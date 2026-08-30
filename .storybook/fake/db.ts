@@ -835,11 +835,13 @@ export interface FakeUpdate {
  * authenticate: nothing a person types produces a *well-formed* blob that will not decrypt. So
  * this fault sits on `sync_pairing_respond` and nowhere else.
  *
- * **`patreonDeclined`** and **`patreonLapsed`** are the two supporter states a story cannot
- * press its way into, and the split from *supporting* is `pairingReadError`'s exactly. Connecting
- * **is** reachable by typing — paste a claim code, press Connect — so there is no fault and no
- * seed for it; what a reader can never produce from this window is Patreon declining their card
- * or their pledge ending, because both are decided at the other end of a webhook.
+ * **`patreonDeclined`**, **`patreonLapsed`** and **`patreonGroupEntitled`** are the three
+ * supporter states a story cannot press its way into, and the split from *supporting* is
+ * `pairingReadError`'s exactly. Connecting **is** reachable by typing — paste a claim code,
+ * press Connect — so there is no fault and no seed for it; what a reader can never produce from
+ * this window is Patreon declining their card or their pledge ending, because both are decided
+ * at the other end of a webhook, or **another device's** membership covering this one, which is
+ * decided at the other end of `/token`.
  *
  * `patreonDeclined` is spec §7.2's grace window: a failed card Patreon is still retrying, where
  * tokens are still minted and **sync keeps working**. The story it exists for is the *Sync now*
@@ -853,6 +855,17 @@ export interface FakeUpdate {
  * a device fresh out of the box, which is why a fault that set `since` to a plausible date would
  * story the panel against a state the crate cannot produce and let a `since`-keyed panel pass.
  * That is not hypothetical: the panel shipped keyed on `since` for exactly one wave.
+ *
+ * **`patreonGroupEntitled` is the third, and it is a *good* state rather than a bad one** —
+ * spec §2.2, and the whole of the reader's item 3. It is the second device in a group whose
+ * first device connected: no refresh secret, no access token this window ever minted from
+ * Patreon, and a `supporter_status` of `active` written by `/token`'s group door. Every field
+ * but one is a lapse's, and the one that differs is the *status*, which is why it belongs
+ * beside `patreonLapsed` rather than anywhere else — a panel that read the wrong one of those
+ * two draws **Connect Patreon at a paid-up supporter**, on every device but the one that
+ * pressed it. It is written as a state and not a press because there is no press: the
+ * entitlement is another device's, and it reaches this one over a relay this workbench has not
+ * got.
  *
  * **Being paired is not here, and that is `combosMissing`'s argument the other way up**: it is not
  * something that has gone wrong with a world, it is where a reader arrives after two presses. It
@@ -887,7 +900,8 @@ export type Fault =
   | "combosFetchError"
   | "pairingReadError"
   | "patreonDeclined"
-  | "patreonLapsed";
+  | "patreonLapsed"
+  | "patreonGroupEntitled";
 
 /**
  * What the picture cache costs, as the Settings page's one button sees it.
@@ -1307,36 +1321,53 @@ export interface FakeRelay {
 }
 
 /**
- * The five `sync_state` rows `entitlement` owns, as the one command that reads them sees them.
+ * The five `sync_state` rows `entitlement` owns — **the rows, not the DTO built from them.**
  *
- * **Four fields for three sentences, and no two of them are spare.** `connected` is the local
- * fact — this device holds a refresh secret — and it is what *both* endings clear, so it is the
- * field that says a device is supporting. `groupBound` is `entitlement::membership_ended`
- * crossing the wire, and it is the only thing separating a lapse from a device out of the box:
- * `revoke` deletes the date along with the secret, so **`since` cannot tell them apart** and a
- * fake that implied it could would let a wrong panel pass.
+ * ⚠️ **`entitled` is deliberately not a field here, and that is the whole reason this interface
+ * changed shape** (spec §2.5). The command answers `entitled`, which the crate *derives*:
+ * `refresh_secret.is_some() || SUPPORTER_STATUS in {active, grace}`. Stored as a fourth boolean
+ * it could be set to disagree with the two things it is made of — `entitled: false` beside an
+ * `"active"` status is a world the crate cannot produce and a fixture could assert for ever.
+ * So this holds what `sync_state` holds and {@link supporterStatus} does the derivation, which
+ * is `db.ts`'s standing rule (rows in, DTOs out) reached from the side where it bites hardest:
+ * the field was called `connected` until §2.5, `ipc.ts` kept the old spelling for one wave, and
+ * every test stayed green while the shipped panel read `undefined`.
  *
- * The four states this fake can be in, and what leaves each of them in the crate:
+ * **`refreshSecret` is what "connected" used to mean**, narrowed to the one device that pressed
+ * Connect — it no longer travels in the pairing blob (§2.2), because a device that holds it
+ * could re-register the group auth and evict the devices that removed it. `groupBound` is
+ * `entitlement::membership_ended` crossing the wire and stays stored, because deriving it would
+ * need a distinction this fake does not model: an absent `supporter_status` row and one that
+ * says `"dead"` read the same here. It is the only thing separating a lapse from a device out
+ * of the box — `revoke` deletes the date along with the secret, so **`since` cannot tell them
+ * apart** and a fake that implied it could would let a wrong panel pass.
  *
- * | | `connected` | `status` | `since` | `groupBound` |
- * | --- | --- | --- | --- | --- |
- * | out of the box (no keys), or after `clear` | `false` | `"dead"` | `null` | `false` |
- * | claimed — `store_grant` + `store_status` | `true` | `"active"` | a stamp | `true` |
- * | a declined card (§7.2) | `true` | `"grace"` | a stamp | `true` |
- * | lapsed — `revoke`, which is `clear` plus one row | `false` | `"dead"` | **`null`** | `true` |
+ * The five states this fake can be in, what leaves each of them in the crate, and the `entitled`
+ * that falls out:
  *
- * A fifth is reachable and is deliberately **not** a fault, because a story presses its way
- * there: a device paired *into* a group is handed the refresh secret with no status row beside
- * it (§6.2), so it reads `connected: true` with the default `"dead"` and no date.
+ * | | `refreshSecret` | `status` | `since` | `groupBound` | → `entitled` |
+ * | --- | --- | --- | --- | --- | --- |
+ * | out of the box (no keys), or after `clear` | `false` | `"dead"` | `null` | `false` | `false` |
+ * | claimed — `store_grant` + `store_status` | `true` | `"active"` | a stamp | `true` | `true` |
+ * | a declined card (§7.2) | `true` | `"grace"` | a stamp | `true` | `true` |
+ * | lapsed — `revoke`, which is `clear` plus one row | `false` | `"dead"` | **`null`** | `true` | `false` |
+ * | **entitled through the group** — `/token`'s group door, `store_status` alone | **`false`** | `"active"` | a stamp | `true` | **`true`** |
+ *
+ * **The last row is the one this app exists to draw right**, and it is the `patreonGroupEntitled`
+ * fault: no Patreon-side secret at all, and supporting anyway. A sixth is reachable and needs
+ * neither seed nor fault, because it is what the row above looks like *before* its first round
+ * trip: `false`/`"dead"`/`null`/`false`, which is a fresh install exactly. It self-heals on the
+ * first sync and the panel is not asked to guess at it.
  */
 export interface FakeSupporter {
-  /** `entitlement::refresh_secret(conn).is_some()` — the whole of what "connected" means. */
-  connected: boolean;
+  /** `entitlement::refresh_secret(conn).is_some()` — true only on the device that pressed
+   *  Connect Patreon. **Not `entitled`**: see the table above. */
+  refreshSecret: boolean;
   /** `sync_state.supporter_status`, defaulting to `"dead"` when the row has never been written. */
   status: "active" | "grace" | "dead";
   /** `sync_state.supporter_since`, unix seconds. **Deleted rather than kept** by a revoke. */
   since: number | null;
-  /** `connected || membership_ended` — see the table above. */
+  /** `entitled || membership_ended` — see the table above. */
   groupBound: boolean;
 }
 
@@ -1628,30 +1659,52 @@ function isStorableZoom(zoom: number): boolean {
 export const SUPPORTING_SINCE = 1_756_000_000;
 
 /**
- * The two supporter states no press can reach, written onto the world.
+ * The three supporter states no press can reach, written onto the world.
  *
  * `mirrorFailedPass`'s shape and its reason — an assignment rather than a branch in the handlers,
- * so that the panel draws the state with nothing having been clicked. Neither of these is a
- * *refusal*: `sync_supporter_status` answers perfectly in both, and what differs is the answer.
+ * so that the panel draws the state with nothing having been clicked. None of these is a
+ * *refusal*: `sync_supporter_status` answers perfectly in all three, and what differs is the
+ * answer.
  *
- * **The two are written out rather than spread from one another, because the interesting thing
- * about them is how nearly identical they are not.** A declined card is still connected and
- * still dated; a lapse is neither. `entitlement::revoke` is `clear` plus one row, so it takes the
- * refresh secret **and** the date together and leaves `groupBound` as the only field that
+ * **They are written out rather than spread from one another, because the interesting thing
+ * about them is how nearly identical they are not.** A declined card still holds the secret and
+ * is still dated; a lapse is neither. `entitlement::revoke` is `clear` plus one row, so it takes
+ * the refresh secret **and** the date together and leaves `groupBound` as the only field that
  * remembers there was ever a membership — which is exactly the distinction the panel has to
  * draw, and exactly the one a convenient fixture erases. A `patreonLapsed` world carrying a
  * plausible `since` would story the panel against a state the crate cannot produce, and let a
  * `since`-keyed panel pass; that panel existed for one wave.
+ *
+ * **`patreonGroupEntitled` differs from that lapse in exactly one field**, and spelling the two
+ * out side by side is what makes the pair readable: `refreshSecret` is `false` in both, because
+ * only the device that pressed Connect ever holds one (§2.2). What the group door writes is the
+ * *status*, and `supporterStatus` turns that into `entitled: true` — so the whole distance
+ * between "supporting through my desktop" and "my pledge ended" is `"active"` against `"dead"`.
+ * A world that gave this state a `refreshSecret: true` would be storying the second device as
+ * the first and could never fail the bug it exists for.
  *
  * Exported so `db.test.ts` can stand the state up the way `installWorld` does, which is the one
  * thing `makeDb({ fault })` cannot do for a fault that writes rows.
  */
 export function applySupporterFault(db: FakeDb): void {
   if (db.fault === "patreonDeclined") {
-    db.supporter = { connected: true, status: "grace", since: SUPPORTING_SINCE, groupBound: true };
+    db.supporter = {
+      refreshSecret: true,
+      status: "grace",
+      since: SUPPORTING_SINCE,
+      groupBound: true,
+    };
   }
   if (db.fault === "patreonLapsed") {
-    db.supporter = { connected: false, status: "dead", since: null, groupBound: true };
+    db.supporter = { refreshSecret: false, status: "dead", since: null, groupBound: true };
+  }
+  if (db.fault === "patreonGroupEntitled") {
+    db.supporter = {
+      refreshSecret: false,
+      status: "active",
+      since: SUPPORTING_SINCE,
+      groupBound: true,
+    };
   }
 }
 
@@ -1831,8 +1884,9 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // **Not connected, which is what every installation is in until somebody presses Connect
     // Patreon.** All four fields are the crate's out-of-the-box read: no keys written at all,
     // so the status defaults to `dead`, there is no date, and `membership_ended` is false
-    // because there is no `supporter_status` row to have been left behind.
-    supporter: { connected: false, status: "dead", since: null, groupBound: false },
+    // because there is no `supporter_status` row to have been left behind. `entitled` is
+    // derived from the first two and is therefore `false` without being asserted here.
+    supporter: { refreshSecret: false, status: "dead", since: null, groupBound: false },
     fault: null,
     ...init,
   };
@@ -12257,10 +12311,15 @@ export function writeHandlers(db: FakeDb) {
       if (!CLAIM_CODE.test(code)) throw refuse(CLAIM_REFUSED);
       // One-time, at the far end. A second press with a well-formed code is the same refusal,
       // because the relay has already spent it.
-      if (db.supporter.connected) throw refuse(CLAIM_REFUSED);
+      //
+      // **`refreshSecret` and not `entitled`, and the difference is the second device.** A
+      // device entitled through its group holds no secret and has claimed nothing, so asking
+      // the derived field would refuse the one press that reader might legitimately make -
+      // connecting a membership of their own on a device somebody else's is currently covering.
+      if (db.supporter.refreshSecret) throw refuse(CLAIM_REFUSED);
       if (db.pairing.group === null) foundGroupOfOne(db);
       db.supporter = {
-        connected: true,
+        refreshSecret: true,
         status: "active",
         since: Math.floor(Date.now() / 1000),
         groupBound: true,
@@ -12271,11 +12330,12 @@ export function writeHandlers(db: FakeDb) {
     /**
      * `sync_now` - one round trip.
      *
-     * **`null` is the answer with nothing to do, and it is not a failure** - no connected
-     * membership, or no pairing group. That is the state every world here starts in, and the
-     * panel's sentence about it is the one this handler exists to make reachable. The first of
-     * those two moved with the address field: it used to be an empty `relay.url`, and the crate
-     * now answers `Ok(None)` when there is no refresh secret.
+     * **`null` is the answer with nothing to do, and it is not a failure** - no entitlement, or
+     * no pairing group. That is the state every world here starts in, and the panel's sentence
+     * about it is the one this handler exists to make reachable. The first of those two has
+     * moved twice: it was an empty `relay.url`, then the absence of a refresh secret, and since
+     * spec §2.2 it is the absence of an *entitlement* - which a device with no secret of its own
+     * can still have, through its group.
      *
      * There is no network, so a trip that *can* run reports what the pile it just cleared would
      * have produced: everything waiting is sent, nothing comes back, and the stamp moves. A
@@ -12293,7 +12353,11 @@ export function writeHandlers(db: FakeDb) {
      */
     sync_now: (): RelayOutcome | null => {
       refuseIfBusy(db);
-      if (!db.supporter.connected || db.pairing.group === null) return null;
+      // **Entitled, not "holds a secret".** Spec §2.2: a device in a group with a live
+      // membership mints its own token through `/token`'s group door, so the second device
+      // syncs having connected nothing - which is the whole of the reader's item 3, and a gate
+      // written on the secret would make this fake the shape of the bug.
+      if (!isEntitled(db) || db.pairing.group === null) return null;
       const pushed = db.relay.pending;
       const first = db.relay.lastSyncAt === null;
       db.relay.pending = 0;
@@ -12375,13 +12439,38 @@ function relayStatus(db: FakeDb): RelayStatus {
  * the crate's does, so that the panel is not left re-reading a value it has just been handed, and
  * two constructions of one DTO is how a field comes to be right in only one of them.
  *
- * It is a straight copy of the four stored fields rather than a derivation, because the crate's
- * own `supporter_status` derives only one of them - `group_bound`, from
- * `connected || membership_ended` - and this store already holds that answer. Deriving it here
- * from a `status` string would be inventing the very distinction the field exists to carry.
+ * **`entitled` is derived here and is stored nowhere**, which is the crate's own arrangement
+ * (`commands::entitled`) and the reason {@link FakeSupporter} dropped the field: it is the
+ * refresh secret **or** a `supporter_status` the relay has written, so a store that also kept a
+ * boolean could hold one that disagreed with both. `group_bound` stays a stored field for the
+ * opposite reason - it turns on whether a `supporter_status` row *exists*, and an absent row and
+ * a `"dead"` one are the same value here, so deriving it would be inventing the very distinction
+ * the field exists to carry.
+ *
+ * **`dead` is not a signal.** It is also what a device that has never connected reads, so
+ * treating "the status row says something" as entitlement would make every fresh install look
+ * like a supporter and take the Connect button off the one panel that needs it.
  */
 function supporterStatus(db: FakeDb): SupporterStatus {
-  return { ...db.supporter };
+  return {
+    entitled: isEntitled(db),
+    status: db.supporter.status,
+    since: db.supporter.since,
+    groupBound: db.supporter.groupBound,
+  };
+}
+
+/**
+ * `commands::entitled` - will the relay mint this device a token?
+ *
+ * Two signals because `/token` has two doors (spec §2.2): the refresh secret, which only the
+ * device that pressed Connect ever holds, and a stored `active`/`grace` status, which is the
+ * relay having answered *this device's group auth*. The second is the whole of the reader's
+ * item 3 - a phone paired to a paid-up desktop mints on its own and never opens a browser.
+ */
+function isEntitled(db: FakeDb): boolean {
+  if (db.supporter.refreshSecret) return true;
+  return db.supporter.status === "active" || db.supporter.status === "grace";
 }
 
 /**

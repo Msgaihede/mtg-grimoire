@@ -243,13 +243,13 @@ fn tidy(raw: &str) -> String {
     raw.trim().chars().take(MAX_NAME_LEN).collect()
 }
 
-/// What [`revoke_device`] says when it is pointed at this very device.
+/// What [`plan_rotation`] says when it is pointed at this very device.
 const CANNOT_REMOVE_SELF: &str = "This device cannot remove itself. Use Leave group instead.";
 
-/// What [`revoke_device`] says on a device that is in no group.
+/// What [`plan_rotation`] says on a device that is in no group.
 const NOT_IN_A_GROUP: &str = "This device is not in a pairing group.";
 
-/// What [`revoke_device`] says when the id names nobody on the roster.
+/// What [`plan_rotation`] says when the id names nobody on the roster.
 const NOT_ON_THE_ROSTER: &str = "That device is not in this pairing group.";
 
 /// Read this device's identity, minting one the first time.
@@ -270,7 +270,8 @@ const NOT_ON_THE_ROSTER: &str = "That device is not in this pairing group.";
 /// called. A device that has never filed one is a device every *other* device goes on calling
 /// `DEFAULT_PEER_NAME`, because a joiner is never told the initiator's name and no later rename
 /// crossed either. It is cheap here and nowhere else — `ensure` is called from the six pairing
-/// entry points and from [`revoke_device`], never on a hot path.
+/// entry points and from nothing on a hot path. [`plan_rotation`] deliberately reads the identity
+/// instead of ensuring one, because it promises to write nothing at all.
 pub fn ensure(conn: &Connection) -> rusqlite::Result<Identity> {
     if let Some(mut id) = read(conn)? {
         // **The placeholder is upgraded exactly once; a name a reader chose never is.**
@@ -469,6 +470,10 @@ pub fn add_device(
               -- Re-pairing a device that was removed puts it back. The reader pressed Pair
               -- and compared six digits; refusing them would be the app disagreeing with a
               -- decision it just asked for.
+              --
+              -- **Since spec §2.3 a removal deletes the row, so the ordinary re-pair takes the
+              -- INSERT arm and never this one.** The clear stays for the databases written by
+              -- builds that stamped: on those, a re-pair still has a row to un-stamp.
               revoked_at = NULL",
         params![device_id, public_key.as_slice(), name],
     )?;
@@ -549,69 +554,279 @@ pub fn rename_device(conn: &Connection, device_id: &str, name: &str) -> rusqlite
     write_synced_name(conn, device_id, name)
 }
 
-/// Take a device off the group and rotate the key — §7.6, and the two halves are one statement.
+/// A rotation that has been worked out and has **not happened yet**.
 ///
-/// **The rotation is the removal.** Marking the row and leaving the key alone would produce an
-/// app that says a device is gone while that device can still read every op written afterwards.
-/// The epoch is what the remaining devices compare, and it is bumped in the same transaction.
+/// The whole of the split between [`plan_rotation`] and [`commit_rotation`] is that this value
+/// can exist while the database is untouched. The removing device hands `keys` and `auth` to the
+/// relay, and only an accepted `POST /g/{group}/rotate` earns the right to write `group`.
 ///
-/// **This device cannot revoke itself.** "Leave the group" is a different press with different
-/// consequences — it throws this device's own copy of the key away — and collapsing the two
-/// would let a mis-click cost the reader the group they are standing in.
+/// `keys` is `(device_id, sealed blob)` for every device that **stays**, this one included — the
+/// remover is on its own manifest, so a rotation the relay accepted and a local commit that then
+/// failed heals itself at the next `/keys` check rather than stranding the device that did the
+/// removing. Its device ids, taken together, are the manifest, which is the roster from the
+/// moment the relay stores them.
+pub struct Rotation {
+    pub group: Group,
+    pub keys: Vec<(String, Vec<u8>)>,
+    pub auth: String,
+}
+
+/// What a removal says in a group no membership has ever been connected to — spec §2.4's fourth
+/// refusal, beside [`CANNOT_REMOVE_SELF`], [`NOT_IN_A_GROUP`] and [`NOT_ON_THE_ROSTER`].
 ///
-/// **And an id nobody on the roster answers to rotates nothing.** A rotation locks every
-/// remaining device out of what came before it, so one with nobody removed is a cost with no
-/// cause and nothing on any screen to explain it.
+/// **The relay is what carries a removal to the other devices, and only a claimed group has an
+/// auth the relay will accept.** Rotating locally anyway is exactly the bug this whole change
+/// exists to end: the removing device moves to epoch *N+1* and every other device stalls at *N*
+/// the moment somebody finally connects. It is an honest answer rather than a limitation —
+/// until a membership exists nothing is syncing, so there is nothing a removal would protect.
 ///
-/// **What it does not do is withdraw anything the removed device contributed** — spec §12.3.
-/// The collection is one object the whole group has been writing, and a phone's cards, decks
-/// and folders are rows in every device's tables by the time it leaves. Removing a device ends
-/// its ability to keep *writing*; nothing here deletes, re-parents or re-counts a row it wrote,
-/// and `removing_a_device_changes_no_row_it_contributed` is what holds that true. Note the
+/// It is checked by the command that has a relay in front of it (`pairing::sync_device_revoke`),
+/// not by [`plan_rotation`], because this module has no opinion about entitlements and the
+/// question "does this group have a membership" is one only the relay can answer.
+pub const NO_MEMBERSHIP: &str = "Removing a device changes the key your devices share, and that \
+     change has to reach the others through the relay. Connect a membership first.";
+
+/// What [`adopt_epoch`] says when it is handed an epoch that is not ahead of this device's.
+///
+/// **The guard is load-bearing and the caller has one too** — spec §2.3. A group that has claimed
+/// but never rotated holds one `group_keys` row with an *empty* manifest, so every device in it
+/// reads `blob: null` and `devices: []`. Comparing the epochs first is the whole of what stops
+/// every device in a healthy never-rotated group concluding it has been removed. Equal epochs
+/// mean nothing to do, and this refuses loudly rather than sweeping a roster against a manifest
+/// that was never about this device.
+const NOT_A_NEWER_EPOCH: &str = "that key manifest is not ahead of this device";
+
+/// Work out the rotation a removal needs, **without writing a single row.**
+///
+/// **That separation is the fix rather than a tidiness.** The version this replaced committed the
+/// rotation first and unconditionally, so a device that pressed Remove ended up holding a key
+/// nobody else could ever learn: it pushed at epoch *N+1* while every remaining device sat at
+/// *N*, `client::pull` set `behind = true` and held its cursor for ever, and one removal bricked
+/// any group of three. Nothing here touches the database, so a `/rotate` that is refused or
+/// unreachable leaves the group exactly as it was and the reader can press again.
+///
+/// It reads the identity rather than [`ensure`]ing one, because "writes nothing" has to be
+/// literally true: `ensure` mints on absence and can file a name, and a planning call that
+/// wrote three rows on a first run would make the claim above a lie in the one case nobody
+/// tests. A device with no identity is in no group, which is what it is told.
+///
+/// **The three refusals are the ones the deleted `revoke_device` carried**, moved here because
+/// this is now
+/// the first thing a removal does. This device cannot remove itself — "leave the group" is a
+/// different press with different consequences, and collapsing the two would let a mis-click cost
+/// the reader the group they are standing in. A device in no group has nothing to rotate. And an
+/// id nobody on the roster answers to rotates nothing: a rotation locks every remaining device
+/// out of what came before it, so one with nobody removed is a cost with no cause.
+///
+/// **The manifest never names the device being removed**, and that is the one line in this
+/// function whose absence would undo the whole feature — a manifest naming it is the roster
+/// saying it is still a member, on every device that adopts.
+///
+/// **What a rotation does not do is withdraw anything the removed device contributed** — spec
+/// §12.3. The collection is one object the whole group has been writing, and a phone's cards,
+/// decks and folders are rows in every device's tables by the time it leaves. Removal ends a
+/// device's ability to keep *writing*; nothing here deletes, re-parents or re-counts a row it
+/// wrote, and `removing_a_device_changes_no_row_it_contributed` is what holds that true. Note the
 /// consequence for anyone tempted to add such a sweep later: a row carries no author. Its
 /// `sync_uid` is `lower(hex(randomblob(16)))` and `apply` records no ops of its own, so on the
 /// remaining devices there is nothing that even *says* which device a row came from.
-pub fn revoke_device(conn: &Connection, device_id: &str) -> Result<Group, String> {
-    let me = ensure(conn).map_err(|e| e.to_string())?;
-    if me.device_id == device_id {
+pub fn plan_rotation(conn: &Connection, removing: &str) -> Result<Rotation, String> {
+    let Some(me) = read(conn).map_err(|e| e.to_string())? else {
+        return Err(NOT_IN_A_GROUP.to_owned());
+    };
+    if me.device_id == removing {
         return Err(CANNOT_REMOVE_SELF.to_owned());
     }
     let Some(current) = group(conn).map_err(|e| e.to_string())? else {
         return Err(NOT_IN_A_GROUP.to_owned());
     };
-
-    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    let marked = tx
-        .execute(
-            "UPDATE sync_devices SET revoked_at = unixepoch() WHERE device_id = ?1",
-            params![device_id],
-        )
-        .map_err(|e| e.to_string())?;
-    if marked == 0 {
+    let members = roster(conn).map_err(|e| e.to_string())?;
+    if !members.iter().any(|d| d.device_id == removing) {
         return Err(NOT_ON_THE_ROSTER.to_owned());
     }
-    // **A rotation re-arms the baseline for everybody who stays.** Spec §12.4: the new epoch
-    // makes every op written before it unreadable, and `client::pull` steps over a lower-epoch
-    // envelope rather than stalling on it — so a peer's last words can be lost at the boundary.
-    // Re-baselining under the new key carries them across as ordinary rows. Claims resolve by
-    // `max` and a horizon only filters, so this cannot double-count.
-    //
-    // **After the mark, not before**, which is what `WHERE revoked_at IS NULL` is reading: the
-    // departed device keeps its marker, so re-arming cannot hand a full baseline to a peer that
-    // is never going to answer.
-    tx.execute(
-        "UPDATE sync_devices SET baselined_at = NULL WHERE revoked_at IS NULL",
-        [],
-    )
-    .map_err(|e| e.to_string())?;
+
     let rotated = Group {
         group_id: current.group_id,
         epoch: current.epoch + 1,
         group_key: crypto::random_bytes::<32>(),
     };
-    write_group(&tx, &rotated).map_err(|e| e.to_string())?;
-    tx.commit().map_err(|e| e.to_string())?;
-    Ok(rotated)
+    let mut keys = Vec::with_capacity(members.len());
+    for peer in &members {
+        // **The departing device, and any row an older build stamped, are both left off.** The
+        // stamp stopped being written by `commit_rotation`, but a database that predates this
+        // change can still hold one — and a manifest naming such a device would put it back in
+        // the group on every device that adopts this epoch.
+        if peer.device_id == removing || peer.revoked_at.is_some() {
+            continue;
+        }
+        let blob = crypto::wrap_group_key(
+            &me.keypair.secret,
+            &peer.public_key,
+            &rotated.group_id,
+            &peer.device_id,
+            rotated.epoch,
+            &rotated.group_key,
+        )
+        .map_err(|e| e.to_string())?;
+        keys.push((peer.device_id.clone(), blob));
+    }
+    let auth = crypto::relay_auth(&rotated.group_key, &rotated.group_id, rotated.epoch);
+    Ok(Rotation {
+        group: rotated,
+        keys,
+        auth,
+    })
+}
+
+/// Write the rotation the relay has already accepted. **Only on success**, and never before.
+///
+/// One transaction, three statements, and the order of the first two is what the third depends
+/// on.
+///
+/// **A rotation re-arms the baseline for everybody who stays.** Spec §12.4: the new epoch makes
+/// every op written before it unreadable, and `client::pull` steps over a lower-epoch envelope
+/// rather than stalling on it — so a peer's last words can be lost at the boundary. Re-baselining
+/// under the new key carries them across as ordinary rows. Claims resolve by `max` and a horizon
+/// only filters, so this cannot double-count.
+pub fn commit_rotation(
+    conn: &Connection,
+    removing: &str,
+    rotation: &Rotation,
+) -> Result<(), String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    // **Deleted, not stamped, and this reverses §7.6.** The relay's manifest is the roster now
+    // (spec §2.3), so a device the manifest omits has no row on any *other* device — and a
+    // remover that kept a tombstone would be the one machine in the group with a different
+    // answer about who is in it. `baseline::peers_needing` reads `WHERE revoked_at IS NULL`,
+    // which a deleted row satisfies just as well, and `add_device` still puts a re-paired device
+    // back — by insert now rather than by clearing the stamp. The column stays in the schema for
+    // the migration's sake and stops being written.
+    tx.execute(
+        "DELETE FROM sync_devices WHERE device_id = ?1",
+        params![removing],
+    )
+    .map_err(|e| e.to_string())?;
+    // **After the delete, not before**, which is what makes the `WHERE` clause enough: the
+    // departed row is gone, so re-arming cannot hand a full baseline to a peer that is never
+    // going to answer. `revoked_at IS NULL` is still read because a database written by an
+    // older build can hold a stamped row this removal did not touch.
+    tx.execute(
+        "UPDATE sync_devices SET baselined_at = NULL WHERE revoked_at IS NULL",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
+    write_group(&tx, &rotation.group).map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())
+}
+
+/// Take the group key some other device rotated to, and take its manifest as the roster.
+///
+/// This is the other end of [`plan_rotation`] and the half that carries a removal to the devices
+/// that were not doing the removing. `blob` is what `GET /g/{group}/keys?device=<me>` answered and
+/// `manifest` is the `devices` beside it.
+///
+/// **The manifest is the roster, so every row it omits is deleted** — spec §2.3. It is
+/// deliberately not a thirteenth synced table: a manifest that *is* the key distribution cannot
+/// disagree with it, where a synced `device_removals` table could arrive late, arrive out of
+/// order, or arrive at a device that cannot decrypt it — which is precisely the state a rotation
+/// puts every peer in.
+///
+/// **This device's own row is never swept, whatever the manifest says.** A blob that unwrapped is
+/// one the remover sealed to *this* device at *this* epoch, so this device is in the group by
+/// construction; obeying a manifest that omitted it would leave a device in a group whose roster
+/// does not contain itself, which nothing downstream is written to survive.
+///
+/// **The epoch guard is checked here as well as by the caller**, for [`NOT_A_NEWER_EPOCH`]'s
+/// reason.
+pub fn adopt_epoch(
+    conn: &Connection,
+    from_device: &str,
+    epoch: i64,
+    blob: &[u8],
+    manifest: &[String],
+) -> Result<(), String> {
+    let Some(me) = read(conn).map_err(|e| e.to_string())? else {
+        return Err(NOT_IN_A_GROUP.to_owned());
+    };
+    let Some(current) = group(conn).map_err(|e| e.to_string())? else {
+        return Err(NOT_IN_A_GROUP.to_owned());
+    };
+    if epoch <= current.epoch {
+        return Err(NOT_A_NEWER_EPOCH.to_owned());
+    }
+    // The remover's own public key, off this device's roster. Nothing about a rotation crosses
+    // in the clear that the target could not already authenticate.
+    let their_public = conn
+        .query_row(
+            "SELECT public_key FROM sync_devices WHERE device_id = ?1",
+            params![from_device],
+            |r| r.get::<_, Vec<u8>>(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .map(bytes32)
+        .ok_or_else(|| NOT_ON_THE_ROSTER.to_owned())?;
+    let new_key = crypto::unwrap_group_key(
+        &me.keypair.secret,
+        &their_public,
+        &current.group_id,
+        &me.device_id,
+        epoch,
+        blob,
+    )
+    .map_err(|e| e.to_string())?;
+
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    write_group(
+        &tx,
+        &Group {
+            // **The group id must not move.** A rotation replaces the key and the epoch and
+            // nothing else; a new id here would be this device silently founding a second group.
+            group_id: current.group_id.clone(),
+            epoch,
+            group_key: new_key,
+        },
+    )
+    .map_err(|e| e.to_string())?;
+
+    let mut stays: Vec<&str> = manifest.iter().map(String::as_str).collect();
+    stays.push(&me.device_id);
+    let holes: Vec<String> = (1..=stays.len()).map(|n| format!("?{n}")).collect();
+    tx.execute(
+        &format!(
+            "DELETE FROM sync_devices WHERE device_id NOT IN ({})",
+            holes.join(", ")
+        ),
+        rusqlite::params_from_iter(stays),
+    )
+    .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())
+}
+
+/// Leave the group entirely: the key, the epoch and the whole roster.
+///
+/// **What a removed device does when `/keys` answers a higher epoch and no blob for it** — spec
+/// §2.4. That is positive evidence rather than a guess: the manifest is the roster, so a device
+/// the current epoch's manifest does not name is a device that has been taken off.
+///
+/// **`sync_identity` survives, and that is the difference between leaving and being reinstalled.**
+/// The device id is what the hybrid logical clock breaks ties on and what every op this device
+/// ever wrote is stamped with; re-minting it here would fork the reader's own history for the
+/// sake of a row that costs nothing to keep. The reader's collection is untouched too, which is
+/// what `REMOVAL_WARNING` already promises them.
+///
+/// **The grant keys are the caller's to decide about and are deliberately not touched here.**
+/// This module knows about groups and nothing about Patreon: the removed device may be the very
+/// one holding the refresh secret — the reader selling a laptop removes it from the phone — and
+/// throwing that secret away would cost them the membership rather than the pairing.
+/// `client::check_keys` is where the two facts sit side by side.
+pub fn leave_group(conn: &Connection) -> Result<(), String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    tx.execute("DELETE FROM sync_devices", [])
+        .map_err(|e| e.to_string())?;
+    tx.execute("DELETE FROM sync_group", [])
+        .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -641,6 +856,18 @@ mod tests {
 
     /// A pair, not `Connection::open_in_memory` plus a ladder — `schema::memory_pair`'s own
     /// doc says why, and it is the shape the running app has.
+    /// Plan and commit in one breath, which is what these tests want and what **no production
+    /// path may have**. The relay stands between the two now — `pairing::remove_device` is
+    /// `plan_rotation` → `POST /g/{group}/rotate` → `commit_rotation` — so the pair exists as
+    /// one call only here, where there is no relay to stand in the middle. The deleted
+    /// `identity::revoke_device` was exactly this and was `pub`, which put committing a rotation
+    /// nobody had accepted one call away from any caller in the crate.
+    fn remove(conn: &Connection, device_id: &str) -> Result<Group, String> {
+        let plan = plan_rotation(conn, device_id)?;
+        commit_rotation(conn, device_id, &plan)?;
+        Ok(plan.group)
+    }
+
     fn db() -> Connection {
         crate::schema::memory_pair()
     }
@@ -860,8 +1087,10 @@ mod tests {
         assert_eq!(g.group_key, key);
     }
 
-    /// Revocation rotates the key, bumps the epoch, and leaves the removed device on the
-    /// roster as removed — §7.6. A deleted row could not answer "who did I take off, and when".
+    /// Revocation rotates the key, bumps the epoch, and takes the removed device **off** the
+    /// roster — spec §2.3, which reverses §7.6. The manifest the relay stores is the roster now,
+    /// so a tombstone here would make the removing device the one machine in the group with a
+    /// different answer about who is in it.
     #[test]
     fn revoking_a_device_rotates_the_key_and_bumps_the_epoch() {
         let conn = db();
@@ -870,7 +1099,7 @@ mod tests {
         add_device(&conn, "deadbeef", &[9u8; 32], "Phone").unwrap();
 
         let before = group(&conn).unwrap().unwrap();
-        revoke_device(&conn, "deadbeef").unwrap();
+        remove(&conn, "deadbeef").unwrap();
         let after = group(&conn).unwrap().unwrap();
 
         assert_eq!(
@@ -883,12 +1112,20 @@ mod tests {
             "the key must actually change"
         );
 
-        let phone = roster(&conn)
-            .unwrap()
-            .into_iter()
-            .find(|d| d.device_id == "deadbeef")
-            .expect("the removed device stays on the roster");
-        assert!(phone.revoked_at.is_some());
+        assert!(
+            !roster(&conn)
+                .unwrap()
+                .iter()
+                .any(|d| d.device_id == "deadbeef"),
+            "the removed device is still on the roster"
+        );
+        // ...and only that one went. A delete that swept the whole table would satisfy the
+        // assertion above and leave this device in a group with no roster row of its own.
+        assert_eq!(
+            count(&conn, "sync_devices"),
+            1,
+            "this device and nobody else"
+        );
     }
 
     /// This device cannot remove itself. "Leave the group" is a different command with
@@ -898,7 +1135,7 @@ mod tests {
         let conn = db();
         let me = ensure(&conn).unwrap();
         create_group(&conn, &me).unwrap();
-        assert!(revoke_device(&conn, &me.device_id).is_err());
+        assert!(remove(&conn, &me.device_id).is_err());
     }
 
     /// A device that is not on the roster cannot be removed, **and the key does not move**.
@@ -911,7 +1148,7 @@ mod tests {
         create_group(&conn, &me).unwrap();
         let before = group(&conn).unwrap().unwrap();
 
-        assert!(revoke_device(&conn, "nobody").is_err());
+        assert!(remove(&conn, "nobody").is_err());
 
         assert_eq!(group(&conn).unwrap().unwrap(), before);
     }
@@ -922,19 +1159,23 @@ mod tests {
     fn an_unpaired_device_cannot_revoke() {
         let conn = db();
         ensure(&conn).unwrap();
-        assert!(revoke_device(&conn, "deadbeef").is_err());
+        assert!(remove(&conn, "deadbeef").is_err());
         assert!(group(&conn).unwrap().is_none());
     }
 
     /// Re-pairing a device that was removed puts it back. The reader pressed Pair and
     /// compared six digits; refusing them would be the app disagreeing with what it just asked.
+    ///
+    /// **By insert now rather than by clearing a stamp** — spec §2.3 deletes the row — and the
+    /// assertions below do not care which, which is the point: the roster afterwards says the
+    /// same thing either way.
     #[test]
     fn adding_a_removed_device_again_puts_it_back() {
         let conn = db();
         let me = ensure(&conn).unwrap();
         create_group(&conn, &me).unwrap();
         add_device(&conn, "deadbeef", &[9u8; 32], "Phone").unwrap();
-        revoke_device(&conn, "deadbeef").unwrap();
+        remove(&conn, "deadbeef").unwrap();
 
         add_device(&conn, "deadbeef", &[8u8; 32], "Phone again").unwrap();
         let phone = roster(&conn)
@@ -1235,16 +1476,17 @@ mod tests {
         let before = snapshot(&b);
         let key_before = group(&b).unwrap().unwrap().group_key;
 
-        revoke_device(&b, &me_a.device_id).unwrap();
+        remove(&b, &me_a.device_id).unwrap();
 
         // The removal really happened — otherwise the comparison below is about nothing.
         assert_ne!(group(&b).unwrap().unwrap().group_key, key_before);
-        let departed = roster(&b)
-            .unwrap()
-            .into_iter()
-            .find(|d| d.device_id == me_a.device_id)
-            .expect("the removed device stays on the roster");
-        assert!(departed.revoked_at.is_some());
+        assert!(
+            !roster(&b)
+                .unwrap()
+                .iter()
+                .any(|d| d.device_id == me_a.device_id),
+            "the removed device's row is gone, not stamped — spec §2.3"
+        );
 
         let after = snapshot(&b);
         assert_eq!(
@@ -1262,8 +1504,14 @@ mod tests {
     }
 
     /// §12.4: a rotation re-arms the baseline for the devices that remain, so the next sync
-    /// repairs whatever the epoch boundary swallowed — and leaves the departed device's marker
-    /// alone, because re-arming it would hand a full baseline to a peer that will never answer.
+    /// repairs whatever the epoch boundary swallowed — and does not re-arm the departed device,
+    /// because a full baseline for a peer that will never answer is work nobody collects.
+    ///
+    /// **The departed row is gone rather than carrying its old marker** — spec §2.3 — so what
+    /// used to be asserted about its `baselined_at` is now asserted about the row's absence.
+    /// That is a stronger claim, not a weaker one: a stamped row with `baselined_at = 1000` and
+    /// a deleted row are indistinguishable to `peers_needing`, and only one of them is also
+    /// invisible to `roster`.
     #[test]
     fn a_rotation_re_arms_the_baseline_for_the_devices_that_remain() {
         let conn = db();
@@ -1275,23 +1523,273 @@ mod tests {
             .unwrap();
         assert_eq!(count(&conn, "sync_devices"), 3, "three on the roster");
 
-        revoke_device(&conn, "tablet").unwrap();
+        remove(&conn, "tablet").unwrap();
 
-        let marker = |id: &str| -> Option<i64> {
+        let marker = |id: &str| -> Option<Option<i64>> {
             conn.query_row(
                 "SELECT baselined_at FROM sync_devices WHERE device_id = ?1",
                 params![id],
                 |r| r.get(0),
             )
+            .optional()
             .unwrap()
         };
-        assert_eq!(marker(&me.device_id), None, "this device was not re-armed");
-        assert_eq!(marker("phone"), None, "the surviving peer was not re-armed");
+        assert_eq!(
+            marker(&me.device_id),
+            Some(None),
+            "this device was not re-armed"
+        );
+        assert_eq!(
+            marker("phone"),
+            Some(None),
+            "the surviving peer was not re-armed"
+        );
         assert_eq!(
             marker("tablet"),
-            Some(1000),
-            "the removed device's marker must be left where it was"
+            None,
+            "the removed device has no row left to carry a marker"
         );
+        assert_eq!(count(&conn, "sync_devices"), 2, "and nobody else was swept");
+    }
+
+    // -------------------------------------------------------------------------------------
+    // Rotation as two halves, and the manifest that is the roster — spec §2.3 and §2.4
+    // -------------------------------------------------------------------------------------
+
+    /// A planned rotation writes nothing — which is what stops the app holding a key rotation the
+    /// relay never accepted, and it is the difference from `revoke_device` as it stood.
+    #[test]
+    fn planning_a_rotation_changes_no_row() {
+        let conn = db();
+        let me = ensure(&conn).unwrap();
+        create_group(&conn, &me).unwrap();
+        add_device(&conn, "phone", &[9u8; 32], "Phone").unwrap();
+        add_device(&conn, "tablet", &[8u8; 32], "Tablet").unwrap();
+
+        let before = group(&conn).unwrap().unwrap();
+        let plan = plan_rotation(&conn, "tablet").expect("plan");
+
+        assert_eq!(group(&conn).unwrap().unwrap(), before, "the group moved");
+        assert_eq!(count(&conn, "sync_devices"), 3, "a row was written");
+        // The plan itself really did mint something, or the assertions above are about nothing.
+        assert_eq!(plan.group.epoch, before.epoch + 1);
+        assert_ne!(plan.group.group_key, before.group_key);
+        // One blob per device that STAYS — this one and the phone — and never for the departing
+        // one. A manifest naming the removed device would put it back in the group it just left.
+        assert_eq!(plan.keys.len(), 2);
+        assert!(plan.keys.iter().all(|(id, _)| id != "tablet"));
+        assert_eq!(
+            plan.auth,
+            crate::sync_pair::crypto::relay_auth(
+                &plan.group.group_key,
+                &plan.group.group_id,
+                plan.group.epoch
+            )
+        );
+    }
+
+    /// A device the manifest omits is off the roster, and the row is **deleted** rather than
+    /// stamped — because the manifest is the roster, and a tombstone here would make this device
+    /// the only one in the group with a different answer about who is in it.
+    #[test]
+    fn adopting_an_epoch_drops_everyone_the_manifest_omits() {
+        // B's database: it is in a group with A and with a tablet.
+        let b = db();
+        let me_b = ensure(&b).unwrap();
+        let remover = crate::sync_pair::crypto::keypair();
+        create_group(&b, &me_b).unwrap();
+        add_device(&b, "dev-a", &remover.public, "Desk").unwrap();
+        add_device(&b, "tablet", &[8u8; 32], "Tablet").unwrap();
+        let before = group(&b).unwrap().unwrap();
+
+        // A rotated, removing the tablet, and sealed the new key to B.
+        let new_key = [42u8; 32];
+        let epoch = before.epoch + 1;
+        let blob = crate::sync_pair::crypto::wrap_group_key(
+            &remover.secret,
+            &me_b.keypair.public,
+            &before.group_id,
+            &me_b.device_id,
+            epoch,
+            &new_key,
+        )
+        .unwrap();
+
+        adopt_epoch(
+            &b,
+            "dev-a",
+            epoch,
+            &blob,
+            &[me_b.device_id.clone(), "dev-a".to_owned()],
+        )
+        .expect("adopt");
+
+        let after = group(&b).unwrap().unwrap();
+        assert_eq!(after.epoch, epoch);
+        assert_eq!(after.group_key, new_key, "B did not take the new key");
+        assert_eq!(
+            after.group_id, before.group_id,
+            "the group id must not move"
+        );
+
+        let ids: Vec<String> = roster(&b)
+            .unwrap()
+            .into_iter()
+            .map(|d| d.device_id)
+            .collect();
+        assert!(
+            !ids.contains(&"tablet".to_owned()),
+            "the tablet is still here"
+        );
+        assert_eq!(ids.len(), 2, "and nobody else was swept");
+        // Deleted, not stamped. A stamped row would still satisfy the assertion above.
+        assert_eq!(count(&b, "sync_devices"), 2);
+    }
+
+    /// **Three devices, and the case that is broken on `main`.** A removes C; B adopts the
+    /// rewrapped key and reaches A's epoch, so an envelope A seals is one B can open. Before this
+    /// PR nothing distributes the key: B stalls at the old epoch, `client::pull` sets
+    /// `behind = true` and holds its cursor for ever, and one removal bricks any group of three.
+    ///
+    /// It asserts against `wire`, not against the epoch number, because the number agreeing is not
+    /// the property that matters — being able to read what the group says is.
+    #[test]
+    fn a_third_device_adopts_the_rotated_key_and_catches_up() {
+        use crate::sync_engine::hlc::Hlc;
+        use crate::sync_engine::merge::Kind;
+        use crate::sync_engine::wire;
+
+        let a = db();
+        let me_a = ensure(&a).unwrap();
+        create_group(&a, &me_a).unwrap();
+
+        let b = db();
+        let me_b = ensure(&b).unwrap();
+        let start = group(&a).unwrap().unwrap();
+        join_group(&b, &start.group_id, start.epoch, &start.group_key, &me_b).unwrap();
+        add_device(&a, &me_b.device_id, &me_b.keypair.public, "Phone").unwrap();
+        add_device(&b, &me_a.device_id, &me_a.keypair.public, "Desk").unwrap();
+        add_device(&a, "tablet", &[8u8; 32], "Tablet").unwrap();
+        add_device(&b, "tablet", &[8u8; 32], "Tablet").unwrap();
+
+        // A removes the tablet and the rotation is accepted by a relay this test stands in for.
+        let plan = plan_rotation(&a, "tablet").expect("plan");
+        commit_rotation(&a, "tablet", &plan).expect("commit");
+
+        // What A now says is unreadable to B until B adopts — the bug, asserted before the fix.
+        let ops = vec![Op {
+            table: "decks".to_owned(),
+            uid: "0123456789abcdef0123456789abcdef".to_owned(),
+            kind: Kind::Put,
+            fields: BTreeMap::new(),
+            counters: BTreeMap::new(),
+            parents: BTreeMap::new(),
+            at: Hlc {
+                ms: 1_787_000_000_000,
+                ctr: 0,
+                device: me_a.device_id.clone(),
+            },
+            baseline: false,
+            horizon: None,
+        }];
+        let envelope =
+            wire::seal_batch(&group(&a).unwrap().unwrap(), &me_a.device_id, &ops).unwrap();
+        assert!(
+            wire::open_batch(&group(&b).unwrap().unwrap(), &envelope).is_err(),
+            "B could already read this, so the test proves nothing"
+        );
+
+        let blob = plan
+            .keys
+            .iter()
+            .find(|(id, _)| id == &me_b.device_id)
+            .map(|(_, blob)| blob.clone())
+            .expect("B is on the manifest");
+        let manifest: Vec<String> = plan.keys.iter().map(|(id, _)| id.clone()).collect();
+        adopt_epoch(&b, &me_a.device_id, plan.group.epoch, &blob, &manifest).expect("adopt");
+
+        assert_eq!(
+            wire::open_batch(&group(&b).unwrap().unwrap(), &envelope).expect("B opens it"),
+            ops,
+            "B adopted the key and still cannot read A"
+        );
+        assert!(
+            !roster(&b).unwrap().iter().any(|d| d.device_id == "tablet"),
+            "and the removal reached B's roster"
+        );
+    }
+
+    /// **A group that claimed and never rotated leaves every device alone** — spec §2.3's ⚠️,
+    /// and the case where a missing guard dissolves a healthy group rather than merely failing.
+    ///
+    /// Such a group has one `group_keys` row at the claim's epoch with an *empty* manifest, so
+    /// every device in it reads `blob: null` and `devices: []`. Comparing the epochs first is the
+    /// whole of what stops all of them concluding they have been removed. The guard is checked by
+    /// the caller too; this is the half that cannot be bypassed by getting that wrong.
+    #[test]
+    fn adopting_an_epoch_that_is_not_ahead_is_refused_and_sweeps_nothing() {
+        let conn = db();
+        let me = ensure(&conn).unwrap();
+        create_group(&conn, &me).unwrap();
+        let phone = crypto::keypair();
+        add_device(&conn, "phone", &phone.public, "Phone").unwrap();
+        let before = group(&conn).unwrap().unwrap();
+
+        // **A blob that opens.** Handing this an unreadable one would make the test pass on the
+        // unwrap failing, and it would then say nothing about the guard: only the epoch stands
+        // between this device and a swept roster.
+        let blob = crypto::wrap_group_key(
+            &phone.secret,
+            &me.keypair.public,
+            &before.group_id,
+            &me.device_id,
+            before.epoch,
+            &[42u8; 32],
+        )
+        .unwrap();
+
+        // The empty manifest a never-rotated group answers, at the epoch it is already on.
+        let err = adopt_epoch(&conn, "phone", before.epoch, &blob, &[]).unwrap_err();
+
+        assert_eq!(err, NOT_A_NEWER_EPOCH);
+        assert_eq!(group(&conn).unwrap().unwrap(), before, "the group moved");
+        assert_eq!(
+            count(&conn, "sync_devices"),
+            2,
+            "an empty manifest emptied the roster"
+        );
+    }
+
+    /// A removed device leaves the group and **keeps its identity** — spec §2.4.
+    ///
+    /// The device id is the hybrid logical clock's deterministic tiebreak and the stamp on every
+    /// op this device ever wrote, so re-minting it here would fork the reader's own history for
+    /// the sake of a row that costs nothing to keep.
+    #[test]
+    fn leaving_the_group_keeps_this_devices_identity() {
+        let conn = db();
+        let me = ensure(&conn).unwrap();
+        create_group(&conn, &me).unwrap();
+        add_device(&conn, "phone", &[9u8; 32], "Phone").unwrap();
+        assert!(
+            group(&conn).unwrap().is_some(),
+            "the fixture is about a group"
+        );
+
+        leave_group(&conn).unwrap();
+
+        assert!(
+            group(&conn).unwrap().is_none(),
+            "the key and epoch are gone"
+        );
+        assert_eq!(
+            count(&conn, "sync_devices"),
+            0,
+            "and the whole roster with it"
+        );
+        let still = ensure(&conn).unwrap();
+        assert_eq!(still.device_id, me.device_id, "the identity was re-minted");
+        assert_eq!(still.keypair.secret, me.keypair.secret);
     }
 
     // -------------------------------------------------------------------------------------

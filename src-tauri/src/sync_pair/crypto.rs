@@ -22,6 +22,8 @@ use x25519_dalek::{PublicKey, StaticSecret};
 /// pair rather than derive two different keys and blame the network.
 const INFO_PAIR: &[u8] = b"mtg-grimoire/pair/v1";
 const INFO_SAS: &[u8] = b"mtg-grimoire/sas/v1";
+const INFO_RELAY_AUTH: &[u8] = b"mtg-grimoire/relay-auth/v1";
+const INFO_ROTATE: &[u8] = b"mtg-grimoire/rotate/v1";
 
 /// XChaCha20-Poly1305's nonce: 192 bits.
 const NONCE: usize = 24;
@@ -112,6 +114,127 @@ pub fn sas(pair_key: &[u8; 32], initiator_public: &[u8; 32], joiner_public: &[u8
     format!("{:06}", u32::from_be_bytes(out) % 1_000_000)
 }
 
+/// The credential a device presents to the relay to say "I am in this group".
+///
+/// **One-way from the group key, which is what makes it safe to send.** The relay stores this
+/// and can invert nothing from it: it never learns the group key, so what it holds stays
+/// ciphertext it cannot open. Every device in the group derives the same value without anything
+/// being distributed, which is what makes an entitlement a property of the *group* rather than of
+/// whichever device happened to open a browser.
+///
+/// **It changes with the epoch, and that is how a removal reaches the device that was removed.**
+/// A rotation mints a new group key, so the auth derived from it is new too; the departed device
+/// derives the old one, the relay has the new one, and the refusal is what sends it to `/keys` to
+/// find out it is not on the manifest.
+///
+/// The epoch is in the info **as well as** being baked into the key, which is belt and braces
+/// rather than a second mechanism: a group key that was ever reused across two epochs — a
+/// restore from backup, a bug — would otherwise yield one auth for two epochs, and the relay's
+/// monotonic check is the only thing standing between a removed device and re-entry.
+///
+/// The group id is the **salt** and the purpose is the **info**, which is [`pair_key`]'s shape:
+/// the value unique to *this* use binds the extract step, so two groups that somehow shared a key
+/// still present two unrelated auths.
+pub fn relay_auth(group_key: &[u8; 32], group_id: &str, epoch: i64) -> String {
+    let hk = Hkdf::<Sha256>::new(Some(group_id.as_bytes()), group_key);
+    let mut info = INFO_RELAY_AUTH.to_vec();
+    info.push(b'|');
+    info.extend_from_slice(epoch.to_string().as_bytes());
+    let mut out = [0u8; 32];
+    hk.expand(&info, &mut out)
+        .expect("32 bytes is far below HKDF-SHA256's output limit");
+    out.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The key one rewrapped blob is sealed under: one ECDH, one HKDF, per epoch.
+///
+/// Both sides compute it from material they already hold — the remover from its own secret and
+/// the target's `sync_devices.public_key`, the target from its own secret and the remover's — so
+/// a rotation publishes no key material anybody has to be told about out of band.
+///
+/// **Per epoch, and that is the mechanism rather than a flourish.** Two rotations to the same
+/// device wrap under two unrelated keys, so a blob from epoch four is not a blob for epoch five
+/// even before the AAD refuses it.
+fn rotate_kek(
+    my_secret: &[u8; 32],
+    their_public: &[u8; 32],
+    group_id: &str,
+    epoch: i64,
+) -> [u8; 32] {
+    let shared = StaticSecret::from(*my_secret).diffie_hellman(&PublicKey::from(*their_public));
+    let hk = Hkdf::<Sha256>::new(Some(group_id.as_bytes()), shared.as_bytes());
+    let mut info = INFO_ROTATE.to_vec();
+    info.push(b'|');
+    info.extend_from_slice(epoch.to_string().as_bytes());
+    let mut out = [0u8; 32];
+    hk.expand(&info, &mut out)
+        .expect("32 bytes is far below HKDF-SHA256's output limit");
+    out
+}
+
+/// What one rewrapped blob is bound to: the group, the device it is for, and the epoch.
+///
+/// **`\0` between the fields rather than `|`**, which is [`crate::sync_engine::wire`]'s rule and
+/// its reason: a device id containing the separator could otherwise be read as a different
+/// `(group, device, epoch)` triple. And it matters more here than it does there, because the
+/// device half of *this* triple is a manifest key the relay stores and hands back — the one
+/// field on the wire whose spelling a caller chooses.
+fn rotate_aad(group_id: &str, device: &str, epoch: i64) -> Vec<u8> {
+    format!("{group_id}\0{device}\0{epoch}").into_bytes()
+}
+
+/// Seal a freshly minted group key for one device that stays in the group.
+///
+/// **This is what makes a removal reach the devices that are not doing the removing.** Rotating
+/// the key stops the departed device reading anything new; without this hop it also stops every
+/// remaining device, which stalls at the old epoch for ever — one removal bricking a group of
+/// three. The blob goes to the relay in the manifest, and the relay can open none of them.
+///
+/// **The target device and the epoch are in the associated data, not merely in the key.** The
+/// relay holds every device's blob in one JSON object, so lifting one row and presenting it as
+/// another device's is the attack that costs nothing to try; binding both means such a blob opens
+/// for nobody rather than for the wrong body. The group id is bound for the same reason one
+/// epoch's blob must not be replayed into another group that shares a pair of keypairs.
+pub fn wrap_group_key(
+    my_secret: &[u8; 32],
+    their_public: &[u8; 32],
+    group_id: &str,
+    target_device: &str,
+    epoch: i64,
+    new_group_key: &[u8; 32],
+) -> Result<Vec<u8>, CryptoError> {
+    let kek = rotate_kek(my_secret, their_public, group_id, epoch);
+    seal(
+        &kek,
+        &rotate_aad(group_id, target_device, epoch),
+        new_group_key,
+    )
+}
+
+/// The other half: open the blob `/keys` answered and take the group key out of it.
+///
+/// **Every refusal is a `CryptoError` and none is a panic**, which is the whole of what this
+/// function has to defend against beyond the AEAD. `blob` arrives from the network, so it can be
+/// empty, shorter than a nonce, or — the case the length check below exists for — a perfectly
+/// authentic seal that simply does not hold 32 bytes. A `try_into` on that last one is where a
+/// panic would live, in a code path a stranger who guessed a group id can reach.
+///
+/// A blob that opens is one the *remover* sealed for *this* device at *this* epoch, and there is
+/// no weaker reading of a success here: the wrapping key is an ECDH nobody else can compute and
+/// the AAD names all three.
+pub fn unwrap_group_key(
+    my_secret: &[u8; 32],
+    their_public: &[u8; 32],
+    group_id: &str,
+    my_device: &str,
+    epoch: i64,
+    blob: &[u8],
+) -> Result<[u8; 32], CryptoError> {
+    let kek = rotate_kek(my_secret, their_public, group_id, epoch);
+    let plaintext = open(&kek, &rotate_aad(group_id, my_device, epoch), blob)?;
+    plaintext.as_slice().try_into().map_err(|_| CryptoError)
+}
+
 /// Seal `plaintext` under `key`, authenticating `aad`.
 ///
 /// The 24-byte nonce is drawn fresh and prefixed to the ciphertext, so a caller never has to
@@ -158,6 +281,155 @@ pub fn open(key: &[u8; 32], aad: &[u8], sealed: &[u8]) -> Result<Vec<u8>, Crypto
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The auth is a function of the key, the id and the epoch, and no two of the three may be
+    /// dropped from it.
+    #[test]
+    fn relay_auth_separates_every_input() {
+        let k1 = [1u8; 32];
+        let k2 = [2u8; 32];
+        let a = relay_auth(&k1, "group-a", 0);
+        assert_eq!(a.len(), 64, "64 hex characters");
+        assert!(a
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        assert_ne!(a, relay_auth(&k2, "group-a", 0), "a different key");
+        assert_ne!(a, relay_auth(&k1, "group-b", 0), "a different group");
+        // **The epoch, even though the key already changes with it.** A group key that was ever
+        // reused across two epochs — a restore from backup, a bug — would otherwise yield one auth
+        // for two epochs, and the relay's monotonic check is the only thing standing between a
+        // removed device and re-entry.
+        assert_ne!(a, relay_auth(&k1, "group-a", 1), "a different epoch");
+        assert_eq!(a, relay_auth(&k1, "group-a", 0), "and it is deterministic");
+    }
+
+    /// The rewrapped key opens for the device it was sealed to, and **for nobody else** — which is
+    /// the one assertion the whole rotation scheme rests on.
+    #[test]
+    fn a_rewrapped_key_opens_only_for_its_target() {
+        let remover = keypair();
+        let target = keypair();
+        let bystander = keypair();
+        let new_key = [9u8; 32];
+
+        let blob = wrap_group_key(
+            &remover.secret,
+            &target.public,
+            "g1",
+            "dev-target",
+            4,
+            &new_key,
+        )
+        .expect("wrap");
+
+        assert_eq!(
+            unwrap_group_key(
+                &target.secret,
+                &remover.public,
+                "g1",
+                "dev-target",
+                4,
+                &blob
+            )
+            .expect("the target opens it"),
+            new_key
+        );
+        assert!(
+            unwrap_group_key(
+                &bystander.secret,
+                &remover.public,
+                "g1",
+                "dev-target",
+                4,
+                &blob
+            )
+            .is_err(),
+            "a device that is not the target must not open it"
+        );
+        // The AAD binds the device and the epoch, so a blob lifted from one row of the manifest and
+        // presented as another device's does not open either.
+        assert!(
+            unwrap_group_key(&target.secret, &remover.public, "g1", "dev-other", 4, &blob).is_err(),
+            "the target device is bound"
+        );
+        assert!(
+            unwrap_group_key(
+                &target.secret,
+                &remover.public,
+                "g1",
+                "dev-target",
+                5,
+                &blob
+            )
+            .is_err(),
+            "the epoch is bound"
+        );
+        assert!(
+            unwrap_group_key(
+                &target.secret,
+                &remover.public,
+                "g2",
+                "dev-target",
+                4,
+                &blob
+            )
+            .is_err(),
+            "the group is bound"
+        );
+    }
+
+    /// A blob that is not a blob must be refused rather than panicked over, and a blob that opens
+    /// to the wrong number of bytes is refused too. Both arrive from the network.
+    #[test]
+    fn unwrap_refuses_a_malformed_blob_without_panicking() {
+        let remover = keypair();
+        let target = keypair();
+
+        assert!(
+            unwrap_group_key(&target.secret, &remover.public, "g1", "d", 1, &[]).is_err(),
+            "empty"
+        );
+        assert!(
+            unwrap_group_key(&target.secret, &remover.public, "g1", "d", 1, &[0u8; 24]).is_err(),
+            "exactly a nonce and nothing after it"
+        );
+        assert!(
+            unwrap_group_key(&target.secret, &remover.public, "g1", "d", 1, &[7u8; 200]).is_err(),
+            "two hundred bytes of noise"
+        );
+
+        // A well-formed seal under the right key that simply does not hold 32 bytes. The AEAD
+        // authenticates it, so only the length check can refuse it — and `try_into` on a Vec of
+        // the wrong length is exactly where a panic would live.
+        let kek = rotate_kek(&remover.secret, &target.public, "g1", 1);
+        let short = seal(&kek, &rotate_aad("g1", "d", 1), b"not thirty-two bytes").unwrap();
+        assert!(unwrap_group_key(&target.secret, &remover.public, "g1", "d", 1, &short).is_err());
+    }
+
+    /// Two epochs seal the same key under two unrelated wrapping keys, and a blob does not carry
+    /// across. `relay_auth`'s epoch argument is belt and braces; this one is the mechanism.
+    #[test]
+    fn each_epoch_wraps_under_its_own_key() {
+        let remover = keypair();
+        let target = keypair();
+        let key = [3u8; 32];
+
+        let four =
+            wrap_group_key(&remover.secret, &target.public, "g1", "dev", 4, &key).expect("wrap");
+        let five =
+            wrap_group_key(&remover.secret, &target.public, "g1", "dev", 5, &key).expect("wrap");
+        assert_ne!(four, five, "the nonce alone would make these differ");
+
+        assert_eq!(
+            unwrap_group_key(&target.secret, &remover.public, "g1", "dev", 5, &five).unwrap(),
+            key
+        );
+        assert_ne!(
+            rotate_kek(&remover.secret, &target.public, "g1", 4),
+            rotate_kek(&remover.secret, &target.public, "g1", 5),
+            "one wrapping key for two epochs"
+        );
+    }
 
     /// Both sides of a real exchange must derive the same pair key. This is the whole of the
     /// ECDH, and it is genuinely two-sided: two independent keypairs, each deriving from the

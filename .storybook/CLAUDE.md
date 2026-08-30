@@ -30,30 +30,38 @@ deliberately**: no screenshots are stored.
 - **Seeds and faults are state, not response stubs**: `parameters: { fake: { seed, fault } }`.
   **Seven** seeds
   (`empty`/`starter`/`needsReview`/`large`/`bracketMismatch`/`combosMissing`/`paired`),
-  **twenty-two** faults
+  **twenty-three** faults
   (`busy`/`syncing`/`syncError`/`imageFailures`/`gone`/`indexCold`/`deckMeta`/`updateAvailable`/
   `updateError`/`errorLog`/`feedFetchError`/`oracleTagsMissing`/`oracleTagsFetchError`/
   `artTagsMissing`/`artTagsFetchError`/`imageUrisMissing`/`exportWriteError`/
   `mirrorRootUnwritable`/`combosFetchError`/`pairingReadError`/`patreonDeclined`/
-  `patreonLapsed`); saying
+  `patreonLapsed`/`patreonGroupEntitled`); saying
   nothing gets `starter` with no fault. A
   fault is set on the _world_, so a story shows what the **app** does with a refusal rather than
   what one mocked call returns. **`syncing` is `busy`'s neighbour and reaches exactly one
   command**: `cache_clear` refuses outright while a card update is in flight, because
   `data/tmp/` is where the corpus download puts 77 MB the ingest then reads back — and it is
   checked *before* the write connection is asked for, which is why it is not `busy`.
-  **Six of the twenty-two are not failures at all** — `indexCold` is
+  **Seven of the twenty-three are not failures at all** — `indexCold` is
   the search index mid-build; `oracleTagsMissing` is the Oracle tag taxonomy having never
   been ingested, which is every install's first launch and the state the type-line fallback
   exists for; `artTagsMissing` is the same thing one dataset over, where the honest floor is a
   Tags page that says it has nothing yet; and `imageUrisMissing` is a corpus whose
   `cards.image_uris` is NULL throughout, so
   `card_image_uri` answers `null` for every printing and "Copy card image" copies nothing.
-  **`patreonDeclined` and `patreonLapsed` are the other two, and they are the two supporter
-  states no press can reach.** Connecting *is* reachable — paste a claim code, press Connect — so
-  there is neither fault nor seed for it; what a reader can never produce from this window is
-  Patreon declining their card (§7.2's grace window, where sync keeps working) or their pledge
-  ending. **The lapsed one is written out in `db.ts` because it is easy to get subtly wrong**:
+  **`patreonDeclined`, `patreonLapsed` and `patreonGroupEntitled` are the other three, and they
+  are the three supporter states no press can reach.** Connecting *is* reachable — paste a claim
+  code, press Connect — so there is neither fault nor seed for it; what a reader can never
+  produce from this window is Patreon declining their card (§7.2's grace window, where sync keeps
+  working), their pledge ending, or **another device's membership covering this one**, which is
+  decided at the far end of `/token`'s group door. **`patreonGroupEntitled` is a good state
+  rather than a bad one** — the second device in a group whose first device connected, holding no
+  refresh secret at all and supporting anyway. It differs from the lapse in exactly one stored
+  field, the *status*, which is why `db.ts` **derives** `entitled` from `refreshSecret` and
+  `status` instead of storing it: a stored fourth boolean could be set to disagree with both, and
+  a panel reading the wrong one of those two states draws **Connect Patreon at a paid-up
+  supporter on every device but the one that pressed it**. That shipped.
+  **The lapsed one is written out in `db.ts` because it is easy to get subtly wrong**:
   `entitlement::revoke` is `clear` plus one row, so a lapsed device has no refresh secret, no
   access token and **no `since`** — every field but `groupBound` reads exactly as a device out of
   the box, and a fault carrying a plausible date would let a panel keyed on that date pass. It

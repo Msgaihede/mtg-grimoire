@@ -3979,27 +3979,44 @@ export interface RelayStatus {
 /**
  * The membership that unlocks the relay, as this device last heard it.
  *
- * **`connected` and `status` are two different questions and the panel must never fold them
- * into one.** `connected` is local — does this device hold a refresh secret — while `status` is
- * the relay's own last word about the membership behind it. A device that has never connected
- * and a reader whose pledge has ended are both `connected: false, status: "dead"`, and they get
- * different sentences: *Not connected* points at a button, *Membership ended* points at a
+ * **`entitled` and `status` are two different questions and the panel must never fold them
+ * into one.** `entitled` says the relay will mint this device a token; `status` is the relay's
+ * own last word about the membership behind it. A device that has never connected and a reader
+ * whose pledge has ended are both `entitled: false, status: "dead"`, and they get different
+ * sentences: *Not connected* points at a button, *Membership ended* points at a
  * renewal and has to say that nothing local was touched (spec §7.1).
  *
  * **`groupBound` is what tells them apart, and `since` cannot.** `entitlement::revoke` deletes the
  * start date along with the refresh secret, so a lapsed membership and a device out of the box
  * both read `since: null` — the field that survives a lapse is `groupBound`, which says an
- * entitlement was once bound to this device's group. `supporterState` therefore asks `connected`
+ * entitlement was once bound to this device's group. `supporterState` therefore asks `entitled`
  * first and `groupBound` second, and a build that keyed the two silences on `since` showed every
  * lapsed reader *Not connected*.
+ *
+ * ⚠️ **This interface is hand-written and nothing type-checks it against the crate**, which is
+ * exactly how the rename below arrived as a runtime bug rather than a red build: the field was
+ * called `connected` until spec §2.5, and a build that kept the old spelling compiled, passed
+ * every test, read `undefined` in the shipped window and drew *Connect Patreon* at a paid-up
+ * supporter on every device but one. Assert the field **by name** — `toEqual` over the whole
+ * object, never `toMatchObject` on the fields that did not move.
  *
  * **`grace` is a third thing again, not a softer `dead`** (spec §7.2): a card Patreon is still
  * retrying, where tokens are still minted and sync keeps working. Drawing it as a cancellation
  * would punish a reader for something they did not decide.
  */
 export interface SupporterStatus {
-  /** This device holds a refresh secret — the local half, and the only one it owns. */
-  connected: boolean;
+  /**
+   * **The relay will mint this device a token** — spec §2.5, and the field was `connected`
+   * until then.
+   *
+   * Renamed rather than redefined, because it stopped being one device's fact. "Connected"
+   * meant *this device holds a refresh secret*; entitlement is the **group's**, since any
+   * device in a group with a live membership can mint through `/token`'s group door holding no
+   * Patreon-side secret at all. So the crate answers this as that secret **or** a stored
+   * `SUPPORTER_STATUS` of `active`/`grace`, which is the relay having answered this device's
+   * group auth.
+   */
+  entitled: boolean;
   /** `"active"`, `"grace"` or `"dead"`, as the relay last answered. */
   status: string;
   /** Unix **seconds** the membership began; null for never having been told one **and for one

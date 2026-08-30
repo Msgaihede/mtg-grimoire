@@ -1,4 +1,5 @@
 import { decide, type Status } from "./entitlement";
+import { authIsCurrent, seedGroup } from "./groupauth";
 import { hex } from "./md5";
 import {
   exchangeCode,
@@ -40,6 +41,15 @@ import type { Env } from "./index";
  * the device has no token yet) and `claim_codes` has no group column. A claim without it mints
  * a token matching no group: Patreon connects, and every later push, pull and ack 401s for
  * ever.
+ *
+ * **`/token` has two doors and they are looked up by different columns.** The refresh door finds
+ * a row by `refresh_secret` and serves the one device that pressed Connect; the group door finds
+ * a row by `group_id` and serves any device that can derive the group's `relay_auth` — which is
+ * every device holding the group key, and is the whole of spec §2.2. The two must never be
+ * collapsed into one `SELECT … WHERE refresh_secret = ? OR group_id = ?`: a row is findable by
+ * either column, so an `OR` would open a row to a caller presenting the *group id* — a value
+ * that travels in the clear in every `/g/…` path — in the field that is supposed to hold a
+ * secret.
  */
 
 /**
@@ -66,6 +76,22 @@ export const GROUP_SEGMENT = "[A-Za-z0-9_-]{1,128}";
 
 /** The same rule, anchored, for a group id that arrives in a body rather than in a path. */
 export const GROUP_ID = new RegExp(`^${GROUP_SEGMENT}$`);
+
+/**
+ * A group's `relay_auth` on the wire: HKDF-SHA256's thirty-two bytes as lowercase hex, and
+ * nothing else (spec §2.1).
+ *
+ * **It is checked at the route rather than in `groupauth.ts`, and the split is deliberate.** That
+ * module compares and stores; this one decides what is allowed to reach it. An `auth` that has
+ * not been through here reaches `equalsConstantTime` — whose own doc leans on both sides being
+ * 64 hex characters for its length check not to be a near miss — and, on `/claim`, reaches a D1
+ * write that fixes the group's credential for as long as nobody rotates it.
+ *
+ * Lowercase only, because `hex` in `md5.ts` and `hex::encode` in the Rust both emit lowercase and
+ * neither side ever normalises: accepting upper case here would store a value that no device
+ * derives, and the group would be locked out of its own auth at the next `/token`.
+ */
+export const RELAY_AUTH = /^[0-9a-f]{64}$/;
 
 /** Characters in a claim code, before the separators. Twelve, as three groups of four. */
 const CODE_CHARS = 12;
@@ -106,14 +132,32 @@ type EntitlementRow = {
 };
 
 /**
- * What `/claim` and `/token` both answer, and it is five fields rather than the two the design
- * sketch carried. `sync_engine::entitlement::Grant` deserialises exactly this shape: a name
- * that disagrees, or a sixth field where `since` should be, is a body serde refuses at runtime
- * while every test on both sides stays green.
+ * What `/claim` and `/token`'s **refresh** door answer, and it is five fields rather than the two
+ * the design sketch carried. `sync_engine::entitlement::Grant` deserialises exactly this shape: a
+ * name that disagrees, or a sixth field where `since` should be, is a body serde refuses at
+ * runtime while every test on both sides stays green.
  */
-interface Grant {
-  access: string;
+interface Grant extends GroupGrant {
   refresh: string;
+}
+
+/**
+ * What `/token`'s **group** door answers — the same thing minus the refresh secret, and the
+ * omission is the point rather than an economy.
+ *
+ * A device that reached `/token` by proving it is in the group has proved nothing about the
+ * Patreon account behind it. Handing that device the credential which can revoke, rebind and
+ * re-register the group would make every paired device able to evict every other one, which is
+ * precisely the failure `pairing.rs` dropping the secret from its blob exists to prevent
+ * (spec §2.2). `sync_engine::entitlement::GroupGrant` deserialises this four-field shape.
+ *
+ * It is the *base* of `Grant` rather than an `Omit<Grant, "refresh">` so that `grantFor` can
+ * build it without ever being handed a secret: the one door that holds one adds it afterwards.
+ * A structural subtraction would leave the secret in the minting function's arguments, one
+ * careless spread away from the wire.
+ */
+interface GroupGrant {
+  access: string;
   expires: number;
   status: Status;
   since: number;
@@ -221,7 +265,12 @@ function randomSecret(): string {
 }
 
 /**
- * Mint an access token and dress it as the five-field answer both endpoints give.
+ * Mint an access token and dress it as the four fields **every** answer this file gives carries.
+ *
+ * **The refresh secret is not a parameter, and that is the fence.** Two of the three callers hold
+ * one and the third must never send one; a function that took it would put the group door one
+ * careless argument away from leaking the credential that can evict every device in the group.
+ * The two doors that answer a `Grant` spread this result and add `refresh` themselves.
  *
  * The signing key is fetched through `required` rather than passed as `env.RELAY_HMAC_KEY` or,
  * worse, `String(env.RELAY_HMAC_KEY)`: an unset binding spelled that way signs every token with
@@ -232,10 +281,9 @@ async function grantFor(
   env: Env,
   subject: string,
   group: string,
-  refresh: string,
   status: Status,
   createdAtMs: number,
-): Promise<Grant> {
+): Promise<GroupGrant> {
   const exp = Date.now() + TOKEN_TTL_MS;
   const access = await mint(
     { sub: subject, grp: group, exp },
@@ -243,7 +291,6 @@ async function grantFor(
   );
   return {
     access,
-    refresh,
     expires: unixSeconds(exp),
     status,
     since: unixSeconds(createdAtMs),
@@ -455,15 +502,34 @@ async function connectPatreon(
  * mistyping a code must not lose an entitlement they already hold.
  */
 export async function handleClaim(request: Request, env: Env): Promise<Response> {
-  let body: { code?: unknown; group?: unknown };
+  let body: ClaimBody;
   try {
-    body = (await request.json()) as { code?: unknown; group?: unknown };
+    body = (await request.json()) as ClaimBody;
   } catch {
     return json({ error: "unreadable body" }, 400);
   }
   if (typeof body?.code !== "string" || typeof body.group !== "string") {
     return json({ error: "malformed claim" }, 400);
   }
+
+  // **`epoch` and `auth` are validated with exactly the care `group` is, and for the same
+  // reason**: both are written to D1 by this handler and both are read back as credentials.
+  //
+  // `isSafeInteger` rather than `isInteger`, because `1e300` passes the latter and is the one
+  // value a claim could carry that permanently bricks its own group: `epoch + 1 === epoch` up
+  // there, so `recordRotation`'s `WHERE ? > max(epoch)` could never again be satisfied and no
+  // removal would ever publish. An epoch is a removal counter starting at zero, so 2^53 is not
+  // a ceiling any group reaches by living.
+  if (typeof body.epoch !== "number" || !Number.isSafeInteger(body.epoch) || body.epoch < 0) {
+    return json({ error: "malformed claim" }, 400);
+  }
+  // Unvalidated, this string reaches `equalsConstantTime` — whose length check is only *not* a
+  // near-miss oracle because both sides are 64 hex characters by the time they get there — and
+  // then a D1 write that fixes the group's credential until somebody rotates it.
+  if (typeof body.auth !== "string" || !RELAY_AUTH.test(body.auth)) {
+    return json({ error: "malformed claim" }, 400);
+  }
+  const { epoch, auth } = body;
 
   // A group id the router could never carry is refused before it is bound, not after. Bound, it
   // would mint tokens whose `grp` names a path segment `ROUTE` rejects — a claim that succeeds
@@ -524,7 +590,33 @@ export async function handleClaim(request: Request, env: Env): Promise<Response>
     return json({ error: "that membership is already bound to another sync group" }, 409);
   }
 
-  return json(await grantFor(env, row.subject, group, refresh, status, row.created_at));
+  // **After the binding and never before.** Every refusal above leaves this group's key alone,
+  // which is what a 409 has to mean: a claim that registered an auth for a group it did not bind
+  // would hand the *next* device to claim that group a `group_auth` it cannot match, and no
+  // amount of re-claiming would clear it — `seedGroup` is `INSERT OR IGNORE` precisely so that a
+  // re-claim does not overwrite a live manifest.
+  //
+  // Allowed to throw. The alternative is answering a grant while the group's first auth was
+  // never registered, which is a device that syncs today and cannot rotate ever; a 500 is the
+  // loud version of the same failure and the reader's next press re-claims the same group,
+  // because `row.group_id === group` by then.
+  await seedGroup(env, group, epoch, auth);
+
+  // Annotated rather than inferred, so a mis-spelled field is a type error here instead of a
+  // serde failure in `sync_engine::entitlement` that no test on either side can see.
+  const grant: Grant = {
+    refresh,
+    ...(await grantFor(env, row.subject, group, status, row.created_at)),
+  };
+  return json(grant);
+}
+
+/** The `/claim` body, before any of it has been checked. */
+interface ClaimBody {
+  code?: unknown;
+  group?: unknown;
+  epoch?: unknown;
+  auth?: unknown;
 }
 
 // ---------------------------------------------------------------------------------------
@@ -540,54 +632,142 @@ export async function handleClaim(request: Request, env: Env): Promise<Response>
  * nothing to announce it, and this is one of only two places that ever asks.
  */
 export async function handleToken(request: Request, env: Env): Promise<Response> {
-  let body: { refresh?: unknown };
+  let body: TokenBody;
   try {
-    body = (await request.json()) as { refresh?: unknown };
+    body = (await request.json()) as TokenBody;
   } catch {
     return json({ error: "unreadable body" }, 400);
   }
-  if (typeof body?.refresh !== "string" || body.refresh === "") {
-    return json({ error: "malformed refresh" }, 400);
+
+  // **The shape is decided before anything is looked up, and `refresh` wins whenever it is
+  // present at all.** Branching on presence rather than on validity is what stops a body
+  // carrying both fields being steered onto the weaker door by sending a `refresh` the caller
+  // knows is malformed: a caller who names a secret is answered about that secret or refused.
+  if (body?.refresh !== undefined) {
+    if (typeof body.refresh !== "string" || body.refresh === "") {
+      return json({ error: "malformed refresh" }, 400);
+    }
+    return refreshDoor(env, body.refresh);
   }
 
+  if (typeof body?.group !== "string" || !GROUP_ID.test(body.group)) {
+    return json({ error: "malformed token request" }, 400);
+  }
+  if (typeof body.auth !== "string" || !RELAY_AUTH.test(body.auth)) {
+    return json({ error: "malformed token request" }, 400);
+  }
+  return groupDoor(env, body.group, body.auth);
+}
+
+/** The `/token` body, before any of it has been checked. Either shape arrives here. */
+interface TokenBody {
+  refresh?: unknown;
+  group?: unknown;
+  auth?: unknown;
+}
+
+/**
+ * The refresh door: the one device that pressed Connect, trading the Patreon-side secret.
+ *
+ * **Looked up by `refresh_secret`, and that column alone.** See this module's doc for why this
+ * query and `groupDoor`'s are not one query with an `OR`.
+ */
+async function refreshDoor(env: Env, refresh: string): Promise<Response> {
   const row = await env.DB.prepare(
     `SELECT subject, status, grace_until, group_id, refresh_secret, patreon_refresh, created_at
        FROM entitlements
       WHERE refresh_secret = ?`,
   )
-    .bind(body.refresh)
+    .bind(refresh)
     .first<EntitlementRow>();
 
   // No row is a revoked or never-issued secret; a row with no group has never been claimed and
   // there is nothing to stamp into `grp`. Both are the same sentence to the app.
   if (row === null || row.group_id === null) return json({ error: "unauthorized" }, 401);
 
+  const status = await serveOrRevoke(env, row);
+  if (status === null) return json({ error: "unauthorized" }, 401);
+
+  // The caller's own string rather than `row.refresh_secret`: the same value, and the secret is
+  // not rotated here — the app stores whatever comes back, and rotating on every refresh would
+  // break a device that is refreshing concurrently.
+  const grant: Grant = {
+    refresh,
+    ...(await grantFor(env, row.subject, row.group_id, status, row.created_at)),
+  };
+  return json(grant);
+}
+
+/**
+ * The group door: any device that holds the group key, and therefore no Patreon secret at all.
+ * Spec §2.2, and the whole of item 3 — a device that has only ever paired can mint its own token.
+ *
+ * **The auth is checked before the row is loaded, through `authIsCurrent` rather than a `WHERE
+ * group_auth = ?`.** That helper is where the comparison is constant-time and where "current"
+ * is defined; a second spelling of the question here would be a second thing to get wrong, and
+ * an index probe on a secret besides. It costs one extra point read on `entitlements`, against
+ * a route that is asked once a day per device.
+ *
+ * **The answer omits `refresh` and nothing here has one to omit.** `grantFor` is not given the
+ * secret, so the omission is structural rather than a deletion somebody could forget.
+ */
+async function groupDoor(env: Env, group: string, auth: string): Promise<Response> {
+  // A stale auth lands here after a rotation this device has not caught up with, which is not a
+  // lapse — spec §2.5 has the app re-check `/keys` once before concluding anything from a 401 on
+  // this door. The relay cannot tell the two apart and does not try: it answers the same
+  // `unauthorized` to a device that is behind and to one that was removed.
+  if (!(await authIsCurrent(env, group, auth))) return json({ error: "unauthorized" }, 401);
+
+  const row = await env.DB.prepare(
+    `SELECT subject, status, grace_until, group_id, refresh_secret, patreon_refresh, created_at
+       FROM entitlements
+      WHERE group_id = ?`,
+  )
+    .bind(group)
+    .first<EntitlementRow>();
+  // Unreachable while `authIsCurrent` reads `entitlements.group_auth` — no row is no auth. Kept
+  // because the day that helper is taught to read `group_keys` instead, this line is the only
+  // thing standing between a group with no membership and a token (spec §2.4).
+  if (row === null) return json({ error: "unauthorized" }, 401);
+
+  const status = await serveOrRevoke(env, row);
+  if (status === null) return json({ error: "unauthorized" }, 401);
+
+  const grant: GroupGrant = await grantFor(env, row.subject, group, status, row.created_at);
+  return json(grant);
+}
+
+/**
+ * What a stored row is worth *now*, or `null` for "refuse" — and the revocation that a refusal
+ * on this route has to carry with it.
+ *
+ * **One function so that both doors settle identically, which is a requirement rather than
+ * tidiness.** A closed grace window is resolved on the group door exactly as on the refresh
+ * door (spec §2.2): `/token` is one of only two places that ever asks whether a window has run
+ * out, and a group door that merely reported it would leave a declined reader's every paired
+ * device syncing for ever on a membership that ended a week ago.
+ *
+ * §7.1 runs here rather than being left to tomorrow's cron, because the alternative is a row
+ * this pass has already decided is dead whose log nothing will ever drop — the reconciliation
+ * skips `dead` rows by design. A failure must not change the answer: the token is refused either
+ * way, and the cron's local settle will try again.
+ */
+async function serveOrRevoke(env: Env, row: EntitlementRow): Promise<Status | null> {
   const now = Date.now();
   const status = settle(row.status, row.grace_until, now);
   if (status === "dead") {
-    // The window closed. §7.1 runs here rather than being left to tomorrow's cron, because the
-    // alternative is a row this pass has already decided is dead whose log nothing will ever
-    // drop — the reconciliation skips `dead` rows by design. A failure must not change the
-    // answer: the token is refused either way, and the cron's local settle will try again.
     try {
       await revoke(env, row.subject, row.group_id);
     } catch (error) {
       console.error("token revoke", error);
     }
-    return json({ error: "unauthorized" }, 401);
+    return null;
   }
 
   await env.DB.prepare(`UPDATE entitlements SET checked_at = ? WHERE subject = ?`)
     .bind(now, row.subject)
     .run();
-
-  // `body.refresh` rather than `row.refresh_secret`: the same string, already narrowed to
-  // `string` by the guard above, and the secret is not rotated here — the app stores whatever
-  // comes back, and rotating on every refresh would break a second device that holds the same
-  // secret from the sealed pairing blob (spec §6.2).
-  return json(
-    await grantFor(env, row.subject, row.group_id, body.refresh, status, row.created_at),
-  );
+  return status;
 }
 
 // ---------------------------------------------------------------------------------------
