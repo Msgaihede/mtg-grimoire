@@ -26,6 +26,11 @@
 /// re-export from there does not work, because a name re-exported from a gated module is
 /// invisible on wasm exactly when it is wanted.
 pub mod app_meta;
+/// **The card pane, moved here on 2026-08-30** for the deck domain's reason and with the same
+/// finding: its six command wrappers sit in a block and everything else is `&Connection` in,
+/// DTO out - no filesystem, no `tokio`, no `reqwest` anywhere in the file. `card_detail` is
+/// the command the reader hit first on the phone.
+pub mod card;
 pub mod card_row;
 /// **The deck domain, and the ten modules below it, moved here on 2026-08-29** — they were
 /// under "Desktop and Android" because of where their *commands* were, not because of
@@ -96,8 +101,6 @@ pub mod wishlist;
 pub mod wishlist_folders;
 
 // ── Desktop and Android ──────────────────────────────────────────────────────────
-#[cfg(not(target_family = "wasm"))]
-pub mod card;
 #[cfg(not(target_family = "wasm"))]
 pub mod export;
 #[cfg(not(target_family = "wasm"))]
