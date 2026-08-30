@@ -12,11 +12,12 @@ way every application's API base URL is public, and no longer a setting a reader
 Settings. What a reader supplies instead is a **membership**: they connect Patreon once, paste a
 claim code, and the app trades it for a pair of tokens.
 
-**What is deployed at that address today is the pre-entitlement Worker.** The host is real — it
-is what the 2026-08-29 end-to-end pass ran against — but the code on it has no auth gate, no
-`/claim`, no `/token`, no OAuth callback, no webhook and no D1 binding. A device pointed there
-now reaches a live relay that answers none of the endpoints the app calls, which fails as a 404
-from a server that is there rather than as a name that will not resolve. Deploying this tree is
+**What is deployed at that address today is the entitlement Worker, minus this change's two
+routes.** Probed 2026-08-30: `/claim` and `/token` answer **405** (the route is there and wants POST), `/oauth/patreon/callback` **400**, `/g/{group}/pull` **401** from the bearer gate, and `/g/{group}/rotate` and `/g/{group}/keys` **404**. So a device pointed there
+reaches a relay that speaks the membership flow and the log, and 404s only on the key
+distribution. **This paragraph said the opposite until 2026-08-30**, and was repeated into two
+`CLAUDE.md` files before anybody asked the host — which is why step 0 of the runbook is two
+`curl`s rather than a sentence. Deploying this tree is
 `npx wrangler deploy` from this directory, and it is the last of the four steps under
 **Deploying** below rather than the whole of them.
 
@@ -280,10 +281,11 @@ loudly on the first request rather than quietly.
 Four steps, in order, and the first two are why `npx wrangler deploy` alone is not enough:
 
 1. `npx wrangler d1 create mtg-grimoire-relay`, then put the id it prints into
-   `wrangler.jsonc`'s `d1_databases[0].database_id`. **The committed value is the placeholder
-   `<set on create>`** — only that command can produce the real one, and a plausible-looking uuid
-   in this file is a value that gets copied into documentation and deployed against, where one
-   that cannot resolve is caught by the first person who tries it.
+   `wrangler.jsonc`'s `d1_databases[0].database_id`. **Already done** — the committed value is a
+   real uuid, not the `<set on create>` placeholder this step described until 2026-08-30, so the
+   database exists and step 2 runs against it rather than creating it. Only that command can
+   produce a real id, and a plausible-looking uuid invented here would be a value that gets copied
+   into documentation and deployed against.
 2. `npx wrangler d1 execute mtg-grimoire-relay --remote --file=./schema.sql`.
 3. Set the three secrets, and add the two public `vars` beside `RELAY_BASE`.
 4. `npx wrangler deploy`, then register the redirect URI and the webhook with Patreon.

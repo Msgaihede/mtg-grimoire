@@ -15,7 +15,6 @@
 //! the clear prefix belongs to the same handshake: the joiner's key is repeated inside the
 //! sealed bytes and compared, and the initiator's id is the AEAD's associated data.
 
-use crate::sync_engine::entitlement;
 use crate::sync_pair::crypto;
 use crate::sync_pair::identity;
 use crate::sync_pair::invite::{Invite, QrMatrix};
@@ -233,21 +232,21 @@ pub fn respond(
 /// What a device with no name of its own is filed as.
 const DEFAULT_PEER_NAME: &str = "Paired device";
 
-/// The access token a device carries out of a pairing: **a placeholder, already expired.**
-///
-/// Spec §6.2 puts the *refresh secret* in the sealed blob and nothing else, and that is right:
-/// an `access` is a 24-hour bearer token the relay minted for the **other** device, so copying
-/// one would hand the joiner a credential that dies the same afternoon and says the wrong
-/// device made the request. [`entitlement::store_grant`] writes the two together — an access
-/// token with no refresh secret reads as disconnected — so the field has to hold something, and
-/// what makes this string harmless is the `0` expiry stored beside it:
-/// [`entitlement::access_token`] compares that against its refresh margin, finds it long dead,
-/// and trades the refresh secret for a token of the joiner's own before a single request goes
-/// out. **This value never reaches the relay.**
-const PAIRED_ACCESS: &str = "pairing";
-
 /// The initiator confirms the digits matched: the group is created if needed, the joiner goes on
 /// the roster, and the group key is sealed for it to carry.
+///
+/// **What the blob hands over is a group and nothing else, and the absence is the point.** Spec
+/// §6.2 sealed the *refresh secret* in beside the key, so that the joining device never opened a
+/// browser and never saw Patreon; spec §2.2 takes it back out, because that made every device in
+/// a group hold the one credential `/token`'s refresh door answers to — and a device holding it
+/// can re-register the group's auth and so evict the very devices that removed it. **Restricting
+/// the Patreon-side secret to the device that actually pressed Connect is what makes a removal
+/// stick.** Nothing is lost by it: the joiner derives [`crypto::relay_auth`] from the key it is
+/// being handed here and mints a token of its own through `/token`'s **group** door, which
+/// answers the membership's status and date along with it.
+///
+/// The cost, stated plainly: a freshly paired device draws *Supporting since …* after its first
+/// relay call rather than the instant the digits match.
 pub fn confirm(conn: &Connection, pending: &mut Option<Pending>) -> Result<SealedKey, String> {
     let me = identity::ensure(conn).map_err(err)?;
     let p = pending.as_mut().ok_or(NOTHING_IN_FLIGHT)?;
@@ -269,28 +268,23 @@ pub fn confirm(conn: &Connection, pending: &mut Option<Pending>) -> Result<Seale
     )
     .map_err(err)?;
 
-    // `<group_id>\0<epoch>\0<refresh>\0<32-byte key>` — the id and the epoch travel with the
-    // key because a key with no epoch cannot be compared against a later rotation, and the
-    // refresh secret travels with them so that **the joining device never opens a browser and
-    // never sees Patreon** (spec §6.2). One membership, one group, every device the reader owns.
+    // `<group_id>\0<epoch>\0<32-byte key>` — the id and the epoch travel with the key because a
+    // key with no epoch cannot be compared against a later rotation, and since spec §2.2 nothing
+    // else travels at all. **This device's membership is not consulted here**, which is what
+    // makes pairing possible in either order: a reader may pair two devices and connect Patreon
+    // afterwards, or the other way round, and neither is a refusal.
     //
-    // **The key is still last, and the refresh secret goes before it rather than after it.** The
-    // key is 32 raw bytes and may hold a zero of its own, so it can only ever be the *final*
-    // field: [`complete`] splits on zero bytes and takes everything left over as the key. A
-    // refresh secret appended after it would be swallowed by any group key containing a zero —
-    // about one pairing in eight — and would pass every test whose fixture key happened to
-    // contain none. It is safe as a **middle** field for the reason A's device id is safe as the
-    // prefix one step down: the relay mints it as base64url, so it carries no zero byte at all.
-    //
-    // **Empty when this device holds no membership, and that is a pairing rather than a
-    // refusal**: a reader may pair two devices and connect Patreon afterwards, in either order.
-    let refresh = entitlement::refresh_secret(conn).unwrap_or_default();
+    // **The key is last, and anything ever added here goes before it.** The key is 32 raw bytes
+    // and may hold a zero of its own, so it can only ever be the *final* field: [`complete`]
+    // splits on zero bytes and takes everything left over as the key. A field appended after it
+    // would be swallowed by any group key containing a zero — about one pairing in eight — and
+    // would pass every test whose fixture key happened to contain none. The two ahead of it are
+    // safe there for the reason A's device id is safe as the clear prefix one step down: a hex
+    // group id and a decimal epoch carry no zero byte at all.
     let mut plain = Vec::new();
     plain.extend_from_slice(group.group_id.as_bytes());
     plain.push(0);
     plain.extend_from_slice(group.epoch.to_string().as_bytes());
-    plain.push(0);
-    plain.extend_from_slice(refresh.as_bytes());
     plain.push(0);
     plain.extend_from_slice(&group.group_key);
 
@@ -327,15 +321,20 @@ pub fn complete(
     let peer_id = String::from_utf8_lossy(&blob[..split]).into_owned();
     let plain = crypto::open(&pair_key, peer_id.as_bytes(), &blob[split + 1..]).map_err(err)?;
 
-    // `<group_id>\0<epoch>\0<refresh>\0<32-byte key>`, and **the key is read last because it
-    // is the one field that may contain a zero byte of its own** — [`confirm`], which seals it,
-    // carries the whole argument.
-    let mut parts = plain.splitn(4, |b| *b == 0);
+    // `<group_id>\0<epoch>\0<32-byte key>`, and **the key is read last because it is the one
+    // field that may contain a zero byte of its own** — [`confirm`], which seals it, carries the
+    // whole argument.
+    //
+    // **The `3` is the fence and not an optimisation**: a plain `split` would end the key at the
+    // first zero *inside* it and hand `join_group` a short slice, which the length check below
+    // then refuses. The same check is what makes a sealer that writes one field too many a
+    // refusal rather than a wrong key — the leftover separator and field are still in this
+    // slice, so it cannot be 32 bytes long.
+    let mut parts = plain.splitn(3, |b| *b == 0);
     let group_id = String::from_utf8_lossy(parts.next().unwrap_or_default()).into_owned();
     let epoch: i64 = String::from_utf8_lossy(parts.next().unwrap_or_default())
         .parse()
         .map_err(|_| NOT_A_KEY)?;
-    let refresh = String::from_utf8_lossy(parts.next().ok_or(NOT_A_KEY)?).into_owned();
     let key_bytes = parts.next().ok_or(NOT_A_KEY)?;
     if key_bytes.len() != 32 {
         return Err(NOT_A_KEY.to_owned());
@@ -364,25 +363,25 @@ pub fn complete(
     )
     .map_err(err)?;
 
-    // **The membership rides in behind the group, and an absent one takes nothing away.** A
-    // blank field is an offering device that has not connected Patreon — which says nothing
-    // whatever about this one, and this one may have connected it itself. Clearing a grant on
-    // the strength of the *other* device not holding one would disconnect a reader for pairing.
+    // **Nothing about the membership is written, and that is the whole of spec §2.2.** The blob
+    // used to carry the offering device's refresh secret and this is where it was stored, under
+    // a placeholder access token that had expired at the epoch; it carries none now, so a
+    // pairing writes the group and the roster and touches `sync_state`'s grant keys not at all —
+    // neither this device's own, which is why a reader who connected Patreon here and then
+    // paired with a device that never did keeps their membership, nor an absent one.
     //
-    // **No supporter status is written**, deliberately: what the relay last said about the
-    // membership is the relay's own fact and this device has not asked it yet, so
-    // `entitlement::supporter_state` reads `("dead", None)` here until the first `/token` call
-    // answers one. Copying A's word for it would put a "supporting since" date on this panel
-    // that nothing on this device was ever told. See [`PAIRED_ACCESS`] for the other half of
-    // that argument — the access token is a placeholder that expired at the epoch, so the first
-    // sync trades this secret for a real one before it sends anything.
+    // What makes that sufficient rather than a loss is `/token`'s **group** door: the key
+    // written just above is what `crypto::relay_auth` derives from, so the first round trip
+    // mints a token of this device's own and is told the status and the date with it — which is
+    // more than the old field ever carried, since it brought no `supporter_status` and left this
+    // panel drawing a dateless *Supporting. Thank you.*
     //
-    // It is written **after** the group rather than before it: a failure here is a database that
-    // is already failing, and what the reader pressed the button for — the two devices being in
-    // one group — has landed by the time it can happen.
-    if !refresh.trim().is_empty() {
-        entitlement::store_grant(conn, PAIRED_ACCESS, &refresh, 0)?;
-    }
+    // **The cost is one sync and it is visible on the way past.** Until that round trip this
+    // device holds no `supporter_status`, so `entitlement::supporter_state` reads
+    // `("dead", None)` and `commands::entitled` is false — which a Remove pressed in that window
+    // answers with `identity::NO_MEMBERSHIP` even though the group has a membership. It heals
+    // itself the first time anything syncs, and refusing later would break the ordering that
+    // refusal exists for.
     Ok(())
 }
 
@@ -452,6 +451,7 @@ fn from_hex16(s: &str) -> Option<[u8; 16]> {
 
 use crate::sync::{self, AppState};
 use crate::sync_engine::client;
+use crate::sync_engine::commands;
 
 /// What [`sync_device_revoke`] says when the round trip it makes first does not complete.
 ///
@@ -566,23 +566,44 @@ pub async fn sync_device_rename(
     .map_err(|e| format!("could not rename that device: {e}"))?
 }
 
-/// Remove a device and rotate the group key.
+/// Remove a device, in the four steps whose **order is the whole of the fix**.
 ///
-/// **The rotation is the removal** — see §7.6. What it cannot do is reach the removed device:
-/// whatever that device already synced, it keeps, and no server can take it back.
+/// 1. **Refuse a group with no membership.** Spec §2.4's fourth refusal, and it comes before
+///    anything moves: `/rotate` authenticates against an auth only `/claim` can seed, so an
+///    unentitled group has no way to publish a rotation — and rotating locally anyway is exactly
+///    the bug this change exists to end. `commands::entitled` is the local half of that question
+///    and [`identity::NO_MEMBERSHIP`] is the sentence.
+/// 2. **A round trip, so the departing device's last push is absorbed.** Spec §12.4: the
+///    rotation makes every op sealed under the old epoch unreadable, and [`client::pull`] steps
+///    over such an envelope rather than stalling on it, so anything the leaving device pushed
+///    that this one has not yet taken would be thrown away at the boundary. **It is the trip that
+///    emits no baseline** — [`client::run_once`] would hand thousands of ops to the very device
+///    this is about to remove.
+/// 3. **Plan the rotation, which writes nothing** ([`identity::plan_rotation`]), and publish it
+///    ([`client::post_rotation`]).
+/// 4. **Commit only on a 2xx** ([`identity::commit_rotation`]).
 ///
-/// **It completes a round trip before it rotates, and a failed one removes nothing.** Spec
-/// §12.4: the rotation makes every op sealed under the old epoch unreadable, and
-/// [`client::pull`] steps over such an envelope rather than stalling on it — so anything the
-/// leaving device pushed that this one has not yet taken is thrown away at the boundary, which
-/// is exactly the tail §12.3 promises to keep. Removing a device is never urgent; doing it
-/// offline is the one way to lose what that device last said. A device with no relay address
-/// gets `Ok(None)` from [`client::run_once_without_baselines`] and the removal goes straight
-/// ahead — sync is off, so there is nothing on any server to collect.
+/// **`identity::revoke_device` is gone and steps 3 and 4 are what replaced it.** It rotated
+/// locally in one transaction and reached nobody: the removing device moved to epoch *N+1* while
+/// every remaining device sat at *N*, `client::pull` set `behind = true` and held its cursor for
+/// ever, and one removal bricked any group of three. A refused `/rotate` now leaves the group
+/// exactly as it was and says so.
 ///
-/// **It is the trip that emits no baseline**, and that function's own doc comment says why:
-/// [`client::run_once`] here would hand a full baseline to the device this command is about to
-/// mark gone.
+/// What a removal still cannot do is take back what the removed device already synced. No server
+/// can, and §12.3 says so.
+async fn remove_device(conn: &Connection, device_id: &str) -> Result<(), String> {
+    if !commands::entitled(conn) {
+        return Err(identity::NO_MEMBERSHIP.to_owned());
+    }
+    let _ = client::run_once_without_baselines(conn)
+        .await
+        .map_err(|e| format!("{COULD_NOT_COLLECT} {e}"))?;
+    let plan = identity::plan_rotation(conn, device_id)?;
+    client::post_rotation(conn, &plan).await?;
+    identity::commit_rotation(conn, device_id, &plan)
+}
+
+/// Remove a device and rotate the group key. See [`remove_device`] for the order.
 ///
 /// **On the blocking pool with a runtime of its own**, for `sync_engine::commands::sync_now`'s
 /// reason: the write connection is behind a `Mutex`, a guard on it cannot cross an `await` on a
@@ -600,10 +621,7 @@ pub async fn sync_device_revoke(
             .build()
             .map_err(|e| e.to_string())?;
         sync::with_write(&state, |conn| {
-            let _ = runtime
-                .block_on(client::run_once_without_baselines(conn))
-                .map_err(|e| format!("{COULD_NOT_COLLECT} {e}"))?;
-            identity::revoke_device(conn, &device_id).map(|_| ())
+            runtime.block_on(remove_device(conn, &device_id))
         })
     })
     .await
@@ -613,6 +631,11 @@ pub async fn sync_device_revoke(
 #[cfg(test)]
 mod tests {
     use super::*;
+    // **Test-only since spec §2.2.** Nothing above this module asks `entitlement` anything any
+    // more: a pairing neither reads this device's membership nor writes the joiner's. What the
+    // tests below do with it is assert exactly that.
+    use crate::sync_engine::entitlement;
+    use httpmock::prelude::*;
 
     fn db() -> Connection {
         crate::schema::memory_pair()
@@ -981,19 +1004,29 @@ mod tests {
         assert_eq!(after.devices.len(), 2);
     }
 
-    /// A removed device is off the list the panel draws, and the roster underneath still has it.
+    /// A removed device is off the list the panel draws **and off the roster underneath it**,
+    /// and the second half is the reversal.
     ///
-    /// **Two assertions and not one.** `identity::roster` is the record — `add_device` clears
-    /// `revoked_at` on a re-pair and `baseline::peers_needing` reads the mark — so a fix that
-    /// deleted the row would pass a test that only counted what the panel sees, and would quietly
-    /// hand a full baseline to a device that is never going to answer.
+    /// **This asserted the opposite until spec §2.3.** The doc it replaces argued that the
+    /// roster had to keep the row, because deleting it would "quietly hand a full baseline to a
+    /// device that is never going to answer" — which was never true and is plainly not now:
+    /// `baseline::peers_needing` reads `WHERE revoked_at IS NULL`, and a row that has been
+    /// deleted satisfies that by not being there to select at all. What is true is that the
+    /// relay's manifest **is** the roster now, so a remover that kept a tombstone would be the
+    /// one machine in the group with a different answer about who is in it, and `add_device`
+    /// puts a re-paired device back by insert rather than by clearing a stamp.
+    ///
+    /// **`status`'s filter stays and both halves are still asserted**, because a database
+    /// written by a build that predates the delete can still hold a stamped row and the panel
+    /// must not draw it.
     #[test]
-    fn a_removed_device_is_not_on_the_panels_list() {
+    fn a_removed_device_is_off_the_panel_and_off_the_roster() {
         let conn = db();
-        let me = crate::sync_pair::identity::ensure(&conn).unwrap();
-        crate::sync_pair::identity::create_group(&conn, &me).unwrap();
-        crate::sync_pair::identity::add_device(&conn, "deadbeef", &[7u8; 32], "Phone").unwrap();
-        crate::sync_pair::identity::revoke_device(&conn, "deadbeef").unwrap();
+        let me = identity::ensure(&conn).unwrap();
+        identity::create_group(&conn, &me).unwrap();
+        identity::add_device(&conn, "deadbeef", &[7u8; 32], "Phone").unwrap();
+        let plan = identity::plan_rotation(&conn, "deadbeef").unwrap();
+        identity::commit_rotation(&conn, "deadbeef", &plan).unwrap();
 
         let drawn = status(&conn).unwrap();
         assert_eq!(
@@ -1006,10 +1039,193 @@ mod tests {
             "the removed device is still being drawn"
         );
         assert_eq!(
-            crate::sync_pair::identity::roster(&conn).unwrap().len(),
-            2,
-            "the roster itself must keep the row"
+            identity::roster(&conn).unwrap().len(),
+            1,
+            "the row was stamped rather than deleted"
         );
+    }
+
+    // -----------------------------------------------------------------------------------
+    // The removal, with the relay in the middle of it
+    //
+    // **Driven through `remove_device` rather than through `sync_device_revoke`**, which takes a
+    // `tauri::State` no test can build. The command is four lines around this function and a
+    // `block_on`; everything that can be got wrong is here.
+    // -----------------------------------------------------------------------------------
+
+    /// A group of two, pointed at a relay on localhost.
+    ///
+    /// `entitled` decides whether this device holds a grant, which is spec §2.4's fourth
+    /// refusal: a group with no membership cannot publish a rotation and so may not remove
+    /// anybody.
+    fn removable(
+        server: &httpmock::MockServer,
+        entitled: bool,
+    ) -> (Connection, identity::Identity, String) {
+        let conn = db();
+        let me = identity::ensure(&conn).unwrap();
+        identity::create_group(&conn, &me).unwrap();
+        identity::add_device(&conn, "deadbeef", &[7u8; 32], "Phone").unwrap();
+        client::set_state(&conn, client::RELAY_URL, &server.base_url()).unwrap();
+        if entitled {
+            // Twelve hours, absolutely — `client/tests.rs`'s `grant` and its reasoning: derived
+            // from `REFRESH_MARGIN_SECS` this would shrink with the margin and start making a
+            // `/token` round trip nothing here has a mock for.
+            let expires: i64 = conn
+                .query_row("SELECT unixepoch()", [], |r| r.get::<_, i64>(0))
+                .unwrap()
+                + 12 * 60 * 60;
+            entitlement::store_grant(&conn, "access-1", "refresh-1", expires).unwrap();
+        }
+        let group = identity::group(&conn).unwrap().unwrap().group_id;
+        (conn, me, group)
+    }
+
+    /// The three requests the round trip in front of a removal makes, all answering "nothing to
+    /// do". There is no `/push` mock because the outbox is empty — `memory_pair` installs no
+    /// capture triggers — so a push that happened would 404 loudly rather than pass silently.
+    fn quiet_round_trip(server: &httpmock::MockServer, group: &str) {
+        server.mock(|when, then| {
+            when.method(GET).path(format!("/g/{group}/keys"));
+            then.status(200).json_body(serde_json::json!({
+                "epoch": 0, "blob": serde_json::Value::Null, "devices": [],
+            }));
+        });
+        server.mock(|when, then| {
+            when.method(GET).path(format!("/g/{group}/pull"));
+            then.status(200)
+                .json_body(serde_json::json!({ "envelopes": [], "cursor": 1 }));
+        });
+        server.mock(|when, then| {
+            when.method(POST).path(format!("/g/{group}/ack"));
+            then.status(204);
+        });
+    }
+
+    /// **A `/rotate` the relay refuses removes nothing at all.**
+    ///
+    /// This is the whole reason `plan_rotation` writes no row and `commit_rotation` runs last.
+    /// The version this replaced rotated first and unconditionally, so a device that pressed
+    /// Remove held a key nobody else could ever learn: it pushed at epoch *N+1* while every
+    /// remaining device sat at *N*, `client::pull` set `behind = true` and held its cursor for
+    /// ever, and one removal bricked any group of three.
+    ///
+    /// **The group is compared whole**, not epoch by epoch: `Group` is `PartialEq` over the id,
+    /// the epoch and the key, so a commit that moved any of the three fails this.
+    #[tokio::test]
+    async fn a_rotation_the_relay_refuses_removes_nothing() {
+        let server = MockServer::start_async().await;
+        let (conn, _me, group) = removable(&server, true);
+        quiet_round_trip(&server, &group);
+        let rotate = server.mock(|when, then| {
+            when.method(POST).path(format!("/g/{group}/rotate"));
+            then.status(500).body("nope");
+        });
+        let before = identity::group(&conn).unwrap().unwrap();
+
+        let error = remove_device(&conn, "deadbeef")
+            .await
+            .expect_err("a 500 on /rotate is a failed removal");
+
+        assert!(error.contains("500"), "{error}");
+        rotate.assert();
+        assert_eq!(
+            identity::group(&conn).unwrap().unwrap(),
+            before,
+            "the group moved on a rotation the relay never accepted"
+        );
+        assert_eq!(
+            identity::roster(&conn).unwrap().len(),
+            2,
+            "the departing device's row was deleted anyway"
+        );
+    }
+
+    /// ...and one it accepts commits, publishing the plan the commit then writes.
+    ///
+    /// **The `auth` on the wire is compared against the key that ends up stored**, which is what
+    /// says the published rotation and the committed one are the same rotation. Sending the
+    /// *old* epoch's auth as the body's `auth` — an easy transposition, since the header really
+    /// does carry the old one — would leave the relay standing on a value no device can derive,
+    /// and nothing local would look wrong.
+    #[tokio::test]
+    async fn an_accepted_rotation_publishes_the_plan_it_then_commits() {
+        let server = MockServer::start_async().await;
+        let (conn, me, group) = removable(&server, true);
+        quiet_round_trip(&server, &group);
+        let seen: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+        let recorder = seen.clone();
+        server.mock(|when, then| {
+            when.method(POST)
+                .path(format!("/g/{group}/rotate"))
+                .is_true(move |req: &httpmock::prelude::HttpMockRequest| {
+                    recorder.lock().unwrap().push(req.body_string());
+                    true
+                });
+            then.status(200)
+                .json_body(serde_json::json!({ "epoch": 1 }));
+        });
+        let before = identity::group(&conn).unwrap().unwrap();
+
+        remove_device(&conn, "deadbeef").await.expect("removed");
+
+        let after = identity::group(&conn).unwrap().unwrap();
+        assert_eq!(after.epoch, before.epoch + 1);
+        assert_ne!(after.group_key, before.group_key, "the key did not change");
+        assert_eq!(
+            identity::roster(&conn)
+                .unwrap()
+                .into_iter()
+                .map(|d| d.device_id)
+                .collect::<Vec<_>>(),
+            vec![me.device_id.clone()],
+            "the removed row is gone and nobody else went with it"
+        );
+
+        let body: serde_json::Value =
+            serde_json::from_str(&seen.lock().unwrap()[0]).expect("a JSON body");
+        assert_eq!(body["epoch"], serde_json::json!(after.epoch));
+        assert_eq!(
+            body["auth"].as_str().unwrap(),
+            crypto::relay_auth(&after.group_key, &after.group_id, after.epoch),
+            "the published auth is not the one the committed key derives"
+        );
+        let keys = body["keys"].as_object().expect("a manifest object");
+        assert!(
+            keys.contains_key(&me.device_id),
+            "the remover is not on its own manifest, so a failed commit could not heal"
+        );
+        assert!(
+            !keys.contains_key("deadbeef"),
+            "the manifest names the device being removed, which puts it straight back"
+        );
+    }
+
+    /// **A group with no membership is refused before anything moves** — spec §2.4's fourth
+    /// refusal, and *before* the round trip rather than after it.
+    ///
+    /// The relay is what carries a removal to the other devices and only a claimed group has an
+    /// auth `/rotate` will accept, so rotating locally anyway is exactly the bug this change
+    /// exists to end. The server answers **any** request, so a single call of any shape — the
+    /// `/keys` check at the top of the round trip included — fails this.
+    #[tokio::test]
+    async fn a_group_with_no_membership_is_refused_before_the_round_trip() {
+        let server = MockServer::start_async().await;
+        let never = server.mock(|when, then| {
+            when.any_request();
+            then.status(500).body("this must never be asked for");
+        });
+        let (conn, _me, _group) = removable(&server, false);
+        let before = identity::group(&conn).unwrap().unwrap();
+
+        let error = remove_device(&conn, "deadbeef")
+            .await
+            .expect_err("an unentitled group cannot remove anybody");
+
+        assert_eq!(error, identity::NO_MEMBERSHIP);
+        never.assert_calls(0);
+        assert_eq!(identity::group(&conn).unwrap().unwrap(), before);
+        assert_eq!(identity::roster(&conn).unwrap().len(), 2);
     }
 
     /// The offer carries a QR of the code, and it is the code's own picture.
@@ -1028,10 +1244,14 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------------------
-    // The membership the pairing carries
+    // The membership the pairing does NOT carry
     //
-    // Spec §6.2: the refresh secret rides to the second device inside the sealed blob, so that
-    // device never opens a browser and never sees Patreon.
+    // **This block asserted the opposite until spec §2.2.** §6.2 rode the refresh secret to the
+    // second device inside the sealed blob so that device never opened a browser; §2.2 takes it
+    // back out, because a device holding that secret can re-register the group auth and evict
+    // the devices that removed it, and a removal that a removed device can undo is not one. The
+    // joiner mints its own token through `/token`'s group door instead, off an auth derived from
+    // the key it was handed — and is told the membership's status and date by the answer.
     // -----------------------------------------------------------------------------------
 
     /// A whole pairing, up to the blob the reader carries to the joining device.
@@ -1057,14 +1277,19 @@ mod tests {
         identity::join_group(conn, "0123456789abcdef0123456789abcdef", 0, &key, &me).unwrap();
     }
 
-    /// Now, off the same connection the grant was written through.
-    fn unix_now(conn: &Connection) -> i64 {
-        conn.query_row("SELECT unixepoch()", [], |r| r.get(0))
-            .unwrap()
-    }
-
+    /// **The joiner is handed a group and nothing else.**
+    ///
+    /// This asserted the exact opposite until spec §2.2, under the name
+    /// `the_sealed_key_carries_the_refresh_secret_to_the_joiner`. The secret stays on the device
+    /// that pressed Connect because a device that holds it can re-register the group auth and
+    /// therefore evict the devices that removed it; what the joiner gets in its place is the
+    /// group key, which is all `crypto::relay_auth` and `/token`'s group door need.
+    ///
+    /// **A holds a full grant here**, so every assertion below is about what `complete` declined
+    /// to copy rather than about there having been nothing to copy — the same test written
+    /// against an A with no membership would pass whatever `complete` did.
     #[test]
-    fn the_sealed_key_carries_the_refresh_secret_to_the_joiner() {
+    fn the_sealed_key_carries_no_membership_to_the_joiner() {
         let a = db();
         let b = db();
         let (mut pa, mut pb) = (None, None);
@@ -1073,45 +1298,51 @@ mod tests {
         let sealed = pair_up(&a, &mut pa, &b, &mut pb);
         complete(&b, &mut pb, &sealed).unwrap();
 
+        assert!(
+            identity::group(&b).unwrap().is_some(),
+            "the pairing itself must still have happened"
+        );
         assert_eq!(
-            entitlement::refresh_secret(&b).as_deref(),
+            entitlement::refresh_secret(&b),
+            None,
+            "the Patreon-side secret reached a device that never pressed Connect"
+        );
+        // **Nor the access token, nor the expiry that used to be written beside it.** A's is a
+        // 24-hour bearer token the relay minted for *A*; the placeholder that once stood in its
+        // place existed only because `store_grant` writes the pair together, and there is no
+        // pair to write any more.
+        assert_eq!(client::get_state(&b, entitlement::ACCESS_TOKEN), None);
+        assert_eq!(client::get_state(&b, entitlement::ACCESS_EXPIRES), None);
+        // **And no supporter status.** What the relay last said about the membership is the
+        // relay's own fact; B has not asked it yet, and learns one from `/token`'s group door on
+        // its first round trip rather than by taking A's word for a date.
+        assert_eq!(client::get_state(&b, entitlement::SUPPORTER_STATUS), None);
+        assert_eq!(client::get_state(&b, entitlement::SUPPORTER_SINCE), None);
+        // A kept its own, which is "the secret stays where it was" read from the other end: this
+        // is a device declining to *send*, not one losing what it had.
+        assert_eq!(
+            entitlement::refresh_secret(&a).as_deref(),
             Some("refresh-a")
         );
-        // **A's own bearer token is not carried and must not be**: it is a 24-hour credential
-        // the relay minted for A. What B stores in its place expired at the epoch, which is
-        // what makes `entitlement::access_token` trade the secret for a token of B's own
-        // before the first request rather than sending a placeholder to the relay.
-        let expires: i64 = client::get_state(&b, entitlement::ACCESS_EXPIRES)
-            .expect("an expiry")
-            .parse()
-            .unwrap();
-        assert!(
-            expires < unix_now(&b),
-            "the carried access token must already be dead, not {expires}"
-        );
-        assert_ne!(
-            client::get_state(&b, entitlement::ACCESS_TOKEN).as_deref(),
-            Some("access-a")
-        );
-        // **And no supporter status.** What the relay last said about the membership is the
-        // relay's fact; B has not asked it yet, so the panel says nothing about a date nobody
-        // on this device was ever told.
-        assert_eq!(client::get_state(&b, entitlement::SUPPORTER_STATUS), None);
     }
 
+    /// **The field-order trap, made unmissable**, and it outlived the field it was written for.
+    ///
+    /// This was `a_zero_byte_in_the_group_key_does_not_swallow_the_refresh_secret` and its second
+    /// half is gone with the secret. Its first half is not about that secret at all: `complete`
+    /// splits the sealed plaintext on zero bytes, so the 32-byte group key is only safe as the
+    /// **last** field and is only reassembled whole because the split is bounded. A fixture key
+    /// of random bytes holds a zero about one time in eight, so `splitn(3)` relaxed to a plain
+    /// `split` — an inviting simplification, now that there are exactly three fields — would
+    /// pass on most runs and truncate the key on the rest: one pairing in eight, in the field,
+    /// with nothing on either screen to say why. This key is nothing but zeroes, so it fails
+    /// every time or never.
     #[test]
-    fn a_group_key_containing_a_zero_byte_still_opens() {
-        // **The field-order trap, made unmissable.** `complete` splits the sealed plaintext on
-        // zero bytes, so the 32-byte group key is only safe as the LAST field. A fixture key of
-        // random bytes holds a zero about one time in eight, so a refresh secret appended after
-        // the key would pass on most runs and lose the key on the rest — one pairing in eight,
-        // in the field, with nothing on either screen to say why. This key is nothing but
-        // zeroes, and the secret beside it is what makes the remainder the wrong length.
+    fn a_group_key_that_is_all_zeroes_still_arrives_whole() {
         let a = db();
         let b = db();
         let (mut pa, mut pb) = (None, None);
         in_a_group_with_key(&a, [0u8; 32]);
-        entitlement::store_grant(&a, "access-a", "refresh-a", 1_900_000_000).unwrap();
 
         let sealed = pair_up(&a, &mut pa, &b, &mut pb);
         complete(&b, &mut pb, &sealed).unwrap();
@@ -1120,16 +1351,17 @@ mod tests {
             identity::group(&b).unwrap().expect("B joined").group_key,
             [0u8; 32]
         );
-        assert_eq!(
-            entitlement::refresh_secret(&b).as_deref(),
-            Some("refresh-a")
-        );
     }
 
+    /// Pairing must not require a membership: a reader can pair two devices and connect Patreon
+    /// afterwards, in either order.
+    ///
+    /// **What it fences is a precondition nobody has written yet.** `confirm` no longer asks
+    /// `entitlement` anything, so the tempting next edit — refusing to pair a group that cannot
+    /// sync, the way `remove_device` refuses to rotate one — would make the second half of the
+    /// reader's natural order impossible. This is the test that goes red for it.
     #[test]
     fn a_host_with_no_grant_still_pairs() {
-        // Pairing must not require a membership: a reader can pair two devices and connect
-        // Patreon afterwards, in either order.
         let a = db();
         let b = db();
         let (mut pa, mut pb) = (None, None);
@@ -1137,38 +1369,54 @@ mod tests {
         let sealed = pair_up(&a, &mut pa, &b, &mut pb);
         complete(&b, &mut pb, &sealed).unwrap();
 
-        assert_eq!(entitlement::refresh_secret(&b), None);
         assert!(
             identity::group(&b).unwrap().is_some(),
             "the pairing itself happened; only the membership was absent"
         );
+        assert_eq!(entitlement::refresh_secret(&b), None);
     }
 
+    /// **Pairing never touches the joiner's own grant, whatever the other device holds.**
+    ///
+    /// This was `an_empty_refresh_does_not_take_the_joiners_own_membership_away` and asserted
+    /// something weaker: that a *blank* field did not clear a membership this device had
+    /// connected itself. There is no field at all now, so the claim is the whole of it — and the
+    /// half that is new is the loop's second pass. Under the old shape an A **with** a grant
+    /// overwrote B's own secret and expiry with A's, which is the case that could disconnect a
+    /// reader who had connected Patreon on the very device they were joining from.
     #[test]
-    fn an_empty_refresh_does_not_take_the_joiners_own_membership_away() {
-        // A device that connected Patreon itself, pairing with one that never did. The blank
-        // field says nothing about *this* device, and clearing the grant on the strength of it
-        // would disconnect a reader for pairing.
-        let a = db();
-        let b = db();
-        let (mut pa, mut pb) = (None, None);
-        entitlement::store_grant(&b, "access-b", "refresh-b", 1_900_000_000).unwrap();
+    fn pairing_never_touches_the_joiners_own_grant() {
+        for a_has_a_grant in [false, true] {
+            let a = db();
+            let b = db();
+            let (mut pa, mut pb) = (None, None);
+            if a_has_a_grant {
+                entitlement::store_grant(&a, "access-a", "refresh-a", 1_900_000_000).unwrap();
+            }
+            entitlement::store_grant(&b, "access-b", "refresh-b", 1_800_000_000).unwrap();
 
-        let sealed = pair_up(&a, &mut pa, &b, &mut pb);
-        complete(&b, &mut pb, &sealed).unwrap();
+            let sealed = pair_up(&a, &mut pa, &b, &mut pb);
+            complete(&b, &mut pb, &sealed).unwrap();
 
-        assert_eq!(
-            entitlement::refresh_secret(&b).as_deref(),
-            Some("refresh-b")
-        );
-        assert_eq!(
-            client::get_state(&b, entitlement::ACCESS_TOKEN).as_deref(),
-            Some("access-b"),
-            "and its own access token still has the life it had"
-        );
-        assert_eq!(
-            client::get_state(&b, entitlement::ACCESS_EXPIRES).as_deref(),
-            Some("1900000000")
-        );
+            assert_eq!(
+                entitlement::refresh_secret(&b).as_deref(),
+                Some("refresh-b"),
+                "B's own secret did not survive pairing with an A that {}",
+                if a_has_a_grant {
+                    "held one"
+                } else {
+                    "held none"
+                }
+            );
+            assert_eq!(
+                client::get_state(&b, entitlement::ACCESS_TOKEN).as_deref(),
+                Some("access-b"),
+                "and its own access token still has the life it had"
+            );
+            assert_eq!(
+                client::get_state(&b, entitlement::ACCESS_EXPIRES).as_deref(),
+                Some("1800000000")
+            );
+        }
     }
 }

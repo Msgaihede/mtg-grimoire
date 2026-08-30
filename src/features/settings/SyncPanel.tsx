@@ -451,7 +451,7 @@ export const SUPPORTER_KEY: QueryKey = ["sync", "supporter"];
 /**
  * The membership in one word — and the three that must never be spelled the same way.
  *
- * `never` and `ended` arrive from the backend as the **same two fields**: `connected: false`
+ * `never` and `ended` arrive from the backend as the **same two fields**: `entitled: false`
  * with `status: "dead"`. They are not the same state and they do not get the same sentence. A
  * reader who has not connected is looking at a button; a reader whose pledge stopped is looking
  * at a renewal and at a paragraph saying their collection is untouched (spec §7.1), and telling
@@ -460,15 +460,16 @@ export const SUPPORTER_KEY: QueryKey = ["sync", "supporter"];
  * **`groupBound` is the whole of what separates them, and `since` cannot do it.** That is the
  * trap the Rust names at `SupporterStatus::group_bound` and it was worth one bug here before
  * this comment existed: `entitlement::revoke` stores `("dead", None)`, so a lapsed device and a
- * device out of the box read the *same three fields* — `connected: false`, `status: "dead"`,
+ * device out of the box read the *same three fields* — `entitled: false`, `status: "dead"`,
  * `since: null`. `group_bound` is `entitlement::membership_ended` crossing the wire, and it is
  * the only signal that remembers this device was ever bound to an entitlement.
  *
- * **A `"dead"` status on a *connected* device is not an ending either**, and that is the second
- * trap: `store_grant` and `store_status` are separate calls, so a device that was paired to a
- * connected one (§6.2) holds a live refresh secret with no status row beside it, and an absent
- * row defaults to `"dead"`. It is supporting; it simply has not been told a date yet, which is
- * what {@link supporterNote}'s dateless *Supporting* line is for.
+ * **A `"dead"` status on an *entitled* device is not an ending either**, and that is the second
+ * trap. It is reachable from both sides of the grant: the device that pressed Connect holds a
+ * refresh secret, and `store_grant` and `store_status` are separate calls, so a status row can
+ * be absent while the secret is live — and an absent row defaults to `"dead"`. It is
+ * supporting; it simply has not been told a date yet, which is what {@link supporterNote}'s
+ * dateless *Supporting* line is for.
  *
  * **`grace` is a third thing and not a gentler `dead`** (spec §7.2). Patreon is retrying a card;
  * tokens are still minted and sync still works. Drawn as a cancellation it would punish a reader
@@ -482,13 +483,16 @@ export type SupporterState = "unknown" | "active" | "grace" | "ended" | "never";
 
 export function supporterState(status: SupporterStatus | null): SupporterState {
   if (status === null) return "unknown";
-  // **`connected` is asked first, and the order is load-bearing rather than tidy.** It is the
-  // local fact, and it is the one thing *both* endings clear — `entitlement::revoke` and
-  // `clear` each take the refresh secret — so a device holding one has not ended anything. A
-  // build that asked `status` first read device B as lapsed: pairing carries the grant across
-  // with no status row beside it (§6.2), `supporter_state` defaults an absent row to `"dead"`,
-  // and a phone that had just been paired to a paid-up desktop drew *Membership ended*.
-  if (status.connected) return status.status === "grace" ? "grace" : "active";
+  // **`entitled` is asked first, and the order is load-bearing rather than tidy.** It is the
+  // question the relay's own answer settles — will it mint this device a token — and a device
+  // it will mint for has not ended anything. A build that asked `status` first read the second
+  // device as lapsed: `store_grant` and `store_status` are separate calls, `supporter_state`
+  // defaults an absent row to `"dead"`, and a phone whose desktop had just paid drew
+  // *Membership ended*. The order matters more now, not less: `entitlement::membership_ended`
+  // is `refresh_secret.is_none() && SUPPORTER_STATUS.is_some()`, which a device entitled
+  // through its *group* satisfies — so `groupBound` below reads `true` for a membership that
+  // has not ended at all, and this line is the whole of what stops it being drawn as one.
+  if (status.entitled) return status.status === "grace" ? "grace" : "active";
   // `groupBound`, never `since` — see above. A revoked grant deletes the date with the secret.
   return status.groupBound ? "ended" : "never";
 }
@@ -548,7 +552,7 @@ const LAPSE_REASSURANCE =
   "up where you left off — your devices stay paired.";
 
 /**
- * The order the two flows have to be done in, and the dead end it exists to prevent.
+ * The one dead end this press can still walk a reader into, and the reassurance beside it.
  *
  * **Connecting founds a group of one when this device is in none** (§6.3, `ensure_group`), and
  * `pairing::complete` refuses a `group_id` that differs from the one this device already holds. So
@@ -558,6 +562,15 @@ const LAPSE_REASSURANCE =
  * *"This device is already in a different pairing group. Leave that one first."* with nothing to
  * press, which is the one way this panel can strand somebody.
  *
+ * **What this paragraph no longer says is that the *order* costs anything, because since spec
+ * §2.2 it does not.** It used to open "Connect on the device you want to pair from", which was
+ * advice about a second trap that has been removed: `refresh` travelled only inside the sealed
+ * pairing blob, so a device paired *before* anybody connected got nothing and could never get
+ * anything. `/token`'s group door ended that — any device in the group mints on the group auth —
+ * so pairing first and connecting second now leaves every device entitled, and the last clause
+ * is there to say so rather than to leave a reader guessing which device has to hold the
+ * membership. The sentence that survives is the one about *groups*, not about order.
+ *
  * **Drawn beside the press that causes it**, not in the pairing half above: the trap belongs to
  * this button, and a reader whose devices are already paired has nothing here to avoid. That
  * placement is a claim, so it is asserted both ways — present on `never` and on `ended`, absent
@@ -566,9 +579,9 @@ const LAPSE_REASSURANCE =
  * level out of the `offering` block leaves the rest of the file green.
  */
 const CONNECT_ORDER =
-  "Connect on the device you want to pair from: connecting puts this device in a sync group of " +
-  "its own and a device can only be in one, so if your other devices already sync together, " +
-  "pair this one to them first.";
+  "Connecting puts this device in a sync group of its own if it is not in one yet, and a " +
+  "device can only be in one group. If your other devices already sync together, pair this " +
+  "one to them first — then a membership on any of them covers all of them.";
 
 /**
  * The membership, the relay it pays for, and the one press that makes a round trip.
@@ -587,16 +600,37 @@ const CONNECT_ORDER =
  * is an account with **Patreon** and never one with the relay: the relay is told a subject and a
  * group, and is never told a person.
  *
- * **Only one device ever opens a browser.** `refresh` rides to the second inside the sealed
- * pairing blob (§6.2), so a phone paired to a connected desktop is connected without meeting any
- * of this.
+ * **Only one device ever opens a browser, and since spec §2.2 that is a fact about the
+ * *group* rather than about a secret that travelled.** The refresh secret no longer rides
+ * inside the sealed pairing blob — it stays on the device that pressed Connect, which is what
+ * makes a removal stick — and every other device in the group mints its own token on the group
+ * auth through `/token`'s second door. So a phone paired to a connected desktop is entitled
+ * without meeting any of this, in either pairing order, and it draws *Supporting since …* after
+ * its first round trip rather than instantly: the status and the date arrive with the token.
  *
- * **Sync now is drawn only once a membership is connected**, which is `DeviceRow`'s rule about
+ * **Sync now is drawn only once this device is entitled**, which is `DeviceRow`'s rule about
  * the missing Remove button in a friendlier case: `sync_now` with no entitlement answers `null`
  * rather than refusing, so the press would be harmless — and a control that can only ever report
  * "there was nothing to do" is a control that teaches a reader to distrust it. On a `grace`
  * membership it *is* drawn, and that is the whole of §7.2 in one control: the card is being
  * retried, so the sync still works.
+ *
+ * **So the gate is `entitled` OR `paired`, and the second half is what breaks a circle.** A
+ * device that has just paired holds no `supporter_status` until its first round trip — spec
+ * §2.2's one-sync window — so `entitled` is false; and `ipc.syncNow` is `client::run_once`'s
+ * **only** caller in the app, with no launch sync and no timer behind it. Gated on `entitled`
+ * alone, the one press that would entitle the device is the one press it cannot reach, and the
+ * second device sits on *Connect Patreon* for ever. That is the reader's own bug reproduced one
+ * step further along, which is what makes the extra clause load-bearing rather than generous.
+ *
+ * **A paired device always has a trip worth making**, whatever its membership says: it may be
+ * behind a key rotation, it may be owed a baseline, and — the case this is for — it may be
+ * entitled through its group and not know yet. A device in **no** group and with no membership
+ * still sees nothing, because there `run_once` genuinely answers `null` and a control that can
+ * only ever report "there was nothing to do" teaches a reader to distrust it.
+ *
+ * The press is the fallback rather than the mechanism: {@link SyncPanel}'s `complete` makes that
+ * trip itself the moment a pairing finishes, so the ordinary reader never presses anything.
  */
 function SupporterSection(): JSX.Element {
   const client = useQueryClient();
@@ -658,6 +692,15 @@ function SupporterSection(): JSX.Element {
   const note = relayNote(state, status, nowSeconds());
   /** Connected enough for the relay to answer: `grace` counts, which is §7.2's whole point. */
   const on = membership === "active" || membership === "grace";
+  /**
+   * Whether to offer a round trip: entitled, **or merely paired**.
+   *
+   * See this component's doc for why the second half exists — a freshly paired device is not
+   * entitled until it has synced once, and this button is the only thing in the app that syncs.
+   * `RelayStatus.paired` rather than the pairing query, because this half of the panel already
+   * reads it and a second source for one fact is a second thing to disagree.
+   */
+  const canSync = on || status?.paired === true;
   /** The two states with a press to offer. `unknown` has none — a Connect button drawn over an
    *  unanswered read is one a connected reader would see flash on every visit. */
   const offering = membership === "never" || membership === "ended";
@@ -775,7 +818,7 @@ function SupporterSection(): JSX.Element {
         {/* `min-w-0` so the sentence gives way rather than the button: a flex item cannot shrink
             below its own min-content unless it is told it may. */}
         <p className="min-w-0 flex-1 text-sm text-dim">{note}</p>
-        {on && (
+        {canSync && (
           // `disabled` rather than `aria-disabled` — `controls.ts`'s family, and correct here
           // for its reason: a trip already in flight has genuinely nothing for a second press
           // to do, and `disabled:active:scale-100` holds the box at full size so a greyed
@@ -873,10 +916,28 @@ export function SyncPanel(): JSX.Element {
     },
   });
   const complete = useMutation({
-    mutationFn: (sealedKey: string) => ipc.syncPairingComplete(sealedKey),
+    mutationFn: async (sealedKey: string) => {
+      await ipc.syncPairingComplete(sealedKey);
+      // **One round trip, here, and it is what makes the membership arrive without a press.**
+      // Pairing carries no refresh secret any more (spec §2.2), so this device is entitled
+      // through its *group* — and it learns that only by asking `/token`'s group door, which
+      // only a sync does. Until it has, `supporter_status` reads `dead` with no date and the
+      // panel below draws *Connect Patreon* at a reader whose group is paid up: the reader's
+      // own bug, one step further along.
+      //
+      // **Its failure is swallowed on purpose.** The pairing succeeded; a relay that could not
+      // be reached does not make it un-succeed, and reporting it here would put a network
+      // sentence on a ceremony that completed. The backend has already written the reason to
+      // `error_log`, the panel keeps a *Sync now* button because this device is now paired, and
+      // the next trip picks it up.
+      await ipc.syncNow().catch(() => undefined);
+    },
     onSuccess: () => {
       setFlow({ kind: "idle" });
       refresh();
+      // `SYNC_KEY` rather than `PAIRING_KEY`: the trip above moved the membership and the
+      // relay figures as well as the roster, and all three sit under this root.
+      void client.invalidateQueries({ queryKey: SYNC_KEY });
     },
   });
   const cancel = useMutation({

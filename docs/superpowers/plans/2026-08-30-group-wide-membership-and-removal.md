@@ -1113,3 +1113,127 @@ const CONNECT_ORDER =
 
 - **Spec coverage.** §2.1 → Tasks 5, 8. §2.2 → Tasks 7, 9, 12. §2.3 → Tasks 5, 6, 10. §2.4 → Tasks 10, 11. §2.5 → Tasks 9, 11, 13. §3 → Tasks 1, 2, 3. §4's failure table → the tests named in 6, 7, 9, 10, 11. §5 → every task's own test step plus Task 15's live pass. §6 lists what is deliberately absent.
 - **The one thing the spec asks for that no task fully closes** is the ⚠️ in §2.3 about a claimed-but-never-rotated group. It is covered by Task 6's `/keys` current-epoch test and Task 11's `KeyOutcome::Current` test, and by Task 10's `adopt_epoch` only being called on a strictly higher epoch — three places, none of them a single named test for the empty-manifest case. **Task 11's first test must assert it explicitly**: a group at epoch 0 with an empty manifest leaves every device alone.
+
+---
+
+## Wave findings — read before Task 11
+
+Recorded as each wave landed. These are corrections to this plan, not suggestions.
+
+### From wave 1
+
+- **There is no vitest config in `relay/`.** Relay tests run from the **repo root** through the
+  root vitest's `relay/src/**/*.test.ts` glob. Every `cd relay && npx vitest` in this plan is
+  wrong.
+- **The D1 fake lives at `relay/src/fakeD1.ts`** and exports `fakeEnv(...groups: string[]): Env`.
+  It *evaluates* the SQL rather than matching statement shapes, which is the only reason the
+  monotonic guard's mutation goes red at all. Import it; never write a second. It is not named
+  `*.test.ts` so vitest does not collect it, and nothing in the Worker's entry graph imports it.
+- **`equalsConstantTime` is exported from `groupauth.ts`.** `token.ts`'s copy is private.
+- **`currentManifest` throws** on a manifest that will not parse rather than answering `{}` — an
+  empty manifest at a higher epoch is positive evidence of removal, so `{}` would evict every
+  device in a group nobody was removed from. `handleKeys` lets it 500.
+- ⚠️ **This plan's own `EPOCH_HISTORY` test could not fail.** Its four assertions read identically
+  whether the window was 8 or 9, because epoch 0 is outside both. The assertion that pins the
+  width is `authIsRecent("auth-1") === false`. **Ask of every remaining test what value would make
+  it red**, and prove it by mutation where unsure.
+
+### From wave 2 — Task 11 owns both of these
+
+- ⚠️ **`sync_engine::client::tests::no_grant_means_no_request_at_all` (`client/tests.rs:303`) now
+  fails, and that is the design working.** It uses `paired("dev-a", 0)` — a device in a group with
+  no grant — and asserts no request is made. Spec §2.2 reverses exactly that premise: a paired
+  device with no secret now mints through the group door, and no local signal could gate it,
+  because once Task 12 lands a pairing-joined device holds no status either. **Task 11 reconciles
+  it**: either give the fixture a grant, or invert it into "a device with **no group** and no
+  secret makes no request", which is what `entitlement`'s own
+  `no_group_and_no_secret_is_still_sync_off` already covers.
+- ⚠️ **`entitlement::membership_ended` now reads `true` for a group-entitled device.** It is
+  `refresh_secret.is_none() && SUPPORTER_STATUS.is_some()`, and a device entitled through its group
+  holds a status and no secret. `commands.rs` computes `group_bound = connected || membership_ended`,
+  so the panel would draw *Membership ended* over an `active` status. The `entitled` rename fixes
+  the panel because the first row of §10's table wins — but **the function's name and doc now
+  over-claim** ("the one function that separates the two silences"), and Task 11 should correct
+  them in the same change rather than leave a comment that is no longer true.
+- **`post_for_grant` is generic now** (`<T: DeserializeOwned>`) rather than concrete over `Grant`.
+  The `Grant`/`GroupGrant` split forces it; the plan did not mention it.
+- **`#[serde(default)]` on an `Option<T>` field is decorative** — serde's derive already treats
+  `Option` as optional, proven by mutation. It is documentation, not behaviour, on `Grant.since`
+  as well. Do not rely on removing it to make a test red.
+
+### From wave 3 — controller decisions Task 11 must follow
+
+- ⚠️ **`leave_group` clears pairing state only; the CALLER clears the grant.** Task 10's interface
+  said "clears `sync_group` and `sync_devices`, keeps `sync_identity`" while spec §2.4 said the
+  grant keys go too. Both are right under one reading and that reading is now binding: `identity`
+  owns pairing state and must not reach into `entitlement`, so **Task 11's `KeyOutcome::Removed`
+  calls `identity::leave_group` *and* `entitlement::clear`**.
+
+  **The grant must go, and the reason is the whole of item 2.** A removed device that keeps its
+  refresh secret keeps a *working credential for the group it was removed from*: the refresh door
+  mints a token whose `grp` is that group, and `/g/{group}/push` honours it. The key rotation stops
+  it reading anything new, but it could still spend the group's requests — which makes the removal
+  cosmetic at the relay, exactly the failure the reader reported.
+
+  **`clear` and never `revoke`.** The two differ by the mark `membership_ended` reads. Nothing
+  ended: the reader's Patreon membership is untouched and this device simply left a group. `revoke`
+  would draw *Membership ended* and §7.1's reassurance paragraph at somebody whose pledge is fine.
+  `clear` draws *Not connected*, and reconnecting is one press.
+
+- **`revoke_device` still exists as a three-line shim** (`plan_rotation` → `commit_rotation`, no
+  relay). Task 10 could not delete it without breaking `pairing.rs:606`, which it did not own.
+  **Task 11 deletes it and rewires `sync_device_revoke`** — left standing it is precisely the bug
+  this PR exists to end: a rotation that reaches nobody.
+
+- **Two tests outside Task 10's file are red and Task 11 owns both:**
+  - `sync_pair::pairing::tests::a_removed_device_is_not_on_the_panels_list` (`pairing.rs`) —
+    PR 1 asserted `roster().len() == 2`, "the roster itself must keep the row". Spec §2.3 reverses
+    that. Invert it **and rewrite its doc comment**, which argues that deleting the row would
+    "quietly hand a full baseline to a device that is never going to answer" — no longer true,
+    since `peers_needing` reads `WHERE revoked_at IS NULL` and a deleted row satisfies it.
+  - `sync_engine::client::tests::no_grant_means_no_request_at_all` — see the wave 2 note above.
+
+- **The plan's test sketches named two symbols wrongly**, both confirmed by Task 10:
+  `join_group` is `(conn, group_id: &str, epoch: i64, key: &[u8; 32], me: &Identity)`, and **`Op`
+  derives no `Default`** — build it by hand, and `Hlc` lives in `sync_engine::hlc`, not `merge`.
+
+### From waves 4 and 5 — Task 14's worklist
+
+Every one of these is a claim that is **now false in a file whose author did not own it**. A
+prose-only edit routes to neither CI job, so nothing goes red for any of them.
+
+- **`docs/reference/sync.md:73`** documents the old blob layout,
+  `<group_id>\0<epoch>\0<refresh>\0<32-byte key>`. It is three fields now. The measured sealed size
+  changed too: **140 bytes / 224 base32 characters**, against 150/240 with a 9-byte secret.
+- **`entitlement::membership_ended`'s doc over-claims.** It is
+  `refresh_secret.is_none() && SUPPORTER_STATUS.is_some()`, so a device entitled through its group
+  answers `true` for a membership that is live. Its heading ("A membership that ended, as against
+  one that never began") and its "the one function that separates the two silences" line are both
+  now conditional on `entitled` being asked first — which `commands::supporter_status` does.
+- **`entitlement::revoke`'s doc carries a stale paragraph** saying `client.rs`'s 401 handling
+  "should call this rather than `clear` … it is in another agent's file this wave". `client::lapsed`
+  already calls `revoke` and always has. The paragraph implies a defect that does not exist.
+- **`commands.rs::a_grant_pairing_carried_across_is_connected_before_the_relay_has_said_a_word`**
+  keeps a doc comment whose premise — that pairing carries the secret — died with Task 12. Its
+  assertions stay valid; only the name and the reasoning need moving.
+- **`relay/src/rotate.ts`'s `handleKeys` doc** justified `Object.hasOwn` by saying a body with no
+  `blob` is "a shape the app's deserialiser refuses". That was **false when written** — serde read a
+  missing `Option` as `None`, i.e. as the removal notice — and became true only when Task 11 added
+  a `deserialize_with`. No code change is owed; the sentence should say what actually makes it true.
+
+Two behaviours that are new and undocumented, both worth a line rather than a fix:
+
+- **A paired group with *no* membership now errors on every Sync now.** `/keys` authenticates
+  against rows only `/claim` seeds, so an unclaimed group gets a 401 there before `access_token`
+  can answer `STALE_GROUP_AUTH`. One folded `error_log` row per grain. It follows from the design.
+- **A freshly-paired device reads `entitled: false` until its first round trip**, because it holds
+  no `SUPPORTER_STATUS` yet — so Remove answers *"Connect a membership first"* for that window even
+  though the group has a membership. It self-heals after one sync, and refusing later would violate
+  the "refuse before the round trip" ordering.
+
+And the two strikes the spec promised:
+
+- `sync.md`'s "What is still owed" bullet **"A revoked device's rewrapped key over the relay"** is
+  built — strike it.
+- `sync.md`'s line saying **two devices that have revoked each other cannot recover on their own**
+  is no longer true for the ordinary case — a rotation now reaches the devices that stay.

@@ -1,19 +1,51 @@
 import { describe, expect, it } from "vitest";
-import { codeFrom, GROUP_ID, normaliseCode, settle, unixSeconds } from "./claim";
+import {
+  codeFrom,
+  GROUP_ID,
+  handleClaim,
+  handleToken,
+  normaliseCode,
+  RELAY_AUTH,
+  settle,
+  unixSeconds,
+} from "./claim";
+import { fakeEnv, fakeEnvOver, fakeTables, type Tables } from "./fakeD1";
+import { recordRotation, seedGroup } from "./groupauth";
+import { verify } from "./token";
+import type { Env } from "./index";
 
 /**
- * The four decisions `claim.ts` makes that are functions of their arguments rather than of D1,
- * the network or the clock. Everything else in that file is I/O and routing, which `log.ts`'s
- * split deliberately leaves to a deploy — but a status mapping, a unit conversion and a code
- * alphabet are not, and each of the three fails in a way that is invisible from the outside:
- * a reader who syncs for ever after cancelling, a sync that dies silently a day later, and a
- * code that is refused because it was typed the way it was printed.
+ * The decisions `claim.ts` makes that are functions of their arguments rather than of the
+ * network — a status mapping, a unit conversion, a code alphabet, two body validators — plus the
+ * whole of `/token`, which is I/O but is I/O against D1 alone and so runs on `fakeD1`'s
+ * evaluating harness.
+ *
+ * Each of the pure four fails in a way that is invisible from the outside: a reader who syncs
+ * for ever after cancelling, a sync that dies silently a day later, a code that is refused
+ * because it was typed the way it was printed, and — new here — a group auth stored in a case
+ * no device derives.
  */
 
 const NOW = 1_756_000_000_000;
 
 /** `sync_engine::entitlement::SECONDS_CEILING` — the app refuses any wire value above it. */
 const SECONDS_CEILING = 100_000_000_000;
+
+/**
+ * Thirty-two bytes of lowercase hex, which is the only shape a `relay_auth` ever takes.
+ *
+ * **Both carry letters deliberately.** An all-digit auth like `"11".repeat(32)` is its own upper
+ * case, so every assertion below about case would have passed against a pattern that did not
+ * check it — which is how the first draft of this file went green on a bug.
+ */
+const AUTH_ONE = "ab12".repeat(16);
+const AUTH_TWO = "cd34".repeat(16);
+
+/**
+ * Not a real key, and it does not have to be. `mint` and `verify` are the same two lines of HMAC
+ * whatever they are handed, and `token.test.ts` owns the question of whether they agree.
+ */
+const HMAC = "a-signing-key-for-tests";
 
 describe("unixSeconds", () => {
   it("turns this file's milliseconds into the wire's seconds", () => {
@@ -156,4 +188,449 @@ describe("GROUP_ID", () => {
       expect(GROUP_ID.test(id)).toBe(false);
     },
   );
+});
+
+describe("RELAY_AUTH", () => {
+  it("accepts thirty-two bytes of lowercase hex", () => {
+    expect(AUTH_ONE).toHaveLength(64);
+    expect(RELAY_AUTH.test(AUTH_ONE)).toBe(true);
+  });
+
+  it("refuses the same value in upper case", () => {
+    // Both sides emit lowercase and neither normalises, so an upper-case auth stored by
+    // `/claim` is a credential no device in the group can ever derive — the group would be
+    // locked out of its own key at the next `/token`.
+    //
+    // The first line is not ceremony: an all-digit fixture is its own upper case, and this
+    // whole family of assertions passes against a pattern with no case check if it ever
+    // becomes one again.
+    expect(AUTH_ONE.toUpperCase()).not.toBe(AUTH_ONE);
+    expect(RELAY_AUTH.test(AUTH_ONE.toUpperCase())).toBe(false);
+  });
+
+  it.each([[""], ["11"], ["1".repeat(63)], ["1".repeat(65)], [`${"1".repeat(63)}g`]])(
+    "refuses %j",
+    (auth) => {
+      expect(RELAY_AUTH.test(auth)).toBe(false);
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------------------
+// The two doors on /token
+// ---------------------------------------------------------------------------------------
+
+/**
+ * `fakeEnv` supplies D1 and nothing else, because `groupauth.ts` needs nothing else. `/token`
+ * mints, so it also needs the signing key — and it asks for it through `required`, which turns
+ * an unset binding into a throw rather than into tokens signed with the word "undefined".
+ */
+function tokenEnv(...groups: string[]): Env {
+  return { ...fakeEnv(...groups), RELAY_HMAC_KEY: HMAC };
+}
+
+function post(path: string, body: unknown): Request {
+  return new Request(`https://relay.example${path}`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+/**
+ * Deliberately a type that admits `refresh` even where the design forbids it. A body typed as
+ * the four-field answer would make `expect(body.refresh)` a compile error, and the assertion
+ * that has to be able to fail is exactly the one saying that field is absent.
+ */
+interface Overshared {
+  access?: string;
+  refresh?: string;
+  expires?: number;
+  status?: string;
+  since?: number;
+  error?: string;
+}
+
+/** The `{status, body}` pair every assertion below is written against. */
+async function answer(response: Response): Promise<{ status: number; body: Overshared }> {
+  return { status: response.status, body: (await response.json()) as Overshared };
+}
+
+describe("/token — the refresh door", () => {
+  it("answers all five fields, the refresh secret among them", async () => {
+    const env = tokenEnv("g1");
+
+    const request = post("/token", { refresh: "secret-0" });
+    const { status, body } = await answer(await handleToken(request, env));
+
+    expect(status).toBe(200);
+    // The whole shape at once. `sync_engine::entitlement::Grant` deserialises this, and a
+    // missing or renamed field is a runtime serde failure with every test on both sides green.
+    expect(Object.keys(body).sort()).toEqual(["access", "expires", "refresh", "since", "status"]);
+    expect(body.refresh).toBe("secret-0");
+    expect(body.status).toBe("active");
+    expect(body.since).toBe(0);
+  });
+
+  it("refuses a secret no row holds", async () => {
+    const env = tokenEnv("g1");
+
+    const request = post("/token", { refresh: "not-a-secret" });
+    const { status } = await answer(await handleToken(request, env));
+
+    expect(status).toBe(401);
+  });
+
+  it.each([[{}], [{ refresh: "" }], [{ refresh: 5 }], [{ refresh: null }]])(
+    "refuses %j as malformed rather than looking it up",
+    async (body) => {
+      const { status } = await answer(await handleToken(post("/token", body), tokenEnv("g1")));
+
+      expect(status).toBe(400);
+    },
+  );
+
+  it("refuses a body that is not JSON at all", async () => {
+    const request = new Request("https://relay.example/token", { method: "POST", body: "{" });
+
+    const { status } = await answer(await handleToken(request, tokenEnv("g1")));
+
+    expect(status).toBe(400);
+  });
+});
+
+describe("/token — the group door", () => {
+  it("answers four fields and never the refresh secret", async () => {
+    const env = tokenEnv("g1");
+    await seedGroup(env, "g1", 0, AUTH_ONE);
+
+    const request = post("/token", { group: "g1", auth: AUTH_ONE });
+    const { status, body } = await answer(await handleToken(request, env));
+
+    expect(status).toBe(200);
+    // **The assertion the whole door exists to satisfy.** A device that proved it is in the
+    // group has proved nothing about the Patreon account; the refresh secret can revoke, rebind
+    // and re-register, so handing it over would make every paired device able to evict every
+    // other one.
+    expect(Object.keys(body).sort()).toEqual(["access", "expires", "since", "status"]);
+    expect(body.refresh).toBeUndefined();
+    expect(body.status).toBe("active");
+    expect(body.since).toBe(0);
+  });
+
+  it("mints a token naming the group asked for and the subject that owns it", async () => {
+    const env = tokenEnv("g1", "g2");
+    await seedGroup(env, "g1", 0, AUTH_ONE);
+    await seedGroup(env, "g2", 3, AUTH_TWO);
+
+    const request = post("/token", { group: "g2", auth: AUTH_TWO });
+    const { body } = await answer(await handleToken(request, env));
+    const claims = await verify(String(body.access), HMAC, Date.now());
+
+    // `grp` is what `index.ts` compares against the `/g/{group}/…` path segment before the
+    // Durable Object hop, so a token minted for the wrong group is a mint that succeeds and a
+    // sync that 401s for ever. `sub-1` is `g2`'s row, not `g1`'s.
+    expect(claims?.grp).toBe("g2");
+    expect(claims?.sub).toBe("sub-1");
+    // The milliseconds-to-seconds boundary, asserted where it actually crosses.
+    expect(body.expires).toBe(unixSeconds(Number(claims?.exp)));
+  });
+
+  it("refuses an auth the group is not standing on", async () => {
+    const env = tokenEnv("g1");
+    await seedGroup(env, "g1", 0, AUTH_ONE);
+
+    const request = post("/token", { group: "g1", auth: AUTH_TWO });
+    const { status, body } = await answer(await handleToken(request, env));
+
+    expect(status).toBe(401);
+    expect(body.access).toBeUndefined();
+  });
+
+  it("refuses the auth the group was standing on before a rotation", async () => {
+    // **The removal, seen from this door, and the reason it is `authIsCurrent` rather than
+    // `authIsRecent`.** A device that was removed still knows the epoch-0 auth and cannot
+    // compute the epoch-1 one, so this refusal is the whole of what stops it minting a token
+    // and carrying on syncing. `/keys` deliberately takes the stale auth — a device that is
+    // merely behind has to be told apart from one that is out, and the manifest is what tells
+    // them apart — so the two questions must not be answered by the same helper.
+    const env = tokenEnv("g1");
+    await seedGroup(env, "g1", 0, AUTH_ONE);
+    expect(await recordRotation(env, "g1", 1, AUTH_TWO, { desk: "blob" })).toBe(true);
+
+    const current = post("/token", { group: "g1", auth: AUTH_TWO });
+    const stale = post("/token", { group: "g1", auth: AUTH_ONE });
+
+    expect((await answer(await handleToken(current, env))).status).toBe(200);
+    expect((await answer(await handleToken(stale, env))).status).toBe(401);
+  });
+
+  it("refuses one group's auth presented against another group", async () => {
+    const env = tokenEnv("g1", "g2");
+    await seedGroup(env, "g1", 0, AUTH_ONE);
+    await seedGroup(env, "g2", 0, AUTH_TWO);
+
+    const request = post("/token", { group: "g1", auth: AUTH_TWO });
+    const { status } = await answer(await handleToken(request, env));
+
+    // Both auths are current — each for its own group. A door that looked an auth up without
+    // the group would answer this one with a token for `g1`.
+    expect(status).toBe(401);
+  });
+
+  it("refuses a group the relay holds keys for but no membership", async () => {
+    // `g2` is seeded into `group_keys` and has no entitlement row, which is spec §2.4's "no
+    // membership, no removal" seen from `/token`: the auth is one this relay has stored, and it
+    // still opens nothing.
+    const env = tokenEnv("g1");
+    await seedGroup(env, "g2", 0, AUTH_TWO);
+
+    const request = post("/token", { group: "g2", auth: AUTH_TWO });
+    const { status } = await answer(await handleToken(request, env));
+
+    expect(status).toBe(401);
+  });
+
+  it("refuses a group whose entitlement has never registered an auth", async () => {
+    // Every entitlement written before this change is in exactly this state: bound to a group,
+    // `group_auth` still NULL. A NULL that compared equal to anything would hand a token to any
+    // caller who guessed the group id, which is the whole of what the gate is protecting.
+    const env = tokenEnv("g1");
+
+    const request = post("/token", { group: "g1", auth: AUTH_ONE });
+    const { status } = await answer(await handleToken(request, env));
+
+    expect(status).toBe(401);
+  });
+
+  it("refuses a dead entitlement even on a current auth", async () => {
+    const env = tokenEnv("g1");
+    await seedGroup(env, "g1", 0, AUTH_ONE);
+    await env.DB.prepare(`UPDATE entitlements SET status = ? WHERE subject = ?`)
+      .bind("dead", "sub-0")
+      .run();
+
+    const request = post("/token", { group: "g1", auth: AUTH_ONE });
+    const { status } = await answer(await handleToken(request, env));
+
+    expect(status).toBe(401);
+  });
+
+  it.each([
+    [{ group: "g1" }],
+    [{ auth: AUTH_ONE }],
+    [{ group: "g1", auth: "not hex" }],
+    [{ group: "g1", auth: AUTH_ONE.toUpperCase() }],
+    [{ group: "slash/es", auth: AUTH_ONE }],
+    [{ group: 7, auth: AUTH_ONE }],
+  ])("refuses %j as malformed rather than looking it up", async (body) => {
+    const env = tokenEnv("g1");
+    await seedGroup(env, "g1", 0, AUTH_ONE);
+
+    const { status } = await answer(await handleToken(post("/token", body), env));
+
+    expect(status).toBe(400);
+  });
+
+  it("answers a body carrying both shapes on the refresh door", async () => {
+    // The app sends one shape or the other and never both (spec §2.5), so this pins a choice
+    // rather than a requirement — but the choice has to turn on *presence*, not on validity.
+    // Branching on whether `refresh` parses would let a caller who names a secret be answered
+    // about a credential they did not present, by spoiling the one they did.
+    const env = tokenEnv("g1");
+    await seedGroup(env, "g1", 0, AUTH_ONE);
+
+    const both = post("/token", { refresh: "secret-0", group: "g1", auth: AUTH_ONE });
+    const spoiled = post("/token", { refresh: "", group: "g1", auth: AUTH_ONE });
+
+    expect((await answer(await handleToken(both, env))).body.refresh).toBe("secret-0");
+    expect((await answer(await handleToken(spoiled, env))).status).toBe(400);
+  });
+});
+
+describe("/token — a grace window settles the same on both doors", () => {
+  /**
+   * Two subjects, one per door, so neither call can disturb the other's row. `sub-0` is reached
+   * by its refresh secret and `sub-1` by `g2`'s group auth.
+   *
+   * ⚠️ **These assert the refusal and not the revocation that goes with it.** `revoke`'s
+   * `UPDATE … SET status = 'dead', grace_until = NULL, …` carries literals, and `fakeD1` binds a
+   * statement's `WHERE` parameters by counting `SET` assignments — so against this harness it
+   * matches no rows and changes nothing, silently. The 401 is real; an assertion about
+   * `refresh_secret` afterwards would be a fiction.
+   */
+  async function twoDoors(graceUntil: number): Promise<Env> {
+    const env = tokenEnv("g1", "g2");
+    await seedGroup(env, "g2", 0, AUTH_TWO);
+    for (const subject of ["sub-0", "sub-1"]) {
+      await env.DB.prepare(`UPDATE entitlements SET status = ?, grace_until = ? WHERE subject = ?`)
+        .bind("grace", graceUntil, subject)
+        .run();
+    }
+    return env;
+  }
+
+  it("serves both doors while the window is open", async () => {
+    const env = await twoDoors(Date.now() + 60_000);
+
+    const refreshDoor = post("/token", { refresh: "secret-0" });
+    const groupDoor = post("/token", { group: "g2", auth: AUTH_TWO });
+    const viaRefresh = await answer(await handleToken(refreshDoor, env));
+    const viaGroup = await answer(await handleToken(groupDoor, env));
+
+    expect(viaRefresh.status).toBe(200);
+    expect(viaRefresh.body.status).toBe("grace");
+    // The status has to reach the app on this door too: it is what draws the panel's warning,
+    // and a device that only ever mints through its group would otherwise never be told.
+    expect(viaGroup.status).toBe(200);
+    expect(viaGroup.body.status).toBe("grace");
+  });
+
+  it("refuses both doors once the window has closed", async () => {
+    const env = await twoDoors(Date.now() - 1);
+
+    const refreshDoor = post("/token", { refresh: "secret-0" });
+    const groupDoor = post("/token", { group: "g2", auth: AUTH_TWO });
+    const viaRefresh = await answer(await handleToken(refreshDoor, env));
+    const viaGroup = await answer(await handleToken(groupDoor, env));
+
+    // A window closes with nothing to announce it, so a door that merely read the stored
+    // `grace` and served would keep a declined reader's every paired device syncing for ever.
+    expect(viaRefresh.status).toBe(401);
+    expect(viaGroup.status).toBe(401);
+    expect(viaGroup.body.access).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// /claim's two new body fields
+// ---------------------------------------------------------------------------------------
+
+/**
+ * An `Env` whose D1 makes any query a failure, so a 400 against it is proof the guard ran
+ * *first* rather than merely proof of a 400.
+ */
+function noDatabase(): Env {
+  return {
+    DB: {
+      prepare: () => {
+        throw new Error("a body reached D1 before it had been validated");
+      },
+    },
+    RELAY_HMAC_KEY: HMAC,
+  } as unknown as Env;
+}
+
+const WELL_FORMED = { code: "0123-4567-89AB", group: "g1", epoch: 0, auth: AUTH_ONE };
+
+/**
+ * `epoch` and `auth` are checked before `handleClaim` touches D1 at all, which is what these
+ * assert.
+ *
+ * **The seeding itself is asserted below, since 2026-08-30.** It could not be while `fakeD1`
+ * answered `DELETE … RETURNING subject` with no rows rather than by throwing — every claim
+ * stopped at the 401 — and while the binding `UPDATE`'s
+ * `WHERE … AND (group_id IS NULL OR group_id = ?)` threw `expected select, found group_id`,
+ * because a `(` in a condition was read as the start of a subquery. The harness grew `RETURNING`,
+ * `OR`, parenthesised groups and `IS NULL`, so both statements now run.
+ */
+describe("/claim — the group key's two body fields", () => {
+  it("carries a well-formed body past every guard and into the code lookup", async () => {
+    // **The control that stops the refusals below being vacuous.** Without it they would all
+    // still pass against a handler that answered 400 to everything. 401 is the honest answer to
+    // a code no `claim_codes` row holds, and it is reached only after `code`, `group`, `epoch`
+    // and `auth` have each been accepted.
+    const request = post("/claim", WELL_FORMED);
+    const { status, body } = await answer(await handleClaim(request, fakeEnv()));
+
+    expect(status).toBe(401);
+    expect(body.error).toBe("that claim code is not valid");
+  });
+
+  it.each([
+    [{ ...WELL_FORMED, epoch: undefined }],
+    [{ ...WELL_FORMED, epoch: "0" }],
+    [{ ...WELL_FORMED, epoch: 1.5 }],
+    [{ ...WELL_FORMED, epoch: -1 }],
+    [{ ...WELL_FORMED, auth: undefined }],
+    [{ ...WELL_FORMED, auth: "" }],
+    [{ ...WELL_FORMED, auth: AUTH_ONE.toUpperCase() }],
+    [{ ...WELL_FORMED, auth: `${"1".repeat(63)}g` }],
+  ])("refuses %j without touching D1", async (body) => {
+    const { status } = await answer(await handleClaim(post("/claim", body), noDatabase()));
+
+    expect(status).toBe(400);
+  });
+
+  it("refuses an epoch too large for the monotonic check to advance", async () => {
+    // `Number.isInteger(1e300)` is true and `1e300 + 1 === 1e300`, so a group claimed at that
+    // epoch could never accept a rotation again and no removal in it would ever publish. The
+    // guard is `isSafeInteger` for this one value's sake.
+    const unsafe = post("/claim", { ...WELL_FORMED, epoch: 1e300 });
+    const largest = post("/claim", { ...WELL_FORMED, epoch: Number.MAX_SAFE_INTEGER });
+
+    expect((await answer(await handleClaim(unsafe, noDatabase()))).status).toBe(400);
+    // The largest epoch integer arithmetic is still exact at is accepted, so the guard refuses
+    // unsafe values rather than merely large ones.
+    expect((await answer(await handleClaim(largest, fakeEnv()))).status).toBe(401);
+  });
+});
+
+/**
+ * The write a claim makes that nothing else can make, and the ordering that keeps it honest.
+ *
+ * **A claim is the only moment the relay is ever told a group exists.** `/rotate` authenticates
+ * against an auth only `seedGroup` can have written, so a claim that bound a group and registered
+ * nothing would leave a group whose auth no device can match and whose every rotation is refused
+ * — with the reader's Connect press having reported success. That is the failure this pair pins.
+ *
+ * **The second test is the one that survived a mutation before the harness could run these.**
+ * Moving `seedGroup` above the binding `UPDATE` leaves the first test green: the group is bound,
+ * the key is registered, everything looks right. Only a claim that is *refused* tells the two
+ * orders apart, which is why the 409 is here rather than filed with the other refusals.
+ */
+describe("/claim — registering the group's relay key", () => {
+  /** A live code for `WELL_FORMED`, against `sub-0`. `normaliseCode` strips the separators. */
+  function withCode(tables: Tables): Tables {
+    tables.claim_codes = [
+      { code: "0123456789AB", subject: "sub-0", expires_at: Date.now() + 60_000 },
+    ];
+    return tables;
+  }
+
+  it("binds the group and registers its first relay key", async () => {
+    // `bound: false` is the state a first claim finds: no group, no refresh secret. It is what
+    // makes the binding UPDATE take the `group_id IS NULL` arm rather than the re-claim arm.
+    const tables = withCode(fakeTables({ groups: ["g1"], bound: false }));
+
+    const env = { ...fakeEnvOver(tables), RELAY_HMAC_KEY: HMAC };
+
+    const { status } = await answer(await handleClaim(post("/claim", WELL_FORMED), env));
+
+    expect(status).toBe(200);
+    expect(tables.entitlements[0].group_id).toBe("g1");
+    // The manifest starts empty — a group of one has nobody to rewrap for — but the ROW has to
+    // exist, because `recordRotation` refuses an epoch that does not advance one.
+    expect(tables.group_keys).toHaveLength(1);
+    expect(tables.group_keys[0]).toMatchObject({ group_id: "g1", epoch: 0, auth: AUTH_ONE });
+    expect(JSON.parse(String(tables.group_keys[0].keys))).toEqual({});
+    // And the code is spent, which is the `DELETE … RETURNING` doing its other job.
+    expect(tables.claim_codes).toHaveLength(0);
+  });
+
+  it("registers nothing when the binding is refused", async () => {
+    // `sub-0` is unbound and holds the code; `sub-1` already owns `g1`. The binding UPDATE
+    // changes no row, `handleClaim` answers 409, and `group_keys` must still hold only the row
+    // `sub-1` put there — never a second one under `sub-0`'s auth.
+    const tables = withCode(fakeTables({ groups: ["taken", "g1"], bound: true }));
+    tables.entitlements[0].group_id = null;
+    tables.entitlements[0].refresh_secret = null;
+    const env = { ...fakeEnvOver(tables), RELAY_HMAC_KEY: HMAC };
+    await seedGroup(env, "g1", 4, AUTH_TWO);
+
+    const { status } = await answer(await handleClaim(post("/claim", WELL_FORMED), env));
+
+    expect(status).toBe(409);
+    expect(tables.group_keys).toHaveLength(1);
+    expect(tables.group_keys[0]).toMatchObject({ epoch: 4, auth: AUTH_TWO });
+  });
 });

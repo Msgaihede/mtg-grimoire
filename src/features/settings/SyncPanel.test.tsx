@@ -116,11 +116,20 @@ const RELAY_ON: RelayStatus = {
   reviewCount: 0,
 };
 
-/** A device that has never connected a membership. **`groupBound: false` is the whole of what
- *  tells this apart from a membership that has ended** — `since` is null in both, because
- *  `entitlement::revoke` deletes the date along with the refresh secret. */
+/**
+ * A device that has never connected a membership. **`groupBound: false` is the whole of what
+ * tells this apart from a membership that has ended** — `since` is null in both, because
+ * `entitlement::revoke` deletes the date along with the refresh secret.
+ *
+ * ⚠️ **A device that has just paired and not yet synced reads exactly this**, and it is written
+ * here rather than given a fixture of its own because a second object would be a lie about
+ * there being a second state. Since spec §2.2 the pairing blob carries no refresh secret, so a
+ * joiner holds no grant and no `supporter_status` — `entitled` is false and `membership_ended`
+ * is false, which is a fresh install byte for byte. The panel cannot tell them apart and must
+ * not pretend to; what resolves it is the round trip that mints on the group auth.
+ */
 const NOT_CONNECTED: SupporterStatus = {
-  connected: false,
+  entitled: false,
   status: "dead",
   since: null,
   groupBound: false,
@@ -134,31 +143,55 @@ const NOT_CONNECTED: SupporterStatus = {
  * object that remembers the reader was ever a supporter.
  */
 const REVOKED: SupporterStatus = {
-  connected: false,
+  entitled: false,
   status: "dead",
   since: null,
   groupBound: true,
 };
 
 /**
- * A device that was paired to a connected one, before its first token refresh.
+ * A grant written with no status beside it — **entitled, and looking exactly like a lapse.**
  *
- * `store_grant` and `store_status` are two calls and pairing makes only the first (§6.2), so
- * this device holds a live refresh secret with **no status row at all** — which
- * `entitlement::supporter_state` reads back as the default `"dead"`. Every field but `connected`
- * therefore looks like a lapse, which is why it is written out rather than derived from one of
- * the two above.
+ * `store_grant` and `store_status` are two writes in a row with no transaction around them
+ * (`entitlement::refresh_door`), so a process that stops between them leaves the refresh secret
+ * live and no `supporter_status` row at all, which `entitlement::supporter_state` reads back as
+ * the default `"dead"`. Every field but `entitled` therefore reads as a lapse, which is why it
+ * is written out rather than spread from one of the two above.
+ *
+ * **This used to be device B and is not any more.** Until spec §2.2 the pairing blob carried the
+ * offering device's refresh secret, so a phone paired to a paid-up desktop landed here on the
+ * spot; it carries none now, and a joiner reads `NOT_CONNECTED` instead until its first round
+ * trip. The *shape* still has to be handled and the reason has simply moved, which is the point
+ * of renaming the fixture rather than deleting it.
  */
-const PAIRED_IN: SupporterStatus = {
-  connected: true,
+const GRANT_WITHOUT_STATUS: SupporterStatus = {
+  entitled: true,
   status: "dead",
   since: null,
   groupBound: true,
 };
 
-/** Connected and paid up. */
+/**
+ * **The second device: entitled through its group, holding nothing of its own.**
+ *
+ * Spec §2.2 and the whole of the reader's item 3. No refresh secret ever reached this device —
+ * `/token`'s group door mints on the group auth, which every device derives from the group key —
+ * and the answer carries `status` and `since`, so the panel says *Supporting since …* dated.
+ *
+ * **`entitled: true` beside a `groupBound` that `membership_ended` also answers `true` for** is
+ * exactly the collision `supporterState`'s ordering exists to resolve: this object is a
+ * *supporter*, and asking `groupBound` first would draw *Membership ended* over a live pledge.
+ */
+const GROUP_ENTITLED: SupporterStatus = {
+  entitled: true,
+  status: "active",
+  since: 1_740_000_000,
+  groupBound: true,
+};
+
+/** Connected and paid up — this device pressed the button itself. */
 const SUPPORTING: SupporterStatus = {
-  connected: true,
+  entitled: true,
   status: "active",
   since: 1_756_000_000,
   groupBound: true,
@@ -539,7 +572,7 @@ describe("the relay half", () => {
 describe("the supporter half", () => {
   it("offers Connect Patreon when nothing is connected", async () => {
     syncSupporterStatus.mockResolvedValue({
-      connected: false, status: "dead", since: null, groupBound: false,
+      entitled: false, status: "dead", since: null, groupBound: false,
     });
     render(<SyncPanel />, { wrapper: unpaired });
 
@@ -553,7 +586,7 @@ describe("the supporter half", () => {
     // Spec 10: a lapse is a state, not a failure. "Could not reach the relay" points a reader
     // at their network when the fix is their pledge.
     syncSupporterStatus.mockResolvedValue({
-      connected: false, status: "dead", since: null, groupBound: true,
+      entitled: false, status: "dead", since: null, groupBound: true,
     });
     render(<SyncPanel />, { wrapper: unpaired });
 
@@ -564,7 +597,7 @@ describe("the supporter half", () => {
   it("tells a lapsed reader their own data is untouched", async () => {
     // The one sentence that stops a lapse reading as data loss.
     syncSupporterStatus.mockResolvedValue({
-      connected: false, status: "dead", since: null, groupBound: true,
+      entitled: false, status: "dead", since: null, groupBound: true,
     });
     render(<SyncPanel />, { wrapper: unpaired });
 
@@ -576,7 +609,7 @@ describe("the supporter half", () => {
    *  would be an answer to a question a first-run reader has not asked. */
   it("does not offer that reassurance to a reader who never connected", async () => {
     syncSupporterStatus.mockResolvedValue({
-      connected: false, status: "dead", since: null, groupBound: false,
+      entitled: false, status: "dead", since: null, groupBound: false,
     });
     render(<SyncPanel />, { wrapper: unpaired });
 
@@ -598,18 +631,42 @@ describe("the supporter half", () => {
    */
   it("tells a first-run reader which device to connect on", async () => {
     syncSupporterStatus.mockResolvedValue({
-      connected: false, status: "dead", since: null, groupBound: false,
+      entitled: false, status: "dead", since: null, groupBound: false,
     });
     render(<SyncPanel />, { wrapper: unpaired });
 
     expect(await screen.findByText(/pair this one to them first/i)).toBeInTheDocument();
   });
 
+  /**
+   * **The clause spec §2.2 added, asserted so a revert to the old copy goes red.**
+   *
+   * `CONNECT_ORDER` used to open "Connect on the device you want to pair from", which was advice
+   * about a trap that has been removed: `refresh` travelled only inside the sealed pairing blob,
+   * so pairing before anybody connected left the joiner with nothing it could ever get. The
+   * group door ended that, and the sentence has to say so — a reader told only "pair this one to
+   * them first" is left to guess whether they must then connect on some *particular* device.
+   *
+   * It is a second `getByText` rather than a longer regex on the first because the two clauses
+   * are separate claims: the placement rule survives, the promise is new, and a copy edit that
+   * dropped either should name which one it dropped.
+   */
+  it("promises a membership on any device covers the whole group", async () => {
+    syncSupporterStatus.mockResolvedValue(NOT_CONNECTED);
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    expect(await screen.findByText(/a membership on any of them covers all of them/i))
+      .toBeInTheDocument();
+    // ...and the advice it replaced is gone, or the panel is telling a reader that the order
+    // matters in the same breath as telling them it does not.
+    expect(screen.queryByText(/connect on the device you want to pair from/i)).toBeNull();
+  });
+
   it("says it to a lapsed reader too, who is offered the same press", async () => {
     // `ended` is the second state with a Connect button on it, and reconnecting on the wrong
     // device strands them the same way a first connect would.
     syncSupporterStatus.mockResolvedValue({
-      connected: false, status: "dead", since: null, groupBound: true,
+      entitled: false, status: "dead", since: null, groupBound: true,
     });
     render(<SyncPanel />, { wrapper: unpaired });
 
@@ -620,7 +677,7 @@ describe("the supporter half", () => {
     // The advice is about a press that is no longer on screen. Left drawn, it reads as an
     // instruction to a reader with nothing left to do about it.
     syncSupporterStatus.mockResolvedValue({
-      connected: true, status: "active", since: 1_756_000_000, groupBound: true,
+      entitled: true, status: "active", since: 1_756_000_000, groupBound: true,
     });
     render(<SyncPanel />, { wrapper: unpaired });
 
@@ -629,33 +686,56 @@ describe("the supporter half", () => {
   });
 
   /**
-   * **Device B, which never opens a browser** (§6.2) — and whose three fields read as a lapse.
+   * **The second device — spec §2.2, and the whole reason this PR exists.**
    *
-   * A phone paired to a paid-up desktop is handed the refresh secret and nothing else, so it
-   * holds a live grant with no status row and no date. It is supporting; it has simply not been
-   * told when since. Drawing an ending here would tell that reader their membership stopped at
-   * the moment it started working, and the fields cannot tell you otherwise — only `connected`
-   * can.
+   * A phone paired to a desktop whose reader pays mints its own token through `/token`'s group
+   * door, so it is entitled holding no Patreon-side secret at all, and the answer carries the
+   * date. Every field but `entitled` is a lapse's, and the panel drew *Connect Patreon* at this
+   * reader on every device but one for as long as it read a boolean called `connected` — which
+   * `ipc.ts` went on declaring for a wave after the crate had renamed it, compiling and passing
+   * while `status.connected` was `undefined` in the shipped window.
+   *
+   * **The button's absence is asserted, not just the sentence's presence.** *Supporting since …*
+   * with a Connect Patreon under it would satisfy half of this and is precisely what the bug
+   * looked like from one device.
    */
-  it("draws a just-paired device as supporting rather than as a lapse", async () => {
-    syncSupporterStatus.mockResolvedValue({
-      connected: true, status: "dead", since: null, groupBound: true,
-    });
+  it("offers no Connect button on a device entitled through its group", async () => {
+    syncSupporterStatus.mockResolvedValue(GROUP_ENTITLED);
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    expect(await screen.findByText(/supporting since/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /connect patreon/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/membership ended/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/not connected/i)).not.toBeInTheDocument();
+    // ...and it can sync, which is what the group door was built to give it.
+    expect(screen.getByRole("button", { name: /sync now/i })).toBeInTheDocument();
+  });
+
+  /**
+   * **Entitled with no status row beside it** — and it still reads as supporting, dateless.
+   *
+   * `store_grant` and `store_status` are two writes with nothing around them, so a device can
+   * hold a live refresh secret and no `supporter_status` at all, which reads back as the default
+   * `"dead"`. Drawing an ending here would tell that reader their membership stopped at the
+   * moment it started working, and the other three fields cannot tell you otherwise — only
+   * `entitled` can.
+   */
+  it("draws an entitled device with no status yet as supporting rather than as a lapse", async () => {
+    syncSupporterStatus.mockResolvedValue(GRANT_WITHOUT_STATUS);
     render(<SyncPanel />, { wrapper: unpaired });
 
     expect(await screen.findByText(/supporting/i)).toBeInTheDocument();
     expect(screen.queryByText(/membership ended/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/not connected/i)).not.toBeInTheDocument();
-    // ...and it can sync, which is the whole of what pairing carried the secret across for.
     expect(screen.getByRole("button", { name: /sync now/i })).toBeInTheDocument();
   });
 
   it("sends a pasted claim code and shows the connected state", async () => {
     syncSupporterStatus.mockResolvedValue({
-      connected: false, status: "dead", since: null, groupBound: false,
+      entitled: false, status: "dead", since: null, groupBound: false,
     });
     syncPatreonClaim.mockResolvedValue({
-      connected: true, status: "active", since: 1_756_000_000, groupBound: true,
+      entitled: true, status: "active", since: 1_756_000_000, groupBound: true,
     });
     render(<SyncPanel />, { wrapper: unpaired });
     const field = await screen.findByLabelText(/claim code/i);
@@ -696,7 +776,7 @@ describe("the supporter half", () => {
 
   it("says a card was declined without saying the membership ended", async () => {
     syncSupporterStatus.mockResolvedValue({
-      connected: true, status: "grace", since: 1_756_000_000, groupBound: true,
+      entitled: true, status: "grace", since: 1_756_000_000, groupBound: true,
     });
     render(<SyncPanel />, { wrapper: unpaired });
 
@@ -709,7 +789,7 @@ describe("the supporter half", () => {
   it("keeps sync working through a declined card", async () => {
     syncRelayStatus.mockResolvedValue(RELAY_ON);
     syncSupporterStatus.mockResolvedValue({
-      connected: true, status: "grace", since: 1_756_000_000, groupBound: true,
+      entitled: true, status: "grace", since: 1_756_000_000, groupBound: true,
     });
     render(<SyncPanel />, { wrapper: unpaired });
 
@@ -718,10 +798,10 @@ describe("the supporter half", () => {
 });
 
 /**
- * Four states, and the pair that share every field but one.
+ * Five states, and the two pairs that each share every field but one.
  *
  * `groupBound` is the whole of what tells *never connected* from *membership ended* — both are
- * `connected: false, status: "dead"`, and both are `since: null`, because `entitlement::revoke`
+ * `entitled: false, status: "dead"`, and both are `since: null`, because `entitlement::revoke`
  * deletes the date with the secret. So it is asserted here rather than only through a render.
  */
 describe("supporterState", () => {
@@ -731,12 +811,33 @@ describe("supporterState", () => {
     expect(supporterState(REVOKED)).toBe("ended");
     expect(supporterState(SUPPORTING)).toBe("active");
     expect(supporterState({ ...SUPPORTING, status: "grace" })).toBe("grace");
-    // **A `dead` status on a *connected* device is device B, not a lapse.** Pairing carries the
-    // refresh secret across with no status row beside it (§6.2), and `supporter_state` defaults
-    // an absent row to `"dead"` — so a phone paired to a paid-up desktop lands exactly here, and
-    // drawing it as an ending would tell that reader their membership stopped the moment it
-    // started working.
-    expect(supporterState(PAIRED_IN)).toBe("active");
+    // **A `dead` status on an *entitled* device is a grant whose status write has not landed,
+    // not a lapse.** `supporter_state` defaults an absent row to `"dead"`, so a device that
+    // holds a live secret and nothing else lands exactly here, and drawing it as an ending
+    // would tell that reader their membership stopped the moment it started working.
+    expect(supporterState(GRANT_WITHOUT_STATUS)).toBe("active");
+  });
+
+  /**
+   * **The second device, and the field that has to be read first for it to come out right.**
+   *
+   * `commands::supporter_status` computes `group_bound = entitled || membership_ended`, and
+   * `membership_ended` is `refresh_secret.is_none() && SUPPORTER_STATUS.is_some()` — which a
+   * device entitled through its group satisfies, because it holds a status and no secret. So
+   * this object carries `groupBound: true` for a membership that has not ended at all, and the
+   * *only* thing standing between it and *Membership ended* is `entitled` being asked first.
+   *
+   * **Swapping the two lines in `supporterState` is what makes this red**, which the mutation
+   * for this task confirmed: `GROUP_ENTITLED` goes `"ended"` while every other fixture in this
+   * file stays exactly where it was.
+   */
+  it("puts a group entitlement ahead of a groupBound that also answers true", () => {
+    expect(supporterState(GROUP_ENTITLED)).toBe("active");
+    expect(supporterState({ ...GROUP_ENTITLED, status: "grace" })).toBe("grace");
+    // The mirror image, and the reason the first line is not vacuous: the same `groupBound`
+    // with the entitlement gone *is* a lapse.
+    expect(supporterState({ ...GROUP_ENTITLED, entitled: false, status: "dead", since: null }))
+      .toBe("ended");
   });
 
   /**
@@ -838,5 +939,58 @@ describe("outcomeText", () => {
    *  drawn empty — "0 rows went across" on a routine trip is the whole of what §13 is against. */
   it("says nothing about a baseline on an ordinary sync", () => {
     expect(outcomeText(OUTCOME)).not.toMatch(/first exchange/i);
+  });
+});
+
+/**
+ * The circle spec §2.2 opens, and the two things that break it.
+ *
+ * A device that has just paired is entitled through its **group** and does not know it yet: it
+ * holds no `supporter_status` until a round trip asks `/token`'s group door. `ipc.syncNow` is
+ * `client::run_once`'s only caller in the whole app — no launch sync, no timer — so if the one
+ * control that calls it is drawn only for an entitled device, the press that would entitle this
+ * device is the press it cannot reach. It sits on *Connect Patreon* for ever, which is the
+ * reader's own item 3 reproduced one step further along.
+ *
+ * Both halves are asserted because either alone leaves a reader stranded: without the trip, a
+ * reader who never opens Settings again is never entitled; without the button, a reader whose
+ * relay was down at that exact moment has nothing to retry with.
+ */
+describe("a freshly paired device can reach the sync that entitles it", () => {
+  it("makes a round trip as soon as the pairing completes", async () => {
+    const user = userEvent.setup();
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    await user.click(await screen.findByRole("button", { name: /enter a code from another/i }));
+    await user.type(await screen.findByLabelText(/code the other device is showing/i), "CODE");
+    await user.click(screen.getByRole("button", { name: /read the code/i }));
+    await user.click(await screen.findByRole("button", { name: /codes match/i }));
+    await user.type(await screen.findByLabelText(/wrapped key the other device/i), "SEALED");
+    await user.click(screen.getByRole("button", { name: /finish pairing/i }));
+
+    await waitFor(() => expect(syncPairingComplete).toHaveBeenCalled());
+    // The assertion the whole block exists for. Nothing else in the app calls this.
+    await waitFor(() => expect(syncNow).toHaveBeenCalled());
+  });
+
+  it("still offers Sync now to a paired device its membership has not reached yet", async () => {
+    // NOT_CONNECTED is what a joiner reads until that trip lands: no secret, no status, no date.
+    // `paired: true` on the relay read is the only thing that may keep the button on screen.
+    syncSupporterStatus.mockResolvedValue(NOT_CONNECTED);
+    syncRelayStatus.mockResolvedValue({ ...RELAY_ON, paired: true });
+    render(<SyncPanel />, { wrapper: paired });
+
+    expect(await screen.findByRole("button", { name: /sync now/i })).toBeInTheDocument();
+  });
+
+  it("offers no Sync now to a device that is in no group and has no membership", async () => {
+    // The other side of the same rule, and what stops the fix above from drawing a control that
+    // can only ever report "there was nothing to do": `run_once` genuinely answers null here.
+    syncSupporterStatus.mockResolvedValue(NOT_CONNECTED);
+    syncRelayStatus.mockResolvedValue({ ...RELAY_OFF, paired: false });
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    await screen.findByText(/not paired with anything yet/i);
+    expect(screen.queryByRole("button", { name: /sync now/i })).not.toBeInTheDocument();
   });
 });
