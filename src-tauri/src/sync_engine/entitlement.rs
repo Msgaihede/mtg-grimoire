@@ -481,20 +481,35 @@ fn now(conn: &Connection) -> Result<i64, String> {
 /// short control-plane request — one small JSON body each way — and must not sit behind the relay
 /// client's 30-second read timeout, which is sized for a page of envelopes. Widening that one
 /// would slacken the sync's own deadline to suit two requests that should answer in a second.
-#[cfg(not(target_family = "wasm"))]
+///
+/// **Split into an app arm and a test arm for [`super::client::http`]'s reason**, and taken
+/// here as well because the shape is identical rather than because this module was measured
+/// flaking: one static client, `httpmock`'s pooled ports, and a runtime per `#[tokio::test]`.
+/// Fixing one of a matched pair and leaving the other is how the survivor gets diagnosed from
+/// scratch in six months.
+#[cfg(all(not(target_family = "wasm"), not(test)))]
 fn http() -> reqwest::Client {
     use std::sync::OnceLock;
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT
-        .get_or_init(|| {
-            reqwest::Client::builder()
-                .user_agent(crate::scryfall::USER_AGENT)
-                .connect_timeout(std::time::Duration::from_secs(10))
-                .read_timeout(std::time::Duration::from_secs(10))
-                .build()
-                .unwrap_or_default()
-        })
-        .clone()
+    CLIENT.get_or_init(build_http).clone()
+}
+
+/// See [`http`]: a test build takes a fresh client so nothing is shared across runtimes.
+#[cfg(all(not(target_family = "wasm"), test))]
+fn http() -> reqwest::Client {
+    build_http()
+}
+
+/// The one place this client's shape is written down. **Its read timeout is 10 seconds, not
+/// the relay client's 30**, which is the whole reason the two exist separately.
+#[cfg(not(target_family = "wasm"))]
+fn build_http() -> reqwest::Client {
+    reqwest::Client::builder()
+        .user_agent(crate::scryfall::USER_AGENT)
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .read_timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap_or_default()
 }
 
 /// **No `OnceLock` and no timeouts, and neither is an oversight** — `client::http`'s reasoning

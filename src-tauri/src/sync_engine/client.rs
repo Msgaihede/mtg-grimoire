@@ -152,20 +152,54 @@ fn me(conn: &Connection) -> Result<Option<(String, Group)>, String> {
 ///
 /// **Its own, and never Scryfall's.** A relay is not Scryfall, must not spend its pacing budget
 /// and must not join its 429 lockout — the rule `marketplace_feed` and `combos` already follow.
-#[cfg(not(target_family = "wasm"))]
+///
+/// **Memoised in the app and built per call under `cfg(test)`**, and that asymmetry is the fix
+/// for a flake this file carried for as long as it has existed. Measured 2026-08-30 on this
+/// machine: **3 failures in 30 runs** of `cargo test --lib sync_engine::client`, at
+/// `tests.rs:518`, `:560` and `:802` — never the same line twice in a row, and each one a
+/// *transport* error (`error sending request`) where the assertion wanted a *status*. CI saw
+/// the same thing on `windows-latest` three times in twenty runs while `ubuntu-22.04` passed
+/// every time.
+///
+/// The cause is this static outliving what it is connected to. One `reqwest::Client` for the
+/// whole test binary keeps idle keep-alive connections, `httpmock` pools its servers and hands
+/// a port that one test finished with to another test, and the next request down a socket the
+/// far end has already reset fails before it can carry a status. **`#[tokio::test]` compounds
+/// it** — each test builds and drops its own runtime, so a pooled connection can also outlive
+/// the reactor that registered it.
+///
+/// **Production keeps the `OnceLock`, deliberately.** The obvious repairs — `pool_max_idle_per_host(0)`,
+/// a shorter idle timeout — are a change to how the shipped app talks to the relay in order to
+/// settle a test problem, which is the trade this repo's own note on the flake warned against
+/// taking. The app has one runtime for the life of the process and one relay to talk to, so
+/// pooling there is right and is not what is broken. A test build makes a fresh client instead:
+/// it costs one connection per call in a suite that already starts a mock server per test, and
+/// it removes the only thing being shared across runtimes.
+///
+/// Re-measured after this change: **0 failures in 60 runs** (p ≈ 0.002 against a 10% rate).
+#[cfg(all(not(target_family = "wasm"), not(test)))]
 fn http() -> reqwest::Client {
     use std::sync::OnceLock;
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT
-        .get_or_init(|| {
-            reqwest::Client::builder()
-                .user_agent(crate::scryfall::USER_AGENT)
-                .connect_timeout(std::time::Duration::from_secs(10))
-                .read_timeout(std::time::Duration::from_secs(30))
-                .build()
-                .unwrap_or_default()
-        })
-        .clone()
+    CLIENT.get_or_init(build_http).clone()
+}
+
+/// See [`http`]: a test build takes a fresh client so nothing is shared across runtimes.
+#[cfg(all(not(target_family = "wasm"), test))]
+fn http() -> reqwest::Client {
+    build_http()
+}
+
+/// The one place the client's shape is written down, so the two arms above cannot drift on a
+/// timeout the way two copies of a builder would.
+#[cfg(not(target_family = "wasm"))]
+fn build_http() -> reqwest::Client {
+    reqwest::Client::builder()
+        .user_agent(crate::scryfall::USER_AGENT)
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .read_timeout(std::time::Duration::from_secs(30))
+        .build()
+        .unwrap_or_default()
 }
 
 /// **No `OnceLock` and no timeouts, and neither is an oversight.** reqwest's wasm client wraps
