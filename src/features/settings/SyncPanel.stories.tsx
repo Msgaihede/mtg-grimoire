@@ -82,6 +82,10 @@ export const NotPaired: Story = {
     // Nothing to compare and nothing to remove: the roster is not drawn at all rather than
     // drawn empty, because an empty list of devices reads as a group that has lost them.
     await expect(canvas.queryByRole("list")).not.toBeInTheDocument();
+    // **And nothing to leave.** `leave_group_now` refuses a device in no group in as many
+    // words, so the press is not drawn here — `DeviceRow`'s missing Remove one rung up, and the
+    // other end of the gate `LeavingSaysWhatItCosts` walks through.
+    await expect(canvas.queryByRole("button", { name: "Leave group" })).not.toBeInTheDocument();
   },
 };
 
@@ -351,6 +355,59 @@ export const RemovingSaysWhatItCannotDo: Story = {
     await expect(canvas.queryByText("Removed")).not.toBeInTheDocument();
   },
 };
+
+/**
+ * **Leaving — the press `identity::CANNOT_REMOVE_SELF` has pointed at since before it existed.**
+ *
+ * *"This device cannot remove itself. Use Leave group instead."* was written for a control that
+ * was not there; this is it. Spec §2.1 makes the departure **always possible**: the command
+ * plans a rotation, publishes it best effort, and then clears this device's group **and its
+ * grant** whatever the relay answered. There is no relay in the workbench, so what this story
+ * drives is exactly the half that survives an unreachable one — which is, deliberately, every
+ * step that changes anything.
+ *
+ * **The dialog is the story.** Two facts a reader cannot guess sit in it, and each one is the
+ * difference between a reasonable press and a frightening one: that this device keeps its own
+ * collection — the reassurance `REMOVAL_WARNING` gives from the other side of the same act — and
+ * that a relay this device could not reach has not told anybody, so the other devices go on
+ * listing this one until somebody removes it there. That second sentence is the honest cost of
+ * *"always possible"*, and leaving it out would let a reader believe the group had closed behind
+ * them when it had not.
+ *
+ * It goes all the way down, `RemovingSaysWhatItCannotDo`'s way: the press empties the fake's
+ * group and roster and clears its grant, so the roster the story opened on is replaced by the
+ * pairing offer a device out of the box shows — and the press that opened the dialog goes with
+ * the group it was about.
+ */
+export const LeavingSaysWhatItCosts: Story = {
+  parameters: { fake: { seed: "paired" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // The dialog draws at the app root, so its body is outside the panel's canvas.
+    const page = within(canvasElement.ownerDocument.body);
+
+    await expect(await canvas.findByText(/in a group of 2, at key version 2/i)).toBeInTheDocument();
+    await userEvent.click(canvas.getByRole("button", { name: "Leave group" }));
+
+    // 1. Nothing local is deleted. 2. The others may never hear.
+    const warning = await page.findByText(/your collection stays on this device/i);
+    await expect(warning).toHaveTextContent(/nothing here is deleted/i);
+    await expect(warning).toHaveTextContent(/relay cannot be reached/i);
+    await expect(warning).toHaveTextContent(/go on listing this one/i);
+
+    await userEvent.click(page.getByRole("button", { name: "Leave the group" }));
+
+    // Out. The roster is gone rather than emptied, and what is drawn in its place is the offer
+    // a device in no group opens on — which is the same read the panel makes on first launch.
+    await expect(await canvas.findByText(/not paired with anything yet/i)).toBeInTheDocument();
+    await expect(canvas.queryByText("Phone")).not.toBeInTheDocument();
+    await expect(canvas.queryByRole("list")).not.toBeInTheDocument();
+    // And the press goes with the group it was about — the other end of the same gate
+    // `NotPaired` asserts from the start.
+    await expect(canvas.queryByRole("button", { name: "Leave group" })).not.toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: /pair a device/i })).toBeInTheDocument();
+  },
+};
 /* -------------------------------------------------------------- the membership ---------- */
 
 /**
@@ -389,6 +446,13 @@ export const NotConnected: Story = {
     // **The one warning that does belong here**, because it is about the press below it:
     // connecting founds a group of one, and a device in a group can never join another.
     await expect(canvas.getByText(/pair this one to them first/i)).toBeInTheDocument();
+    // **And the second, at the field rather than at the button** (spec §3). `/claim` *moves* a
+    // binding now rather than refusing one with a 409 — which is what un-strands the payer who
+    // has just left a group — and the price is paid by whoever is still in the old one: their
+    // relay log is dropped and they stop syncing with each other. A reader who simply pastes a
+    // fresh code on a second machine can do that to a working group by accident, and this
+    // paragraph is the only thing between them and it.
+    await expect(canvas.getByText(/one membership covers one group/i)).toBeInTheDocument();
   },
 };
 
