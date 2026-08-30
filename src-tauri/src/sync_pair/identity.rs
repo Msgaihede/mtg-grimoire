@@ -247,10 +247,56 @@ fn tidy(raw: &str) -> String {
 const CANNOT_REMOVE_SELF: &str = "This device cannot remove itself. Use Leave group instead.";
 
 /// What [`plan_rotation`] says on a device that is in no group.
-const NOT_IN_A_GROUP: &str = "This device is not in a pairing group.";
+/// **`pub` since 2026-08-30**, because `pairing::leave_group_now` needs it. A second copy of a
+/// user-facing sentence is how two screens come to disagree about one refusal, and
+/// `client::post_rotation` already writes its own for want of this.
+pub const NOT_IN_A_GROUP: &str = "This device is not in a pairing group.";
 
 /// What [`plan_rotation`] says when the id names nobody on the roster.
 const NOT_ON_THE_ROSTER: &str = "That device is not in this pairing group.";
+
+/// How many devices one group may hold — spec §4.
+///
+/// **One number, and the relay spells it again in `groupauth.ts`.** That is not a duplication
+/// that can be removed: this repository is public and readers build it, so a cap that lived only
+/// here would be a suggestion, and the point of a device limit is precisely the case where
+/// somebody has reason to exceed it. **The relay is the fence and this is the message** — what
+/// this constant buys is that a reader meets the limit at the moment they press Pair rather than
+/// at a sync three minutes later.
+pub const MAX_GROUP_DEVICES: usize = 5;
+
+/// What [`room_for`] says to the sixth device — spec §4.3.
+///
+/// It names the number, because a refusal a reader cannot count against is one they will press
+/// again. It also names the way out, which is a removal or a departure: both publish a manifest,
+/// and a manifest is what frees a slot on the relay as well as here.
+pub const GROUP_IS_FULL: &str = "This pairing group already has five devices, which is the \
+     limit. Remove one from the list of devices before pairing another.";
+
+/// Refuse a device that would be the sixth — the guard `pairing::confirm` and
+/// `pairing::complete` open with.
+///
+/// **Live rows only, and that is the whole of the `filter`.** `revoked_at` stopped being written
+/// when the manifest became the roster, but a database from a build before that can still hold a
+/// stamped row — and a tombstone from last year must not cost a reader a slot they are entitled
+/// to.
+///
+/// **`joining` is excluded from the count, so re-pairing a device already in the group is never
+/// refused.** A ceremony with a device that is already on the roster grows nothing; refusing it
+/// at five would mean a full group could never repair a pairing, which is the one case a reader
+/// runs the ceremony again for. It is the relay's rule too — `admitDevice` upserts, so a device
+/// already counted does not consume a second slot.
+pub fn room_for(conn: &Connection, joining: &str) -> Result<(), String> {
+    let live = roster(conn)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|d| d.revoked_at.is_none() && d.device_id != joining)
+        .count();
+    if live >= MAX_GROUP_DEVICES {
+        return Err(GROUP_IS_FULL.to_owned());
+    }
+    Ok(())
+}
 
 /// Read this device's identity, minting one the first time.
 ///
@@ -634,9 +680,44 @@ pub fn plan_rotation(conn: &Connection, removing: &str) -> Result<Rotation, Stri
     let Some(me) = read(conn).map_err(|e| e.to_string())? else {
         return Err(NOT_IN_A_GROUP.to_owned());
     };
+    // **The self-refusal stays here rather than moving into [`plan`]** — spec §2.1. Removing
+    // somebody else and leaving yourself are different acts with different consequences, and a
+    // single entrance that accepted either would let a mis-click on a roster row throw this
+    // device's own key away. [`plan_departure`] is the other entrance, and it is a press of its
+    // own with a confirmation of its own.
     if me.device_id == removing {
         return Err(CANNOT_REMOVE_SELF.to_owned());
     }
+    plan(conn, removing)
+}
+
+/// Work out the rotation **this device's own departure** needs, writing nothing — spec §2.1.
+///
+/// [`plan_rotation`] with the self-check inverted rather than relaxed: the manifest is everyone
+/// **except** this device, so the group closes behind the leaver on every device that adopts,
+/// exactly as a removal does.
+///
+/// **The leaver mints the key the devices that stay will use, and that is not new exposure.** A
+/// device that wanted to go on reading the group would simply *not leave* and would keep the key
+/// it already has; leaving is voluntary, so the threat this would defend against is one the
+/// actor has already declined to be. Spec §2.2 carries the argument in full.
+///
+/// **What it does not do is decide whether the departure happens.** Publishing is best effort and
+/// the local clear is unconditional — `pairing::leave_group_now` owns that order, because
+/// *"leaving is always possible"* is a promise about the whole press rather than about the plan.
+pub fn plan_departure(conn: &Connection) -> Result<Rotation, String> {
+    let Some(me) = read(conn).map_err(|e| e.to_string())? else {
+        return Err(NOT_IN_A_GROUP.to_owned());
+    };
+    plan(conn, &me.device_id)
+}
+
+/// The body both entrances share. **It asks nothing about who `removing` is** — that is the one
+/// question its two callers answer differently, and the whole reason they are two functions.
+fn plan(conn: &Connection, removing: &str) -> Result<Rotation, String> {
+    let Some(me) = read(conn).map_err(|e| e.to_string())? else {
+        return Err(NOT_IN_A_GROUP.to_owned());
+    };
     let Some(current) = group(conn).map_err(|e| e.to_string())? else {
         return Err(NOT_IN_A_GROUP.to_owned());
     };
@@ -808,6 +889,11 @@ pub fn adopt_epoch(
 /// **What a removed device does when `/keys` answers a higher epoch and no blob for it** — spec
 /// §2.4. That is positive evidence rather than a guess: the manifest is the roster, so a device
 /// the current epoch's manifest does not name is a device that has been taken off.
+///
+/// **It is also what a device that leaves of its own accord does** — `pairing::leave_group_now`,
+/// after [`plan_departure`] has been published — and the two callers are the reason the grant is
+/// still not touched here. Being removed and choosing to go are different events with different
+/// sentences on the panel; this function is the half they have in common.
 ///
 /// **`sync_identity` survives, and that is the difference between leaving and being reinstalled.**
 /// The device id is what the hybrid logical clock breaks ties on and what every op this device
@@ -1585,6 +1671,132 @@ mod tests {
                 &plan.group.group_id,
                 plan.group.epoch
             )
+        );
+    }
+
+    /// **A departure names everyone but this device** — spec §2.1, and the inversion of the line
+    /// above.
+    ///
+    /// Red if the manifest includes this device (the group would go on listing a device that has
+    /// gone, and the leaver would be handed a key it is not keeping), or if it omits a peer (a
+    /// device that stayed would be dropped from the group by somebody else's departure). The
+    /// epoch, the key and the auth are asserted for `planning_a_rotation_changes_no_row`'s
+    /// reason: without them a `plan_departure` that returned an empty rotation would pass the
+    /// two membership checks.
+    #[test]
+    fn a_departure_names_everyone_but_this_device() {
+        let conn = db();
+        let me = ensure(&conn).unwrap();
+        create_group(&conn, &me).unwrap();
+        add_device(&conn, "phone", &[9u8; 32], "Phone").unwrap();
+        add_device(&conn, "tablet", &[8u8; 32], "Tablet").unwrap();
+
+        let before = group(&conn).unwrap().unwrap();
+        let plan = plan_departure(&conn).expect("plan a departure");
+
+        let named: Vec<&str> = plan.keys.iter().map(|(id, _)| id.as_str()).collect();
+        assert!(
+            !named.contains(&me.device_id.as_str()),
+            "the leaver is on its own manifest, so the group never closes behind it: {named:?}"
+        );
+        assert!(named.contains(&"phone"), "a device that stays was dropped");
+        assert!(named.contains(&"tablet"), "a device that stays was dropped");
+        assert_eq!(named.len(), 2);
+
+        // It really is a rotation, and it wrote nothing.
+        assert_eq!(plan.group.epoch, before.epoch + 1);
+        assert_ne!(plan.group.group_key, before.group_key);
+        assert_eq!(
+            plan.auth,
+            crate::sync_pair::crypto::relay_auth(
+                &plan.group.group_key,
+                &plan.group.group_id,
+                plan.group.epoch
+            )
+        );
+        assert_eq!(group(&conn).unwrap().unwrap(), before, "the group moved");
+        assert_eq!(count(&conn, "sync_devices"), 3, "a row was written");
+    }
+
+    /// **[`plan_rotation`] still refuses to remove this device**, now that a departure has an
+    /// entrance of its own — spec §2.1.
+    ///
+    /// `this_device_cannot_revoke_itself` above drives the same refusal through the plan-and-
+    /// commit pair; this one asks `plan_rotation` directly, so a guard *bypassed* by the new
+    /// entrance and a guard *relaxed* are told apart. Red if `plan_rotation` starts answering
+    /// `Ok` for this device's own id — which is what collapsing the two entrances into one would
+    /// do, and what would let a mis-click on a roster row throw this device's key away.
+    #[test]
+    fn plan_rotation_still_refuses_to_remove_this_device() {
+        let conn = db();
+        let me = ensure(&conn).unwrap();
+        create_group(&conn, &me).unwrap();
+        add_device(&conn, "phone", &[9u8; 32], "Phone").unwrap();
+
+        // `.err().as_deref()` rather than `expect_err`, because `Rotation` is deliberately not
+        // `Debug` — a panic message printing one would put a group key in a CI log.
+        assert_eq!(
+            plan_rotation(&conn, &me.device_id).err().as_deref(),
+            Some(CANNOT_REMOVE_SELF),
+            "this device may not remove itself through the removal entrance"
+        );
+
+        // ...and the other entrance is the one that does it, so the refusal above is a fence
+        // rather than an absence of the feature.
+        assert!(plan_departure(&conn).is_ok());
+    }
+
+    /// A device in no group has nothing to leave, and both entrances say so.
+    #[test]
+    fn an_unpaired_device_cannot_plan_a_departure() {
+        let conn = db();
+        ensure(&conn).unwrap();
+        assert_eq!(plan_departure(&conn).err().as_deref(), Some(NOT_IN_A_GROUP));
+    }
+
+    /// The cap counts **live rows only** — spec §4.3 — and never the device being admitted.
+    ///
+    /// Three readings in one test, because each is a different way to get the arithmetic wrong.
+    /// Red if the guard is off by one at either end, if a tombstone from a pre-manifest build
+    /// costs a reader a slot, or if a device already on the roster is made to consume a second.
+    #[test]
+    fn the_device_cap_counts_live_rows_and_never_the_joiner() {
+        let conn = db();
+        let me = ensure(&conn).unwrap();
+        create_group(&conn, &me).unwrap();
+        for n in 1..=3u8 {
+            add_device(&conn, &format!("peer{n}"), &[n; 32], "Peer").unwrap();
+        }
+        assert_eq!(roster(&conn).unwrap().len(), 4, "four live devices");
+        assert!(
+            room_for(&conn, "newcomer").is_ok(),
+            "a fifth device is inside the limit"
+        );
+
+        // A tombstone an older build stamped is not a member and must cost nobody a slot.
+        add_device(&conn, "ghost", &[9u8; 32], "Ghost").unwrap();
+        conn.execute(
+            "UPDATE sync_devices SET revoked_at = unixepoch() WHERE device_id = 'ghost'",
+            [],
+        )
+        .unwrap();
+        assert_eq!(roster(&conn).unwrap().len(), 5, "four live and one stamped");
+        assert!(
+            room_for(&conn, "newcomer").is_ok(),
+            "a stale tombstone cost a reader a slot"
+        );
+
+        // The fifth live device fills the group.
+        add_device(&conn, "peer4", &[4u8; 32], "Peer").unwrap();
+        assert_eq!(
+            room_for(&conn, "newcomer").unwrap_err(),
+            GROUP_IS_FULL,
+            "a sixth device was admitted"
+        );
+        // ...and a device already in it is not a sixth of anything.
+        assert!(
+            room_for(&conn, "peer4").is_ok(),
+            "re-pairing a device already in a full group was refused"
         );
     }
 

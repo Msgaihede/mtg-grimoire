@@ -495,9 +495,9 @@ pub fn run() {
             mirror::settings::mirror_set_enabled,
             mirror::settings::mirror_set_root,
             mirror::settings::mirror_rebuild,
-            // Pairing (spec §7.5 and §7.6). Nine commands: the panel's read, the five
-            // steps of the handshake, cancelling one, and the two things a roster row
-            // can be told.
+            // Pairing (spec §7.5 and §7.6). The panel's read, the five steps of the
+            // handshake, cancelling one, the two things a roster row can be told, and —
+            // since the leave-group spec §2.1 — this device's own way out.
             sync_pair::pairing::sync_pairing_status,
             sync_pair::pairing::sync_pairing_begin,
             sync_pair::pairing::sync_pairing_accept,
@@ -507,6 +507,7 @@ pub fn run() {
             sync_pair::pairing::sync_pairing_cancel,
             sync_pair::pairing::sync_device_rename,
             sync_pair::pairing::sync_device_revoke,
+            sync_pair::pairing::sync_group_leave,
             // The relay, the membership and the review queue (spec §6.1, §7.2–§7.4, §7.7 and
             // §10). Seven: the panel's two reads, the Connect press, the claim code the reader
             // pastes back, one round trip now, the rows carrying a sentence, and clearing one
