@@ -263,6 +263,14 @@ const NOT_ON_THE_ROSTER: &str = "That device is not in this pairing group.";
 /// somebody has reason to exceed it. **The relay is the fence and this is the message** — what
 /// this constant buys is that a reader meets the limit at the moment they press Pair rather than
 /// at a sync three minutes later.
+///
+/// **Nothing checks the two against each other, and what a disagreement costs is the message
+/// rather than the limit.** Spelled higher here, a sixth device pairs and is then refused a token
+/// with `entitlement::GROUP_IS_FULL` — late, but correct. Spelled lower, a reader is refused a
+/// slot the relay would have given them. Either way the fence holds and only the sentence is
+/// wrong, which is why this is a duplication worth having rather than one worth engineering
+/// away. The `device_limit` marker beside it is the pair that could **not** be left to drift —
+/// see `sync_engine::entitlement::DEVICE_LIMIT` — and it is pinned by a test on each side.
 pub const MAX_GROUP_DEVICES: usize = 5;
 
 /// What [`room_for`] says to the sixth device — spec §4.3.
