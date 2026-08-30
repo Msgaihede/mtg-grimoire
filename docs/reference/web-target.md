@@ -77,11 +77,12 @@ the real 43-column one, `raw` included**.
   `Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp` and
   it passed both ways. **Do not add those headers**, and do not let a future service worker
   re-attach them.
-- **Sixty-seven commands of 152**, as of 2026-08-29. The first four are the browse —
+- **Eighty-one commands of 152**, as of 2026-08-30. The first four are the browse —
   `sync_status`, `search_cards`, `list_sets`, `facet_cards` — which is the read path spec §8
   wanted measured in wasm rather than guessed. The rest are the Decks destination (PR 10b's
-  thirteen reads and 10c's thirty-three writes) and the Collection (10d's seventeen). Adding
-  one, once its module is in the map, is a line in `web::route::COMMANDS` and a `match` arm.
+  thirteen reads and 10c's thirty-three writes), the Collection (10d's seventeen) and the
+  Wishlist (10e's fourteen). Adding one, once its module is in the map, is a line in
+  `web::route::COMMANDS` and a `match` arm.
 
   ⚠️ **This is not the intended end state.** Decided 2026-08-29, after the phone layout made
   the boundary visible: **all of them but ten**, by destination, worst broken first. The survey,
@@ -109,7 +110,7 @@ rewrite and not a port.
 
 **A module's column is a fact about its contents; being *routed* is a separate question.**
 Everything on the left compiles for the target. What the browser can actually call is
-`web::route::COMMANDS`, which is 67 of 152.
+`web::route::COMMANDS`, which is 81 of 152.
 
 `split` is the odd one in the left column. It compiles there and can never succeed —
 every path in it is `std::fs`, which builds for wasm and answers `Unsupported` — and gating it
@@ -351,7 +352,7 @@ of `main` at PR #301 with a 117 606-card corpus. Each nav destination was opened
 | Tagger | ❌ | `tag_children` |
 | Decks | ❌ *(reads routed 2026-08-29 — see PR 10b below; not yet driven on the device)* | `deck_folder_list`, `deck_list` |
 | Collection | ❌ *(routed 2026-08-29 - PR 10d; not yet driven on the device)* | `collection_list` |
-| Wishlist | ❌ | `wishlist_list` |
+| Wishlist | ❌ *(routed 2026-08-30 - PR 10e; not yet driven on the device)* | `wishlist_list` |
 | Settings | ❌ | `update_history`, `tags_muted`, `error_log_list` |
 | The card pane, from Search | ❌ | `card_detail` — *"Could not read this card — unknown command `card_detail`"* |
 
@@ -607,6 +608,26 @@ command rather than about the feature.
 
 `collection::commit_import` was the second of PR 10a's nine markers to come good — now
 `pub(crate)`, attribute gone. **Seven remain.**
+
+## PR 10e: the Wishlist destination — `COMMANDS` reaches 81
+
+**Shipped 2026-08-30.** Fourteen arms, six for the wishlist and eight for its cabinet. The same
+shape as the collection with **one deliberate difference: plain `with_write` throughout.**
+
+**A wish is something the reader does *not* have**, so nothing written here changes what is
+owned and the facet index has nothing to invalidate. Reaching for `with_write_owned` because
+the two destinations look alike would rebuild the owned index on every wish edit — wasted work
+rather than a wrong answer, but wrong about what the two lists mean. The wrappers already
+encode this; the arms copy them rather than reasoning from the resemblance.
+
+`wishlist::commit_import` is the third of PR 10a's nine markers to come good. **Six remain.**
+
+**One test caught its own fixture, which is worth keeping.** The first draft of
+`a_wish_added_through_the_route_is_listed_by_it` sent `{ name, quantity }` and got
+`Failed("a wish needs either a card or an oracle id")` — the command's own sentence, arriving
+through the route unchanged. The arm was right and the test was wrong, and the failure said so
+precisely enough to fix in one edit. That is what `RouteError::Failed` carrying the command's
+words rather than a generic message buys.
 
 **Three families are not that shape** and need a browser mechanism that does not exist yet:
 `import`/`export`'s file handles (spec §6.2 already specifies `<input type=file>` and a `Blob`
