@@ -156,7 +156,9 @@ mechanism, because both publish a manifest.
 **And a last-seen ages out what the manifest never mentions.** A device whose data folder is wiped
 mints a *new* id at `identity::ensure`, so the old row is never removed by anything: five
 reinstalls would exhaust a reader's own account permanently. A row unseen for
-`DEVICE_TTL_DAYS = 90` is not counted and is pruned when the count is taken.
+`DEVICE_TTL_MS` — ninety days — is not counted and is pruned when the count is taken. **Milliseconds
+rather than days, because every clock on the relay side is already one**: `decide` takes a `nowMs`,
+`GRACE_MS` is one, and a second unit here would be a conversion somebody eventually forgets.
 
 Ninety days is chosen against the thing it must not break: a device put in a drawer for a season
 and brought back. It is long enough that returning from one is the ordinary case, and short enough

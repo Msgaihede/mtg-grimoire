@@ -40,10 +40,20 @@ export type Value = string | number | null;
 export type Row = Record<string, Value>;
 export type Tables = Record<string, Row[]>;
 
-/** Enough of the schema to make a duplicate insert fail the way SQLite makes it fail. */
+/**
+ * Enough of the schema to make a duplicate insert fail the way SQLite makes it fail.
+ *
+ * ⚠️ **`group_devices` is here for a sharper reason than the other two.** The device cap's most
+ * important assertion is that a device already counted does not consume a second slot — which
+ * against a table that *cannot hold a duplicate row anyway* passes whatever `admitDevice` does.
+ * With the key declared, dropping the `ON CONFLICT` clause raises a unique violation and dropping
+ * this line makes every upsert throw by name (see `insertRow`), so both mutations are caught by
+ * the fake rather than by luck.
+ */
 const PRIMARY_KEY: Record<string, string[]> = {
   entitlements: ["subject"],
   group_keys: ["group_id", "epoch"],
+  group_devices: ["group_id", "device_id"],
 };
 
 /**
@@ -304,15 +314,82 @@ function project(row: Row, columnList: string): Row {
   return out;
 }
 
+/**
+ * A `SET` list applied to a copy of a row: `column = ?` consuming parameters from `offset`
+ * onwards, `column = <literal>` consuming none.
+ *
+ * **The copy is the point.** SQLite raises a constraint violation mid-statement and rolls the
+ * whole statement back, so a fake that mutated first and checked afterwards would leave a
+ * half-written row behind the exception and the next assertion in the test would be about a state
+ * no database can be in. Both callers build the candidate here and only assign it once
+ * `assertUnique` has had its say.
+ */
+function applyAssignments(row: Row, assignments: string[], params: Value[], offset: number): Row {
+  const candidate: Row = { ...row };
+  let bound = offset;
+  for (const assignment of assignments) {
+    const cut = assignment.indexOf("=");
+    const column = assignment.slice(0, cut).trim();
+    const source = assignment.slice(cut + 1).trim();
+    if (source === "?") {
+      candidate[column] = params[bound] ?? null;
+      bound += 1;
+    } else {
+      candidate[column] = literal(source);
+    }
+  }
+  return candidate;
+}
+
+/**
+ * The `ON CONFLICT (…) DO UPDATE SET …` tail of an upsert, already split.
+ *
+ * `offset` is how many `?` the `VALUES` list ahead of it consumed, because D1 binds one flat list
+ * across the whole statement and the SET list's own holes come after every value.
+ */
+interface Upsert {
+  target: string[];
+  assignments: string[];
+  offset: number;
+  params: Value[];
+}
+
 function insertRow(
   tables: Tables,
   table: string,
   row: Row,
   ignore: boolean,
+  upsert?: Upsert,
 ): { results: Row[]; changes: number } {
   const rows = (tables[table] ??= []);
   const key = PRIMARY_KEY[table] ?? [];
-  if (key.length > 0 && rows.some((existing) => key.every((c) => existing[c] === row[c]))) {
+
+  // **Checked before the conflict is looked for, because SQLite checks it before it knows there
+  // is one.** `ON CONFLICT (a, b)` has to name a unique index or the statement is rejected at
+  // prepare time — "does not match any PRIMARY KEY or UNIQUE constraint" — whatever the rows say.
+  // Modelling that ordering is what makes deleting a `PRIMARY_KEY` entry a loud failure here
+  // rather than a silent second row, which is the difference between the cap's headline test
+  // proving something and proving nothing.
+  if (upsert !== undefined) {
+    const matches =
+      upsert.target.length === key.length && upsert.target.every((c) => key.includes(c));
+    if (!matches) {
+      throw new Error(
+        `fake sql: ON CONFLICT (${upsert.target.join(", ")}) does not match a unique ` +
+          `constraint on ${table}`,
+      );
+    }
+  }
+
+  const clash =
+    key.length > 0 ? rows.find((existing) => key.every((c) => existing[c] === row[c])) : undefined;
+  if (clash !== undefined) {
+    if (upsert !== undefined) {
+      const candidate = applyAssignments(clash, upsert.assignments, upsert.params, upsert.offset);
+      assertUnique(table, rows, candidate, clash);
+      Object.assign(clash, candidate);
+      return { results: [], changes: 1 };
+    }
     if (ignore) return { results: [], changes: 0 };
     throw new Error(`fake sql: UNIQUE constraint failed: ${table}.${key.join(", ")}`);
   }
@@ -321,6 +398,22 @@ function insertRow(
   return { results: [], changes: 1 };
 }
 
+/**
+ * `INSERT … VALUES (…)`, with an optional `ON CONFLICT (…) DO UPDATE SET …` tail.
+ *
+ * **The upsert is a tail on this shape rather than a sixth statement shape** because everything
+ * ahead of it — the column list, the values, the order the parameters bind in — is the insert
+ * this branch already reads; the conflict clause only changes what happens when the row is
+ * already there. It is assembled out of two pieces because the whole pattern on one line is
+ * longer than this file's lines are allowed to be, and `String.raw` is what keeps the escapes
+ * looking like the literal they came from.
+ */
+const INSERT_VALUES = new RegExp(
+  String.raw`^INSERT (OR IGNORE )?INTO (\w+) \(([^)]+)\) VALUES \(([^)]+)\)` +
+    String.raw`(?: ON CONFLICT \(([^)]+)\) DO UPDATE SET (.+))?$`,
+  "i",
+);
+
 function execute(
   tables: Tables,
   sql: string,
@@ -328,11 +421,9 @@ function execute(
 ): { results: Row[]; changes: number } {
   const text = sql.replace(/\s+/g, " ").trim();
 
-  const insertValues = /^INSERT (OR IGNORE )?INTO (\w+) \(([^)]+)\) VALUES \(([^)]+)\)$/i.exec(
-    text,
-  );
+  const insertValues = INSERT_VALUES.exec(text);
   if (insertValues) {
-    const [, ignore, table, columnList, valueList] = insertValues;
+    const [, ignore, table, columnList, valueList, conflictList, setList] = insertValues;
     const columns = columnList.split(",").map((c) => c.trim());
     const terms = valueList.split(",").map((v) => v.trim());
     if (terms.some((term) => term !== "?")) throw new Error(`fake sql: only ? in VALUES`);
@@ -340,7 +431,16 @@ function execute(
     columns.forEach((column, index) => {
       row[column] = params[index] ?? null;
     });
-    return insertRow(tables, table, row, ignore !== undefined);
+    const upsert =
+      conflictList === undefined || setList === undefined
+        ? undefined
+        : {
+            target: conflictList.split(",").map((c) => c.trim()),
+            assignments: setList.split(",").map((a) => a.trim()),
+            offset: terms.length,
+            params,
+          };
+    return insertRow(tables, table, row, ignore !== undefined, upsert);
   }
 
   const insertSelect = /^INSERT INTO (\w+) \(([^)]+)\) SELECT (.+?) WHERE (.+)$/i.exec(text);
@@ -390,23 +490,9 @@ function execute(
     const matched = matching(where, tables[table] ?? [], params, holes, tables);
     const all = tables[table] ?? [];
     for (const row of matched) {
-      // **Built beside the row and only then applied**, so a unique violation leaves the table as
-      // it was. SQLite raises mid-statement and rolls the whole thing back; a fake that mutated
-      // first and checked afterwards would leave a half-written row behind the exception, and the
-      // next assertion in the test would be about a state no database can be in.
-      const candidate: Row = { ...row };
-      let bound = 0;
-      for (const assignment of assignments) {
-        const cut = assignment.indexOf("=");
-        const column = assignment.slice(0, cut).trim();
-        const source = assignment.slice(cut + 1).trim();
-        if (source === "?") {
-          candidate[column] = params[bound] ?? null;
-          bound += 1;
-        } else {
-          candidate[column] = literal(source);
-        }
-      }
+      // Built beside the row and only then applied — see `applyAssignments`, which the upsert
+      // path shares for the same reason.
+      const candidate = applyAssignments(row, assignments, params, 0);
       assertUnique(table, all, candidate, row);
       Object.assign(row, candidate);
     }
@@ -503,6 +589,7 @@ export function fakeEnv(...groups: string[]): Env {
       group_auth: null,
     })),
     group_keys: [],
+    group_devices: [],
   };
   return fakeEnvOver(tables);
 }
@@ -535,6 +622,11 @@ export function fakeTables(options: { groups: string[]; bound?: boolean }): Tabl
       group_auth: null,
     })),
     group_keys: [],
+    // Seeded empty rather than left to `insertRow`'s `??= []`, so a test can assert on the table
+    // *before* anything has been admitted to it — "the group is full" and "the group does not
+    // exist yet" are the two states the cap has to tell apart, and a table that springs into
+    // being on first write cannot express the second.
+    group_devices: [],
     claim_codes: [],
   };
 }

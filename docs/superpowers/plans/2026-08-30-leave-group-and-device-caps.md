@@ -55,8 +55,14 @@ CREATE TABLE IF NOT EXISTS group_devices (
   last_seen  INTEGER NOT NULL,
   PRIMARY KEY (group_id, device_id)
 );
-CREATE INDEX IF NOT EXISTS group_devices_by_group ON group_devices (group_id);
 ```
+
+  **No second index, and that is deliberate rather than an omission.** SQLite builds one for a
+  rowid table's `PRIMARY KEY`, `group_id` is its leading column, and `(group_id, device_id)`
+  *covers* every read here — each is `WHERE group_id = ?`, or that plus an equality on
+  `device_id`. A `(group_id)` index would serve nothing and cost a second b-tree write on every
+  `/token`, which is the hottest route the relay has. (An earlier draft of this step asked for
+  one; Task 1 followed the spec instead and was right to.)
 
 - [ ] **Step 2: Teach the fake the new primary key.** `fakeD1.ts`'s `PRIMARY_KEY` map gains `group_devices: ["group_id", "device_id"]`, and `fakeTables` seeds `group_devices: []`.
 

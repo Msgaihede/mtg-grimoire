@@ -43,6 +43,36 @@ import type { Env } from "./index";
 export const EPOCH_HISTORY = 8;
 
 /**
+ * How many devices one group — which is to say one Patreon account — may hold at once.
+ *
+ * **Five per account and five per group are the same number because they are the same count.** A
+ * subject is bound to exactly one group and a re-claim *moves* that binding rather than adding a
+ * second, so there is no arrangement in which a subscription's devices and a group's devices are
+ * different sets. One constant, one table, both questions.
+ *
+ * `/rotate` imports this rather than keeping its own manifest bound: a cap spelled twice is a cap
+ * that eventually disagrees with itself, and the two spellings would be a rotation the relay
+ * accepts naming more devices than the relay will admit.
+ */
+export const MAX_GROUP_DEVICES = 5;
+
+/**
+ * How long a device may go unseen before its slot is given back: ninety days.
+ *
+ * **This exists for the reinstall, not for tidiness.** A rotation frees the slots of devices its
+ * manifest omits, which covers every removal and every departure — but a device whose data folder
+ * is wiped mints a *new* id at `identity::ensure`, so the old row is named by no manifest and
+ * freed by nothing. Five reinstalls would exhaust a reader's own account permanently, and the
+ * only door out would be a hand edit of D1.
+ *
+ * Ninety days is chosen against the case it must not break: a laptop put in a drawer for a season
+ * and brought back should find its slot where it left it. It is long enough that returning from
+ * one is the ordinary case, and short enough that a machine sold a year ago is not still holding
+ * a slot against the reader who sold it.
+ */
+export const DEVICE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+
+/**
  * One epoch's manifest: the epoch it belongs to and the sealed key for every device that was in
  * the group when it was written.
  *
@@ -260,4 +290,127 @@ export async function authIsRecent(env: Env, group: string, auth: string): Promi
   let seen = false;
   for (const row of results) seen = equalsConstantTime(row.auth, auth) || seen;
   return seen;
+}
+
+/**
+ * The devices this group holds *right now*: every row the TTL has not aged out, with the aged-out
+ * ones deleted on the way past.
+ *
+ * **The prune is here rather than on a schedule**, and it is `recordRotation`'s argument again: a
+ * sweep would be a cron that has to discover which groups exist, where this is a `DELETE` against
+ * the one group the caller has already named. Every path that cares about the count comes through
+ * this function, so a stale row cannot be counted anywhere without also being deleted here.
+ *
+ * **Prune first, then read, and not the other way round.** Reading and filtering in JavaScript
+ * would answer the same number and leave the rows on disk for ever, which is precisely the
+ * failure the TTL exists to prevent — a wiped reinstall's abandoned id would go on occupying
+ * storage after it had stopped occupying a slot, and nothing would ever remove it.
+ *
+ * The set comes back rather than the size because `admitDevice` needs both facts — how many, and
+ * whether *this* one is among them — and asking twice would be two reads for one question.
+ * `last_seen < cutoff` and not `<=`: a row seen exactly ninety days ago is still inside the
+ * window, which is the reading that makes the constant a duration rather than an off-by-one.
+ */
+async function liveDevices(env: Env, group: string, nowMs: number): Promise<string[]> {
+  await env.DB.prepare(`DELETE FROM group_devices WHERE group_id = ? AND last_seen < ?`)
+    .bind(group, nowMs - DEVICE_TTL_MS)
+    .run();
+  const { results } = await env.DB.prepare(
+    `SELECT device_id FROM group_devices WHERE group_id = ?`,
+  )
+    .bind(group)
+    .all<{ device_id: string }>();
+  return results.map((row) => row.device_id);
+}
+
+/**
+ * How many devices this group is holding, the aged-out ones pruned and not counted.
+ *
+ * Exported for the callers that want the number to put in a sentence rather than a decision to
+ * act on — the refusal itself is `admitDevice`'s, which asks the same question and then writes.
+ */
+export async function liveDeviceCount(env: Env, group: string, nowMs: number): Promise<number> {
+  return (await liveDevices(env, group, nowMs)).length;
+}
+
+/**
+ * Register a device against its group, and answer whether it is allowed in.
+ *
+ * **`false` means *new device, full group*, and nothing else.** A device already on the roll is
+ * always re-admitted, however full the group is — it is not asking for a slot, it is using the
+ * one it has — and getting that wrong would lock a settled five-device household out of syncing
+ * on the day the fifth device was admitted. That is what the `ON CONFLICT DO UPDATE` is for as
+ * much as the membership test above it: the test is the decision, the clause is what makes the
+ * write idempotent even if the two disagreed.
+ *
+ * **Nothing is written when the answer is `false`.** A refused device must not move a `last_seen`
+ * it does not own, and must not leave a row that the next call would then re-admit.
+ *
+ * **Call it on a token that would otherwise be issued, never before the entitlement has settled.**
+ * A dead membership that consumed a slot on its way to a 401 would spend a reader's fifth device
+ * on a request that was refused anyway.
+ */
+export async function admitDevice(
+  env: Env,
+  group: string,
+  device: string,
+  nowMs: number,
+): Promise<boolean> {
+  const live = await liveDevices(env, group, nowMs);
+  if (!live.includes(device) && live.length >= MAX_GROUP_DEVICES) return false;
+  await env.DB.prepare(
+    `INSERT INTO group_devices (group_id, device_id, first_seen, last_seen)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT (group_id, device_id) DO UPDATE SET last_seen = ?`,
+  )
+    .bind(group, device, nowMs, nowMs, nowMs)
+    .run();
+  return true;
+}
+
+/**
+ * Drop the rows for devices this manifest does not name — the way a slot is freed.
+ *
+ * **The manifest is the roster, so `/rotate` is the only place a slot needs to be given back.** A
+ * removal and a departure both publish one, so neither needs a mechanism of its own: the set of
+ * devices holding slots is reconciled against the set of devices holding keys, and #307 already
+ * made the second of those the authority.
+ *
+ * **Read, then delete what was read, rather than one `DELETE … NOT IN (…)`.** The difference only
+ * shows up against a device admitted between the two statements, and it decides which way that
+ * race falls: `NOT IN` would delete a row written after the manifest was composed, freeing a slot
+ * for a device that is legitimately present, where this leaves it alone until the next rotation
+ * sees it. Under-deleting a slot counter costs one slot for one rotation; over-deleting it evicts
+ * a device that just presented a valid token. Note that neither is a membership decision —
+ * membership is the manifest, and this table only counts.
+ */
+export async function keepOnly(env: Env, group: string, devices: string[]): Promise<void> {
+  const { results } = await env.DB.prepare(
+    `SELECT device_id FROM group_devices WHERE group_id = ?`,
+  )
+    .bind(group)
+    .all<{ device_id: string }>();
+  const keep = new Set(devices);
+  const doomed = results.map((row) => row.device_id).filter((id) => !keep.has(id));
+  if (doomed.length === 0) return;
+  await env.DB.batch(
+    doomed.map((id) =>
+      env.DB.prepare(`DELETE FROM group_devices WHERE group_id = ? AND device_id = ?`).bind(
+        group,
+        id,
+      ),
+    ),
+  );
+}
+
+/**
+ * Forget a group's devices entirely: what a binding moving off a group leaves behind.
+ *
+ * A re-claim points a subject at a different group and drops the old one's log and keys with it
+ * (spec §3). Leaving these rows would hold slots in a group whose manifest no longer exists —
+ * against a count that nothing would ever take again, since the count is only taken per group.
+ * They are not orphaned so much as unreachable, which is the worse of the two.
+ */
+export async function forgetGroup(env: Env, group: string): Promise<void> {
+  await env.DB.prepare(`DELETE FROM group_devices WHERE group_id = ?`).bind(group).run();
 }
