@@ -102,6 +102,21 @@ pub const COMMANDS: &[&str] = &[
     "collection_set_folder",
     "collection_to_deck",
     "deck_to_collection",
+    // The Wishlist destination.
+    "wishlist_list",
+    "wishlist_add",
+    "wishlist_set_quantity",
+    "wishlist_remove",
+    "wishlist_set_printing",
+    "wishlist_import_commit",
+    "wishlist_folder_list",
+    "wishlist_folder_summary",
+    "wishlist_folder_create",
+    "wishlist_folder_rename",
+    "wishlist_folder_move",
+    "wishlist_folder_reorder",
+    "wishlist_folder_delete",
+    "wishlist_set_folder",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -1044,6 +1059,168 @@ pub fn call(
             )
         }
 
+        // ── Wishlist ────────────────────────────────────────────────────────────────
+        //
+        // **Plain `with_write` throughout, and the contrast with the collection above is the
+        // point.** A wish is something the reader does *not* have, so nothing here changes
+        // what is owned and the facet index has nothing to invalidate. Reaching for
+        // `with_write_owned` because the two destinations look alike would rebuild the owned
+        // index on every wish edit — wasted work rather than a wrong answer, but wrong about
+        // what the two lists mean.
+        "wishlist_list" => {
+            let query: crate::wishlist::WishlistQuery = field(command, args, "query")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::wishlist::list_wishes(&conn, &query).map_err(RouteError::Failed)?,
+            )
+        }
+
+        "wishlist_add" => {
+            let wish: crate::wishlist::WishInput = field(command, args, "wish")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::wishlist::add_wish(c, &wish))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "wishlist_set_quantity" => {
+            let id: i64 = field(command, args, "id")?;
+            let quantity: i64 = field(command, args, "quantity")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::wishlist::set_wish_quantity(c, id, quantity)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "wishlist_remove" => {
+            let id: i64 = field(command, args, "id")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::wishlist::remove_wish(c, id))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        // `cardId` on the wire, `card_id` in Rust, and `None` is a real value here rather than
+        // an omission: it is how a wish stops naming a particular printing.
+        "wishlist_set_printing" => {
+            let id: i64 = field(command, args, "id")?;
+            let card_id: Option<String> = optional(command, args, "cardId")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::wishlist::set_wish_printing(c, id, card_id)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "wishlist_import_commit" => {
+            let items: Vec<crate::wishlist::WishlistImportItem> = field(command, args, "items")?;
+            let mode: String = field(command, args, "mode")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::wishlist::commit_import(c, &items, &mode)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        // ── The wishlist's cabinet ──────────────────────────────────────────────────
+        "wishlist_folder_list" => {
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::wishlist_folders::list_folders(&conn).map_err(RouteError::Failed)?,
+            )
+        }
+
+        "wishlist_folder_summary" => {
+            let marketplace: Option<String> = optional(command, args, "marketplace")?;
+            let marketplace = crate::sorting::Marketplace::from_opt(marketplace.as_deref());
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::wishlist_folders::folder_summary(&conn, marketplace)
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "wishlist_folder_create" => {
+            let parent_id: Option<i64> = optional(command, args, "parentId")?;
+            let name: String = field(command, args, "name")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::wishlist_folders::create_folder(c, parent_id, &name)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "wishlist_folder_rename" => {
+            let id: i64 = field(command, args, "id")?;
+            let name: String = field(command, args, "name")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::wishlist_folders::rename_folder(c, id, &name)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "wishlist_folder_move" => {
+            let id: i64 = field(command, args, "id")?;
+            let parent_id: Option<i64> = optional(command, args, "parentId")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::wishlist_folders::move_folder(c, id, parent_id)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "wishlist_folder_reorder" => {
+            let parent_id: Option<i64> = optional(command, args, "parentId")?;
+            let ids: Vec<i64> = field(command, args, "ids")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::wishlist_folders::reorder_folders(c, parent_id, &ids)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "wishlist_folder_delete" => {
+            let id: i64 = field(command, args, "id")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::wishlist_folders::delete_folder(c, id))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "wishlist_set_folder" => {
+            let id: i64 = field(command, args, "id")?;
+            let folder_id: Option<i64> = optional(command, args, "folderId")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::wishlist_folders::set_wish_folder(c, id, folder_id)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
         other => Err(RouteError::Unknown(other.to_owned())),
     }
 }
@@ -1356,6 +1533,40 @@ mod tests {
         assert_eq!(items[0]["quantity"], json!(3));
     }
 
+    /// A wish added through the route and listed by it.
+    ///
+    /// **The wishlist takes plain `with_write`, unlike the collection**, because a wish is
+    /// something the reader does *not* have — nothing it writes changes what is owned. This
+    /// pins the round trip; the helper choice is argued at the arms and cannot be asserted
+    /// here, since both helpers would make this test pass.
+    #[test]
+    fn a_wish_added_through_the_route_is_listed_by_it() {
+        let s = state("web-route-wishlist-add");
+        let card_id = {
+            let conn = crate::db::lock_blocking(&s.db);
+            conn.query_row("SELECT id FROM cards LIMIT 1", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .expect("the fixture seeds four printings")
+        };
+
+        // **A name alone is refused** — "a wish needs either a card or an oracle id" — and the
+        // first draft of this test hit that, which is worth keeping as a comment: the refusal
+        // arrived through the route as `RouteError::Failed` carrying the command's own
+        // sentence, so the arm was right and the fixture was wrong.
+        call(
+            &s,
+            "wishlist_add",
+            &json!({ "wish": { "cardId": card_id, "quantity": 1 } }),
+        )
+        .expect("wishlist_add is routed");
+
+        let out = call(&s, "wishlist_list", &json!({ "query": {} })).unwrap();
+        let items = out["items"].as_array().expect("a page with `items`");
+        assert_eq!(items.len(), 1, "the write must commit");
+        assert_eq!(items[0]["quantity"], json!(1));
+    }
+
     /// **`mirror_rebuild`, and the choice of name is the point.** This used to reach for
     /// `deck_list`, which stopped being unknown the moment the Decks reads were routed — so
     /// the example is now one of the ten §6.3 names that are *permanently* desktop-only. A
@@ -1393,7 +1604,7 @@ mod tests {
         }
         assert_eq!(
             COMMANDS.len(),
-            67,
+            81,
             "update this number when a command is added"
         );
     }
