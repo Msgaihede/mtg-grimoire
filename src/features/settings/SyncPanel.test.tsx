@@ -60,7 +60,6 @@ import {
 
 const ME = "aa".repeat(16);
 const PHONE = "cc".repeat(16);
-const OLD = "dd".repeat(16);
 
 /** A device that has never paired. `groupId` and `epoch` are both null, which is the state the
  *  panel must draw as an offer rather than as a group of one. */
@@ -76,8 +75,16 @@ const UNPAIRED: PairingStatus = {
   devices: [],
 };
 
-/** A group of three, one of which was taken off — the row that is kept rather than deleted, so
- *  the roster can still say who went and when. */
+/**
+ * A group of two, which is what `sync_pairing_status` answers.
+ *
+ * **No removed device, because the command cannot send one.** `pairing::status` filters
+ * `revoked_at` out before answering, so a fixture carrying one would encode a state the backend
+ * has no way to produce — and a panel written to survive it would be handling an impossible
+ * input. The row still exists in `sync_devices`; that the command drops it is asserted in Rust
+ * (`a_removed_device_is_not_on_the_panels_list`) and in the fake (`db.test.ts`'s roster tests),
+ * which is where a filter can actually fail.
+ */
 const PAIRED: PairingStatus = {
   deviceId: ME,
   deviceName: "Desk",
@@ -86,7 +93,6 @@ const PAIRED: PairingStatus = {
   devices: [
     { deviceId: ME, name: "Desk", addedAt: 1, revokedAt: null },
     { deviceId: PHONE, name: "Phone", addedAt: 2, revokedAt: null },
-    { deviceId: OLD, name: "Old laptop", addedAt: 3, revokedAt: 99 },
   ],
 };
 
@@ -99,16 +105,14 @@ const RELAY_OFF: RelayStatus = {
   paired: false,
   pending: 0,
   lastSyncAt: null,
-  lastError: null,
   reviewCount: 0,
 };
 
-/** A group, four changes waiting, and a failure still on the record. */
+/** A group, four changes waiting, and one trip already finished. */
 const RELAY_ON: RelayStatus = {
   paired: true,
   pending: 4,
   lastSyncAt: 1_700_000_000,
-  lastError: "the relay answered 502 to a push",
   reviewCount: 0,
 };
 
@@ -223,15 +227,14 @@ describe("SyncPanel", () => {
     expect(screen.getByText(/not paired with anything yet/i)).toBeInTheDocument();
   });
 
-  it("lists the group's devices, and marks a removed one as removed", async () => {
+  it("lists the group's devices", async () => {
     render(<SyncPanel />, { wrapper: paired });
     expect(await screen.findByText("Phone")).toBeInTheDocument();
-    expect(screen.getByText(/old laptop/i)).toBeInTheDocument();
-    expect(screen.getByText(/^removed$/i)).toBeInTheDocument();
-    // A removed device has no Remove button of its own — it is already off — and neither does
-    // this device, because the backend refuses that and a press that cannot work is worse than
-    // no press at all.
-    expect(screen.queryByRole("button", { name: /remove old laptop/i })).not.toBeInTheDocument();
+    expect(screen.getByText("Desk")).toBeInTheDocument();
+    // Every row that is drawn is a device still in the group, so every row offers both presses
+    // — except that this device has no Remove of its own, because the backend refuses that and
+    // a press that cannot work is worse than no press at all.
+    expect(screen.getAllByRole("button", { name: /rename/i })).toHaveLength(2);
     expect(screen.queryByRole("button", { name: /remove desk/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /remove phone/i })).toBeInTheDocument();
   });
@@ -279,20 +282,6 @@ describe("SyncPanel", () => {
     // And a long hostname must truncate rather than shove the presses off the row.
     expect(name.classList.contains("truncate")).toBe(true);
     expect(name.classList.contains("min-w-0")).toBe(true);
-  });
-
-  /**
-   * **`Removed` stays a word.** Two tokens of equal weight in one row would make history read
-   * as status; the removed row already says what it is through the struck-through name and the
-   * two presses it no longer offers.
-   */
-  it("leaves Removed as plain text rather than a second pill", async () => {
-    render(<SyncPanel />, { wrapper: paired });
-
-    const removed = await screen.findByText(/^removed$/i);
-    expect(removed.classList.contains("rounded-full")).toBe(false);
-    expect(removed.classList.contains("border")).toBe(false);
-    expect(removed.classList.contains("text-dim")).toBe(true);
   });
 
   /**
@@ -462,16 +451,33 @@ describe("the relay half", () => {
     expect(screen.queryByRole("button", { name: /sync now/i })).not.toBeInTheDocument();
   });
 
-  it("draws what is waiting and the failure still on the record", async () => {
+  it("draws what is waiting to go", async () => {
     syncRelayStatus.mockResolvedValue(RELAY_ON);
     syncSupporterStatus.mockResolvedValue(SUPPORTING);
     render(<SyncPanel />, { wrapper: unpaired });
 
     expect(await screen.findByText(/4 changes waiting to go/i)).toBeInTheDocument();
-    expect(screen.getByText(/answered 502 to a push/i)).toBeInTheDocument();
-    // The record survives a later success on purpose, and the line says so rather than letting
-    // a reader read it as "sync is broken right now".
-    expect(screen.getByText(/kept even after a later sync worked/i)).toBeInTheDocument();
+  });
+
+  /**
+   * **The Errors panel further down this page is the record, and one failure drawn twice in two
+   * registers under two headings is the thing this asserts against.** `errors::record` still
+   * writes every relay failure; nothing on the sync half reads it back.
+   *
+   * The waiting line is the anchor rather than a bare `findByText("Phone")`: it is driven by the
+   * *relay* read, so it cannot be on screen until the answer the failure line would have been
+   * drawn from has landed.
+   */
+  it("draws no relay-failure line, because the Errors panel holds the record", async () => {
+    syncRelayStatus.mockResolvedValue(RELAY_ON);
+    syncSupporterStatus.mockResolvedValue(SUPPORTING);
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    await screen.findByText(/4 changes waiting to go/i);
+    // Both halves of the line that used to be here — the heading it was found by and the
+    // sentence that explained why it outlived a success — so a partial revert cannot pass.
+    expect(screen.queryByText(/last relay failure/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/kept even after a later sync worked/i)).not.toBeInTheDocument();
   });
 
   /**
@@ -782,16 +788,13 @@ describe("relayState", () => {
     expect(relayState({ ...RELAY_ON, paired: false }, "active", false, true)).toBe("failed");
   });
 
-  /** `lastError` is a record and survives a later success, so it must never drive the state —
-   *  a panel that read its state off it would say "failed" forever. */
-  it("does not read failed off the stored error", () => {
-    expect(relayState(RELAY_ON, "active", false, false)).toBe("synced");
-    expect(relayNote("synced", RELAY_ON, 1_700_000_060)).toBe("Last synced 1 minute ago.");
-  });
-
   it("says nothing while a read or a trip is in flight", () => {
     expect(relayNote("unknown", null, 0)).toBeNull();
     expect(relayNote("syncing", RELAY_ON, 0)).toBeNull();
+    // The note a settled `synced` carries, kept here because it was the only other assertion in
+    // the test this describe used to hold about the relay's stored error — that field is gone
+    // and `relayState` never took it, so the claim was no longer reachable through the UI.
+    expect(relayNote("synced", RELAY_ON, 1_700_000_060)).toBe("Last synced 1 minute ago.");
   });
 });
 

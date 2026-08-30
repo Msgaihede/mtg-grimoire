@@ -36,8 +36,9 @@ const meta = {
           "there is.** The fake derives the six digits from the code with a plain hash and " +
           "draws a QR-shaped picture rather than a readable code — see `FakePairing` in " +
           "`.storybook/fake/db.ts`. What is real is everything a panel is drawn against: the " +
-          "two blobs carried by hand, the one number both readers compare, the roster that " +
-          "keeps a removed device on it, and every refusal in the crate's own words.\n\n" +
+          "two blobs carried by hand, the one number both readers compare, the store that " +
+          "keeps a removed device the status command does not answer with, and every refusal " +
+          "in the crate's own words.\n\n" +
           "**Nor is there a Patreon.** The fake mints a claim code's answer rather than " +
           "exchanging one, so what these stories hold still is the thing that matters here: " +
           "that *not connected*, *payment problem* and *membership ended* are three " +
@@ -233,17 +234,15 @@ export const AnswerUnreadable: Story = {
 /**
  * A group of three, one of them taken off — the state §7.6 is about.
  *
- * **The removed device is still on the roster**, struck through and labelled, because a row that
- * was deleted could not answer "who did I take off, and when". The key version beside the group
- * is `2` for the same reason: the rotation *is* the removal, so the number is a count of them.
+ * **The removed device is on the roster and off the screen.** The `paired` seed still holds it,
+ * because the backend still does — `add_device` clears the mark on a re-pair and the baseline
+ * trigger reads it — and this story is where that separation is asserted. The key version beside
+ * the group is `2` because the rotation *is* the removal, so the number is a count of them.
  *
- * **This is where the two marks are drawn side by side, and they are deliberately not the same
- * weight.** `This device` is a pill — orientation, the thing a reader scans a roster for, and
- * the question a real machine name leaves open once the rows stop reading identically.
- * `Removed` stays a plain word, because history that looked like status would compete with it,
- * and the struck-through name plus both missing presses already say what that row is.
+ * **One mark per row, and it is `This device`** — orientation, the thing a reader scans a roster
+ * for, and the question a real machine name leaves open once the rows stop reading identically.
  *
- * The three names here are what a reader who has renamed their devices sees. What a fresh
+ * The two names here are what a reader who has renamed their devices sees. What a fresh
  * install mints is the machine itself — `MAIN-PC` on Windows, `OnePlus 12` on Android, a label
  * like `Chrome on Windows` in a browser — and `Rename` is the one press away from either.
  */
@@ -253,13 +252,18 @@ export const Paired: Story = {
     const canvas = within(canvasElement);
 
     await expect(await canvas.findByText("Phone")).toBeInTheDocument();
-    await expect(canvas.getByText("Old laptop")).toBeInTheDocument();
-    await expect(canvas.getByText(/key version 2/i)).toBeInTheDocument();
-    // Removed rows offer neither press: they are history rather than a control. This device
-    // offers no Remove either, because the backend refuses it.
+    // The removed device is on the roster the backend holds and off the list the panel draws.
+    // A reader who removed a device asked for it to be gone; the row survives only so a
+    // re-pair can clear the mark and so the baseline trigger skips a peer that will not answer.
+    await expect(canvas.queryByText("Old laptop")).not.toBeInTheDocument();
+    await expect(canvas.queryByText("Removed")).not.toBeInTheDocument();
+    // Two of three, and the key version is still 2 — the epoch counts rotations, and the
+    // rotation happened. The seed's third row is what stops the line above being vacuous.
+    await expect(canvas.getByText(/in a group of 2, at key version 2/i)).toBeInTheDocument();
     await expect(
       canvas.queryByRole("button", { name: /remove old laptop/i }),
     ).not.toBeInTheDocument();
+    // This device offers no Remove either, because the backend refuses it.
     await expect(canvas.queryByRole("button", { name: /remove desk/i })).not.toBeInTheDocument();
     await expect(canvas.getByRole("button", { name: /remove phone/i })).toBeInTheDocument();
 
@@ -270,9 +274,6 @@ export const Paired: Story = {
     const group = pill.parentElement as HTMLElement;
     await expect(within(group).getByText("Desk")).toBeInTheDocument();
     await expect(within(group).queryByRole("button")).not.toBeInTheDocument();
-
-    // And the second mark is a word, not a second pill.
-    await expect(canvas.getByText("Removed")).not.toHaveClass("rounded-full");
   },
 };
 
@@ -321,7 +322,10 @@ export const ALongMachineNameStillFitsTheRow: Story = {
  * lost phone had been wiped, which is the opposite of what happens.
  *
  * It goes all the way down: the press rotates the fake's key and the panel re-reads it, so the
- * version beside the group moves from 2 to 3 on screen.
+ * version beside the group moves from 2 to 3 on screen and the row goes with it. **The row
+ * leaving is the assertion worth having**, because the backend still holds it — `sync_devices`
+ * keeps the stamp and `sync_pairing_status` filters it — so this is the one story where a
+ * removal is watched happening rather than read out of a fixture.
  */
 export const RemovingSaysWhatItCannotDo: Story = {
   parameters: { fake: { seed: "paired" } },
@@ -335,8 +339,11 @@ export const RemovingSaysWhatItCannotDo: Story = {
     await expect(page.getByText(/cannot reach into it/i)).toBeInTheDocument();
 
     await userEvent.click(page.getByRole("button", { name: /remove device/i }));
-    await expect(await canvas.findByText(/key version 3/i)).toBeInTheDocument();
-    await expect(canvas.getAllByText(/^removed$/i)).toHaveLength(2);
+    await expect(await canvas.findByText(/in a group of 1, at key version 3/i)).toBeInTheDocument();
+    // The row is gone from the screen, and it is gone from the *panel* rather than from the
+    // store: the fake still holds the stamped row, exactly as `sync_devices` does.
+    await expect(canvas.queryByText("Phone")).not.toBeInTheDocument();
+    await expect(canvas.queryByText("Removed")).not.toBeInTheDocument();
   },
 };
 /* -------------------------------------------------------------- the membership ---------- */
