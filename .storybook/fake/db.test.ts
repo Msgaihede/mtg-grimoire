@@ -5588,6 +5588,40 @@ describe("the busy fault", () => {
 });
 
 /**
+ * The roster — the one place this fake narrows what it stores before answering.
+ *
+ * `pairing::status` filters `revoked_at IS NOT NULL` out of `devices` while `identity::roster`
+ * keeps every row, because the mark has two readers that need it (`add_device` clears it on a
+ * re-pair, `baseline::peers_needing` reads it to skip a peer that will never answer) and the
+ * panel is asking a different question: who is in the group *now*. The `paired` seed's third
+ * device is what makes both halves assertable at once.
+ */
+describe("the roster", () => {
+  it("keeps the removed device in the store and off what the status answers", () => {
+    const db = seed("paired");
+
+    expect(db.pairing.devices).toHaveLength(3);
+    expect(db.pairing.devices.filter((d) => d.revokedAt !== null)).toHaveLength(1);
+
+    const names = readHandlers(db).sync_pairing_status().devices.map((d) => d.name);
+    expect(names).toEqual(["Desk", "Phone"]);
+  });
+
+  /** The removal is a stamp and not a delete here, exactly as it is in `sync_devices` — so the
+   *  row leaving the panel and the row surviving the table are two separate facts, and this is
+   *  the press that produces both. */
+  it("takes a removed device off the status without dropping its row", () => {
+    const db = seed("paired");
+    writeHandlers(db).sync_device_revoke({ deviceId: "c0ffee00c0ffee00c0ffee00c0ffee00" });
+
+    expect(db.pairing.devices).toHaveLength(3);
+    expect(readHandlers(db).sync_pairing_status().devices.map((d) => d.name)).toEqual(["Desk"]);
+    // The rotation is the removal, so the epoch moves with it.
+    expect(readHandlers(db).sync_pairing_status().epoch).toBe(3);
+  });
+});
+
+/**
  * The membership block — the three commands that replaced the relay-address field.
  *
  * **The whole value of this describe is that four states which share most of their fields cannot

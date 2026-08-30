@@ -158,11 +158,10 @@ function Digits({ sas }: { sas: string }): JSX.Element {
  * which of these real machines is *here* — and it has to be findable by shape rather than read
  * for.
  *
- * **`Removed` beside it stayed plain text, deliberately, and that is the decision worth
- * recording.** Two tokens of equal weight in one row would make history look like status: a
- * removed row already says what it is three times over — the struck-through name, the dim text,
- * and both presses gone — while this one is *orientation*, the only thing on the row a reader
- * actually scans for. One pill per row, and it is this one.
+ * **One mark per row, and it is this one**, which is now a statement about the whole roster
+ * rather than a ranking against a second mark. Every row drawn is a device still in the group,
+ * so the only thing left for a mark to say is which of them is *here* — orientation, the thing
+ * a reader scans a roster for and the question a real machine name leaves open.
  *
  * **No colour**, because the panel's own comment two lines down still holds: `border-border`
  * over `text-dim` is what this app uses for a fact stated beside a name (`LangBadge`, the card
@@ -173,7 +172,7 @@ function Digits({ sas }: { sas: string }): JSX.Element {
 const THIS_DEVICE_PILL =
   "shrink-0 rounded-full border border-border bg-bg px-2 py-px text-[0.6875rem] leading-4 text-dim";
 
-/** One row of the roster. */
+/** One row of the roster — a device that is still in the group. */
 function DeviceRow({
   device,
   isThisDevice,
@@ -186,7 +185,6 @@ function DeviceRow({
   onRemove: () => void;
 }): JSX.Element {
   const [editing, setEditing] = useState<string | null>(null);
-  const removed = device.revokedAt !== null;
 
   return (
     <li className="flex flex-wrap items-center gap-2 border-t border-border py-2 first:border-t-0">
@@ -201,14 +199,13 @@ function DeviceRow({
           so a long hostname refuses to shrink and pushes the buttons off the row instead of
           truncating; one of the two alone is not enough.
 
-          Two facts a name cannot carry: which of these is the machine you are looking at, and
-          which one was taken off. Words rather than colour — a removed device is not an error,
-          it is a row of history. */}
+          One fact a name cannot carry: which of these is the machine you are looking at. There
+          used to be a second — which one was taken off — and it went with the rows that carried
+          it, because a reader who removed a device asked for it to be gone rather than struck
+          through. */}
       <span className="flex min-w-0 flex-1 items-center gap-2">
         {editing === null ? (
-          <span className={cn("min-w-0 truncate text-sm", removed && "text-dim line-through")}>
-            {device.name}
-          </span>
+          <span className="min-w-0 truncate text-sm">{device.name}</span>
         ) : (
           <input
             value={editing}
@@ -230,27 +227,23 @@ function DeviceRow({
           />
         )}
         {isThisDevice && <span className={THIS_DEVICE_PILL}>This device</span>}
-        {removed && <span className="shrink-0 text-[0.6875rem] text-dim">Removed</span>}
       </span>
 
-      {/* **Rename stays on every row that is not removed, this device's own included, and it
-          matters more now than it did.** The name a device mints is its hostname, which travels
-          to every device in the group at the next pairing — so this press is the reader's way
-          out of sending one they would rather not. The pill does not replace it and must not
-          crowd it out. */}
-      {!removed && (
-        <button
-          type="button"
-          onClick={() => setEditing(device.name)}
-          className={cn(BUTTON, "h-7 border-border px-2 text-xs hover:bg-bg")}
-        >
-          Rename
-        </button>
-      )}
+      {/* **Rename stays on every row, this device's own included, and it matters more now than
+          it did.** The name a device mints is its hostname, which travels to every device in the
+          group at the next pairing — so this press is the reader's way out of sending one they
+          would rather not. The pill does not replace it and must not crowd it out. */}
+      <button
+        type="button"
+        onClick={() => setEditing(device.name)}
+        className={cn(BUTTON, "h-7 border-border px-2 text-xs hover:bg-bg")}
+      >
+        Rename
+      </button>
       {/* **No Remove on this device's own row**, because the backend refuses it and offering a
           press that cannot work is worse than not offering it: leaving a group throws this
           device's own key away, which is a different act with different consequences. */}
-      {!removed && !isThisDevice && (
+      {!isThisDevice && (
         <button
           type="button"
           onClick={onRemove}
@@ -270,8 +263,8 @@ function DeviceRow({
  *
  * `CombosPanel`'s `comboState` one feature over, and the ordering is again the whole content:
  *
- * * **`off` first among the settled states** — no membership means nothing can run, so a stale
- *   `lastError` from before it lapsed must not out-shout it.
+ * * **`off` first among the settled states** — no membership means nothing can run, so a failed
+ *   press from before it lapsed must not out-shout it.
  * * **`syncing` before `failed`** — a round trip in flight is happening *now*, and a press over
  *   a previous failure is not "failed".
  * * **`failed` before `never`** — "we tried and it did not work" is a different sentence from
@@ -285,10 +278,11 @@ function DeviceRow({
  * than an `off` in disguise: drawing "sync is off" over an unanswered read would tell a reader
  * whose devices are syncing perfectly that nothing is.
  *
- * **`failed` is the press this window made, never `RelayStatus.lastError`.** The stored error is
- * a *record* — it survives a later success on purpose, because the log is the record — so a
- * panel that read its state off it would say "failed" forever. It gets a line of its own
- * instead, in the error log's own quiet register.
+ * **`failed` is a press this window made, and it is news rather than a record.** It says a trip
+ * the reader just asked for did not finish, and it is forgotten the moment the next one does —
+ * which is what makes it safe to draw as a *state*. The record is the Errors panel further down
+ * this page, where the log survives a later success on purpose and where it is cleared; a panel
+ * that read its state off a log would say "failed" for ever.
  */
 export type RelayState =
   | "unknown"
@@ -777,16 +771,6 @@ function SupporterSection(): JSX.Element {
         </p>
       )}
 
-      {status?.lastError != null && (
-        // The record, in the error log's own quiet register rather than the destructive red: it
-        // is not news about a press the reader just made, and it stands after a later sync
-        // worked because the log is the record.
-        <p className="text-xs text-dim">
-          {`Last relay failure: ${status.lastError} It is kept even after a later sync ` +
-            "worked — Errors, further down this page, is where the log is cleared."}
-        </p>
-      )}
-
       <div className="flex flex-wrap items-center justify-between gap-3">
         {/* `min-w-0` so the sentence gives way rather than the button: a flex item cannot shrink
             below its own min-content unless it is told it may. */}
@@ -927,6 +911,16 @@ export function SyncPanel(): JSX.Element {
     null;
 
   const paired = status !== null && status.groupId !== null;
+
+  // **`status.devices` is the devices still in the group, and this panel does not check.**
+  // `pairing::status` filters `revoked_at` out before answering, and the Storybook fake filters
+  // the same way because it exists to mimic that command — one contract, two implementations,
+  // which is the arrangement the whole workbench runs on. A third filter here would be the
+  // consumer re-deriving its own input's contract, and three copies of one rule is what drifts:
+  // the layer that stopped filtering would be covered by the other two until all three were
+  // wrong. `sync_devices` still keeps the removed row — `add_device` clears the mark on a
+  // re-pair, `baseline::peers_needing` reads it to skip a peer that will never answer — but that
+  // is the backend's record and never reaches this list.
 
   return (
     <SettingsSection id="sync" title="Sync">
