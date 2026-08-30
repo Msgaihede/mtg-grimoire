@@ -64,16 +64,20 @@ use serde::Deserialize;
 /// resolve.
 pub const RELAY_BASE: &str = "https://mtg-grimoire-relay.denmark-east.workers.dev";
 
-/// **PLACEHOLDER. Awaiting the real OAuth client id.**
+/// The OAuth client id, real since 2026-08-29 and public by the same argument as [`RELAY_BASE`]:
+/// it is on the wire of every authorize request, so withholding it from this repository would
+/// hide it from nobody. **`client_secret` never belongs here** — it lives only as a Worker
+/// secret, which is what makes the code exchange server-side rather than a choice.
 ///
-/// **Not the same state as [`RELAY_BASE`] above, which is now the real address** — this one is
-/// unsettled and Markus has not supplied a value, so the two are no longer a matched pair. The
-/// practical difference: with the address real and the client id invented, pressing Connect
-/// reaches Patreon and is refused at the consent screen, rather than failing at DNS.
+/// **It must equal `PATREON_CLIENT_ID` in `relay/wrangler.jsonc`'s `vars`.** This side builds the
+/// authorize URL and the relay side builds the exchange; Patreon compares them, and a mismatch
+/// fails at the exchange rather than at the consent screen, where the error names no client.
 ///
-/// It is public once it is real, for `RELAY_BASE`'s reason — an OAuth client id is on the wire of
-/// every authorize request — so it belongs in this repository too. `client_secret` never does.
-pub const PATREON_CLIENT_ID: &str = "mtg-grimoire-placeholder-client-id";
+/// Verified live on 2026-08-29: `GET /oauth2/authorize` with this id and
+/// [`PATREON_REDIRECT_PATH`] answered 302 to Patreon's login, preserving both parameters — which
+/// an unregistered id or a mismatched redirect does not do.
+pub const PATREON_CLIENT_ID: &str =
+    "UFkUESN45GFyy36WQBaOpedWwFvtcOfujPZz_s8Yhu54z4I7-eA8Zg9lv-FEXqV4";
 
 /// Where Patreon sends the reader after they consent. **The relay, never this app** — the
 /// `client_secret` can only live server-side, so the exchange happens there whatever the app

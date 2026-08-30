@@ -820,10 +820,16 @@ Six layers and five commands; the whole record, with every measurement, is
   approval; it is the baseline relay the 2026-08-29 pass ran against, and **what is not deployed
   at it is this design's Worker code** — no auth gate, no `/claim`, no `/token` — so a device
   pointed there today reaches a live relay that does not speak the endpoints this crate now calls.
-  `PATREON_CLIENT_ID` is **still a placeholder** and is not settled. **A *guess* is the one thing
-  that must never go in either constant**: a plausible-looking value gets copied into
-  documentation and eventually deployed against, where one that cannot resolve is caught by the
-  first person who tries it.
+  `PATREON_CLIENT_ID` is **real since 2026-08-30 and the two are a matched pair again** — it was
+  a placeholder until then, and this paragraph said so. It is verified live: `GET
+  /oauth2/authorize` with it and `PATREON_REDIRECT_PATH` answered 302 to Patreon's login,
+  preserving both parameters, which an unregistered id or a mismatched redirect does not do. **It
+  must equal `PATREON_CLIENT_ID` in `relay/wrangler.jsonc`'s `vars`**, because this side builds
+  the authorize URL and the relay builds the exchange and Patreon compares them — a mismatch
+  fails at the *exchange*, where the error names no client. **A *guess* is the one thing that
+  must never go in either constant**: a plausible-looking value gets copied into documentation
+  and eventually deployed against, where one that cannot resolve is caught by the first person
+  who tries it.
   **What must never be in this repository, a test or a default are the three secrets the
   relay holds** (spec §9): `PATREON_CLIENT_SECRET`, `PATREON_WEBHOOK_SECRET` and
   `RELAY_HMAC_KEY`. **Three and not four**: spec §9's table **listed** a `PATREON_CREATOR_TOKEN`
