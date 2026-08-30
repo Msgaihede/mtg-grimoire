@@ -83,8 +83,18 @@ CREATE INDEX IF NOT EXISTS group_keys_by_group ON group_keys (group_id, epoch DE
 
 -- Added 2026-08-30. `ALTER TABLE` and not an edit to the CREATE above: that statement is
 -- `IF NOT EXISTS` and does nothing at all on a database that already holds the table, so a new
--- column written there reaches a fresh deploy and never an existing one. D1 has no
--- `ADD COLUMN IF NOT EXISTS`; re-running these two on a database that has them is an error the
--- deploy runbook expects and ignores.
+-- column written there reaches a fresh deploy and never an existing one.
+--
+-- ⚠️ **These two are last in the file, and on a database that already has them they take the
+-- whole file down with them.** `wrangler d1 execute --file` is **atomic**: D1 has no
+-- `ADD COLUMN IF NOT EXISTS`, a duplicate column is an error, and one error rolls back every
+-- statement above — including `CREATE TABLE group_keys`, which would have succeeded alone. This
+-- comment said the re-run error was one "the deploy runbook expects and ignores"; it is not
+-- ignored, and on 2026-08-30 it left a deployed Worker 500ing on `no such table: group_keys`
+-- after an execute that looked fine.
+--
+-- **So this file is for a database that has never been migrated.** To bring an existing one
+-- forward use `relay/migrations/2026-08-30-group-keys.sql` and run each `ALTER` as its own
+-- `--command`, where a duplicate-column error can fail alone.
 ALTER TABLE entitlements ADD COLUMN group_epoch INTEGER;
 ALTER TABLE entitlements ADD COLUMN group_auth  TEXT;

@@ -72,15 +72,43 @@ below settles it by asking the host rather than by reading any of us.**
    ```
    npx wrangler d1 execute mtg-grimoire-relay --remote --file=./schema.sql
    ```
-   ⚠️ **The two `ALTER TABLE`s at the foot of `schema.sql` error on a second run, and that is the
-   file working.** `group_epoch` and `group_auth` were added on 2026-08-30 and could not go into
-   the `CREATE TABLE entitlements` above them: that statement is `IF NOT EXISTS` and does nothing
-   at all on a database that already holds the table, so a column written there would reach a
-   fresh deploy and never an existing one. D1 has no `ADD COLUMN IF NOT EXISTS`. **On an empty
-   database the whole file applies cleanly; on a database created before 2026-08-30 the `CREATE`s
-   no-op and only the two `ALTER`s do work; on a database that already has them the two `ALTER`s
-   are `duplicate column name` and nothing else in the file has changed.** Read the errors rather
-   than counting them — an error naming anything but `group_epoch` or `group_auth` is a real one.
+   ⚠️ **That command is for an empty database only. On any other, use the migration below.**
+
+   `wrangler d1 execute --file` is **atomic**: one failing statement rolls back every statement
+   in the file. `schema.sql` ends with two `ALTER TABLE ... ADD COLUMN`, D1 has no
+   `ADD COLUMN IF NOT EXISTS`, and a duplicate column is an error — so on a database that already
+   has `group_epoch` and `group_auth`, those two `ALTER`s fail and **take `CREATE TABLE
+   group_keys` down with them**, even though the CREATE comes first and would have succeeded.
+
+   **This is measured, not theoretical.** On the 2026-08-30 deploy `wrangler deploy` landed and
+   the execute reported nothing wrong, and `/g/{group}/keys` went from 404 to a **500** —
+   `authIsRecent`'s `SELECT auth FROM group_keys` throwing `no such table` against a Worker that
+   had just been told the schema was applied. An earlier draft of this step said the re-run error
+   was one to "expect and ignore". It is not ignored; it reverts.
+
+   **To bring an existing database forward**, which is every database that is not brand new:
+   ```
+   npx wrangler d1 execute mtg-grimoire-relay --remote \
+     --file=./migrations/2026-08-30-group-keys.sql
+   npx wrangler d1 execute mtg-grimoire-relay --remote \
+     --command "ALTER TABLE entitlements ADD COLUMN group_epoch INTEGER"
+   npx wrangler d1 execute mtg-grimoire-relay --remote \
+     --command "ALTER TABLE entitlements ADD COLUMN group_auth TEXT"
+   ```
+   The migration file is `IF NOT EXISTS` throughout and safe to run any number of times. Each
+   `ALTER` is its own invocation so a `duplicate column name` — the correct answer on a database
+   that already has it — costs nothing else.
+
+   **Then verify against the host rather than against an exit code**, which is the whole lesson
+   of this step:
+   ```
+   curl -s -o /dev/null -w "%{http_code}\n" -H "authorization: Bearer $(printf 'ab%.0s' {1..32})" \
+     "https://mtg-grimoire-relay.denmark-east.workers.dev/g/abc/keys?device=deadbeef"
+   ```
+   **401 is the pass** — the credential was well-formed, reached the D1 read, and matched nothing.
+   **500 means `group_keys` is missing.** A bare `curl` with *no* header answers 401 either way,
+   because `handleKeys` refuses a missing credential before it touches D1 — so the header is what
+   makes this probe worth running.
 3. **Create the Patreon OAuth client** — **already done as of 2026-08-30**, and this step is now
    the two halves of it that are not. The client and its redirect URI
    `https://mtg-grimoire-relay.denmark-east.workers.dev/oauth/patreon/callback` are registered and
