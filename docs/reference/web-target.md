@@ -77,11 +77,11 @@ the real 43-column one, `raw` included**.
   `Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp` and
   it passed both ways. **Do not add those headers**, and do not let a future service worker
   re-attach them.
-- **Seventeen commands of 152**, as of 2026-08-29. The first four are the browse —
+- **Sixty-seven commands of 152**, as of 2026-08-29. The first four are the browse —
   `sync_status`, `search_cards`, `list_sets`, `facet_cards` — which is the read path spec §8
-  wanted measured in wasm rather than guessed. The other thirteen are the Decks destination's
-  reads (PR 10b). Adding one, once its module is in the map, is a line in
-  `web::route::COMMANDS` and a `match` arm.
+  wanted measured in wasm rather than guessed. The rest are the Decks destination (PR 10b's
+  thirteen reads and 10c's thirty-three writes) and the Collection (10d's seventeen). Adding
+  one, once its module is in the map, is a line in `web::route::COMMANDS` and a `match` arm.
 
   ⚠️ **This is not the intended end state.** Decided 2026-08-29, after the phone layout made
   the boundary visible: **all of them but ten**, by destination, worst broken first. The survey,
@@ -109,7 +109,7 @@ rewrite and not a port.
 
 **A module's column is a fact about its contents; being *routed* is a separate question.**
 Everything on the left compiles for the target. What the browser can actually call is
-`web::route::COMMANDS`, which is 17 of 152.
+`web::route::COMMANDS`, which is 67 of 152.
 
 `split` is the odd one in the left column. It compiles there and can never succeed —
 every path in it is `std::fs`, which builds for wasm and answers `Unsupported` — and gating it
@@ -350,7 +350,7 @@ of `main` at PR #301 with a 117 606-card corpus. Each nav destination was opened
 | **Search** | ✅ | — |
 | Tagger | ❌ | `tag_children` |
 | Decks | ❌ *(reads routed 2026-08-29 — see PR 10b below; not yet driven on the device)* | `deck_folder_list`, `deck_list` |
-| Collection | ❌ | `collection_list` |
+| Collection | ❌ *(routed 2026-08-29 - PR 10d; not yet driven on the device)* | `collection_list` |
 | Wishlist | ❌ | `wishlist_list` |
 | Settings | ❌ | `update_history`, `tags_muted`, `error_log_list` |
 | The card pane, from Search | ❌ | `card_detail` — *"Could not read this card — unknown command `card_detail`"* |
@@ -570,6 +570,43 @@ command that answered `Ok` and committed nothing would satisfy the weaker check 
 `web::route` would call next. It is now `pub(crate)` with two real callers and the attribute is
 gone — which is the intended lifecycle of that marker rather than an exception to it. **Eight
 remain**, and each is a command not yet routed.
+
+## PR 10d: the Collection destination — `COMMANDS` reaches 67
+
+**Shipped 2026-08-29.** Seventeen arms: the seven collection commands, the eight folder
+commands, and **the pair that moves a row across the deck boundary** (`collection_to_deck` /
+`deck_to_collection`), which belongs here because both ends of it are a collection write.
+
+### `route::call` now takes `&Arc<AppState>`, and the collection is why
+
+Every write to `collection_entries` goes through
+[`collection_source::with_write_owned`](../../src-tauri/src/collection_source.rs), which takes
+the `Arc` because it hands it to `index::lifecycle::invalidate_owned` after a successful write.
+The alternatives were both worse: re-spell that helper's two steps in each of the seven
+collection arms — two copies of a rule that must agree, which this repo has been bitten by — or
+use the plain `with_write` and leave the search's **owned facet stale after every web write**, a
+wrong count rather than an error.
+
+**It cost nothing.** `glue.rs` already held an `Arc` and passed `&app` either way, and
+`&Arc<AppState>` derefs to `&AppState`, so **not one of the fifty existing arms changed**.
+
+### Which helper an arm uses is read off its wrapper, never guessed
+
+`collection_folder_delete` is the trap. It re-files every row in the folder it deletes, so "it
+touches entries, therefore it needs the owned helper" is the obvious inference — and it is
+wrong. Those rows keep their quantities, nothing the owned index counts changes, and the
+wrapper uses plain `with_write`. `collection_set_folder` sits beside it using the *owned*
+helper, because it moves an entry rather than a folder.
+
+### The import commit is a port; the file read is not
+
+`collection_import_commit` takes already-parsed items, so it routes like anything else.
+`import_read_file` is the one that needs the browser mechanism §6.2 specifies, and it is not
+here. Separating those two is what makes "import needs file handles" a statement about one
+command rather than about the feature.
+
+`collection::commit_import` was the second of PR 10a's nine markers to come good — now
+`pub(crate)`, attribute gone. **Seven remain.**
 
 **Three families are not that shape** and need a browser mechanism that does not exist yet:
 `import`/`export`'s file handles (spec §6.2 already specifies `<input type=file>` and a `Blob`

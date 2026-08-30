@@ -84,6 +84,24 @@ pub const COMMANDS: &[&str] = &[
     "deck_theory_missing_to_wishlist",
     "deck_undo_apply",
     "deck_redo_apply",
+    // The Collection destination, and the pair that moves a row across the deck boundary.
+    "collection_list",
+    "collection_summary",
+    "collection_add",
+    "collection_set_quantity",
+    "collection_update",
+    "collection_remove",
+    "collection_import_commit",
+    "collection_folder_list",
+    "collection_folder_summary",
+    "collection_folder_create",
+    "collection_folder_rename",
+    "collection_folder_move",
+    "collection_folder_reorder",
+    "collection_folder_delete",
+    "collection_set_folder",
+    "collection_to_deck",
+    "deck_to_collection",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -162,7 +180,20 @@ fn encode<T: serde::Serialize>(command: &str, value: T) -> Result<Value, RouteEr
 /// **[`crate::sync::lock_db_read`] is `pub(crate)`** and this module is inside the crate, so
 /// it resolves. On wasm it hands back the write connection, so a search there does queue
 /// behind an ingest - the single-Worker trade, written down rather than left to be found.
-pub fn call(state: &AppState, command: &str, args: &Value) -> Result<Value, RouteError> {
+///
+/// **`&Arc<AppState>` rather than `&AppState`, and the collection is why.** Every write to
+/// `collection_entries` goes through [`crate::collection_source::with_write_owned`], which
+/// takes the `Arc` because it hands it to `index::lifecycle::invalidate_owned` after a
+/// successful write. Taking the bare reference here would have meant either re-spelling that
+/// helper's two steps in every collection arm - two copies of a rule that must agree, which
+/// this repo has been bitten by - or leaving the facet index stale after a web write.
+/// `glue.rs` already holds an `Arc` and passed `&app` either way, so this costs it nothing,
+/// and `&Arc<AppState>` derefs to `&AppState` for every arm that wants the plain one.
+pub fn call(
+    state: &std::sync::Arc<AppState>,
+    command: &str,
+    args: &Value,
+) -> Result<Value, RouteError> {
     match command {
         "sync_status" => encode(command, crate::sync::status(state)),
 
@@ -788,6 +819,231 @@ pub fn call(state: &AppState, command: &str, args: &Value) -> Result<Value, Rout
             )
         }
 
+        // ── Collection ──────────────────────────────────────────────────────────────
+        //
+        // **Every write here is [`crate::collection_source::with_write_owned`], not
+        // `with_write`**, and the difference is the facet index: that helper runs
+        // `index::lifecycle::invalidate_owned` after a successful write, so the *owned*
+        // dimension stops answering about a collection that has changed. Using the plain
+        // helper would leave the search's owned facet stale until the next rebuild — a wrong
+        // count rather than an error, which is the kind that does not get reported.
+        //
+        // The folder commands are the exception and use `with_write`, exactly as their
+        // wrappers do: moving a folder changes no quantity, so the owned index is unaffected.
+        // `collection_set_folder` is a folder command that *does* use the owned helper,
+        // because it moves an entry rather than a folder.
+        "collection_list" => {
+            let query: crate::collection::CollectionQuery = field(command, args, "query")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::collection::list_entries(&conn, &query).map_err(RouteError::Failed)?,
+            )
+        }
+
+        "collection_summary" => {
+            let query: crate::collection::CollectionQuery = field(command, args, "query")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::collection::summarise(&conn, &query).map_err(RouteError::Failed)?,
+            )
+        }
+
+        "collection_add" => {
+            let entry: crate::collection::EntryInput = field(command, args, "entry")?;
+            encode(
+                command,
+                crate::collection_source::with_write_owned(state, |c| {
+                    crate::collection::add_entry(c, &entry)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "collection_set_quantity" => {
+            let id: i64 = field(command, args, "id")?;
+            let quantity: i64 = field(command, args, "quantity")?;
+            encode(
+                command,
+                crate::collection_source::with_write_owned(state, |c| {
+                    crate::collection::set_quantity(c, id, quantity)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "collection_update" => {
+            let id: i64 = field(command, args, "id")?;
+            let patch: crate::collection::EntryPatch = field(command, args, "patch")?;
+            encode(
+                command,
+                crate::collection_source::with_write_owned(state, |c| {
+                    crate::collection::update_entry(c, id, &patch)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "collection_remove" => {
+            let id: i64 = field(command, args, "id")?;
+            encode(
+                command,
+                crate::collection_source::with_write_owned(state, |c| {
+                    crate::collection::remove_entry(c, id)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        // **This is the *commit*, not the file read.** It takes already-parsed items, so it
+        // is an ordinary port; `import_read_file` is the one that needs a browser mechanism
+        // §6.2 specifies and is not here.
+        "collection_import_commit" => {
+            let items: Vec<crate::collection::CollectionImportItem> =
+                field(command, args, "items")?;
+            let mode: String = field(command, args, "mode")?;
+            let folder_id: Option<i64> = optional(command, args, "folderId")?;
+            encode(
+                command,
+                crate::collection_source::with_write_owned(state, |c| {
+                    crate::collection::commit_import(c, &items, &mode, folder_id)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        // ── The collection's cabinet ────────────────────────────────────────────────
+        "collection_folder_list" => {
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::collection_folders::list_folders(&conn).map_err(RouteError::Failed)?,
+            )
+        }
+
+        "collection_folder_summary" => {
+            let marketplace: Option<String> = optional(command, args, "marketplace")?;
+            let marketplace = crate::sorting::Marketplace::from_opt(marketplace.as_deref());
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::collection_folders::folder_summary(&conn, marketplace)
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "collection_folder_create" => {
+            let parent_id: Option<i64> = optional(command, args, "parentId")?;
+            let name: String = field(command, args, "name")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::collection_folders::create_folder(c, parent_id, &name)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "collection_folder_rename" => {
+            let id: i64 = field(command, args, "id")?;
+            let name: String = field(command, args, "name")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::collection_folders::rename_folder(c, id, &name)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "collection_folder_move" => {
+            let id: i64 = field(command, args, "id")?;
+            let parent_id: Option<i64> = optional(command, args, "parentId")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::collection_folders::move_folder(c, id, parent_id)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "collection_folder_reorder" => {
+            let parent_id: Option<i64> = optional(command, args, "parentId")?;
+            let ids: Vec<i64> = field(command, args, "ids")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::collection_folders::reorder_folders(c, parent_id, &ids)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        // **`with_write`, matching its wrapper**, even though deleting a folder re-files every
+        // row inside it: those rows keep their quantities, so nothing the owned index counts
+        // has changed. The wrapper is the authority on which helper a command uses, and this
+        // is a place where guessing from "it touches entries" would have got it wrong.
+        "collection_folder_delete" => {
+            let id: i64 = field(command, args, "id")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::collection_folders::delete_folder(c, id))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "collection_set_folder" => {
+            let id: i64 = field(command, args, "id")?;
+            let folder_id: Option<i64> = optional(command, args, "folderId")?;
+            encode(
+                command,
+                crate::collection_source::with_write_owned(state, |c| {
+                    crate::collection_folders::set_entry_folder(c, id, folder_id)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        // ── Across the deck boundary ────────────────────────────────────────────────
+        //
+        // The crate's only pair that moves a row between a binder and a deck. Both are
+        // `with_write_owned` because both change what a deck owns.
+        "collection_to_deck" => {
+            let entry_id: i64 = field(command, args, "entryId")?;
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let category_id: Option<i64> = optional(command, args, "categoryId")?;
+            let category_name: Option<String> = optional(command, args, "categoryName")?;
+            let quantity: i64 = field(command, args, "quantity")?;
+            // Before the lock, as the wrapper does: a caller that named a pile both ways is a
+            // caller bug and is not worth waiting on a busy database to discover.
+            let pile =
+                crate::collection_alloc::Pile::from_args(category_id, category_name.as_deref())
+                    .map_err(RouteError::Failed)?;
+            encode(
+                command,
+                crate::collection_source::with_write_owned(state, |c| {
+                    crate::collection_alloc::collection_to_deck(
+                        c, entry_id, deck_id, pile, quantity,
+                    )
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_to_collection" => {
+            let deck_card_id: i64 = field(command, args, "deckCardId")?;
+            let quantity: i64 = field(command, args, "quantity")?;
+            encode(
+                command,
+                crate::collection_source::with_write_owned(state, |c| {
+                    crate::collection_alloc::deck_to_collection(c, deck_card_id, quantity)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
         other => Err(RouteError::Unknown(other.to_owned())),
     }
 }
@@ -1054,6 +1310,52 @@ mod tests {
         );
     }
 
+    /// The Collection destination answers before anything is in it, and the page it answers
+    /// with is a DTO rather than a bare array — `items`, not the rows.
+    #[test]
+    fn collection_list_answers_an_empty_page_before_anything_is_owned() {
+        let s = state("web-route-collection-empty");
+        let out = call(&s, "collection_list", &json!({ "query": {} })).unwrap();
+        assert_eq!(
+            out["items"]
+                .as_array()
+                .expect("collection_list answers a page with `items`")
+                .len(),
+            0
+        );
+    }
+
+    /// A collection row added through the route, read back through the route.
+    ///
+    /// **This is the arm that must use [`crate::collection_source::with_write_owned`]**, and
+    /// the read-back is what proves the write landed at all. What it deliberately does *not*
+    /// prove is the facet-index invalidation that helper adds on top of `with_write` — that
+    /// is a second effect on `AppState`, and a test asserting only the row would pass on an
+    /// arm that used the plain helper and left the owned facet stale.
+    #[test]
+    fn a_collection_row_added_through_the_route_is_listed_by_it() {
+        let s = state("web-route-collection-add");
+        let card_id = {
+            let conn = crate::db::lock_blocking(&s.db);
+            conn.query_row("SELECT id FROM cards LIMIT 1", [], |r| {
+                r.get::<_, String>(0)
+            })
+            .expect("the fixture seeds four printings")
+        };
+
+        call(
+            &s,
+            "collection_add",
+            &json!({ "entry": { "cardId": card_id, "quantity": 3, "finish": "nonfoil" } }),
+        )
+        .expect("collection_add is routed");
+
+        let out = call(&s, "collection_list", &json!({ "query": {} })).unwrap();
+        let items = out["items"].as_array().unwrap();
+        assert_eq!(items.len(), 1, "the write must commit");
+        assert_eq!(items[0]["quantity"], json!(3));
+    }
+
     /// **`mirror_rebuild`, and the choice of name is the point.** This used to reach for
     /// `deck_list`, which stopped being unknown the moment the Decks reads were routed — so
     /// the example is now one of the ten §6.3 names that are *permanently* desktop-only. A
@@ -1091,7 +1393,7 @@ mod tests {
         }
         assert_eq!(
             COMMANDS.len(),
-            50,
+            67,
             "update this number when a command is added"
         );
     }
