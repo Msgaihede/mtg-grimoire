@@ -112,7 +112,20 @@ export function SettingsPage({ update }: { update: Update }) {
 
   return (
     <div className="mx-auto max-w-2xl space-y-8 py-2">
-      <UpdatePanel update={update} history={history} />
+      {/* **Not on the web target**, where every control on it is about something the app
+          cannot do: `update_status`, `update_check`, `update_download`, `update_apply` and
+          `update_history` are five of §6.3's ten desktop-only commands, because **a PWA
+          updates through its service worker** — which ships and works. `!isWebTarget()`
+          rather than the panel's own `installKind === "managed"` test, and the difference
+          matters: that one reads an answer from `update_status`, which on a browser never
+          arrives, so the panel decided it was *not* managed and drew the controls anyway.
+          Driven on the phone 2026-08-30, this was the last `unknown command` in the app.
+
+          What it costs is the nearest thing to an About screen — the mark, the version and
+          the last check. **Nothing is lost**, because with no `update_status` to read it was
+          already drawing "MTG Grimoire …" with no version at all. A web About panel is worth
+          having and is a different thing to build. */}
+      {!isWebTarget() && <UpdatePanel update={update} history={history} />}
 
       <MarketplacePanel marketplace={marketplace} />
 

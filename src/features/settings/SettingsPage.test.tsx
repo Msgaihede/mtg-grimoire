@@ -28,6 +28,19 @@ vi.mock("@/features/settings/MarketplacePanel", () => ({
   MarketplacePanel: stub("panel:prices"),
 }));
 vi.mock("@/features/settings/UpdatePanel", () => ({ UpdatePanel: stub("panel:update") }));
+// `isWebTarget` reads `__CORE__`, a build-time constant vitest fixes at "tauri" — so the web
+// answer is only reachable by mocking the module, which its own doc says.
+vi.mock("@/pwa/target", () => ({ isWebTarget: vi.fn(() => false) }));
+// **Stubbed for the same reason the other eight are, and it had never needed to be**: it is
+// the one panel `SettingsPage` draws *only* when `isWebTarget()` is true, so before this file
+// could say that, it never rendered here. Unstubbed it reaches `caches.open` on mount, which
+// jsdom has no Cache Storage for — a failure about the environment rather than about the gate.
+// The hook goes with it: `SettingsPage` calls `useWebStorage()` unconditionally, and the real
+// one reaches `caches.open` as soon as `isWebTarget()` answers true.
+vi.mock("@/features/settings/WebStoragePanel", () => ({
+  WebStoragePanel: stub("panel:webstorage"),
+  useWebStorage: () => null,
+}));
 
 /**
  * The one command this file answers for real, held in `vi.hoisted` because `vi.mock`'s factory
@@ -135,6 +148,37 @@ describe("the Backup panel is desktop-only", () => {
     expect(screen.queryByText("panel:backup")).not.toBeInTheDocument();
     // The page itself still rendered, so this is the gate rather than a failed mount.
     expect(screen.getByText("panel:cache")).toBeInTheDocument();
+    expect(screen.getByText("panel:update")).toBeInTheDocument();
+  });
+});
+
+describe("the Updates panel is not on the web target", () => {
+  /**
+   * **Found by driving the phone on 2026-08-30, not by this suite.** After PR 10 routed 114 of
+   * the crate's 154 commands, `update_history` was the only `unknown command` left anywhere in
+   * the app — and it was *printed on the Settings page*, where the documented behaviour is
+   * that §6.3's ten desktop-only commands are hidden rather than broken.
+   *
+   * The panel's own `installKind === "managed"` test could not have caught it: that reads an
+   * answer from `update_status`, which is itself desktop-only, so on a browser it never
+   * arrives and the panel concluded it was *not* managed and drew the controls.
+   */
+  it("is gone on the web build, while the rest of the page stays", async () => {
+    const { isWebTarget } = await import("@/pwa/target");
+    vi.mocked(isWebTarget).mockReturnValue(true);
+
+    render(wrap(<SettingsPage update={NO_UPDATE} />));
+
+    expect(screen.queryByText("panel:update")).not.toBeInTheDocument();
+    expect(screen.getByText("panel:cache")).toBeInTheDocument();
+  });
+
+  it("is on the page when the build is not the web one", async () => {
+    const { isWebTarget } = await import("@/pwa/target");
+    vi.mocked(isWebTarget).mockReturnValue(false);
+
+    render(wrap(<SettingsPage update={NO_UPDATE} />));
+
     expect(screen.getByText("panel:update")).toBeInTheDocument();
   });
 });

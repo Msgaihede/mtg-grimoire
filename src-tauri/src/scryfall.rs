@@ -216,7 +216,10 @@ pub const BULK_DEFAULT_CARDS: &str = "default_cards";
 /// Same document shape as [`BULK_DEFAULT_CARDS`] in the one way that matters here — it
 /// publishes `jsonl_download_uri` and `compressed_size` and neither of the pre-2026-07-20
 /// `download_uri`/`size` fields — which is why one [`BulkInfo`] describes both.
-pub const BULK_ORACLE_TAGS: &str = "oracle_tags";
+/// **Aliases [`crate::tags::oracle::BULK_NAME`] rather than holding its own copy**, because
+/// that name is read on every target - it is the key a status query answers from - and this
+/// module is desktop-only. One definition, so the two cannot disagree.
+pub const BULK_ORACLE_TAGS: &str = crate::tags::oracle::BULK_NAME;
 
 /// Scryfall's Art Tags: 11 531 tag objects, ~12.5 MB gzipped, each carrying its own
 /// `taggings` array of `illustration_id`s. [`crate::tags::art`] reads it.
@@ -224,7 +227,8 @@ pub const BULK_ORACLE_TAGS: &str = "oracle_tags";
 /// [`BULK_ORACLE_TAGS`]'s document shape exactly — measured live 2026-08-20, entry id
 /// `48da5752-eeb6-4126-bf97-8829e20ad14f`, `compressed_size` 12 544 874 and no
 /// `download_uri`/`size`.
-pub const BULK_ART_TAGS: &str = "art_tags";
+/// [`BULK_ORACLE_TAGS`]'s aliasing, for its reason.
+pub const BULK_ART_TAGS: &str = crate::tags::art::BULK_NAME;
 
 /// The bits of a `bulk_data` object this app needs. Note `jsonl_download_uri` and
 /// `compressed_size`: the pre-2026-07-20 `download_uri`/`size` fields are gone and

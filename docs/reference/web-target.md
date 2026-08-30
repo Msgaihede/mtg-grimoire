@@ -77,12 +77,14 @@ the real 43-column one, `raw` included**.
   `Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp` and
   it passed both ways. **Do not add those headers**, and do not let a future service worker
   re-attach them.
-- **Eighty-one commands of 152**, as of 2026-08-30. The first four are the browse —
+- **114 commands of 154**, as of 2026-08-30. The first four are the browse —
   `sync_status`, `search_cards`, `list_sets`, `facet_cards` — which is the read path spec §8
   wanted measured in wasm rather than guessed. The rest are the Decks destination (PR 10b's
-  thirteen reads and 10c's thirty-three writes), the Collection (10d's seventeen) and the
-  Wishlist (10e's fourteen). Adding one, once its module is in the map, is a line in
-  `web::route::COMMANDS` and a `match` arm.
+  thirteen reads and 10c's thirty-three writes), the Collection (10d's seventeen), the
+  Wishlist (10e's fourteen), the card pane (10f's six), the Tagger (10g's ten of twelve) and
+  Settings (10h's fourteen). Adding one, once its module is in the map, is a line in
+  `web::route::COMMANDS` and a `match` arm. **What the remaining 40 are, and why none of
+  them is an oversight, is tabulated at the foot of this file.**
 
   ⚠️ **This is not the intended end state.** Decided 2026-08-29, after the phone layout made
   the boundary visible: **all of them but ten**, by destination, worst broken first. The survey,
@@ -95,12 +97,16 @@ the real 43-column one, `raw` included**.
 
 | Compiled for wasm | Desktop/Android only |
 | --- | --- |
-| `app_meta` · `card_row` · `collection` · `collection_alloc` · `collection_folders` · `collection_source` · `combos` · `db` · `deck` · `deck_audit` · `deck_meta` · `deck_theory` · `deck_undo` · `errors` · `feed` · `filters` · `image_uri` · `index` · `ingest` · `legalities` · `maintenance` · `marketplace` · `schema` · `search` · `slug` · `sorting` · `split` · `sync` · `sync_engine` · `sync_pair` · `web` · `wishlist` · `wishlist_folders` | `card` · `export` · `flatten` · `images` · `import` · `listview` · `marketplace_feed` · `mirror` · `nav` · `paths` · `picked` · `reconcile` · `reset` · `scryfall` · `tags` · `transfer` · `update` · `window` · `zoom` |
+| `app_meta` · `card` · `card_row` · `collection` · `collection_alloc` · `collection_folders` · `collection_source` · `combos` · `db` · `deck` · `deck_audit` · `deck_meta` · `deck_theory` · `deck_undo` · `errors` · `feed` · `filters` · `flatten` · `listview` · `image_uri` · `index` · `ingest` · `legalities` · `maintenance` · `marketplace` · `schema` · `search` · `slug` · `nav` · `sorting` · `split` · `sync` · `sync_engine` · `sync_pair` · `tags` · `web` · `wishlist` · `wishlist_folders` · `zoom` | `export` · `images` · `import` · `marketplace_feed` · `mirror` · `paths` · `picked` · `reconcile` · `reset` · `scryfall` · `transfer` · `update` · `window` |
 
-**Eleven modules moved left on 2026-08-29** (PR 10a) — the deck domain, the collection, the
-wishlist, both folder tables and `marketplace`. Nothing in them changed: they were on the right
+**Seventeen modules have moved left**: eleven on 2026-08-29 (PR 10a) — the deck domain, the
+collection, the wishlist, both folder tables and `marketplace` — then `card` (PR 10f) and
+`tags` (PR 10g), and the four view-state modules `flatten`, `listview`, `nav` and `zoom`
+(PR 10h), all on 2026-08-30. **Nothing in the first twelve changed**: they were on the right
 because each file *ends* in a block of `#[tauri::command]` wrappers, and the gate sat on the
-module instead of on the wrappers. See the PR 10a section at the foot of this file.
+module instead of on the wrappers. **`tags` is the exception and the first real split** — its
+ingest half is gated item by item inside an otherwise portable module, because that half
+downloads. See the PR 10a and 10g sections at the foot of this file.
 
 **Four of the exclusions are permanent** (spec §6.3): the plain-text `mirror`, the Rust
 `transfer` writer that exists only for it, the portable `update` swap, and `window`'s Win32
@@ -110,7 +116,7 @@ rewrite and not a port.
 
 **A module's column is a fact about its contents; being *routed* is a separate question.**
 Everything on the left compiles for the target. What the browser can actually call is
-`web::route::COMMANDS`, which is 81 of 152.
+`web::route::COMMANDS`, which is 114 of 154.
 
 `split` is the odd one in the left column. It compiles there and can never succeed —
 every path in it is `std::fs`, which builds for wasm and answers `Unsupported` — and gating it
@@ -349,12 +355,12 @@ of `main` at PR #301 with a 117 606-card corpus. Each nav destination was opened
 | Destination | Works | Missing |
 | --- | --- | --- |
 | **Search** | ✅ | — |
-| Tagger | ❌ | `tag_children` |
-| Decks | ❌ *(reads routed 2026-08-29 — see PR 10b below; not yet driven on the device)* | `deck_folder_list`, `deck_list` |
-| Collection | ❌ *(routed 2026-08-29 - PR 10d; not yet driven on the device)* | `collection_list` |
-| Wishlist | ❌ *(routed 2026-08-30 - PR 10e; not yet driven on the device)* | `wishlist_list` |
-| Settings | ❌ | `update_history`, `tags_muted`, `error_log_list` |
-| The card pane, from Search | ❌ | `card_detail` — *"Could not read this card — unknown command `card_detail`"* |
+| Tagger | ✅ *(queries routed 10g, driven 2026-08-30; the two refresh commands stay desktop-only)* | `tag_children` |
+| Decks | ✅ *(routed 10b/10c, driven on the phone 2026-08-30)* | `deck_folder_list`, `deck_list` |
+| Collection | ✅ *(routed 10d, driven 2026-08-30)* | `collection_list` |
+| Wishlist | ✅ *(routed 10e, driven 2026-08-30)* | `wishlist_list` |
+| Settings | ❌ *(routed 2026-08-30 - PR 10h, except `update_history` which is one of the permanent ten; not yet driven on the device)* | `update_history`, `tags_muted`, `error_log_list` |
+| The card pane, from Search | ❌ *(routed 2026-08-30 - PR 10f, the bug that started all of this; not yet driven on the device)* | `card_detail` — *"Could not read this card — unknown command `card_detail`"* |
 
 **Nothing regressed.** `web/route.rs`'s own doc has always said so: *"This is a first slice and not
 the whole surface. The app has 152 commands; the four here are the browse."* The web target was
@@ -622,6 +628,76 @@ encode this; the arms copy them rather than reasoning from the resemblance.
 
 `wishlist::commit_import` is the third of PR 10a's nine markers to come good. **Six remain.**
 
+## PR 10f: the card pane — the reported bug is fixed, `COMMANDS` reaches 87
+
+**Shipped 2026-08-30.** `card.rs` moves to "Every target" and its six commands are routed. **This
+is the PR that answers the bug that started PR 10**: on 2026-08-29 a card tapped on the phone
+gave *"Could not read this card — unknown command `card_detail`"*.
+
+`card_detail` is one `match` arm and always was. What it was waiting for is the same thing the
+deck domain was waiting for — the module compiling for the target — and `card.rs` needed no
+work at all to get there: **no filesystem, no `tokio`, no `reqwest` anywhere in its 2 146
+lines**, six command wrappers, and everything else `&Connection` in and a DTO out. The gate
+move cost two gated imports and one `pub(crate)`.
+
+`card_image_uri` is routed and **its answer is one the browser cannot fetch** — an `mtgimg://`
+URI, whose protocol handler is a Tauri webview thing. Routing it anyway is deliberate: the
+command's job is to resolve *which* picture a printing has, and the page decides what to do
+with that. On web `src/lib/images.ts` builds a `cards.scryfall.io` URL from the same two
+columns and goes through the service worker, so this arm is not what makes an image appear —
+it is what stops the call being an `unknown command` in the console while the page works.
+
+Two tests: the reported call answering `Lightning Bolt` with its camelCase DTO intact, and an
+unknown id answering `null` rather than an error, which is the shape the pane draws an empty
+state for.
+
+## PR 10g: the Tagger — ten of twelve, and the two left out are the two that download
+
+**Shipped 2026-08-30.** `COMMANDS` reaches **97 of 152**. This is the first destination where
+the module genuinely split rather than simply moving, which is what PR 10a predicted for
+`tags/` and three others.
+
+**Routed (10):** both `*_status`, `oracle_tags_for_cards`, `oracle_tags_for_printings`,
+`tag_search`, `tag_children`, `tag_resolve`, `tags_muted`, `tag_mute`, `tag_unmute`.
+**Not routed (2):** `oracle_tags_refresh`, `art_tags_refresh` — they fetch a bulk file through
+`state.client`, a field wasm's `AppState` does not have, and report progress through an
+`AppHandle`.
+
+**What the ten buy is the documented fallback instead of an error.** A database that has never
+fetched a taxonomy is a supported state — the Tags page "says so and still answers from the
+oracle side" — and the web target could not previously *reach* that state, because
+`tag_children` was an unknown command. Both `*_status` arms now answer honestly on a browser:
+`ingestedAt: null`, `stale: true`, `refreshing: false`.
+
+### `SystemTime::now()` would have panicked the Worker, not failed
+
+`status_of` — which backs both `*_status` commands — called `unix_now()`, and
+**`SystemTime::now()` panics on `wasm32-unknown-unknown`**. Routing the status commands without
+noticing would not have produced an error the page could show; it would have taken the Worker
+down. `tags::now_from(conn)` reads `SELECT unixepoch()` instead, following
+`sync_engine::entitlement::now`, and `unix_now` is now gated as ingest-only. `tag_mute` needed
+the same treatment, because a muted row carries a timestamp.
+
+**This is the sharpest argument yet for the module map's rule about `SystemTime`.** It is in
+`src-tauri/CLAUDE.md` because it is invisible: it compiles, it passes every desktop test, and
+it fails only in a browser, loudly and unrecoverably.
+
+### One assumption the compiler corrected
+
+`Dataset::bulk_name` looked like pure download data and was gated off the web target — wrongly.
+Its own doc says it is *"the `/bulk-data/{name}` entry to check, **and** the `operation` a
+failure is logged under"*, and `is_refreshing(ds.bulk_name)` reads it on the **status** path.
+It is an identity, not a URL. The real problem was only that its *value* came from the gated
+`scryfall`, so each dataset now owns its `BULK_NAME` and **`scryfall` aliases that** rather than
+holding a second copy — one definition, no drift possible.
+
+### Nine items gated as ingest-only
+
+`RefreshGuard` and its `Drop`, `claim`, `temp_path`, `note_failure`, `closure_is_populated`,
+`DOWNLOAD_EMIT_BYTES`, `mark_checked`, `unix_now`. `is_refreshing` stays ungated and always
+answers `false` on a browser, which is correct rather than a stub: nothing there can ever claim
+the registry.
+
 **One test caught its own fixture, which is worth keeping.** The first draft of
 `a_wish_added_through_the_route_is_listed_by_it` sent `{ name, quantity }` and got
 `Failed("a wish needs either a card or an oracle id")` — the command's own sentence, arriving
@@ -637,3 +713,121 @@ download), and `reset`'s OPFS deletion.
 pane, Tagger, Settings — so that every PR makes one nav destination genuinely work and can be
 driven on the phone. It front-loads the deck domain, which is the biggest cluster and where the
 surprises will be, and that is deliberate.
+
+## PR 10h: Settings — `COMMANDS` reaches 111, and every destination is routed
+
+**Shipped 2026-08-30.** Fourteen arms: the four view-state pairs (`nav`, `zoom`, `listview`,
+`flatten`, all four modules moved left), both `error_log` commands, both `marketplace` ones,
+and Commander Spellbook's two queries.
+
+**`error_log_list` and `error_log_clear` live in `desktop.rs`**, which can never compile for
+wasm — it is the Tauri app's own setup. Nothing needed lifting: they are thin over
+`errors::list`/`errors::clear`, and `errors` has been ungated all along.
+
+**`set_marketplace` routes to `store`, not to `set_marketplace_now`.** That wrapper is `store`
+plus `state.mirror.mark_all()`, because changing the marketplace changes what every mirrored
+CSV would say — and a browser has no plain-text mirror to re-render. The pure half is the whole
+of the feature on this target rather than a reduced version of it.
+
+**`combos::status_of` had the same `SystemTime::now()` trap `tags` did**, found the same way
+and one command later: it was gated *and* called `unix_now()`, so routing `combos_status`
+against it would have panicked the Worker. Its clock now comes off the connection too. **Two
+modules, one day, the same latent crash** — which is the argument for the module map's rule
+being stated as a rule rather than left to be noticed.
+
+## Driven on the phone, 2026-08-30: every destination works, and the pass found one bug
+
+**OnePlus, Chrome 152, portrait, 360×696, against a production build of PR 10's whole queue with
+the 117 606-card corpus already in OPFS.** Each nav destination opened in turn and its `main`
+scraped for `unknown command`, then a card tapped from the wall.
+
+| Destination | Before PR 10 | After |
+| --- | --- | --- |
+| Search | ✅ | ✅ |
+| Tagger | `tag_children` | ✅ *"No tags picked yet"* — the documented never-fetched state |
+| Decks | `deck_folder_list`, `deck_list` | ✅ folder tree and `All decks 0` |
+| Collection | `collection_list` | ✅ `Cards 0` |
+| Wishlist | `wishlist_list` | ✅ `Wishes 0` |
+| Settings | `update_history`, `tags_muted`, `error_log_list` | ✅ |
+| The card pane | **`card_detail`** | ✅ formats, printings, artist, both printings priced |
+
+**The reported bug is fixed on hardware**: tapping a card opens the pane with its legality list,
+`PRINTINGS`, the artist, two printings with set, year and price, and the Scryfall attribution.
+
+### The one thing the pass found that no test could
+
+**`update_history` was still on screen** — the only `unknown command` left in the app after 114
+commands were routed — printed on the Settings page, where §6.3's ten desktop-only commands are
+supposed to be *hidden rather than broken*.
+
+Three things were wrong and each hid the next:
+
+- **`SettingsPage` rendered `UpdatePanel` unconditionally.** Now `!isWebTarget()`.
+- **`useReleaseHistory` ran unconditionally**, which is what produced the visible error. Now
+  `enabled: !isWebTarget()`, and `loading` reads `fetchStatus !== "idle"` because a disabled
+  TanStack v5 query stays `pending` for ever and would otherwise report "loading" permanently.
+- **`useUpdate` polled `update_status` every minute for the life of the tab** and swallowed each
+  failure in a `catch` whose comment explains why one failure does not matter. Now it returns
+  early on the web target.
+
+**The panel's own guard could not have caught this, and that is the general lesson.** It tests
+`installKind === "managed"` — an answer from `update_status`, which is *itself* desktop-only. On
+a browser that answer never arrives, so the panel concluded it was **not** managed and drew the
+controls. **A feature gated on a backend answer is ungated wherever the backend cannot answer**,
+which is the opposite of the intended reading, and it is invisible to every test that has a
+backend.
+
+### Two operational notes, both of which cost time here
+
+- **The service worker served the previous build and the first sweep read exactly like a failed
+  port** — all six destinations still reporting the same `unknown command`s as before PR 10. It
+  was the PWA shell doing its job. Clearing `caches` and unregistering the worker, then
+  reloading, is what showed the new bundle; the **shell cache's build id is the tell**
+  (`grimoire-shell-<id>`), and it changing is proof the reload took.
+- **`navigator.serviceWorker.getRegistrations()[].unregister()` can hang** over CDP once a new
+  worker is waiting. Closing the tab and opening a fresh one is the reliable move, and it is also
+  the flow the app's own update actually uses.
+- **OPFS is untouched by any of that.** The 117 606-row corpus survived every cache clear and
+  every reload — a different storage API, so a shell-cache bust costs nothing but a re-fetch of
+  the bundle.
+
+## Where PR 10 got to: 114 of 154 routed, and what the other 40 are
+
+Counted 2026-08-30 by walking every `#[tauri::command]` in the crate — both attribute
+spellings, skipping doc-comment mentions — and diffing against `COMMANDS`. **The crate is 154
+now, not the 152 measured on 2026-08-29**: the hosted-relay work added two.
+
+| | |
+| --- | --- |
+| Commands in the crate | **154** |
+| Routed | **114** |
+| Not routed | **40** |
+
+**The 40, and none of them is an oversight:**
+
+| Count | What | Why not |
+| --- | --- | --- |
+| **16** | `sync_pair/pairing` (9) and `sync_engine/commands` (7) | The pairing and membership surface. `lib.rs` states `pairing` "does not and never will" compile for wasm; the relay work is live and moving, so this is its own decision rather than a port |
+| **7** | `desktop.rs` | The five §6.3 updater commands, `update_status`, and `sync_run` — the web target runs its own ingest through `glue.rs` |
+| **5** | `reset.rs` (4) and `deck_set_cover_image` | OPFS deletion, and a covers directory a browser has none of |
+| **4** | `mirror/settings.rs` | §6.3: a mirror in OPFS cannot be read by the programs a mirror exists for |
+| **2** | `import_read_file`, `export_write_file` | §6.2's `<input type=file>` and `Blob` |
+| **4** | The four `*_refresh` (oracle tags, art tags, combos, marketplace feed) | Each downloads through `state.client` |
+| **2** | `images.rs` | The byte cache is Cache Storage on web — a rewrite, not a port |
+
+**PR 10i closed the last two gaps**, so every one of the 40 is now a decision with a reason
+above it rather than something nobody got to. `marketplace_feed` got `tags`' split — the
+status query kept, the download gated — and `import` got the same: `import_resolve` and
+`deck_import_commit` are ordinary SQLite, and only `import_read_file` ever needed a file
+handle. **The page can already paste a decklist without touching a file**, so those two are the
+whole of the import that works on this target.
+
+**And the same clock trap a third time.** `marketplace_feed`'s status path used `unix_now()`,
+like `tags` and `combos` before it. Three modules, one day, one latent Worker crash each. The
+arm reads `SELECT unixepoch()` off the connection like the other two.
+
+**One near-miss worth recording**: the first attempt fixed `marketplace_feed::status_of`, which
+looked like the status command's function and is not — that one belongs to `refresh`, and the
+command maps `PROVIDERS` over `read_status` itself. The fix compiled, passed, and would have
+left the actual command still calling the panicking clock. **A name matching is not a call
+graph**; the wrapper is.

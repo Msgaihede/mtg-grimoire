@@ -29,9 +29,11 @@
 //!   `schema::a_mute_survives_a_card_sync_and_a_taxonomy_rebuild` is the fence that keeps it
 //!   that way.
 
+#[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
 use rusqlite::{params, Connection};
 use serde::Serialize;
+#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// One muted tag, as Settings lists it.
@@ -157,6 +159,7 @@ pub fn list(conn: &Connection) -> Result<Vec<MutedTag>, String> {
 /// A write, so it takes `AppState.db` through the one [`crate::sync::with_write`] and answers
 /// [`crate::db::BUSY`] if a sync holds it — never `db_read`, which is the read connection and
 /// cannot write.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn tag_mute(
     state: tauri::State<'_, Arc<AppState>>,
@@ -175,6 +178,7 @@ pub async fn tag_mute(
 }
 
 /// Offer a tag again.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn tag_unmute(
     state: tauri::State<'_, Arc<AppState>>,
@@ -190,6 +194,7 @@ pub async fn tag_unmute(
 }
 
 /// Everything the reader has hidden, for the Settings list that gives it back.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn tags_muted(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<MutedTag>, String> {
     let state = state.inner().clone();

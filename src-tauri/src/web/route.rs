@@ -117,6 +117,44 @@ pub const COMMANDS: &[&str] = &[
     "wishlist_folder_reorder",
     "wishlist_folder_delete",
     "wishlist_set_folder",
+    // The card pane. `card_detail` is the command the reader reported on 2026-08-29.
+    "card_detail",
+    "card_printings",
+    "card_meld_parts",
+    "card_image_uri",
+    "printing_group_by",
+    "set_printing_group_by",
+    // The Tagger, minus the two that download. See the arms for why.
+    "oracle_tags_status",
+    "art_tags_status",
+    "oracle_tags_for_cards",
+    "oracle_tags_for_printings",
+    "tag_search",
+    "tag_children",
+    "tag_resolve",
+    "tags_muted",
+    "tag_mute",
+    "tag_unmute",
+    // Settings, and the view state the pages keep in `app_meta`.
+    "nav_collapsed",
+    "set_nav_collapsed",
+    "card_zoom",
+    "set_card_zoom",
+    "list_view",
+    "set_list_view",
+    "flatten_state",
+    "set_flatten_state",
+    "error_log_list",
+    "error_log_clear",
+    "get_marketplace",
+    "set_marketplace",
+    // Commander Spellbook. `combos_refresh` downloads and is not here.
+    "combos_status",
+    "combos_for_cards",
+    // The last two gaps, closed. See the arms.
+    "marketplace_feed_status",
+    "import_resolve",
+    "deck_import_commit",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -1221,6 +1259,377 @@ pub fn call(
             )
         }
 
+        // ── The card pane ───────────────────────────────────────────────────────────
+        //
+        // **`card_detail` is the command the reader actually reported**, on 2026-08-29:
+        // *"Could not read this card — unknown command `card_detail`"*, tapping a card on the
+        // phone minutes after the browse became good enough to invite the tap. It is one line
+        // of `match` and always was; what it was waiting for was `card.rs` to compile for the
+        // target, which is the gate move in this same PR.
+        "card_detail" => {
+            let id: String = field(command, args, "id")?;
+            let marketplace: Option<String> = optional(command, args, "marketplace")?;
+            let market = crate::sorting::Marketplace::from_opt(marketplace.as_deref());
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::card::get_card(&conn, &id, market).map_err(RouteError::Failed)?,
+            )
+        }
+
+        // `oracleId` on the wire; `limit` absent means the pane's own `MAX_PRINTINGS`, which
+        // `list_printings` applies — so `None` is passed through rather than defaulted here.
+        "card_printings" => {
+            let oracle_id: String = field(command, args, "oracleId")?;
+            let marketplace: Option<String> = optional(command, args, "marketplace")?;
+            let limit: Option<i64> = optional(command, args, "limit")?;
+            let market = crate::sorting::Marketplace::from_opt(marketplace.as_deref());
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::card::list_printings(&conn, &oracle_id, market, limit)
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "card_meld_parts" => {
+            let id: String = field(command, args, "id")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::card::meld_parts(&conn, &id).map_err(RouteError::Failed)?,
+            )
+        }
+
+        // **Answers an `mtgimg://` URI the browser cannot fetch**, and routing it anyway is
+        // deliberate: the command's job is to resolve *which* picture a printing has, and the
+        // page decides what to do with the answer. On web `src/lib/images.ts` builds a
+        // `cards.scryfall.io` URL from the same two columns through the service worker, so
+        // this arm answering is not what makes an image appear — it is what stops the call
+        // being an `unknown command` in the console while the page works.
+        "card_image_uri" => {
+            let card_id: String = field(command, args, "cardId")?;
+            let variant: String = field(command, args, "variant")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::card::card_image_uri_inner(&conn, &card_id, &variant)
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "printing_group_by" => {
+            let conn = crate::sync::lock_db_read(state);
+            encode(command, crate::card::stored_group_by(&conn))
+        }
+
+        "set_printing_group_by" => {
+            let mode: String = field(command, args, "mode")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::card::store_group_by(c, &mode))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        // ── The Tagger ──────────────────────────────────────────────────────────────
+        //
+        // **Ten of twelve, and the two missing are the two that download.**
+        // `oracle_tags_refresh` and `art_tags_refresh` fetch a bulk file from Scryfall
+        // through `state.client` — a field wasm's `AppState` does not have — and report
+        // progress through an `AppHandle`. They are the download half of the split the
+        // compiler named in PR 10a, and porting them is its own piece of work rather than a
+        // `match` arm.
+        //
+        // **What the ten buy is the documented fallback instead of an error.** A database
+        // that has never fetched a taxonomy is a supported state — `src-tauri/CLAUDE.md` says
+        // the Tags page "says so and still answers from the oracle side" — and until now the
+        // web target could not even reach that state, because `tag_children` was an unknown
+        // command. Both `*_status` arms answer honestly on a browser: never fetched, stale.
+        "oracle_tags_status" => encode(
+            command,
+            crate::tags::status_of(&crate::tags::oracle::ORACLE, state),
+        ),
+
+        "art_tags_status" => encode(
+            command,
+            crate::tags::status_of(&crate::tags::art::ART, state),
+        ),
+
+        "oracle_tags_for_cards" => {
+            let oracle_ids: Vec<String> = field(command, args, "oracleIds")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::tags::oracle::read_card_tags(&conn, &oracle_ids)
+                    // The wrapper's own sentence, so the page sees one message whatever
+                    // target answered it.
+                    .map_err(|e| RouteError::Failed(format!("could not read the tags: {e}")))?,
+            )
+        }
+
+        "oracle_tags_for_printings" => {
+            let card_ids: Vec<String> = field(command, args, "cardIds")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::tags::oracle::read_printing_tags(&conn, &card_ids)
+                    .map_err(|e| RouteError::Failed(format!("could not read the tags: {e}")))?,
+            )
+        }
+
+        "tag_search" => {
+            let text: String = field(command, args, "text")?;
+            let namespace: String = field(command, args, "namespace")?;
+            let limit: u32 = field(command, args, "limit")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::tags::query::run_tag_search(&conn, &text, &namespace, limit)
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "tag_children" => {
+            let namespace: String = field(command, args, "namespace")?;
+            let slug: Option<String> = optional(command, args, "slug")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::tags::query::run_tag_children(&conn, &namespace, slug.as_deref())
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "tag_resolve" => {
+            let asks: Vec<crate::tags::query::TagLookup> = field(command, args, "asks")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::tags::query::run_tag_resolve(&conn, &asks).map_err(RouteError::Failed)?,
+            )
+        }
+
+        "tags_muted" => {
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::tags::muted::list(&conn).map_err(RouteError::Failed)?,
+            )
+        }
+
+        // **`now_from` and not `unix_now`**: the muted row carries a timestamp, and
+        // `SystemTime::now()` panics on `wasm32-unknown-unknown` rather than failing. The
+        // clock comes off the connection, which is the same answer `sync_engine::entitlement`
+        // reaches for the same reason.
+        "tag_mute" => {
+            let namespace: String = field(command, args, "namespace")?;
+            let tag_id: String = field(command, args, "tagId")?;
+            let slug: String = field(command, args, "slug")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |conn| {
+                    let now = crate::tags::now_from(conn);
+                    crate::tags::muted::mute(conn, &namespace, &tag_id, &slug, now)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "tag_unmute" => {
+            let namespace: String = field(command, args, "namespace")?;
+            let tag_id: String = field(command, args, "tagId")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |conn| {
+                    crate::tags::muted::unmute(conn, &namespace, &tag_id)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        // ── Settings, and the view state the pages keep in `app_meta` ───────────────
+        //
+        // Eight of these are four matched pairs — read the setting, write the setting — and
+        // all four modules moved to "Every target" in this PR because none of them has a
+        // filesystem, a `tokio` or a `reqwest` in it. They lean on [`crate::app_meta`], which
+        // is why PR 10a's carve-out had to come first.
+        "nav_collapsed" => {
+            let conn = crate::sync::lock_db_read(state);
+            encode(command, crate::nav::stored(&conn))
+        }
+
+        "set_nav_collapsed" => {
+            let collapsed: bool = field(command, args, "collapsed")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::nav::store(c, collapsed))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "card_zoom" => {
+            let conn = crate::sync::lock_db_read(state);
+            encode(command, crate::zoom::stored(&conn))
+        }
+
+        "set_card_zoom" => {
+            let section: String = field(command, args, "section")?;
+            let zoom: f64 = field(command, args, "zoom")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::zoom::store(c, &section, zoom))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "list_view" => {
+            let conn = crate::sync::lock_db_read(state);
+            encode(command, crate::listview::stored(&conn))
+        }
+
+        "set_list_view" => {
+            let section: String = field(command, args, "section")?;
+            let view: String = field(command, args, "view")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::listview::store(c, &section, &view))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "flatten_state" => {
+            let conn = crate::sync::lock_db_read(state);
+            encode(command, crate::flatten::stored(&conn))
+        }
+
+        "set_flatten_state" => {
+            let section: String = field(command, args, "section")?;
+            let flattened: bool = field(command, args, "flattened")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::flatten::store(c, &section, flattened))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        // ── The error log ───────────────────────────────────────────────────────────
+        //
+        // **Both wrappers live in `desktop.rs`, which can never compile for wasm** — it is the
+        // Tauri app's own setup. Nothing needed lifting for all that: they are thin over
+        // `errors::list` and `errors::clear`, and `errors` has been ungated all along.
+        "error_log_list" => {
+            let limit: i64 = field(command, args, "limit")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::errors::list(&conn, limit).map_err(|e| {
+                    RouteError::Failed(format!("could not read the error log: {e}"))
+                })?,
+            )
+        }
+
+        "error_log_clear" => encode(
+            command,
+            crate::sync::with_write(state, |c| {
+                crate::errors::clear(c).map_err(|e| format!("could not clear the error log: {e}"))
+            })
+            .map_err(RouteError::Failed)?,
+        ),
+
+        // ── The marketplace ─────────────────────────────────────────────────────────
+        "get_marketplace" => {
+            let conn = crate::sync::lock_db_read(state);
+            encode(command, crate::marketplace::stored(&conn))
+        }
+
+        // **`store`, not `set_marketplace_now`**, and the difference is one line the web
+        // target has no use for. That wrapper is `store` plus `state.mirror.mark_all()`,
+        // because changing the marketplace changes what every mirrored CSV would say — and a
+        // browser has no plain-text mirror to re-render. Calling the pure half here is not a
+        // reduced feature; it is the whole of the feature that exists on this target.
+        "set_marketplace" => {
+            let id: String = field(command, args, "id")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::marketplace::store(c, &id))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        // ── Commander Spellbook's combos ────────────────────────────────────────────
+        //
+        // **Two of three, and `combos.rs` was ungated all along** — it is on `lib.rs`'s
+        // every-target list because its ingest streams through `crate::feed`. Only
+        // `combos_refresh` is missing, for `oracle_tags_refresh`'s reason: it downloads.
+        //
+        // `combos_status` is on the Settings panel and `combos_for_cards` is the deck
+        // bracket's fourth signal. **A database that never fetched the feed answers three
+        // signals instead of four**, which the crate documents as supported rather than an
+        // error — and `combos_status` is explicitly safe before the first refresh: two zeros,
+        // three nulls and `stale: true`.
+        "combos_status" => encode(command, crate::combos::status_of(state)),
+
+        "combos_for_cards" => {
+            let card_ids: Vec<String> = field(command, args, "cardIds")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::combos::match_combos(&conn, &card_ids).map_err(RouteError::Failed)?,
+            )
+        }
+
+        // ── The last two gaps ───────────────────────────────────────────────────────
+        //
+        // Both were named in this file's own tally as gaps rather than decisions, and both are
+        // closed here. What is left after them is deliberate on every line.
+        //
+        // **`marketplace_feed_status` is a pure query that was stranded in a module that also
+        // downloads** — the same shape `tags` had, and split the same way. The arm maps
+        // `PROVIDERS` over `read_status` exactly as the wrapper does, rather than going
+        // through `status_of`: that helper is the *refresh* path's, and reaching for it here
+        // because the names match would have been the wrong function with the right label.
+        "marketplace_feed_status" => {
+            let conn = crate::sync::lock_db_read(state);
+            // The clock off the connection, for the third time in this file's history:
+            // `SystemTime::now()` panics on wasm rather than failing.
+            let now = conn
+                .query_row("SELECT unixepoch()", [], |r| r.get::<_, i64>(0))
+                .unwrap_or(0);
+            let out: Vec<_> = crate::marketplace_feed::PROVIDERS
+                .iter()
+                .map(|p| crate::marketplace_feed::read_status(&conn, *p, now))
+                .collect();
+            encode(command, out)
+        }
+
+        // **`import`'s two pure halves.** Only `import_read_file` needs the file handle §6.2
+        // specifies; resolving a pasted decklist against the corpus and committing the result
+        // are ordinary SQLite. The page can already paste a list without touching a file, so
+        // these two are the whole of the import that works on this target.
+        "import_resolve" => {
+            let lines: Vec<crate::import::ResolveLine> = field(command, args, "lines")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::import::resolve_lines(&conn, &lines).map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_import_commit" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let variant: String = field(command, args, "variant")?;
+            let mode: String = field(command, args, "mode")?;
+            let items: Vec<crate::import::ImportItem> = field(command, args, "items")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::import::commit_import(c, deck_id, &variant, &mode, &items)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
         other => Err(RouteError::Unknown(other.to_owned())),
     }
 }
@@ -1567,6 +1976,150 @@ mod tests {
         assert_eq!(items[0]["quantity"], json!(1));
     }
 
+    /// **The command the reader reported.** On 2026-08-29, tapping a card on the phone gave
+    /// *"Could not read this card — unknown command `card_detail`"*. This is that call, on the
+    /// route that now answers it.
+    #[test]
+    fn card_detail_answers_the_card_the_reader_tapped() {
+        let s = state("web-route-card-detail");
+        let card_id = {
+            let conn = crate::db::lock_blocking(&s.db);
+            conn.query_row(
+                "SELECT id FROM cards WHERE name = 'Lightning Bolt'",
+                [],
+                |r| r.get::<_, String>(0),
+            )
+            .expect("the fixture seeds Lightning Bolt")
+        };
+
+        let out = call(&s, "card_detail", &json!({ "id": card_id })).unwrap();
+        assert_eq!(out["name"], json!("Lightning Bolt"));
+        // camelCase again, and `setCode` is the one the pane's header reads first.
+        assert!(
+            out.get("setCode").is_some(),
+            "the DTO's camelCase names must survive the route"
+        );
+    }
+
+    /// An id nobody answers to is `null`, not an error — `card_detail`'s documented shape, and
+    /// the page draws an empty pane rather than a failure for it.
+    #[test]
+    fn card_detail_answers_null_for_a_card_that_is_not_there() {
+        let s = state("web-route-card-missing");
+        let out = call(&s, "card_detail", &json!({ "id": "no-such-card" })).unwrap();
+        assert_eq!(out, json!(null));
+    }
+
+    /// **A taxonomy that was never fetched is a supported state, and this is what it answers.**
+    ///
+    /// That is the whole value of routing the Tagger's queries without its two downloads: the
+    /// web target could not previously reach this state at all, because `tag_children` was an
+    /// `unknown command`. Now it reaches the documented fallback — a page that says it has
+    /// nothing yet — instead of an error.
+    #[test]
+    fn the_tagger_answers_honestly_before_any_taxonomy_has_been_fetched() {
+        let s = state("web-route-tags-cold");
+
+        let status = call(&s, "oracle_tags_status", &json!({})).unwrap();
+        // **`null`, not `0`** — `TagStatus::ingested_at`'s doc is explicit that `None` is
+        // "never ingested", which for the oracle taxonomy means the app is categorising by
+        // card type rather than by what a card does. A zero would have meant "fetched, and it
+        // was empty", which is a different and much worse thing to report.
+        assert_eq!(
+            status["ingestedAt"],
+            json!(null),
+            "nothing has been fetched"
+        );
+        assert_eq!(status["tagCount"], json!(null));
+        assert_eq!(status["stale"], json!(true), "never ingested is stale");
+        assert_eq!(
+            status["refreshing"],
+            json!(false),
+            "a browser never refreshes, so this can only ever be false there"
+        );
+
+        // The command the Tags page opens with, and the one the phone reported missing.
+        let children = call(
+            &s,
+            "tag_children",
+            &json!({ "namespace": "art", "slug": null }),
+        )
+        .unwrap();
+        assert_eq!(
+            children.as_array().expect("an array of children").len(),
+            0,
+            "an empty taxonomy is an empty list, not a refusal"
+        );
+    }
+
+    /// A card nothing has tagged answers an entry rather than dropping out — one per requested
+    /// id, in request order, which is the contract `src-tauri/CLAUDE.md` states for both tag
+    /// reads and the reason a deck add can never fail for want of a tag.
+    #[test]
+    fn a_tag_read_answers_one_entry_per_requested_id() {
+        let s = state("web-route-tags-per-id");
+        let out = call(
+            &s,
+            "oracle_tags_for_cards",
+            &json!({ "oracleIds": ["nobody-has-tagged-this", "nor-this"] }),
+        )
+        .unwrap();
+        assert_eq!(out.as_array().unwrap().len(), 2);
+    }
+
+    /// The four view-state pairs, read back through the route.
+    ///
+    /// One test rather than four, because they are the same shape and the thing worth pinning
+    /// is that a *setting written on the web target is there on the next read* — the whole
+    /// point of `app_meta` having been carved out of the updater in PR 10a.
+    #[test]
+    fn a_view_setting_written_through_the_route_is_read_back_by_it() {
+        let s = state("web-route-view-state");
+
+        assert_eq!(call(&s, "nav_collapsed", &json!({})).unwrap(), json!(false));
+        call(&s, "set_nav_collapsed", &json!({ "collapsed": true })).unwrap();
+        assert_eq!(call(&s, "nav_collapsed", &json!({})).unwrap(), json!(true));
+
+        call(
+            &s,
+            "set_card_zoom",
+            &json!({ "section": "search", "zoom": 1.5 }),
+        )
+        .unwrap();
+        let zoom = call(&s, "card_zoom", &json!({})).unwrap();
+        assert_eq!(zoom["search"], json!(1.5));
+    }
+
+    /// **`set_marketplace` routes to `store`, not to `set_marketplace_now`**, and this is the
+    /// evidence the difference is only the mirror.
+    ///
+    /// That wrapper is `store` plus `state.mirror.mark_all()`; a browser has no plain-text
+    /// mirror to re-render, and `AppState` there has no `mirror` field to call it on. What the
+    /// reader gets is the setting, saved and read back — which is the whole of the feature on
+    /// this target rather than a reduced version of it.
+    #[test]
+    fn the_marketplace_setting_survives_the_route_without_the_mirror() {
+        let s = state("web-route-marketplace");
+        call(&s, "set_marketplace", &json!({ "id": "cardmarket" })).unwrap();
+        assert_eq!(
+            call(&s, "get_marketplace", &json!({})).unwrap(),
+            json!("cardmarket")
+        );
+    }
+
+    /// The error log answers an empty list before anything has gone wrong, and `limit` is a
+    /// required argument rather than an optional one — `errors::list` clamps it, and the page
+    /// always sends one.
+    #[test]
+    fn the_error_log_answers_before_anything_has_failed() {
+        let s = state("web-route-error-log");
+        let out = call(&s, "error_log_list", &json!({ "limit": 50 })).unwrap();
+        assert_eq!(out.as_array().expect("an array of entries").len(), 0);
+
+        let err = call(&s, "error_log_list", &json!({})).unwrap_err();
+        assert!(matches!(&err, RouteError::Args { .. }), "got {err:?}");
+    }
+
     /// **`mirror_rebuild`, and the choice of name is the point.** This used to reach for
     /// `deck_list`, which stopped being unknown the moment the Decks reads were routed — so
     /// the example is now one of the ten §6.3 names that are *permanently* desktop-only. A
@@ -1604,7 +2157,7 @@ mod tests {
         }
         assert_eq!(
             COMMANDS.len(),
-            81,
+            114,
             "update this number when a command is added"
         );
     }

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ipc, ipcError, type UpdateProgressEvent, type UpdateStatus } from "@/lib/ipc";
 import { ago, daysSince } from "@/lib/relativeTime";
+import { isWebTarget } from "@/pwa/target";
 
 /**
  * How often the status is re-read when nothing is happening.
@@ -97,6 +98,11 @@ export function useUpdate(): Update {
   const [nonce, setNonce] = useState(0);
 
   useEffect(() => {
+    // **The web target has no updater to poll**, and the `catch` below is what made that
+    // invisible: `update_status` is one of §6.3's desktop-only commands, so on a browser this
+    // was a failing IPC call once a minute for the life of the tab, swallowed every time.
+    // Found on the phone 2026-08-30 while chasing the one `unknown command` still on screen.
+    if (isWebTarget()) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const poll = async () => {

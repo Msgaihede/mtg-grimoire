@@ -64,7 +64,6 @@
 //! Per `uses[]` entry: an oracle id, a name, a quantity and whether the card must be the
 //! commander. Everything else is read and dropped.
 
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use serde::de::{DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
@@ -1168,10 +1167,17 @@ pub fn read_status(conn: &Connection, now: i64) -> ComboStatus {
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
-fn status_of(state: &AppState) -> ComboStatus {
+/// **Ungated, and its clock comes off the connection.** `web::route` answers `combos_status`
+/// with this, and `SystemTime::now()` — which [`unix_now`] below uses — *panics* on
+/// `wasm32-unknown-unknown` rather than failing, so calling that here would take the Worker
+/// down instead of returning an error. `crate::tags::now_from` reached the same conclusion on
+/// the same day, for the same command shape.
+pub(crate) fn status_of(state: &AppState) -> ComboStatus {
     let conn = crate::sync::lock_db_read(state);
-    read_status(&conn, unix_now())
+    let now = conn
+        .query_row("SELECT unixepoch()", [], |r| r.get::<_, i64>(0))
+        .unwrap_or(0);
+    read_status(&conn, now)
 }
 
 /// Seconds since the Unix epoch. A clock before 1970 reads as 0, which makes the combo

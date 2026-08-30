@@ -58,10 +58,12 @@
 //! week the tag is renamed, which is exactly the week it mattered.
 
 use super::{normalize, Dataset};
+#[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
 use rusqlite::{params_from_iter, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// One tag, as the Tags page draws it.
@@ -581,6 +583,7 @@ pub fn run_tag_resolve(
 ///
 /// `async` and answered on the blocking pool, like every other read in this crate: a sync
 /// command body runs inline on the IPC thread and this takes `db_read`'s mutex.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn tag_search(
     state: tauri::State<'_, Arc<AppState>>,
@@ -598,6 +601,7 @@ pub async fn tag_search(
 }
 
 /// One level of the tag tree: the children of `slug`, or the roots when it is absent.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn tag_children(
     state: tauri::State<'_, Arc<AppState>>,
@@ -618,6 +622,7 @@ pub async fn tag_children(
 /// One answer per ask, in order, `null` where there is no such tag — see [`run_tag_resolve`]
 /// for why the misses ride along rather than being dropped, and for why this is exact where
 /// [`tag_search`] is a substring.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn tag_resolve(
     state: tauri::State<'_, Arc<AppState>>,

@@ -26,6 +26,11 @@
 /// re-export from there does not work, because a name re-exported from a gated module is
 /// invisible on wasm exactly when it is wanted.
 pub mod app_meta;
+/// **The card pane, moved here on 2026-08-30** for the deck domain's reason and with the same
+/// finding: its six command wrappers sit in a block and everything else is `&Connection` in,
+/// DTO out - no filesystem, no `tokio`, no `reqwest` anywhere in the file. `card_detail` is
+/// the command the reader hit first on the phone.
+pub mod card;
 pub mod card_row;
 /// **The deck domain, and the ten modules below it, moved here on 2026-08-29** — they were
 /// under "Desktop and Android" because of where their *commands* were, not because of
@@ -56,16 +61,24 @@ pub mod filters;
 /// one predicate over a string — no filesystem, no protocol handler, nothing a browser
 /// lacks. `search.rs` puts a card's URL on a result row from here, and `images` composes
 /// the same three pieces into a cached fetch.
+/// **The four view-state modules, moved here on 2026-08-30.** `flatten`, `listview`, `nav` and
+/// `zoom` each keep one setting in `app_meta` and answer it back - two commands apiece and no
+/// filesystem, no `tokio` and no `reqwest` between them. They were on the other side only
+/// because [`app_meta`] used to live inside the portable updater; PR 10a moved the store and
+/// this moves the four modules that lean on it hardest.
+pub mod flatten;
 pub mod image_uri;
 pub mod index;
 pub mod ingest;
 pub mod legalities;
+pub mod listview;
 pub mod maintenance;
 /// **The stored marketplace id is every target's; telling the mirror about a change is not.**
 /// `stored` and `store` are one settings row, and `deck_meta`'s readback quotes the first of
 /// them on every platform — so the module is here and `set_marketplace_now`, which calls
 /// `AppState.mirror` (a field wasm's `AppState` does not have), carries the gate instead.
 pub mod marketplace;
+pub mod nav;
 pub mod schema;
 pub mod search;
 pub mod slug;
@@ -94,26 +107,17 @@ pub mod sync_pair;
 pub mod web;
 pub mod wishlist;
 pub mod wishlist_folders;
+pub mod zoom;
 
 // ── Desktop and Android ──────────────────────────────────────────────────────────
 #[cfg(not(target_family = "wasm"))]
-pub mod card;
-#[cfg(not(target_family = "wasm"))]
 pub mod export;
 #[cfg(not(target_family = "wasm"))]
-pub mod flatten;
-#[cfg(not(target_family = "wasm"))]
 pub mod images;
-#[cfg(not(target_family = "wasm"))]
 pub mod import;
-#[cfg(not(target_family = "wasm"))]
-pub mod listview;
-#[cfg(not(target_family = "wasm"))]
 pub mod marketplace_feed;
 #[cfg(not(target_family = "wasm"))]
 pub mod mirror;
-#[cfg(not(target_family = "wasm"))]
-pub mod nav;
 #[cfg(not(target_family = "wasm"))]
 pub mod paths;
 #[cfg(not(target_family = "wasm"))]
@@ -124,7 +128,6 @@ pub mod reconcile;
 pub mod reset;
 #[cfg(not(target_family = "wasm"))]
 pub mod scryfall;
-#[cfg(not(target_family = "wasm"))]
 pub mod tags;
 #[cfg(not(target_family = "wasm"))]
 pub mod transfer;
@@ -140,8 +143,6 @@ pub mod update;
 // runs for a wasm `TARGET`, so nothing sets it there.
 #[cfg(desktop)]
 pub mod window;
-#[cfg(not(target_family = "wasm"))]
-pub mod zoom;
 
 #[cfg(not(target_family = "wasm"))]
 mod desktop;
