@@ -452,6 +452,7 @@ fn from_hex16(s: &str) -> Option<[u8; 16]> {
 
 use crate::sync::{self, AppState};
 use crate::sync_engine::client;
+use crate::sync_engine::commands;
 
 /// What [`sync_device_revoke`] says when the round trip it makes first does not complete.
 ///
@@ -566,23 +567,44 @@ pub async fn sync_device_rename(
     .map_err(|e| format!("could not rename that device: {e}"))?
 }
 
-/// Remove a device and rotate the group key.
+/// Remove a device, in the four steps whose **order is the whole of the fix**.
 ///
-/// **The rotation is the removal** — see §7.6. What it cannot do is reach the removed device:
-/// whatever that device already synced, it keeps, and no server can take it back.
+/// 1. **Refuse a group with no membership.** Spec §2.4's fourth refusal, and it comes before
+///    anything moves: `/rotate` authenticates against an auth only `/claim` can seed, so an
+///    unentitled group has no way to publish a rotation — and rotating locally anyway is exactly
+///    the bug this change exists to end. `commands::entitled` is the local half of that question
+///    and [`identity::NO_MEMBERSHIP`] is the sentence.
+/// 2. **A round trip, so the departing device's last push is absorbed.** Spec §12.4: the
+///    rotation makes every op sealed under the old epoch unreadable, and [`client::pull`] steps
+///    over such an envelope rather than stalling on it, so anything the leaving device pushed
+///    that this one has not yet taken would be thrown away at the boundary. **It is the trip that
+///    emits no baseline** — [`client::run_once`] would hand thousands of ops to the very device
+///    this is about to remove.
+/// 3. **Plan the rotation, which writes nothing** ([`identity::plan_rotation`]), and publish it
+///    ([`client::post_rotation`]).
+/// 4. **Commit only on a 2xx** ([`identity::commit_rotation`]).
 ///
-/// **It completes a round trip before it rotates, and a failed one removes nothing.** Spec
-/// §12.4: the rotation makes every op sealed under the old epoch unreadable, and
-/// [`client::pull`] steps over such an envelope rather than stalling on it — so anything the
-/// leaving device pushed that this one has not yet taken is thrown away at the boundary, which
-/// is exactly the tail §12.3 promises to keep. Removing a device is never urgent; doing it
-/// offline is the one way to lose what that device last said. A device with no relay address
-/// gets `Ok(None)` from [`client::run_once_without_baselines`] and the removal goes straight
-/// ahead — sync is off, so there is nothing on any server to collect.
+/// **`identity::revoke_device` is gone and steps 3 and 4 are what replaced it.** It rotated
+/// locally in one transaction and reached nobody: the removing device moved to epoch *N+1* while
+/// every remaining device sat at *N*, `client::pull` set `behind = true` and held its cursor for
+/// ever, and one removal bricked any group of three. A refused `/rotate` now leaves the group
+/// exactly as it was and says so.
 ///
-/// **It is the trip that emits no baseline**, and that function's own doc comment says why:
-/// [`client::run_once`] here would hand a full baseline to the device this command is about to
-/// mark gone.
+/// What a removal still cannot do is take back what the removed device already synced. No server
+/// can, and §12.3 says so.
+async fn remove_device(conn: &Connection, device_id: &str) -> Result<(), String> {
+    if !commands::entitled(conn) {
+        return Err(identity::NO_MEMBERSHIP.to_owned());
+    }
+    let _ = client::run_once_without_baselines(conn)
+        .await
+        .map_err(|e| format!("{COULD_NOT_COLLECT} {e}"))?;
+    let plan = identity::plan_rotation(conn, device_id)?;
+    client::post_rotation(conn, &plan).await?;
+    identity::commit_rotation(conn, device_id, &plan)
+}
+
+/// Remove a device and rotate the group key. See [`remove_device`] for the order.
 ///
 /// **On the blocking pool with a runtime of its own**, for `sync_engine::commands::sync_now`'s
 /// reason: the write connection is behind a `Mutex`, a guard on it cannot cross an `await` on a
@@ -600,10 +622,7 @@ pub async fn sync_device_revoke(
             .build()
             .map_err(|e| e.to_string())?;
         sync::with_write(&state, |conn| {
-            let _ = runtime
-                .block_on(client::run_once_without_baselines(conn))
-                .map_err(|e| format!("{COULD_NOT_COLLECT} {e}"))?;
-            identity::revoke_device(conn, &device_id).map(|_| ())
+            runtime.block_on(remove_device(conn, &device_id))
         })
     })
     .await
@@ -613,6 +632,7 @@ pub async fn sync_device_revoke(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use httpmock::prelude::*;
 
     fn db() -> Connection {
         crate::schema::memory_pair()
@@ -981,19 +1001,29 @@ mod tests {
         assert_eq!(after.devices.len(), 2);
     }
 
-    /// A removed device is off the list the panel draws, and the roster underneath still has it.
+    /// A removed device is off the list the panel draws **and off the roster underneath it**,
+    /// and the second half is the reversal.
     ///
-    /// **Two assertions and not one.** `identity::roster` is the record — `add_device` clears
-    /// `revoked_at` on a re-pair and `baseline::peers_needing` reads the mark — so a fix that
-    /// deleted the row would pass a test that only counted what the panel sees, and would quietly
-    /// hand a full baseline to a device that is never going to answer.
+    /// **This asserted the opposite until spec §2.3.** The doc it replaces argued that the
+    /// roster had to keep the row, because deleting it would "quietly hand a full baseline to a
+    /// device that is never going to answer" — which was never true and is plainly not now:
+    /// `baseline::peers_needing` reads `WHERE revoked_at IS NULL`, and a row that has been
+    /// deleted satisfies that by not being there to select at all. What is true is that the
+    /// relay's manifest **is** the roster now, so a remover that kept a tombstone would be the
+    /// one machine in the group with a different answer about who is in it, and `add_device`
+    /// puts a re-paired device back by insert rather than by clearing a stamp.
+    ///
+    /// **`status`'s filter stays and both halves are still asserted**, because a database
+    /// written by a build that predates the delete can still hold a stamped row and the panel
+    /// must not draw it.
     #[test]
-    fn a_removed_device_is_not_on_the_panels_list() {
+    fn a_removed_device_is_off_the_panel_and_off_the_roster() {
         let conn = db();
-        let me = crate::sync_pair::identity::ensure(&conn).unwrap();
-        crate::sync_pair::identity::create_group(&conn, &me).unwrap();
-        crate::sync_pair::identity::add_device(&conn, "deadbeef", &[7u8; 32], "Phone").unwrap();
-        crate::sync_pair::identity::revoke_device(&conn, "deadbeef").unwrap();
+        let me = identity::ensure(&conn).unwrap();
+        identity::create_group(&conn, &me).unwrap();
+        identity::add_device(&conn, "deadbeef", &[7u8; 32], "Phone").unwrap();
+        let plan = identity::plan_rotation(&conn, "deadbeef").unwrap();
+        identity::commit_rotation(&conn, "deadbeef", &plan).unwrap();
 
         let drawn = status(&conn).unwrap();
         assert_eq!(
@@ -1006,10 +1036,193 @@ mod tests {
             "the removed device is still being drawn"
         );
         assert_eq!(
-            crate::sync_pair::identity::roster(&conn).unwrap().len(),
-            2,
-            "the roster itself must keep the row"
+            identity::roster(&conn).unwrap().len(),
+            1,
+            "the row was stamped rather than deleted"
         );
+    }
+
+    // -----------------------------------------------------------------------------------
+    // The removal, with the relay in the middle of it
+    //
+    // **Driven through `remove_device` rather than through `sync_device_revoke`**, which takes a
+    // `tauri::State` no test can build. The command is four lines around this function and a
+    // `block_on`; everything that can be got wrong is here.
+    // -----------------------------------------------------------------------------------
+
+    /// A group of two, pointed at a relay on localhost.
+    ///
+    /// `entitled` decides whether this device holds a grant, which is spec §2.4's fourth
+    /// refusal: a group with no membership cannot publish a rotation and so may not remove
+    /// anybody.
+    fn removable(
+        server: &httpmock::MockServer,
+        entitled: bool,
+    ) -> (Connection, identity::Identity, String) {
+        let conn = db();
+        let me = identity::ensure(&conn).unwrap();
+        identity::create_group(&conn, &me).unwrap();
+        identity::add_device(&conn, "deadbeef", &[7u8; 32], "Phone").unwrap();
+        client::set_state(&conn, client::RELAY_URL, &server.base_url()).unwrap();
+        if entitled {
+            // Twelve hours, absolutely — `client/tests.rs`'s `grant` and its reasoning: derived
+            // from `REFRESH_MARGIN_SECS` this would shrink with the margin and start making a
+            // `/token` round trip nothing here has a mock for.
+            let expires: i64 = conn
+                .query_row("SELECT unixepoch()", [], |r| r.get::<_, i64>(0))
+                .unwrap()
+                + 12 * 60 * 60;
+            entitlement::store_grant(&conn, "access-1", "refresh-1", expires).unwrap();
+        }
+        let group = identity::group(&conn).unwrap().unwrap().group_id;
+        (conn, me, group)
+    }
+
+    /// The three requests the round trip in front of a removal makes, all answering "nothing to
+    /// do". There is no `/push` mock because the outbox is empty — `memory_pair` installs no
+    /// capture triggers — so a push that happened would 404 loudly rather than pass silently.
+    fn quiet_round_trip(server: &httpmock::MockServer, group: &str) {
+        server.mock(|when, then| {
+            when.method(GET).path(format!("/g/{group}/keys"));
+            then.status(200).json_body(serde_json::json!({
+                "epoch": 0, "blob": serde_json::Value::Null, "devices": [],
+            }));
+        });
+        server.mock(|when, then| {
+            when.method(GET).path(format!("/g/{group}/pull"));
+            then.status(200)
+                .json_body(serde_json::json!({ "envelopes": [], "cursor": 1 }));
+        });
+        server.mock(|when, then| {
+            when.method(POST).path(format!("/g/{group}/ack"));
+            then.status(204);
+        });
+    }
+
+    /// **A `/rotate` the relay refuses removes nothing at all.**
+    ///
+    /// This is the whole reason `plan_rotation` writes no row and `commit_rotation` runs last.
+    /// The version this replaced rotated first and unconditionally, so a device that pressed
+    /// Remove held a key nobody else could ever learn: it pushed at epoch *N+1* while every
+    /// remaining device sat at *N*, `client::pull` set `behind = true` and held its cursor for
+    /// ever, and one removal bricked any group of three.
+    ///
+    /// **The group is compared whole**, not epoch by epoch: `Group` is `PartialEq` over the id,
+    /// the epoch and the key, so a commit that moved any of the three fails this.
+    #[tokio::test]
+    async fn a_rotation_the_relay_refuses_removes_nothing() {
+        let server = MockServer::start_async().await;
+        let (conn, _me, group) = removable(&server, true);
+        quiet_round_trip(&server, &group);
+        let rotate = server.mock(|when, then| {
+            when.method(POST).path(format!("/g/{group}/rotate"));
+            then.status(500).body("nope");
+        });
+        let before = identity::group(&conn).unwrap().unwrap();
+
+        let error = remove_device(&conn, "deadbeef")
+            .await
+            .expect_err("a 500 on /rotate is a failed removal");
+
+        assert!(error.contains("500"), "{error}");
+        rotate.assert();
+        assert_eq!(
+            identity::group(&conn).unwrap().unwrap(),
+            before,
+            "the group moved on a rotation the relay never accepted"
+        );
+        assert_eq!(
+            identity::roster(&conn).unwrap().len(),
+            2,
+            "the departing device's row was deleted anyway"
+        );
+    }
+
+    /// ...and one it accepts commits, publishing the plan the commit then writes.
+    ///
+    /// **The `auth` on the wire is compared against the key that ends up stored**, which is what
+    /// says the published rotation and the committed one are the same rotation. Sending the
+    /// *old* epoch's auth as the body's `auth` — an easy transposition, since the header really
+    /// does carry the old one — would leave the relay standing on a value no device can derive,
+    /// and nothing local would look wrong.
+    #[tokio::test]
+    async fn an_accepted_rotation_publishes_the_plan_it_then_commits() {
+        let server = MockServer::start_async().await;
+        let (conn, me, group) = removable(&server, true);
+        quiet_round_trip(&server, &group);
+        let seen: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+        let recorder = seen.clone();
+        server.mock(|when, then| {
+            when.method(POST)
+                .path(format!("/g/{group}/rotate"))
+                .is_true(move |req: &httpmock::prelude::HttpMockRequest| {
+                    recorder.lock().unwrap().push(req.body_string());
+                    true
+                });
+            then.status(200)
+                .json_body(serde_json::json!({ "epoch": 1 }));
+        });
+        let before = identity::group(&conn).unwrap().unwrap();
+
+        remove_device(&conn, "deadbeef").await.expect("removed");
+
+        let after = identity::group(&conn).unwrap().unwrap();
+        assert_eq!(after.epoch, before.epoch + 1);
+        assert_ne!(after.group_key, before.group_key, "the key did not change");
+        assert_eq!(
+            identity::roster(&conn)
+                .unwrap()
+                .into_iter()
+                .map(|d| d.device_id)
+                .collect::<Vec<_>>(),
+            vec![me.device_id.clone()],
+            "the removed row is gone and nobody else went with it"
+        );
+
+        let body: serde_json::Value =
+            serde_json::from_str(&seen.lock().unwrap()[0]).expect("a JSON body");
+        assert_eq!(body["epoch"], serde_json::json!(after.epoch));
+        assert_eq!(
+            body["auth"].as_str().unwrap(),
+            crypto::relay_auth(&after.group_key, &after.group_id, after.epoch),
+            "the published auth is not the one the committed key derives"
+        );
+        let keys = body["keys"].as_object().expect("a manifest object");
+        assert!(
+            keys.contains_key(&me.device_id),
+            "the remover is not on its own manifest, so a failed commit could not heal"
+        );
+        assert!(
+            !keys.contains_key("deadbeef"),
+            "the manifest names the device being removed, which puts it straight back"
+        );
+    }
+
+    /// **A group with no membership is refused before anything moves** — spec §2.4's fourth
+    /// refusal, and *before* the round trip rather than after it.
+    ///
+    /// The relay is what carries a removal to the other devices and only a claimed group has an
+    /// auth `/rotate` will accept, so rotating locally anyway is exactly the bug this change
+    /// exists to end. The server answers **any** request, so a single call of any shape — the
+    /// `/keys` check at the top of the round trip included — fails this.
+    #[tokio::test]
+    async fn a_group_with_no_membership_is_refused_before_the_round_trip() {
+        let server = MockServer::start_async().await;
+        let never = server.mock(|when, then| {
+            when.any_request();
+            then.status(500).body("this must never be asked for");
+        });
+        let (conn, _me, _group) = removable(&server, false);
+        let before = identity::group(&conn).unwrap().unwrap();
+
+        let error = remove_device(&conn, "deadbeef")
+            .await
+            .expect_err("an unentitled group cannot remove anybody");
+
+        assert_eq!(error, identity::NO_MEMBERSHIP);
+        never.assert_calls(0);
+        assert_eq!(identity::group(&conn).unwrap().unwrap(), before);
+        assert_eq!(identity::roster(&conn).unwrap().len(), 2);
     }
 
     /// The offer carries a QR of the code, and it is the code's own picture.

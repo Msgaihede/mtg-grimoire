@@ -165,12 +165,21 @@ const PATREON_STATE: &str = "patreon_state";
 ///
 /// **No token on it, ever.** `identity::Device` skips its public key for the same reason: a
 /// secret that reaches the webview is a secret in a screenshot, and neither the access token
-/// nor the refresh secret tells the panel anything it cannot get from `connected`.
+/// nor the refresh secret tells the panel anything it cannot get from `entitled`.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SupporterStatus {
-    /// This device holds a refresh secret, which is the whole of what "connected" means.
-    pub connected: bool,
+    /// **This device is entitled — the relay will mint it a token.** Spec §2.5, and the field
+    /// was called `connected` until then.
+    ///
+    /// **Renamed rather than redefined, because it now means something wider and a call site
+    /// that quietly kept the old reading would compile.** "Connected" meant *this device holds a
+    /// refresh secret*, which is one device's fact; entitlement is now the **group's** — any
+    /// device in a group with a connected membership can mint its own token through `/token`'s
+    /// group door, holding no Patreon-side secret at all. So this is that secret **or** a
+    /// `SUPPORTER_STATUS` of `active`/`grace`, which is the relay having answered this device's
+    /// group auth. See [`entitled`].
+    pub entitled: bool,
     /// What the relay last said about the membership: `active`, `grace` or `dead`. **A device
     /// that has never connected reads `dead` as well**, which is why this field cannot be the
     /// only thing the panel keys on.
@@ -182,10 +191,10 @@ pub struct SupporterStatus {
     ///
     /// **It is deliberately not "is this device in a group": [`RelayStatus::paired`] already
     /// answers that**, and a second field answering it again would leave spec §10's three
-    /// sentences with only two signals to tell them apart. `connected` separates supporting
+    /// sentences with only two signals to tell them apart. `entitled` separates supporting
     /// from not supporting; this separates the two silences:
     ///
-    /// | `connected` | `group_bound` | The sentence |
+    /// | `entitled` | `group_bound` | The sentence |
     /// | --- | --- | --- |
     /// | `true` | `true` | *Supporting since …*, or the grace line for a declined card |
     /// | `false` | **`true`** | *Membership ended*, with §7.1's reassurance that nothing local was touched |
@@ -193,8 +202,13 @@ pub struct SupporterStatus {
     ///
     /// **`since` cannot do it, and that is the trap worth naming**: `entitlement::revoke` stores
     /// `("dead", None)`, so a lapsed device and a device out of the box both read `dead` with no
-    /// date and no refresh secret. `entitlement::membership_ended` is the one function that
-    /// separates them, and this field is it crossing the wire.
+    /// date and no refresh secret. `entitlement::membership_ended` is what separates *those two*,
+    /// and this field is it crossing the wire — **but it is no longer a reading of the panel's
+    /// state on its own.** That function is `refresh_secret.is_none() && SUPPORTER_STATUS
+    /// .is_some()`, and a device entitled through its *group* holds a status and no secret, so it
+    /// answers `true` for a membership that has not ended at all. What keeps the panel right is
+    /// the first row of the table above: `entitled` is asked first and wins. Order matters here
+    /// now, where before it did not.
     pub group_bound: bool,
 }
 
@@ -205,16 +219,44 @@ pub struct SupporterStatus {
 /// saying *Not connected*.
 fn supporter_status(conn: &Connection) -> SupporterStatus {
     let (status, since) = entitlement::supporter_state(conn);
-    let connected = entitlement::refresh_secret(conn).is_some();
+    let entitled = entitled(conn);
     SupporterStatus {
-        connected,
+        entitled,
         status,
         since,
-        // The two ways a group comes to be bound: this device claimed, or pairing brought the
-        // grant across. `membership_ended` covers the third state, where it was bound and the
-        // relay has since refused the refresh.
-        group_bound: connected || entitlement::membership_ended(conn),
+        // The ways a group comes to be bound: this device claimed, or it minted through the
+        // group door. `membership_ended` covers the third state, where it was bound and the
+        // relay has since refused — and it is asked **second**, because it also answers `true`
+        // for a device entitled through its group. See the field's own doc.
+        group_bound: entitled || entitlement::membership_ended(conn),
     }
+}
+
+/// **Is this device entitled — will the relay mint it a token?** Spec §2.5.
+///
+/// Two signals, because there are now two doors on `/token`:
+///
+/// * **A refresh secret**, which is the device that pressed Connect. It can always mint.
+/// * **A stored `active` or `grace` status**, which is the relay having answered *this device's
+///   group auth*. A device that only ever paired holds no Patreon-side secret and never will;
+///   what it holds instead is what the group door last told it, and that is the signal.
+///
+/// **`dead` is not a signal and must not be read as one.** It is also what a device that has
+/// never connected reads (`entitlement::supporter_state`'s default), so treating it as "the
+/// relay has spoken" would make every fresh install look entitled.
+///
+/// **It is what `pairing::sync_device_revoke` asks before it rotates**, which is why it is `pub`:
+/// spec §2.4's fourth refusal is "a group with no membership cannot remove a device", and this is
+/// the local half of that question. The relay's half is `/rotate` authenticating against an auth
+/// only `/claim` can seed.
+pub fn entitled(conn: &Connection) -> bool {
+    if entitlement::refresh_secret(conn).is_some() {
+        return true;
+    }
+    matches!(
+        entitlement::supporter_state(conn).0.as_str(),
+        "active" | "grace"
+    )
 }
 
 /// Mint the `state` for one Connect press, remember it, and answer the URL to open.
@@ -483,7 +525,7 @@ mod tests {
         // The panel draws this. A refresh secret reaching the webview is a secret in a
         // screenshot, which is the reason `Device` skips its public key too.
         let status = SupporterStatus {
-            connected: true,
+            entitled: true,
             status: "grace".to_owned(),
             since: Some(1_756_000_000),
             group_bound: true,
@@ -491,6 +533,12 @@ mod tests {
         let json = serde_json::to_string(&status).expect("serialise");
 
         assert!(json.contains("\"groupBound\":true"));
+        // **The rename is on the wire, and this is where that is asserted.** `entitled` was
+        // `connected` until spec §2.5; the page reads this JSON by field name, so a rename that
+        // did not reach the serialised shape would leave `SyncPanel` drawing Connect Patreon at
+        // a device that is already supporting — the exact bug the rename exists to fix.
+        assert!(json.contains("\"entitled\":true"), "{json}");
+        assert!(!json.contains("\"connected\""), "{json}");
         assert!(!json.contains("refresh"));
         assert!(!json.contains("access"));
     }
@@ -547,7 +595,7 @@ mod tests {
         assert_eq!(
             supporter_status(&conn),
             SupporterStatus {
-                connected: false,
+                entitled: false,
                 status: "dead".to_owned(),
                 since: None,
                 group_bound: false,
@@ -564,7 +612,7 @@ mod tests {
         assert_eq!(
             supporter_status(&conn),
             SupporterStatus {
-                connected: true,
+                entitled: true,
                 status: "active".to_owned(),
                 since: Some(1_740_000_000),
                 group_bound: true,
@@ -588,11 +636,64 @@ mod tests {
         let fresh = supporter_status(&fresh);
         let lapsed = supporter_status(&lapsed);
 
-        assert_eq!(fresh.connected, lapsed.connected, "both are disconnected");
+        assert_eq!(fresh.entitled, lapsed.entitled, "neither is entitled");
         assert_eq!(fresh.status, lapsed.status, "both read dead");
         assert_eq!(fresh.since, lapsed.since, "neither has a date");
         assert!(!fresh.group_bound);
         assert!(lapsed.group_bound, "the one field that can tell them apart");
+    }
+
+    /// **A device entitled through its group, which is the whole of spec item 3.**
+    ///
+    /// It holds no refresh secret and never will — pairing does not carry one — and what it does
+    /// hold is what `/token`'s group door last told it. Reading only the secret, which is what
+    /// `connected` did, drew *Connect Patreon* on a second device whose group is already
+    /// supporting.
+    ///
+    /// **`group_bound` is the half that could have gone wrong silently.**
+    /// `entitlement::membership_ended` is `refresh_secret.is_none() && SUPPORTER_STATUS
+    /// .is_some()`, both of which are true here, so it answers `true` for a membership that is
+    /// live. The panel is right only because `entitled` is asked first.
+    #[test]
+    fn a_device_entitled_through_its_group_holds_no_secret_and_is_still_supporting() {
+        let conn = db();
+        // What the group door writes: `store_access` and `store_status`, and no refresh secret.
+        entitlement::store_access(&conn, "a1", 1_756_000_000).unwrap();
+        entitlement::store_status(&conn, "active", Some(1_740_000_000)).unwrap();
+        assert_eq!(
+            entitlement::refresh_secret(&conn),
+            None,
+            "the fixture is wrong"
+        );
+
+        assert_eq!(
+            supporter_status(&conn),
+            SupporterStatus {
+                entitled: true,
+                status: "active".to_owned(),
+                since: Some(1_740_000_000),
+                group_bound: true,
+            }
+        );
+    }
+
+    /// A `grace` status is entitled too, and `dead` is not — which is the reason the check is a
+    /// match on two words rather than "the relay has said anything at all".
+    ///
+    /// **`dead` is what a device that has never connected reads**, so a signal of "a status row
+    /// exists" would make every fresh install look entitled and every `Connect Patreon` button
+    /// disappear on a machine that has no membership to speak of.
+    #[test]
+    fn a_grace_status_is_entitled_and_a_dead_one_is_not() {
+        let grace = db();
+        entitlement::store_status(&grace, "grace", None).unwrap();
+        assert!(entitled(&grace));
+
+        let dead = db();
+        entitlement::store_status(&dead, "dead", None).unwrap();
+        assert!(!entitled(&dead));
+
+        assert!(!entitled(&db()), "a database that has never connected");
     }
 
     #[test]
@@ -607,7 +708,7 @@ mod tests {
         entitlement::clear(&conn).unwrap();
 
         let status = supporter_status(&conn);
-        assert!(!status.connected);
+        assert!(!status.entitled);
         assert!(!status.group_bound);
     }
 
@@ -622,7 +723,7 @@ mod tests {
 
         let status = supporter_status(&conn);
 
-        assert!(status.connected);
+        assert!(status.entitled);
         assert!(status.group_bound);
         assert_eq!(status.status, "dead", "nothing has told it otherwise yet");
     }
@@ -718,7 +819,7 @@ mod tests {
         assert_eq!(
             supporter_status(&conn),
             SupporterStatus {
-                connected: true,
+                entitled: true,
                 status: "active".to_owned(),
                 since: Some(1_740_000_000),
                 group_bound: true,

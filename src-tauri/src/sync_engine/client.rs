@@ -30,7 +30,10 @@ use crate::sync_engine::capture;
 use crate::sync_engine::entitlement;
 use crate::sync_engine::merge::Op;
 use crate::sync_engine::wire::{self, Envelope, WireError};
+use crate::sync_pair::crypto;
 use crate::sync_pair::identity::{self, Group};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
@@ -216,6 +219,245 @@ fn lapsed(conn: &Connection, what: &str) -> String {
         // is what happened first and is what the reader has to hear.
         Err(e) => format!("{message} (the grant could not be cleared: {e})"),
     }
+}
+
+// ---------------------------------------------------------------------------------------
+// The group key
+// ---------------------------------------------------------------------------------------
+
+/// What a `/keys` check found, and what [`round_trip`] does about it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyOutcome {
+    /// The relay stands on the epoch this device already holds, so there is nothing to do. One
+    /// cheap read, and the answer on every sync of every healthy group.
+    Current,
+    /// A higher epoch with a blob sealed to this device: the new key is written and the roster
+    /// swept to the manifest. This device is still in the group and the trip carries on.
+    Adopted,
+    /// A higher epoch and **no blob for this device**, which is the removal notice — see
+    /// [`check_keys`]. The group is left and the grant cleared.
+    Removed,
+}
+
+/// What `GET /g/{group}/keys` answers.
+#[derive(Debug, Clone, Deserialize)]
+struct KeyPage {
+    epoch: i64,
+    /// The group key at that epoch sealed for **this** device, base64url with no padding —
+    /// `wire::Envelope::sealed`'s encoding, for its reasons. `null` when the manifest does not
+    /// name this device.
+    #[serde(deserialize_with = "null_but_present")]
+    blob: Option<String>,
+    /// The manifest's key set: the roster at that epoch (spec §2.3).
+    devices: Vec<String>,
+}
+
+/// `Option<String>`, except that the field has to be **there**.
+///
+/// **serde reads a missing `Option` field as `None` without being asked to**, and here that
+/// default is the one answer this type must never invent: at a higher epoch an absent `blob` is
+/// the removal notice, so a relay that answered a body with no `blob` at all would dissolve a
+/// group nobody was removed from. A `deserialize_with` is exempt from the missing-field default,
+/// so a truncated answer is a parse failure — which stalls this device exactly where it is,
+/// recoverable, instead of taking its group away.
+fn null_but_present<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer)
+}
+
+/// Ask the relay what epoch the group is on, and act on the answer.
+///
+/// **The one request that has to work when a token cannot be minted.** A device that has been
+/// rotated away from holds a stale group auth, so `entitlement::access_token` answers
+/// [`entitlement::STALE_GROUP_AUTH`] and every other route is closed to it. `/keys` accepts an
+/// auth up to eight epochs old for exactly that reason: "behind a rotation" and "removed"
+/// otherwise produce an identical refusal, and a device that guessed wrong would either leave a
+/// group it is still in or sit for ever in one it is not.
+///
+/// ⚠️ **The manifest is consulted only when the answered epoch is strictly higher than this
+/// device's, and that guard is the whole of what keeps a healthy group alive.** A group that has
+/// claimed and never rotated holds one `group_keys` row with an *empty* manifest, so every device
+/// in it reads `blob: null, devices: []`. Comparing the epochs first is what stops all of them
+/// concluding they were removed and dissolving the group on their next sync. Equal epochs mean
+/// *nothing to do*, and `devices` is not read at all. `identity::adopt_epoch` refuses a
+/// non-advancing epoch too, but the `Removed` branch is decided here and has no such backstop.
+///
+/// **A 401 is never [`lapsed`], and copying push/pull/ack's handling here would be the worst
+/// mistake in this file.** The credential is the group auth, not the access token, so a refusal
+/// says the group key is unrecognised — a group with no membership yet, or a device dark across
+/// more rotations than the relay keeps (spec §4). Revoking the grant over either would tell a
+/// reader their Patreon membership ended because of something else entirely.
+pub async fn check_keys(conn: &Connection) -> Result<KeyOutcome, String> {
+    // A device in no group has no key to check and no auth to check it with. It must make no
+    // request at all: `/g//keys` is a URL, and one built from an empty group id would be sent.
+    let Some((device, group)) = me(conn)? else {
+        return Ok(KeyOutcome::Current);
+    };
+    let base = entitlement::base(conn);
+    let auth = crypto::relay_auth(&group.group_key, &group.group_id, group.epoch);
+    let url = format!("{base}/g/{}/keys?device={device}", group.group_id);
+    let response = match http()
+        .get(&url)
+        .header("authorization", format!("Bearer {auth}"))
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            note(conn, "keys", kind_of(&e), &e.to_string(), Some(&url));
+            return Err(e.to_string());
+        }
+    };
+    let status = response.status().as_u16();
+    if !(200..300).contains(&status) {
+        let message = if status == 401 {
+            "the relay did not recognise this device's group key: either this group has no \
+             membership connected to it yet, or this device has been offline across more key \
+             changes than the relay keeps"
+                .to_owned()
+        } else {
+            format!("the relay answered {status} to a key check")
+        };
+        note(conn, "keys", Kind::Http, &message, Some(&url));
+        return Err(message);
+    }
+    let text = match response.text().await {
+        Ok(t) => t,
+        Err(e) => {
+            note(conn, "keys", kind_of(&e), &e.to_string(), Some(&url));
+            return Err(e.to_string());
+        }
+    };
+    let page: KeyPage = match serde_json::from_str(&text) {
+        Ok(p) => p,
+        Err(e) => {
+            note(conn, "keys", Kind::Parse, &e.to_string(), Some(&url));
+            return Err(e.to_string());
+        }
+    };
+
+    if page.epoch <= group.epoch {
+        return Ok(KeyOutcome::Current);
+    }
+    let Some(blob) = page.blob else {
+        // **Both halves, and the second one is the caller's to make rather than
+        // `identity`'s.** That module owns pairing state and knows nothing about Patreon; here
+        // the two facts sit side by side. The grant has to go because a removed device that kept
+        // its refresh secret would keep a *working credential for the group it was removed
+        // from* — the refresh door mints a token whose `grp` is that group and `/g/{group}/push`
+        // honours it, so the rotation would stop it reading anything new while it went on
+        // spending the group's requests.
+        //
+        // **`clear` and never `revoke`.** The two differ by the mark `membership_ended` reads,
+        // and nothing ended: the reader's pledge is untouched and this device simply left a
+        // group. `revoke` would draw *Membership ended* and §7.1's reassurance at somebody whose
+        // membership is fine; `clear` draws *Not connected*, and reconnecting is one press.
+        identity::leave_group(conn)?;
+        entitlement::clear(conn)?;
+        return Ok(KeyOutcome::Removed);
+    };
+    let sealed = match URL_SAFE_NO_PAD.decode(blob.as_bytes()) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            note(conn, "keys", Kind::Parse, &e.to_string(), Some(&url));
+            return Err(e.to_string());
+        }
+    };
+
+    // **The answer does not say who rotated, so the candidates are tried in turn.** `/keys`
+    // carries the epoch, the blob and the manifest and nothing about the sealer — deliberately,
+    // because the relay is not a party to the rewrap. The blob's key is
+    // `X25519(remover_secret, my_public)` and its AAD binds the group, this device and the
+    // epoch, so exactly one peer's public key opens it and the rest fail the AEAD. The manifest
+    // is at most 64 ids and the remover is always on it (it rewraps for itself as well), so this
+    // is a short loop with a guaranteed hit. `adopt_epoch` unwraps *before* it opens its
+    // transaction, so a candidate that does not fit writes nothing.
+    let mut refusal = None;
+    for peer in page.devices.iter().filter(|id| id.as_str() != device) {
+        match identity::adopt_epoch(conn, peer, page.epoch, &sealed, &page.devices) {
+            Ok(()) => return Ok(KeyOutcome::Adopted),
+            Err(e) => refusal = Some(e),
+        }
+    }
+    let message = match refusal {
+        Some(e) => format!("that new group key could not be opened by this device: {e}"),
+        None => "the relay sent a key for this device with nobody on the manifest to have \
+                 sealed it"
+            .to_owned(),
+    };
+    note(conn, "keys", Kind::Parse, &message, Some(&url));
+    Err(message)
+}
+
+/// Publish a rotation: the new epoch's auth, and the new group key rewrapped per device.
+///
+/// **Nothing local has moved when this is called and nothing may move if it fails.**
+/// `identity::plan_rotation` writes no row, so a refused or unreachable `/rotate` leaves the
+/// group exactly as it was and the reader can press Remove again — where the version this
+/// replaced committed first and unconditionally, which is how a device came to hold a rotation
+/// nobody else could ever learn.
+///
+/// **The credential is the group auth of the epoch being replaced**, in an `authorization`
+/// header. The relay accepts that or the Patreon refresh secret; the auth is what every device
+/// in the group holds, so it is what this reaches for. It is the *current* one and not the
+/// planned one — the relay compares against what it has stored, which is the epoch this call is
+/// about to advance past.
+///
+/// A 401 here is not [`lapsed`] either, for [`check_keys`]' reason: it says the group auth was
+/// not current, which after the round trip above it can only be if another device rotated in
+/// between.
+pub async fn post_rotation(conn: &Connection, rotation: &identity::Rotation) -> Result<(), String> {
+    // Its own sentence rather than `identity`'s `NOT_IN_A_GROUP`, which is private to that
+    // module: this is not the ordinary "you are in no group" refusal — `plan_rotation` has
+    // already answered that one — but a group that went away between planning and publishing.
+    let Some(current) = identity::group(conn).map_err(|e| e.to_string())? else {
+        return Err(
+            "this device left its group before that key change could be published".to_owned(),
+        );
+    };
+    let base = entitlement::base(conn);
+    let auth = crypto::relay_auth(&current.group_key, &current.group_id, current.epoch);
+    let url = format!("{base}/g/{}/rotate", current.group_id);
+    let keys: serde_json::Map<String, serde_json::Value> = rotation
+        .keys
+        .iter()
+        .map(|(device, blob)| {
+            (
+                device.clone(),
+                serde_json::Value::String(URL_SAFE_NO_PAD.encode(blob)),
+            )
+        })
+        .collect();
+    let body = serde_json::json!({
+        "epoch": rotation.group.epoch,
+        "auth": rotation.auth,
+        "keys": keys,
+    })
+    .to_string();
+    let response = match http()
+        .post(&url)
+        .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {auth}"))
+        .body(body)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            note(conn, "rotate", kind_of(&e), &e.to_string(), Some(&url));
+            return Err(e.to_string());
+        }
+    };
+    let status = response.status().as_u16();
+    if !(200..300).contains(&status) {
+        let message =
+            format!("the relay answered {status} to a key change, so nothing was removed");
+        note(conn, "rotate", Kind::Http, &message, Some(&url));
+        return Err(message);
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------
@@ -585,13 +827,26 @@ pub async fn run_once_without_baselines(conn: &Connection) -> Result<Option<Rela
 
 /// The body both of the above share. `baselines` is the only difference between them.
 ///
-/// **The token is fetched once, above everything else, and the four requests below share it.**
-/// Asking [`entitlement::access_token`] per request would be three refresh checks where one will
-/// do, and a trip whose push carried one token and whose ack carried the next is a seam nothing
-/// needs. It is fetched **above** the `me` check as well: `Ok(None)` there means no grant, which
-/// is the same silence a device in no group answers with, and a membership that ended while this
-/// device happened to be unpaired must still clear itself rather than wait for a pairing.
+/// **[`check_keys`] runs first, above the token fetch, and that ordering is the whole reason it
+/// exists.** A device that has been rotated away from cannot mint a token: its group auth is
+/// stale, so [`entitlement::access_token`] answers [`entitlement::STALE_GROUP_AUTH`] and every
+/// route below is closed to it. `/keys` is the one door that accepts a recent auth, and it is
+/// what tells the difference between a device that is merely behind — which adopts the new key
+/// and carries on down this function — and one that has been removed, which is not on the
+/// manifest and leaves. `Ok(None)` for the second: there is nothing left to sync to, and that is
+/// not an error.
+///
+/// **The token is then fetched once, above everything else, and the four requests below share
+/// it.** Asking [`entitlement::access_token`] per request would be three refresh checks where one
+/// will do, and a trip whose push carried one token and whose ack carried the next is a seam
+/// nothing needs. It is fetched **above** the `me` check as well: `Ok(None)` there means no
+/// grant, which is the same silence a device in no group answers with, and a membership that
+/// ended while this device happened to be unpaired must still clear itself rather than wait for a
+/// pairing.
 async fn round_trip(conn: &Connection, baselines: bool) -> Result<Option<RelayOutcome>, String> {
+    if check_keys(conn).await? == KeyOutcome::Removed {
+        return Ok(None);
+    }
     let Some(token) = entitlement::access_token(conn).await? else {
         return Ok(None);
     };

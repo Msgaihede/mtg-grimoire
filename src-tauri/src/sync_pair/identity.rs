@@ -610,7 +610,8 @@ const NOT_A_NEWER_EPOCH: &str = "that key manifest is not ahead of this device";
 /// wrote three rows on a first run would make the claim above a lie in the one case nobody
 /// tests. A device with no identity is in no group, which is what it is told.
 ///
-/// **The three refusals are the ones [`revoke_device`] carried**, moved here because this is now
+/// **The three refusals are the ones the deleted `revoke_device` carried**, moved here because
+/// this is now
 /// the first thing a removal does. This device cannot remove itself — "leave the group" is a
 /// different press with different consequences, and collapsing the two would let a mis-click cost
 /// the reader the group they are standing in. A device in no group has nothing to rotate. And an
@@ -828,19 +829,6 @@ pub fn leave_group(conn: &Connection) -> Result<(), String> {
     tx.commit().map_err(|e| e.to_string())
 }
 
-/// Plan and commit in one breath, with no relay in between.
-///
-/// **A bridge and not a design, and it is Task 11's to delete.** `pairing::sync_device_revoke`
-/// still calls this, and that file belongs to another agent this wave; leaving the crate
-/// uncompilable would have meant not running a test in this one. Every caller should be
-/// [`plan_rotation`] → `POST /g/{group}/rotate` → [`commit_rotation`], because committing
-/// without the relay having accepted the manifest is the exact bug this change exists to end.
-pub fn revoke_device(conn: &Connection, device_id: &str) -> Result<Group, String> {
-    let plan = plan_rotation(conn, device_id)?;
-    commit_rotation(conn, device_id, &plan)?;
-    Ok(plan.group)
-}
-
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -868,6 +856,18 @@ mod tests {
 
     /// A pair, not `Connection::open_in_memory` plus a ladder — `schema::memory_pair`'s own
     /// doc says why, and it is the shape the running app has.
+    /// Plan and commit in one breath, which is what these tests want and what **no production
+    /// path may have**. The relay stands between the two now — `pairing::remove_device` is
+    /// `plan_rotation` → `POST /g/{group}/rotate` → `commit_rotation` — so the pair exists as
+    /// one call only here, where there is no relay to stand in the middle. The deleted
+    /// `identity::revoke_device` was exactly this and was `pub`, which put committing a rotation
+    /// nobody had accepted one call away from any caller in the crate.
+    fn remove(conn: &Connection, device_id: &str) -> Result<Group, String> {
+        let plan = plan_rotation(conn, device_id)?;
+        commit_rotation(conn, device_id, &plan)?;
+        Ok(plan.group)
+    }
+
     fn db() -> Connection {
         crate::schema::memory_pair()
     }
@@ -1099,7 +1099,7 @@ mod tests {
         add_device(&conn, "deadbeef", &[9u8; 32], "Phone").unwrap();
 
         let before = group(&conn).unwrap().unwrap();
-        revoke_device(&conn, "deadbeef").unwrap();
+        remove(&conn, "deadbeef").unwrap();
         let after = group(&conn).unwrap().unwrap();
 
         assert_eq!(
@@ -1135,7 +1135,7 @@ mod tests {
         let conn = db();
         let me = ensure(&conn).unwrap();
         create_group(&conn, &me).unwrap();
-        assert!(revoke_device(&conn, &me.device_id).is_err());
+        assert!(remove(&conn, &me.device_id).is_err());
     }
 
     /// A device that is not on the roster cannot be removed, **and the key does not move**.
@@ -1148,7 +1148,7 @@ mod tests {
         create_group(&conn, &me).unwrap();
         let before = group(&conn).unwrap().unwrap();
 
-        assert!(revoke_device(&conn, "nobody").is_err());
+        assert!(remove(&conn, "nobody").is_err());
 
         assert_eq!(group(&conn).unwrap().unwrap(), before);
     }
@@ -1159,7 +1159,7 @@ mod tests {
     fn an_unpaired_device_cannot_revoke() {
         let conn = db();
         ensure(&conn).unwrap();
-        assert!(revoke_device(&conn, "deadbeef").is_err());
+        assert!(remove(&conn, "deadbeef").is_err());
         assert!(group(&conn).unwrap().is_none());
     }
 
@@ -1175,7 +1175,7 @@ mod tests {
         let me = ensure(&conn).unwrap();
         create_group(&conn, &me).unwrap();
         add_device(&conn, "deadbeef", &[9u8; 32], "Phone").unwrap();
-        revoke_device(&conn, "deadbeef").unwrap();
+        remove(&conn, "deadbeef").unwrap();
 
         add_device(&conn, "deadbeef", &[8u8; 32], "Phone again").unwrap();
         let phone = roster(&conn)
@@ -1476,7 +1476,7 @@ mod tests {
         let before = snapshot(&b);
         let key_before = group(&b).unwrap().unwrap().group_key;
 
-        revoke_device(&b, &me_a.device_id).unwrap();
+        remove(&b, &me_a.device_id).unwrap();
 
         // The removal really happened — otherwise the comparison below is about nothing.
         assert_ne!(group(&b).unwrap().unwrap().group_key, key_before);
@@ -1523,7 +1523,7 @@ mod tests {
             .unwrap();
         assert_eq!(count(&conn, "sync_devices"), 3, "three on the roster");
 
-        revoke_device(&conn, "tablet").unwrap();
+        remove(&conn, "tablet").unwrap();
 
         let marker = |id: &str| -> Option<Option<i64>> {
             conn.query_row(

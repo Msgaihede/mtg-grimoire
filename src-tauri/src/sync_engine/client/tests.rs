@@ -60,6 +60,25 @@ fn grant(conn: &Connection) {
     entitlement::store_grant(conn, "access-1", "refresh-1", expires).unwrap();
 }
 
+/// The `/keys` answer a healthy group gives every device on every sync: **this epoch, no blob,
+/// nobody named**.
+///
+/// **It is what a group that has claimed and never rotated really answers**, because `/claim`
+/// seeds `group_keys` with an empty manifest — so this is the shape that would dissolve every
+/// group in existence if [`check_keys`] read the manifest before comparing the epochs. Every
+/// round-trip test below registers it, and the one that asserts what it means is
+/// [`a_current_epoch_with_an_empty_manifest_leaves_the_group_alone`].
+fn keys_mock(server: &MockServer, epoch: i64) -> httpmock::Mock<'_> {
+    server.mock(|when, then| {
+        when.method(GET).path(format!("/g/{GROUP}/keys"));
+        then.status(200).json_body(serde_json::json!({
+            "epoch": epoch,
+            "blob": serde_json::Value::Null,
+            "devices": [],
+        }));
+    })
+}
+
 fn unpushed_count(conn: &Connection) -> i64 {
     conn.query_row(
         "SELECT count(*) FROM sync_ops WHERE pushed_at IS NULL",
@@ -283,22 +302,44 @@ async fn a_failed_pull_leaves_the_cursor_alone() {
 // that test. Both are deleted: the three `base` tests next to the function say the same three
 // things (a blank is not an override, a real one wins, a trailing slash is trimmed) about the code
 // that actually decides them. What was this test's *other* half — "no URL" meaning sync is off —
-// moved to `no_grant_means_no_request_at_all` below when the entitlement replaced it.
+// moved to `no_group_and_no_grant_means_no_request_at_all` below when the entitlement replaced
+// it.
 
-/// **A device with no entitlement makes no request at all**, and that is not an error — it is
-/// the state every existing installation is in, and the successor to "no relay URL".
+/// **A device in no group and with no grant makes no request at all**, and that is not an error
+/// — it is the state every existing installation is in, and the successor to "no relay URL".
 ///
-/// The server is registered to answer *anything*, so a single request of any shape fails this.
+/// **This asserted a *paired* device with no grant until spec §2.2, and the reversal is the
+/// design working rather than a regression.** A paired device now mints its own token through
+/// `/token`'s group door, holding no Patreon-side secret at all — that is the whole of item 3 —
+/// and it asks `/keys` above the token besides. No local signal could gate either: once pairing
+/// stops carrying the refresh secret, a pairing-joined device holds no status either, so
+/// "entitled" is a thing only the relay can answer. What survives is the narrower claim, which is
+/// the one `entitlement::access_token`'s own guard makes: **neither a secret nor a group is
+/// nothing to ask about**.
+///
+/// The server answers *anything*, so a single request of any shape fails this — including the
+/// `/g//keys` a `check_keys` that forgot to check for a group would build out of an empty group
+/// id and send.
 #[tokio::test]
-async fn no_grant_means_no_request_at_all() {
+async fn no_group_and_no_grant_means_no_request_at_all() {
     let server = MockServer::start_async().await;
     let never = server.mock(|when, then| {
         when.any_request();
         then.status(500).body("this must never be asked for");
     });
-    let a = paired("dev-a", 0);
+    let a = crate::schema::memory_pair();
+    capture::install(&a).unwrap();
     set_state(&a, RELAY_URL, &server.base_url()).unwrap();
     add_copy(&a, "c1", 1);
+    assert!(
+        identity::group(&a).unwrap().is_none(),
+        "the fixture is wrong"
+    );
+    assert_eq!(
+        entitlement::refresh_secret(&a),
+        None,
+        "the fixture is wrong"
+    );
 
     assert_eq!(run_once(&a).await.unwrap(), None);
 
@@ -331,6 +372,7 @@ async fn an_unpaired_device_never_reaches_the_relay() {
 #[tokio::test]
 async fn run_once_pushes_pulls_and_acks() {
     let server = MockServer::start_async().await;
+    keys_mock(&server, 0);
     let pushed = server.mock(|when, then| {
         when.method(POST).path(format!("/g/{GROUP}/push"));
         then.status(200)
@@ -491,6 +533,7 @@ async fn a_baseline_is_emitted_after_the_pull_and_not_before() {
     let envelope = wire::seal_batch(&group, "dev-b", &outbox(&b)).unwrap();
 
     let server = MockServer::start_async().await;
+    keys_mock(&server, 0);
     let sent = Sent::default();
     server.mock(|when, then| {
         when.method(POST)
@@ -540,6 +583,7 @@ async fn a_baseline_is_emitted_after_the_pull_and_not_before() {
 #[tokio::test]
 async fn a_failed_baseline_push_leaves_the_marker_unset() {
     let server = MockServer::start_async().await;
+    keys_mock(&server, 0);
     let pushed = server.mock(|when, then| {
         when.method(POST).path(format!("/g/{GROUP}/push"));
         then.status(500).body("nope");
@@ -574,6 +618,7 @@ async fn a_failed_baseline_push_leaves_the_marker_unset() {
 #[tokio::test]
 async fn a_baseline_is_sent_once_per_peer() {
     let server = MockServer::start_async().await;
+    keys_mock(&server, 0);
     server.mock(|when, then| {
         when.method(POST).path(format!("/g/{GROUP}/push"));
         then.status(200)
@@ -610,6 +655,7 @@ async fn a_baseline_is_sent_once_per_peer() {
 #[tokio::test]
 async fn baseline_ops_are_never_written_to_sync_ops() {
     let server = MockServer::start_async().await;
+    keys_mock(&server, 0);
     server.mock(|when, then| {
         when.method(POST).path(format!("/g/{GROUP}/push"));
         then.status(200)
@@ -648,6 +694,7 @@ async fn baseline_ops_are_never_written_to_sync_ops() {
 #[tokio::test]
 async fn every_pushed_batch_carries_a_horizon() {
     let server = MockServer::start_async().await;
+    keys_mock(&server, 0);
     let sent = Sent::default();
     server.mock(|when, then| {
         when.method(POST)
@@ -705,6 +752,7 @@ async fn every_pushed_batch_carries_a_horizon() {
 #[tokio::test]
 async fn the_revoke_trip_pushes_and_pulls_and_emits_no_baseline() {
     let server = MockServer::start_async().await;
+    keys_mock(&server, 0);
     let sent = Sent::default();
     let pushed = server.mock(|when, then| {
         when.method(POST)
@@ -772,6 +820,7 @@ async fn the_revoke_trip_pushes_and_pulls_and_emits_no_baseline() {
 #[tokio::test]
 async fn every_relay_request_carries_the_bearer_token() {
     let server = MockServer::start_async().await;
+    keys_mock(&server, 0);
     let sent = Sent::default();
     server.mock(|when, then| {
         when.method(POST)
@@ -829,6 +878,7 @@ async fn every_relay_request_carries_the_bearer_token() {
 /// stopped honouring the token.
 async fn a_round_trip_with_a_401_on(route: &str) -> Connection {
     let server = MockServer::start_async().await;
+    keys_mock(&server, 0);
     let status = |name: &str| if name == route { 401 } else { 200 };
     server.mock(|when, then| {
         when.method(POST).path(format!("/g/{GROUP}/push"));
@@ -897,4 +947,329 @@ async fn a_401_on_any_sync_route_ends_the_membership_and_logs_nothing() {
             "{route}: a lapse is a sentence, not an error_log row"
         );
     }
+}
+
+// ---------------------------------------------------------------------------------------
+// The group key
+//
+// **The one request that has to work when a token cannot be minted.** A device rotated away
+// from holds a stale group auth, so every other route is closed to it; `/keys` is what tells
+// "behind a rotation" from "removed", and the epoch comparison in front of the manifest is what
+// stops a healthy group reading itself as dissolved.
+// ---------------------------------------------------------------------------------------
+
+/// A group with **real keypairs**, which [`paired`] deliberately does not have: it writes
+/// `x'00'`/`x'01'`, and no X25519 agreement can be made to work against a public key that is not
+/// the base-point multiple of the secret beside it.
+///
+/// Answers the database, this device's identity, the keypair of the peer that plays the remover
+/// — so a test can seal a blob exactly as `plan_rotation` on the other machine would — and the
+/// group id, which is minted rather than fixed here. The `tablet` is the third device, the one a
+/// rotation is about to drop.
+fn keyed_group() -> (Connection, identity::Identity, crypto::Keypair, String) {
+    let conn = crate::schema::memory_pair();
+    capture::install(&conn).unwrap();
+    let me = identity::ensure(&conn).unwrap();
+    identity::create_group(&conn, &me).unwrap();
+    let remover = crypto::keypair();
+    identity::add_device(&conn, "dev-remover", &remover.public, "Desk").unwrap();
+    identity::add_device(&conn, "tablet", &[8u8; 32], "Tablet").unwrap();
+    let group = identity::group(&conn).unwrap().unwrap().group_id;
+    (conn, me, remover, group)
+}
+
+/// Register `GET /g/{group}/keys` with a body written by hand, so a test can leave a field out.
+fn keys_answering(server: &MockServer, group: &str, body: serde_json::Value) {
+    server.mock(|when, then| {
+        when.method(GET).path(format!("/g/{group}/keys"));
+        then.status(200).json_body(body);
+    });
+}
+
+/// ⚠ **A group that has claimed and never rotated leaves every device alone.**
+///
+/// `/claim` seeds `group_keys` with an *empty* manifest at the claim's epoch, so every device in
+/// such a group reads `blob: null, devices: []` — which is byte for byte the removal notice.
+/// Comparing the epochs first is the whole of what stops all of them concluding they were removed
+/// and dissolving the group on their next sync. This is the case where a missing guard does not
+/// merely fail: it takes a healthy group apart, on every machine, at once.
+///
+/// **What makes it red**: reading the manifest before the epochs — the answer becomes `Removed`
+/// and every assertion below fails at once.
+#[tokio::test]
+async fn a_current_epoch_with_an_empty_manifest_leaves_the_group_alone() {
+    let server = MockServer::start_async().await;
+    let (conn, me, _remover, group) = keyed_group();
+    set_state(&conn, RELAY_URL, &server.base_url()).unwrap();
+    grant(&conn);
+    keys_answering(
+        &server,
+        &group,
+        serde_json::json!({ "epoch": 0, "blob": serde_json::Value::Null, "devices": [] }),
+    );
+    let before = identity::group(&conn).unwrap().unwrap();
+
+    assert_eq!(check_keys(&conn).await.unwrap(), KeyOutcome::Current);
+
+    assert_eq!(identity::group(&conn).unwrap().unwrap(), before);
+    assert_eq!(
+        identity::roster(&conn).unwrap().len(),
+        3,
+        "the empty manifest was read as a roster"
+    );
+    assert_eq!(
+        entitlement::refresh_secret(&conn).as_deref(),
+        Some("refresh-1"),
+        "the grant was cleared on a group nobody was removed from"
+    );
+    assert_eq!(identity::ensure(&conn).unwrap().device_id, me.device_id);
+    assert!(error_rows(&conn).is_empty(), "nothing failed");
+}
+
+/// A higher epoch with a blob for this device: **the key is adopted and the manifest becomes the
+/// roster.**
+///
+/// This is the half that carries a removal to the devices that were not doing the removing, and
+/// it is what unsticks `client::pull` — a device behind a rotation holds its cursor for ever
+/// (`an_envelope_from_a_newer_epoch_holds_the_cursor`) until the key arrives.
+///
+/// **What makes it red**: dropping the manifest sweep (the tablet stays and the length is 3),
+/// writing the wrong key (`group_key` is not `new_key`), or moving the group id.
+#[tokio::test]
+async fn a_higher_epoch_with_a_blob_is_adopted_and_sweeps_the_roster() {
+    let server = MockServer::start_async().await;
+    let (conn, me, remover, group) = keyed_group();
+    set_state(&conn, RELAY_URL, &server.base_url()).unwrap();
+    let before = identity::group(&conn).unwrap().unwrap();
+    let new_key = [42u8; 32];
+    let blob = crypto::wrap_group_key(
+        &remover.secret,
+        &me.keypair.public,
+        &group,
+        &me.device_id,
+        before.epoch + 1,
+        &new_key,
+    )
+    .unwrap();
+    keys_answering(
+        &server,
+        &group,
+        serde_json::json!({
+            "epoch": before.epoch + 1,
+            "blob": URL_SAFE_NO_PAD.encode(&blob),
+            "devices": [me.device_id.clone(), "dev-remover"],
+        }),
+    );
+
+    assert_eq!(check_keys(&conn).await.unwrap(), KeyOutcome::Adopted);
+
+    let after = identity::group(&conn).unwrap().unwrap();
+    assert_eq!(after.epoch, before.epoch + 1);
+    assert_eq!(after.group_key, new_key, "the new key was not written");
+    assert_eq!(after.group_id, before.group_id, "the group id moved");
+    let ids: Vec<String> = identity::roster(&conn)
+        .unwrap()
+        .into_iter()
+        .map(|d| d.device_id)
+        .collect();
+    assert!(!ids.contains(&"tablet".to_owned()), "{ids:?}");
+    assert_eq!(ids.len(), 2, "somebody else was swept: {ids:?}");
+}
+
+/// A higher epoch and **no blob**: this device is not on the manifest, so it has been removed.
+///
+/// Both halves go — the pairing state and the grant — and the second is not tidiness. A removed
+/// device that kept its refresh secret would keep a *working credential for the group it was
+/// removed from*: the refresh door mints a token whose `grp` is that group and `/g/{group}/push`
+/// honours it, so the removal would be cosmetic at the relay.
+///
+/// **`clear` and never `revoke`**, which is what the `membership_ended` assertion pins: nothing
+/// ended, the reader's pledge is untouched, and drawing *Membership ended* at them would be a lie
+/// about an event that did not happen. And `sync_identity` survives, because the device id is
+/// what every op this device ever wrote is stamped with.
+///
+/// **What makes it red**: leaving the group standing, keeping the grant, `revoke` instead of
+/// `clear`, or re-minting the identity.
+#[tokio::test]
+async fn a_higher_epoch_with_no_blob_leaves_the_group_and_the_grant() {
+    let server = MockServer::start_async().await;
+    let (conn, me, _remover, group) = keyed_group();
+    set_state(&conn, RELAY_URL, &server.base_url()).unwrap();
+    grant(&conn);
+    entitlement::store_status(&conn, "active", Some(1_740_000_000)).unwrap();
+    keys_answering(
+        &server,
+        &group,
+        serde_json::json!({
+            "epoch": 1,
+            "blob": serde_json::Value::Null,
+            "devices": ["dev-remover"],
+        }),
+    );
+
+    assert_eq!(check_keys(&conn).await.unwrap(), KeyOutcome::Removed);
+
+    assert!(
+        identity::group(&conn).unwrap().is_none(),
+        "still in a group"
+    );
+    assert!(
+        identity::roster(&conn).unwrap().is_empty(),
+        "roster survived"
+    );
+    assert_eq!(entitlement::refresh_secret(&conn), None, "grant survived");
+    assert_eq!(get_state(&conn, entitlement::ACCESS_TOKEN), None);
+    assert!(
+        !entitlement::membership_ended(&conn),
+        "revoked rather than cleared - the panel will say Membership ended"
+    );
+    assert_eq!(
+        identity::ensure(&conn).unwrap().device_id,
+        me.device_id,
+        "the device id was re-minted, which forks this device's own history"
+    );
+}
+
+/// ...and the round trip stops there, answering `Ok(None)` rather than an error.
+///
+/// There is nothing left to sync to, which is not a failure. **No token is fetched either**,
+/// which is why `check_keys` sits above that call: a removed device cannot mint one.
+#[tokio::test]
+async fn a_removed_device_stops_the_round_trip_without_an_error() {
+    let server = MockServer::start_async().await;
+    let (conn, _me, _remover, group) = keyed_group();
+    set_state(&conn, RELAY_URL, &server.base_url()).unwrap();
+    grant(&conn);
+    add_copy(&conn, "c1", 1);
+    keys_answering(
+        &server,
+        &group,
+        serde_json::json!({ "epoch": 1, "blob": serde_json::Value::Null, "devices": [] }),
+    );
+    let pushed = server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{group}/push"));
+        then.status(500);
+    });
+    let pulled = server.mock(|when, then| {
+        when.method(GET).path(format!("/g/{group}/pull"));
+        then.status(500);
+    });
+    let acked = server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{group}/ack"));
+        then.status(500);
+    });
+
+    assert_eq!(run_once(&conn).await.unwrap(), None);
+
+    pushed.assert_calls(0);
+    pulled.assert_calls(0);
+    acked.assert_calls(0);
+    assert!(identity::group(&conn).unwrap().is_none());
+    assert!(error_rows(&conn).is_empty(), "leaving is not a failure");
+}
+
+/// **`/keys` carries the group auth and never the access token**, which is the whole of why a
+/// device that cannot mint a token can still ask it.
+///
+/// **What makes it red**: sending `Bearer access-1`, or deriving the auth from anything but this
+/// device's current group key, id and epoch.
+#[tokio::test]
+async fn a_key_check_presents_the_group_auth_rather_than_the_token() {
+    let server = MockServer::start_async().await;
+    let (conn, _me, _remover, group) = keyed_group();
+    set_state(&conn, RELAY_URL, &server.base_url()).unwrap();
+    grant(&conn);
+    let sent = Sent::default();
+    server.mock(|when, then| {
+        when.method(GET)
+            .path(format!("/g/{group}/keys"))
+            .is_true(tap(&sent));
+        then.status(200).json_body(
+            serde_json::json!({ "epoch": 0, "blob": serde_json::Value::Null, "devices": [] }),
+        );
+    });
+
+    assert_eq!(check_keys(&conn).await.unwrap(), KeyOutcome::Current);
+
+    let stored = identity::group(&conn).unwrap().unwrap();
+    let expected = format!(
+        "Bearer {}",
+        crypto::relay_auth(&stored.group_key, &stored.group_id, stored.epoch)
+    );
+    let seen = sent.lock().unwrap();
+    let request = seen.first().expect("nothing reached /keys at all");
+    assert_eq!(request.authorization.as_deref(), Some(expected.as_str()));
+    assert_ne!(
+        request.authorization.as_deref(),
+        Some("Bearer access-1"),
+        "the access token is exactly what a rotated-away device cannot mint"
+    );
+}
+
+/// An answer with **no `blob` field at all** is a parse failure, not a removal notice.
+///
+/// **serde reads a missing `Option` field as `None` without being asked to**, and here that
+/// default is the one answer this type must never invent: at a higher epoch an absent `blob`
+/// would take the group apart. `KeyPage::blob` carries a `deserialize_with`, which is exempt from
+/// the missing-field default, so a truncated answer stalls this device exactly where it is.
+///
+/// **What makes it red**: dropping that attribute — the answer becomes `Ok(Removed)` and the
+/// group is gone.
+#[tokio::test]
+async fn a_key_answer_with_no_blob_field_is_refused_rather_than_read_as_a_removal() {
+    let server = MockServer::start_async().await;
+    let (conn, _me, _remover, group) = keyed_group();
+    set_state(&conn, RELAY_URL, &server.base_url()).unwrap();
+    keys_answering(
+        &server,
+        &group,
+        serde_json::json!({ "epoch": 1, "devices": ["dev-remover"] }),
+    );
+    let before = identity::group(&conn).unwrap().unwrap();
+
+    assert!(check_keys(&conn).await.is_err(), "read as a removal");
+
+    assert_eq!(identity::group(&conn).unwrap().unwrap(), before);
+    assert_eq!(identity::roster(&conn).unwrap().len(), 3);
+    assert_eq!(
+        error_rows(&conn)
+            .first()
+            .map(|r| (r.0.clone(), r.1.clone())),
+        Some(("keys".to_owned(), "parse".to_owned()))
+    );
+}
+
+/// **A 401 on `/keys` is never a lapse, and it must not cost the grant.**
+///
+/// The credential is the group auth, not the access token, so a refusal says the group key is
+/// unrecognised: a group with no membership connected to it yet, or a device dark across more
+/// rotations than the relay keeps (spec §4). `client::lapsed` handles push, pull and ack that way
+/// and copying it here would tell a reader their Patreon membership ended because of something
+/// else entirely.
+///
+/// **What makes it red**: calling `lapsed` on this status, which clears the grant and leaves the
+/// `membership_ended` mark.
+#[tokio::test]
+async fn a_401_on_a_key_check_costs_the_grant_nothing() {
+    let server = MockServer::start_async().await;
+    let (conn, _me, _remover, group) = keyed_group();
+    set_state(&conn, RELAY_URL, &server.base_url()).unwrap();
+    grant(&conn);
+    server.mock(|when, then| {
+        when.method(GET).path(format!("/g/{group}/keys"));
+        then.status(401).body("");
+    });
+
+    assert!(check_keys(&conn).await.is_err());
+
+    assert_eq!(
+        entitlement::refresh_secret(&conn).as_deref(),
+        Some("refresh-1"),
+        "a stale group auth cost the reader their membership"
+    );
+    assert!(!entitlement::membership_ended(&conn));
+    assert!(identity::group(&conn).unwrap().is_some(), "the group went");
+    let rows = error_rows(&conn);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!((rows[0].0.as_str(), rows[0].1.as_str()), ("keys", "http"));
 }
