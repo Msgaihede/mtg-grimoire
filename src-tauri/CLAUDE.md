@@ -722,15 +722,41 @@ the 105-character code and the crate pins, is [sync.md](../docs/reference/sync.m
   initialises it, so `android_context()` would answer a null pointer and that arm would fall back
   on every phone forever. Full record, with the table of what each target reads:
   [sync.md](../docs/reference/sync.md).
-- **Revocation rotates the key in the same transaction that marks the row.** Marking the row
-  alone produces an app that says a device is gone while that device can still read every op
-  written afterwards. Three refusals guard it — this device cannot revoke itself, an id nobody on
-  the roster answers to rotates nothing, and a device already in a group may only rejoin the one
-  it is in — and every one of them is a sentence rather than a constraint failure.
-- **There is no bare "rotate the key" command, and that is a decision rather than an omission.**
-  `rotate_key` was written, tested and deleted before this shipped: with no relay, a rotation
-  A performs cannot reach B, so one with nobody removed would silently lock the group out of
-  itself. Revocation keeps its rotation because there the lock-out is the point.
+- **A removal rotates the key, publishes the rotation, and commits only when the relay accepts
+  it — in that order, and the order is the rule.** `pairing::remove_device` refuses a group with
+  no membership, makes a round trip that emits no baseline, calls `identity::plan_rotation` (which
+  writes nothing), posts to `/g/{group}/rotate`, and only then calls `identity::commit_rotation`.
+  **`identity::revoke_device` is gone and that sequence is what replaced it**: it rotated locally
+  in one transaction and reached nobody, so the removing device moved to epoch *N+1* while every
+  remaining device sat at *N* with `client::pull` holding its cursor for ever — **one removal
+  bricked any group of three.** A refused `/rotate` now leaves the group exactly as it was.
+- **The manifest at the current epoch is the roster, and a removed row is DELETED rather than
+  stamped.** `group_keys.keys` is `device_id -> sealed blob`, and its key set is who is in the
+  group; `identity::adopt_epoch` deletes every `sync_devices` row it omits, and `commit_rotation`
+  deletes the departed row rather than writing `revoked_at`. A remover that kept a tombstone would
+  be the one machine in the group with a different answer about who is in it. **`revoked_at` stays
+  on the table for the migration's sake and is read but never written** — `plan_rotation` still
+  skips a stamped row, because a database written by an older build can hold one and a manifest
+  naming that device would put it back in the group on every device that adopts.
+- **The manifest is deliberately not a thirteenth synced table.** A manifest that *is* the key
+  distribution cannot disagree with it, where a synced `device_removals` table could arrive late,
+  arrive out of order, or arrive at a device that cannot decrypt it — which is precisely the state
+  a rotation puts every peer in.
+- **Four refusals guard a removal**, each a sentence rather than a constraint failure: this device
+  cannot revoke itself; an id nobody on the roster answers to rotates nothing; a device already in
+  a group may only rejoin the one it is in; and **a group with no membership cannot remove a
+  device at all** (`identity::NO_MEMBERSHIP`, asked of `commands::entitled` before anything
+  moves). `/rotate` authenticates against an auth only `/claim` can seed, so an unentitled group
+  has no way to publish a rotation — and rotating locally anyway is the bug above.
+- **There is still no bare "rotate the key" command, and its old reason has expired.** `rotate_key`
+  was written, tested and deleted on the argument that with no relay a rotation A performs cannot
+  reach B — which is exactly what the rewrap hop now builds. The press is missing rather than
+  refused; **re-open it as a decision rather than by citing the old argument.**
+- **⚠️ A device with no blob at a higher epoch has been removed, and the epoch comparison is
+  load-bearing.** A group that has claimed and never rotated holds one `group_keys` row with an
+  *empty* manifest, so every device in it reads `blob: null, devices: []`. `client::check_keys`
+  compares epochs first and does nothing on an equal one; without that guard every device in a
+  healthy group concludes it was removed and dissolves the group on its next sync, all at once.
 - **The pending offer lives in `AppState.pairing` and never in SQLite.** An offer that survived
   a restart would be an invite a reader printed last month still being accepted today; it
   outlives the webview, which is what a reader who opens Settings twice needs, and dies with the
@@ -748,7 +774,10 @@ the 105-character code and the crate pins, is [sync.md](../docs/reference/sync.m
 
 ## Hard rules — sync (`sync_engine/`)
 
-Six layers and five commands; the whole record, with every measurement, is
+A stack of layers and a handful of `#[tauri::command]`s — **counted here until 2026-08-30 as "six
+layers and five commands", which the hosted relay had already made wrong by three**; a count is a
+fact about a tree and every open branch has a different one, so it is not written down. The whole
+record, with every measurement, is
 [sync.md](../docs/reference/sync.md). The binding rules:
 
 - **The conflict engine is Rust's, and the boundary is unchanged rather than bent.** "Two devices
@@ -806,6 +835,31 @@ Six layers and five commands; the whole record, with every measurement, is
 - **Six tables can hold a `needs_review` sentence** since v29, and `sync_engine::commands::REVIEWABLE`
   is the list, held to `sqlite_master` by a test. The sentences are Rust's, following
   `reconcile.rs`, and the first message wins.
+- **An entitlement belongs to a GROUP, not to the device that pressed Connect.** `/token` has two
+  doors: the refresh secret opens one, and `crypto::relay_auth` — HKDF-SHA256 over the group key,
+  so every device in the group derives it and nothing is distributed — opens the other.
+  `entitlement::access_token` takes the refresh door if this device holds a secret and the group
+  door otherwise. **A device entitled through its group never receives a refresh secret**, which is
+  why the group door answers `GroupGrant` rather than `Grant` and writes through `store_access`
+  rather than `store_grant`.
+- **`pairing.rs` must never carry the refresh secret again.** It sealed one into the blob for a
+  day and the field was taken back out: a device holding that secret can re-register the group's
+  auth through `/rotate`'s second door and therefore evict the devices that removed it, which
+  makes a removal something any paired device can reverse. Restricting the Patreon-side secret to
+  the device that pressed Connect is what makes a removal stick. The sealed plaintext is
+  `<group_id>\0<epoch>\0<32-byte key>` and **anything ever added goes before the key**, which is
+  the only field that can hold a zero byte of its own.
+- **A 401 on the group door is NOT a lapse**, and copying the sync routes' handling would be the
+  worst mistake in `client.rs`. The credential is derived from the group key, so a rotation this
+  device has not caught up with produces exactly the refusal a cancelled membership does.
+  `entitlement::STALE_GROUP_AUTH` names it, and `/keys` — which accepts an auth up to eight epochs
+  old — is what tells the two apart out of band. Revoking on it would tell a reader their
+  membership ended because a sibling device removed somebody an hour ago.
+- **`/rotate` and `/keys` stand ahead of the bearer gate, and that is the design rather than a
+  hole.** A device that has just been rotated away from cannot mint a token, so a `/keys` behind
+  the gate would refuse exactly the caller it exists to serve. Both are D1 only and **never reach
+  the Durable Object**, so nothing they can be made to spend is on the metered line — which is
+  what makes standing outside affordable.
 - **The relay's address is `entitlement::RELAY_BASE`, compiled in and public, and this reverses
   what this file said.** One deployment serves every reader, so an address stopped being a
   setting: `entitlement::base` answers the override when `sync_state.relay_url` holds one and
@@ -817,9 +871,15 @@ Six layers and five commands; the whole record, with every measurement, is
   every request that uses it, so being public is what it is *for*, and it belongs here — as does
   `entitlement::PATREON_CLIENT_ID`, for the same reason — **but the two are not a matched pair
   and must not be read as one.** `RELAY_BASE` holds a real hostname, committed with Markus's
-  approval; it is the baseline relay the 2026-08-29 pass ran against, and **what is not deployed
-  at it is this design's Worker code** — no auth gate, no `/claim`, no `/token` — so a device
-  pointed there today reaches a live relay that does not speak the endpoints this crate now calls.
+  approval, and **the hosted Worker is deployed at it** — which reverses what this paragraph said
+  from the day `RELAY_BASE` landed until 2026-08-30, through four separate edits that each repeated
+  "no auth gate, no `/claim`, no `/token`" without anybody asking the host. Probed 2026-08-30: `/claim` and `/token` answer **405** (the route is there and wants POST), `/oauth/patreon/callback` **400**, `/g/{group}/pull` **401** from the bearer gate, and `/g/{group}/rotate` and `/g/{group}/keys` **404**. So the auth gate,
+  the OAuth callback, `/claim` and `/token` are live; **this PR's two routes are what is not there
+  yet**, and `wrangler.jsonc` carries a real `database_id`, so a D1 exists and may hold live
+  entitlement rows. That makes the next deploy an **update to a running service**, not a first
+  landing, and the `ALTER TABLE`s in `schema.sql` run against real data.
+  [hosted-relay-deploy.md](../docs/reference/hosted-relay-deploy.md)'s step 0 is those `curl`s
+  written down: **ask the host, never a document** — this paragraph is the reason why.
   `PATREON_CLIENT_ID` is **real since 2026-08-30 and the two are a matched pair again** — it was
   a placeholder until then, and this paragraph said so. It is verified live: `GET
   /oauth2/authorize` with it and `PATREON_REDIRECT_PATH` answered 302 to Patreon's login,

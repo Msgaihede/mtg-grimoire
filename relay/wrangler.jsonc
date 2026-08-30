@@ -19,10 +19,12 @@
   // The entitlement store — `relay/schema.sql` is its shape, applied with
   // `npx wrangler d1 execute mtg-grimoire-relay --remote --file=./schema.sql`.
   //
-  // **`database_id` is a placeholder and a deploy has to replace it.** Only
-  // `npx wrangler d1 create mtg-grimoire-relay` can produce the real one, and inventing a
-  // plausible uuid here would be a value that gets copied into documentation and deployed
-  // against; one that cannot resolve is caught by the first person who tries it.
+  // **`database_id` is real and the database exists** — this comment called it a placeholder
+  // until 2026-08-30, and `relay/README.md` step 1 said the committed value was `<set on create>`.
+  // Neither was true, and the pair of them is why the runbook now opens by probing the live host
+  // instead of asserting anything. Only `npx wrangler d1 create mtg-grimoire-relay` can produce a
+  // real id; inventing a plausible uuid here would be a value that gets copied into documentation
+  // and deployed against.
   //
   // D1 rather than KV: KV allows 1 000 writes/day on the free plan. These rows are read rarely
   // and written rarely, and the hot path — the auth gate in `index.ts` — touches no storage at

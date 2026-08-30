@@ -33,15 +33,29 @@ has sync off, which is the state every existing installation is in. **The relay 
 Worker Markus runs**, not one each reader deploys — that was the original premise and nobody
 would ever have done it. **Its address is compiled into the binary as `RELAY_BASE`, is in this
 repository, and is public**, in exactly the way every application's API base URL is public: the
-relay can decrypt nothing it stores, and **every `/g/…` sync route refuses a request without a
-token the relay minted** — the four entitlement routes are not behind that gate and cannot be,
-because three of them exist precisely so a caller with no token can get one, so each is guarded
-by something else instead (an authorization code Patreon carries, a single-use ten-minute claim
-code, the refresh secret being presented, the webhook's HMAC). Either way nothing follows from
-knowing where it lives. **What is not deployed at that address yet is this design's Worker code**
-— no auth gate, no `/claim`, no `/token` — so a device pointed there today reaches a live relay
-that does not speak the endpoints the app now calls.
-`PATREON_CLIENT_ID` beside it is a different case and is **still a placeholder**.
+relay can decrypt nothing it stores, and **every route that reaches a Durable Object refuses a
+request without a token the relay minted** — push, pull and ack. The four entitlement routes are
+not behind that gate and cannot be, because three of them exist precisely so a caller with no
+token can get one, so each is guarded by something else instead (an authorization code Patreon
+carries, a single-use ten-minute claim code, the refresh secret or the group auth being presented,
+the webhook's HMAC). **Two `/g/…` routes stand outside it too** — `/rotate` and `/keys`, which
+carry the group's own key material and are D1 only: a device that has just been rotated away from
+cannot mint a token, so a `/keys` behind the gate would refuse exactly the caller it exists to
+serve. Either way nothing follows from knowing where the relay lives. **The hosted Worker is
+deployed at that address**, which reverses what this file said until 2026-08-30. Probed 2026-08-30: `/claim` and `/token` answer **405** (the route is there and wants POST), `/oauth/patreon/callback` **400**, `/g/{group}/pull` **401** from the bearer gate, and `/g/{group}/rotate` and `/g/{group}/keys` **404** — so the gate, the callback, `/claim` and `/token` are live and only this
+change's two routes are missing. The next deploy is an **update** with a D1 that may hold real
+entitlements, not a first landing. **`PATREON_CLIENT_ID` beside it
+was a placeholder until 2026-08-30 and holds the real id now**, public on the same terms and
+verified live against Patreon's authorize endpoint.
+
+**An entitlement is a property of the GROUP, not of the device that pressed Connect** — so a
+reader may pair first and connect second, and every device in the group reads *Supporting since
+…*. Any paired device derives its own relay credential from the group key and mints its own token,
+which is why **pairing does not carry the refresh secret**: a device holding that secret could
+re-register the group's auth and evict the devices that removed it. **A removal reaches every
+device**: it rotates the group key, rewraps it per remaining device, publishes the set, and
+commits only when the relay accepts it — and the published manifest's key set *is* the roster, so
+a device it omits leaves the group on its next sync.
 **What must never be committed are the three secrets the Worker holds** —
 `PATREON_CLIENT_SECRET`, `PATREON_WEBHOOK_SECRET` and `RELAY_HMAC_KEY`, in
 [the hosted-relay design](docs/superpowers/specs/2026-08-29-hosted-relay-and-patreon-design.md)
@@ -162,8 +176,8 @@ number to compare against.
 | [live-ui-verification.md](docs/reference/live-ui-verification.md) | The CDP harness contract — `scripts/cdp.mjs` and its traps |
 | [tauri-mcp-bridge.md](docs/reference/tauri-mcp-bridge.md) | The other way to drive the window — its four pieces, three permissions, and the one tool that cannot reach an app command |
 | [ci-and-releases.md](docs/reference/ci-and-releases.md) | Both workflows, in full |
-| [hosted-relay-deploy.md](docs/reference/hosted-relay-deploy.md) | The deploy runbook — what exists and what does not, the order, and the nine things only a live deploy can settle |
-| [sync.md](docs/reference/sync.md) | Pairing **and** the relay — the protocol step by step, the six digits, the eleven synced tables, how a row is named across devices, §7.3's five rules against the test that proves each, the envelope measured, the auth gate on the three endpoints, and what is not built |
+| [hosted-relay-deploy.md](docs/reference/hosted-relay-deploy.md) | The deploy runbook — what exists and what does not, how to ask the host rather than a document, the order, and the things only a live deploy can settle |
+| [sync.md](docs/reference/sync.md) | Pairing **and** the relay — the protocol step by step, the six digits, the eleven synced tables, how a row is named across devices, §7.3's five rules against the test that proves each, the envelope measured, the auth gate and the two routes that stand outside it, the group door, the rewrap hop that carries a removal to every device, and what is not built |
 | [test-coverage.md](docs/reference/test-coverage.md) | What both suites reach, and why the Rust figure needs a correction |
 
 ## Running and verifying

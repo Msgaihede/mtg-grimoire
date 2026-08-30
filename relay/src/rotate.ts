@@ -266,9 +266,20 @@ export async function handleKeys(
   // **`Object.hasOwn` and never `keys[device] ?? null`.** The manifest is JSON a caller chose the
   // key set of, and `constructor`, `toString` and `valueOf` are all device ids as far as
   // [`DEVICE_ID`] is concerned. `??` does not fire on the inherited function it would find, and
-  // `JSON.stringify` then drops the field outright — so a device that is not on the roster would
-  // be answered a body with no `blob` at all, which is a shape the app's deserialiser refuses
-  // rather than the removal notice it is owed.
+  // `JSON.stringify` then drops the field outright — so a device asking under one of those names
+  // would be answered a body with **no `blob` key at all** rather than the `blob: null` it is
+  // owed.
+  //
+  // ⚠️ **What that costs has changed, and the version of this comment that claimed the app's
+  // deserialiser "refuses" such a body was false when it was written.** serde reads a missing
+  // `Option` field as `None` without being asked to, so a dropped `blob` deserialised to exactly
+  // the removal notice — a group could have been dissolved by a device id that collides with an
+  // `Object.prototype` key. It became true only when `client::KeyPage` gained
+  // `#[serde(deserialize_with = "null_but_present")]`, which is exempt from the missing-field
+  // default and turns a body with no `blob` into a parse failure: the device stalls where it is,
+  // recoverably, instead of leaving its group. **Both halves are load-bearing** — this line keeps
+  // the field present, and that attribute is what makes its absence loud. Neither is a backstop
+  // for the other, because only one of them existed for the window in which this was wrong.
   const blob = Object.hasOwn(manifest.keys, device) ? manifest.keys[device] : null;
   return json({ epoch: manifest.epoch, blob, devices: Object.keys(manifest.keys) });
 }

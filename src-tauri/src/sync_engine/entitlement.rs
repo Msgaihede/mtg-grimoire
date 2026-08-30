@@ -70,14 +70,16 @@ use serde::Deserialize;
 ///
 /// **What is not on that host yet is this design's Worker, and the distinction matters.** The host
 /// is live — it is the relay the 2026-08-29 end-to-end pass ran against — but what is deployed
-/// there is the pre-entitlement code: no auth gate, no `/claim`, no `/token`, no OAuth callback,
-/// no webhook, no D1 binding. **A device pointed at it today reaches a real relay that answers
-/// none of the endpoints this module calls.** That is Wave 2 and a deploy, not a placeholder, and
-/// it fails differently: a 404 from a server that is there, rather than a name that will not
-/// resolve.
+/// there is the pre-entitlement code: no auth gate, no `/claim`, no `/token`, no `/g/…/rotate`,
+/// no `/g/…/keys`, no OAuth callback, no webhook, no D1 binding. **A device pointed at it today
+/// reaches a real relay that answers none of the endpoints this module calls.** That is Wave 2 and
+/// a deploy, not a placeholder, and it fails differently: a 404 from a server that is there,
+/// rather than a name that will not resolve. `docs/reference/hosted-relay-deploy.md`'s step 0 is
+/// how to check that claim against the host rather than against this comment.
 pub const RELAY_BASE: &str = "https://mtg-grimoire-relay.denmark-east.workers.dev";
 
-/// The OAuth client id, real since 2026-08-29 and public by the same argument as [`RELAY_BASE`]:
+/// The OAuth client id, real since `a0eb0c6` (committed 2026-08-30, against the verification
+/// recorded below, which was taken the day before) and public by the same argument as [`RELAY_BASE`]:
 /// it is on the wire of every authorize request, so withholding it from this repository would
 /// hide it from nobody. **`client_secret` never belongs here** — it lives only as a Worker
 /// secret, which is what makes the code exchange server-side rather than a choice.
@@ -107,8 +109,13 @@ const PATREON_SCOPES: &str = "identity identity.memberships";
 /// The bearer token on every relay request. A day's life.
 pub const ACCESS_TOKEN: &str = "access_token";
 
-/// The long-lived secret traded for the next [`ACCESS_TOKEN`]. **Holding one is what "connected"
-/// means**, which is why [`refresh_secret`] is the question every caller asks.
+/// The long-lived secret traded for the next [`ACCESS_TOKEN`].
+///
+/// ⚠️ **Holding one is what "connected" meant, and "connected" is gone** (spec §2.5,
+/// 2026-08-30). It now means only *this device is the one that pressed Connect* — which decides
+/// which of [`access_token`]'s two doors it takes and nothing else. **Whether a device is
+/// entitled is a fact about its group**, answered by `commands::entitled`; a device that has only
+/// ever paired never holds this key and is entitled all the same.
 pub const REFRESH_SECRET: &str = "refresh_secret";
 
 /// When [`ACCESS_TOKEN`] stops being accepted, in unix seconds.
@@ -285,8 +292,15 @@ fn checked_seconds(field: &str, value: i64) -> Result<i64, String> {
 /// Store a fresh pair of tokens and when the access one dies.
 ///
 /// **Three arguments and deliberately not five**: the supporter status and its date go through
-/// [`store_status`], because pairing carries the refresh secret to a second device (spec §6.2)
-/// and that device has a grant to store with no status to store beside it.
+/// [`store_status`], which [`store_access`] needs as well — the group door writes a token with no
+/// secret beside it and the same status. Folding the status in here would mean writing it twice.
+/// ⚠️ This said the split was for pairing, which "carries the refresh secret to a second device
+/// (spec §6.2)"; **that stopped being true on 2026-08-30** and the split outlived the reason.
+///
+/// **The two calls are not one transaction, and the window is reachable.** Every path writes the
+/// grant and then the status, and [`store_status`] refuses a millisecond `since` — so a relay
+/// answering one leaves this device holding a grant with no status at all. That state must read
+/// as *entitled*, which is what `commands::entitled`'s refresh-secret arm gives it.
 ///
 /// **`expires` is a unix second and a millisecond value is refused here** ([`SECONDS_CEILING`]),
 /// and **a blank token is refused too**: every read in this module treats a blank as absent, so
@@ -398,7 +412,8 @@ pub fn clear(conn: &Connection) -> Result<(), String> {
     .map_err(|e| e.to_string())
 }
 
-/// **A membership that ended, as against one that never began.**
+/// **A membership that ended, as against one that never began — asked only of a device that is
+/// not entitled.**
 ///
 /// Spec §10 asks the panel for three sentences — *Supporting since …*, *Not connected*, and
 /// *Membership ended* — and §7.1 puts the reassurance that no local data was touched on the third
@@ -406,10 +421,20 @@ pub fn clear(conn: &Connection) -> Result<(), String> {
 /// device fresh out of the box is that a `SUPPORTER_STATUS` row exists at all. That is what this
 /// reads.
 ///
+/// ⚠️ **It over-claims on its own and must never be the first question.** This is
+/// `refresh_secret.is_none() && SUPPORTER_STATUS.is_some()`, and **a device entitled through its
+/// group holds a status and no secret** (spec §2.2) — so it answers `true` for a membership that
+/// is live and has ended nothing. The heading above was written when holding a refresh secret was
+/// what "connected" meant; it is not, since 2026-08-30. What keeps the panel right is the order:
+/// `commands::supporter_status` asks `commands::entitled` first and only reaches this when the
+/// answer is `false`, which is exactly the case this function is about. **Order matters here now,
+/// where before it did not** — a call site that asked this alone would draw *Membership ended*
+/// over an `active` status on every paired device in a supporting group.
+///
 /// True only once the tokens are gone: an `active` or `grace` device has a status row too, and it
 /// has not ended anything. **[`clear`] deliberately does not leave the mark** — a reader who
-/// pressed Disconnect chose that, and telling them their membership ended would be a lie about
-/// their own action.
+/// pressed Disconnect, or a device that was removed from its group, chose or suffered something
+/// that is not a lapse, and telling them their membership ended would be a lie about it.
 pub fn membership_ended(conn: &Connection) -> bool {
     refresh_secret(conn).is_none() && client::get_state(conn, SUPPORTER_STATUS).is_some()
 }
@@ -418,11 +443,20 @@ pub fn membership_ended(conn: &Connection) -> bool {
 /// membership**.
 ///
 /// [`clear`] plus one row, and the row is the whole point — see [`membership_ended`]. This is the
-/// call for a 401, and [`clear`] is the call for the reader pressing Disconnect.
+/// call for a 401 on the **refresh** door, and [`clear`] is the call for everything that is not a
+/// lapse.
 ///
-/// **`client.rs`'s 401 handling on the sync routes should call this rather than [`clear`]**, for
-/// the same reason and to the same effect; it is in another agent's file this wave, so it is
-/// written down here and reported rather than changed.
+/// **`client::lapsed` calls this and always has**, on a 401 from push, pull or ack — the same
+/// event through a different route. ⚠️ This paragraph used to say that it *should* and did not,
+/// "in another agent's file this wave"; **corrected 2026-08-30**, and it implied a defect that
+/// never existed.
+///
+/// ⚠️ **`client::check_keys` deliberately calls [`clear`] instead**, and the two must not be
+/// collapsed. A device that finds itself off the manifest has been removed from a group; its
+/// reader's pledge is untouched, so `revoke`'s mark would draw *Membership ended* and §7.1's
+/// reassurance at somebody whose membership is fine. **A 401 from the *group* door is neither
+/// call** — see [`STALE_GROUP_AUTH`], which is a stale auth rather than a lapse and clears
+/// nothing at all.
 pub fn revoke(conn: &Connection) -> Result<(), String> {
     clear(conn)?;
     store_status(conn, "dead", None)

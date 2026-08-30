@@ -1196,3 +1196,44 @@ Recorded as each wave landed. These are corrections to this plan, not suggestion
 - **The plan's test sketches named two symbols wrongly**, both confirmed by Task 10:
   `join_group` is `(conn, group_id: &str, epoch: i64, key: &[u8; 32], me: &Identity)`, and **`Op`
   derives no `Default`** — build it by hand, and `Hlc` lives in `sync_engine::hlc`, not `merge`.
+
+### From waves 4 and 5 — Task 14's worklist
+
+Every one of these is a claim that is **now false in a file whose author did not own it**. A
+prose-only edit routes to neither CI job, so nothing goes red for any of them.
+
+- **`docs/reference/sync.md:73`** documents the old blob layout,
+  `<group_id>\0<epoch>\0<refresh>\0<32-byte key>`. It is three fields now. The measured sealed size
+  changed too: **140 bytes / 224 base32 characters**, against 150/240 with a 9-byte secret.
+- **`entitlement::membership_ended`'s doc over-claims.** It is
+  `refresh_secret.is_none() && SUPPORTER_STATUS.is_some()`, so a device entitled through its group
+  answers `true` for a membership that is live. Its heading ("A membership that ended, as against
+  one that never began") and its "the one function that separates the two silences" line are both
+  now conditional on `entitled` being asked first — which `commands::supporter_status` does.
+- **`entitlement::revoke`'s doc carries a stale paragraph** saying `client.rs`'s 401 handling
+  "should call this rather than `clear` … it is in another agent's file this wave". `client::lapsed`
+  already calls `revoke` and always has. The paragraph implies a defect that does not exist.
+- **`commands.rs::a_grant_pairing_carried_across_is_connected_before_the_relay_has_said_a_word`**
+  keeps a doc comment whose premise — that pairing carries the secret — died with Task 12. Its
+  assertions stay valid; only the name and the reasoning need moving.
+- **`relay/src/rotate.ts`'s `handleKeys` doc** justified `Object.hasOwn` by saying a body with no
+  `blob` is "a shape the app's deserialiser refuses". That was **false when written** — serde read a
+  missing `Option` as `None`, i.e. as the removal notice — and became true only when Task 11 added
+  a `deserialize_with`. No code change is owed; the sentence should say what actually makes it true.
+
+Two behaviours that are new and undocumented, both worth a line rather than a fix:
+
+- **A paired group with *no* membership now errors on every Sync now.** `/keys` authenticates
+  against rows only `/claim` seeds, so an unclaimed group gets a 401 there before `access_token`
+  can answer `STALE_GROUP_AUTH`. One folded `error_log` row per grain. It follows from the design.
+- **A freshly-paired device reads `entitled: false` until its first round trip**, because it holds
+  no `SUPPORTER_STATUS` yet — so Remove answers *"Connect a membership first"* for that window even
+  though the group has a membership. It self-heals after one sync, and refusing later would violate
+  the "refuse before the round trip" ordering.
+
+And the two strikes the spec promised:
+
+- `sync.md`'s "What is still owed" bullet **"A revoked device's rewrapped key over the relay"** is
+  built — strike it.
+- `sync.md`'s line saying **two devices that have revoked each other cannot recover on their own**
+  is no longer true for the ordinary case — a rotation now reaches the devices that stay.

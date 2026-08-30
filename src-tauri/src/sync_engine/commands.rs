@@ -187,7 +187,9 @@ pub struct SupporterStatus {
     /// When the membership started, in unix seconds; `None` for one the relay cannot date.
     pub since: Option<i64>,
     /// **Whether an entitlement was ever bound to this device's group** — a claim that
-    /// succeeded, or a grant pairing carried across (spec §6.2).
+    /// succeeded, or a token `/token`'s group door minted for a device that only ever paired.
+    /// ⚠️ It said "a grant pairing carried across (spec §6.2)" until 2026-08-30; pairing carries
+    /// no grant now, and the group door is what replaced that route.
     ///
     /// **It is deliberately not "is this device in a group": [`RelayStatus::paired`] already
     /// answers that**, and a second field answering it again would leave spec §10's three
@@ -713,11 +715,18 @@ mod tests {
     }
 
     #[test]
-    fn a_grant_pairing_carried_across_is_connected_before_the_relay_has_said_a_word() {
-        // Device B never opens a browser (spec §6.2): the sealed pairing blob carries the
-        // refresh secret and no status, so `supporter_state` answers its "dead" default. A
-        // panel keying on `status` alone would offer Connect Patreon to a device that is
-        // already syncing.
+    fn a_grant_stored_without_its_status_is_entitled_on_the_secret_alone() {
+        // **The window between `store_grant` and `store_status`, which is not one transaction.**
+        // Every path that mints a grant writes the tokens first and the status second, and
+        // `store_status` refuses a millisecond `since` — so a relay answering one leaves this
+        // device holding a real, working grant and no `SUPPORTER_STATUS` row at all, which is
+        // `supporter_state`'s "dead" default. A panel keying on `status` alone would offer
+        // Connect Patreon to a device that is already syncing.
+        //
+        // ⚠️ This test was named for a different producer of the same state: a grant the sealed
+        // pairing blob carried across (spec §6.2). **Pairing stopped carrying the refresh secret
+        // on 2026-08-30** and that route is gone; the state is not, and neither is the reason the
+        // panel must not key on `status`.
         let conn = db();
         entitlement::store_grant(&conn, "a1", "r1", 1_756_000_000).unwrap();
 
