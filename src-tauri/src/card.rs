@@ -28,9 +28,11 @@
 //! [`store_group_by`].
 
 use crate::sorting::Marketplace;
+#[cfg(not(target_family = "wasm"))]
 use crate::sync::{lock_db_read, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
+#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// Printings returned for one oracle card. A bound on a pane, not a pager.
@@ -412,6 +414,7 @@ pub fn list_printings(
 /// The marketplace is resolved by [`Marketplace::from_opt`], which is the crate's one rule and
 /// never fails: absent, null, a typo, a future id and `cardtrader` all mean TCGplayer, because a
 /// card the reader asked to see must not refuse to open over a setting.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn card_detail(
     state: tauri::State<'_, Arc<AppState>>,
@@ -433,6 +436,7 @@ pub async fn card_detail(
 /// for it; the printings modal asks for [`MAX_PRINTINGS_HARD`] because it filters client-side,
 /// and a filter over a truncated list draws an empty wall that reads as an answer. Whatever a
 /// caller sends is clamped by [`page_size`], so the number is a request rather than a promise.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn card_printings(
     state: tauri::State<'_, Arc<AppState>>,
@@ -481,6 +485,7 @@ pub async fn card_printings(
 /// replaced.
 ///
 /// Read-only connection, blocking pool — as [`card_detail`] is, and for the same reason.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn card_image_uri(
     state: tauri::State<'_, Arc<AppState>>,
@@ -495,7 +500,10 @@ pub async fn card_image_uri(
     .map_err(|e| format!("the image URL could not be read: {e}"))?
 }
 
-fn card_image_uri_inner(
+/// **`pub(crate)` since 2026-08-30**: `web::route` calls it directly, because the browser
+/// has no `mtgimg://` handler for the wrapper's answer to be fetched through and the page
+/// builds a `cards.scryfall.io` URL from the same two columns instead.
+pub(crate) fn card_image_uri_inner(
     conn: &Connection,
     card_id: &str,
     variant: &str,
@@ -669,6 +677,7 @@ pub fn meld_parts(conn: &Connection, id: &str) -> Result<Vec<MeldRelation>, Stri
 /// [`card_detail`] is, and for the same reason.
 ///
 /// Takes no `marketplace`: this answers who a card melds with, not what anything costs.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn card_meld_parts(
     state: tauri::State<'_, Arc<AppState>>,
@@ -760,6 +769,7 @@ pub fn store_group_by(conn: &Connection, mode: &str) -> Result<(), String> {
 /// the write connection would hold the whole pane behind it. The `Result` is `spawn_blocking`'s
 /// join and nothing else; the read itself has no failure mode left, because every way it could
 /// go wrong is already a reason to answer the default.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn printing_group_by(state: tauri::State<'_, Arc<AppState>>) -> Result<String, String> {
     let state = state.inner().clone();
@@ -777,6 +787,7 @@ pub async fn printing_group_by(state: tauri::State<'_, Arc<AppState>>) -> Result
 /// sync holds the connection answers BUSY, because nothing has looked at the mode yet. Getting
 /// that backwards would mean the same call answered two different sentences depending on
 /// whether an ingest happened to be running.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn set_printing_group_by(
     state: tauri::State<'_, Arc<AppState>>,

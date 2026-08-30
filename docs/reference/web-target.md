@@ -77,11 +77,11 @@ the real 43-column one, `raw` included**.
   `Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp` and
   it passed both ways. **Do not add those headers**, and do not let a future service worker
   re-attach them.
-- **Eighty-one commands of 152**, as of 2026-08-30. The first four are the browse —
+- **Eighty-seven commands of 152**, as of 2026-08-30. The first four are the browse —
   `sync_status`, `search_cards`, `list_sets`, `facet_cards` — which is the read path spec §8
   wanted measured in wasm rather than guessed. The rest are the Decks destination (PR 10b's
-  thirteen reads and 10c's thirty-three writes), the Collection (10d's seventeen) and the
-  Wishlist (10e's fourteen). Adding one, once its module is in the map, is a line in
+  thirteen reads and 10c's thirty-three writes), the Collection (10d's seventeen), the
+  Wishlist (10e's fourteen) and the card pane (10f's six). Adding one, once its module is in the map, is a line in
   `web::route::COMMANDS` and a `match` arm.
 
   ⚠️ **This is not the intended end state.** Decided 2026-08-29, after the phone layout made
@@ -95,9 +95,9 @@ the real 43-column one, `raw` included**.
 
 | Compiled for wasm | Desktop/Android only |
 | --- | --- |
-| `app_meta` · `card_row` · `collection` · `collection_alloc` · `collection_folders` · `collection_source` · `combos` · `db` · `deck` · `deck_audit` · `deck_meta` · `deck_theory` · `deck_undo` · `errors` · `feed` · `filters` · `image_uri` · `index` · `ingest` · `legalities` · `maintenance` · `marketplace` · `schema` · `search` · `slug` · `sorting` · `split` · `sync` · `sync_engine` · `sync_pair` · `web` · `wishlist` · `wishlist_folders` | `card` · `export` · `flatten` · `images` · `import` · `listview` · `marketplace_feed` · `mirror` · `nav` · `paths` · `picked` · `reconcile` · `reset` · `scryfall` · `tags` · `transfer` · `update` · `window` · `zoom` |
+| `app_meta` · `card` · `card_row` · `collection` · `collection_alloc` · `collection_folders` · `collection_source` · `combos` · `db` · `deck` · `deck_audit` · `deck_meta` · `deck_theory` · `deck_undo` · `errors` · `feed` · `filters` · `image_uri` · `index` · `ingest` · `legalities` · `maintenance` · `marketplace` · `schema` · `search` · `slug` · `sorting` · `split` · `sync` · `sync_engine` · `sync_pair` · `web` · `wishlist` · `wishlist_folders` | `export` · `flatten` · `images` · `import` · `listview` · `marketplace_feed` · `mirror` · `nav` · `paths` · `picked` · `reconcile` · `reset` · `scryfall` · `tags` · `transfer` · `update` · `window` · `zoom` |
 
-**Eleven modules moved left on 2026-08-29** (PR 10a) — the deck domain, the collection, the
+**Twelve modules have moved left**: eleven on 2026-08-29 (PR 10a) and `card` on 2026-08-30 (PR 10f) — the deck domain, the collection, the
 wishlist, both folder tables and `marketplace`. Nothing in them changed: they were on the right
 because each file *ends* in a block of `#[tauri::command]` wrappers, and the gate sat on the
 module instead of on the wrappers. See the PR 10a section at the foot of this file.
@@ -110,7 +110,7 @@ rewrite and not a port.
 
 **A module's column is a fact about its contents; being *routed* is a separate question.**
 Everything on the left compiles for the target. What the browser can actually call is
-`web::route::COMMANDS`, which is 81 of 152.
+`web::route::COMMANDS`, which is 87 of 152.
 
 `split` is the odd one in the left column. It compiles there and can never succeed —
 every path in it is `std::fs`, which builds for wasm and answers `Unsupported` — and gating it
@@ -354,7 +354,7 @@ of `main` at PR #301 with a 117 606-card corpus. Each nav destination was opened
 | Collection | ❌ *(routed 2026-08-29 - PR 10d; not yet driven on the device)* | `collection_list` |
 | Wishlist | ❌ *(routed 2026-08-30 - PR 10e; not yet driven on the device)* | `wishlist_list` |
 | Settings | ❌ | `update_history`, `tags_muted`, `error_log_list` |
-| The card pane, from Search | ❌ | `card_detail` — *"Could not read this card — unknown command `card_detail`"* |
+| The card pane, from Search | ❌ *(routed 2026-08-30 - PR 10f, the bug that started all of this; not yet driven on the device)* | `card_detail` — *"Could not read this card — unknown command `card_detail`"* |
 
 **Nothing regressed.** `web/route.rs`'s own doc has always said so: *"This is a first slice and not
 the whole surface. The app has 152 commands; the four here are the browse."* The web target was
@@ -621,6 +621,29 @@ rather than a wrong answer, but wrong about what the two lists mean. The wrapper
 encode this; the arms copy them rather than reasoning from the resemblance.
 
 `wishlist::commit_import` is the third of PR 10a's nine markers to come good. **Six remain.**
+
+## PR 10f: the card pane — the reported bug is fixed, `COMMANDS` reaches 87
+
+**Shipped 2026-08-30.** `card.rs` moves to "Every target" and its six commands are routed. **This
+is the PR that answers the bug that started PR 10**: on 2026-08-29 a card tapped on the phone
+gave *"Could not read this card — unknown command `card_detail`"*.
+
+`card_detail` is one `match` arm and always was. What it was waiting for is the same thing the
+deck domain was waiting for — the module compiling for the target — and `card.rs` needed no
+work at all to get there: **no filesystem, no `tokio`, no `reqwest` anywhere in its 2 146
+lines**, six command wrappers, and everything else `&Connection` in and a DTO out. The gate
+move cost two gated imports and one `pub(crate)`.
+
+`card_image_uri` is routed and **its answer is one the browser cannot fetch** — an `mtgimg://`
+URI, whose protocol handler is a Tauri webview thing. Routing it anyway is deliberate: the
+command's job is to resolve *which* picture a printing has, and the page decides what to do
+with that. On web `src/lib/images.ts` builds a `cards.scryfall.io` URL from the same two
+columns and goes through the service worker, so this arm is not what makes an image appear —
+it is what stops the call being an `unknown command` in the console while the page works.
+
+Two tests: the reported call answering `Lightning Bolt` with its camelCase DTO intact, and an
+unknown id answering `null` rather than an error, which is the shape the pane draws an empty
+state for.
 
 **One test caught its own fixture, which is worth keeping.** The first draft of
 `a_wish_added_through_the_route_is_listed_by_it` sent `{ name, quantity }` and got

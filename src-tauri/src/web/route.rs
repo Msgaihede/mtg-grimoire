@@ -117,6 +117,13 @@ pub const COMMANDS: &[&str] = &[
     "wishlist_folder_reorder",
     "wishlist_folder_delete",
     "wishlist_set_folder",
+    // The card pane. `card_detail` is the command the reader reported on 2026-08-29.
+    "card_detail",
+    "card_printings",
+    "card_meld_parts",
+    "card_image_uri",
+    "printing_group_by",
+    "set_printing_group_by",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -1221,6 +1228,79 @@ pub fn call(
             )
         }
 
+        // ── The card pane ───────────────────────────────────────────────────────────
+        //
+        // **`card_detail` is the command the reader actually reported**, on 2026-08-29:
+        // *"Could not read this card — unknown command `card_detail`"*, tapping a card on the
+        // phone minutes after the browse became good enough to invite the tap. It is one line
+        // of `match` and always was; what it was waiting for was `card.rs` to compile for the
+        // target, which is the gate move in this same PR.
+        "card_detail" => {
+            let id: String = field(command, args, "id")?;
+            let marketplace: Option<String> = optional(command, args, "marketplace")?;
+            let market = crate::sorting::Marketplace::from_opt(marketplace.as_deref());
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::card::get_card(&conn, &id, market).map_err(RouteError::Failed)?,
+            )
+        }
+
+        // `oracleId` on the wire; `limit` absent means the pane's own `MAX_PRINTINGS`, which
+        // `list_printings` applies — so `None` is passed through rather than defaulted here.
+        "card_printings" => {
+            let oracle_id: String = field(command, args, "oracleId")?;
+            let marketplace: Option<String> = optional(command, args, "marketplace")?;
+            let limit: Option<i64> = optional(command, args, "limit")?;
+            let market = crate::sorting::Marketplace::from_opt(marketplace.as_deref());
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::card::list_printings(&conn, &oracle_id, market, limit)
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "card_meld_parts" => {
+            let id: String = field(command, args, "id")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::card::meld_parts(&conn, &id).map_err(RouteError::Failed)?,
+            )
+        }
+
+        // **Answers an `mtgimg://` URI the browser cannot fetch**, and routing it anyway is
+        // deliberate: the command's job is to resolve *which* picture a printing has, and the
+        // page decides what to do with the answer. On web `src/lib/images.ts` builds a
+        // `cards.scryfall.io` URL from the same two columns through the service worker, so
+        // this arm answering is not what makes an image appear — it is what stops the call
+        // being an `unknown command` in the console while the page works.
+        "card_image_uri" => {
+            let card_id: String = field(command, args, "cardId")?;
+            let variant: String = field(command, args, "variant")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::card::card_image_uri_inner(&conn, &card_id, &variant)
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "printing_group_by" => {
+            let conn = crate::sync::lock_db_read(state);
+            encode(command, crate::card::stored_group_by(&conn))
+        }
+
+        "set_printing_group_by" => {
+            let mode: String = field(command, args, "mode")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::card::store_group_by(c, &mode))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
         other => Err(RouteError::Unknown(other.to_owned())),
     }
 }
@@ -1567,6 +1647,40 @@ mod tests {
         assert_eq!(items[0]["quantity"], json!(1));
     }
 
+    /// **The command the reader reported.** On 2026-08-29, tapping a card on the phone gave
+    /// *"Could not read this card — unknown command `card_detail`"*. This is that call, on the
+    /// route that now answers it.
+    #[test]
+    fn card_detail_answers_the_card_the_reader_tapped() {
+        let s = state("web-route-card-detail");
+        let card_id = {
+            let conn = crate::db::lock_blocking(&s.db);
+            conn.query_row(
+                "SELECT id FROM cards WHERE name = 'Lightning Bolt'",
+                [],
+                |r| r.get::<_, String>(0),
+            )
+            .expect("the fixture seeds Lightning Bolt")
+        };
+
+        let out = call(&s, "card_detail", &json!({ "id": card_id })).unwrap();
+        assert_eq!(out["name"], json!("Lightning Bolt"));
+        // camelCase again, and `setCode` is the one the pane's header reads first.
+        assert!(
+            out.get("setCode").is_some(),
+            "the DTO's camelCase names must survive the route"
+        );
+    }
+
+    /// An id nobody answers to is `null`, not an error — `card_detail`'s documented shape, and
+    /// the page draws an empty pane rather than a failure for it.
+    #[test]
+    fn card_detail_answers_null_for_a_card_that_is_not_there() {
+        let s = state("web-route-card-missing");
+        let out = call(&s, "card_detail", &json!({ "id": "no-such-card" })).unwrap();
+        assert_eq!(out, json!(null));
+    }
+
     /// **`mirror_rebuild`, and the choice of name is the point.** This used to reach for
     /// `deck_list`, which stopped being unknown the moment the Decks reads were routed — so
     /// the example is now one of the ten §6.3 names that are *permanently* desktop-only. A
@@ -1604,7 +1718,7 @@ mod tests {
         }
         assert_eq!(
             COMMANDS.len(),
-            81,
+            87,
             "update this number when a command is added"
         );
     }
