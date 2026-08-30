@@ -500,12 +500,14 @@ pub struct WishlistImportItem {
     pub notes: Option<String>,
 }
 
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
 /// One transaction for the whole file — `collection::commit_import`'s rule, and its reasons.
 ///
 /// `removed` is counted in the loop rather than derived, because a delete and an insert in one
 /// file would cancel out in a before/after row count and report neither.
-fn commit_import(
+/// **`pub(crate)` since 2026-08-30**, one-PR `allow(dead_code)` gone: `web::route` is the
+/// second caller. As with the collection's, the *file read* stayed behind - this takes
+/// already-parsed items.
+pub(crate) fn commit_import(
     conn: &Connection,
     items: &[WishlistImportItem],
     mode: &str,
