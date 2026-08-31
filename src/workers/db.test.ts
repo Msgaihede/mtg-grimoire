@@ -56,10 +56,26 @@ describe("once", () => {
  * button that does nothing for six days out of seven, which nothing about looks like a bug.
  */
 describe("the feed refresh mapping", () => {
+  /**
+   * The three ingests, **typed through `vi.fn<T>` rather than by naming the parameters**.
+   *
+   * A bare `vi.fn(async () => …)` types `mock.calls` as `[][]`, so every `calls[0][0]`
+   * assertion below is a `TS2493` — invisible to vitest, which does not type-check, so the
+   * suite goes green and `npm run build` is what finds it. Naming them instead
+   * (`_force: boolean`) fixes the types and fails `no-unused-vars`, which does not read the
+   * underscore convention here. The signature as a type argument satisfies both.
+   */
+  type Progress = (json: string) => void;
   const glue = () => ({
-    ingest_combos: vi.fn(async () => JSON.stringify({ kind: "ok", result: { combos: 1 } })),
-    ingest_tags: vi.fn(async () => JSON.stringify({ kind: "ok", result: { tags: 2 } })),
-    ingest_prices: vi.fn(async () => JSON.stringify({ kind: "ok", result: { rowCount: 3 } })),
+    ingest_combos: vi.fn<(force: boolean, onProgress: Progress) => Promise<string>>(async () =>
+      JSON.stringify({ kind: "ok", result: { combos: 1 } }),
+    ),
+    ingest_tags: vi.fn<(dataset: string, force: boolean, onProgress: Progress) => Promise<string>>(
+      async () => JSON.stringify({ kind: "ok", result: { tags: 2 } }),
+    ),
+    ingest_prices: vi.fn<(marketplace: string, onProgress: Progress) => Promise<string>>(async () =>
+      JSON.stringify({ kind: "ok", result: { rowCount: 3 } }),
+    ),
   });
 
   /** The full `Glue` is what `runFeed` takes; only the three ingests are ever reached. */
@@ -170,10 +186,10 @@ describe("the feed refresh mapping", () => {
   it("hands the progress callback to the export it drove", async () => {
     const seen: string[] = [];
     const g = glue();
-    g.ingest_combos = vi.fn(async (_force: boolean, onProgress: (json: string) => void) => {
+    g.ingest_combos = vi.fn(async (_force: boolean, onProgress: Progress) => {
       onProgress(JSON.stringify({ event: "combos:progress", payload: { phase: "done" } }));
       return JSON.stringify({ kind: "ok", result: {} });
-    }) as unknown as typeof g.ingest_combos;
+    });
 
     await runFeed(
       asGlue(g),
