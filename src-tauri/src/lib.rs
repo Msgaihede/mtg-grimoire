@@ -1,11 +1,21 @@
 //! The crate's module map, and nothing else.
 //!
 //! **The first block below compiles for `wasm32-unknown-unknown`; the second does not.**
-//! Four of the exclusions are permanent (spec §6.3): the plain-text `mirror`, the Rust
-//! `transfer` writer that exists only for it, the portable `update` swap, and `window`'s
+//! Two of the exclusions are permanent (spec §6.3): the portable `update` swap and `window`'s
 //! Win32 snap layouts. The rest are "not yet" — they are ported with the commands that
 //! need them. `images` is neither: on web the image cache is Cache Storage rather than a
 //! filesystem, so it is a rewrite and not a port.
+//!
+//! **`mirror` and `transfer` were two of that permanent four until 2026-08-31, and what
+//! changed is a decision rather than a discovery.** The mirror writes ~350 files so that
+//! *other programs* can read them, and neither a browser nor an Android app has a folder that
+//! serves that — so on those two targets the folder becomes a zip the reader asks for
+//! ([`mirror::snapshot`]). A zip needs the renderer, and the renderer never touched a
+//! filesystem: `mirror::{layout, paths, read, readme, snapshot}` and the whole of [`transfer`]
+//! moved up here, while `mirror::{run, settings, watch}` — `std::fs`, the `update_hook` and
+//! the thread — stayed behind a gate that moved down into `mirror/mod.rs`. **The golden fence
+//! did not move and did not weaken**: `src/features/transfer/__golden__/` goes on fencing the
+//! Rust writer against the TypeScript one byte for byte, on three targets instead of one.
 //!
 //! **A module's side is decided by what is *in* it, not by where its commands are, and that
 //! is what moved eleven of them on 2026-08-29.** The deck domain, the collection, the
@@ -78,6 +88,12 @@ pub mod maintenance;
 /// them on every platform — so the module is here and `set_marketplace_now`, which calls
 /// `AppState.mirror` (a field wasm's `AppState` does not have), carries the gate instead.
 pub mod marketplace;
+/// **Half of it, and the half is the point — see `mirror/mod.rs` for the line.** The tree
+/// ([`mirror::layout`]), the names ([`mirror::paths`]), the four listings ([`mirror::read`])
+/// and the renderer ([`mirror::snapshot`]) touch no filesystem and no clock, so a browser can
+/// build the same files and hand them over as one zip. `run`, `settings` and `watch` — the
+/// folder, the two `app_meta` settings and the thread — carry the gate inside that module.
+pub mod mirror;
 pub mod nav;
 /// **Three of Settings' four clears, moved here on 2026-08-31** — the deck domain's move a
 /// day earlier, arrived at from the same finding. `clear_collection`, `clear_wishlist` and
@@ -115,6 +131,14 @@ pub mod sync_engine;
 /// SQLite tables, and [`sync_engine::wire`] seals every batch with the first of them. A
 /// browser that could not open an envelope would be a browser that cannot sync.
 pub mod sync_pair;
+/// **The Rust half of an export, and the second implementation the golden fence exists for.**
+/// `src/features/transfer/export/` is the first; this one is here because a backup cannot ask
+/// the page to render a file — the mirror thread cannot, and neither can a Worker building a
+/// zip. Pure formatting: `&[Card]` and two enums in, a `String` out, with no filesystem, no
+/// clock and no `tauri::` anywhere in it, which is why it compiles for the browser as it
+/// stands. `src/features/transfer/__golden__/` is one corpus and one golden set that both
+/// suites assert byte equality against, and it goes on doing that unchanged.
+pub mod transfer;
 /// **The version, the release history and the clock they were read at — but never the swap.**
 /// This module was §6.3's second permanent exclusion and only half of it ever was one: the
 /// `.exe` replacement, the staging and the relaunch are Windows to the bone, while
@@ -142,8 +166,6 @@ pub mod images;
 pub mod import;
 pub mod marketplace_feed;
 #[cfg(not(target_family = "wasm"))]
-pub mod mirror;
-#[cfg(not(target_family = "wasm"))]
 pub mod paths;
 #[cfg(not(target_family = "wasm"))]
 pub mod picked;
@@ -153,7 +175,6 @@ pub mod reconcile;
 pub mod scryfall;
 pub mod tags;
 #[cfg(not(target_family = "wasm"))]
-pub mod transfer;
 // Desktop only. `open_sized_to_monitor` calls `WebviewWindow::center()`, which tauri
 // declares `#[cfg(desktop)]` (tauri/src/window/mod.rs:1924) — so this module is not merely
 // useless on a phone, it does not compile there. Android's window is the activity and the

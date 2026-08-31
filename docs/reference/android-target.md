@@ -132,7 +132,7 @@ on that list — which is the correction worth keeping.
 | Site | Why |
 | --- | --- |
 | The `--await-predecessor` handshake | There is no portable exe on a phone, and `current_exe()` names a native-library directory. |
-| The mirror's `install_hook` + `spawn` | The mirror's point is a folder a reader greps or syncs; Android's app directory is not that, and `tauri-plugin-dialog` has no folder picker there. |
+| The mirror's `install_hook` + `spawn` | The mirror's point is a folder a reader greps or syncs; Android's app directory is not that, and `tauri-plugin-dialog` has no folder picker there. **The renderer is not gated** — see the archive below. |
 | `update::clean_up` and the daily update check | Nothing stages a build beside the executable, and the store is what notices a release. |
 | `tauri_plugin_snap_layout` | No caption to park an overlay over. The crate itself compiles everywhere. |
 
@@ -146,6 +146,25 @@ whole of what makes any of it do anything.
 
 `tauri_build::build()` emits `cfg(desktop)` and `cfg(mobile)`, so every gate above is a real cfg
 and cargo checks it.
+
+**The backup, as of 2026-08-31: no folder, but the same files as one archive.** The reason the
+folder is not built here has not changed — Android's app directory is reachable mainly through a
+file-manager app and often not by other apps at all, and there is no folder picker to choose a root
+with. What changed is that a reader on a phone still wants their cards in plain text, so
+`mirror::snapshot::mirror_backup_save` renders every file a pass would write, zips it, and writes it
+where the reader said. **It rides the `content://` seam below and needs no new permission**:
+`dialog:allow-save` has been in `capabilities/mobile.json` since the export dialog shipped, and the
+write goes through `picked::write_all` exactly as `export_write_file` does. The bytes never cross
+the webview — a megabyte of base64 handed to the page and handed straight back would be two copies
+of the archive for nothing, and `<a download>` on a blob URL does nothing at all in this webview
+unless the app wires `with_download_started_handler`, which it does not.
+
+**What the reader does *not* get is the share sheet**, which would need a share plugin and an ACL
+entry this repo has neither of. The system save dialog puts the file in Downloads, Drive or
+wherever else they pick, which is the same destination by a different door.
+
+**Undriven on a device.** Nothing in §7's figures covers this: no archive has been built on the
+phone, saved, or opened. What is tested is that the archive's bytes match the desktop folder's.
 
 ## 4. The `content://` seam
 

@@ -126,7 +126,7 @@ function syncStatus(over: Partial<SyncStatus> = {}): SyncStatus {
 
 const folderPanel = () => screen.getByRole("region", { name: "Data folder" });
 
-describe("the Backup panel is desktop-only", () => {
+describe("the Backup panel is on every platform", () => {
   it("is on the page under jsdom, which is the desktop shape", () => {
     render(wrap(<SettingsPage update={NO_UPDATE} />));
 
@@ -134,19 +134,25 @@ describe("the Backup panel is desktop-only", () => {
   });
 
   /**
-   * The mirror writes a folder a reader opens in a text editor, syncs with Dropbox or greps —
-   * none of which an Android app's own directory affords — and `tauri-plugin-dialog`'s manifest
-   * records Android as having no folder picker, so the root could not be chosen either. Rust
-   * agrees from the other side: `lib.rs` installs neither the mirror's hook nor its thread on
-   * mobile.
+   * **This assertion was the opposite until 2026-08-31, and the reversal is the point.** The
+   * panel used to be hidden outright on Android, because the mirror writes a folder a reader
+   * opens in a text editor, syncs with Dropbox or greps — none of which an Android app's own
+   * directory affords — and `tauri-plugin-dialog`'s manifest records the platform as having no
+   * folder picker, so the root could not be chosen either. All of that is still true; hiding the
+   * panel took the *backup* away along with the folder, which is more than the reason supported.
+   *
+   * `BackupPanel` now dispatches on the platform itself and draws the archive here, so the page
+   * mounts it unconditionally. **`BackupArchivePanel.test.tsx` is where the two shapes are told
+   * apart** — this file mocks the panel to a stub, so all it can see is whether it is on the
+   * page at all.
    */
-  it("is gone on Android, while the rest of the page stays", () => {
+  it("stays on Android, where it draws the archive instead of the folder", () => {
     pretendAndroid();
 
     render(wrap(<SettingsPage update={NO_UPDATE} />));
 
-    expect(screen.queryByText("panel:backup")).not.toBeInTheDocument();
-    // The page itself still rendered, so this is the gate rather than a failed mount.
+    expect(screen.getByText("panel:backup")).toBeInTheDocument();
+    // The rest of the page still rendered, so this is about the panel rather than a failed mount.
     expect(screen.getByText("panel:cache")).toBeInTheDocument();
     expect(screen.getByText("panel:update")).toBeInTheDocument();
   });

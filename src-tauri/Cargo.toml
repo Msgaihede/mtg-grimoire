@@ -32,6 +32,23 @@ tauri-build = { version = "2", features = [] }
 # no dependencies of its own.
 unicode-normalization = "0.1"
 flate2 = "1"
+# Two jobs at opposite ends of the app, and it moved up here on 2026-08-31 for the second.
+# **Reading** one entry — `mtg-grimoire.exe` — out of the portable release archive, which is
+# `update`'s and desktop-only. **Writing** the backup archive `mirror::snapshot` hands a
+# browser or a phone, which is every target's, because that is the whole of what web and
+# Android get instead of a folder.
+#
+# `deflate` only, and `default-features = false`: the default set drags in bzip2, zstd, lzma
+# and AES for formats this will never see. Everything `deflate` does pull is pure Rust —
+# `flate2/rust_backend` is miniz_oxide and `zopfli` has no C in it — so the line compiles for
+# `wasm32-unknown-unknown` unchanged, which is why moving it needed no feature edit and left
+# `Cargo.lock` alone.
+#
+# **Switching `time` off is also what keeps it off `SystemTime::now()`**, which *panics* on
+# wasm rather than erroring: without that feature `DateTime::default_for_write()` is the zip
+# epoch and asks no clock at all. `snapshot::stamp` supplies the real moment from
+# `SELECT strftime(…)` instead.
+zip = { version = "2", default-features = false, features = ["deflate"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
@@ -178,10 +195,6 @@ tauri-plugin-mcp-bridge = "0.12"
 # `sync` is the semaphore that caps concurrent image fetches; `time` is the sleep the
 # image cache's pacer and its 429 penalty are made of.
 tokio = { version = "1", features = ["fs", "io-util", "rt", "sync", "time"] }
-# Reading one entry — `mtg-grimoire.exe` — out of the portable release archive.
-# `deflate` only: `Compress-Archive` writes plain deflate, and the default feature set
-# drags in bzip2, zstd, lzma and AES for formats this will never see.
-zip = { version = "2", default-features = false, features = ["deflate"] }
 # Decoding whatever a user picks as a custom deck cover and re-encoding it to WEBP at the
 # `art` crop's 626x457, so a cover and a card's art are interchangeable in every tile.
 # `default-features = false` drops rayon and eleven formats nobody will hand a file-picker;
