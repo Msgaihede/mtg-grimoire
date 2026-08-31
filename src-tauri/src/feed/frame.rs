@@ -723,7 +723,8 @@ mod tests {
     /// brackets are at depth 1 or more, which is what the guard tests.
     #[test]
     fn an_array_inside_an_element_does_not_end_the_framing() {
-        let doc = br#"{"data":[{"id":1,"tags":["a","b"]},{"id":2,"n":{"deep":[1,2]}}],"t":{"x":1}}"#;
+        let doc =
+            br#"{"data":[{"id":1,"tags":["a","b"]},{"id":2,"n":{"deep":[1,2]}}],"t":{"x":1}}"#;
         let (els, _) = collect_elements(&[doc]);
         assert_eq!(
             els,

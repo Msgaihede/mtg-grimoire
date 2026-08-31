@@ -782,96 +782,96 @@ impl<'a> StreamTags<'a> {
             written = stats.taggings;
         }
 
-    // **Two ways a file that decoded perfectly is still not a taxonomy**, and the swap below
-    // is unconditional, so this is the last place either can be stopped. Both leave the
-    // previous rows exactly where they were and drop the staging tables rather than leave
-    // them lying around.
-    //
-    // Not one line was a tag is the obvious one: a gzipped error page, a truncated download.
-    // **Tags but not one tagging is the one that only exists because there are two datasets
-    // of the same shape** — the art file served under the oracle name, or Scryfall renaming
-    // the key `Dataset::subject_column` reads — and it is the more dangerous of the two,
-    // because it does not self-heal. A swap would write an empty closure *and* the watermark
-    // in one transaction, and the next weekly check would replay that ETag, take its 304 and
-    // leave the taxonomy empty forever with nothing in `error_log` to explain it.
-    let refusal = match (g.tags.is_empty(), stats.taggings) {
-        (true, _) => Some(TagError::Empty {
-            skipped: stats.skipped_lines,
-        }),
-        (false, 0) => Some(TagError::Untagged {
-            tags: g.tags.len() as u64,
-        }),
-        _ => None,
-    };
-    if let Some(err) = refusal {
-        let conn = crate::db::lock_blocking(db);
-        (ds.drop_staging)(&conn)?;
-        return Err(err);
-    }
-    stats.tags = g.tags.len() as u64;
+        // **Two ways a file that decoded perfectly is still not a taxonomy**, and the swap below
+        // is unconditional, so this is the last place either can be stopped. Both leave the
+        // previous rows exactly where they were and drop the staging tables rather than leave
+        // them lying around.
+        //
+        // Not one line was a tag is the obvious one: a gzipped error page, a truncated download.
+        // **Tags but not one tagging is the one that only exists because there are two datasets
+        // of the same shape** — the art file served under the oracle name, or Scryfall renaming
+        // the key `Dataset::subject_column` reads — and it is the more dangerous of the two,
+        // because it does not self-heal. A swap would write an empty closure *and* the watermark
+        // in one transaction, and the next weekly check would replay that ETag, take its 304 and
+        // leave the taxonomy empty forever with nothing in `error_log` to explain it.
+        let refusal = match (g.tags.is_empty(), stats.taggings) {
+            (true, _) => Some(TagError::Empty {
+                skipped: stats.skipped_lines,
+            }),
+            (false, 0) => Some(TagError::Untagged {
+                tags: g.tags.len() as u64,
+            }),
+            _ => None,
+        };
+        if let Some(err) = refusal {
+            let conn = crate::db::lock_blocking(db);
+            (ds.drop_staging)(&conn)?;
+            return Err(err);
+        }
+        stats.tags = g.tags.len() as u64;
 
-    // The tags themselves. **Five columns, and `slug_norm` is [`normalize`]'s answer for the
-    // slug in the same row**: the search compares a normalised needle against that column, so
-    // a column left empty here is a search that matches nothing with no error anywhere.
-    let tags_sql = format!(
-        "INSERT OR IGNORE INTO {staging} (slug, id, label, description, slug_norm)
+        // The tags themselves. **Five columns, and `slug_norm` is [`normalize`]'s answer for the
+        // slug in the same row**: the search compares a normalised needle against that column, so
+        // a column left empty here is a search that matches nothing with no error anywhere.
+        let tags_sql = format!(
+            "INSERT OR IGNORE INTO {staging} (slug, id, label, description, slug_norm)
          VALUES (?1, ?2, ?3, ?4, ?5)",
-        staging = staging(ds.tags_table)
-    );
-    for chunk in g.tags.chunks(BATCH) {
-        let mut conn = crate::db::lock_blocking(db);
-        let tx = conn.transaction()?;
+            staging = staging(ds.tags_table)
+        );
+        for chunk in g.tags.chunks(BATCH) {
+            let mut conn = crate::db::lock_blocking(db);
+            let tx = conn.transaction()?;
+            {
+                let mut stmt = tx.prepare_cached(&tags_sql)?;
+                for tag in chunk {
+                    stmt.execute(params![
+                        tag.slug,
+                        tag.id,
+                        tag.label,
+                        tag.description,
+                        normalize(&tag.slug)
+                    ])?;
+                }
+            }
+            tx.commit()?;
+            drop(conn);
+            stand_aside();
+            written += chunk.len() as u64;
+            progress(written);
+        }
+
+        // The edges, once every id in the file is known. A parent the file never defined is
+        // counted and dropped: an edge to a tag that does not exist is not a hierarchy, and
+        // carrying it would only make the walk below reach for an index that is not there.
+        for (child, ids) in parent_ids.iter().enumerate() {
+            for id in ids {
+                match by_id.get(id) {
+                    // A tag naming itself as its own parent is a one-node cycle; the walk
+                    // survives it either way, but the edge says nothing and is not stored.
+                    Some(&parent) if parent as usize != child => g.tags[child].parents.push(parent),
+                    Some(_) => {}
+                    None => stats.dangling_parents += 1,
+                }
+            }
+        }
+        write_edges(ds, db, &g, &mut written, progress)?;
+
+        // The closure. Computed with no lock held — this is pure CPU over the tag list — and then
+        // unioned per subject: a subject holding two tags that share an ancestor gets that
+        // ancestor once, which is what the `(subject, slug)` primary key would insist on anyway.
+        let closures = ancestor_closures(&g.tags);
+        stats.closure_rows = write_closure(ds, db, &g, &closures, &mut written, progress)?;
+
         {
-            let mut stmt = tx.prepare_cached(&tags_sql)?;
-            for tag in chunk {
-                stmt.execute(params![
-                    tag.slug,
-                    tag.id,
-                    tag.label,
-                    tag.description,
-                    normalize(&tag.slug)
-                ])?;
-            }
-        }
-        tx.commit()?;
-        drop(conn);
-        stand_aside();
-        written += chunk.len() as u64;
-        progress(written);
-    }
-
-    // The edges, once every id in the file is known. A parent the file never defined is
-    // counted and dropped: an edge to a tag that does not exist is not a hierarchy, and
-    // carrying it would only make the walk below reach for an index that is not there.
-    for (child, ids) in parent_ids.iter().enumerate() {
-        for id in ids {
-            match by_id.get(id) {
-                // A tag naming itself as its own parent is a one-node cycle; the walk
-                // survives it either way, but the edge says nothing and is not stored.
-                Some(&parent) if parent as usize != child => g.tags[child].parents.push(parent),
-                Some(_) => {}
-                None => stats.dangling_parents += 1,
-            }
-        }
-    }
-    write_edges(ds, db, &g, &mut written, progress)?;
-
-    // The closure. Computed with no lock held — this is pure CPU over the tag list — and then
-    // unioned per subject: a subject holding two tags that share an ancestor gets that
-    // ancestor once, which is what the `(subject, slug)` primary key would insist on anyway.
-    let closures = ancestor_closures(&g.tags);
-    stats.closure_rows = write_closure(ds, db, &g, &closures, &mut written, progress)?;
-
-    {
-        let mut conn = crate::db::lock_blocking(db);
-        let tx = conn.transaction()?;
-        (ds.swap_staging)(&tx)?;
-        // In the same transaction as the swap, and that is the contract: a watermark without
-        // its rows would 304 past an empty taxonomy forever, and rows without their watermark
-        // would re-download a file the database already holds.
-        tx.execute(
-            &format!(
-                "INSERT INTO {meta}
+            let mut conn = crate::db::lock_blocking(db);
+            let tx = conn.transaction()?;
+            (ds.swap_staging)(&tx)?;
+            // In the same transaction as the swap, and that is the contract: a watermark without
+            // its rows would 304 past an empty taxonomy forever, and rows without their watermark
+            // would re-download a file the database already holds.
+            tx.execute(
+                &format!(
+                    "INSERT INTO {meta}
                     (id, etag, updated_at, ingested_at, checked_at, tag_count, tagging_count)
                  VALUES (1, ?1, ?2, ?3, ?3, ?4, ?5)
                  ON CONFLICT(id) DO UPDATE SET
@@ -881,22 +881,22 @@ impl<'a> StreamTags<'a> {
                     checked_at = excluded.checked_at,
                     tag_count = excluded.tag_count,
                     tagging_count = excluded.tagging_count",
-                meta = ds.meta_table
-            ),
-            // `?3` twice: an ingest is also a check, and the two stamps only come apart when a
-            // later run is told 304.
-            params![
-                stamp.etag,
-                stamp.updated_at,
-                ingested_at,
-                stats.tags as i64,
-                stats.taggings as i64
-            ],
-        )?;
-        tx.commit()?;
-    }
-    progress(written);
-    Ok(stats)
+                    meta = ds.meta_table
+                ),
+                // `?3` twice: an ingest is also a check, and the two stamps only come apart when a
+                // later run is told 304.
+                params![
+                    stamp.etag,
+                    stamp.updated_at,
+                    ingested_at,
+                    stats.tags as i64,
+                    stats.taggings as i64
+                ],
+            )?;
+            tx.commit()?;
+        }
+        progress(written);
+        Ok(stats)
     }
 }
 
@@ -1852,7 +1852,10 @@ mod tests {
         assert_eq!(from_stream, from_file, "the two drivers must count alike");
         assert_eq!(from_stream.tags, 3);
         assert_eq!(from_stream.taggings, 4);
-        assert_eq!(from_stream.skipped_lines, 2, "the junk line and the blank one");
+        assert_eq!(
+            from_stream.skipped_lines, 2,
+            "the junk line and the blank one"
+        );
         assert_eq!(closure_rows(&by_stream), closure_rows(&by_file));
         // The flattening really happened: `oid-3` holds `ramp-land` and its ancestor `ramp`.
         assert!(closure_rows(&by_stream).contains(&("oid-3".into(), "ramp".into())));
@@ -1902,7 +1905,10 @@ mod tests {
     #[test]
     fn a_stream_of_tags_with_no_taggings_is_refused() {
         let db = mem_db();
-        let lines = [line("a1", "ramp", &[], &[]), line("a2", "removal", &[], &[])];
+        let lines = [
+            line("a1", "ramp", &[], &[]),
+            line("a2", "removal", &[], &[]),
+        ];
         let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
         let err = push_all(&db, &gz_bytes(&refs), 64).unwrap_err();
         assert!(

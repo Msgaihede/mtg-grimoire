@@ -465,7 +465,10 @@ pub async fn ingest_tags(dataset: String, force: bool, on_progress: js_sys::Func
             Ok(c) => c,
             Err(e) => {
                 report(&on_progress, event, "error", 0, 0);
-                return err(format!("the {} download stopped partway: {e}", ds.bulk_name));
+                return err(format!(
+                    "the {} download stopped partway: {e}",
+                    ds.bulk_name
+                ));
             }
         };
         got += chunk.len() as u64;
