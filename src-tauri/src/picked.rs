@@ -2,7 +2,7 @@
 //!
 //! On desktop a picked file is a **path**, and `std::fs` opens it. On Android it is a
 //! **`content://` URI**: `tauri-plugin-dialog`'s `DialogPlugin.kt` fires
-//! `ACTION_OPEN_DOCUMENT`/`ACTION_CREATE_DOCUMENT` and returns `uri.toString()`, which names a
+//! `ACTION_GET_CONTENT`/`ACTION_CREATE_DOCUMENT` and returns `uri.toString()`, which names a
 //! row in a ContentProvider rather than anything on a filesystem. `std::fs::read` of one
 //! answers `No such file or directory`, which reads exactly like the reader picked a file that
 //! vanished.
