@@ -864,7 +864,7 @@ since 2026-08-31**: the backup archive added `mirror_backup_zip`, which is route
 | --- | --- | --- |
 | **16** | `sync_pair/pairing` (9) and `sync_engine/commands` (7) | The pairing and membership surface. `lib.rs` states `pairing` "does not and never will" compile for wasm; the relay work is live and moving, so this is its own decision rather than a port |
 | **5** | `desktop.rs` | Seven commands, two of which were routed on 2026-08-31: `update_status` and `update_history` report rather than replace. What is left is the five §6.3 updater commands and `sync_run` — the web target runs its own ingest through `glue.rs` |
-| **2** | `cache_clear`, `deck_set_cover_image` | Three of `reset`'s four clears were routed on 2026-08-31 — they are pure SQLite and always were. `cache_clear` sweeps a directory of image files, which on this target is Cache Storage; the cover directory a browser has none of |
+| **2** | `cache_clear`, `deck_set_cover_image` | Three of `reset`'s four clears were routed on 2026-08-31 — they are pure SQLite and always were. `cache_clear` sweeps a directory of image files, which on this target is Cache Storage, so it is **answered by the service worker** rather than by an arm — diverted in `src/lib/core/browser.ts` the way the four `*_refresh` are, and pinned out of `COMMANDS` by a test. The cover directory a browser has none of |
 | **4** | `mirror/settings.rs` | These four *are* the folder — where it is, whether it runs, when it last ran, rebuild it now — and a folder in OPFS cannot be read by the programs a mirror exists for |
 | **1** | `mirror_backup_save` | Android's door onto the same archive `mirror_backup_zip` routes: it writes at a destination a save dialog answered, which a browser has no way to name. Not a gap — the browser's door is the routed one |
 | **2** | `import_read_file`, `export_write_file` | §6.2's `<input type=file>` and `Blob` |
@@ -1008,6 +1008,11 @@ is written here rather than left to be found on the phone. A test in `route.rs` 
 an arm added without the rewrite compiles on the desktop leg and takes the wasm build red on
 a branch nobody ran `--target` on.
 
+> **The gap in that paragraph closed the same day** — see *The last control on Settings* at
+> the foot of this page. The rewrite landed in the page and the service worker; `COMMANDS` did
+> not move and the `route.rs` test still holds, so everything above stays true except the
+> sentence about the button.
+
 **`decks_clear` passes `None` for its covers directory, and that argument is load-bearing.**
 `clear_decks` hands it to `sweep_dir`, which deletes everything under it *recursively*. A
 browser has no covers directory — `crate::paths` does not compile there — so `None` is the
@@ -1090,3 +1095,102 @@ anything reachable by `sweep_dir`**. Two survived and both were worth the round:
 it handed a *managed* install the Windows setup — a mock encoding a state the backend refuses,
 green for ever because nothing else in the workbench disagreed with it. It is an allow-list
 now, like the Rust it mirrors.
+---
+
+## 2026-08-31: the last control on Settings — the cache clear works in a browser
+
+**`COMMANDS` did not move, and this is the second time that has been the answer.** PR 11
+diverted four command *names* onto `#[wasm_bindgen]` exports because a refresh is `async` and
+downloads; this diverts one onto the **service worker** because the thing it deletes is not in
+the database at all. `route.rs`'s `cache_clear_is_not_routed_while_the_image_cache_is_a_rewrite`
+is unchanged and still passing: there is nothing for an arm over a `&Connection` to sweep.
+
+| | Desktop | Browser |
+| --- | --- | --- |
+| `DELETE FROM image_cache` | the rows that vouched for the files | **nothing** — `images.rs` is gated out of the wasm crate, so no row has ever been written and `rows` is a truthful literal `0` |
+| `sweep_dir(images)`, `sweep_dir(tmp)` | the byte cache on disk | every entry in the worker's `IMAGE_CACHE`, minus the ledger's own |
+| `cache.forget_pending()` | the fetcher's in-flight set | no equivalent — there is no fetcher, the `<img>` is |
+
+### The three pieces
+
+- **`clearImages` in `src/pwa/imageLedger.ts`** deletes the pictures and hands back the ledger
+  that describes what is left. **Both halves or neither**: a clear that emptied Cache Storage
+  and left the stored ledger alone would leave the worker certain it was holding 256 MB of
+  files that are gone, after which `evictions` deletes from an empty cache on every request for
+  the life of the worker — `forget`'s failure reached from the other end.
+- **The `CLEAR_IMAGE_CACHE` verb in `sw.ts`**, the fourth the worker answers. It goes through
+  `mutateLedger` for `SET_IMAGE_CAP`'s reason and replies on `event.ports[0]` for `VERSION`'s:
+  a `postMessage` back to the clients would answer every open tab rather than the one whose
+  reader pressed the button.
+- **`src/pwa/imageCacheClear.ts`**, the page half, which opens a `MessageChannel`, asks, and
+  answers as the `CacheCleared` DTO the panel already reads. `CachePanel` and `useLocalCache`
+  are untouched and cannot tell which target they are drawn on.
+
+### Three things that are decisions rather than details
+
+**A browser with no service worker is told nothing was cached, and that is the fact rather
+than a shrug.** `npm run web:dev` registers no worker at all (measured, and in
+[pwa-shell.md](pwa-shell.md)), and a private window may have none either — in both cases
+nothing has ever written to `IMAGE_CACHE`, because the worker is its only writer. `files: 0`
+prints *"There was nothing cached to clear."* through `cacheOutcome`, which is true. A
+rejection was the alternative and would paint the panel red for a button that did exactly what
+it should have.
+
+**The controller is asked first and the registration second.** `navigator.serviceWorker.
+controller` is `null` in three situations that are not the same thing: no support at all, a
+first load before `clients.claim()`, and a document loaded *around* a perfectly good worker (a
+shift-reload, devtools' bypass) whose cache is full. Only the last has anything to clear, and
+`getRegistration()` is what finds it. **`.ready` is not used and must not be** — it never
+resolves when there is no registration, which `PwaShell`'s comment records measuring.
+
+**There is a timeout, because a worker that does not know the verb says nothing at all.**
+`sw.ts`'s message handler is a chain of `if`s with no `else`. A reader who never presses the
+update bar keeps the build they started the session with, by design (spec §5.4), so an older
+active worker is a reachable state — and without the timeout the mutation stays `isPending`
+for the life of the page: a Clear button that spins for ever with nothing on screen saying why.
+
+### What the mutation round found
+
+Eighteen mutations, all in Cache Storage arithmetic, the page-side helper or the core's
+routing — **none of them touched a path, a directory, or anything reachable from `sweep_dir`**.
+**Sixteen were killed on the first pass, seventeen after the repair below**, and the one
+survivor is equivalent by construction:
+
+- **A test that could not fail, which is the finding worth the round.** *"does not reject after
+  it has already answered"* waited past the timeout and asserted the promise had not rejected —
+  true whether or not the timer is cancelled, because rejecting a settled promise is a no-op.
+  Deleting the `clearTimeout` left it green. It watches the cancel itself now, and kills that
+  mutant.
+- **A type-only fence, surviving because there is no behaviour to change.**
+  `ClearableCache.delete` *requires* `{ ignoreVary: true }` rather than accepting it, so
+  relaxing the interface alone leaves every call site passing it; dropping the argument was
+  killed at once. The requirement stays, because `Cache.delete` runs the same matching
+  algorithm as `Cache.match`: a stored response carrying a `Vary` the request disagrees about
+  is **not deleted** and answers `false` — which this code would then report as a file that
+  would not go.
+
+### Two things found on the way, both open
+
+- **`sw.ts`'s `sweep()` deletes without `ignoreVary`.** It is the eviction path, it predates
+  this work, and it has the same exposure the paragraph above describes: a picture whose stored
+  response carries a `Vary` would refuse to be evicted and the ledger would forget it anyway,
+  putting the cache permanently over its cap with no way back. `swCore.test.ts`'s sweep only
+  checks `.match(`, so nothing goes red. Not fixed here — it is the eviction path's own change.
+- **Two comments in `src-tauri/src/web/route.rs` have expired.** The `COMMANDS` block says the
+  Local cache button *"is the one control on the Settings page that still answers `unknown
+  command` in a browser"*, which is no longer true of any control; the test's own doc says the
+  arm *"cannot exist until that is rewritten"*, and the rewrite happened somewhere the arm
+  still cannot reach. **The assertion itself is right and must stay** — nothing about
+  `COMMANDS` changed. Left alone here because this work is frontend-only and a `src-tauri` edit
+  restarts every running `tauri dev`.
+
+### Not verified
+
+**Nobody has pressed the button in a browser.** The three suites cover the arithmetic, the
+message helper and the divert, but `sw.ts` itself is unreachable from vitest — jsdom
+implements neither `caches` nor a registration — so the message handler's wiring is guarded by
+a **source sweep** in `swCore.test.ts` rather than by a test that runs it. What a live pass
+would settle: that the reply arrives at all, that `files` matches what the wall put in the
+cache, and that a picture whose response carries a `Vary` really does need the `ignoreVary`
+this code passes. Use `web:build` + `vite preview`; a dev-server reading cannot answer any
+question about this route.

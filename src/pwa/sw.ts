@@ -23,6 +23,7 @@ import {
   IMAGE_CACHE,
   LEDGER_KEY,
   admit,
+  clearImages,
   evictions,
   forget,
   ledgerWriter,
@@ -31,6 +32,7 @@ import {
   serializeLedger,
   touch,
   withCap,
+  type ImageClearReport,
   type Ledger,
 } from "./imageLedger";
 import { routeFor, shellCacheName, staleShellCaches } from "./swCore";
@@ -221,6 +223,42 @@ sw.addEventListener("message", (event) => {
         await mutateLedger(async (ledger) =>
           sweep(cache, withCap(ledger, Number(data.bytes))),
         );
+      })(),
+    );
+    return;
+  }
+  if (data?.type === "CLEAR_IMAGE_CACHE") {
+    // **Settings → Local cache → Clear, on this target.** The desktop's `cache_clear`
+    // sweeps `data/images/` and drops the `image_cache` rows that vouched for it; a browser
+    // has neither, and the pictures are in this cache instead — so the command is diverted in
+    // `src/lib/core/browser.ts` and lands here. `web::route::COMMANDS` does not move: the
+    // bytes are Cache Storage's and no arm over a SQLite connection could reach them.
+    //
+    // Through `mutateLedger` for `SET_IMAGE_CAP`'s reason, and the reason is sharper here: a
+    // clear that raced an admit and wrote back the ledger it read first would leave the
+    // worker counting a picture it had just deleted, for the life of the worker. Queued, an
+    // admit either lands before the read — and is cleared with everything else — or after the
+    // write, with its own `cache.put` already done. Both are consistent.
+    //
+    // The counts escape through a closure because `mutateLedger` answers with the *ledger*
+    // and this needs what the *cache* did. It is not a race — the mutation is awaited before
+    // the reply — and the initialiser is unreachable rather than a fallback: a throw anywhere
+    // in here rejects the whole `waitUntil` and posts nothing at all, which the caller's own
+    // timeout is what covers. Nothing here is caught, because there is nothing this worker
+    // could truthfully say about a Cache Storage call that failed.
+    event.waitUntil(
+      (async () => {
+        const cache = await caches.open(IMAGE_CACHE);
+        let report: ImageClearReport = { files: 0, bytes: 0, failed: 0 };
+        await mutateLedger(async (ledger) => {
+          const cleared = await clearImages(cache, ledger);
+          report = cleared.report;
+          return cleared.ledger;
+        });
+        // Answered on the port the caller opened, exactly as `VERSION` is — a reader who
+        // pressed a button is owed the number, and a `postMessage` back to the client would
+        // reach every tab rather than the one that asked.
+        event.ports[0]?.postMessage(report);
       })(),
     );
     return;

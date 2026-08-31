@@ -150,6 +150,36 @@ describe("what the worker must never contain", () => {
    * `ignoreVary`. `readLedger` is deliberately not counted: `ledgerFor` has to call it, and a
    * lone read races nothing.
    */
+  /**
+   * **The clear is the one operation that can leave the two halves disagreeing, and going
+   * around the queue is how.** `clearImages` deletes files and hands back the ledger that
+   * describes what is left; it is the caller that writes it. A call made outside
+   * `mutateLedger` would empty Cache Storage and leave the stored ledger certain it was still
+   * holding 256 MB of pictures - after which `evictions` deletes from an empty cache on every
+   * single request, for the life of the worker. That is `forget`'s failure reached from the
+   * other end, and the sweep in the previous test cannot see it: nothing has to be *written*
+   * for it to happen.
+   *
+   * The reply is swept for the same reason `ledgerWriter` is not memoised - a silent failure
+   * with no witness. `sw.ts` is unreachable from vitest (jsdom implements no `caches` and no
+   * registration), so the page's own timeout is all that stands between a handler that forgets
+   * to answer and a Clear button that spins for ever.
+   */
+  it("clears the image cache through the writer, and answers the caller", () => {
+    const calls = SW_SOURCE.match(/clearImages\(/g) ?? [];
+    expect(calls).toHaveLength(1);
+
+    const verbAt = SW_SOURCE.indexOf('"CLEAR_IMAGE_CACHE"');
+    const nextVerbAt = SW_SOURCE.indexOf('"VERSION"');
+    expect(verbAt).toBeGreaterThan(-1);
+    expect(nextVerbAt).toBeGreaterThan(verbAt);
+
+    const handler = SW_SOURCE.slice(verbAt, nextVerbAt);
+    expect(handler).toContain("clearImages(");
+    expect(handler).toContain("mutateLedger(");
+    expect(handler).toContain("event.ports[0]?.postMessage");
+  });
+
   it("never writes the ledger outside the serialising writer", () => {
     // The definition, plus the single call inside `ledgerFor`'s writer argument. Anything more
     // is a caller that has gone around the queue.
