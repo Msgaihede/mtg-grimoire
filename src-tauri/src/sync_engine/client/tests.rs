@@ -1780,3 +1780,46 @@ async fn a_failed_ack_leaves_the_watermark_unset_so_the_next_trip_retries() {
         "an ack the relay refused is not a watermark"
     );
 }
+
+/// **The test that kills `acked.is_some()`.**
+///
+/// The three tests above all turn on a *first* ack, where `LAST_ACKED` is `None` under both the
+/// correct guard and the mutant — so none of them can tell the two apart. The divergence only
+/// appears on a second trip whose cursor has moved past a watermark this device already stored:
+/// the correct guard acks again, `acked.is_some()` goes quiet for ever and pins the relay's
+/// compaction floor at the first value this device ever sent.
+#[tokio::test]
+async fn a_later_trip_acks_again_once_the_cursor_moves_past_the_stored_watermark() {
+    let server = MockServer::start_async().await;
+    keys_mock(&server, 0);
+    // Two pulls, told apart by the cursor the device asks from.
+    server.mock(|when, then| {
+        when.method(GET)
+            .path(format!("/g/{GROUP}/pull"))
+            .query_param("since", "0");
+        then.status(200)
+            .json_body(serde_json::json!({ "envelopes": [], "cursor": 4 }));
+    });
+    server.mock(|when, then| {
+        when.method(GET)
+            .path(format!("/g/{GROUP}/pull"))
+            .query_param("since", "4");
+        then.status(200)
+            .json_body(serde_json::json!({ "envelopes": [], "cursor": 9 }));
+    });
+    let acked = server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{GROUP}/ack"));
+        then.status(204);
+    });
+
+    let a = paired("dev-a", 0);
+    set_state(&a, RELAY_URL, &server.base_url()).unwrap();
+    grant(&a);
+
+    run_once(&a).await.unwrap();
+    assert_eq!(get_state(&a, LAST_ACKED).as_deref(), Some("4"));
+
+    run_once(&a).await.unwrap();
+    acked.assert_calls(2);
+    assert_eq!(get_state(&a, LAST_ACKED).as_deref(), Some("9"));
+}
