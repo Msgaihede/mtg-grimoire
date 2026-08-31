@@ -232,6 +232,36 @@ describe("Ribbon", () => {
     expect(screen.getByRole("button", { name: /refresh/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Update to 0.3.0" })).toBeEnabled();
   });
+
+  /**
+   * `deviceSync` is `null` for both the web target and every installation that has paired
+   * nothing — which is every installation today. Neither is a failure, so the row says
+   * nothing rather than drawing a marker for a feature that does not apply.
+   */
+  it("says nothing about device sync when there is no group", () => {
+    render(<Ribbon {...props({ deviceSync: null })} />);
+    expect(screen.queryByLabelText(/sync/i)).not.toBeInTheDocument();
+  });
+
+  /**
+   * The one state this marker exists for: a socket that died silently reads as a device with
+   * nothing to sync, and offline is the state a reader has to be told about.
+   */
+  it("shows an offline marker when the socket is down", () => {
+    render(<Ribbon {...props({ deviceSync: "offline" })} />);
+    expect(screen.getByLabelText("Sync offline")).toBeInTheDocument();
+  });
+
+  /**
+   * `getByRole("status")` is singular in six assertions in this file and throws on multiple
+   * matches. A working socket is not news, so the marker carries a tooltip and an
+   * `aria-label` and never a live-region role — this is the test that would fail loudly if a
+   * later edit gave it one.
+   */
+  it("adds no second live region", () => {
+    render(<Ribbon {...props({ deviceSync: "live" })} />);
+    expect(() => screen.getByRole("status")).not.toThrow();
+  });
 });
 
 /**

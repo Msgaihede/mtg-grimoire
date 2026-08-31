@@ -1,4 +1,4 @@
-import { useRef, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   PanelLeftClose,
@@ -22,6 +22,7 @@ import {
   useSidebarDropTarget,
   type SidebarDrop,
 } from "@/components/useSidebarDrops";
+import { ipc } from "@/lib/ipc";
 import { isAndroid } from "@/lib/platform";
 import { isWebTarget } from "@/pwa/target";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
@@ -42,6 +43,8 @@ import { useCardZoomPersistence } from "@/lib/useCardZoomPersistence";
 import { useListViewPersistence } from "@/lib/useListViewPersistence";
 import { useFlattenPersistence } from "@/lib/useFlattenPersistence";
 import { useDelayedFlag } from "@/lib/useDelayedFlag";
+import { useDeviceSyncInvalidation } from "@/lib/useDeviceSyncInvalidation";
+import { useDeviceSyncLive } from "@/lib/useDeviceSyncLive";
 import { useMarketplace, useMarketplaceProgress } from "@/lib/useMarketplace";
 import { useNarrowWindow } from "@/lib/useNarrowWindow";
 import { useNavCollapsed } from "@/lib/useNavCollapsed";
@@ -177,6 +180,30 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // component that is always mounted — and it takes the progress event as a prop so the
   // app still registers exactly one `sync:progress` listener.
   useSyncInvalidation(progress);
+  // Task 10's bug fix, for the same "exactly one of these in the app" reason as everything else
+  // in this block: `sync_now`'s own mutation invalidates only the sync status, so applying pulled
+  // ops from an automatic trip refreshed nothing on screen until this listener existed.
+  useDeviceSyncInvalidation();
+  // The relay socket's state, seeded and then kept live by one `sync:live` listener — the
+  // ribbon's whole reason for existing (see `Ribbon`'s own comment on `deviceSync`). Read here
+  // rather than in the ribbon itself so there is exactly one subscription for the life of the
+  // app, and passed down `isWebTarget()`-gated at the call site below.
+  const deviceSync = useDeviceSyncLive();
+  // Android drops its socket in the background because Doze would sever it anyway, and a
+  // phone that looks connected while being hours stale is worse than one that knows it is
+  // offline. Desktop never calls this: an idle hibernated socket costs nothing.
+  //
+  // `isAndroid()`, and deliberately not `isWebTarget()` — the question here is the handset's own
+  // Doze behaviour, which is a fact about the platform the app is running on rather than about
+  // which core it was built against. `TitleBar`'s gate two screens up is the other question, and
+  // getting the two confused is exactly what the comment there warns about.
+  useEffect(() => {
+    if (!isAndroid()) return;
+    const tell = () => void ipc.syncLiveForeground(!document.hidden).catch(() => undefined);
+    tell();
+    document.addEventListener("visibilitychange", tell);
+    return () => document.removeEventListener("visibilitychange", tell);
+  }, []);
   // The one `marketplace:progress` subscription in the app, for `useSyncProgress`' reason.
   // It renders nothing: the event goes into the query cache, and every `useMarketplace()`
   // observer — including the one two lines below — reads it back from there.
@@ -460,6 +487,13 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
             updateVersion={update.status?.available?.version ?? null}
             updateInstallable={update.action !== "unavailable"}
             onOpenUpdate={() => setActiveView("settings")}
+            // **`isWebTarget()`, never `isAndroid()`.** Android runs the relay over Tauri events
+            // exactly like desktop; it is the web target that has no relay commands at all
+            // (`web/route.rs`'s `COMMANDS` list carries none of them), so `useDeviceSyncLive`
+            // would sit on its `"off"` seed forever there and drawing a marker over that would be
+            // this shell's `TitleBar` gate wrong a second time in one file.
+            deviceSync={isWebTarget() ? null : deviceSync}
+            onOpenSync={() => setActiveView("settings")}
           />
 
           {/* Given the whole screen when the database is empty, so it needs the error and

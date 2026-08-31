@@ -353,6 +353,19 @@ export const UpdateNotInstallable: Story = {
  * two sentences about one folder, in that order, separated by a newline that
  * `whitespace-pre-line` on the panel keeps as a break.
  */
+/**
+ * The socket is up. Quiet on purpose — this is the state every other story above is silently
+ * in too, and a working connection is not news. `Ribbon`'s own comment is the argument in full.
+ */
+export const SyncLive: Story = { args: { deviceSync: "live" } };
+
+/**
+ * The one state this marker exists for. Automatic sync made a failure manual sync never had: a
+ * socket that died silently looks exactly like a device with nothing to sync, and this is the
+ * only visible difference between the two.
+ */
+export const SyncOffline: Story = { args: { deviceSync: "offline" } };
+
 export const ImagesNotCached: Story = {
   args: { imageStoreFailures: 12 },
   play: async ({ canvasElement }) => {

@@ -1,8 +1,9 @@
-import { CircleArrowUp, RefreshCw } from "lucide-react";
+import { CircleArrowUp, LoaderCircle, RefreshCw, Wifi, WifiOff } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { ManaLine } from "@/components/ManaLine";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import type { Activity } from "@/lib/activity";
+import type { LiveState } from "@/lib/ipc";
 import { PRESS, TRANSITION } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
@@ -67,6 +68,13 @@ export interface RibbonProps {
   updateInstallable?: boolean;
   /** Opens Settings, where the release notes and the actual update controls are. */
   onOpenUpdate?: () => void;
+  /**
+   * The relay socket's state, or `null` where device sync does not exist — the web target,
+   * and every installation that has paired nothing.
+   */
+  deviceSync?: LiveState | null;
+  /** Opens Settings at the Sync panel. */
+  onOpenSync?: () => void;
 }
 
 /**
@@ -84,6 +92,23 @@ export interface RibbonProps {
  * in and does not have to ask about the pointer to answer this.
  */
 const TOUCH_FLOOR = { minWidth: "var(--target-min)", minHeight: "var(--target-min)" } as const;
+
+/**
+ * The one sentence a hover gets, per socket state — never `"off"` or `null`, which the row does
+ * not draw at all.
+ *
+ * **`live` says the least, on purpose.** A socket that is doing its job is not news: the whole
+ * reason this marker exists is `offline`, where a reader believes their edits are going
+ * somewhere and they are not. Saying more about `live` than "it is" would spend the same weight
+ * on the state that never needed defending.
+ */
+const DEVICE_SYNC_TOOLTIP: Record<Exclude<LiveState, "off">, string> = {
+  connecting: "Reconnecting to your other devices…",
+  live: "Synced with your other devices.",
+  offline:
+    "The connection to your other devices dropped. Changes made here are not reaching them " +
+    "until it reconnects.",
+};
 
 /**
  * The global ribbon: one 56px row that owns every action which is not about the view
@@ -163,6 +188,8 @@ export function Ribbon({
   updateVersion = null,
   updateInstallable = false,
   onOpenUpdate,
+  deviceSync = null,
+  onOpenSync,
 }: RibbonProps) {
   const tip = useTooltip();
   // Two sentences about one folder, in the tooltip that already names it. Not a banner:
@@ -255,6 +282,42 @@ export function Ribbon({
                   replace itself; an MSI or Linux build can only be shown where to
                   download — and a control says exactly what happens when it is used. */}
               {!narrow && updateLabel}
+            </button>
+          )}
+          {/* A small marker rather than a control that competes with Refresh — the row's other
+              two buttons announce something the reader can *do*; this only ever announces
+              something the reader could not otherwise see, which is why `live` and
+              `connecting` are drawn as dim as the row allows and only `offline` reaches for the
+              destructive colour. **No `role="status"`, deliberately**: the row's own status
+              line two elements over is the one live region here, and a reader does not need to
+              be told a working socket exists. The word is in a hover only, through
+              `useTooltip()` and never a native `title`, and the accessible name carries the
+              state on its own (`aria-label`) so a screen reader still gets it without one. */}
+          {deviceSync !== null && deviceSync !== "off" && (
+            <button
+              type="button"
+              onClick={onOpenSync}
+              aria-label={"Sync " + deviceSync}
+              {...tip(DEVICE_SYNC_TOOLTIP[deviceSync])}
+              className={cn(
+                "inline-flex shrink-0 items-center justify-center rounded-md p-1.5",
+                PRESS,
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                deviceSync === "offline"
+                  ? "text-destructive hover:bg-destructive/10"
+                  : "text-dim hover:bg-bg",
+              )}
+            >
+              {deviceSync === "offline" ? (
+                <WifiOff className="size-4" aria-hidden="true" />
+              ) : deviceSync === "connecting" ? (
+                <LoaderCircle
+                  className="size-4 animate-spin motion-reduce:animate-none"
+                  aria-hidden="true"
+                />
+              ) : (
+                <Wifi className="size-4" aria-hidden="true" />
+              )}
             </button>
           )}
           {/* A fade, and deliberately **not** `statusLine`: this line is a flex item in a
