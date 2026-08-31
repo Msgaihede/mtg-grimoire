@@ -39,7 +39,15 @@ const OUT = join("web", "public", "wasm");
  * Grepping the generated glue is the cheapest gate that can catch it, and it catches it at
  * build time rather than at Task 10's manual pass.
  */
-const EXPORTS = ["open", "call", "ingest_cards", "ingest_combos", "close"];
+const EXPORTS = [
+  "open",
+  "call",
+  "ingest_cards",
+  "ingest_combos",
+  "ingest_tags",
+  "ingest_prices",
+  "close",
+];
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, { stdio: "inherit", shell: false, ...options });

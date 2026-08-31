@@ -46,11 +46,9 @@ pub mod oracle;
 pub mod query;
 
 use crate::sync::AppState;
-use flate2::read::GzDecoder;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
-use std::io::{BufRead, BufReader};
 use std::path::Path;
 // `PathBuf` is only in `temp_path`'s return type, and downloading is desktop-only.
 #[cfg(not(target_family = "wasm"))]
@@ -539,8 +537,119 @@ pub struct FileStamp {
 // Ingest
 // ---------------------------------------------------------------------------------------
 
-/// Stream a gzipped tag file into `ds`'s staging tables, flatten the hierarchy, and swap the
-/// result into place.
+/// Everything the read loop used to keep in locals.
+///
+/// It is a struct rather than seven bindings because [`StreamTags`] hands the whole of it to
+/// one closure — `Lines::push` calls back per line, and a closure that captured seven
+/// `&mut` fields of `self` would collide with the `&self.lines` driving it.
+#[derive(Default)]
+struct Accum {
+    stats: TagStats,
+    /// The file, and the two maps that intern it: uuid → tag index, which resolves
+    /// `parent_ids` once the file has been read to the end, and subject id → subject index.
+    g: Graph,
+    parent_ids: Vec<Vec<String>>,
+    by_id: HashMap<String, u32>,
+    subject_of: HashMap<String, u32>,
+    /// …and the third, which interns [`Graph::weights`]. A map rather than a linear scan of a
+    /// four-entry list: the vocabulary is small in every file measured, but a file that had
+    /// gone wrong in that particular way would turn the scan quadratic over 475 163 taggings
+    /// on a background thread with no window to say so in.
+    weight_of: HashMap<String, u32>,
+    /// `weight` and `annotation` are never held whole: they go straight to staging with the
+    /// row that carries them.
+    batch: Vec<(u32, u32, Option<String>, Option<String>)>,
+}
+
+impl Accum {
+    /// Fold one line into the graph, or count it skipped.
+    ///
+    /// **Infallible, and that is what lets it be the `Lines::push` callback.** The database
+    /// is never touched here; [`StreamTags::flush_full_batches`] does that after the framer
+    /// has returned, which is [`crate::ingest::StreamIngest`]'s arrangement exactly.
+    fn take_line(&mut self, ds: &Dataset, line: &[u8]) {
+        // Parsed with the lock *not* held: it is the expensive half of the loop, and the
+        // whole point of batching is that the connection is free during it.
+        let parsed = std::str::from_utf8(line)
+            .ok()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+            .as_ref()
+            .and_then(|v| parse_tag_line(ds, v));
+        let Some(tag) = parsed else {
+            // **A blank line counts as skipped, and that is deliberately not
+            // `crate::ingest::StreamIngest`'s rule one feed over.** `BufRead::lines()`, which
+            // the pull loop this replaced used, yields an empty record for a blank line and
+            // `serde_json` refuses it — so counting it here is what keeps the two drivers'
+            // `skipped_lines` identical. A stream that merely *ends* on a newline produces no
+            // such record: `frame::Lines::finish` emits nothing for an empty tail.
+            self.stats.skipped_lines += 1;
+            return;
+        };
+
+        let index = self.g.tags.len() as u32;
+        // An **id** the file repeats is one tag, not two: the first line wins and the
+        // second's taggings are folded onto it, exactly as the `INSERT OR IGNORE`s below
+        // would have them. (Two *different* ids sharing a slug fold the same way, one table
+        // down: the slug is the key everything here is stored under.)
+        let index = *self.by_id.entry(tag.id.clone()).or_insert(index);
+        if index == self.g.tags.len() as u32 {
+            self.g.tags.push(Tag {
+                id: tag.id,
+                slug: tag.slug,
+                label: tag.label,
+                description: tag.description,
+                parents: Vec::new(),
+            });
+            self.parent_ids.push(tag.parent_ids);
+        }
+
+        for tagging in tag.taggings {
+            let subject = match self.subject_of.get(&tagging.subject) {
+                Some(&s) => s,
+                None => {
+                    let s = self.g.subjects.len() as u32;
+                    self.subject_of.insert(tagging.subject.clone(), s);
+                    self.g.subjects.push(tagging.subject);
+                    self.g.held.push(Vec::new());
+                    s
+                }
+            };
+            // The weight the closure will fold, interned. **A tagging that states none is
+            // read as [`DEFAULT_WEIGHT`] here and stored as NULL below** — the closure's
+            // column is `NOT NULL` and the taggings table's is not, so the two disagree on
+            // purpose: one records what the file said, the other what the search must rank.
+            let weight = {
+                let w = tagging.weight.as_deref().unwrap_or(DEFAULT_WEIGHT);
+                match self.weight_of.get(w) {
+                    Some(&i) => i,
+                    None => {
+                        let i = self.g.weights.len() as u32;
+                        self.weight_of.insert(w.to_owned(), i);
+                        self.g.weights.push(w.to_owned());
+                        i
+                    }
+                }
+            };
+            self.g.held[subject as usize].push((index, weight));
+            self.batch
+                .push((subject, index, tagging.weight, tagging.annotation));
+        }
+    }
+}
+
+/// A tag ingest as an object the caller pushes bytes into, rather than a loop that pulls.
+///
+/// **Why this shape.** [`ingest_gz`] reads a file, where a blocking `read()` is free; a
+/// browser has no such reader to offer — `reqwest::Response::bytes_stream()` yields a
+/// `Stream` whose `next()` must be awaited, and `wasm32-unknown-unknown` has no thread to
+/// block while it resolves. So the state the read loop kept in locals moved into [`Accum`],
+/// `ingest_gz` became a short driver, and `web::glue` writes the other one. One drain, two
+/// drivers — [`crate::ingest::StreamIngest`]'s arrangement, one feed over.
+///
+/// **Gzipped or not is decided from the bytes.** `fetch` transparently decodes a
+/// `Content-Encoding: gzip` response and cannot be told not to, so the same Scryfall file
+/// arrives compressed on a desktop and plain in a browser; [`crate::feed::frame::Decoder`]
+/// sniffs the two magic bytes rather than trusting a header.
 ///
 /// # The connection is taken a batch at a time
 ///
@@ -558,6 +667,250 @@ pub struct FileStamp {
 /// row. **A half-populated closure is the one state that must never be visible**, because a
 /// card whose ancestors landed and whose siblings did not reads as a card that is simply not
 /// in that category.
+pub struct StreamTags<'a> {
+    ds: &'a Dataset,
+    db: &'a Mutex<Connection>,
+    decoder: crate::feed::frame::Decoder,
+    lines: crate::feed::frame::Lines,
+    decoded: Vec<u8>,
+    acc: Accum,
+    written: u64,
+}
+
+impl<'a> StreamTags<'a> {
+    /// Create `ds`'s staging tables and get ready for the first chunk.
+    ///
+    /// Made here rather than on the first `push` so that a caller that never gets a byte
+    /// still leaves a database in the state the next run expects — [`crate::ingest::
+    /// StreamIngest::begin`]'s reason.
+    pub fn begin(ds: &'a Dataset, db: &'a Mutex<Connection>) -> Result<Self, TagError> {
+        {
+            let conn = crate::db::lock_blocking(db);
+            (ds.create_staging)(&conn)?;
+        }
+        Ok(StreamTags {
+            ds,
+            db,
+            decoder: crate::feed::frame::Decoder::new(),
+            lines: crate::feed::frame::Lines::new(),
+            decoded: Vec::new(),
+            acc: Accum {
+                batch: Vec::with_capacity(BATCH),
+                ..Accum::default()
+            },
+            written: 0,
+        })
+    }
+
+    /// Feed one chunk of the download.
+    pub fn push(&mut self, chunk: &[u8], progress: &mut dyn FnMut(u64)) -> Result<(), TagError> {
+        self.decoded.clear();
+        self.decoder.push(chunk, &mut self.decoded)?;
+        {
+            let acc = &mut self.acc;
+            let ds = self.ds;
+            self.lines
+                .push(&self.decoded, |line| acc.take_line(ds, line))
+                .map_err(std::io::Error::from)?;
+        }
+        self.flush_full_batches(progress)
+    }
+
+    /// Commit whatever whole batches the last chunk produced, then let go of the connection.
+    ///
+    /// The batch can overshoot [`BATCH`] by one line's taggings, because a line is folded
+    /// whole before the framer returns. It is bounded by that line, which the framer already
+    /// caps at `feed::frame::MAX_LINE_BYTES`, and the pull loop this replaced held the same
+    /// parsed line in memory anyway.
+    fn flush_full_batches(&mut self, progress: &mut dyn FnMut(u64)) -> Result<(), TagError> {
+        if self.acc.batch.len() >= BATCH {
+            self.acc.stats.taggings += self.acc.batch.len() as u64;
+            write_taggings(self.ds, self.db, &self.acc.g, &mut self.acc.batch)?;
+            self.written = self.acc.stats.taggings;
+            progress(self.written);
+        }
+        Ok(())
+    }
+
+    /// Flush what is owed, refuse a file that is not a taxonomy, and swap staging into place.
+    ///
+    /// `progress` is called with the running row count every [`BATCH`] rows, and once more
+    /// when the swap is done.
+    pub fn finish(
+        mut self,
+        stamp: &FileStamp,
+        ingested_at: i64,
+        progress: &mut dyn FnMut(u64),
+    ) -> Result<TagStats, TagError> {
+        self.decoded.clear();
+        self.decoder.finish(&mut self.decoded)?;
+        {
+            let acc = &mut self.acc;
+            let ds = self.ds;
+            // **The full-batch drain runs again below, and that is not belt-and-braces.**
+            // `flate2::write::GzDecoder` holds a tail back until `try_finish`, so a file
+            // small enough to arrive in one chunk delivers its last lines *after* the push
+            // loop has ended — `crate::ingest::StreamIngest::finish` names the measurement.
+            self.lines
+                .push(&self.decoded, |line| acc.take_line(ds, line))
+                .map_err(std::io::Error::from)?;
+            self.lines.finish(|line| acc.take_line(ds, line));
+        }
+        self.flush_full_batches(progress)?;
+
+        // Destructured so the rest of this reads as the pull loop's tail did — the swap, the
+        // refusals and the graph walk are unchanged from the day they were written.
+        let StreamTags {
+            ds,
+            db,
+            acc,
+            mut written,
+            ..
+        } = self;
+        let Accum {
+            mut stats,
+            mut g,
+            parent_ids,
+            by_id,
+            mut batch,
+            ..
+        } = acc;
+
+        if !batch.is_empty() {
+            stats.taggings += batch.len() as u64;
+            write_taggings(ds, db, &g, &mut batch)?;
+            written = stats.taggings;
+        }
+
+        // **Two ways a file that decoded perfectly is still not a taxonomy**, and the swap below
+        // is unconditional, so this is the last place either can be stopped. Both leave the
+        // previous rows exactly where they were and drop the staging tables rather than leave
+        // them lying around.
+        //
+        // Not one line was a tag is the obvious one: a gzipped error page, a truncated download.
+        // **Tags but not one tagging is the one that only exists because there are two datasets
+        // of the same shape** — the art file served under the oracle name, or Scryfall renaming
+        // the key `Dataset::subject_column` reads — and it is the more dangerous of the two,
+        // because it does not self-heal. A swap would write an empty closure *and* the watermark
+        // in one transaction, and the next weekly check would replay that ETag, take its 304 and
+        // leave the taxonomy empty forever with nothing in `error_log` to explain it.
+        let refusal = match (g.tags.is_empty(), stats.taggings) {
+            (true, _) => Some(TagError::Empty {
+                skipped: stats.skipped_lines,
+            }),
+            (false, 0) => Some(TagError::Untagged {
+                tags: g.tags.len() as u64,
+            }),
+            _ => None,
+        };
+        if let Some(err) = refusal {
+            let conn = crate::db::lock_blocking(db);
+            (ds.drop_staging)(&conn)?;
+            return Err(err);
+        }
+        stats.tags = g.tags.len() as u64;
+
+        // The tags themselves. **Five columns, and `slug_norm` is [`normalize`]'s answer for the
+        // slug in the same row**: the search compares a normalised needle against that column, so
+        // a column left empty here is a search that matches nothing with no error anywhere.
+        let tags_sql = format!(
+            "INSERT OR IGNORE INTO {staging} (slug, id, label, description, slug_norm)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+            staging = staging(ds.tags_table)
+        );
+        for chunk in g.tags.chunks(BATCH) {
+            let mut conn = crate::db::lock_blocking(db);
+            let tx = conn.transaction()?;
+            {
+                let mut stmt = tx.prepare_cached(&tags_sql)?;
+                for tag in chunk {
+                    stmt.execute(params![
+                        tag.slug,
+                        tag.id,
+                        tag.label,
+                        tag.description,
+                        normalize(&tag.slug)
+                    ])?;
+                }
+            }
+            tx.commit()?;
+            drop(conn);
+            stand_aside();
+            written += chunk.len() as u64;
+            progress(written);
+        }
+
+        // The edges, once every id in the file is known. A parent the file never defined is
+        // counted and dropped: an edge to a tag that does not exist is not a hierarchy, and
+        // carrying it would only make the walk below reach for an index that is not there.
+        for (child, ids) in parent_ids.iter().enumerate() {
+            for id in ids {
+                match by_id.get(id) {
+                    // A tag naming itself as its own parent is a one-node cycle; the walk
+                    // survives it either way, but the edge says nothing and is not stored.
+                    Some(&parent) if parent as usize != child => g.tags[child].parents.push(parent),
+                    Some(_) => {}
+                    None => stats.dangling_parents += 1,
+                }
+            }
+        }
+        write_edges(ds, db, &g, &mut written, progress)?;
+
+        // The closure. Computed with no lock held — this is pure CPU over the tag list — and then
+        // unioned per subject: a subject holding two tags that share an ancestor gets that
+        // ancestor once, which is what the `(subject, slug)` primary key would insist on anyway.
+        let closures = ancestor_closures(&g.tags);
+        stats.closure_rows = write_closure(ds, db, &g, &closures, &mut written, progress)?;
+
+        {
+            let mut conn = crate::db::lock_blocking(db);
+            let tx = conn.transaction()?;
+            (ds.swap_staging)(&tx)?;
+            // In the same transaction as the swap, and that is the contract: a watermark without
+            // its rows would 304 past an empty taxonomy forever, and rows without their watermark
+            // would re-download a file the database already holds.
+            tx.execute(
+                &format!(
+                    "INSERT INTO {meta}
+                    (id, etag, updated_at, ingested_at, checked_at, tag_count, tagging_count)
+                 VALUES (1, ?1, ?2, ?3, ?3, ?4, ?5)
+                 ON CONFLICT(id) DO UPDATE SET
+                    etag = excluded.etag,
+                    updated_at = excluded.updated_at,
+                    ingested_at = excluded.ingested_at,
+                    checked_at = excluded.checked_at,
+                    tag_count = excluded.tag_count,
+                    tagging_count = excluded.tagging_count",
+                    meta = ds.meta_table
+                ),
+                // `?3` twice: an ingest is also a check, and the two stamps only come apart when a
+                // later run is told 304.
+                params![
+                    stamp.etag,
+                    stamp.updated_at,
+                    ingested_at,
+                    stats.tags as i64,
+                    stats.taggings as i64
+                ],
+            )?;
+            tx.commit()?;
+        }
+        progress(written);
+        Ok(stats)
+    }
+}
+
+/// How much of the file is read at a time by the desktop driver. `crate::ingest::ingest_gz`'s
+/// figure, so the two ingests behave the same way against the same disk.
+const READ_CHUNK: usize = 64 * 1024;
+
+/// Stream a gzipped tag file into `ds`'s staging tables, flatten the hierarchy, and swap the
+/// result into place.
+///
+/// **The desktop driver over [`StreamTags`], and nothing about the ingest lives here.** It
+/// reads the file [`READ_CHUNK`] bytes at a time and pushes; every rule the ingest follows —
+/// the batched connection, the staged write, the two refusals, the watermark in the swap's own
+/// transaction — is documented on the type.
 ///
 /// `progress` is called with the running row count every [`BATCH`] rows, and once more when
 /// the swap is done.
@@ -569,222 +922,21 @@ pub fn ingest_gz(
     ingested_at: i64,
     progress: &mut dyn FnMut(u64),
 ) -> Result<TagStats, TagError> {
+    use std::io::Read as _;
+
     // Opened before the database is touched: a missing or unreadable path must not cost the
     // caller the staging tables it was about to fill.
-    let file = std::fs::File::open(gz_path)?;
-    {
-        let conn = crate::db::lock_blocking(db);
-        (ds.create_staging)(&conn)?;
-    }
-
-    let mut stats = TagStats::default();
-    let mut written = 0u64;
-
-    // The file, and the two maps that intern it: uuid → tag index, which resolves
-    // `parent_ids` once the file has been read to the end, and subject id → subject index.
-    let mut g = Graph::default();
-    let mut parent_ids: Vec<Vec<String>> = Vec::new();
-    let mut by_id: HashMap<String, u32> = HashMap::new();
-    let mut subject_of: HashMap<String, u32> = HashMap::new();
-    // …and the third, which interns `Graph::weights`. A map rather than a linear scan of a
-    // four-entry list: the vocabulary is small in every file measured, but a file that had
-    // gone wrong in that particular way would turn the scan quadratic over 475 163 taggings
-    // on a background thread with no window to say so in.
-    let mut weight_of: HashMap<String, u32> = HashMap::new();
-
-    // `weight` and `annotation` are never held whole: they go straight to staging with the
-    // row that carries them.
-    let mut batch: Vec<(u32, u32, Option<String>, Option<String>)> = Vec::with_capacity(BATCH);
-
-    let reader = BufReader::new(GzDecoder::new(file));
-    for line in reader.lines() {
-        let line = line?;
-        // Parsed with the lock *not* held: it is the expensive half of the loop, and the
-        // whole point of batching is that the connection is free during it.
-        let parsed = serde_json::from_str::<serde_json::Value>(&line)
-            .ok()
-            .as_ref()
-            .and_then(|v| parse_tag_line(ds, v));
-        let Some(tag) = parsed else {
-            stats.skipped_lines += 1;
-            continue;
-        };
-
-        let index = g.tags.len() as u32;
-        // An **id** the file repeats is one tag, not two: the first line wins and the
-        // second's taggings are folded onto it, exactly as the `INSERT OR IGNORE`s below
-        // would have them. (Two *different* ids sharing a slug fold the same way, one table
-        // down: the slug is the key everything here is stored under.)
-        let index = *by_id.entry(tag.id.clone()).or_insert(index);
-        if index == g.tags.len() as u32 {
-            g.tags.push(Tag {
-                id: tag.id,
-                slug: tag.slug,
-                label: tag.label,
-                description: tag.description,
-                parents: Vec::new(),
-            });
-            parent_ids.push(tag.parent_ids);
+    let mut file = std::fs::File::open(gz_path)?;
+    let mut sink = StreamTags::begin(ds, db)?;
+    let mut buf = vec![0u8; READ_CHUNK];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
         }
-
-        for tagging in tag.taggings {
-            let subject = match subject_of.get(&tagging.subject) {
-                Some(&s) => s,
-                None => {
-                    let s = g.subjects.len() as u32;
-                    subject_of.insert(tagging.subject.clone(), s);
-                    g.subjects.push(tagging.subject);
-                    g.held.push(Vec::new());
-                    s
-                }
-            };
-            // The weight the closure will fold, interned. **A tagging that states none is
-            // read as [`DEFAULT_WEIGHT`] here and stored as NULL below** — the closure's
-            // column is `NOT NULL` and the taggings table's is not, so the two disagree on
-            // purpose: one records what the file said, the other what the search must rank.
-            let weight = {
-                let w = tagging.weight.as_deref().unwrap_or(DEFAULT_WEIGHT);
-                match weight_of.get(w) {
-                    Some(&i) => i,
-                    None => {
-                        let i = g.weights.len() as u32;
-                        weight_of.insert(w.to_owned(), i);
-                        g.weights.push(w.to_owned());
-                        i
-                    }
-                }
-            };
-            g.held[subject as usize].push((index, weight));
-            batch.push((subject, index, tagging.weight, tagging.annotation));
-            if batch.len() >= BATCH {
-                stats.taggings += batch.len() as u64;
-                write_taggings(ds, db, &g, &mut batch)?;
-                written = stats.taggings;
-                progress(written);
-            }
-        }
+        sink.push(&buf[..n], progress)?;
     }
-    if !batch.is_empty() {
-        stats.taggings += batch.len() as u64;
-        write_taggings(ds, db, &g, &mut batch)?;
-        written = stats.taggings;
-    }
-
-    // **Two ways a file that decoded perfectly is still not a taxonomy**, and the swap below
-    // is unconditional, so this is the last place either can be stopped. Both leave the
-    // previous rows exactly where they were and drop the staging tables rather than leave
-    // them lying around.
-    //
-    // Not one line was a tag is the obvious one: a gzipped error page, a truncated download.
-    // **Tags but not one tagging is the one that only exists because there are two datasets
-    // of the same shape** — the art file served under the oracle name, or Scryfall renaming
-    // the key `Dataset::subject_column` reads — and it is the more dangerous of the two,
-    // because it does not self-heal. A swap would write an empty closure *and* the watermark
-    // in one transaction, and the next weekly check would replay that ETag, take its 304 and
-    // leave the taxonomy empty forever with nothing in `error_log` to explain it.
-    let refusal = match (g.tags.is_empty(), stats.taggings) {
-        (true, _) => Some(TagError::Empty {
-            skipped: stats.skipped_lines,
-        }),
-        (false, 0) => Some(TagError::Untagged {
-            tags: g.tags.len() as u64,
-        }),
-        _ => None,
-    };
-    if let Some(err) = refusal {
-        let conn = crate::db::lock_blocking(db);
-        (ds.drop_staging)(&conn)?;
-        return Err(err);
-    }
-    stats.tags = g.tags.len() as u64;
-
-    // The tags themselves. **Five columns, and `slug_norm` is [`normalize`]'s answer for the
-    // slug in the same row**: the search compares a normalised needle against that column, so
-    // a column left empty here is a search that matches nothing with no error anywhere.
-    let tags_sql = format!(
-        "INSERT OR IGNORE INTO {staging} (slug, id, label, description, slug_norm)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        staging = staging(ds.tags_table)
-    );
-    for chunk in g.tags.chunks(BATCH) {
-        let mut conn = crate::db::lock_blocking(db);
-        let tx = conn.transaction()?;
-        {
-            let mut stmt = tx.prepare_cached(&tags_sql)?;
-            for tag in chunk {
-                stmt.execute(params![
-                    tag.slug,
-                    tag.id,
-                    tag.label,
-                    tag.description,
-                    normalize(&tag.slug)
-                ])?;
-            }
-        }
-        tx.commit()?;
-        drop(conn);
-        stand_aside();
-        written += chunk.len() as u64;
-        progress(written);
-    }
-
-    // The edges, once every id in the file is known. A parent the file never defined is
-    // counted and dropped: an edge to a tag that does not exist is not a hierarchy, and
-    // carrying it would only make the walk below reach for an index that is not there.
-    for (child, ids) in parent_ids.iter().enumerate() {
-        for id in ids {
-            match by_id.get(id) {
-                // A tag naming itself as its own parent is a one-node cycle; the walk
-                // survives it either way, but the edge says nothing and is not stored.
-                Some(&parent) if parent as usize != child => g.tags[child].parents.push(parent),
-                Some(_) => {}
-                None => stats.dangling_parents += 1,
-            }
-        }
-    }
-    write_edges(ds, db, &g, &mut written, progress)?;
-
-    // The closure. Computed with no lock held — this is pure CPU over the tag list — and then
-    // unioned per subject: a subject holding two tags that share an ancestor gets that
-    // ancestor once, which is what the `(subject, slug)` primary key would insist on anyway.
-    let closures = ancestor_closures(&g.tags);
-    stats.closure_rows = write_closure(ds, db, &g, &closures, &mut written, progress)?;
-
-    {
-        let mut conn = crate::db::lock_blocking(db);
-        let tx = conn.transaction()?;
-        (ds.swap_staging)(&tx)?;
-        // In the same transaction as the swap, and that is the contract: a watermark without
-        // its rows would 304 past an empty taxonomy forever, and rows without their watermark
-        // would re-download a file the database already holds.
-        tx.execute(
-            &format!(
-                "INSERT INTO {meta}
-                    (id, etag, updated_at, ingested_at, checked_at, tag_count, tagging_count)
-                 VALUES (1, ?1, ?2, ?3, ?3, ?4, ?5)
-                 ON CONFLICT(id) DO UPDATE SET
-                    etag = excluded.etag,
-                    updated_at = excluded.updated_at,
-                    ingested_at = excluded.ingested_at,
-                    checked_at = excluded.checked_at,
-                    tag_count = excluded.tag_count,
-                    tagging_count = excluded.tagging_count",
-                meta = ds.meta_table
-            ),
-            // `?3` twice: an ingest is also a check, and the two stamps only come apart when a
-            // later run is told 304.
-            params![
-                stamp.etag,
-                stamp.updated_at,
-                ingested_at,
-                stats.tags as i64,
-                stats.taggings as i64
-            ],
-        )?;
-        tx.commit()?;
-    }
-    progress(written);
-    Ok(stats)
+    sink.finish(stamp, ingested_at, progress)
 }
 
 /// Commit one batch of taggings, then let go of the connection.
@@ -1601,5 +1753,233 @@ mod tests {
         // An unknown weight sorts below every known one rather than above: a value this build
         // has not heard of must never silently outrank `very_strong`.
         assert_eq!(stronger("median", "zzz"), "median");
+    }
+
+    // ---- the push-shaped ingest -------------------------------------------------------
+    //
+    // `ingest_gz` is a driver over `StreamTags` now, and `web::glue` is the other one. What
+    // these hold is that the two drivers agree, because the browser's is compiled only for
+    // `wasm32-unknown-unknown` and no test on any host will ever run it.
+
+    use crate::tags::testing::{gz_fixture, mem_db};
+
+    /// One oracle tag line. `parents` are uuids, `cards` are oracle ids.
+    fn line(id: &str, slug: &str, parents: &[&str], cards: &[&str]) -> String {
+        let parents = parents
+            .iter()
+            .map(|p| format!("\"{p}\""))
+            .collect::<Vec<_>>()
+            .join(",");
+        let taggings = cards
+            .iter()
+            .map(|c| format!("{{\"oracle_id\":\"{c}\",\"weight\":\"median\"}}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            r#"{{"object":"tag","id":"{id}","label":"{slug}","slug":"{slug}","type":"oracle","description":null,"parent_ids":[{parents}],"child_ids":[],"aliases":[],"taggings":[{taggings}]}}"#
+        )
+    }
+
+    fn gz_bytes(lines: &[&str]) -> Vec<u8> {
+        use flate2::{write::GzEncoder, Compression};
+        use std::io::Write as _;
+        let mut e = GzEncoder::new(Vec::new(), Compression::fast());
+        for l in lines {
+            e.write_all(l.as_bytes()).unwrap();
+            e.write_all(b"\n").unwrap();
+        }
+        e.finish().unwrap()
+    }
+
+    /// Every `(subject, slug)` the closure holds, sorted — the whole of what an ingest is for.
+    fn closure_rows(db: &Mutex<Connection>) -> Vec<(String, String)> {
+        let conn = crate::db::lock_blocking(db);
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT {subject}, slug FROM {table} ORDER BY 1, 2",
+                subject = crate::tags::oracle::ORACLE.subject_column,
+                table = crate::tags::oracle::ORACLE.closure_table
+            ))
+            .unwrap();
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        rows
+    }
+
+    fn push_all(db: &Mutex<Connection>, bytes: &[u8], chunk: usize) -> Result<TagStats, TagError> {
+        let mut sink = StreamTags::begin(&crate::tags::oracle::ORACLE, db)?;
+        for c in bytes.chunks(chunk) {
+            sink.push(c, &mut |_| {})?;
+        }
+        sink.finish(&FileStamp::default(), 1_800_000_000, &mut |_| {})
+    }
+
+    /// The two drivers must not disagree, and the chunk size must not change the answer.
+    ///
+    /// Seven bytes at a time splits gzip members, JSON lines and multi-byte structure all in
+    /// the middle, which is the only shape a browser stream ever arrives in.
+    #[test]
+    fn a_chunked_push_produces_exactly_what_the_file_driver_does() {
+        let lines = [
+            line("a1", "ramp", &[], &["oid-1", "oid-2"]),
+            line("a2", "ramp-land", &["a1"], &["oid-3"]),
+            line("a3", "removal", &[], &["oid-1"]),
+            "this line is not JSON at all".to_owned(),
+            // A blank line, which `BufRead::lines()` yields as an empty record and the framer
+            // yields as an empty slice: both drivers must call it skipped, or the two counts
+            // drift by one on any file that has one.
+            String::new(),
+        ];
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+
+        let by_file = mem_db();
+        let from_file = ingest_gz(
+            &crate::tags::oracle::ORACLE,
+            &by_file,
+            &gz_fixture(&refs),
+            &FileStamp::default(),
+            1_800_000_000,
+            &mut |_| {},
+        )
+        .unwrap();
+
+        let by_stream = mem_db();
+        let from_stream = push_all(&by_stream, &gz_bytes(&refs), 7).unwrap();
+
+        assert_eq!(from_stream, from_file, "the two drivers must count alike");
+        assert_eq!(from_stream.tags, 3);
+        assert_eq!(from_stream.taggings, 4);
+        assert_eq!(
+            from_stream.skipped_lines, 2,
+            "the junk line and the blank one"
+        );
+        assert_eq!(closure_rows(&by_stream), closure_rows(&by_file));
+        // The flattening really happened: `oid-3` holds `ramp-land` and its ancestor `ramp`.
+        assert!(closure_rows(&by_stream).contains(&("oid-3".into(), "ramp".into())));
+    }
+
+    /// The browser shape. `fetch` transparently decodes `Content-Encoding: gzip` and cannot
+    /// be told not to, so the same Scryfall file arrives as plain JSONL there — and the
+    /// decoder has to decide from the bytes rather than from a header.
+    #[test]
+    fn a_stream_that_arrives_already_decompressed_ingests_identically() {
+        let lines = [
+            line("a1", "ramp", &[], &["oid-1"]),
+            line("a2", "ramp-land", &["a1"], &["oid-2"]),
+        ];
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let plain = refs.join("\n").into_bytes();
+
+        let gz = mem_db();
+        let gz_stats = push_all(&gz, &gz_bytes(&refs), 64).unwrap();
+        let raw = mem_db();
+        // No trailing newline either: `Lines::finish` is what emits the last record, and a
+        // stream cut off at the end of its last line is the common case rather than the edge.
+        let raw_stats = push_all(&raw, &plain, 64).unwrap();
+
+        assert_eq!(raw_stats, gz_stats);
+        assert_eq!(closure_rows(&raw), closure_rows(&gz));
+        assert_eq!(raw_stats.taggings, 2);
+    }
+
+    /// A file that decoded and held no tag swaps nothing — the refusal that stops a gzipped
+    /// error page replacing a working taxonomy with an empty one. It has to survive the move
+    /// to a push driver, because it is the failure that does not self-heal: a swap would
+    /// stamp the ETag too, and every weekly check after it would be told 304.
+    #[test]
+    fn a_stream_with_no_tag_in_it_is_refused_and_swaps_nothing() {
+        let db = mem_db();
+        let err = push_all(&db, b"not json\nstill not json\n", 5).unwrap_err();
+        assert!(
+            matches!(err, TagError::Empty { skipped: 2 }),
+            "expected Empty {{ skipped: 2 }}, got {err:?}"
+        );
+        assert!(closure_rows(&db).is_empty());
+    }
+
+    /// Tags with not one tagging between them is the other refusal, and the more dangerous:
+    /// the art file served under the oracle name looks exactly like this.
+    #[test]
+    fn a_stream_of_tags_with_no_taggings_is_refused() {
+        let db = mem_db();
+        let lines = [
+            line("a1", "ramp", &[], &[]),
+            line("a2", "removal", &[], &[]),
+        ];
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let err = push_all(&db, &gz_bytes(&refs), 64).unwrap_err();
+        assert!(
+            matches!(err, TagError::Untagged { tags: 2 }),
+            "expected Untagged {{ tags: 2 }}, got {err:?}"
+        );
+    }
+
+    /// A tagging count larger than one batch has to cross the flush boundary the push driver
+    /// moved: the pull loop flushed inside its per-tagging loop and this one flushes after
+    /// the framer returns, so an off-by-a-batch here would be silent.
+    #[test]
+    fn a_file_larger_than_one_batch_stores_every_tagging() {
+        let db = mem_db();
+        let cards: Vec<String> = (0..BATCH * 2 + 17).map(|i| format!("oid-{i}")).collect();
+        let card_refs: Vec<&str> = cards.iter().map(String::as_str).collect();
+        let one = line("a1", "ramp", &[], &card_refs);
+        let stats = push_all(&db, &gz_bytes(&[one.as_str()]), 4096).unwrap();
+
+        assert_eq!(stats.taggings, cards.len() as u64);
+        assert_eq!(stats.closure_rows, cards.len() as u64);
+        assert_eq!(closure_rows(&db).len(), cards.len());
+    }
+
+    /// **Taggings are committed while the stream is still arriving, not all at the end.**
+    ///
+    /// That is what gives the connection back between batches — the discipline this ingest
+    /// is built around, because holding the shared write mutex for a whole ingest is what
+    /// turns a reader's edit into a frozen button. It is invisible to a row count: an ingest
+    /// that buffered all 475 163 taggings and wrote them in `finish` stores exactly the same
+    /// rows. So the assertion is on **when** progress fires, and it is counted inside the
+    /// push loop rather than over the whole run.
+    ///
+    /// Plain bytes rather than gzipped, deliberately: `flate2` holds a tail back until
+    /// `try_finish`, so a small compressed fixture delivers everything to `finish` and this
+    /// would pass without proving anything.
+    #[test]
+    fn taggings_are_committed_while_the_stream_is_still_arriving() {
+        let db = mem_db();
+        let cards: Vec<String> = (0..BATCH + 5).map(|i| format!("oid-{i}")).collect();
+        let card_refs: Vec<&str> = cards.iter().map(String::as_str).collect();
+        let lines = [
+            line("a1", "ramp", &[], &card_refs),
+            line("a2", "removal", &[], &card_refs),
+        ];
+        let bytes = lines.join("\n").into_bytes();
+
+        let mut during_push: Vec<u64> = Vec::new();
+        let mut after: Vec<u64> = Vec::new();
+        let mut sink = StreamTags::begin(&crate::tags::oracle::ORACLE, &db).unwrap();
+        for c in bytes.chunks(4096) {
+            sink.push(c, &mut |n| during_push.push(n)).unwrap();
+        }
+        let stats = sink
+            .finish(&FileStamp::default(), 1_800_000_000, &mut |n| after.push(n))
+            .unwrap();
+
+        assert!(
+            !during_push.is_empty(),
+            "a batch must be committed before the stream ends; got {during_push:?}"
+        );
+        assert!(
+            during_push.iter().all(|n| *n >= BATCH as u64),
+            "each report is the running tagging count: {during_push:?}"
+        );
+        assert!(!after.is_empty(), "the swap reports too");
+        let all: Vec<u64> = during_push.iter().chain(after.iter()).copied().collect();
+        assert!(
+            all.windows(2).all(|w| w[1] >= w[0]),
+            "the running count must never go backwards: {all:?}"
+        );
+        assert_eq!(stats.taggings, 2 * cards.len() as u64);
     }
 }

@@ -231,12 +231,66 @@ pub async fn ingest_cards(descriptor_url: String, on_progress: js_sys::Function)
     }))
 }
 
+// ---------------------------------------------------------------------------------------
+// The three optional feeds
+// ---------------------------------------------------------------------------------------
+//
+// **These are `#[wasm_bindgen]` entries and not routed commands, and the distinction is the
+// whole seam.** [`crate::web::route::COMMANDS`] answers *queries*: it is synchronous, it
+// takes the connection and it makes no network call. A refresh downloads tens of megabytes,
+// reports itself as it goes and can only be `async`, so it arrives here beside
+// [`ingest_cards`] — `combos_refresh` is deliberately absent from `COMMANDS`, and adding it
+// there would be the wrong seam even though the name looks like every other command's.
+//
+// `src/lib/core/browser.ts` is what makes that invisible to the page: it maps the four
+// refresh command names onto these entries, so `ipc.combosRefresh(true)` reaches this file on
+// a browser and the Tauri command on a desktop, and no panel knows which.
+
+/// Now, in unix seconds, **asked of SQLite rather than of the clock**.
+///
+/// `SystemTime::now()` and `Instant::now()` do not fail on `wasm32-unknown-unknown`, they
+/// **panic** — and a wasm trap takes the Worker down with nothing the page can show. This is
+/// `crate::tags::now_from`'s answer and `crate::combos::status_of`'s, reached for the same
+/// reason on the same target.
+fn now_seconds(app: &AppState) -> i64 {
+    let conn = crate::sync::lock_db_read(app);
+    conn.query_row("SELECT unixepoch()", [], |r| r.get::<_, i64>(0))
+        .unwrap_or(0)
+}
+
+/// One progress report, as the `{ event, payload }` envelope `db.ts` forwards verbatim.
+///
+/// **The event name comes from Rust**, because it already lives here — `combos::PROGRESS_EVENT`,
+/// `Dataset::progress_event`, `marketplace_feed::PROGRESS_EVENT` — and a second table of the
+/// same strings on the TypeScript side is a place for them to drift. `db.ts` re-emits this as
+/// the Worker's `event` message and `browser.ts` hands it to whatever called `core.listen`,
+/// so `ipc.onCombosProgress` needs no browser branch at all.
+fn report(on_progress: &js_sys::Function, event: &str, phase: &str, done: u64, total: u64) {
+    let envelope = serde_json::json!({
+        "event": event,
+        "payload": { "phase": phase, "done": done, "total": total },
+    });
+    let _ = on_progress.call1(&JsValue::NULL, &JsValue::from_str(&json(&envelope)));
+}
+
+/// How often the download phase reports itself, in bytes. `crate::tags`' `DOWNLOAD_EMIT_BYTES`
+/// — a report per chunk would be thousands of `postMessage`s across a 63.7 MiB feed.
+const PROGRESS_EMIT_BYTES: u64 = 1024 * 1024;
+
+/// An answer `browser.ts` resolves a `core.call` with: the status DTO the desktop command
+/// returns, under the same `kind` discipline every other entry point here uses.
+fn done<T: serde::Serialize>(status: &T) -> String {
+    json(&serde_json::json!({ "kind": "ok", "result": status }))
+}
+
 /// Download Commander Spellbook's `variants.json.gz` and store what it holds.
 ///
-/// `fetched_at` comes from `Date.now()` in the Worker, in **unix seconds**. It is a
-/// parameter and not a call to `SystemTime::now()`, which **panics** on
-/// `wasm32-unknown-unknown` — and which this target cannot even name, because `sync.rs` and
-/// `combos.rs` both gate that import off.
+/// The browser's `combos_refresh`. `force` skips the weekly throttle exactly as the desktop
+/// command's does — and there is no ETag half to skip, because a browser cannot read one: a
+/// cross-origin `fetch` exposes no `ETag` header unless the host names it in
+/// `Access-Control-Expose-Headers`, so this always downloads where the desktop can take a
+/// 304. That is a real cost of the target rather than a shortcut, and it is why the throttle
+/// is honoured here rather than ignored.
 ///
 /// **The browser has already gunzipped this one and the desktop has not.** Spellbook sends
 /// `Content-Encoding: gzip` even when the client asks for `identity`, and `fetch`
@@ -244,49 +298,290 @@ pub async fn ingest_cards(descriptor_url: String, on_progress: js_sys::Function)
 /// as plain JSON, while the same URL on desktop arrives still compressed. Nothing here has
 /// to know: `feed::frame::Decoder` sniffs the two-byte magic and decides from the bytes.
 ///
-/// `peakBuffer` is reported because a row count cannot see the failure this parser has.
-/// Measured 2026-08-27: **2.01 MB against a 610.2 MB document**, 111 148 variants seen and
-/// 105 516 kept, identical on a desktop and a OnePlus 12. A peak anywhere near the
-/// document's own size means the framer desynchronised and is accumulating silently.
+/// Measured 2026-08-27: **a 2.01 MB peak framer buffer against a 610.2 MB document**, 111 148
+/// variants seen and 105 516 kept, identical on a desktop and a OnePlus 12. A peak anywhere
+/// near the document's own size means the framer desynchronised and is accumulating silently
+/// — which is why `Elements` now refuses past `feed::frame::MAX_ELEMENT_BYTES` rather than
+/// leaving that to a caller who might not look.
 #[wasm_bindgen]
-pub async fn ingest_combos(url: String, fetched_at: f64) -> String {
+pub async fn ingest_combos(force: bool, on_progress: js_sys::Function) -> String {
     use futures_util::StreamExt as _;
 
     let app = match state() {
         Ok(a) => a,
         Err(message) => return err(message),
     };
-    let response = match net::get(&url).await {
+    let event = crate::combos::PROGRESS_EVENT;
+
+    // A refresh that is not due does nothing and says so, which is the desktop's answer and
+    // costs zero bytes on a link the reader may be paying for.
+    let status = crate::combos::status_of(&app);
+    if !force && !status.stale {
+        report(&on_progress, event, "done", 0, 0);
+        return done(&status);
+    }
+
+    report(&on_progress, event, "checking", 0, 0);
+    let response = match net::get(crate::combos::FEED_URL).await {
         Ok(r) => r,
-        Err(message) => return err(message),
+        Err(message) => {
+            report(&on_progress, event, "error", 0, 0);
+            return err(message);
+        }
     };
+    let total = response.content_length().unwrap_or(0);
     let mut stream = response.bytes_stream();
     let mut sink = crate::combos::StreamRead::new();
+    let mut got = 0u64;
+    let mut last = 0u64;
+    report(&on_progress, event, "downloading", 0, total);
 
     while let Some(chunk) = stream.next().await {
         let chunk = match chunk {
             Ok(c) => c,
-            Err(e) => return err(format!("the combo download stopped partway: {e}")),
+            Err(e) => {
+                report(&on_progress, event, "error", 0, 0);
+                return err(format!("the combo download stopped partway: {e}"));
+            }
         };
+        got += chunk.len() as u64;
         if let Err(e) = sink.push(&chunk) {
+            report(&on_progress, event, "error", 0, 0);
             return err(e);
         }
+        if got.saturating_sub(last) >= PROGRESS_EMIT_BYTES {
+            last = got;
+            report(&on_progress, event, "downloading", got, total.max(got));
+        }
     }
-    let peak = sink.peak_buffer();
+    report(&on_progress, event, "ingesting", 0, 0);
     let file = match sink.finish() {
         Ok(f) => f,
-        Err(e) => return err(e),
+        Err(e) => {
+            report(&on_progress, event, "error", 0, 0);
+            return err(e);
+        }
     };
-    match crate::combos::store(&app.db, &file, None, fetched_at as i64, &mut |_, _| {}) {
-        Ok(done) => json(&serde_json::json!({
-            "kind": "ok",
-            "combos": done.combos,
-            "cards": done.cards,
-            "skipped": done.skipped,
-            "seen": done.seen,
-            "peakBuffer": peak,
-        })),
-        Err(e) => err(e),
+    // `None` for the ETag, for the reason above: there is none to store.
+    let fetched_at = now_seconds(&app);
+    match crate::combos::store(&app.db, &file, None, fetched_at, &mut |_, _| {}) {
+        Ok(_) => {
+            report(&on_progress, event, "done", 0, 0);
+            done(&crate::combos::status_of(&app))
+        }
+        Err(e) => {
+            // **The previous combos are exactly where they were.** `store` stages and
+            // promotes in one transaction, so a failure here changed no row — the panel is
+            // owed the state the database is actually in rather than an empty one.
+            report(&on_progress, event, "error", 0, 0);
+            err(e)
+        }
+    }
+}
+
+/// Download one of Scryfall's two tag taxonomies and replace it.
+///
+/// The browser's `oracle_tags_refresh` and `art_tags_refresh`, which are one function here
+/// for the reason they are one engine in `crate::tags`: the two files are the same file in
+/// two dialects, and everything that differs is on the `Dataset`.
+///
+/// **No ETag and no 304**, for [`ingest_combos`]' reason. What survives is the *other* half of
+/// the desktop's freshness check: the descriptor's `updated_at` is stored with the rows, so a
+/// database that already holds this build of the file can still say so.
+#[wasm_bindgen]
+pub async fn ingest_tags(dataset: String, force: bool, on_progress: js_sys::Function) -> String {
+    use futures_util::StreamExt as _;
+
+    let ds: &'static crate::tags::Dataset = match dataset.as_str() {
+        "oracle" => &crate::tags::oracle::ORACLE,
+        "art" => &crate::tags::art::ART,
+        other => return err(format!("there is no `{other}` tag dataset")),
+    };
+    let app = match state() {
+        Ok(a) => a,
+        Err(message) => return err(message),
+    };
+    let event = ds.progress_event;
+
+    let status = crate::tags::status_of(ds, &app);
+    if !force && !status.stale {
+        report(&on_progress, event, "done", 0, 0);
+        return done(&status);
+    }
+
+    report(&on_progress, event, "checking", 0, 0);
+    // The per-type bulk endpoint, which is what `scryfall::Client::check_bulk_dataset` asks
+    // on the desktop. `jsonl_download_uri` and **not** `download_uri`: Scryfall dropped the
+    // pre-2026-07-20 pair, and `ingest_cards` reads the same key.
+    let descriptor_url = format!("https://api.scryfall.com/bulk-data/{}", ds.bulk_name);
+    let descriptor = match net::get_json(&descriptor_url).await {
+        Ok(v) => v,
+        Err(message) => {
+            report(&on_progress, event, "error", 0, 0);
+            return err(message);
+        }
+    };
+    let uri = descriptor["jsonl_download_uri"]
+        .as_str()
+        .unwrap_or("")
+        .to_owned();
+    if uri.is_empty() {
+        report(&on_progress, event, "error", 0, 0);
+        return err(format!(
+            "the {} descriptor named no jsonl_download_uri",
+            ds.bulk_name
+        ));
+    }
+    let stamp = crate::tags::FileStamp {
+        etag: None,
+        updated_at: descriptor["updated_at"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned),
+    };
+
+    let response = match net::get(&uri).await {
+        Ok(r) => r,
+        Err(message) => {
+            report(&on_progress, event, "error", 0, 0);
+            return err(message);
+        }
+    };
+    let total = response.content_length().unwrap_or(0);
+    let mut stream = response.bytes_stream();
+    let mut sink = match crate::tags::StreamTags::begin(ds, &app.db) {
+        Ok(s) => s,
+        Err(e) => {
+            report(&on_progress, event, "error", 0, 0);
+            return err(e);
+        }
+    };
+    let mut got = 0u64;
+    let mut last = 0u64;
+    report(&on_progress, event, "downloading", 0, total);
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = match chunk {
+            Ok(c) => c,
+            Err(e) => {
+                report(&on_progress, event, "error", 0, 0);
+                return err(format!(
+                    "the {} download stopped partway: {e}",
+                    ds.bulk_name
+                ));
+            }
+        };
+        got += chunk.len() as u64;
+        if let Err(e) = sink.push(&chunk, &mut |_| {}) {
+            report(&on_progress, event, "error", 0, 0);
+            return err(e);
+        }
+        if got.saturating_sub(last) >= PROGRESS_EMIT_BYTES {
+            last = got;
+            report(&on_progress, event, "downloading", got, total.max(got));
+        }
+    }
+    report(&on_progress, event, "ingesting", 0, 0);
+    let ingested_at = now_seconds(&app);
+    match sink.finish(&stamp, ingested_at, &mut |_| {}) {
+        Ok(_) => {
+            report(&on_progress, event, "done", 0, 0);
+            done(&crate::tags::status_of(ds, &app))
+        }
+        Err(e) => {
+            // The staged write was never promoted, so the previous taxonomy is untouched —
+            // which is the rule that lets a failed refresh cost a reader nothing.
+            report(&on_progress, event, "error", 0, 0);
+            err(e)
+        }
+    }
+}
+
+/// Download one marketplace's price feed and replace that marketplace's rows.
+///
+/// The browser's `marketplace_feed_refresh`, and it takes no `force` because the desktop
+/// command does not either: a reader who presses Refresh on a price panel is asking for now.
+///
+/// **`state.mirror.mark_all()` has no counterpart here and that is not an omission.** The
+/// desktop calls it because a new price changes what every mirrored CSV would say; a browser
+/// has no plain-text mirror, which is the same argument `web::route`'s `set_marketplace` arm
+/// already makes one module over.
+#[wasm_bindgen]
+pub async fn ingest_prices(marketplace: String, on_progress: js_sys::Function) -> String {
+    use futures_util::StreamExt as _;
+
+    let Some(provider) = crate::marketplace_feed::provider_for(&marketplace) else {
+        return err(format!(
+            "\"{marketplace}\" has no price feed this app can download. Feeds: {}.",
+            crate::marketplace_feed::PROVIDERS
+                .iter()
+                .map(|p| p.marketplace())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    };
+    let app = match state() {
+        Ok(a) => a,
+        Err(message) => return err(message),
+    };
+    let event = crate::marketplace_feed::PROGRESS_EVENT;
+
+    report(&on_progress, event, "downloading", 0, 0);
+    let response = match net::get(provider.url()).await {
+        Ok(r) => r,
+        Err(message) => {
+            report(&on_progress, event, "error", 0, 0);
+            return err(message);
+        }
+    };
+    let total = response.content_length().unwrap_or(0);
+    let mut stream = response.bytes_stream();
+    let mut sink = crate::marketplace_feed::StreamRead::new(provider);
+    let mut got = 0u64;
+    let mut last = 0u64;
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = match chunk {
+            Ok(c) => c,
+            Err(e) => {
+                report(&on_progress, event, "error", 0, 0);
+                return err(format!("the price feed stopped partway: {e}"));
+            }
+        };
+        got += chunk.len() as u64;
+        if let Err(e) = sink.push(&chunk) {
+            report(&on_progress, event, "error", 0, 0);
+            return err(e);
+        }
+        if got.saturating_sub(last) >= PROGRESS_EMIT_BYTES {
+            last = got;
+            report(&on_progress, event, "downloading", got, total.max(got));
+        }
+    }
+    report(&on_progress, event, "ingesting", 0, 0);
+    let feed = match sink.finish() {
+        Ok(f) => f,
+        Err(e) => {
+            report(&on_progress, event, "error", 0, 0);
+            return err(e);
+        }
+    };
+    let fetched_at = now_seconds(&app);
+    match crate::marketplace_feed::store(&app.db, &feed, fetched_at) {
+        Ok(_) => {
+            report(&on_progress, event, "done", 0, 0);
+            let conn = crate::sync::lock_db_read(&app);
+            let now = conn
+                .query_row("SELECT unixepoch()", [], |r| r.get::<_, i64>(0))
+                .unwrap_or(0);
+            done(&crate::marketplace_feed::read_status(&conn, provider, now))
+        }
+        Err(e) => {
+            // **A failed refresh leaves the previous prices in place** — stale prices with an
+            // honest as-of line beat an empty table, which is the rule the whole feed follows.
+            report(&on_progress, event, "error", 0, 0);
+            err(e)
+        }
     }
 }
 
