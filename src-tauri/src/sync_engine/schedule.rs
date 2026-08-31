@@ -153,6 +153,81 @@ pub fn backoff_ms(attempt: u32, jitter: f64) -> u64 {
     base + (base as f64 * jitter.clamp(0.0, 1.0)) as u64
 }
 
+/// Why a socket stopped — the only thing [`super::live`] decides for itself.
+///
+/// **The classification is the socket's and every consequence is here.** Three reconnect rules
+/// were written inline in that loop where no test could reach them, and two of the three were
+/// wrong: a 4001 close that skipped the backoff and spun against the relay, and a foreground
+/// pause that spent an attempt. The third — how an attempt is forgiven — was wrong in a way
+/// only a trace could find. So the rules moved to the layer that has tests, and the socket now
+/// says only what happened to it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Disconnect {
+    /// The relay closed with 4001: this group no longer exists.
+    Removed,
+    /// The relay closed the socket, or the stream simply ended.
+    Closed,
+    /// The connection, the upgrade or a write failed.
+    Failed,
+    /// The socket reached [`super::live`]'s age limit and was replaced on purpose.
+    Aged,
+    /// The foreground gate closed under it.
+    Paused,
+}
+
+/// Whether the loop waits before reconnecting after `cause`.
+///
+/// **`Removed` is on the waiting side, and that is most of why this function exists.** "We have
+/// been removed, so there is nothing to back off from" assumes local state has already caught up
+/// with the close frame — nothing is cleared by a close, so a device that reconnects at once is
+/// told 4001 again and spins against the one endpoint, which is the thundering herd
+/// [`backoff_ms`]'s jitter exists to break arriving by a different road.
+pub fn deserves_backoff(cause: Disconnect) -> bool {
+    match cause {
+        Disconnect::Removed | Disconnect::Closed | Disconnect::Failed => true,
+        // Neither is a failure: the age limit is a socket replaced deliberately, and a pause is
+        // the app being put down. Making either wait punishes the healthy case.
+        Disconnect::Aged | Disconnect::Paused => false,
+    }
+}
+
+/// How long a socket must have lived for a failure to be forgiven.
+///
+/// [`BACKOFF_MAX_MS`], reused deliberately rather than given a number of its own: a socket that
+/// stayed up longer than the longest wait this ladder can produce has demonstrated the endpoint
+/// works, and anything shorter is inside the window a bad connection spends flapping.
+const FORGIVEN_AFTER_MS: u64 = BACKOFF_MAX_MS;
+
+/// The reconnect counter after a socket ended for `cause`, having lived `socket_lifetime_ms`.
+///
+/// **The counter measures the endpoint's health, not the process's lifetime**, which is the
+/// defect it was written for. With every real socket death counted and none ever forgiven, a
+/// device that works for three hours and then blips comes back one rung up the ladder; seven
+/// blips over a long session put it at the cap, so the eighth costs a minute of `Offline`
+/// before a reconnect that would have succeeded instantly.
+///
+/// ⚠️ **Forgiveness is bought by a long-lived socket and never by reaching `Live`.** Resetting
+/// on a successful upgrade looks equivalent and is not: a relay that accepts the upgrade and
+/// then closes 4001 would zero the counter every cycle, which is exactly the spin
+/// [`deserves_backoff`] exists to prevent.
+pub fn next_attempt(attempt: u32, cause: Disconnect, socket_lifetime_ms: u64) -> u32 {
+    match cause {
+        // Evidence of nothing, so the count is left exactly as it was. A pause must not spend
+        // an attempt, and a socket retired at its age limit has not failed at all.
+        Disconnect::Aged | Disconnect::Paused => attempt,
+        // **Never forgiven by lifetime.** A group that is gone is gone however long this socket
+        // had been up, and the reconnect that follows will be refused the same way.
+        Disconnect::Removed => attempt.saturating_add(1),
+        Disconnect::Closed | Disconnect::Failed => {
+            if socket_lifetime_ms >= FORGIVEN_AFTER_MS {
+                0
+            } else {
+                attempt.saturating_add(1)
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,6 +340,62 @@ mod tests {
             s.take_due(9_999),
             "the wake that arrived mid-trip is not lost"
         );
+    }
+
+    #[test]
+    fn a_removal_backs_off_and_spends_an_attempt() {
+        assert!(deserves_backoff(Disconnect::Removed));
+        assert_eq!(next_attempt(2, Disconnect::Removed, 0), 3);
+        // However long the socket had been up. Forgiving a 4001 on lifetime would let a relay
+        // that accepts the upgrade and immediately closes zero the counter every cycle.
+        assert_eq!(next_attempt(2, Disconnect::Removed, 10 * BACKOFF_MAX_MS), 3);
+    }
+
+    #[test]
+    fn a_pause_neither_backs_off_nor_spends_an_attempt() {
+        assert!(!deserves_backoff(Disconnect::Paused));
+        assert_eq!(next_attempt(4, Disconnect::Paused, 0), 4);
+        assert_eq!(next_attempt(0, Disconnect::Paused, 10 * BACKOFF_MAX_MS), 0);
+    }
+
+    #[test]
+    fn the_age_limit_neither_backs_off_nor_spends_an_attempt() {
+        assert!(!deserves_backoff(Disconnect::Aged));
+        // Twelve hours, which is `live::SOCKET_MAX_AGE`.
+        assert_eq!(next_attempt(4, Disconnect::Aged, 12 * 60 * 60 * 1_000), 4);
+    }
+
+    #[test]
+    fn a_long_lived_socket_forgives_the_whole_run_of_failures() {
+        // The counter is about the endpoint, not the process. A device that worked for an hour
+        // and then blipped must come back at the bottom rung, not a minute later.
+        for cause in [Disconnect::Closed, Disconnect::Failed] {
+            assert!(
+                deserves_backoff(cause),
+                "{cause:?} still waits before reconnecting"
+            );
+            assert_eq!(next_attempt(6, cause, FORGIVEN_AFTER_MS), 0);
+            assert_eq!(next_attempt(6, cause, 60 * 60 * 1_000), 0);
+        }
+    }
+
+    #[test]
+    fn a_short_lived_socket_climbs_the_ladder() {
+        for cause in [Disconnect::Closed, Disconnect::Failed] {
+            assert_eq!(next_attempt(0, cause, 0), 1);
+            assert_eq!(next_attempt(1, cause, FORGIVEN_AFTER_MS - 1), 2);
+        }
+        // And the climb is what the next wait is measured against.
+        assert!(
+            backoff_ms(next_attempt(1, Disconnect::Failed, 0), 0.0) > backoff_ms(1, 0.0),
+            "a second consecutive failure waits longer than the first"
+        );
+    }
+
+    #[test]
+    fn the_attempt_counter_cannot_overflow() {
+        assert_eq!(next_attempt(u32::MAX, Disconnect::Removed, 0), u32::MAX);
+        assert_eq!(next_attempt(u32::MAX, Disconnect::Failed, 0), u32::MAX);
     }
 
     #[test]

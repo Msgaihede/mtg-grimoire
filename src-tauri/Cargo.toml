@@ -202,7 +202,15 @@ tokio = { version = "1", features = ["fs", "io-util", "macros", "rt", "sync", "t
 # `reqwest` above is `rustls-tls`, and a second TLS stack would put schannel into a portable
 # exe for no gain. In this block and not `[dependencies]` because `sync_engine` compiles for
 # wasm32 — see `lib.rs`'s module doc — so the crate must be invisible there.
-tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+#
+# **0.28 and not 0.24, because `tauri-plugin-mcp-bridge` already pulls 0.28 and cargo unifies
+# on it.** The version the plan named was a second copy of both this crate and `tungstenite`
+# in one exe, and it dragged `rand 0.8`/`rand_chacha`/`rand_core 0.6` in with it — and with
+# those, `getrandom 0.2`, the one major in this tree that refuses to build for wasm32 without a
+# build flag. Matching the plugin costs a little API churn (`Utf8Bytes` and `Bytes` payloads)
+# and adds exactly **one** crate to `Cargo.lock`: `webpki-roots`. It is the same argument the
+# paragraph above makes about not admitting a second TLS stack, one crate over.
+tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 # Decoding whatever a user picks as a custom deck cover and re-encoding it to WEBP at the
 # `art` crop's 626x457, so a cover and a card's art are interchangeable in every tile.
 # `default-features = false` drops rayon and eleven formats nobody will hand a file-picker;
