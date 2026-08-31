@@ -3900,6 +3900,41 @@ export interface MirrorStatus {
 }
 
 /**
+ * One backup archive — `src-tauri/src/mirror/snapshot.rs`.
+ *
+ * **What web and Android get instead of the folder**, and the trade is written down rather than
+ * hidden: the mirror writes ~350 files so that *other* programs can read them, and neither OPFS
+ * nor an Android app's private directory is a folder any other program can open. So those two
+ * targets render the same files on demand and hand over one zip — a snapshot rather than a live
+ * mirror.
+ *
+ * **`base64` is `null` when Rust has already written the file**, which is the one field that
+ * says which door the bytes went out of. `mirrorBackupSave` picks that door on Android, where
+ * the destination is a `content://` URI and a megabyte of base64 through the webview and
+ * straight back would be two copies of the archive for nothing; `mirrorBackupZip` picks the
+ * other, which is the only one a browser has.
+ */
+export interface BackupZip {
+  /** A suggestion, not a promise — `mtg-grimoire-backup-2026-08-31.zip`, or the stem alone if
+   *  the database's clock would not answer. Nothing parses it. */
+  fileName: string;
+  /** Entries in the archive, `README.txt` included. */
+  files: number;
+  /**
+   * Lists that could not be read, and so are **missing from the archive**.
+   *
+   * {@link PassReport.failed}'s rule with one difference that matters: a folder the reader can
+   * look at shows them a missing deck, and a zip they have already mailed to themselves does
+   * not. So this number travels to the panel and is said in the tone a refusal gets.
+   */
+  failed: number;
+  /** The archive's size in bytes. */
+  byteLength: number;
+  /** The archive itself, standard base64 — or `null` when Rust wrote it at a picked path. */
+  base64: string | null;
+}
+
+/**
  * A QR code as a grid, row-major, `width * width` long. `true` is a dark module.
  *
  * **A fact rather than a picture, which is why it crosses the boundary in this shape.** Rust
@@ -5597,6 +5632,31 @@ export const ipc = {
    * by hand read as unchanged, which is the one state this command exists to get out of.
    */
   mirrorRebuild: () => invoke<PassReport>("mirror_rebuild"),
+  /**
+   * Render the whole backup and hand this page the archive.
+   *
+   * **The browser's door, and the only one it has.** The four calls above are the folder —
+   * where it is, whether it runs, when it last ran — and a browser has nowhere to put a folder
+   * other programs can read. This one renders the same files through the same Rust writer the
+   * mirror pass uses and answers the zip's bytes as base64, which the page turns into a
+   * download.
+   *
+   * Routed on web (`web::route`) and registered on the Tauri builds too, because it is the same
+   * archive either way and a command that exists on one target only is a command nothing here
+   * can test.
+   */
+  mirrorBackupZip: () => invoke<BackupZip>("mirror_backup_zip"),
+  /**
+   * Render the whole backup and write it at a path the reader chose in the OS save dialog.
+   *
+   * **Android's door**, and it exists rather than reusing {@link ipc.mirrorBackupZip} for the
+   * same reason {@link ipc.exportWriteFile} exists: what `dialog:allow-save` answers on a phone
+   * is a `content://` URI naming a row `ACTION_CREATE_DOCUMENT` has already created, not a path
+   * the page could ever write to — and handing the webview a megabyte of base64 to hand
+   * straight back would be two copies of the archive through IPC for nothing. Rust builds it
+   * and Rust writes it; {@link BackupZip.base64} comes back `null`.
+   */
+  mirrorBackupSave: (path: string) => invoke<BackupZip>("mirror_backup_save", { path }),
   /**
    * This device, the group it is in, and the roster — the pairing panel's only read.
    *

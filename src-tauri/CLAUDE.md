@@ -632,6 +632,27 @@ shared_cell` walks both into two databases and compares them column by column.
 seven formats, so the day the app will not start the cards are still the reader's. Full record,
 with the measurements: [text-mirror.md](../docs/reference/text-mirror.md).
 
+- **The gate is on three files, not on the module, and putting it back on the module breaks the
+  browser.** `layout`, `paths`, `read`, `readme` and `snapshot` compile for every target — they
+  touch no filesystem and no clock — and `run`, `settings` and `watch` carry
+  `#[cfg(not(target_family = "wasm"))]` inside `mirror/mod.rs`. **Web and Android have no folder
+  and get the same files as one archive instead** (`mirror::snapshot`, `mirror_backup_zip` /
+  `mirror_backup_save`): OPFS is invisible to every other program and `tauri-plugin-dialog`'s
+  manifest records Android as having no folder picker, so a continuously-written folder there
+  would be the feature's name without the feature. `mirror_status`, `mirror_set_enabled`,
+  `mirror_set_root` and `mirror_rebuild` stay desktop-only, and `BackupPanel` splits above its
+  hooks so the archive half never polls a command `web::route` does not answer.
+- **One renderer, and a second one would be a third writer outside the golden fence.**
+  `snapshot::render` is what both `run::run_pass` and `snapshot::render_all` call.
+  `every_file_in_the_archive_is_byte_identical_to_the_one_the_mirror_writes` runs a real pass into
+  a `tempfile` root and compares, so that is checked rather than argued from the call graph — and
+  `each_list_is_rendered_with_its_own_surfaces_columns` covers what the comparison structurally
+  cannot: a change to which fields `render` asks for moves both sides together and left all 140
+  `mirror` tests green when it was mutated on 2026-08-31.
+- **`SystemTime::now()` PANICS on wasm rather than erroring, so the archive's clock is
+  `SELECT strftime(…)`.** It only ever falls back — a clock that will not answer costs the file
+  its date and nothing else. The same trap is why `zip` keeps `default-features = false`: with the
+  `time` feature on, `DateTime::default_for_write()` reaches for that clock on its own.
 - **There is one `update_hook`, on the one write connection, and it is the whole of how the
   mirror learns anything.** `watch::install_hook` is installed on `AppState.db` from `setup`, and
   every user-facing write in this crate goes through `sync::with_write` on that connection — so

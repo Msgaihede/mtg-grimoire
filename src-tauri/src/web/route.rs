@@ -167,6 +167,12 @@ pub const COMMANDS: &[&str] = &[
     // merely unrouted.
     "update_status",
     "update_history",
+    // The backup, and **only the archive half of it**. `mirror_status`, `mirror_set_enabled`,
+    // `mirror_set_root` and `mirror_rebuild` are the folder, which a browser has nowhere to
+    // put; `mirror_backup_save` writes at a path a file dialog answered, which a browser has
+    // no way to name. What is left is the one door that fits: render the same files and hand
+    // the page the bytes.
+    "mirror_backup_zip",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -1708,6 +1714,27 @@ pub fn call(
         // the synced tables. That is the same "never fetched" state the Tagger models, and
         // it is why the panel draws no version history there.
         "update_history" => encode(command, crate::update::history(state)),
+        // ── The backup ──────────────────────────────────────────────────────────────
+        //
+        // **The whole of what this target has instead of a folder.** `mirror::snapshot::build`
+        // is the same renderer `run_pass` writes the folder with — same plan, same
+        // `available_fields`, same `format_export` — so what the page downloads and what a
+        // desktop mirrors are the same bytes by construction rather than by two tests
+        // agreeing.
+        //
+        // `lock_db_read` and not a connection of its own, which is the single-Worker trade
+        // this module's header already names: there is one thread here, so there is no queue
+        // to jump. The desktop wrapper does open its own, because there it would be queueing
+        // every search behind ~350 renders.
+        "mirror_backup_zip" => {
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::mirror::snapshot::build(&conn)
+                    .map_err(RouteError::Failed)?
+                    .with_bytes(),
+            )
+        }
 
         other => Err(RouteError::Unknown(other.to_owned())),
     }
@@ -2356,7 +2383,7 @@ mod tests {
         }
         assert_eq!(
             COMMANDS.len(),
-            119,
+            120,
             "update this number when a command is added"
         );
     }

@@ -445,6 +445,110 @@ Two more real-world reports from the shipped thread rather than the button, same
 Per-folder files roughly double the byte count — a card appears in its folder's file and in the root
 list.
 
+## Web and Android: the same files, as one archive
+
+**Decided 2026-08-31, and it is a decision rather than a discovery.** The parity matrix had this
+feature down as desktop-only on all three targets ([§4 of the parity
+matrix](../superpowers/specs/2026-08-27-cross-platform-parity-matrix.md)), and the reason it gave is
+still the right one: the mirror writes ~350 files so that *other programs* can read them — a text
+editor, `grep`, Dropbox. OPFS is invisible to every program but this one, and an Android app's
+private directory is the same in practice; `tauri-plugin-dialog`'s manifest records Android support
+as *"partial — Does not support folder picker"*, so the root could not even be chosen. **A
+continuously-written folder on either target would be the feature's name without the feature.**
+
+What changed is the conclusion drawn from that, not the fact. A reader on a phone or in a browser
+still wants their cards in plain text on the day the app will not start; what they cannot have is a
+folder. **So they get a button that renders the same files and hands over one archive** — the
+browser's download, or Android's save dialog. `mirror::snapshot`.
+
+**A snapshot rather than a mirror, and that trade is accepted rather than papered over.** Nothing
+updates the zip after it is made; the panel says so in those words, and `README.txt` inside the
+archive says it again. Three of the folder's mechanisms are therefore absent, each for a reason:
+
+| Absent | Why |
+| --- | --- |
+| The `Mask` and the thread | A pass learns what to render from three atomic bits an `update_hook` sets. A button knows already, because the reader pressed it — and `AppState` on wasm has no `mirror` field to hold a mask in. |
+| `.mirror-manifest` | It exists to authorise *deleting*, and it is `prune`'s only authority. A zip deletes nothing. One unpacked into the mirror's folder would hand the pruner a list from a different moment. |
+| The digest cache | Every byte in the archive is new to whoever receives it. |
+
+### What moved, and what did not
+
+**The renderer never touched a filesystem, which is the whole reason this was a small change.**
+`layout` is a pure function of the database's shape, `paths` is string handling, `read` is four
+listings — and `run::render` was seven lines over `format_export`. So the gate moved **off the
+module and onto three of its files**: `run`, `settings` and `watch` — `std::fs`, the two `app_meta`
+settings, the `update_hook` and the thread — stay `#[cfg(not(target_family = "wasm"))]` inside
+`mirror/mod.rs`, and `layout`, `paths`, `read`, `readme` and `snapshot` compile everywhere.
+`transfer` came with them, unchanged.
+
+**`render` moved from `run.rs` into `snapshot.rs` and both callers now use it**, which is the one
+edit that makes the archive the same feature as the folder rather than a second one. A second
+renderer would have been a third writer outside [the golden fence](#the-golden-fence-necessary-and-not-sufficient).
+`every_file_in_the_archive_is_byte_identical_to_the_one_the_mirror_writes` runs a real pass into a
+`tempfile` root and compares every archive entry against it, so the claim is checked rather than
+argued from the call graph.
+
+**`README.txt` is the one file that differs, and it has to.** The folder's copy explains a folder
+that rewrites itself and a `.mirror-manifest`; neither is true of an archive. `mirror::readme` holds
+both, with the paragraph they genuinely share — the seven formats and the two omissions §3.1 names —
+written once as a `macro_rules!` and pasted into each by `concat!`, so a format added to one cannot
+miss the other. Two tests fence the pair.
+
+**The clock is `SELECT strftime('%Y %m %d %H %M %S', 'now')`.** `SystemTime::now()` *panics* on
+`wasm32-unknown-unknown` rather than erroring, so the obvious clock would take the Worker down on
+the one target this exists for; SQLite also does the calendar arithmetic, which this crate has no
+date library for. It only ever falls back: a clock that will not answer costs the archive its date
+in the name (`mtg-grimoire-backup.zip` rather than `mtg-grimoire-backup-2026-08-31.zip`) and stamps
+its entries at the zip epoch, and costs it nothing else.
+
+**`zip` moved to the every-target dependency block and needed no feature edit.** It was already in
+the tree for the portable updater, which *reads* one entry out of a release archive; `deflate` pulls
+only pure Rust (`flate2/rust_backend` is miniz_oxide, `zopfli` has no C), so the line compiles for
+wasm as it stands and `Cargo.lock` did not move. **Leaving `time` off is also what keeps it off
+`SystemTime::now()`** — with that feature `DateTime::default_for_write()` asks `OffsetDateTime`, and
+without it the zip epoch is the default and `snapshot::stamp` supplies the real moment instead.
+
+### The two doors, and why there are two
+
+| Command | Answers | Used by |
+| --- | --- | --- |
+| `mirror_backup_zip` | the archive as **standard** base64 | the browser — routed in `web::route`, registered on Tauri too |
+| `mirror_backup_save` | the same counts with `base64: null` | Android — takes a path the save dialog answered |
+
+**One `BackupZip` for both, and `base64` is the field that says which door it came out of.** The
+browser has no way to name a file for Rust to write, and Android has no way to start a download — a
+`<a download>` on a blob URL does nothing at all in a Tauri webview unless the app wires
+`with_download_started_handler`, which this one does not. So each target has exactly one door and
+neither is a fallback for the other.
+
+**Standard base64 and not the URL-safe alphabet `sync_engine::wire` uses**: that blob is a path
+segment on its way to a relay, and this one is what `atob` takes.
+
+**No new permission and no new plugin.** `dialog:allow-save` has been in `capabilities/mobile.json`
+since the export dialog shipped, and the write goes through `picked::write_all` — the one function
+in this crate that knows a picked destination on Android is a `content://` URI naming a row
+`ACTION_CREATE_DOCUMENT` has already created, resolved through `tauri_plugin_fs::Fs::open`, which is
+a Rust-side method on managed state that no `invoke` crosses. `export_write_file` is the precedent,
+one command over. **The reader still gets a file into their own Downloads or Drive, chosen in the
+OS's own picker; what they do not get is the share sheet** — that needs a plugin and an ACL entry
+this repo does not have, and adding one was not part of this change.
+
+**Nothing here can make a button answer `db::BUSY`.** On the Tauri targets both commands go through
+`snapshot::build_now`, which opens a read-only connection of its own and falls back to the shared one
+only if that fails — `rebuild_now`'s rule and `index::lifecycle::build_now`'s before it. On the web
+target it is `lock_db_read`, which there *is* the write connection: the single-Worker trade, already
+written down in `web/route.rs`'s header, and there is no second thread to queue behind anyway.
+
+**The panel is split above the hooks.** `BackupPanel` picks `FolderBackupPanel` or
+`ArchiveBackupPanel` from `isWebTarget() || isAndroid()`, because the folder half polls
+`mirror_status` every five seconds and the archive half must never call it — that command is not
+routed on the web target at all, and on Android it answers about a thread that never starts. A
+conditional `useQuery` is not a thing React allows, so the condition goes above them.
+
+**Unmeasured.** Every figure in the cost table above is the folder's, taken on the desktop; nobody
+has timed an archive, in a browser or on a phone, and no zip has been unpacked from either. What is
+tested is that the bytes agree with the folder's on this machine.
+
 ## The golden fence: necessary and not sufficient
 
 Two writers, one behaviour, and a build that goes red the moment they disagree.

@@ -489,12 +489,22 @@ pub fn run() {
             update_download,
             update_apply,
             update_open_release_page,
-            // The plain-text mirror. Four commands and no more: the Backup panel's read, the
-            // two settings, and the button that rewrites the folder now.
+            // The plain-text mirror. Four commands for the folder: the Backup panel's read,
+            // the two settings, and the button that rewrites it now. **All four are
+            // desktop-only in the panel** — Android registers them because this handler is one
+            // list, and `mirror_status` there answers a mirror whose thread never starts.
             mirror::settings::mirror_status,
             mirror::settings::mirror_set_enabled,
             mirror::settings::mirror_set_root,
             mirror::settings::mirror_rebuild,
+            // The archive, which is what Android has instead of the folder. Two doors on one
+            // build rather than one door per platform: `..._zip` hands the page the bytes and
+            // is what the browser routes, `..._save` writes them at a destination the reader
+            // picked and is what the phone uses — because on Android that destination is a
+            // `content://` URI and a megabyte of base64 through the webview and straight back
+            // would be two copies of the archive for nothing.
+            mirror::snapshot::mirror_backup_zip,
+            mirror::snapshot::mirror_backup_save,
             // Pairing (spec §7.5 and §7.6). The panel's read, the five steps of the
             // handshake, cancelling one, the two things a roster row can be told, and —
             // since the leave-group spec §2.1 — this device's own way out.

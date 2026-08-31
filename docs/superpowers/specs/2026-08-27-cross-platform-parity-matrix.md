@@ -125,25 +125,33 @@ mechanisms.
 | Export — 7 formats, field registry, fold rule | ✅ | 🟡 | 🟡 | Web writes via a `Blob` download or the File System Access API. |
 | Export to clipboard | ✅ | ✅ | ✅ | `navigator.clipboard.writeText` on web. |
 | **The golden fence** | ✅ | ✅ | ✅ | See below. |
-| Plain-text mirror | ✅ | ⛔ | ⛔ | **Desktop-only** — decided. See below. |
+| Plain-text mirror — the continuously-written folder | ✅ | ⛔ | ⛔ | **Desktop-only** — decided. See below. |
+| The same files, as one archive on demand | ✅ | ✅ | ✅ | **Added 2026-08-31.** `mirror::snapshot`. What web and Android have instead of the folder. |
 
-**The golden fence survives, and gets simpler.** `src/features/transfer/__golden__/` exists
-because `src-tauri/src/transfer/` is a second implementation of the TS writer, needed only
-because the mirror is a Rust thread that cannot ask the page to render a file. **The mirror is
-desktop-only**, so the Rust writer is desktop-only too — and the fence keeps doing exactly its
-current job on that platform: one corpus, one golden set, both suites asserting byte equality.
-Web and Android run the TS writer alone and inherit the same goldens. **Nothing about the fence
-changes**; it simply guards one platform's second implementation instead of every platform's.
-
-**The mirror is desktop-only on all three platforms — decided.** Android has a real filesystem
+**The folder is desktop-only on all three platforms — decided.** Android has a real filesystem
 and Tauri mobile can write to scoped storage, so it is *possible*. It is not built, because the
 mirror's whole point is a folder a reader opens in a text editor, syncs with Dropbox or greps,
 and on Android that directory is reachable mainly through a file-manager app and often not by
-other apps at all. The feature would exist without delivering what it is for.
+other apps at all — `tauri-plugin-dialog`'s manifest records the platform as having no folder
+picker, so the root could not even be chosen. A browser's OPFS is invisible to every other
+program outright. The feature would exist without delivering what it is for.
 
-**This is what keeps the golden fence simple.** The Rust writer exists only to serve the mirror,
-so it compiles on exactly one platform, and `__golden__/` goes on guarding exactly one second
-implementation.
+**What changed on 2026-08-31 is the conclusion drawn from that, not the fact.** A reader on a
+phone or in a browser still wants their cards in plain text on the day the app will not start;
+what they cannot have is a *folder*. So those two targets get a button that renders the same
+files through the same Rust writer and hands over **one zip** — the browser's download, or
+Android's save dialog through `ACTION_CREATE_DOCUMENT` and `picked::write_all`, which needs no
+permission `capabilities/mobile.json` does not already grant. **A snapshot rather than a live
+mirror, and the panel says so in those words.** Full record, including the two doors and what is
+still unmeasured: [text-mirror.md](../../reference/text-mirror.md).
+
+**The golden fence survives and did not change, but the sentence below it did.** This section
+used to say the Rust writer would compile on exactly one platform, because the mirror was
+desktop-only and the writer existed only to serve it. The archive is rendered by that same
+writer, so `src-tauri/src/transfer/` now compiles on all three — and `__golden__/` goes on doing
+exactly its current job on each: one corpus, one golden set, both suites asserting byte equality.
+It simply guards one second implementation on three platforms instead of on one. **Nothing about
+the fence itself changed**, and no golden was regenerated.
 
 ## 5. Platform services
 
@@ -214,7 +222,8 @@ platform a touch-capable drag, so the phone layout question is about *shape*, no
 | Card Trader | Per-user JWT, no bulk download. |
 | `cards.raw` on Web/Android | Decision 6. |
 | Window chrome on Web/Android | The browser and the OS own the frame. |
-| Plain-text mirror on Web | No filesystem a browser can write the way the mirror needs. |
+| The mirror's **folder** on Web and Android | No filesystem either can offer that another program could read. Both get the same files as an on-demand zip instead — §4. |
+| A **share sheet** for that zip on Android | Would need a share plugin and an ACL entry this repo does not have. The system save dialog needs neither, and puts the file where the reader chose. |
 
 ## 9. Open questions — I need answers to these
 
@@ -227,7 +236,10 @@ platform a touch-capable drag, so the phone layout question is about *shape*, no
 2. ~~Mana Pool on the web~~ — **settled: disabled on web.** No alternate endpoint exists
    (`api.manapool.com` does not resolve; `OPTIONS` answers 405). A Worker CORS proxy and a
    desktop-shares-prices-for-your-own-cards path were both costed and declined. Card Kingdom only.
-3. ~~The mirror on Android~~ — **settled: desktop-only.** See §4.
+3. ~~The mirror on Android~~ — **settled twice.** The *folder* is desktop-only, for the reason
+   §4 gives and which still holds. On 2026-08-31 the question was reopened from the other end —
+   a reader on a phone still wants their cards in plain text — and answered with an **on-demand
+   zip of the same files** on both web and Android. See §4.
 4. ~~Touch drag-and-drop~~ — **settled: `@dnd-kit/react` 0.5.0 on every platform.** See §3.
 5. ~~`deck_undo` and `deck_audit`~~ — **settled: the audit log syncs, undo stays per-device.**
    They answer different questions. `deck_audit` is the record of what happened to a deck, which
