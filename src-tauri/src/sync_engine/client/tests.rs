@@ -1273,3 +1273,186 @@ async fn a_401_on_a_key_check_costs_the_grant_nothing() {
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert_eq!((rows[0].0.as_str(), rows[0].1.as_str()), ("keys", "http"));
 }
+
+// ---------------------------------------------------------------------------------------
+// The rendezvous, and the join retry
+//
+// **`post_rendezvous`/`get_rendezvous` need no group at all** — the rendezvous is how the two
+// halves of a QR pairing find each other *before* either device knows it is in one — so these
+// run against `crate::schema::memory_pair()` directly, the way
+// `no_group_and_no_grant_means_no_request_at_all` does above. `publish_join` is the opposite: it
+// calls `identity::plan_join`, which needs a real device keypair to seal a blob with, so those
+// three run against [`keyed_group`] rather than [`paired`] — that helper's `x'00'`/`x'01'` fixture
+// keys are not points X25519 will agree on.
+// ---------------------------------------------------------------------------------------
+
+const RV: &str = "0123456789abcdef0123456789abcdef";
+
+/// A rendezvous post carries the blob and nothing else, and a 204 is success.
+///
+/// **`Mock::calls()` is a count, not a request list** (httpmock 0.8 — see [`tap`]'s own doc), so
+/// the body is read back the way `every_pushed_batch_carries_a_horizon` reads one: through the
+/// wire-tapping matcher already in this file, not through the mock itself.
+#[tokio::test]
+async fn a_rendezvous_post_carries_the_blob_and_answers_nothing() {
+    let server = MockServer::start_async().await;
+    let sent = Sent::default();
+    let mock = server.mock(|when, then| {
+        when.method(POST)
+            .path(format!("/p/{RV}/join"))
+            .is_true(tap(&sent));
+        then.status(204);
+    });
+    let conn = crate::schema::memory_pair();
+    set_state(&conn, RELAY_URL, &server.base_url()).unwrap();
+
+    post_rendezvous(&conn, RV, "join", "ABCDE")
+        .await
+        .expect("a 204 is success");
+
+    mock.assert();
+    let seen = sent.lock().unwrap();
+    let body: serde_json::Value =
+        serde_json::from_str(&seen.first().expect("one call").body).expect("json");
+    assert_eq!(
+        body["blob"], "ABCDE",
+        "the blob is the only field the relay is sent"
+    );
+}
+
+/// **Not "the pairing failed"**: somebody else answered this code, which is a different fix —
+/// start a new offer on the device showing it, rather than retry here.
+#[tokio::test]
+async fn a_409_from_the_rendezvous_is_its_own_sentence() {
+    let server = MockServer::start_async().await;
+    server.mock(|when, then| {
+        when.method(POST).path(format!("/p/{RV}/offer"));
+        then.status(409);
+    });
+    let conn = crate::schema::memory_pair();
+    set_state(&conn, RELAY_URL, &server.base_url()).unwrap();
+
+    let error = post_rendezvous(&conn, RV, "offer", "XYZ")
+        .await
+        .expect_err("a 409 must not read as success");
+    assert_eq!(error, RENDEZVOUS_TAKEN);
+}
+
+/// **A 404 is `Ok(None)`, and never an error.** The panel polls this every 1.5 seconds while the
+/// other device is still being read to; a poll that treated "not yet" as a failure would put an
+/// error in front of the reader on every tick before the pairing ever had a chance to finish.
+#[tokio::test]
+async fn an_empty_rendezvous_is_none_and_never_an_error() {
+    let server = MockServer::start_async().await;
+    server.mock(|when, then| {
+        when.method(GET).path(format!("/p/{RV}/offer"));
+        then.status(404);
+    });
+    let conn = crate::schema::memory_pair();
+    set_state(&conn, RELAY_URL, &server.base_url()).unwrap();
+
+    let result = get_rendezvous(&conn, RV, "offer").await;
+    assert_eq!(result, Ok(None), "a 404 is not yet, not a failure");
+    assert!(
+        error_rows(&conn).is_empty(),
+        "a poll finding nothing must not log a failure"
+    );
+}
+
+/// A filled slot is read back as the blob it was posted with.
+#[tokio::test]
+async fn a_filled_rendezvous_answers_the_blob() {
+    let server = MockServer::start_async().await;
+    server.mock(|when, then| {
+        when.method(GET).path(format!("/p/{RV}/join"));
+        then.status(200)
+            .json_body(serde_json::json!({ "blob": "SEALED-BYTES" }));
+    });
+    let conn = crate::schema::memory_pair();
+    set_state(&conn, RELAY_URL, &server.base_url()).unwrap();
+
+    let result = get_rendezvous(&conn, RV, "join").await.unwrap();
+    assert_eq!(result.as_deref(), Some("SEALED-BYTES"));
+}
+
+/// **A first pairing has no membership and cannot publish, and that must not fail the pairing.**
+/// `/rotate` refuses with a 401 exactly as a group with no entitlement row does; `publish_join`
+/// answers `Ok(())` anyway, marks the debt, and — the sharper assertion — leaves the group
+/// exactly as it was, so the reader can press again.
+#[tokio::test]
+async fn publish_join_marks_the_roster_dirty_when_the_relay_refuses() {
+    let server = MockServer::start_async().await;
+    let (conn, _me, _remover, group) = keyed_group();
+    set_state(&conn, RELAY_URL, &server.base_url()).unwrap();
+    server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{group}/rotate"));
+        then.status(401)
+            .json_body(serde_json::json!({ "error": "unauthorized" }));
+    });
+    let before = identity::group(&conn).unwrap().unwrap();
+
+    publish_join(&conn)
+        .await
+        .expect("a refused publish must not fail the join");
+
+    assert!(
+        identity::roster_is_dirty(&conn).unwrap(),
+        "the owed publish was never marked"
+    );
+    assert_eq!(
+        identity::group(&conn).unwrap().unwrap(),
+        before,
+        "a refused /rotate must leave the group exactly as it was"
+    );
+}
+
+/// **The severe one.** A publish that reached an accepting relay must commit the same epoch
+/// locally — without it this device sits at the epoch behind its own rotation, and its very next
+/// `check_keys` reads a higher epoch with no blob for itself, which is the removal notice: the
+/// device that pressed *Codes match* would dissolve its own group on its next sync.
+#[tokio::test]
+async fn publish_join_commits_the_epoch_it_published() {
+    let server = MockServer::start_async().await;
+    let (conn, _me, _remover, group) = keyed_group();
+    set_state(&conn, RELAY_URL, &server.base_url()).unwrap();
+    server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{group}/rotate"));
+        then.status(200)
+            .json_body(serde_json::json!({ "epoch": 1 }));
+    });
+    let before = identity::group(&conn).unwrap().unwrap();
+
+    publish_join(&conn)
+        .await
+        .expect("an accepted rotate must not fail the join");
+
+    let after = identity::group(&conn).unwrap().unwrap();
+    assert_eq!(
+        after.epoch,
+        before.epoch + 1,
+        "a publish with no local commit leaves this device behind its own rotation"
+    );
+}
+
+/// A join the relay accepted clears the debt a previous failed attempt had recorded.
+#[tokio::test]
+async fn publish_join_clears_the_mark_when_the_relay_accepts() {
+    let server = MockServer::start_async().await;
+    let (conn, _me, _remover, group) = keyed_group();
+    set_state(&conn, RELAY_URL, &server.base_url()).unwrap();
+    identity::set_roster_dirty(&conn, true).unwrap();
+    server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{group}/rotate"));
+        then.status(200)
+            .json_body(serde_json::json!({ "epoch": 1 }));
+    });
+
+    publish_join(&conn)
+        .await
+        .expect("an accepted rotate must not fail the join");
+
+    assert!(
+        !identity::roster_is_dirty(&conn).unwrap(),
+        "the mark was not cleared on an accepted publish"
+    );
+}

@@ -508,6 +508,144 @@ pub async fn post_rotation(conn: &Connection, rotation: &identity::Rotation) -> 
 }
 
 // ---------------------------------------------------------------------------------------
+// The rendezvous, and the join retry
+// ---------------------------------------------------------------------------------------
+
+/// What a 409 from the rendezvous says.
+///
+/// **Its own sentence, and not "the pairing failed".** First-write-wins means a filled slot is
+/// somebody else having answered this code — a different situation with a different fix, which is
+/// to start a fresh offer on the first device rather than to try again here.
+pub const RENDEZVOUS_TAKEN: &str =
+    "That pairing code has already been answered on another device. Start a new one on the \
+     device showing the code.";
+
+/// What `GET /p/{rv}/{slot}` answers when the slot is filled.
+#[derive(Debug, Clone, Deserialize)]
+struct RendezvousPage {
+    blob: String,
+}
+
+/// Post one side's blob to the rendezvous, keyed on the token both devices derived
+/// [`crypto::rendezvous_id`] from.
+///
+/// `slot` is `offer` or `join`, and first-write-wins on each: a 409 means the other device
+/// already answered this exact code, which is [`RENDEZVOUS_TAKEN`] rather than an ordinary
+/// failure. The body is written by hand — this crate does not enable reqwest's `json` feature,
+/// the rule every other request in this file already follows.
+pub async fn post_rendezvous(
+    conn: &Connection,
+    rv: &str,
+    slot: &str,
+    blob: &str,
+) -> Result<(), String> {
+    let base = entitlement::base(conn);
+    let url = format!("{base}/p/{rv}/{slot}");
+    let body = serde_json::json!({ "blob": blob }).to_string();
+    let response = match http()
+        .post(&url)
+        .header("content-type", "application/json")
+        .body(body)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            note(conn, "rendezvous", kind_of(&e), &e.to_string(), Some(&url));
+            return Err(e.to_string());
+        }
+    };
+    let status = response.status().as_u16();
+    if status == 204 {
+        return Ok(());
+    }
+    if status == 409 {
+        return Err(RENDEZVOUS_TAKEN.to_owned());
+    }
+    let message = format!("the relay answered {status} to a rendezvous post");
+    note(conn, "rendezvous", Kind::Http, &message, Some(&url));
+    Err(message)
+}
+
+/// Poll the rendezvous for the other side's blob.
+///
+/// **A 404 is `Ok(None)`, and never an error** — the panel polls this every 1.5 seconds while
+/// the other device is still being read to, and a poll that treated "not yet" as a failure would
+/// put an error in front of the reader on every tick before the pairing has had any chance to
+/// finish.
+pub async fn get_rendezvous(
+    conn: &Connection,
+    rv: &str,
+    slot: &str,
+) -> Result<Option<String>, String> {
+    let base = entitlement::base(conn);
+    let url = format!("{base}/p/{rv}/{slot}");
+    let response = match http().get(&url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            note(conn, "rendezvous", kind_of(&e), &e.to_string(), Some(&url));
+            return Err(e.to_string());
+        }
+    };
+    let status = response.status().as_u16();
+    if status == 404 {
+        return Ok(None);
+    }
+    if !(200..300).contains(&status) {
+        let message = format!("the relay answered {status} to a rendezvous poll");
+        note(conn, "rendezvous", Kind::Http, &message, Some(&url));
+        return Err(message);
+    }
+    let text = match response.text().await {
+        Ok(t) => t,
+        Err(e) => {
+            note(conn, "rendezvous", kind_of(&e), &e.to_string(), Some(&url));
+            return Err(e.to_string());
+        }
+    };
+    let page: RendezvousPage = match serde_json::from_str(&text) {
+        Ok(p) => p,
+        Err(e) => {
+            note(conn, "rendezvous", Kind::Parse, &e.to_string(), Some(&url));
+            return Err(e.to_string());
+        }
+    };
+    Ok(Some(page.blob))
+}
+
+/// Carry a join to the rest of the group. **Best effort, and its failure is recorded rather than
+/// raised.**
+///
+/// A first pairing is the common case that *cannot* publish: `/rotate`'s door is the group auth or
+/// the refresh secret, and a group that has never claimed has no entitlement row, so it answers
+/// 401. That is not an error the reader can act on — nothing is syncing yet, so there is no
+/// divergence to carry — so the debt is marked and paid on the first sync that has a membership.
+///
+/// ⚠️ **`commit_rotation` after the relay accepts, and never before or not at all.** `plan`'s
+/// manifest names **peers only** — `roster()` reads `sync_devices`, which holds no row for this
+/// device — so a device that published epoch *N+1* without committing would sit at *N* and its very
+/// next `check_keys` would read a higher epoch with **`blob: null` for itself**, which
+/// `client::KeyOutcome::Removed` defines as the removal notice. **The device that pressed *Codes
+/// match* would dissolve its own group on its next sync.** Committing makes the epochs equal, so
+/// `check_keys` answers `Current` and never reads the manifest at all. This is `remove_device`'s
+/// order exactly.
+pub async fn publish_join(conn: &Connection) -> Result<(), String> {
+    let Ok(plan) = identity::plan_join(conn) else {
+        identity::set_roster_dirty(conn, true)?;
+        return Ok(());
+    };
+    if post_rotation(conn, &plan).await.is_err() {
+        // Nothing committed, so the group is exactly as it was and the debt is recorded.
+        return identity::set_roster_dirty(conn, true);
+    }
+    // `""` removes nobody: `commit_rotation`'s `DELETE … WHERE device_id = ?1` matches no row,
+    // which is what a join wants. Its `baselined_at = NULL` sweep is wanted in full — a joining
+    // device needs every peer's last words carried across the epoch boundary.
+    identity::commit_rotation(conn, "", &plan)?;
+    identity::set_roster_dirty(conn, false)
+}
+
+// ---------------------------------------------------------------------------------------
 // Push
 // ---------------------------------------------------------------------------------------
 
@@ -893,6 +1031,21 @@ pub async fn run_once_without_baselines(conn: &Connection) -> Result<Option<Rela
 async fn round_trip(conn: &Connection, baselines: bool) -> Result<Option<RelayOutcome>, String> {
     if check_keys(conn).await? == KeyOutcome::Removed {
         return Ok(None);
+    }
+    // A join this device pressed *Codes match* on may owe the rest of the group a publish — the
+    // relay was unreachable at the time, or (the common case) this was the first pairing and
+    // there was no membership yet for `/rotate` to accept. `roster_is_dirty` is the debt
+    // `publish_join` records for both, and paying it here, above the token fetch and once per
+    // trip, means it is retried on every ordinary sync from the moment a membership exists, with
+    // no poll of its own. ⚠️ **It publishes from the LOCAL roster and never reads the relay's
+    // manifest to decide whether one is owed**: a group that has claimed and never rotated
+    // answers `devices: []` at the claim epoch, and treating that as evidence would be exactly
+    // the "every device concludes it was removed" bug `check_keys` above already guards against,
+    // reached a second way. A race between two devices publishing at once is settled by
+    // `/rotate`'s 409 on a non-advancing epoch; the loser's `plan_join` is stale and its next
+    // `check_keys` adopts what won.
+    if identity::roster_is_dirty(conn)? && me(conn)?.is_some() {
+        let _ = publish_join(conn).await;
     }
     let Some(token) = entitlement::access_token(conn).await? else {
         return Ok(None);
