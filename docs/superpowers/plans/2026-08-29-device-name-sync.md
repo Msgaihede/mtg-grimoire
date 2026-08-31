@@ -334,7 +334,7 @@ SELECT d.device_id, d.public_key, coalesce(n.name, d.name), d.added_at, d.revoke
 - [ ] `cargo build --lib --target aarch64-linux-android` — CI has no Android job.
 - [ ] `npm run verify` **once, serially**, redirected to a file. Never pipe it, and **never put a
   `; echo` after it** — that swallows its exit code and a failing run reads as green.
-- [ ] Update the prose that says "eleven synced tables": `docs/reference/sync.md`,
+- [x] Update the prose that says "eleven synced tables": `docs/reference/sync.md`,
   `docs/reference/data-and-sync.md`, `src-tauri/src/sync_engine/apply.rs`'s module doc.
 - [ ] Verify each agent's mutation claims by re-running one yourself.
 - [ ] Ship through `auto-pr`. **Do not press Merge.**

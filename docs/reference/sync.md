@@ -844,17 +844,24 @@ Spec §7.2 (what syncs), §7.3 (conflict semantics), §7.4 (what the reader sees
 
 ---
 
-## What syncs: eleven tables, and the twelfth does not exist
+## What syncs: twelve tables, and the spec's twelfth still does not exist
 
 `schema::SYNCED_TABLES`:
 
 `collection_entries` · `collection_folders` · `deck_audit` · `deck_cards` · `deck_categories` ·
-`deck_folders` · `deck_tags` · `decks` · `muted_tags` · `wishlist_entries` · `wishlist_folders`
+`deck_folders` · `deck_tags` · `decks` · `device_names` · `muted_tags` · `wishlist_entries` ·
+`wishlist_folders`
 
-**Eleven and not the spec's twelve.** The spec's list names `deck_allocations`, which **schema
-v25 dropped** — which deck holds a card is now which folder its row sits in, so the work that
-table did is inside `collection_folders`, which is on the list. A table that does not exist
-cannot be synced; the count moved and the intent did not.
+**Twelve, and not for the reason the spec's own count would suggest.** The spec's list names
+`deck_allocations`, which **schema v25 dropped** — which deck holds a card is now which folder
+its row sits in, so the work that table did is inside `collection_folders`, which is on the
+list. A table that does not exist cannot be synced, and that argument has not changed: it is
+why `deck_allocations` stays off this list for good. What brought the count back to twelve is a
+different table entirely — user schema **v31** added `device_names` (what each device in the
+group is called), a table the spec predates and never named. Two tables have each been "the
+twelfth" at different times, and they are not the same table: the spec's was dropped and is
+gone for good, this tree's is real and the spec never spoke of it. The count moved twice; the
+intent behind the first move did not.
 
 Two further corrections, both found by reading `schema.rs` rather than the spec:
 
@@ -929,9 +936,10 @@ while every count still reads one.
 **A sparse update op cannot describe a grain and does not need to** — the row it edits is found
 by uid. An *insert* op carries every field, which is what makes the grain rule work at all.
 
-**The row handle in `apply` is the uid and never the rowid.** Ten of the eleven tables have an
-`INTEGER PRIMARY KEY`; `muted_tags` has none at all, being `WITHOUT ROWID` on
-`(namespace, tag_id)`. Addressing by `sync_uid` is one spelling for all eleven.
+**The row handle in `apply` is the uid and never the rowid.** Ten of the twelve tables have an
+`INTEGER PRIMARY KEY`; two have none at all — `muted_tags` is `WITHOUT ROWID` on
+`(namespace, tag_id)` and `device_names` on `device_id` alone. Addressing by `sync_uid` is one
+spelling for all twelve.
 
 **Minting takes three sites, not one**, and only one of them is the ladder:
 
@@ -2088,3 +2096,26 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
 - ~~**Nothing has been driven in the shipped window.**~~ **Done 2026-08-29** — the relay is
   deployed and a desktop and a phone converged over it. See "The first end-to-end pass" below.
 - **The bulk-import cost.** 4.22× is measured and unaddressed; see above.
+- **A persistent push failure still retries every ~3 s while the socket is up.** The outbox gate
+  (`live::outbox_has_work`) improved this — before it, *every* commit rang the bell whether or
+  not there was anything to push — but it did not close it: a failing trip leaves its op
+  `pushed_at IS NULL`, so the next commit (the trip's own `error_log` row among them) finds a
+  pending op, the gate answers `true`, and `schedule.rs`'s `WRITE_DEBOUNCE_MS` fires the next
+  trip three seconds later. `schedule.rs`'s `backoff_ms`/`deserves_backoff` govern the
+  **socket** — how long `connect_once` waits before dialing again after a disconnect — not the
+  trip ladder, so a trip that keeps failing over a socket that stays up has no error backoff of
+  its own.
+- **`Wake::Resume` is declared but never constructed.** Its mechanism is real but unwired —
+  `live::resume()` only sets the `FOREGROUND` atomic and never calls
+  `sched.wake(Wake::Resume, …)`. The catch-up still happens: the outer loop dials on resume
+  regardless, and `connect_once` fires `Wake::Reconnect` on every socket that comes up, so
+  `Resume` is redundant rather than missing. But `Wake::Exit` was deleted from this very enum
+  for being never-constructed, and this one now sits in the state that condemned it — either
+  arm it or delete it.
+- **`WAKE_LOCK_WAIT`'s one-second timeout can drop a single wake.** `outbox_has_work` tries the
+  write connection for one second and answers `false` on a miss rather than waiting longer or
+  asking again on its own. If another writer holds `state.db` for longer than that with no
+  further commit to ring the bell a second time, that wake is lost. Self-healing in every case
+  examined — the competing writer is usually a `sync_now` press that pushes the very op the
+  missed wake would have pushed — but it is the one way the gate can fall quiet with real work
+  still in the outbox, and it was undocumented until now.

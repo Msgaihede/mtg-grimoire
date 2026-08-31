@@ -860,7 +860,11 @@ mod tests {
 
     /// The other half of the same loop: a **failing** trip writes an `error_log` row inside the
     /// same closure, and that commit rings the same bell. `error_log` is not synced either, so
-    /// a trip that fails forever must not retry itself every three seconds forever.
+    /// an error row **with nothing else pending** leaves the outbox with nothing to find. That
+    /// is narrower than it sounds and deliberately so: with a pending op present, the gate
+    /// answers `true` and a trip that keeps failing keeps retrying every three seconds while the
+    /// socket is up, its own `error_log` commit ringing the bell each time — see "What is still
+    /// owed" in `sync.md`.
     #[tokio::test]
     async fn a_failed_trips_error_row_leaves_nothing_to_push() {
         let state = in_a_group_state("error-row");
