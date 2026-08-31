@@ -3464,6 +3464,22 @@ pub struct DeckCardRow {
     /// row in the read's own order (see [`read_deck_cards`]) and clamped to what each entry
     /// still holds — so a collection that shrank under a stored claim reads honestly.
     pub owned_quantity: i64,
+    /// The front face's picture on `cards.scryfall.io`, by variant — **the only art a browser
+    /// can reach**, and `None` when this printing has none worth fetching.
+    ///
+    /// [`crate::search::CardSummary::image_uris`] carries the argument in full: one variant
+    /// ([`crate::image_uri::LIST_VARIANT`], which is what `DECK_CARD_VARIANT` is on the other
+    /// side), face 0, the face-first precedence and the `soon.jpg` fence, every one of them
+    /// [`crate::image_uri::front_face_map`]'s and none of them respelled here.
+    ///
+    /// **Two surfaces read it and both had to be wired**: `views/GridView` draws a
+    /// `components/CardArt`, which takes the URL as a prop, and `CardStack` builds its own
+    /// `<img>` src — so it is the one that has to put both candidates through `cardArtSrc`
+    /// itself. `deck_get` is routed on web and `mtgimg://` is not reachable there.
+    ///
+    /// `None` for an orphan, whose printing has left `cards` — the same answer as every other
+    /// card fact on this row, and the state `CardArt` already draws "No card" for.
+    pub image_uris: Option<BTreeMap<String, String>>,
 }
 
 /// One deck and everything in it: the gallery's row, one variant's cards, and **every**
@@ -3551,6 +3567,10 @@ pub struct FormatSpecRow {
 ///
 /// The `ORDER BY` is [`read_deck_cards`]'s contract; see its doc for why it lives in SQL.
 fn deck_card_select(marketplace: crate::sorting::Marketplace) -> String {
+    // The front face's picture, off the `cards` row this select already joins. Built by
+    // `image_uri::front_face_selects` so the precedence between the two columns stays that
+    // module's, rather than being respelled as a `COALESCE` here.
+    let image_uris = crate::image_uri::front_face_selects("c").join(", ");
     format!(
         "SELECT dc.id, dc.card_id,
             dc.category_id, cat.name, cat.kind, cat.is_active,
@@ -3573,7 +3593,11 @@ fn deck_card_select(marketplace: crate::sorting::Marketplace) -> String {
             -- is that rule's fourth proof: `promo_types` is TEXT and reads like it belongs
             -- beside `c.finishes` at 30, where it would have handed a printing's finishes to
             -- its treatments and a set name to its finishes, both still plausible strings.
-            c.promo_types
+            c.promo_types,
+            -- 36 and 37, last of all, for the reason written above `dc.finish`: this read is
+            -- positional and a column added anywhere else shifts every index after it into a
+            -- field of the same SQLite type, silently.
+            {image_uris}
        FROM deck_cards dc
        JOIN deck_categories cat ON cat.id = dc.category_id
        LEFT JOIN deck_tags t ON t.id = dc.tag_id
@@ -3642,6 +3666,11 @@ fn read_deck_cards(
     variant: &str,
     marketplace: crate::sorting::Marketplace,
 ) -> Result<Vec<DeckCardRow>, String> {
+    // Where the image pair begins — the count of every column before it, which is what makes
+    // it last. Written down rather than spelled inside the closure, for the reason
+    // `deck_card_select`'s own comment gives.
+    const IMAGE_COL: usize = 36;
+
     let sql = deck_card_select(marketplace);
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
@@ -3685,6 +3714,11 @@ fn read_deck_cards(
                 finish: r.get(34)?,
                 // 35, after it, for the same reason.
                 promo_types: r.get(35)?,
+                // 36 and 37 — the pair `front_face_selects` added, folded back up by the
+                // module that added them, face-first precedence and `soon.jpg` fence included.
+                image_uris: crate::image_uri::front_face_map(|i| {
+                    r.get::<_, Option<String>>(IMAGE_COL + i)
+                })?,
                 // Filled by `attribute_owned`, once the claims are known.
                 owned_quantity: 0,
             })
@@ -9299,6 +9333,97 @@ mod tests {
     // Undoing a game change is `deck_undo.rs`'s `deck_update (game)` case, driven there over
     // the same sweep every other deck-level column goes through.
 
+    /// **A deck card carries the front face's image URL** — what the editor's Grid and Stacks
+    /// views have no other way to draw a picture from in a browser.
+    ///
+    /// `mtgimg://` is a Tauri custom protocol and wasm cannot register one with a browser, so
+    /// without this a deck opened on the web build is a wall of named, artless frames.
+    ///
+    /// **`bolt-m10` is the row that makes the offset visible at all.** 36 and 37 sit directly
+    /// after `c.promo_types`, and with only top-level pictures in the fixture a read one column
+    /// early lands the top-level URL in the `face` slot and answers correctly anyway — the
+    /// mutation survived exactly that way. A `meld`-shaped row carrying **both** columns is the
+    /// only shape where the shifted read gives a different, wrong answer, and it pins the
+    /// face-first precedence in the same breath.
+    #[test]
+    fn a_deck_card_carries_the_front_faces_image_url() {
+        let conn = seeded();
+        conn.execute(
+            "UPDATE cards SET image_uris = json_object(
+                 'display','https://cards.scryfall.io/display/front/0/0/x.webp?17')
+             WHERE id = 'bolt-lea'",
+            [],
+        )
+        .unwrap();
+        // Scryfall's own error page: a URL with nothing to invalidate, on a host that does not
+        // serve card art. It must read as *no picture*, not as a URL a browser will request.
+        conn.execute(
+            "UPDATE cards SET image_uris = json_object(
+                 'display','https://errors.scryfall.com/soon.jpg')
+             WHERE id = 'bolt-jp'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE cards SET
+                 image_uris = json_object(
+                     'display','https://cards.scryfall.io/display/top.webp?1'),
+                 face_image_uris = json_array(json_object(
+                     'display','https://cards.scryfall.io/display/face0.webp?1'))
+             WHERE id = 'bolt-m10'",
+            [],
+        )
+        .unwrap();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-lea", main, 4);
+        add(&conn, deck.id, "bolt-jp", main, 1);
+        add(&conn, deck.id, "bolt-m10", main, 1);
+        // `serra-lea` carries neither image column, which is the ordinary state of 162 of the
+        // live corpus's 117 606 rows.
+        add(&conn, deck.id, "serra-lea", main, 1);
+
+        let detail = get_deck(&conn, deck.id, LIVE, ANY_MARKET).unwrap().unwrap();
+        let row = card_row(&detail, "bolt-lea", main);
+        let art = row
+            .image_uris
+            .as_ref()
+            .expect("a versioned URL on the image host is a picture");
+        assert_eq!(
+            art[crate::image_uri::LIST_VARIANT],
+            "https://cards.scryfall.io/display/front/0/0/x.webp?17"
+        );
+        assert_eq!(
+            art.keys().collect::<Vec<_>>(),
+            [crate::image_uri::LIST_VARIANT]
+        );
+        // The two columns an off-by-one would have reached, both still plausible strings.
+        assert_eq!(row.promo_types, None, "the column directly before the pair");
+        assert_eq!(row.finish, None);
+
+        // The precedence **and** the offset. See the doc above for why no other row here can
+        // fail when the pair is read a column early.
+        assert_eq!(
+            card_row(&detail, "bolt-m10", main)
+                .image_uris
+                .as_ref()
+                .expect("a meld-shaped printing has a front face")[crate::image_uri::LIST_VARIANT],
+            "https://cards.scryfall.io/display/face0.webp?1",
+            "the face wins over the top-level blob, and the pair is read at its own offset"
+        );
+
+        assert_eq!(
+            card_row(&detail, "bolt-jp", main).image_uris,
+            None,
+            "an error page is a gap, not a picture"
+        );
+        assert_eq!(
+            card_row(&detail, "serra-lea", main).image_uris,
+            None,
+            "a printing with neither image column carries nothing"
+        );
+    }
+
     #[test]
     fn deck_card_and_format_spec_json_use_the_camel_case_names_the_frontend_expects() {
         let value = serde_json::to_value(DeckCardRow {
@@ -9344,6 +9469,10 @@ mod tests {
             // beside it is what names which foil that is.
             promo_types: Some(r#"["surgefoil"]"#.to_owned()),
             owned_quantity: 3,
+            image_uris: Some(BTreeMap::from([(
+                crate::image_uri::LIST_VARIANT.to_owned(),
+                "https://cards.scryfall.io/display/front/0/0/x.webp?17".to_owned(),
+            )])),
         })
         .unwrap();
         assert_eq!(
@@ -9362,7 +9491,10 @@ mod tests {
                 "gameChanger": false, "finishes": "[\"nonfoil\",\"foil\"]",
                 "everUncommon": false, "unitPrice": 400.0, "finish": "foil",
                 "promoTypes": "[\"surgefoil\"]",
-                "ownedQuantity": 3
+                "ownedQuantity": 3,
+                "imageUris": {
+                    "display": "https://cards.scryfall.io/display/front/0/0/x.webp?17"
+                }
             })
         );
 

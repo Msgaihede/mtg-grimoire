@@ -793,6 +793,11 @@ export function CollectionPage() {
         setCode: row.setCode,
         collectorNumber: row.collectorNumber,
         rarity: row.rarity,
+        // The picture a browser can reach, straight off the row. Ignored on the desktop, where
+        // `cardArtSrc` prefers the local cache — see `GridCard.imageUris`, which is where that
+        // branch is argued. Off the group's first row like `unitPrice` below, and for the same
+        // reason: every row behind this tile names the same printing.
+        imageUris: row.imageUris,
         copies: copies.get(key) ?? 0,
         // Narrowed against `FINISHES` rather than cast, for the reason the key above is *not*
         // narrowed: `finish` is TEXT with a CHECK rather than an enum this side knows, so a word

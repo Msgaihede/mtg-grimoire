@@ -1180,6 +1180,21 @@ export interface CollectionRow {
    * `null` is an orphan — the printing this entry names has left `cards`.
    */
   legalities: string | null;
+  /**
+   * The front face's image URLs, keyed by the app's own variant names — `null` when Scryfall
+   * has no usable picture for this printing.
+   *
+   * The same field, with the same rules and for the same reason, as
+   * {@link CardSummary.imageUris}: the web build has no `mtgimg://` to ask, so a collection
+   * tile draws `imageUris?.[WALL_CARD_VARIANT]` there or draws the no-art frame. On Tauri it is
+   * ignored and the local cache wins. Front face only, `Partial`, and **a missing entry means
+   * "no art"** — never a reason to build a URL of your own, because the backend has already
+   * refused a URI it cannot version or one from a host that does not serve card art.
+   *
+   * Mirrors `CollectionRow::image_uris` in `src-tauri/src/collection.rs`; `ipc.test.ts`'s
+   * field-name pin is the only fence.
+   */
+  imageUris?: Partial<Record<ImageVariant, string>> | null;
 }
 
 export interface CollectionPage {
@@ -1378,6 +1393,19 @@ export interface WishRow {
    * wish's oracle card. `null` is a genuine orphan — no pinned printing, no oracle match.
    */
   legalities: string | null;
+  /**
+   * The front face's image URLs of **the printing this wish is drawn as** — {@link
+   * WishRow.artCardId}'s printing, never {@link WishRow.cardId}'s, because an any-printing wish
+   * has no printing of its own. One join answers all three, so the picture, the id and the
+   * price can never disagree about which piece of cardboard is on screen.
+   *
+   * The same rules as {@link CardSummary.imageUris}: front face, `Partial`, a missing entry is
+   * "no art", and the whole field is ignored on Tauri. `wishlist_list` is routed on web, where
+   * `mtgimg://` cannot be reached at all.
+   *
+   * Mirrors `WishRow::image_uris` in `src-tauri/src/wishlist.rs`.
+   */
+  imageUris?: Partial<Record<ImageVariant, string>> | null;
 }
 
 export interface WishlistPage {
@@ -2716,6 +2744,18 @@ export interface DeckCard {
    *   an unfiled collection reads as a deck full of red until they drag.
    */
   ownedQuantity: number;
+  /**
+   * The front face's image URLs, keyed by the app's own variant names — `null` when Scryfall
+   * has no usable picture for this printing.
+   *
+   * Read at `DECK_CARD_VARIANT`, which is the same `display` {@link CardSummary.imageUris} is
+   * read at, by both deck surfaces that draw a card: `views/GridView` hands it to `CardArt`'s
+   * `imageUrl`, and `CardStack` — which builds its own `<img>` src — puts it through
+   * `cardArtSrc` itself. Ignored on Tauri; on web it is the only picture there is.
+   *
+   * Mirrors `DeckCardRow::image_uris` in `src-tauri/src/deck.rs`.
+   */
+  imageUris?: Partial<Record<ImageVariant, string>> | null;
 }
 
 /**

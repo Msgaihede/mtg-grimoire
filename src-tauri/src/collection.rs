@@ -18,6 +18,7 @@ use crate::schema::{COLLECTION_GRAIN, FINISHES};
 use crate::sync::AppState;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 #[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
@@ -1456,6 +1457,25 @@ pub struct CollectionRow {
     /// whose name I could not find" — `collection_entries.folder_id` is a real foreign key, so
     /// the id and the name arrive together or not at all.
     pub folder_name: Option<String>,
+    /// The front face's picture on `cards.scryfall.io`, by variant — **the only art a browser
+    /// can reach**, and `None` when this printing has none worth fetching.
+    ///
+    /// [`crate::search::CardSummary::image_uris`] carries the argument in full and it is not
+    /// repeated here. One variant ([`crate::image_uri::LIST_VARIANT`]), face 0 only, the
+    /// face-first precedence, and the `soon.jpg` fence — every one of them applied by
+    /// [`crate::image_uri::front_face_map`] and none of them respelled on this row.
+    ///
+    /// **It is here because `collection_list` is routed on web** (`web/route.rs`'s `COMMANDS`)
+    /// and `mtgimg://` is a Tauri custom protocol wasm cannot register with a browser. Without
+    /// it the collection wall draws named, artless frames in a browser while the search wall
+    /// beside it draws pictures — which is exactly what shipped, and what the device pass of
+    /// 2026-08-30 could not see because the collection was empty. On the desktop it is
+    /// *ignored*: `cardArtSrc` takes the local cache, whose bytes are already re-encoded to
+    /// the variant's exact size.
+    ///
+    /// `None` for an orphan, whose printing has left `cards` — the same answer, in the same
+    /// shape, as every other card-derived field on this row.
+    pub image_uris: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1750,6 +1770,9 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
         )
         .map_err(|e| e.to_string())?;
 
+    // The front face's picture, as two `json_extract`s off the `cards` row this statement
+    // already holds — no join and no second query. `c` is [`from_sql`]'s alias for it.
+    let image_uris = crate::image_uri::front_face_selects("c").join(", ");
     let sql = format!(
         "SELECT e.id, e.card_id, c.name, e.set_code, c.set_name, e.collector_number, e.lang,
                 c.rarity, c.mana_cost, c.type_line, c.layout,
@@ -1759,7 +1782,12 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
                 e.serial_number, e.altered, e.signed, e.proxy, e.misprint, e.grading,
                 e.tags, e.notes, e.needs_review, e.updated_at, c.oracle_id, c.promo_types,
                 c.legalities, e.folder_id,
-                (SELECT f.name FROM collection_folders f WHERE f.id = e.folder_id)
+                (SELECT f.name FROM collection_folders f WHERE f.id = e.folder_id),
+                -- 35 and 36, on the end like every appended column above them. Built by
+                -- `image_uri::front_face_selects` rather than written out, because the
+                -- precedence between the two columns is applied in Rust by `front_face_map`
+                -- and a `COALESCE` spelled here would be a second copy of it.
+                {image_uris}
          FROM {from} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?",
         price = crate::sorting::price_expr(q.marketplace, ENTRY_FINISH),
         order = crate::sorting::order_by(
@@ -1771,6 +1799,12 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
     );
     params.push(Box::new(limit));
     params.push(Box::new(q.offset));
+
+    // Where the image pair begins — the count of every column before it, which is what makes
+    // it last. Written down rather than spelled inside the closure below, for the reason the
+    // five appended `r.get(N)`s carry: a number left behind reads a URL as a folder name, and
+    // nothing errors.
+    const IMAGE_COL: usize = 35;
 
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
@@ -1826,6 +1860,12 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
                     // so two of them swapping would still hand back a plausible string.
                     folder_id: r.get(33)?,
                     folder_name: r.get(34)?,
+                    // 35 and 36 — the pair `front_face_selects` added, folded back up by the
+                    // module that added them. The face-first precedence and the `soon.jpg`
+                    // fence both live in there, so this mapping applies no rule of its own.
+                    image_uris: crate::image_uri::front_face_map(|i| {
+                        r.get::<_, Option<String>>(IMAGE_COL + i)
+                    })?,
                 })
             },
         )
@@ -4506,6 +4546,113 @@ mod tests {
         );
     }
 
+    /// **A collection row carries the front face's image URL, at the index the appended pair
+    /// put it at** — the field the web build's wall has no other way to get a picture from.
+    ///
+    /// `mtgimg://` is a Tauri custom protocol and wasm cannot register one with a browser, so
+    /// in a browser a tile draws this or draws the no-art frame. Four printings, because the
+    /// four ways this can be wrong fail apart: a missing
+    /// [`crate::image_uri::is_fetchable`] lands Scryfall's error page under `display`; a
+    /// printing with neither image column must answer `None` and not an empty map; a reversed
+    /// precedence draws a `meld` card's melded picture where its front belongs; and the pair
+    /// being read at the **wrong offset** is the one that needs the `meld`-shaped row to be
+    /// visible at all — with only top-level pictures in the fixture, a read one column early
+    /// lands the top-level URL in the `face` slot and every other case here still passes. It
+    /// did, and the mutation survived, until this row was added.
+    #[test]
+    fn a_collection_row_carries_the_front_faces_image_url() {
+        let conn = seeded();
+        conn.execute(
+            "UPDATE cards SET image_uris = json_object(
+                 'display','https://cards.scryfall.io/display/front/0/0/x.webp?17')
+             WHERE id = 'bolt-lea'",
+            [],
+        )
+        .unwrap();
+        // Scryfall's own error page, in the shape eight live printings publish it: no
+        // `?<epoch>` to invalidate, on a host that does not serve card art.
+        conn.execute(
+            "UPDATE cards SET image_uris = json_object(
+                 'display','https://errors.scryfall.com/soon.jpg')
+             WHERE id = 'bolt-jp'",
+            [],
+        )
+        .unwrap();
+        // The `meld` shape: **both** columns, carrying different pictures. See the doc above
+        // for what only this row can catch.
+        conn.execute(
+            "UPDATE cards SET
+                 image_uris = json_object(
+                     'display','https://cards.scryfall.io/display/top.webp?1'),
+                 face_image_uris = json_array(json_object(
+                     'display','https://cards.scryfall.io/display/face0.webp?1'))
+             WHERE id = 'card-1'",
+            [],
+        )
+        .unwrap();
+        // Neither column — the ordinary state of 162 of the live corpus's 117 606 rows.
+        conn.execute(
+            "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                rarity,finishes,prices,raw)
+             VALUES ('artless','o9','Artless','tst','2','en','normal','common',?1,?2,'{}')",
+            params![r#"["nonfoil"]"#, r#"{"usd":"1.00"}"#],
+        )
+        .unwrap();
+        add_entry(&conn, &input("bolt-lea", "nonfoil", 1)).unwrap();
+        add_entry(&conn, &input("bolt-jp", "nonfoil", 1)).unwrap();
+        add_entry(&conn, &input("card-1", "nonfoil", 1)).unwrap();
+        add_entry(&conn, &input("artless", "nonfoil", 1)).unwrap();
+
+        let rows = list_entries(&conn, &CollectionQuery::default())
+            .unwrap()
+            .items;
+        let of = |card: &str| {
+            rows.iter()
+                .find(|r| r.card_id == card)
+                .unwrap_or_else(|| panic!("no row for {card}"))
+        };
+
+        let art = of("bolt-lea")
+            .image_uris
+            .as_ref()
+            .expect("a versioned URL on the image host is a picture");
+        assert_eq!(
+            art[crate::image_uri::LIST_VARIANT],
+            "https://cards.scryfall.io/display/front/0/0/x.webp?17"
+        );
+        // The one key, not four: the narrowing to `display` is a decision, and an accidental
+        // widening lands here rather than in a payload nobody measures.
+        assert_eq!(
+            art.keys().collect::<Vec<_>>(),
+            [crate::image_uri::LIST_VARIANT]
+        );
+        // The two neighbours an off-by-one would have reached, both still plausible strings.
+        assert_eq!(of("bolt-lea").folder_name, None);
+        assert_eq!(of("bolt-lea").legalities, None);
+
+        // The precedence **and** the offset, on the one row that can tell either from its
+        // opposite: a pair read a column early answers `top.webp` here.
+        assert_eq!(
+            of("card-1")
+                .image_uris
+                .as_ref()
+                .expect("a meld-shaped printing has a front face")[crate::image_uri::LIST_VARIANT],
+            "https://cards.scryfall.io/display/face0.webp?1",
+            "the face wins over the top-level blob, and the pair is read at its own offset"
+        );
+
+        assert_eq!(
+            of("bolt-jp").image_uris,
+            None,
+            "an error page is a gap, not a picture"
+        );
+        assert_eq!(
+            of("artless").image_uris,
+            None,
+            "a printing with neither image column carries nothing"
+        );
+    }
+
     /// The hand-mirrored wire contract, pinned whole so a field added on this side and
     /// never mirrored in `src/lib/ipc.ts` fails here rather than rendering as `undefined`.
     #[test]
@@ -4548,6 +4695,10 @@ mod tests {
             legalities: Some(r#"{"timeless":"legal","standard":"not_legal"}"#.into()),
             folder_id: Some(3),
             folder_name: Some("Trade binder".into()),
+            image_uris: Some(BTreeMap::from([(
+                crate::image_uri::LIST_VARIANT.to_owned(),
+                "https://cards.scryfall.io/display/front/0/0/x.webp?17".to_owned(),
+            )])),
         })
         .unwrap();
 
@@ -4566,7 +4717,10 @@ mod tests {
                 "tags": "[]", "notes": null, "needsReview": null,
                 "updatedAt": 1800000000, "promoTypes": "[\"surgefoil\"]",
                 "legalities": "{\"timeless\":\"legal\",\"standard\":\"not_legal\"}",
-                "folderId": 3, "folderName": "Trade binder"
+                "folderId": 3, "folderName": "Trade binder",
+                "imageUris": {
+                    "display": "https://cards.scryfall.io/display/front/0/0/x.webp?17"
+                }
             })
         );
 
