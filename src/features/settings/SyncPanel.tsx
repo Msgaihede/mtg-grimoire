@@ -516,11 +516,11 @@ export function outcomeText(outcome: RelayOutcome | null): string {
 /**
  * This device's membership, under one key.
  *
- * Local for {@link PAIRING_KEY}'s reason and under the same standing offer: nothing else in the
- * window reads it, and the moment a second surface does the literal moves to `@/lib/query`, so
- * that two features cannot spell one prefix two ways. It sits **under** `SYNC_KEY`, which is
- * what makes a finished round trip re-read it — a trip refused with a 401 is how a lapse
- * reaches a reader who never opened Patreon.
+ * Local for the reason `PAIRING_KEY` used to be, before it moved to `@/lib/query`: nothing else
+ * in the window reads this one, so there is nothing yet for two features to spell two ways. The
+ * moment a second surface does read it, it moves too, for `COMBOS_KEY`'s reason in that file. It
+ * sits **under** `SYNC_KEY`, which is what makes a finished round trip re-read it — a trip
+ * refused with a 401 is how a lapse reaches a reader who never opened Patreon.
  */
 export const SUPPORTER_KEY: QueryKey = ["sync", "supporter"];
 
