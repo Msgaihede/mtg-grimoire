@@ -5818,7 +5818,8 @@ export const ipc = {
    * has paired nothing, which is all of them today. So a listener that mounts *after* the last
    * transition never learns the state by listening alone: Tauri also drops events emitted before
    * the webview registered a listener, which makes that the common case at launch rather than a
-   * rare race. A later task seeds its hook from this command and then subscribes for changes. */
+   * rare race. A later task seeds its hook from this command and then subscribes for changes.
+   */
   syncLiveState: (): Promise<LiveState> => invoke<LiveState>("sync_live_state"),
   /** Every row carrying a sentence, from all six tables that can hold one. */
   syncReviewList: () => invoke<ReviewRow[]>("sync_review_list"),

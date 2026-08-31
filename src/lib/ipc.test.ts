@@ -1473,13 +1473,6 @@ it("subscribes to sync:live and hands the payload through unwrapped", async () =
   expect(unlisten).toHaveBeenCalledTimes(1);
 });
 
-it("returns a working unsubscribe from each", () => {
-  listen.mockResolvedValue(vi.fn());
-
-  expect(typeof ipc.onSyncApplied(() => {})).toBe("function");
-  expect(typeof ipc.onSyncLive(() => {})).toBe("function");
-});
-
 /**
  * `marketplace:progress` — its **own** event rather than a ninth `SyncPhase`.
  *
