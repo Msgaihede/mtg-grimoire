@@ -186,7 +186,7 @@ export class Group implements DurableObject {
     const device = url.searchParams.get("device") ?? "";
     if (!Number.isFinite(cursor) || cursor < 0) return json({ error: "bad cursor" }, 400);
 
-    const rows = this.rows();
+    const rows = this.rowsSince(cursor);
 
     // **The cursor handed back is the head of the whole log, not of the returned slice.**
     // The slice has the puller's own rows filtered out of it, and a cursor taken from the
@@ -218,6 +218,14 @@ export class Group implements DurableObject {
       return json({ error: "malformed ack" }, 400);
     }
 
+    // What this device had acked before, so the compaction below runs only when it could
+    // possibly change anything. `-1` and not `0`: a device whose stored cursor is genuinely
+    // `0` must still be told apart from one that has never acked.
+    const prior = this.sql
+      .exec<{ cursor: number }>(`SELECT cursor FROM acks WHERE device = ?`, body.device)
+      .toArray();
+    const before = prior.length > 0 ? prior[0].cursor : -1;
+
     // `max(...)` and not a plain assignment: an ack is a watermark, and a retry that arrives
     // out of order must not walk a device's cursor backwards into rows it has already folded.
     this.sql.exec(
@@ -227,7 +235,9 @@ export class Group implements DurableObject {
       body.cursor,
     );
 
-    this.compactNow();
+    // A re-ack of a value already stored cannot move the floor, and `compactNow` is two full
+    // table scans plus a DELETE per doomed row.
+    if (body.cursor > before) this.compactNow();
     return new Response(null, { status: 204 });
   }
 
@@ -361,6 +371,36 @@ export class Group implements DurableObject {
   private rows(): Row[] {
     return this.sql
       .exec<LogRow>(`SELECT seq, device, epoch, hlc_ms, hlc_ctr, sealed, stored_at FROM log`)
+      .toArray()
+      .map((row) => ({
+        seq: row.seq,
+        device: row.device,
+        epoch: row.epoch,
+        hlcMs: row.hlc_ms,
+        hlcCtr: row.hlc_ctr,
+        sealed: row.sealed,
+        storedAt: row.stored_at,
+      }));
+  }
+
+  /**
+   * The rows a pull can possibly return: everything past the cursor.
+   *
+   * **`head` is still the head of the whole log**, which is what `pull`'s comment requires,
+   * and the arithmetic survives the filter: `reduce` seeds with `cursor`, and a row at or
+   * below the cursor could never have been the maximum of a set seeded that way. A device
+   * that is fully caught up sees an empty set and `head === cursor`, which is true.
+   *
+   * `compactNow` deliberately still calls `rows()` — its floor is computed across every device
+   * and a bounded read would compute it against a slice.
+   */
+  private rowsSince(cursor: number): Row[] {
+    return this.sql
+      .exec<LogRow>(
+        `SELECT seq, device, epoch, hlc_ms, hlc_ctr, sealed, stored_at
+           FROM log WHERE seq > ?`,
+        cursor,
+      )
       .toArray()
       .map((row) => ({
         seq: row.seq,
