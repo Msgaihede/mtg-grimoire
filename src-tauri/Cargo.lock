@@ -2708,6 +2708,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+ "webview2-com",
  "windows-sys 0.61.2",
  "x25519-dalek",
  "zip",

@@ -7,7 +7,9 @@ import {
   handleWebhook,
   reconcile,
 } from "./claim";
+import { handlePair } from "./pair";
 import { required } from "./patreon";
+import { handleRendezvousGet, handleRendezvousPut, sweepRendezvous } from "./rendezvous";
 import { handleKeys, handleRotate } from "./rotate";
 import { verify } from "./token";
 
@@ -71,6 +73,9 @@ export interface Env {
  */
 const ROUTE = new RegExp(`^/g/(${GROUP_SEGMENT})/(push|pull|ack|ws|rotate|keys)$`);
 
+/** `/p/{rv}/{slot}` — 32 hex characters, and one of exactly two slots. */
+const RENDEZVOUS = /^\/p\/([0-9a-f]{32})\/(offer|join)$/;
+
 const METHOD: Record<string, string> = {
   push: "POST",
   pull: "GET",
@@ -90,6 +95,16 @@ const METHOD: Record<string, string> = {
  * by its HMAC. A bearer token could not guard any of them — three of the four exist precisely
  * because the caller has no token yet.
  *
+ * **`/pair` is guarded by holding no secret at all, rather than by a credential.** It is a static
+ * page that reads the pairing code out of `location.hash` in the browser — the Worker serving it
+ * never sees the code, so there is nothing here a gate would protect.
+ *
+ * ⚠️ **`/.well-known/assetlinks.json` stood beside it for part of a day and is deliberately
+ * gone.** It existed only so an Android App Link could one day verify — and verifying it would
+ * have *broken* the scan flow, because the app reads no launch intent and Android would have
+ * taken `https://…/pair#<code>` away from the browser that is currently the only thing able to
+ * show the reader that code. `pair.ts` carries the whole argument.
+ *
  * A `Map` and not a `Record`, so a path that is not a route reads as `undefined` rather than as
  * a value the type system has promised is there.
  */
@@ -101,6 +116,7 @@ const CLAIM_ROUTES = new Map<
   ["/claim", { method: "POST", handle: handleClaim }],
   ["/token", { method: "POST", handle: handleToken }],
   ["/webhook/patreon", { method: "POST", handle: handleWebhook }],
+  ["/pair", { method: "GET", handle: (_request, env) => Promise.resolve(handlePair(env)) }],
 ]);
 
 function methodNotAllowed(expected: string): Response {
@@ -115,6 +131,15 @@ export default {
     if (entitlement !== undefined) {
       if (request.method !== entitlement.method) return methodNotAllowed(entitlement.method);
       return entitlement.handle(request, env);
+    }
+
+    const rv = RENDEZVOUS.exec(url.pathname);
+    if (rv) {
+      const [, id, slot] = rv;
+      // D1 only, never a Durable Object — which is what lets it stand ahead of the gate.
+      if (request.method === "POST") return handleRendezvousPut(request, env, id, slot, Date.now());
+      if (request.method === "GET") return handleRendezvousGet(env, id, slot, Date.now());
+      return methodNotAllowed("GET, POST");
     }
 
     const match = ROUTE.exec(url.pathname);
@@ -171,6 +196,7 @@ export default {
   // in front of a parameter that IS used and refuses a trailing one that is not.
   async scheduled(_controller: ScheduledController, env: Env) {
     await reconcile(env);
+    await sweepRendezvous(env, Date.now());
   },
 } satisfies ExportedHandler<Env>;
 

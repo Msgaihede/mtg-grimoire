@@ -5591,13 +5591,17 @@ describe("the busy fault", () => {
     // that is worth this loop's attention rather than in spite of it: everything *after* the door
     // in that command is best effort by design (spec §2.1), so `refuseIfBusy` is the one refusal
     // it has and a handler that forgot it would look identical from outside.
-    // The backup archive then added **two handlers and no refusals**, which is why this number
-    // did not move: `mirror_backup_zip` and `mirror_backup_save` both joined `unlocked` above,
-    // for `mirror_rebuild`'s reason. **That is the fifth entry here whose delta and whose handler
-    // count differ, and the first where the delta is zero** — worth saying out loud, because a
-    // reader who added two handlers and saw this line unchanged would reasonably wonder whether
-    // the loop had stopped seeing them.
-    expect(names).toHaveLength(88);
+    // The backup archive then added **two handlers and no refusals**, so its own delta was zero:
+    // `mirror_backup_zip` and `mirror_backup_save` both joined `unlocked` above, for
+    // `mirror_rebuild`'s reason.
+    //
+    // One-sided pairing then moved it by **minus one**: `sync_pairing_respond` and
+    // `sync_pairing_complete` are gone (a relay carries both blobs now, spec §1) and
+    // `sync_pairing_poll` replaces them — two handlers out, one in. It takes `sync::with_write`
+    // and no arguments of its own, exactly as `sync_pairing_confirm` beside it needs none in
+    // `args` above. So the two changes compose to 88 → 87, and this line was **re-counted by
+    // running the sweep across the merge**, not by adding the two deltas on paper.
+    expect(names).toHaveLength(87);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -5677,6 +5681,66 @@ describe("the roster", () => {
    *  check is best effort, so this is the only way the press can answer no. */
   it("refuses to leave a group this device is not in", () => {
     expect(() => writeHandlers(makeDb()).sync_group_leave()).toThrow(/not in a pairing group/i);
+  });
+});
+
+/**
+ * `sync_pairing_poll` — one command answering both sides of `task-5-brief.md` Step 6's state
+ * machine, and the regression a poll past completion shipped once.
+ *
+ * **The bug this pins**: the joining device's branch used to set `db.pairing.pending = null` the
+ * moment it joined the group, so a *third* poll fell through to the `pending === null` guard and
+ * answered `"idle"` — a device that had just paired reading as unpaired again on the very next
+ * ask. Nothing in the real state machine clears `Pending` on success for either side, only cancel
+ * and expiry do, and the offering device's branch was already written that way; every test below
+ * polls at least one step past `"complete"` for exactly that reason, on both sides, so a story
+ * asserting the correct behaviour can never see this fake disagree with it again.
+ */
+describe("the pairing ceremony's poll", () => {
+  it("answers idle with nothing in flight", () => {
+    expect(writeHandlers(seed("starter")).sync_pairing_poll()).toEqual({
+      stage: "idle",
+      sas: null,
+    });
+  });
+
+  it("walks the offering device waiting -> compare -> complete, and stays complete", () => {
+    const w = writeHandlers(seed("starter"));
+    w.sync_pairing_begin();
+
+    expect(w.sync_pairing_poll()).toEqual({ stage: "waiting", sas: null });
+    const compared = w.sync_pairing_poll();
+    expect(compared.stage).toBe("compare");
+    expect(compared.sas).not.toBeNull();
+
+    w.sync_pairing_confirm();
+    expect(w.sync_pairing_poll()).toEqual({ stage: "complete", sas: null });
+    // Past completion is where this fake diverged from the crate, on the *other* side — pinned
+    // on this side too, since the crate's own asymmetry-free design says both must hold.
+    expect(w.sync_pairing_poll()).toEqual({ stage: "complete", sas: null });
+  });
+
+  /** The one this fix is for — see the describe's own comment. */
+  it("walks the joining device compare -> complete, and stays complete rather than reverting to idle", () => {
+    const db = seed("starter");
+    const w = writeHandlers(db);
+    // A code from a separate offering device, exactly as a reader would carry one in from
+    // another window — `sync_pairing_accept` only cares that it is well-shaped.
+    const offerCode = writeHandlers(seed("starter")).sync_pairing_begin().code;
+
+    const shake = w.sync_pairing_accept({ code: offerCode });
+    expect(w.sync_pairing_poll()).toEqual({ stage: "compare", sas: shake.sas });
+
+    const completed = w.sync_pairing_poll();
+    expect(completed).toEqual({ stage: "complete", sas: null });
+    // The join actually happened — this is not a stage label painted over an untouched store.
+    expect(db.pairing.group).not.toBeNull();
+    expect(db.pairing.devices).toHaveLength(2);
+
+    // The regression: a further poll must answer `"complete"` again, not `"idle"` — which means
+    // `pending` must still be there to ask.
+    expect(w.sync_pairing_poll()).toEqual({ stage: "complete", sas: null });
+    expect(db.pairing.pending).not.toBeNull();
   });
 });
 

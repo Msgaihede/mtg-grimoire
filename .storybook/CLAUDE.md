@@ -83,9 +83,13 @@ deliberately**: no screenshots are stored.
   **`paired` is a seed and `pairingReadError` is a fault, and the split is `combosMissing`'s
   read from both ends.** Being paired is not something that has gone wrong with a world — it is
   where a reader arrives after two presses, and the only state the roster, a removed row **the
-  status command filters away** and the key version are reachable from. What *is* a fault is the one refusal in that flow a reader
-  cannot produce by typing: every other way it fails is a shape the handler raises itself, and
-  what is left is the blob the joining device carries back failing to open.
+  status command filters away** and the key version are reachable from. What *is* a fault is the
+  one refusal in that flow a reader cannot produce by typing: every other way it fails is a shape
+  the handler raises itself, and what is left is a blob failing to open. **Since 2026-08-31 that
+  fault lands on `sync_pairing_poll`, on the offering device's read of the joining device's
+  answer** — not on `sync_pairing_respond`, which no longer exists as a command: the rendezvous
+  moved that read inside `poll`, and the fault moved with it. Nothing is typed here either way,
+  which is the whole reason it is a fault rather than a shape.
   **Re-count this list when you add one** — it said "four" for three faults' worth of drift, and
   then "eight" while `errorLog` had been in the union for a whole feature, because a prose-only
   edit routes to neither CI job and nothing goes red.

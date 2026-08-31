@@ -136,5 +136,23 @@ CREATE TABLE IF NOT EXISTS group_devices (
 -- **So this file is for a database that has never been migrated.** To bring an existing one
 -- forward use `relay/migrations/2026-08-30-group-keys.sql` and run each `ALTER` as its own
 -- `--command`, where a duplicate-column error can fail alone.
+
+-- The pairing rendezvous: a short-lived meeting point for the two blobs an X25519 handshake
+-- exchanges, so a reader retypes one code instead of two. Ten minutes and no authentication —
+-- `relay/src/rendezvous.ts` carries the argument for standing ahead of the bearer gate. No second
+-- index: every read names `(rv, slot)` or `rv` alone, and the primary key's automatic index
+-- covers both.
+CREATE TABLE IF NOT EXISTS pairing_rendezvous (
+  rv         TEXT    NOT NULL,
+  slot       TEXT    NOT NULL CHECK (slot IN ('offer', 'join')),
+  blob       TEXT    NOT NULL,
+  expires_at INTEGER NOT NULL,
+  PRIMARY KEY (rv, slot)
+);
+
+-- **`IF NOT EXISTS` still keeps this table above the two `ALTER TABLE` lines below.** Nothing
+-- about a `CREATE TABLE IF NOT EXISTS` needs to run last; the ordering rule this file's own
+-- comment states is about the two statements that are NOT idempotent, and this one is not one of
+-- them. Adding a table below them would only cost a reader the moment it took to check.
 ALTER TABLE entitlements ADD COLUMN group_epoch INTEGER;
 ALTER TABLE entitlements ADD COLUMN group_auth  TEXT;

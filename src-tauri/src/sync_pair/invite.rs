@@ -51,6 +51,23 @@ pub enum InviteError {
     TooLong,
 }
 
+/// What the QR draws: the relay's `/pair` page with the code in the **fragment**.
+///
+/// ⚠️ **The fragment is load-bearing and not a style choice.** A fragment is never sent to the
+/// server, so the relay serves the page an invite is opened on and still never learns the
+/// invite. A path or query segment here would hand it A's public key and the one-time token,
+/// and the six digits would go from a backstop to the only defence there is.
+///
+/// **Un-hyphenated.** The hyphens are the typed form's, for a reader copying five characters at
+/// a time; in a QR they are 20 bytes that buy nothing and push the symbol a version larger.
+///
+/// Measured 2026-08-31: 162 bytes against `RELAY_BASE`, a **version-9 QR at level M** — 53×53
+/// modules. Version 8 holds 152 and does not fit.
+pub fn qr_payload(code: &str, relay_base: &str) -> String {
+    let bare: String = code.chars().filter(|c| *c != '-').collect();
+    format!("{relay_base}/pair#{bare}")
+}
+
 impl Invite {
     /// The typed form: 105 base32 characters in groups of five, separated by hyphens.
     pub fn encode(&self) -> String {
@@ -75,6 +92,15 @@ impl Invite {
     /// The other half. Tolerant of case, of separators, and of the three letters a person
     /// substitutes for digits; intolerant of everything else.
     pub fn decode(code: &str) -> Result<Invite, InviteError> {
+        // **A scanned QR carries a URL and a typed code does not, and both must work.** The
+        // filter below keeps every ASCII alphanumeric, so a URL handed to it whole would fold
+        // the hostname into the payload and answer `Length` about a code that is perfectly good
+        // — a sentence pointing at the wrong fix. The fragment is the payload; everything before
+        // `#` is address.
+        let code = match code.rsplit_once('#') {
+            Some((_, fragment)) => fragment,
+            None => code,
+        };
         let cleaned: String = code
             .chars()
             .filter(|c| c.is_ascii_alphanumeric())
@@ -264,6 +290,55 @@ mod tests {
             public_key: [0x22; 32],
             token: [0x33; 16],
         }
+    }
+
+    #[test]
+    fn decode_accepts_the_url_the_qr_carries() {
+        let inv = Invite {
+            group_id: [1; 16],
+            public_key: [2; 32],
+            token: [3; 16],
+        };
+        let code = inv.encode();
+        let url = qr_payload(&code, "https://mtg-grimoire-relay.denmark-east.workers.dev");
+        assert_eq!(Invite::decode(&url).expect("the URL form must decode"), inv);
+    }
+
+    #[test]
+    fn decode_still_accepts_a_bare_code() {
+        let inv = Invite {
+            group_id: [9; 16],
+            public_key: [8; 32],
+            token: [7; 16],
+        };
+        assert_eq!(
+            Invite::decode(&inv.encode()).expect("the bare form must decode"),
+            inv
+        );
+    }
+
+    #[test]
+    fn a_url_with_no_fragment_is_not_a_pairing_code() {
+        // Without the fragment strip this folded the hostname into the payload and answered
+        // `Length` about a perfectly good code — a sentence pointing at the wrong fix.
+        assert_eq!(
+            Invite::decode("https://example.com/pair"),
+            Err(InviteError::Length)
+        );
+    }
+
+    #[test]
+    fn the_qr_payload_is_the_relay_base_the_fragment_and_nothing_else() {
+        let inv = Invite {
+            group_id: [1; 16],
+            public_key: [2; 32],
+            token: [3; 16],
+        };
+        let url = qr_payload(&inv.encode(), "https://r.example");
+        assert!(url.starts_with("https://r.example/pair#"));
+        // Hyphens are the typed form's; the QR carries the code the decoder reads fastest.
+        assert!(!url.contains('-'));
+        assert_eq!(url.split('#').nth(1).unwrap().len(), 105);
     }
 
     #[test]

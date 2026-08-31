@@ -54,6 +54,10 @@ const PRIMARY_KEY: Record<string, string[]> = {
   entitlements: ["subject"],
   group_keys: ["group_id", "epoch"],
   group_devices: ["group_id", "device_id"],
+  // `rendezvous.ts`'s whole race guard is this key: `INSERT OR IGNORE` only refuses a second row
+  // because SQLite enforces it, so an entry-less table here would let two "concurrent" writes to
+  // one empty slot both insert and the "refuses a second write" test would pass for no reason.
+  pairing_rendezvous: ["rv", "slot"],
 };
 
 /**
@@ -638,5 +642,16 @@ export function fakeTables(options: { groups: string[]; bound?: boolean }): Tabl
 /** An `Env` over tables the caller already holds a reference to, so it can assert on them. */
 export function fakeEnvOver(tables: Tables): Env {
   return { DB: fakeDatabase(tables) } as unknown as Env;
+}
+
+/**
+ * A bare `D1Database` fake with nothing seeded — no entitlement, no group, no device.
+ *
+ * `rendezvous.ts`'s handlers take a `Env` for its `DB` alone and read no other table, so seeding
+ * a whole entitlement/group roster the way `fakeEnv` does would be scenery a reader would have to
+ * work out is irrelevant. A fresh, empty database is the actual precondition.
+ */
+export function fakeD1(): D1Database {
+  return fakeDatabase({}) as unknown as D1Database;
 }
 

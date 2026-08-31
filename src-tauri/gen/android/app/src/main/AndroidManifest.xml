@@ -1,6 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <!--
+        The in-app QR scanner's camera. `required="false"` is load-bearing: without it the
+        Play Store (and `pm install`) would refuse this app on any device reporting no
+        camera, and the typed pairing code still works there — the scanner is one way in,
+        never the only one.
+    -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
@@ -41,6 +49,29 @@
                 <!-- AndroidTV support -->
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
+
+            <!--
+                ⚠️ **There is deliberately no VIEW/BROWSABLE filter for the relay's `/pair`
+                URL, and adding one back would BREAK the QR flow rather than improve it.**
+
+                One shipped here for part of a day with `android:autoVerify="true"`. Nothing in
+                this app reads a launch intent — there is no `tauri-plugin-deep-link`, no
+                handler for the URL an activity is opened with, and no reader for the code such
+                a URL carries — so the filter did nothing while `assetlinks.json` was a
+                placeholder, and the moment a real signing-certificate fingerprint went up it
+                would have started *working*: Android would hand `https://…/pair#<code>` to this
+                app instead of the browser, this app would open on its ordinary window with the
+                code nowhere, and the relay's `/pair` page — the one place a generic camera app's
+                scan can show the code to copy — would have become unreachable from a scan.
+
+                The reader's primary case needs none of it: the app has its own scanner
+                (`features/settings/QrScanner.tsx`), which reads the QR directly and never
+                involves a URL handler. The fallback for a generic camera app is the `/pair`
+                page, which works today.
+
+                Deep-linking into the app is a coherent follow-up. It needs the intent handling
+                written **first** — the filter is the last step of that work, not the first.
+            -->
         </activity>
 
         <provider

@@ -16,7 +16,7 @@
 // move a move: not one path below changed.
 use crate::sync::AppState;
 use crate::{
-    card, collection, collection_alloc, collection_folders, combos, db, deck, deck_audit,
+    camera, card, collection, collection_alloc, collection_folders, combos, db, deck, deck_audit,
     deck_meta, deck_theory, deck_undo, errors, export, flatten, images, import, index, listview,
     marketplace, marketplace_feed, mirror, nav, paths, reset, schema, scryfall, search, sync,
     sync_engine, sync_pair, tags, update, wishlist, wishlist_folders, zoom,
@@ -505,15 +505,16 @@ pub fn run() {
             // would be two copies of the archive for nothing.
             mirror::snapshot::mirror_backup_zip,
             mirror::snapshot::mirror_backup_save,
-            // Pairing (spec §7.5 and §7.6). The panel's read, the five steps of the
-            // handshake, cancelling one, the two things a roster row can be told, and —
-            // since the leave-group spec §2.1 — this device's own way out.
+            // Pairing (spec §7.5 and §7.6). The panel's read, the presses (offer, accept,
+            // confirm, cancel), the one poll that carries both `respond` and `complete` now
+            // that the relay carries the two blobs those used to be commands for, the two
+            // things a roster row can be told, and — since the leave-group spec §2.1 — this
+            // device's own way out.
             sync_pair::pairing::sync_pairing_status,
             sync_pair::pairing::sync_pairing_begin,
             sync_pair::pairing::sync_pairing_accept,
-            sync_pair::pairing::sync_pairing_respond,
             sync_pair::pairing::sync_pairing_confirm,
-            sync_pair::pairing::sync_pairing_complete,
+            sync_pair::pairing::sync_pairing_poll,
             sync_pair::pairing::sync_pairing_cancel,
             sync_pair::pairing::sync_device_rename,
             sync_pair::pairing::sync_device_revoke,
@@ -541,6 +542,19 @@ pub fn run() {
             // activity is already on screen and the OS sizes it.
             #[cfg(desktop)]
             window::open_sized_to_monitor(app.handle());
+
+            // The in-app QR scanner's camera grant — see `camera`'s own doc for why WebView2
+            // needs one at all. Desktop only, in this same block, for the reason the block
+            // above is: Android's grant is the manifest permission instead, and there is no
+            // equivalent "the window now exists" moment on that platform in this file to hang
+            // the call off. `camera::install` is a no-op off Windows, so calling it on Linux and
+            // macOS costs nothing; it is still gated here rather than called unconditionally
+            // because `app.get_webview_window("main")` and everything past it belongs beside the
+            // rest of this window's own setup.
+            #[cfg(desktop)]
+            if let Some(main) = app.get_webview_window("main") {
+                camera::install(&main);
+            }
 
             // Printed as well as returned: a `Box<dyn Error>` out of `setup` reaches the
             // user as an escaped one-line panic, which turns a multi-line message naming
@@ -1337,12 +1351,19 @@ mod tests {
         assert!(gradle.contains("targetSdk = 36"));
     }
 
-    /// The manifest asks for `INTERNET` and nothing else, and every absence is the point: no
-    /// storage permission (the document picker grants access per-URI, which is what
-    /// `picked.rs` opens), no location, no camera. A permission here is a permission a Play
-    /// listing has to justify, and the generated template asked for exactly this one.
+    /// The manifest asks for `INTERNET` and `CAMERA`, and every other absence is still the
+    /// point: no storage permission (the document picker grants access per-URI, which is what
+    /// `picked.rs` opens), no location. A permission here is a permission a Play listing has to
+    /// justify, so the list stays exact rather than "at least these" — a third permission
+    /// nobody decided on must fail this test rather than slip in as a diff nobody reads twice.
+    ///
+    /// **`CAMERA` joined `INTERNET` for the in-app QR scanner** — `camera.rs`'s own doc has the
+    /// desktop half (a scoped `PermissionRequested` handler over WebView2); on Android the grant
+    /// *is* this manifest permission, with no Rust-side handler needed at all. It carries a
+    /// `required="false"` `<uses-feature>` beside it, so the app still installs on a camera-less
+    /// device and the scanner is simply unusable there rather than the app being unavailable.
     #[test]
-    fn the_android_manifest_asks_for_the_internet_and_nothing_else() {
+    fn the_android_manifest_asks_for_the_internet_and_the_camera() {
         let manifest = include_str!("../gen/android/app/src/main/AndroidManifest.xml");
         let asked: Vec<&str> = manifest
             .match_indices("<uses-permission")
@@ -1352,10 +1373,18 @@ mod tests {
                 &rest[..end]
             })
             .collect();
-        assert_eq!(asked.len(), 1, "exactly one permission: {asked:?}");
+        assert_eq!(asked.len(), 2, "exactly INTERNET and CAMERA: {asked:?}");
         assert!(
-            asked[0].contains("android.permission.INTERNET"),
-            "the one permission is INTERNET: {asked:?}"
+            asked
+                .iter()
+                .any(|a| a.contains("android.permission.INTERNET")),
+            "INTERNET must still be asked for: {asked:?}"
+        );
+        assert!(
+            asked
+                .iter()
+                .any(|a| a.contains("android.permission.CAMERA")),
+            "CAMERA is the QR scanner's Android grant: {asked:?}"
         );
     }
 

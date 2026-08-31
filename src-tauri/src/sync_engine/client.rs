@@ -301,37 +301,31 @@ where
     Option::<String>::deserialize(deserializer)
 }
 
-/// Ask the relay what epoch the group is on, and act on the answer.
+/// The `/keys` URL, written once so the request and the two failures [`check_keys`] records
+/// *after* the request has come back cannot drift into naming two different addresses.
+fn keys_url(conn: &Connection, device: &str, group: &Group) -> String {
+    format!(
+        "{}/g/{}/keys?device={device}",
+        entitlement::base(conn),
+        group.group_id
+    )
+}
+
+/// `GET /g/{group}/keys?device=…`, decoded — the request itself, with no opinion about what the
+/// answer means.
 ///
-/// **The one request that has to work when a token cannot be minted.** A device that has been
-/// rotated away from holds a stale group auth, so `entitlement::access_token` answers
-/// [`entitlement::STALE_GROUP_AUTH`] and every other route is closed to it. `/keys` accepts an
-/// auth up to eight epochs old for exactly that reason: "behind a rotation" and "removed"
-/// otherwise produce an identical refusal, and a device that guessed wrong would either leave a
-/// group it is still in or sit for ever in one it is not.
+/// **Two callers with two different questions, and one request shape between them.**
+/// [`check_keys`] asks *what epoch is the group on and am I still in it*; [`relay_manifest`] asks
+/// only *who does the relay currently think is in this group*, which [`publish_join`] needs
+/// before it may speak for the group at all. Factoring the request out is what stops the second
+/// question growing a second, subtly different spelling of the 401 sentence below.
 ///
-/// ⚠️ **The manifest is consulted only when the answered epoch is strictly higher than this
-/// device's, and that guard is the whole of what keeps a healthy group alive.** A group that has
-/// claimed and never rotated holds one `group_keys` row with an *empty* manifest, so every device
-/// in it reads `blob: null, devices: []`. Comparing the epochs first is what stops all of them
-/// concluding they were removed and dissolving the group on their next sync. Equal epochs mean
-/// *nothing to do*, and `devices` is not read at all. `identity::adopt_epoch` refuses a
-/// non-advancing epoch too, but the `Removed` branch is decided here and has no such backstop.
-///
-/// **A 401 is never [`lapsed`], and copying push/pull/ack's handling here would be the worst
-/// mistake in this file.** The credential is the group auth, not the access token, so a refusal
-/// says the group key is unrecognised — a group with no membership yet, or a device dark across
-/// more rotations than the relay keeps (spec §4). Revoking the grant over either would tell a
-/// reader their Patreon membership ended because of something else entirely.
-pub async fn check_keys(conn: &Connection) -> Result<KeyOutcome, String> {
-    // A device in no group has no key to check and no auth to check it with. It must make no
-    // request at all: `/g//keys` is a URL, and one built from an empty group id would be sent.
-    let Some((device, group)) = me(conn)? else {
-        return Ok(KeyOutcome::Current);
-    };
-    let base = entitlement::base(conn);
+/// **The credential is the group auth of this device's own epoch**, which is what makes this the
+/// one route a device behind a rotation can still reach — see [`check_keys`] for the whole of
+/// that argument.
+async fn fetch_key_page(conn: &Connection, device: &str, group: &Group) -> Result<KeyPage, String> {
     let auth = crypto::relay_auth(&group.group_key, &group.group_id, group.epoch);
-    let url = format!("{base}/g/{}/keys?device={device}", group.group_id);
+    let url = keys_url(conn, device, group);
     let response = match http()
         .get(&url)
         .header("authorization", format!("Bearer {auth}"))
@@ -377,13 +371,57 @@ pub async fn check_keys(conn: &Connection) -> Result<KeyOutcome, String> {
             return Err(e.to_string());
         }
     };
-    let page: KeyPage = match serde_json::from_str(&text) {
-        Ok(p) => p,
+    match serde_json::from_str(&text) {
+        Ok(p) => Ok(p),
         Err(e) => {
             note(conn, "keys", Kind::Parse, &e.to_string(), Some(&url));
-            return Err(e.to_string());
+            Err(e.to_string())
         }
+    }
+}
+
+/// Who the relay currently believes is in this group — the manifest's key set at the epoch it
+/// holds, and nothing else off the page.
+///
+/// **It is not an epoch check and must never grow into one.** [`check_keys`] is the only thing
+/// entitled to conclude anything from an epoch, and it already runs on every sync; this answers
+/// the one narrower question [`publish_join`] has to ask before it publishes a roster.
+async fn relay_manifest(conn: &Connection) -> Result<Vec<String>, String> {
+    let Some((device, group)) = me(conn)? else {
+        return Err("this device is in no group".to_owned());
     };
+    Ok(fetch_key_page(conn, &device, &group).await?.devices)
+}
+
+/// Ask the relay what epoch the group is on, and act on the answer.
+///
+/// **The one request that has to work when a token cannot be minted.** A device that has been
+/// rotated away from holds a stale group auth, so `entitlement::access_token` answers
+/// [`entitlement::STALE_GROUP_AUTH`] and every other route is closed to it. `/keys` accepts an
+/// auth up to eight epochs old for exactly that reason: "behind a rotation" and "removed"
+/// otherwise produce an identical refusal, and a device that guessed wrong would either leave a
+/// group it is still in or sit for ever in one it is not.
+///
+/// ⚠️ **The manifest is consulted only when the answered epoch is strictly higher than this
+/// device's, and that guard is the whole of what keeps a healthy group alive.** A group that has
+/// claimed and never rotated holds one `group_keys` row with an *empty* manifest, so every device
+/// in it reads `blob: null, devices: []`. Comparing the epochs first is what stops all of them
+/// concluding they were removed and dissolving the group on their next sync. Equal epochs mean
+/// *nothing to do*, and `devices` is not read at all. `identity::adopt_epoch` refuses a
+/// non-advancing epoch too, but the `Removed` branch is decided here and has no such backstop.
+///
+/// **A 401 is never [`lapsed`], and copying push/pull/ack's handling here would be the worst
+/// mistake in this file.** The credential is the group auth, not the access token, so a refusal
+/// says the group key is unrecognised — a group with no membership yet, or a device dark across
+/// more rotations than the relay keeps (spec §4). Revoking the grant over either would tell a
+/// reader their Patreon membership ended because of something else entirely.
+pub async fn check_keys(conn: &Connection) -> Result<KeyOutcome, String> {
+    // A device in no group has no key to check and no auth to check it with. It must make no
+    // request at all: `/g//keys` is a URL, and one built from an empty group id would be sent.
+    let Some((device, group)) = me(conn)? else {
+        return Ok(KeyOutcome::Current);
+    };
+    let page = fetch_key_page(conn, &device, &group).await?;
 
     if page.epoch <= group.epoch {
         return Ok(KeyOutcome::Current);
@@ -405,6 +443,7 @@ pub async fn check_keys(conn: &Connection) -> Result<KeyOutcome, String> {
         entitlement::clear(conn)?;
         return Ok(KeyOutcome::Removed);
     };
+    let url = keys_url(conn, &device, &group);
     let sealed = match URL_SAFE_NO_PAD.decode(blob.as_bytes()) {
         Ok(bytes) => bytes,
         Err(e) => {
@@ -505,6 +544,195 @@ pub async fn post_rotation(conn: &Connection, rotation: &identity::Rotation) -> 
         return Err(message);
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------------------
+// The rendezvous, and the join retry
+// ---------------------------------------------------------------------------------------
+
+/// What a 409 from the rendezvous says.
+///
+/// **Its own sentence, and not "the pairing failed".** First-write-wins means a filled slot is
+/// somebody else having answered this code — a different situation with a different fix, which is
+/// to start a fresh offer on the first device rather than to try again here.
+pub const RENDEZVOUS_TAKEN: &str =
+    "That pairing code has already been answered on another device. Start a new one on the \
+     device showing the code.";
+
+/// What `GET /p/{rv}/{slot}` answers when the slot is filled.
+#[derive(Debug, Clone, Deserialize)]
+struct RendezvousPage {
+    blob: String,
+}
+
+/// Post one side's blob to the rendezvous, keyed on the token both devices derived
+/// [`crypto::rendezvous_id`] from.
+///
+/// `slot` is `offer` or `join`, and first-write-wins on each: a 409 means the other device
+/// already answered this exact code, which is [`RENDEZVOUS_TAKEN`] rather than an ordinary
+/// failure. The body is written by hand — this crate does not enable reqwest's `json` feature,
+/// the rule every other request in this file already follows.
+pub async fn post_rendezvous(
+    conn: &Connection,
+    rv: &str,
+    slot: &str,
+    blob: &str,
+) -> Result<(), String> {
+    let base = entitlement::base(conn);
+    let url = format!("{base}/p/{rv}/{slot}");
+    let body = serde_json::json!({ "blob": blob }).to_string();
+    let response = match http()
+        .post(&url)
+        .header("content-type", "application/json")
+        .body(body)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            note(conn, "rendezvous", kind_of(&e), &e.to_string(), Some(&url));
+            return Err(e.to_string());
+        }
+    };
+    let status = response.status().as_u16();
+    if status == 204 {
+        return Ok(());
+    }
+    if status == 409 {
+        return Err(RENDEZVOUS_TAKEN.to_owned());
+    }
+    let message = format!("the relay answered {status} to a rendezvous post");
+    note(conn, "rendezvous", Kind::Http, &message, Some(&url));
+    Err(message)
+}
+
+/// Poll the rendezvous for the other side's blob.
+///
+/// **A 404 is `Ok(None)`, and never an error** — the panel polls this every 1.5 seconds while
+/// the other device is still being read to, and a poll that treated "not yet" as a failure would
+/// put an error in front of the reader on every tick before the pairing has had any chance to
+/// finish.
+pub async fn get_rendezvous(
+    conn: &Connection,
+    rv: &str,
+    slot: &str,
+) -> Result<Option<String>, String> {
+    let base = entitlement::base(conn);
+    let url = format!("{base}/p/{rv}/{slot}");
+    let response = match http().get(&url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            note(conn, "rendezvous", kind_of(&e), &e.to_string(), Some(&url));
+            return Err(e.to_string());
+        }
+    };
+    let status = response.status().as_u16();
+    if status == 404 {
+        return Ok(None);
+    }
+    if !(200..300).contains(&status) {
+        let message = format!("the relay answered {status} to a rendezvous poll");
+        note(conn, "rendezvous", Kind::Http, &message, Some(&url));
+        return Err(message);
+    }
+    let text = match response.text().await {
+        Ok(t) => t,
+        Err(e) => {
+            note(conn, "rendezvous", kind_of(&e), &e.to_string(), Some(&url));
+            return Err(e.to_string());
+        }
+    };
+    let page: RendezvousPage = match serde_json::from_str(&text) {
+        Ok(p) => p,
+        Err(e) => {
+            note(conn, "rendezvous", Kind::Parse, &e.to_string(), Some(&url));
+            return Err(e.to_string());
+        }
+    };
+    Ok(Some(page.blob))
+}
+
+/// Carry a join to the rest of the group. **Best effort, and its failure is recorded rather than
+/// raised.**
+///
+/// A first pairing is the common case that *cannot* publish: `/rotate`'s door is the group auth or
+/// the refresh secret, and a group that has never claimed has no entitlement row, so it answers
+/// 401. That is not an error the reader can act on — nothing is syncing yet, so there is no
+/// divergence to carry — so the debt is marked and paid on the first sync that has a membership.
+///
+/// ⚠️ **This device may only publish a roster it can see the whole of, and the superset check
+/// below is what enforces that.** A manifest's key set *is* the roster on every device that
+/// adopts it, so a manifest built from a partial view does not merely fail to add anybody — it
+/// **evicts** whoever it leaves out. That is not hypothetical: `identity::adopt_epoch` prunes and
+/// **never inserts** (there is no public key anywhere in a manifest to insert *with* —
+/// `relay/src/rotate.ts` answers `devices: Object.keys(manifest.keys)`, ids only), so a device
+/// that adopted somebody else's rotation learns *who left* and never *who joined*. Pair a third
+/// device from such a device and its `plan_join` would omit the peer it was never told about,
+/// whose next `check_keys` would read a higher epoch with no blob for itself and leave a group
+/// nobody removed it from.
+///
+/// So: **publish only when what this device would publish already names everybody the relay
+/// knows about.** When it does, the manifest is that set plus the joiner and nobody can be
+/// dropped. When it does not, this is the device with the partial view and it must not speak for
+/// the group: the debt is marked, nothing is published, and the join still succeeds locally —
+/// which is exactly what pairing did before roster publishing existed, so the floor is the
+/// behaviour that shipped rather than a regression.
+///
+/// **The real fix is a wire change and is deliberately not attempted here.** Carrying each
+/// device's public key in the manifest would let `adopt_epoch` *add* a row, and then every
+/// device's roster would converge on the relay's. That is a protocol change on both sides; until
+/// it exists, a device that has been told about a join only by adopting an epoch still cannot
+/// pair a fourth device into the whole group — it can only decline to break it.
+///
+/// ⚠️ **`commit_rotation` after the relay accepts, and never before or not at all.** `plan`'s
+/// manifest names **every device on the roster, this one included** — `create_group` and
+/// `join_group` both `add_device(me)`, so `roster()` returns this device too, which is what
+/// `check_keys` itself says one screen up and what
+/// `identity::tests::a_departure_names_everyone_but_this_device` exists to pin. So the relay
+/// *would* hold a blob for this device at *N+1* and a missing commit is **not** read as a
+/// removal. What it is instead is harder to diagnose: this device sits at *N*, its next
+/// `check_keys` reads a higher epoch **with** a blob — and the adopt loop skips this device as a
+/// candidate sealer (`filter(|id| id != device)`), so every remaining candidate fails the AEAD
+/// and the device stalls at *N* with *"that new group key could not be opened by this device"*
+/// on every sync while every peer moves on. Committing makes the epochs equal, so `check_keys`
+/// answers `Current` and never reads the manifest at all. This is `remove_device`'s order
+/// exactly.
+pub async fn publish_join(conn: &Connection) -> Result<(), String> {
+    let Ok(plan) = identity::plan_join(conn) else {
+        identity::set_roster_dirty(conn, true)?;
+        return Ok(());
+    };
+    // **One `/keys` read of its own rather than a value threaded down from `check_keys`.** That
+    // call does fetch the same manifest on every sync — but it is not on *this* function's other
+    // path at all: `pairing::confirm` calls straight in with no sync in front of it, and that is
+    // the very path an ordinary pairing takes. Threading the value would leave the confirm path
+    // needing its own read anyway, so there would be two shapes and two behaviours to keep in
+    // step. The cost is one GET per pairing, plus one per sync only while the debt is
+    // outstanding — `round_trip` does not call this otherwise.
+    let Ok(known) = relay_manifest(conn).await else {
+        // Unreachable, refused, or a group with no membership at all — the common first
+        // pairing. Nothing can be concluded about the group's roster, so nothing is published.
+        return identity::set_roster_dirty(conn, true);
+    };
+    let mine: std::collections::HashSet<&str> =
+        plan.keys.iter().map(|(id, _)| id.as_str()).collect();
+    // The comparison is against `plan.keys` and not against `roster()` itself, because
+    // `plan_excluding` drops any row an older build stamped `revoked_at` — so the plan is what
+    // would actually be published, and it is the only set whose superset-ness proves nobody is
+    // evicted. An empty `known` (a group that has claimed and never rotated answers
+    // `devices: []`) is a subset of everything, which is what keeps the common case publishing.
+    if !known.iter().all(|id| mine.contains(id.as_str())) {
+        return identity::set_roster_dirty(conn, true);
+    }
+    if post_rotation(conn, &plan).await.is_err() {
+        // Nothing committed, so the group is exactly as it was and the debt is recorded.
+        return identity::set_roster_dirty(conn, true);
+    }
+    // `""` removes nobody: `commit_rotation`'s `DELETE … WHERE device_id = ?1` matches no row,
+    // which is what a join wants. Its `baselined_at = NULL` sweep is wanted in full — a joining
+    // device needs every peer's last words carried across the epoch boundary.
+    identity::commit_rotation(conn, "", &plan)?;
+    identity::set_roster_dirty(conn, false)
 }
 
 // ---------------------------------------------------------------------------------------
@@ -893,6 +1121,21 @@ pub async fn run_once_without_baselines(conn: &Connection) -> Result<Option<Rela
 async fn round_trip(conn: &Connection, baselines: bool) -> Result<Option<RelayOutcome>, String> {
     if check_keys(conn).await? == KeyOutcome::Removed {
         return Ok(None);
+    }
+    // A join this device pressed *Codes match* on may owe the rest of the group a publish — the
+    // relay was unreachable at the time, or (the common case) this was the first pairing and
+    // there was no membership yet for `/rotate` to accept. `roster_is_dirty` is the debt
+    // `publish_join` records for both, and paying it here, above the token fetch and once per
+    // trip, means it is retried on every ordinary sync from the moment a membership exists, with
+    // no poll of its own. ⚠️ **It publishes from the LOCAL roster and never reads the relay's
+    // manifest to decide whether one is owed**: a group that has claimed and never rotated
+    // answers `devices: []` at the claim epoch, and treating that as evidence would be exactly
+    // the "every device concludes it was removed" bug `check_keys` above already guards against,
+    // reached a second way. A race between two devices publishing at once is settled by
+    // `/rotate`'s 409 on a non-advancing epoch; the loser's `plan_join` is stale and its next
+    // `check_keys` adopts what won.
+    if identity::roster_is_dirty(conn)? && me(conn)?.is_some() {
+        let _ = publish_join(conn).await;
     }
     let Some(token) = entitlement::access_token(conn).await? else {
         return Ok(None);

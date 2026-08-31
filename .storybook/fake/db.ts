@@ -159,6 +159,7 @@ import type {
   OracleTagStatus,
   PairingHandshake,
   PairingOffer,
+  PairingProgress,
   PairingSealedKey,
   PairingStatus,
   PassReport,
@@ -830,11 +831,14 @@ export interface FakeUpdate {
  *
  * **`pairingReadError`** is the one refusal in pairing a reader cannot produce by typing, which
  * is the whole reason it is a fault. Every other way that flow can fail is a *shape*: a code of
- * the wrong length, a character outside Crockford's alphabet, a step pressed out of order —
- * all reachable from the keyboard, all raised by the handler itself. What is left is the blob
- * the joining device carries back failing to open, which in the crate is an AEAD refusing to
- * authenticate: nothing a person types produces a *well-formed* blob that will not decrypt. So
- * this fault sits on `sync_pairing_respond` and nowhere else.
+ * the wrong length, a character outside Crockford's alphabet — both reachable from the keyboard,
+ * both raised by the handler itself. What is left is the offering device's own read of what the
+ * relay is holding for it failing to open, which in the crate is an AEAD refusing to
+ * authenticate: nothing a person types produces a *well-formed* message that will not decrypt.
+ * **It moved with the read it describes**: a relay carries both blobs now (§1), so there is no
+ * more `sync_pairing_respond` for a reader to press — the read happens inside `sync_pairing_poll`
+ * instead, on the offering device's first look at what has arrived, and that is the one place
+ * this fault sits.
  *
  * **`patreonDeclined`**, **`patreonLapsed`** and **`patreonGroupEntitled`** are the three
  * supporter states a story cannot press its way into, and the split from *supporting* is
@@ -980,10 +984,30 @@ export interface FakePending {
   /** The six digits, once both sides know each other's key. `null` on an offer nobody has
    *  answered yet, which is the state the panel's *Codes match* button is disabled in. */
   sas: string | null;
-  /** What the joining device will carry back. Empty on the offering side. */
-  response: string;
-  /** Set by `sync_pairing_confirm`, so a spent offer cannot serve a second joiner. */
+  /**
+   * True once this side of the ceremony is done — by `sync_pairing_confirm` on the offering
+   * device, or by `sync_pairing_poll` itself on the joining device, the moment it runs the old
+   * `complete` body and joins the group.
+   *
+   * **Checked before either branch, and `pending` is never cleared on success — for both
+   * sides.** A poll after completion has to keep answering `"complete"` rather than falling
+   * through to the `pending === null` guard and reporting `"idle"`, which would read as the
+   * pairing having been un-done. Nulling `pending` on success shipped once, on the joining
+   * branch only, and it made a *third* poll regress a paired device back to "no pairing in
+   * progress" — the fake's own bug, not the crate's: nothing clears `Pending` there but cancel
+   * and expiry.
+   */
   spent: boolean;
+  /**
+   * Whether `sync_pairing_poll` has already been asked once for this pending pairing.
+   *
+   * **The fake's stand-in for the other device's turn arriving over the relay.** There is no
+   * second world here for a story to answer from, so the first poll after `begin`/`accept`
+   * finds nothing waiting — exactly as a reader who has just shown the code finds no one home
+   * yet — and the second is where the answer (or the far side's confirmation) turns up. A story
+   * drives the whole ceremony with two polls of one world rather than by juggling two.
+   */
+  polled: boolean;
 }
 
 /**
@@ -991,12 +1015,13 @@ export interface FakePending {
  * `sync_devices` and `AppState.pairing`.
  *
  * **There is no cryptography here and this file does not pretend there is.** The workbench has
- * no X25519, no HKDF and no QR encoder, so the six digits are derived from the code with a
- * plain hash and the matrix below is a *picture of the right shape rather than a readable
- * code*. What the fake models faithfully is the part a panel is drawn against: two blobs
- * carried by hand, one number both readers compare, and a store that keeps a removed device the
- * status command does not answer with. Every refusal these handlers raise is one the crate
- * raises, in its own words.
+ * no X25519, no HKDF, no relay and no QR encoder, so the six digits are derived from the code
+ * with a plain hash and the matrix below is a *picture of the right shape rather than a readable
+ * code*. What the fake models faithfully is the part a panel is drawn against: one number both
+ * readers compare, a poll that finds the other side's turn on its **second** ask rather than its
+ * first (there being no second world here to answer from any sooner), and a store that keeps a
+ * removed device the status command does not answer with. Every refusal these handlers raise is
+ * one the crate raises, in its own words.
  *
  * **The identity is minted here rather than on first read**, which is the one place this
  * diverges from `identity::ensure`: that function writes a row the first time anything asks,
@@ -12161,18 +12186,22 @@ export function writeHandlers(db: FakeDb) {
     sync_pairing_begin: (): PairingOffer => {
       refuseIfBusy(db);
       const code = fakeInviteCode(db.pairing.deviceId, db.pairing.devices.length);
-      db.pairing.pending = { initiator: true, sas: null, response: "", spent: false };
+      db.pairing.pending = { initiator: true, sas: null, spent: false, polled: false };
       return { code, qr: fakeQrMatrix(code) };
     },
 
     /**
      * `sync_pairing_accept` — the joining device reads the offered code.
      *
-     * **The three refusals are the crate's own, in its words**, and they are reachable by
-     * typing rather than by a fault: a code of the wrong length is half a paste, a character
-     * outside Crockford's alphabet is something else entirely, and neither is a typo. The
-     * checksum itself is not modelled — there is no real one to compute — so a well-shaped
-     * code is accepted, which is the one place a story is kinder than the app.
+     * **The two refusals are the crate's own, in its words**, and they are reachable by typing
+     * rather than by a fault: a code of the wrong length is half a paste, a character outside
+     * Crockford's alphabet is something else entirely, and neither is a typo. The checksum
+     * itself is not modelled — there is no real one to compute — so a well-shaped code is
+     * accepted, which is the one place a story is kinder than the app.
+     *
+     * **The digits are the whole answer now.** A relay carries this device's own reply onward
+     * (§1), so there is nothing left for a reader to copy back by hand — `PairingHandshake`
+     * lost the field that used to hold it.
      */
     sync_pairing_accept: (args: { code: string }): PairingHandshake => {
       refuseIfBusy(db);
@@ -12180,30 +12209,8 @@ export function writeHandlers(db: FakeDb) {
       if (cleaned.length !== 105) throw refuse(PAIRING_CODE_LENGTH);
       if (!/^[0-9ABCDEFGHJKMNPQRSTVWXYZILO]+$/.test(cleaned)) throw refuse(PAIRING_CODE_ALPHABET);
       const sas = fakeSas(cleaned);
-      db.pairing.pending = {
-        initiator: false,
-        sas,
-        response: fakeBlob(cleaned + db.pairing.deviceId),
-        spent: false,
-      };
-      return { sas, response: db.pairing.pending.response };
-    },
-
-    /**
-     * `sync_pairing_respond` — the offering device reads what the joiner sent back.
-     *
-     * The `pairingReadError` fault lands here on purpose: this is the step whose failure a
-     * reader cannot produce by typing, because a bent blob fails at the AEAD rather than at any
-     * shape check. It is the one sentence in this feature that only a fault can show.
-     */
-    sync_pairing_respond: (args: { response: string }): PairingHandshake => {
-      refuseIfBusy(db);
-      const pending = db.pairing.pending;
-      if (pending === null || !pending.initiator) throw refuse(PAIRING_NOTHING_IN_FLIGHT);
-      if (pending.spent) throw refuse(PAIRING_ALREADY_USED);
-      if (db.fault === "pairingReadError") throw refuse(PAIRING_UNREADABLE);
-      pending.sas = fakeSas(args.response.replace(/[^0-9A-Za-z]/g, "").toUpperCase());
-      return { sas: pending.sas, response: "" };
+      db.pairing.pending = { initiator: false, sas, spent: false, polled: false };
+      return { sas };
     },
 
     /**
@@ -12211,7 +12218,9 @@ export function writeHandlers(db: FakeDb) {
      *
      * **This is the only place a group is created**, which is what makes a cancelled pairing
      * leave nothing behind: `begin` mints a group id it does not write, and only a confirmed
-     * comparison turns it into a row.
+     * comparison turns it into a row. What it answers is no longer a thing to carry, either —
+     * this device posts it to the relay itself — so a fake with no relay simply keeps marking the
+     * offer `spent`, which is the one bit {@link sync_pairing_poll} needs from it.
      */
     sync_pairing_confirm: (): PairingSealedKey => {
       refuseIfBusy(db);
@@ -12236,21 +12245,66 @@ export function writeHandlers(db: FakeDb) {
       return { sealedKey: fakeBlob(db.pairing.group.groupId + joined) };
     },
 
-    /** `sync_pairing_complete` — the joining device unwraps the key it was handed. */
-    sync_pairing_complete: (args: { sealedKey: string }): void => {
+    /**
+     * `sync_pair::pairing::poll` — where a pairing in flight has got to; the panel asks every
+     * 1.5 seconds while one is.
+     *
+     * **One command answers for both sides**, because which stage applies falls out of who is
+     * asking rather than out of an argument: the offering device is waiting for an answer, the
+     * joining device for the offering device's confirmation. `respond` and `complete` are folded
+     * in here rather than kept as commands of their own, exactly as the crate folds them.
+     *
+     * **The fake's whole model of "the relay eventually answers" is the second ask.** There is
+     * one world here and no round trip to wait out, so the first poll after `begin`/`accept`
+     * finds nothing new — matching a reader who has just shown a code finding no one home yet —
+     * and the second is where the far side's turn appears. A story drives the whole ceremony
+     * with two polls of one world rather than by standing up a second.
+     *
+     * **`pairingReadError` sits on the offering device's first read**, exactly where
+     * `sync_pairing_respond` used to sit before a relay made it a step inside this one: nothing
+     * is typed here either way, which is the whole reason it is a fault.
+     *
+     * **`pending.spent` is checked before either branch and is the one thing a third, fourth or
+     * fifth poll ever sees once it is true**, on both sides alike — see {@link FakePending.spent}
+     * for the shape this fixes. That is what makes the two sides "structurally the same 'look
+     * again' shape" ({@link FakePairing}'s doc comment) actually true rather than true of only
+     * one of them: first ask learns nothing new, second ask reveals the next stage, and every ask
+     * after that is `"complete"`, stably, because nothing here ever nulls `pending` on success.
+     */
+    sync_pairing_poll: (): PairingProgress => {
       refuseIfBusy(db);
       const pending = db.pairing.pending;
-      if (pending === null || pending.initiator) throw refuse(PAIRING_NOT_READ_YET);
-      const cleaned = args.sealedKey.replace(/[^0-9A-Za-z]/g, "");
-      if (cleaned.length < 32) throw refuse(PAIRING_UNREADABLE);
+      if (pending === null) return { stage: "idle", sas: null };
+      if (pending.spent) return { stage: "complete", sas: null };
 
+      if (pending.initiator) {
+        if (pending.sas === null) {
+          if (!pending.polled) {
+            pending.polled = true;
+            return { stage: "waiting", sas: null };
+          }
+          if (db.fault === "pairingReadError") throw refuse(PAIRING_UNREADABLE);
+          pending.sas = fakeSas(`${db.pairing.deviceId}:answer`);
+        }
+        return { stage: "compare", sas: pending.sas };
+      }
+
+      // The joining device already has its digits, from `accept`. What is left is the offering
+      // device pressing *Codes match* — which, with no second world here to press it in, the
+      // second poll stands in for: it runs the old `complete` body and marks `spent`, exactly as
+      // `sync_pairing_confirm` does for the offering device, rather than clearing `pending`.
+      if (!pending.polled) {
+        pending.polled = true;
+        return { stage: "compare", sas: pending.sas };
+      }
       const now = Math.floor(Date.now() / 1000);
       db.pairing.group = { groupId: "0f1e2d3c4b5a69788796a5b4c3d2e1f0", epoch: 0 };
       db.pairing.devices = [
         { deviceId: db.pairing.deviceId, name: db.pairing.deviceName, addedAt: now, revokedAt: null },
         { deviceId: "b000ffffffffffffffffffffffffffff", name: "Paired device", addedAt: now, revokedAt: null },
       ];
-      db.pairing.pending = null;
+      pending.spent = true;
+      return { stage: "complete", sas: null };
     },
 
     /** `sync_pairing_cancel` — throw the offer away. The code on screen stops working. */
@@ -12717,7 +12771,6 @@ const PAIRING_UNREADABLE =
 const PAIRING_NOTHING_IN_FLIGHT = "There is no pairing in progress.";
 const PAIRING_ALREADY_USED = "That pairing code has already been used.";
 const PAIRING_NO_ANSWER_YET = "The other device has not answered yet.";
-const PAIRING_NOT_READ_YET = "This device has not read a pairing code yet.";
 const PAIRING_CANNOT_REMOVE_SELF = "This device cannot remove itself. Use Leave group instead.";
 const PAIRING_NOT_IN_A_GROUP = "This device is not in a pairing group.";
 const PAIRING_NOT_ON_THE_ROSTER = "That device is not in this pairing group.";

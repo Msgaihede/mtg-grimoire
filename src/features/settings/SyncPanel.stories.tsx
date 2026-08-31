@@ -29,16 +29,22 @@ const meta = {
           "**The six digits are the whole security argument** (spec §7.5 step 3), and the " +
           "panel is built so that neither side can move past them without saying so: the " +
           "offering device's *Codes match* button carries `aria-disabled` until the digits " +
-          "exist, and the joining device does not reveal the blob it has to carry back until " +
-          "the reader has said the numbers agree. A panel that advanced on its own would look " +
-          "completely normal and defend nothing.\n\n" +
-          "**There is no cryptography in the workbench and these stories do not pretend " +
-          "there is.** The fake derives the six digits from the code with a plain hash and " +
-          "draws a QR-shaped picture rather than a readable code — see `FakePairing` in " +
-          "`.storybook/fake/db.ts`. What is real is everything a panel is drawn against: the " +
-          "two blobs carried by hand, the one number both readers compare, the store that " +
-          "keeps a removed device the status command does not answer with, and every refusal " +
-          "in the crate's own words.\n\n" +
+          "exist and its handler refuses the press until they do too, and the joining device " +
+          "draws no confirm button of its own at all — under a man-in-the-middle the two " +
+          "screens show different numbers, so the comparison is inherently a two-screen act, " +
+          "and the press that actually releases the group key is the offering device's alone. " +
+          "A panel that advanced on its own would look completely normal and defend nothing.\n\n" +
+          "**A relay carries the accept and the sealed key now, so only the invite is still " +
+          "hand-carried.** Two blobs a reader used to retype between the two screens — one of " +
+          "them 224 characters, one of them the hard phone→PC direction — are gone, and this " +
+          "panel learns both by polling instead of by waiting on a paste. **There is no " +
+          "cryptography in the workbench and these stories do not pretend there is.** The fake " +
+          "derives the six digits from the code with a plain hash and draws a QR-shaped " +
+          "picture rather than a readable code — see `FakePairing` in `.storybook/fake/db.ts`. " +
+          "What is real is everything a panel is drawn against: the invite carried by hand, " +
+          "the one number both readers compare, the poll that tells this panel where the " +
+          "ceremony has got to, the store that keeps a removed device the status command does " +
+          "not answer with, and every refusal in the crate's own words.\n\n" +
           "**Nor is there a Patreon.** The fake mints a claim code's answer rather than " +
           "exchanging one, so what these stories hold still is the thing that matters here: " +
           "that *not connected*, *payment problem* and *membership ended* are three " +
@@ -112,25 +118,28 @@ export const OfferShown: Story = {
 };
 
 /**
- * The other device has answered, so both screens now show one number.
+ * **A — the offering device, from `waiting` to `compare`.** The relay carries the joiner's
+ * answer now, so what used to be a paste ("what the other device answered", "Read their
+ * answer") is the poll finding a peer instead: the fake's own `sync_pairing_poll` answers
+ * `"waiting"` on the first ask and computes the six digits on the second, 1.5 seconds later —
+ * this play waits out that real interval rather than a mocked one, because there is no faking a
+ * clock inside a story.
  *
  * Drawn at `text-3xl` with `tracking-[0.3em]` and `tabular-nums`, which is the one place in
  * this app a number is set that large: the reader is comparing *characters* across two screens,
- * and every one of those three choices is about making that a glance rather than a count.
+ * and every one of those three choices is about making that a glance rather than a count. The
+ * QR and the typed code are gone the moment the digits arrive — the invite has done its one job.
  */
 export const DigitsToCompare: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
     await userEvent.click(await canvas.findByRole("button", { name: /pair a device/i }));
-    await userEvent.type(
-      await canvas.findByLabelText(/what the other device answered/i),
-      "MNPQRSTVWXYZ0123456789ABCDEFGHJK",
-    );
-    await userEvent.click(canvas.getByRole("button", { name: /read their answer/i }));
+    await expect(await canvas.findByTestId("pairing-qr")).toBeInTheDocument();
 
-    const digits = await canvas.findByTestId("pairing-sas");
+    const digits = await canvas.findByTestId("pairing-sas", {}, { timeout: 5000 });
     await expect(digits.textContent).toMatch(/^\d{6}$/);
+    await expect(canvas.queryByTestId("pairing-qr")).not.toBeInTheDocument();
     await expect(canvas.getByRole("button", { name: /codes match/i })).toHaveAttribute(
       "aria-disabled",
       "false",
@@ -139,41 +148,16 @@ export const DigitsToCompare: Story = {
 };
 
 /**
- * The last hand-carried hop: the wrapped group key, for the reader to take back.
+ * The joining half: read a code and see the digits at once — `sync_pairing_accept` answers them
+ * in the one step that used to only start the ceremony, because there is nothing left for a
+ * reader to carry back by hand.
  *
- * **This is the blob PR 7 deletes.** The relay carries it instead, and nothing else about the
- * flow moves — the crypto, the digits, the roster and the rotation are all this PR's. Until
- * then it is 176 characters in a box with a Copy button, which is a miserable thing to type and
- * exactly why §7.5 makes the QR primary.
+ * **No Codes match button here, and that is deliberate rather than missing.** Under a
+ * man-in-the-middle the two screens show different numbers, so the comparison is inherently a
+ * two-screen act; the press that matters is the one gating release of the group key, and that
+ * is the offering device's alone. This screen's whole job is to say where that press is.
  */
-export const KeyToCarryBack: Story = {
-  play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
-
-    await userEvent.click(await canvas.findByRole("button", { name: /pair a device/i }));
-    await userEvent.type(
-      await canvas.findByLabelText(/what the other device answered/i),
-      "MNPQRSTVWXYZ0123456789ABCDEFGHJK",
-    );
-    await userEvent.click(canvas.getByRole("button", { name: /read their answer/i }));
-    await userEvent.click(await canvas.findByRole("button", { name: /codes match/i }));
-
-    const blob = await canvas.findByLabelText(/wrapped key for the other device/i);
-    await expect(blob).toHaveAttribute("readonly");
-    await waitFor(async () => {
-      await expect((blob as HTMLTextAreaElement).value.length).toBeGreaterThan(100);
-    });
-  },
-};
-
-/**
- * The joining half: read a code, compare the digits, and only then hand anything back.
- *
- * The gate here changes no protocol — the answer is already computed by the time the digits are
- * on screen — but a reader who has not looked at the digits has not compared them, and this is
- * the press that says they have.
- */
-export const JoiningComparesFirst: Story = {
+export const JoiningShowsItsOwnDigits: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
@@ -185,11 +169,81 @@ export const JoiningComparesFirst: Story = {
     await userEvent.paste(A_CODE);
     await userEvent.click(canvas.getByRole("button", { name: /read the code/i }));
 
-    await expect(await canvas.findByTestId("pairing-sas")).toBeInTheDocument();
-    await expect(canvas.queryByLabelText(/your answer/i)).not.toBeInTheDocument();
+    const digits = await canvas.findByTestId("pairing-sas");
+    await expect(digits.textContent).toMatch(/^\d{6}$/);
+    await expect(canvas.queryByRole("button", { name: /codes match/i })).not.toBeInTheDocument();
+    await expect(canvas.getByText(/press codes match there/i)).toBeInTheDocument();
+  },
+};
 
-    await userEvent.click(canvas.getByRole("button", { name: /codes match/i }));
-    await expect(await canvas.findByLabelText(/your answer/i)).toBeInTheDocument();
+/**
+ * The ceremony's own end, on the side that pressed Codes match — reached by riding out two real
+ * poll ticks, since a fake clock cannot stand in for `refetchInterval` inside a story.
+ *
+ * **The flow returns to `"idle"` rather than sitting on a "done" screen**, which is
+ * `SyncPanel`'s own doc comment on the render-time `if` that watches for `"complete"`: nothing
+ * is left to show once the group key has moved, so the panel goes back to offering the same two
+ * presses it started with, with one line saying what just happened.
+ */
+export const CeremonyCompletes: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await userEvent.click(await canvas.findByRole("button", { name: /pair a device/i }));
+    const confirm = await canvas.findByRole(
+      "button",
+      { name: /codes match/i },
+      { timeout: 5000 },
+    );
+    await waitFor(
+      async () => await expect(confirm).toHaveAttribute("aria-disabled", "false"),
+      { timeout: 5000 },
+    );
+    await userEvent.click(confirm);
+
+    const note = await canvas.findByText(
+      /paired\. the other device is now part of this group/i,
+      {},
+      { timeout: 5000 },
+    );
+    await expect(note).toBeInTheDocument();
+    await expect(canvas.queryByRole("button", { name: /codes match/i })).not.toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: /pair a device/i })).toBeInTheDocument();
+  },
+};
+
+/**
+ * The one refusal in this flow a reader cannot produce by typing.
+ *
+ * Every other way it can fail is a *shape* — a code of the wrong length, a character outside the
+ * alphabet, a step pressed out of order — and all of those are raised by the handler itself.
+ * What is left is the blob failing to open, which in the crate is an AEAD refusing to
+ * authenticate. So it is a fault, and it lands on this one step.
+ *
+ * ⚠️ **It lands on the offering device's *poll* now, not on a paste.** The fake's own
+ * `sync_pairing_poll` throws it on that device's second read — where `sync_pairing_respond` used
+ * to sit before a relay folded that step into the poll (see `db.ts`'s own comment on the fault).
+ * That read is a *query*, and until `1b2989f` a query's rejection reached the panel nowhere; this
+ * story could not be written at all for a while, because there was nothing on screen for a play
+ * to assert. `poll.error` joining `SyncPanel`'s `error` chain is what makes it visible again.
+ */
+export const AnswerUnreadable: Story = {
+  parameters: { fake: { fault: "pairingReadError" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await userEvent.click(await canvas.findByRole("button", { name: /pair a device/i }));
+    await expect(await canvas.findByTestId("pairing-qr")).toBeInTheDocument();
+
+    // The fault sits on the *second* poll — the first still answers `"waiting"` — so this waits
+    // out the same real 1.5 s tick `DigitsToCompare` does.
+    await expect(
+      await canvas.findByRole("alert", {}, { timeout: 5000 }),
+    ).toHaveTextContent(/could not be read/i);
+    // The code is still on screen and the offer is still live: a refusal here has changed
+    // nothing, and the reader's other device can still scan or type it.
+    await expect(canvas.getByTestId("pairing-qr")).toBeInTheDocument();
+    await expect(canvas.queryByTestId("pairing-sas")).not.toBeInTheDocument();
   },
 };
 
@@ -210,33 +264,6 @@ export const CodeRefused: Story = {
 
     await expect(await canvas.findByRole("alert")).toHaveTextContent(/105 characters/i);
     await expect(canvas.queryByTestId("pairing-sas")).not.toBeInTheDocument();
-  },
-};
-
-/**
- * The one refusal in this flow a reader cannot produce by typing.
- *
- * Every other way it can fail is a *shape* — a code of the wrong length, a character outside the
- * alphabet, a step pressed out of order — and all of those are raised by the handler itself.
- * What is left is the blob failing to open, which in the crate is an AEAD refusing to
- * authenticate. So it is a fault, and it lands on this one step.
- */
-export const AnswerUnreadable: Story = {
-  parameters: { fake: { fault: "pairingReadError" } },
-  play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
-
-    await userEvent.click(await canvas.findByRole("button", { name: /pair a device/i }));
-    await userEvent.type(
-      await canvas.findByLabelText(/what the other device answered/i),
-      "MNPQRSTVWXYZ0123456789ABCDEFGHJK",
-    );
-    await userEvent.click(canvas.getByRole("button", { name: /read their answer/i }));
-
-    await expect(await canvas.findByRole("alert")).toHaveTextContent(/could not be read/i);
-    // The code is still on screen and the offer is still live: a refusal here has changed
-    // nothing, and the reader can paste again.
-    await expect(canvas.getByTestId("pairing-qr")).toBeInTheDocument();
   },
 };
 
