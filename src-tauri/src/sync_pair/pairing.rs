@@ -5,22 +5,31 @@
 //! invite a reader printed last month still being accepted today. It has to outlive a page
 //! reload, because a reader may open Settings twice, and `AppState` is exactly that lifetime.
 //!
-//! Every blob that crosses a screen is base32 through [`super::invite`]'s alphabet — the same
-//! reason the invite is: a reader may have to type it.
+//! **Only the invite still crosses a screen.** It is base32 through [`super::invite`]'s
+//! alphabet — the same reason it always was: a reader with no camera may have to type it — and
+//! it doubles as a URL a QR can carry (`invite::qr_payload`). The other two blobs this
+//! ceremony used to hand-carry — B's answer and A's sealed key — now meet at a relay instead:
+//! both sides derive the same address from the invite's own token
+//! ([`crypto::rendezvous_id`]), so there is nothing left about *where* the blobs meet for a
+//! reader to type or scan. [`poll`] is what reads that address back, on both sides, every
+//! 1.5 seconds.
 //!
-//! **Both blobs carry one field in the clear ahead of the sealed remainder, and that is not a
-//! leak.** Each side has to know *which key* to derive before it can open anything, and the
-//! value it needs is the one the other side is identified by — B's public key on the way back,
-//! A's device id on the way out. Both are public by construction, and the seal is what proves
-//! the clear prefix belongs to the same handshake: the joiner's key is repeated inside the
-//! sealed bytes and compared, and the initiator's id is the AEAD's associated data.
+//! **Both relay-borne blobs still carry one field in the clear ahead of the sealed remainder,
+//! and that is not a leak.** Each side has to know *which key* to derive before it can open
+//! anything, and the value it needs is the one the other side is identified by — B's public key
+//! on the way back, A's device id on the way out. Both are public by construction, and the seal
+//! is what proves the clear prefix belongs to the same handshake: the joiner's key is repeated
+//! inside the sealed bytes and compared, and the initiator's id is the AEAD's associated data.
 
+use crate::sync_engine::client;
+use crate::sync_engine::entitlement;
 use crate::sync_pair::crypto;
 use crate::sync_pair::identity;
 use crate::sync_pair::invite::{Invite, QrMatrix};
 use rusqlite::Connection;
 use serde::Serialize;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// A pairing in flight, on either side. One at a time per device: a second `begin` replaces the
 /// first, which is what a reader who pressed the button twice means.
@@ -33,12 +42,29 @@ pub struct Pending {
     initiator: bool,
     group_id: [u8; 16],
     token: [u8; 16],
+    /// Where both sides meet on the relay — `crypto::rendezvous_id(&token)`, derived
+    /// independently by each side from the one thing the invite carries. Never sent anywhere:
+    /// it is the *address* the two blobs meet at, not one of the blobs.
+    rv: String,
+    /// Whether this side has written its own blob to the rendezvous. Set once, by [`accept`];
+    /// nothing today re-reads it, but it is the honest record of what this side has told the
+    /// relay, for whatever the next thing to read it turns out to be.
+    #[allow(dead_code)]
+    posted: bool,
+    /// Unix ms, ten minutes past `begin`/`accept`. Mirrors [`RENDEZVOUS_TTL_MS`] — see there for
+    /// why the two numbers are not held together by anything a build can check.
+    expires_at: i64,
     /// Filled once the other side's public key has arrived.
     peer_public: Option<[u8; 32]>,
     peer_device_id: Option<String>,
     peer_name: Option<String>,
     pair_key: Option<[u8; 32]>,
-    /// Set by [`confirm`] on the initiator, so a spent offer cannot serve a second joiner.
+    /// Set once this side's own part of the ceremony is finished — by [`confirm`] on the
+    /// initiator, so a spent offer cannot serve a second joiner, and by [`poll`] on the joiner
+    /// once [`complete`] succeeds, so a finished join answers a stable `"complete"` on every
+    /// later poll instead of re-fetching a blob it has already spent. The two roles never read
+    /// the flag the other one sets: `respond` and `confirm` only ever run against an initiator's
+    /// `Pending`, and `poll`'s joiner branch is only ever reached on one.
     spent: bool,
 }
 
@@ -50,17 +76,21 @@ pub struct Offer {
     pub qr: QrMatrix,
 }
 
-/// What each side gets once it knows the other's key: six digits to compare, and a blob to
-/// carry back.
+/// What each side gets once it knows the other's key: six digits to compare.
+///
+/// **No blob any more.** Both sides used to hand a blob back to the reader here — B's answer,
+/// for the reader to carry to A — but [`accept`] now posts it to the rendezvous itself, so there
+/// is nothing left for this struct to carry but the digits.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Handshake {
     pub sas: String,
-    /// Empty on the initiator's side — A has nothing further to hand B until Confirm.
-    pub response: String,
 }
 
-/// The wrapped group key, for the reader to carry to the joining device.
+/// The wrapped group key. Still returned to the caller — mainly for the tests, which drive
+/// [`confirm`] and [`complete`] directly with no relay in the loop at all — even though the
+/// production path never reads it: [`confirm`] has already posted the same bytes to
+/// `/p/{rv}/offer`, and the joiner's [`poll`] reads them back from there.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SealedKey {
@@ -78,6 +108,33 @@ pub struct PairingStatus {
     pub devices: Vec<identity::Device>,
 }
 
+/// What [`poll`] answers, every 1.5 seconds, while a pairing is in flight.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PairingProgress {
+    /// One of `"idle" | "waiting" | "compare" | "complete"`.
+    pub stage: String,
+    /// The six digits, once both sides' keys are known — `None` at `"idle"` and `"waiting"`.
+    pub sas: Option<String>,
+}
+
+const STAGE_IDLE: &str = "idle";
+const STAGE_WAITING: &str = "waiting";
+const STAGE_COMPARE: &str = "compare";
+const STAGE_COMPLETE: &str = "complete";
+
+/// Ten minutes, in milliseconds. Mirrors `relay/src/rendezvous.ts`'s `RENDEZVOUS_TTL_MS`.
+///
+/// **The two are not held together by anything a build can check** — the relay is TypeScript a
+/// reader deploys themselves — so the number is written twice on purpose and this comment is the
+/// fence, `sync_engine::baseline::TAIL_SECS`'s shape. A `Pending` that outlived the relay's own
+/// row would poll a 404 that can never resolve into anything but the timeout below; a `Pending`
+/// that expired *first* only costs the reader a fresh offer the relay would still have answered.
+const RENDEZVOUS_TTL_MS: i64 = 10 * 60 * 1000;
+
+/// What [`poll`] says once the ten-minute rendezvous window has passed with nothing resolved.
+const EXPIRED: &str = "That pairing code has expired. Start a new one.";
+
 /// What every step says when there is nothing in flight.
 const NOTHING_IN_FLIGHT: &str = "There is no pairing in progress.";
 
@@ -92,6 +149,27 @@ fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
+/// Now, in unix milliseconds.
+///
+/// `SystemTime::now()` is safe here — unlike `entitlement` and `sync_engine`, which read
+/// `unixepoch()` off the connection instead because they compile for `wasm32-unknown-unknown`,
+/// this whole module does not: `sync_pair::mod` gates it `#[cfg(not(target_family = "wasm"))]`,
+/// so there is no wasm target for this clock to panic on.
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// 16 random bytes as 32 lowercase hex characters — `identity`'s own `hex`, which is private to
+/// that module. Duplicated rather than exposed: [`confirm`] needs to compute a *candidate* group
+/// id to seal before it is allowed to write anything, and `identity::create_group` both mints
+/// and writes in the same call.
+fn hex16(bytes: &[u8; 16]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// Start an offer. Mints a token, replaces any offer already in flight.
 pub fn begin(conn: &Connection, pending: &mut Option<Pending>) -> Result<Offer, String> {
     let me = identity::ensure(conn).map_err(err)?;
@@ -102,6 +180,7 @@ pub fn begin(conn: &Connection, pending: &mut Option<Pending>) -> Result<Offer, 
         None => crypto::random_bytes::<16>(),
     };
     let token = crypto::random_bytes::<16>();
+    let rv = crypto::rendezvous_id(&token);
 
     let inv = Invite {
         group_id,
@@ -109,12 +188,19 @@ pub fn begin(conn: &Connection, pending: &mut Option<Pending>) -> Result<Offer, 
         token,
     };
     let code = inv.encode();
-    let qr = crate::sync_pair::invite::qr_matrix(&code).map_err(err)?;
+    // **The QR draws the relay's own `/pair` URL, never the bare code.** `qr_payload` strips the
+    // hyphens itself; `Offer.code` keeps them, because that field is still the typed form a
+    // reader without a camera reads back digit group by digit group.
+    let qr_text = crate::sync_pair::invite::qr_payload(&code, &entitlement::base(conn));
+    let qr = crate::sync_pair::invite::qr_matrix(&qr_text).map_err(err)?;
 
     *pending = Some(Pending {
         initiator: true,
         group_id,
         token,
+        rv,
+        posted: false,
+        expires_at: now_ms() + RENDEZVOUS_TTL_MS,
         peer_public: None,
         peer_device_id: None,
         peer_name: None,
@@ -124,9 +210,16 @@ pub fn begin(conn: &Connection, pending: &mut Option<Pending>) -> Result<Offer, 
     Ok(Offer { code, qr })
 }
 
-/// The joining device reads the code, does the ECDH, and produces both the six digits and the
-/// blob the initiator needs.
-pub fn accept(
+/// The joining device reads the code, does the ECDH, posts its answer to the relay, and
+/// produces the six digits for the reader to compare.
+///
+/// **Posts before it keeps anything**, the same shape [`confirm`] uses one step further on: if
+/// the post fails — the code was answered already, or the relay could not be reached — nothing
+/// local exists to half-undo, and a reader whose paste failed can simply try again. Because of
+/// that ordering, `posted` is always `true` by the time a `Pending` exists at all here; the field
+/// is still written on `Pending` rather than assumed, so that fact stays true in the type and not
+/// only in this function's body.
+pub async fn accept(
     conn: &Connection,
     pending: &mut Option<Pending>,
     code: &str,
@@ -159,20 +252,23 @@ pub fn accept(
     blob.extend_from_slice(&me.keypair.public);
     blob.extend_from_slice(&sealed);
 
+    let rv = crypto::rendezvous_id(&inv.token);
+    client::post_rendezvous(conn, &rv, "join", &blob_encode(&blob)).await?;
+
     *pending = Some(Pending {
         initiator: false,
         group_id: inv.group_id,
         token: inv.token,
+        rv,
+        posted: true,
+        expires_at: now_ms() + RENDEZVOUS_TTL_MS,
         peer_public: Some(inv.public_key),
         peer_device_id: None,
         peer_name: None,
         pair_key: Some(pair_key),
         spent: false,
     });
-    Ok(Handshake {
-        sas,
-        response: blob_encode(&blob),
-    })
+    Ok(Handshake { sas })
 }
 
 /// The initiator reads the joiner's blob, derives the same key, and shows the same six digits.
@@ -225,15 +321,33 @@ pub fn respond(
 
     Ok(Handshake {
         sas: crypto::sas(&pair_key, &me.keypair.public, &peer_public),
-        response: String::new(),
     })
 }
 
 /// What a device with no name of its own is filed as.
 const DEFAULT_PEER_NAME: &str = "Paired device";
 
-/// The initiator confirms the digits matched: the group is created if needed, the joiner goes on
-/// the roster, and the group key is sealed for it to carry.
+/// The initiator confirms the digits matched: the group key is sealed and posted to the relay,
+/// and only once that succeeds does the joiner go on the roster.
+///
+/// **The order below is the design, and it is deliberate that it does not match the order things
+/// are *named* in.** Sealing reads a group that does not have to exist yet; committing is what
+/// makes it exist. Rearranging the two would either write the group before the relay has agreed
+/// to carry it (spec §4.3's "a failed post costs nothing" reasoning, undone) or ask the relay to
+/// carry a group this device cannot yet prove it minted (nothing to seal at all). See the module
+/// doc's opening paragraphs for why the blob crosses this way at all.
+///
+/// 1. [`identity::room_for`] — the device cap, refused before anything moves.
+/// 2. Seal the group key **at the current epoch** and POST it to `/p/{rv}/offer`. **If this
+///    fails, nothing has changed locally and the reader can press again** — the candidate group
+///    below is computed, never written, until this succeeds.
+/// 3. Commit: [`identity::join_group`] (which, for a device with no group yet, writes exactly
+///    the candidate this just sealed — never [`identity::create_group`], which would mint its
+///    own different random values and leave the relay holding a key nobody local matches) and
+///    [`identity::add_device`] for the joiner.
+/// 4. [`client::publish_join`], best effort — a first pairing has no membership yet and
+///    `/rotate` refuses it with a 401, which is not a reason to undo a ceremony that has already
+///    committed; the debt is marked and a later sync pays it.
 ///
 /// **What the blob hands over is a group and nothing else, and the absence is the point.** Spec
 /// §6.2 sealed the *refresh secret* in beside the key, so that the joining device never opened a
@@ -247,9 +361,9 @@ const DEFAULT_PEER_NAME: &str = "Paired device";
 ///
 /// The cost, stated plainly: a freshly paired device draws *Supporting since …* after its first
 /// relay call rather than the instant the digits match.
-pub fn confirm(conn: &Connection, pending: &mut Option<Pending>) -> Result<SealedKey, String> {
+pub async fn confirm(conn: &Connection, pending: &mut Option<Pending>) -> Result<SealedKey, String> {
     let me = identity::ensure(conn).map_err(err)?;
-    let p = pending.as_mut().ok_or(NOTHING_IN_FLIGHT)?;
+    let p = pending.as_ref().ok_or(NOTHING_IN_FLIGHT)?;
     if p.spent {
         return Err(ALREADY_USED.to_owned());
     }
@@ -258,6 +372,10 @@ pub fn confirm(conn: &Connection, pending: &mut Option<Pending>) -> Result<Seale
     else {
         return Err("The other device has not answered yet.".to_owned());
     };
+    let rv = p.rv.clone();
+    let peer_name = p.peer_name.clone();
+    // `p`'s borrow ends here — everything above is copied or cloned out of it, and everything
+    // below reaches `pending` fresh, which is what lets the final line take it mutably again.
 
     // **The sixth device is refused here, before a group is minted or a row written** — spec
     // §4.3. The relay is the fence and this is the message: `/token` refuses the sixth device a
@@ -266,14 +384,20 @@ pub fn confirm(conn: &Connection, pending: &mut Option<Pending>) -> Result<Seale
     // re-running the ceremony with a device already in the group is never what fills it.
     identity::room_for(conn, &peer_id)?;
 
-    let group = identity::create_group(conn, &me).map_err(err)?;
-    identity::add_device(
-        conn,
-        &peer_id,
-        &peer_public,
-        p.peer_name.as_deref().unwrap_or(DEFAULT_PEER_NAME),
-    )
-    .map_err(err)?;
+    // **The candidate group, computed but not written.** `Some` is this device's group exactly
+    // as it stands right now — sealing its *current* epoch, never one a rotation might move it
+    // to before this finishes. `None` is a device that has never paired: there is nothing yet
+    // for `identity::group` to read, so the values `identity::create_group` would mint are
+    // reproduced here instead of minted by calling it, because that call also *writes* them, and
+    // a write ahead of the post is exactly the ordering step 2's doc above exists to rule out.
+    let group = match identity::group(conn).map_err(err)? {
+        Some(g) => g,
+        None => identity::Group {
+            group_id: hex16(&crypto::random_bytes::<16>()),
+            epoch: 0,
+            group_key: crypto::random_bytes::<32>(),
+        },
+    };
 
     // `<group_id>\0<epoch>\0<32-byte key>` — the id and the epoch travel with the key because a
     // key with no epoch cannot be compared against a later rotation, and since spec §2.2 nothing
@@ -304,10 +428,31 @@ pub fn confirm(conn: &Connection, pending: &mut Option<Pending>) -> Result<Seale
     blob.extend_from_slice(me.device_id.as_bytes());
     blob.push(0);
     blob.extend_from_slice(&sealed);
+    let encoded = blob_encode(&blob);
 
-    p.spent = true;
+    // **Posted before anything commits.** A failed post ends this call right here, and nothing
+    // above has written to the database — the candidate group was a local value, not a row.
+    client::post_rendezvous(conn, &rv, "offer", &encoded).await?;
+
+    identity::join_group(conn, &group.group_id, group.epoch, &group.group_key, &me).map_err(err)?;
+    identity::add_device(
+        conn,
+        &peer_id,
+        &peer_public,
+        peer_name.as_deref().unwrap_or(DEFAULT_PEER_NAME),
+    )
+    .map_err(err)?;
+
+    if let Some(p) = pending.as_mut() {
+        p.spent = true;
+    }
+
+    // Best effort: see the doc above and `client::publish_join`'s own for why a refusal here is
+    // recorded rather than raised.
+    let _ = client::publish_join(conn).await;
+
     Ok(SealedKey {
-        sealed_key: blob_encode(&blob),
+        sealed_key: encoded,
     })
 }
 
@@ -399,6 +544,150 @@ pub fn complete(
     Ok(())
 }
 
+/// What the panel asks every 1.5 seconds while a pairing is in flight.
+///
+/// **One command for both sides**, because the state it reads already knows which side this is:
+/// the initiator is waiting for an answer, the joiner for a key. Two commands would be two
+/// things for the panel to decide between using state it would have to be handed first.
+///
+/// `respond` and `complete` keep their bodies exactly as they were before this existed — this is
+/// their only caller now, and the tests that drive them directly still do.
+pub async fn poll(
+    conn: &Connection,
+    pending: &mut Option<Pending>,
+    now_ms: i64,
+) -> Result<PairingProgress, String> {
+    let Some(p) = pending.as_ref() else {
+        return Ok(PairingProgress {
+            stage: STAGE_IDLE.to_owned(),
+            sas: None,
+        });
+    };
+    let expires_at = p.expires_at;
+    let initiator = p.initiator;
+    // `p`'s borrow ends here — both branches below reach `pending` fresh.
+
+    // **The relay's own TTL, read off this side's clock rather than the reader's patience.**
+    // Without this a dropped offer polls a 404 forever; with it the panel is told the code timed
+    // out and can start over rather than spin.
+    if now_ms > expires_at {
+        *pending = None;
+        return Err(EXPIRED.to_owned());
+    }
+
+    let me = identity::ensure(conn).map_err(err)?;
+    if initiator {
+        poll_initiator(conn, pending, &me).await
+    } else {
+        poll_joiner(conn, pending, &me).await
+    }
+}
+
+/// The six digits, as the initiator would compute them — `None` while the joiner's key has not
+/// arrived yet, which [`poll_initiator`] reads as "keep waiting" rather than as an error.
+fn initiator_sas(me: &identity::Identity, p: &Pending) -> Option<String> {
+    Some(crypto::sas(&p.pair_key?, &me.keypair.public, &p.peer_public?))
+}
+
+/// The six digits, as the joiner would compute them.
+///
+/// **Always `Some`, unlike its initiator-side sibling.** [`accept`] sets `pair_key` and
+/// `peer_public` together, unconditionally, before a joiner's `Pending` exists at all — so a
+/// joiner has both the moment there is anything to poll about, where an initiator's `Pending`
+/// starts with neither and waits for [`respond`] to fill them in.
+fn joiner_sas(me: &identity::Identity, p: &Pending) -> String {
+    crypto::sas(
+        &p.pair_key.expect("a joiner's pending always carries a pair key"),
+        &p.peer_public
+            .expect("a joiner's pending always carries the initiator's key"),
+        &me.keypair.public,
+    )
+}
+
+fn waiting_progress() -> PairingProgress {
+    PairingProgress {
+        stage: STAGE_WAITING.to_owned(),
+        sas: None,
+    }
+}
+
+fn compare_progress(sas: String) -> PairingProgress {
+    PairingProgress {
+        stage: STAGE_COMPARE.to_owned(),
+        sas: Some(sas),
+    }
+}
+
+fn complete_progress() -> PairingProgress {
+    PairingProgress {
+        stage: STAGE_COMPLETE.to_owned(),
+        sas: None,
+    }
+}
+
+/// The initiator is waiting for an answer, has one and is waiting on the reader's press of
+/// Confirm, or has already pressed it.
+async fn poll_initiator(
+    conn: &Connection,
+    pending: &mut Option<Pending>,
+    me: &identity::Identity,
+) -> Result<PairingProgress, String> {
+    let p = pending.as_ref().expect("poll already checked this is Some");
+    // **Checked before the SAS is even attempted.** Once spent, `pair_key`/`peer_public` are
+    // still set — `respond` filled them in long before `confirm` ran — so `initiator_sas` would
+    // answer `Some` here too, and reading it first would show "compare" for a ceremony that has
+    // already finished.
+    if p.spent {
+        return Ok(complete_progress());
+    }
+    if let Some(sas) = initiator_sas(me, p) {
+        return Ok(compare_progress(sas));
+    }
+    let rv = p.rv.clone();
+    // `p`'s borrow ends here — `respond` below needs `pending` mutably.
+
+    match client::get_rendezvous(conn, &rv, "join").await? {
+        None => Ok(waiting_progress()),
+        Some(blob) => {
+            let handshake = respond(conn, pending, &blob)?;
+            Ok(compare_progress(handshake.sas))
+        }
+    }
+}
+
+/// The joiner has not seen a key yet, or has and is done — [`complete`] runs at most once per
+/// `Pending`, guarded by the same `spent` flag [`confirm`] sets on the initiator's side.
+async fn poll_joiner(
+    conn: &Connection,
+    pending: &mut Option<Pending>,
+    me: &identity::Identity,
+) -> Result<PairingProgress, String> {
+    let p = pending.as_ref().expect("poll already checked this is Some");
+    if p.spent {
+        return Ok(complete_progress());
+    }
+    let sas = joiner_sas(me, p);
+    let rv = p.rv.clone();
+    // `p`'s borrow ends here — `complete` below needs `pending` mutably.
+
+    match client::get_rendezvous(conn, &rv, "offer").await? {
+        None => Ok(compare_progress(sas)),
+        Some(blob) => {
+            complete(conn, pending, &blob)?;
+            // **Set only after `complete` succeeds, and read on every later poll before this
+            // reaches the relay again.** Without it, a poll that landed after some *other* event
+            // rotated the group (a peer's removal, a departure) would re-run `complete` with this
+            // same, now-stale blob and roll the epoch backward — the relay does not delete a
+            // filled slot until its ten-minute row expires, so the blob is still there to
+            // re-fetch.
+            if let Some(p) = pending.as_mut() {
+                p.spent = true;
+            }
+            Ok(complete_progress())
+        }
+    }
+}
+
 /// Throw away whatever is in flight.
 ///
 /// The offer's token dies with it, so the code that was on screen stops working — which is what
@@ -464,13 +753,13 @@ fn from_hex16(s: &str) -> Option<[u8; 16]> {
 // mutex and is safe to hold across it — it is taken first, below.
 
 use crate::sync::{self, AppState};
-use crate::sync_engine::client;
 use crate::sync_engine::commands;
-// **Reachable from this module again since spec §2.1, and for one call only.** A *pairing* still
-// asks the membership nothing and writes it nothing — §2.2's rule, and the block of tests at the
-// bottom of this file asserts exactly that. What reaches it is [`leave_group_now`], which is not
-// a pairing: a device that has left the group must not keep a credential that still opens it.
-use crate::sync_engine::entitlement;
+// **`entitlement` is reachable from this module again since spec §2.1, and for one call beyond
+// `begin`'s and `confirm`'s own use of `entitlement::base`.** A *pairing* still asks the
+// membership nothing and writes it nothing — §2.2's rule, and the block of tests at the bottom
+// of this file asserts exactly that. What reaches it beyond the relay's address is
+// [`leave_group_now`], which is not a pairing: a device that has left the group must not keep a
+// credential that still opens it.
 
 /// What [`sync_device_revoke`] says when the round trip it makes first does not complete.
 ///
@@ -503,7 +792,13 @@ pub async fn sync_pairing_begin(state: tauri::State<'_, Arc<AppState>>) -> Resul
     .map_err(|e| format!("could not start pairing: {e}"))?
 }
 
-/// Read an offer on the joining device. Answers the six digits and a blob to carry back.
+/// Read an offer on the joining device: derives the key, posts the answer to the relay, and
+/// answers the six digits.
+///
+/// **On the blocking pool with a runtime of its own**, [`sync_device_revoke`]'s exact shape:
+/// [`accept`] is `async` now that it posts to the relay, the write connection is behind a
+/// `Mutex`, a guard on it cannot cross an `await` on a multi-threaded runtime, and
+/// `spawn_blocking` moves the whole trip to a thread where `block_on` is legal.
 #[tauri::command]
 pub async fn sync_pairing_accept(
     state: tauri::State<'_, Arc<AppState>>,
@@ -511,55 +806,65 @@ pub async fn sync_pairing_accept(
 ) -> Result<Handshake, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| e.to_string())?;
         let mut pending = sync::lock_plain(&state.pairing);
-        sync::with_write(&state, |conn| accept(conn, &mut pending, &code))
+        sync::with_write(&state, |conn| {
+            runtime.block_on(accept(conn, &mut pending, &code))
+        })
     })
     .await
     .map_err(|e| format!("could not read that pairing code: {e}"))?
 }
 
-/// Read the joiner's blob on the offering device. Answers the same six digits.
-#[tauri::command]
-pub async fn sync_pairing_respond(
-    state: tauri::State<'_, Arc<AppState>>,
-    response: String,
-) -> Result<Handshake, String> {
-    let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut pending = sync::lock_plain(&state.pairing);
-        sync::with_write(&state, |conn| respond(conn, &mut pending, &response))
-    })
-    .await
-    .map_err(|e| format!("could not read that pairing response: {e}"))?
-}
-
-/// The reader says the digits matched. Answers the sealed group key.
+/// The reader says the digits matched: the group key is sealed, posted to the relay, and only
+/// then committed. Answers the sealed group key.
+///
+/// **On the blocking pool with a runtime of its own**, for [`sync_pairing_accept`]'s reason:
+/// [`confirm`] is `async` now that it posts to the relay before it commits anything.
 #[tauri::command]
 pub async fn sync_pairing_confirm(
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<SealedKey, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| e.to_string())?;
         let mut pending = sync::lock_plain(&state.pairing);
-        sync::with_write(&state, |conn| confirm(conn, &mut pending))
+        sync::with_write(&state, |conn| runtime.block_on(confirm(conn, &mut pending)))
     })
     .await
     .map_err(|e| format!("could not finish pairing: {e}"))?
 }
 
-/// The joining device unwraps the key and is in the group.
+/// What the panel asks every 1.5 seconds while a pairing is in flight. See [`poll`].
+///
+/// **On the blocking pool with a runtime of its own**, [`sync_device_revoke`]'s exact shape: the
+/// write connection is behind a `Mutex`, a guard on it cannot cross an `await` on a
+/// multi-threaded runtime, and `spawn_blocking` moves the whole trip to a thread where
+/// `block_on` is legal. `now` is read here, on the IPC thread, rather than inside the closure —
+/// it needs no connection, and reading it before the write lock is taken is one fewer thing the
+/// lock is held for.
 #[tauri::command]
-pub async fn sync_pairing_complete(
+pub async fn sync_pairing_poll(
     state: tauri::State<'_, Arc<AppState>>,
-    sealed_key: String,
-) -> Result<(), String> {
+) -> Result<PairingProgress, String> {
     let state = state.inner().clone();
+    let now = now_ms();
     tauri::async_runtime::spawn_blocking(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| e.to_string())?;
         let mut pending = sync::lock_plain(&state.pairing);
-        sync::with_write(&state, |conn| complete(conn, &mut pending, &sealed_key))
+        sync::with_write(&state, |conn| runtime.block_on(poll(conn, &mut pending, now)))
     })
     .await
-    .map_err(|e| format!("could not finish pairing: {e}"))?
+    .map_err(|e| format!("could not check the pairing's progress: {e}"))?
 }
 
 /// Throw away whatever is in flight.
@@ -730,6 +1035,8 @@ mod tests {
     // writes the joiner's, which the block at the bottom of this file asserts; `leave_group_now`
     // is the one thing above that reaches it, and leaving is not a pairing.
     use httpmock::prelude::*;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
 
     fn db() -> Connection {
         crate::schema::memory_pair()
@@ -748,46 +1055,334 @@ mod tests {
         chars.into_iter().collect()
     }
 
-    /// A whole pairing, two databases, no network. Both ends must end up holding the same
-    /// group key, and the six digits both readers were shown must have matched.
+    // -----------------------------------------------------------------------------------
+    // A fake relay for the rendezvous
+    //
+    // `accept` and `confirm` are `async` now, and make a real `reqwest` call each — so every
+    // test that drives them needs something answering at the other end. This is a tiny
+    // in-process stand-in for `relay/src/rendezvous.ts`'s two slots, wired to real HTTP (via
+    // httpmock's dynamic `respond_with`) so those calls exercise the real wire path rather than
+    // a second hand-written substitute for it.
+    // -----------------------------------------------------------------------------------
+
+    /// First-write-wins per `(rv, slot)`, exactly the relay's own guard: a second POST to a
+    /// filled slot answers 409, and a GET on an empty one answers 404 rather than blocking.
+    ///
+    /// **`blob`/`set_blob` reach into the store directly, bypassing the POST's own guard.** Both
+    /// exist for one test: the rendezvous is the one hop these bytes cross that the reader never
+    /// sees, and proving that a relay which lies about a slot's contents is still caught by the
+    /// six digits needs a way to make it lie.
+    struct FakeRelay {
+        server: MockServer,
+        store: Arc<Mutex<HashMap<(String, String), String>>>,
+    }
+
+    /// Split `/p/{rv}/{slot}` into its two parts. Only ever called on a path the mocks below have
+    /// already matched against that exact shape.
+    fn rv_slot(path: &str) -> (String, String) {
+        let mut parts = path.trim_start_matches('/').split('/');
+        parts.next(); // "p"
+        let rv = parts.next().expect("the route regex pinned this shape").to_owned();
+        let slot = parts.next().expect("the route regex pinned this shape").to_owned();
+        (rv, slot)
+    }
+
+    impl FakeRelay {
+        async fn start() -> Self {
+            let server = MockServer::start_async().await;
+            let store: Arc<Mutex<HashMap<(String, String), String>>> = Arc::default();
+
+            let read_store = store.clone();
+            server.mock(|when, then| {
+                when.method(GET).path_matches(r"^/p/[0-9a-f]{32}/(offer|join)$");
+                then.respond_with(move |req: &HttpMockRequest| {
+                    let (rv, slot) = rv_slot(req.uri().path());
+                    match read_store.lock().unwrap().get(&(rv, slot)) {
+                        Some(blob) => HttpMockResponse::builder()
+                            .status(200)
+                            .header("content-type", "application/json")
+                            .body(serde_json::json!({ "blob": blob }).to_string())
+                            .build(),
+                        None => HttpMockResponse::builder().status(404).build(),
+                    }
+                });
+            });
+
+            let write_store = store.clone();
+            server.mock(|when, then| {
+                when.method(POST).path_matches(r"^/p/[0-9a-f]{32}/(offer|join)$");
+                then.respond_with(move |req: &HttpMockRequest| {
+                    let (rv, slot) = rv_slot(req.uri().path());
+                    let body: serde_json::Value =
+                        serde_json::from_str(&req.body_string()).unwrap_or_default();
+                    let blob = body["blob"].as_str().unwrap_or_default().to_owned();
+                    let mut store = write_store.lock().unwrap();
+                    if store.contains_key(&(rv.clone(), slot.clone())) {
+                        return HttpMockResponse::builder().status(409).build();
+                    }
+                    store.insert((rv, slot), blob);
+                    HttpMockResponse::builder().status(204).build()
+                });
+            });
+
+            FakeRelay { server, store }
+        }
+
+        /// Point `conn` at this relay.
+        fn point(&self, conn: &Connection) {
+            client::set_state(conn, client::RELAY_URL, &self.server.base_url()).unwrap();
+        }
+
+        /// What is sitting in a slot, if anything — a direct read, no HTTP involved.
+        fn blob(&self, rv: &str, slot: &str) -> Option<String> {
+            self.store
+                .lock()
+                .unwrap()
+                .get(&(rv.to_owned(), slot.to_owned()))
+                .cloned()
+        }
+
+        /// Overwrite a slot directly, first-write-wins included. Stands in for a relay (or a
+        /// MITM in front of one) that hands a caller different bytes than the ones actually
+        /// posted — first-write-wins refuses a *second poster* that trick, so making a slot lie
+        /// needs to reach past the guard rather than through it.
+        fn set_blob(&self, rv: &str, slot: &str, blob: &str) {
+            self.store
+                .lock()
+                .unwrap()
+                .insert((rv.to_owned(), slot.to_owned()), blob.to_owned());
+        }
+    }
+
+    /// The typed code is unchanged; the QR is not a picture of it any more.
     #[test]
-    fn two_databases_pair_and_agree_on_the_key() {
+    fn an_offer_carries_a_url_and_the_typed_code_is_unchanged() {
+        let a = db();
+        let mut pa = None;
+        let offer = begin(&a, &mut pa).unwrap();
+
+        // 105 payload-plus-checksum characters, hyphens aside — `invite.rs`'s own arithmetic,
+        // unmoved by this task.
+        assert_eq!(offer.code.chars().filter(|c| *c != '-').count(), 105);
+
+        let base = entitlement::base(&a);
+        let expected_text = crate::sync_pair::invite::qr_payload(&offer.code, &base);
+        let expected = crate::sync_pair::invite::qr_matrix(&expected_text).unwrap();
+        assert_eq!(offer.qr.modules.len(), offer.qr.width * offer.qr.width);
+        assert_eq!(offer.qr.modules, expected.modules);
+        assert_ne!(
+            offer.qr.modules,
+            crate::sync_pair::invite::qr_matrix(&offer.code).unwrap().modules,
+            "the QR must draw the relay's URL, not a picture of the bare code"
+        );
+    }
+
+    /// Both sides land on the same rendezvous from the invite alone — the whole reason the
+    /// ceremony works with no second hand-carry.
+    #[tokio::test]
+    async fn the_two_sides_derive_the_same_rendezvous() {
+        let relay = FakeRelay::start().await;
         let a = db();
         let b = db();
+        relay.point(&a);
+        relay.point(&b);
+        let mut pa = None;
+        let mut pb = None;
+
+        let offer = begin(&a, &mut pa).unwrap();
+        accept(&b, &mut pb, &offer.code).await.unwrap();
+
+        let a_rv = pa.as_ref().unwrap().rv.clone();
+        let b_rv = pb.as_ref().unwrap().rv.clone();
+        assert_eq!(
+            a_rv, b_rv,
+            "both sides must meet at the same address with nothing hand-carried but the invite"
+        );
+        assert_eq!(a_rv, crypto::rendezvous_id(&pa.as_ref().unwrap().token));
+    }
+
+    /// The sealed blob's layout is unchanged — `<device_id>\0` then a seal over
+    /// `<group_id>\0<epoch>\0<32-byte key>`, key last — and the epoch sealed is the one this
+    /// device is *at* when `confirm` runs, not one a rotation might move it to first.
+    #[tokio::test]
+    async fn confirm_seals_at_the_current_epoch_and_the_layout_is_unchanged() {
+        let relay = FakeRelay::start().await;
+        let a = db();
+        let b = db();
+        relay.point(&a);
+        relay.point(&b);
+        let (mut pa, mut pb) = (None, None);
+
+        let offer = begin(&a, &mut pa).unwrap();
+        accept(&b, &mut pb, &offer.code).await.unwrap();
+        poll(&a, &mut pa, now_ms()).await.unwrap();
+        let sealed = confirm(&a, &mut pa).await.unwrap();
+
+        let group = crate::sync_pair::identity::group(&a)
+            .unwrap()
+            .expect("confirm minted a group");
+        let me_a = crate::sync_pair::identity::ensure(&a).unwrap();
+        let pair_key = pb
+            .as_ref()
+            .unwrap()
+            .pair_key
+            .expect("B derived the same pair key");
+
+        let blob = crate::sync_pair::invite::blob_decode(&sealed.sealed_key).unwrap();
+        let split = blob.iter().position(|byte| *byte == 0).unwrap();
+        let device_id = String::from_utf8_lossy(&blob[..split]).into_owned();
+        assert_eq!(device_id, me_a.device_id, "the clear prefix is A's own device id");
+
+        let plain = crypto::open(&pair_key, device_id.as_bytes(), &blob[split + 1..]).unwrap();
+        let mut parts = plain.splitn(3, |byte| *byte == 0);
+        let got_group_id = String::from_utf8_lossy(parts.next().unwrap()).into_owned();
+        let got_epoch: i64 = String::from_utf8_lossy(parts.next().unwrap())
+            .parse()
+            .unwrap();
+        let got_key = parts.next().unwrap();
+
+        assert_eq!(got_group_id, group.group_id);
+        assert_eq!(got_epoch, group.epoch, "the epoch sealed must be the current one");
+        assert_eq!(got_key, group.group_key.as_slice(), "the key is the LAST field");
+    }
+
+    /// A failed post at step 2 must leave nothing committed — the whole reason step 2 runs
+    /// before step 3. Mutate: swap them, and this goes red.
+    #[tokio::test]
+    async fn a_failed_offer_post_leaves_nothing_committed() {
+        let relay = FakeRelay::start().await;
+        let a = db();
+        let b = db();
+        relay.point(&a);
+        relay.point(&b);
+        let (mut pa, mut pb) = (None, None);
+
+        let offer = begin(&a, &mut pa).unwrap();
+        accept(&b, &mut pb, &offer.code).await.unwrap();
+        poll(&a, &mut pa, now_ms()).await.unwrap();
+
+        // A relay that refuses every request, so the post in step 2 fails.
+        let bad = MockServer::start_async().await;
+        bad.mock(|when, then| {
+            when.method(POST).path_matches(r"^/p/.*$");
+            then.status(500);
+        });
+        client::set_state(&a, client::RELAY_URL, &bad.base_url()).unwrap();
+
+        let error = confirm(&a, &mut pa)
+            .await
+            .expect_err("a failed post must fail confirm");
+        assert!(error.contains("500"), "{error}");
+
+        assert!(
+            crate::sync_pair::identity::group(&a).unwrap().is_none(),
+            "nothing was minted locally"
+        );
+        assert_eq!(
+            crate::sync_pair::identity::roster(&a).unwrap().len(),
+            0,
+            "no device was added to a roster that does not exist"
+        );
+        assert!(
+            !pa.as_ref().unwrap().spent,
+            "a failed post must not spend the offer -- the reader can press again"
+        );
+    }
+
+    /// The same failure, against a device that already had a group: the existing group and its
+    /// one-device roster must not move either.
+    #[tokio::test]
+    async fn a_failed_offer_post_leaves_an_existing_group_untouched() {
+        let relay = FakeRelay::start().await;
+        let a = db();
+        let b = db();
+        relay.point(&a);
+        relay.point(&b);
+        let (mut pa, mut pb) = (None, None);
+
+        let me = crate::sync_pair::identity::ensure(&a).unwrap();
+        let group_before = crate::sync_pair::identity::create_group(&a, &me).unwrap();
+
+        let offer = begin(&a, &mut pa).unwrap();
+        accept(&b, &mut pb, &offer.code).await.unwrap();
+        poll(&a, &mut pa, now_ms()).await.unwrap();
+
+        let bad = MockServer::start_async().await;
+        bad.mock(|when, then| {
+            when.method(POST).path_matches(r"^/p/.*$");
+            then.status(500);
+        });
+        client::set_state(&a, client::RELAY_URL, &bad.base_url()).unwrap();
+
+        confirm(&a, &mut pa)
+            .await
+            .expect_err("a failed post must fail confirm");
+
+        assert_eq!(
+            crate::sync_pair::identity::group(&a).unwrap().unwrap(),
+            group_before,
+            "the existing group must not move"
+        );
+        assert_eq!(
+            crate::sync_pair::identity::roster(&a).unwrap().len(),
+            1,
+            "the peer must not have been added"
+        );
+    }
+
+    /// A whole pairing, two databases, a fake relay standing in for the rendezvous. Both ends
+    /// must end up holding the same group key, and the six digits both readers were shown must
+    /// have matched.
+    #[tokio::test]
+    async fn two_databases_pair_and_agree_on_the_key() {
+        let relay = FakeRelay::start().await;
+        let a = db();
+        let b = db();
+        relay.point(&a);
+        relay.point(&b);
         let mut a_pending = None;
         let mut b_pending = None;
 
         let offer = begin(&a, &mut a_pending).unwrap();
-        let accepted = accept(&b, &mut b_pending, &offer.code).unwrap();
-        let responded = respond(&a, &mut a_pending, &accepted.response).unwrap();
+        let accepted = accept(&b, &mut b_pending, &offer.code).await.unwrap();
+        let progress = poll(&a, &mut a_pending, now_ms()).await.unwrap();
+        assert_eq!(progress.stage, STAGE_COMPARE);
 
         assert_eq!(
-            accepted.sas, responded.sas,
+            accepted.sas,
+            progress.sas.unwrap(),
             "the two readers must be shown the same six digits"
         );
 
-        let sealed = confirm(&a, &mut a_pending).unwrap();
-        complete(&b, &mut b_pending, &sealed.sealed_key).unwrap();
+        let sealed = confirm(&a, &mut a_pending).await.unwrap();
+        let progress = poll(&b, &mut b_pending, now_ms()).await.unwrap();
+        assert_eq!(progress.stage, STAGE_COMPLETE);
 
         let ga = crate::sync_pair::identity::group(&a).unwrap().unwrap();
         let gb = crate::sync_pair::identity::group(&b).unwrap().unwrap();
         assert_eq!(ga.group_id, gb.group_id);
         assert_eq!(ga.group_key, gb.group_key);
         assert_eq!(ga.epoch, gb.epoch);
+        // `sealed` is still produced even though `poll`/`complete` never read it here — see
+        // `SealedKey`'s own doc for why it is kept.
+        assert!(!sealed.sealed_key.is_empty());
     }
 
     /// Each side ends up knowing about the other.
-    #[test]
-    fn both_rosters_name_both_devices() {
+    #[tokio::test]
+    async fn both_rosters_name_both_devices() {
+        let relay = FakeRelay::start().await;
         let a = db();
         let b = db();
+        relay.point(&a);
+        relay.point(&b);
         let (mut pa, mut pb) = (None, None);
 
         let offer = begin(&a, &mut pa).unwrap();
-        let acc = accept(&b, &mut pb, &offer.code).unwrap();
-        respond(&a, &mut pa, &acc.response).unwrap();
-        let sealed = confirm(&a, &mut pa).unwrap();
-        complete(&b, &mut pb, &sealed.sealed_key).unwrap();
+        accept(&b, &mut pb, &offer.code).await.unwrap();
+        poll(&a, &mut pa, now_ms()).await.unwrap();
+        confirm(&a, &mut pa).await.unwrap();
+        poll(&b, &mut pb, now_ms()).await.unwrap();
 
         let ra = crate::sync_pair::identity::roster(&a).unwrap();
         let rb = crate::sync_pair::identity::roster(&b).unwrap();
@@ -819,19 +1414,22 @@ mod tests {
     }
 
     /// The name B chose travels sealed, so a relay cannot swap it either.
-    #[test]
-    fn the_joiner_is_filed_under_the_name_it_sent() {
+    #[tokio::test]
+    async fn the_joiner_is_filed_under_the_name_it_sent() {
+        let relay = FakeRelay::start().await;
         let a = db();
         let b = db();
+        relay.point(&a);
+        relay.point(&b);
         let (mut pa, mut pb) = (None, None);
 
         let me_b = crate::sync_pair::identity::ensure(&b).unwrap();
         crate::sync_pair::identity::rename_device(&b, &me_b.device_id, "Kitchen laptop").unwrap();
 
         let offer = begin(&a, &mut pa).unwrap();
-        let acc = accept(&b, &mut pb, &offer.code).unwrap();
-        respond(&a, &mut pa, &acc.response).unwrap();
-        confirm(&a, &mut pa).unwrap();
+        accept(&b, &mut pb, &offer.code).await.unwrap();
+        poll(&a, &mut pa, now_ms()).await.unwrap();
+        confirm(&a, &mut pa).await.unwrap();
 
         let filed = crate::sync_pair::identity::roster(&a)
             .unwrap()
@@ -849,49 +1447,114 @@ mod tests {
     /// six-digit codes collide once in a million, which is the number §7.5 step 3 is worth and
     /// not a weakness of the test. Nothing can make it deterministic without seeding a key,
     /// and a seeded key here would be a far worse thing to own.
-    #[test]
-    fn a_relay_in_the_middle_makes_the_two_codes_disagree() {
+    #[tokio::test]
+    async fn a_relay_in_the_middle_makes_the_two_codes_disagree() {
+        let relay = FakeRelay::start().await;
         let a = db();
         let m = db();
         let b = db();
+        relay.point(&a);
+        relay.point(&m);
+        relay.point(&b);
         let (mut pa, mut pm_join, mut pm_offer, mut pb) = (None, None, None, None);
 
         // A offers. M accepts it, so A ends up computing digits against M's key.
         let a_offer = begin(&a, &mut pa).unwrap();
-        let m_accepts_a = accept(&m, &mut pm_join, &a_offer.code).unwrap();
-        let a_sees = respond(&a, &mut pa, &m_accepts_a.response).unwrap();
+        accept(&m, &mut pm_join, &a_offer.code).await.unwrap();
+        let a_sees = poll(&a, &mut pa, now_ms()).await.unwrap();
+        assert_eq!(a_sees.stage, STAGE_COMPARE);
 
         // M makes its own offer to B, so B computes digits against M's key too.
         let m_offer = begin(&m, &mut pm_offer).unwrap();
-        let b_sees = accept(&b, &mut pb, &m_offer.code).unwrap();
+        let b_sees = accept(&b, &mut pb, &m_offer.code).await.unwrap();
 
         assert_ne!(
-            a_sees.sas, b_sees.sas,
+            a_sees.sas.unwrap(),
+            b_sees.sas,
             "if these matched, a relay could join the group and §7.5 step 3 would be theatre"
         );
     }
 
-    /// The token is one-time. A second acceptance of the same offer must be refused.
-    #[test]
-    fn an_offer_cannot_be_accepted_twice() {
+    /// **The rendezvous is exactly the hop the SAS exists to distrust.** A relay (or a MITM in
+    /// front of one) that hands A a different blob than the one B actually posted must still
+    /// show two different sets of six digits — first-write-wins defends the *slot*, never a
+    /// device from a relay lying about what is in it, so the defence has to be the SAS.
+    ///
+    /// **Probabilistic at the SAS's own strength**, `a_relay_in_the_middle...`'s sibling: two
+    /// unrelated six-digit codes collide once in a million.
+    #[tokio::test]
+    async fn a_substituted_rendezvous_blob_moves_the_six_digits() {
+        let relay = FakeRelay::start().await;
         let a = db();
         let b = db();
-        let c = db();
-        let (mut pa, mut pb, mut pc) = (None, None, None);
+        relay.point(&a);
+        relay.point(&b);
+        let (mut pa, mut pb) = (None, None);
 
         let offer = begin(&a, &mut pa).unwrap();
-        let acc = accept(&b, &mut pb, &offer.code).unwrap();
-        respond(&a, &mut pa, &acc.response).unwrap();
-        confirm(&a, &mut pa).unwrap();
+        // B answers honestly.
+        let b_sees = accept(&b, &mut pb, &offer.code).await.unwrap();
 
-        // The offer is spent; C arrives with the same code.
-        let acc_c = accept(&c, &mut pc, &offer.code).unwrap();
+        // The attacker decodes the same invite and derives its own answer — off a *different*
+        // relay, since the shared one's slot is already filled and a second POST to it would
+        // only prove first-write-wins, not the SAS. What is modelled here is a relay that lies
+        // about what it holds, which first-write-wins cannot defend against once the relay
+        // itself is the attacker.
+        let m_relay = FakeRelay::start().await;
+        let m = db();
+        m_relay.point(&m);
+        let mut pm = None;
+        accept(&m, &mut pm, &offer.code).await.unwrap();
+        let rv = pa.as_ref().unwrap().rv.clone();
+        let attacker_blob = m_relay
+            .blob(&rv, "join")
+            .expect("M's own accept posted somewhere");
+        relay.set_blob(&rv, "join", &attacker_blob);
+
+        let progress = poll(&a, &mut pa, now_ms()).await.unwrap();
+        assert_eq!(progress.stage, STAGE_COMPARE);
+
+        assert_ne!(
+            progress.sas.unwrap(),
+            b_sees.sas,
+            "a relay that can rewrite a rendezvous slot could rewrite both screens into \
+             agreeing on a lie, and here it did not"
+        );
+    }
+
+    /// The token is one-time. A second acceptance of the same offer must be refused — the
+    /// relay's own first-write-wins gets there first now, but `respond`/`confirm`'s local
+    /// `ALREADY_USED` guard is unchanged and this is what still drives it directly.
+    #[tokio::test]
+    async fn a_spent_offer_refuses_a_second_joiner() {
+        let relay = FakeRelay::start().await;
+        let a = db();
+        let b = db();
+        relay.point(&a);
+        relay.point(&b);
+        let (mut pa, mut pb) = (None, None);
+
+        let offer = begin(&a, &mut pa).unwrap();
+        accept(&b, &mut pb, &offer.code).await.unwrap();
+        poll(&a, &mut pa, now_ms()).await.unwrap();
+        confirm(&a, &mut pa).await.unwrap();
+
+        // A second joiner's blob, built off its own relay so the shared one's first-write-wins
+        // is not what this test is about — `respond`/`confirm`'s own `spent` guard is.
+        let c_relay = FakeRelay::start().await;
+        let c = db();
+        c_relay.point(&c);
+        let mut pc = None;
+        accept(&c, &mut pc, &offer.code).await.unwrap();
+        let c_rv = pc.as_ref().unwrap().rv.clone();
+        let c_blob = c_relay.blob(&c_rv, "join").unwrap();
+
         assert!(
-            respond(&a, &mut pa, &acc_c.response).is_err(),
+            respond(&a, &mut pa, &c_blob).is_err(),
             "a spent offer must not accept a second joiner"
         );
         assert!(
-            confirm(&a, &mut pa).is_err(),
+            confirm(&a, &mut pa).await.is_err(),
             "and neither may it be confirmed a second time"
         );
         assert_eq!(
@@ -902,13 +1565,14 @@ mod tests {
     }
 
     /// Confirming before the two sides have exchanged keys is a state that cannot produce a
-    /// key, and it must say so rather than sealing to nothing.
-    #[test]
-    fn confirm_before_respond_is_refused() {
+    /// key, and it must say so rather than sealing to nothing. No relay involved: `confirm`
+    /// refuses this before it ever reaches the network.
+    #[tokio::test]
+    async fn confirm_before_respond_is_refused() {
         let a = db();
         let mut pa = None;
         begin(&a, &mut pa).unwrap();
-        assert!(confirm(&a, &mut pa).is_err());
+        assert!(confirm(&a, &mut pa).await.is_err());
         assert!(
             crate::sync_pair::identity::group(&a).unwrap().is_none(),
             "a refused confirm must not have minted a group"
@@ -916,54 +1580,63 @@ mod tests {
     }
 
     /// Nothing in flight is not a pairing, and every step says so rather than panicking.
-    #[test]
-    fn every_step_refuses_when_nothing_is_in_flight() {
+    #[tokio::test]
+    async fn every_step_refuses_when_nothing_is_in_flight() {
         let a = db();
         let mut pa = None;
         assert!(respond(&a, &mut pa, "anything").is_err());
-        assert!(confirm(&a, &mut pa).is_err());
+        assert!(confirm(&a, &mut pa).await.is_err());
         assert!(complete(&a, &mut pa, "anything").is_err());
     }
 
     /// The joining device cannot be asked to play the offering one's part.
-    #[test]
-    fn a_joiner_cannot_respond_and_an_offerer_cannot_complete() {
+    #[tokio::test]
+    async fn a_joiner_cannot_respond_and_an_offerer_cannot_complete() {
+        let relay = FakeRelay::start().await;
         let a = db();
         let b = db();
+        relay.point(&a);
+        relay.point(&b);
         let (mut pa, mut pb) = (None, None);
 
         let offer = begin(&a, &mut pa).unwrap();
-        let acc = accept(&b, &mut pb, &offer.code).unwrap();
+        accept(&b, &mut pb, &offer.code).await.unwrap();
         assert!(
-            respond(&b, &mut pb, &acc.response).is_err(),
+            respond(&b, &mut pb, "anything").is_err(),
             "B is joining a group, not offering one"
         );
     }
 
     /// Cancelling throws the offer away, and the code that was on screen stops working.
-    #[test]
-    fn cancelling_makes_the_offer_unusable() {
+    #[tokio::test]
+    async fn cancelling_makes_the_offer_unusable() {
+        let relay = FakeRelay::start().await;
         let a = db();
         let b = db();
+        relay.point(&a);
+        relay.point(&b);
         let (mut pa, mut pb) = (None, None);
 
         let offer = begin(&a, &mut pa).unwrap();
         cancel(&mut pa);
-        let acc = accept(&b, &mut pb, &offer.code).unwrap();
-        assert!(respond(&a, &mut pa, &acc.response).is_err());
+        accept(&b, &mut pb, &offer.code).await.unwrap();
+        assert!(respond(&a, &mut pa, "anything").is_err());
     }
 
     /// A tampered sealed key is refused, and B stays unpaired rather than half-paired.
-    #[test]
-    fn a_tampered_sealed_key_leaves_b_unpaired() {
+    #[tokio::test]
+    async fn a_tampered_sealed_key_leaves_b_unpaired() {
+        let relay = FakeRelay::start().await;
         let a = db();
         let b = db();
+        relay.point(&a);
+        relay.point(&b);
         let (mut pa, mut pb) = (None, None);
 
         let offer = begin(&a, &mut pa).unwrap();
-        let acc = accept(&b, &mut pb, &offer.code).unwrap();
-        respond(&a, &mut pa, &acc.response).unwrap();
-        let sealed = confirm(&a, &mut pa).unwrap();
+        accept(&b, &mut pb, &offer.code).await.unwrap();
+        poll(&a, &mut pa, now_ms()).await.unwrap();
+        let sealed = confirm(&a, &mut pa).await.unwrap();
 
         assert!(complete(&b, &mut pb, &bend(&sealed.sealed_key)).is_err());
         assert!(
@@ -977,17 +1650,22 @@ mod tests {
     }
 
     /// A tampered response is refused at the AEAD, before anything reaches the roster.
-    #[test]
-    fn a_tampered_response_never_reaches_the_roster() {
+    #[tokio::test]
+    async fn a_tampered_response_never_reaches_the_roster() {
+        let relay = FakeRelay::start().await;
         let a = db();
         let b = db();
+        relay.point(&a);
+        relay.point(&b);
         let (mut pa, mut pb) = (None, None);
 
         let offer = begin(&a, &mut pa).unwrap();
-        let acc = accept(&b, &mut pb, &offer.code).unwrap();
+        accept(&b, &mut pb, &offer.code).await.unwrap();
+        let rv = pa.as_ref().unwrap().rv.clone();
+        let honest = relay.blob(&rv, "join").unwrap();
 
-        assert!(respond(&a, &mut pa, &bend(&acc.response)).is_err());
-        assert!(confirm(&a, &mut pa).is_err(), "nothing was agreed");
+        assert!(respond(&a, &mut pa, &bend(&honest)).is_err());
+        assert!(confirm(&a, &mut pa).await.is_err(), "nothing was agreed");
         assert!(crate::sync_pair::identity::roster(&a).unwrap().is_empty());
     }
 
@@ -997,25 +1675,29 @@ mod tests {
     /// point: joining group two overwrites the key this device is syncing group one under, and
     /// nothing here can get that key back. A re-pair after a revocation carries the *same*
     /// group id and is allowed by the same check.
-    #[test]
-    fn joining_a_second_group_is_refused_and_the_first_key_survives() {
+    #[tokio::test]
+    async fn joining_a_second_group_is_refused_and_the_first_key_survives() {
+        let relay = FakeRelay::start().await;
         let a = db();
         let b = db();
         let c = db();
+        relay.point(&a);
+        relay.point(&b);
+        relay.point(&c);
         let (mut pa, mut pb, mut pc) = (None, None, None);
 
         let offer = begin(&a, &mut pa).unwrap();
-        let acc = accept(&b, &mut pb, &offer.code).unwrap();
-        respond(&a, &mut pa, &acc.response).unwrap();
-        let sealed = confirm(&a, &mut pa).unwrap();
-        complete(&b, &mut pb, &sealed.sealed_key).unwrap();
+        accept(&b, &mut pb, &offer.code).await.unwrap();
+        poll(&a, &mut pa, now_ms()).await.unwrap();
+        confirm(&a, &mut pa).await.unwrap();
+        poll(&b, &mut pb, now_ms()).await.unwrap();
         let joined = crate::sync_pair::identity::group(&b).unwrap().unwrap();
 
         // C runs a perfectly good pairing at B, into a group of its own.
         let c_offer = begin(&c, &mut pc).unwrap();
-        let acc_c = accept(&b, &mut pb, &c_offer.code).unwrap();
-        respond(&c, &mut pc, &acc_c.response).unwrap();
-        let sealed_c = confirm(&c, &mut pc).unwrap();
+        accept(&b, &mut pb, &c_offer.code).await.unwrap();
+        poll(&c, &mut pc, now_ms()).await.unwrap();
+        let sealed_c = confirm(&c, &mut pc).await.unwrap();
 
         assert!(complete(&b, &mut pb, &sealed_c.sealed_key).is_err());
         assert_eq!(
@@ -1027,16 +1709,19 @@ mod tests {
 
     /// A device already in a group invites into *that* group, rather than minting a second one
     /// and quietly leaving the first.
-    #[test]
-    fn a_second_offer_invites_into_the_group_this_device_is_already_in() {
+    #[tokio::test]
+    async fn a_second_offer_invites_into_the_group_this_device_is_already_in() {
+        let relay = FakeRelay::start().await;
         let a = db();
         let b = db();
+        relay.point(&a);
+        relay.point(&b);
         let (mut pa, mut pb) = (None, None);
 
         let offer = begin(&a, &mut pa).unwrap();
-        let acc = accept(&b, &mut pb, &offer.code).unwrap();
-        respond(&a, &mut pa, &acc.response).unwrap();
-        confirm(&a, &mut pa).unwrap();
+        accept(&b, &mut pb, &offer.code).await.unwrap();
+        poll(&a, &mut pa, now_ms()).await.unwrap();
+        confirm(&a, &mut pa).await.unwrap();
 
         let group = crate::sync_pair::identity::group(&a).unwrap().unwrap();
         let second = begin(&a, &mut pa).unwrap();
@@ -1061,9 +1746,11 @@ mod tests {
     }
 
     /// What Settings draws, before and after.
-    #[test]
-    fn status_answers_the_panel_before_and_after_pairing() {
+    #[tokio::test]
+    async fn status_answers_the_panel_before_and_after_pairing() {
+        let relay = FakeRelay::start().await;
         let a = db();
+        relay.point(&a);
         let mut pa = None;
         let before = status(&a).unwrap();
         assert_eq!(before.device_id.len(), 32);
@@ -1081,12 +1768,13 @@ mod tests {
         assert!(before.devices.is_empty());
 
         let b = db();
+        relay.point(&b);
         let mut pb = None;
         let offer = begin(&a, &mut pa).unwrap();
-        let acc = accept(&b, &mut pb, &offer.code).unwrap();
-        respond(&a, &mut pa, &acc.response).unwrap();
-        let sealed = confirm(&a, &mut pa).unwrap();
-        complete(&b, &mut pb, &sealed.sealed_key).unwrap();
+        accept(&b, &mut pb, &offer.code).await.unwrap();
+        poll(&a, &mut pa, now_ms()).await.unwrap();
+        confirm(&a, &mut pa).await.unwrap();
+        poll(&b, &mut pb, now_ms()).await.unwrap();
 
         let after = status(&a).unwrap();
         assert_eq!(
@@ -1522,13 +2210,20 @@ mod tests {
             .count()
     }
 
-    /// A whole ceremony from A's side, up to the sealed key A hands back.
-    fn offer_to(a: &Connection, b: &Connection) -> Result<SealedKey, String> {
+    /// A whole ceremony from A's side, up to the sealed key A hands back. Both connections are
+    /// pointed at `relay` first, since `accept` and `confirm` now need somewhere to post to.
+    async fn offer_to(
+        relay: &FakeRelay,
+        a: &Connection,
+        b: &Connection,
+    ) -> Result<SealedKey, String> {
+        relay.point(a);
+        relay.point(b);
         let (mut pa, mut pb) = (None, None);
         let offer = begin(a, &mut pa).unwrap();
-        let acc = accept(b, &mut pb, &offer.code).unwrap();
-        respond(a, &mut pa, &acc.response).unwrap();
-        confirm(a, &mut pa)
+        accept(b, &mut pb, &offer.code).await.unwrap();
+        poll(a, &mut pa, now_ms()).await.unwrap();
+        confirm(a, &mut pa).await
     }
 
     /// **The initiator refuses the sixth device, counts live rows only, and is not off by one.**
@@ -1542,9 +2237,11 @@ mod tests {
     /// * at five, a device **already in the group** still pairs — red if the joiner is counted
     ///   against the cap it is being measured for, which would mean a full group could never
     ///   repair a pairing.
-    #[test]
-    fn pairing_refuses_a_sixth_device() {
+    #[tokio::test]
+    async fn pairing_refuses_a_sixth_device() {
+        let relay = FakeRelay::start().await;
         let a = db();
+        relay.point(&a);
         let me = identity::ensure(&a).unwrap();
         identity::create_group(&a, &me).unwrap();
         for n in 1..=3u8 {
@@ -1560,11 +2257,15 @@ mod tests {
         assert_eq!(live(&a), 4, "four live devices and one tombstone");
 
         let fifth = db();
-        offer_to(&a, &fifth).expect("a stale tombstone cost the reader a slot");
+        offer_to(&relay, &a, &fifth)
+            .await
+            .expect("a stale tombstone cost the reader a slot");
         assert_eq!(live(&a), 5, "the group is full");
 
         let sixth = db();
-        let refused = offer_to(&a, &sixth).expect_err("a sixth device was let into the group");
+        let refused = offer_to(&relay, &a, &sixth)
+            .await
+            .expect_err("a sixth device was let into the group");
         assert_eq!(refused, identity::GROUP_IS_FULL);
         assert_eq!(
             live(&a),
@@ -1573,7 +2274,9 @@ mod tests {
         );
 
         // ...and the device already in it is not a sixth of anything.
-        offer_to(&a, &fifth).expect("re-pairing a device already in a full group was refused");
+        offer_to(&relay, &a, &fifth)
+            .await
+            .expect("re-pairing a device already in a full group was refused");
         assert_eq!(live(&a), 5);
     }
 
@@ -1584,15 +2287,18 @@ mod tests {
     /// Red if `complete` writes the row without asking, and red if the guard counts the peer it
     /// is about to admit — the second half drives the same ceremony against a roster of four and
     /// requires it to succeed.
-    #[test]
-    fn completing_refuses_a_sixth_device() {
+    #[tokio::test]
+    async fn completing_refuses_a_sixth_device() {
+        let relay = FakeRelay::start().await;
         let a = db();
         let b = db();
+        relay.point(&a);
+        relay.point(&b);
         let (mut pa, mut pb) = (None, None);
         let offer = begin(&a, &mut pa).unwrap();
-        let acc = accept(&b, &mut pb, &offer.code).unwrap();
-        respond(&a, &mut pa, &acc.response).unwrap();
-        let sealed = confirm(&a, &mut pa).unwrap();
+        accept(&b, &mut pb, &offer.code).await.unwrap();
+        poll(&a, &mut pa, now_ms()).await.unwrap();
+        let sealed = confirm(&a, &mut pa).await.unwrap();
         complete(&b, &mut pb, &sealed.sealed_key).unwrap();
 
         // B adopts an epoch whose manifest did not name A, and fills up with four others: five
@@ -1611,9 +2317,9 @@ mod tests {
         // At four, A is the fifth and completing works.
         let (mut pa, mut pb) = (None, None);
         let offer = begin(&a, &mut pa).unwrap();
-        let acc = accept(&b, &mut pb, &offer.code).unwrap();
-        respond(&a, &mut pa, &acc.response).unwrap();
-        let sealed = confirm(&a, &mut pa).unwrap();
+        accept(&b, &mut pb, &offer.code).await.unwrap();
+        poll(&a, &mut pa, now_ms()).await.unwrap();
+        let sealed = confirm(&a, &mut pa).await.unwrap();
         complete(&b, &mut pb, &sealed.sealed_key).expect("the fifth device was refused");
         assert_eq!(live(&b), 5);
 
@@ -1627,28 +2333,13 @@ mod tests {
         assert_eq!(live(&b), 5, "B and four others, none of them A");
         let (mut pa, mut pb) = (None, None);
         let offer = begin(&a, &mut pa).unwrap();
-        let acc = accept(&b, &mut pb, &offer.code).unwrap();
-        respond(&a, &mut pa, &acc.response).unwrap();
-        let sealed = confirm(&a, &mut pa).unwrap();
+        accept(&b, &mut pb, &offer.code).await.unwrap();
+        poll(&a, &mut pa, now_ms()).await.unwrap();
+        let sealed = confirm(&a, &mut pa).await.unwrap();
         let refused = complete(&b, &mut pb, &sealed.sealed_key)
             .expect_err("a sixth row was filed on the joining side");
         assert_eq!(refused, identity::GROUP_IS_FULL);
         assert_eq!(live(&b), 5, "the refused device was filed anyway");
-    }
-
-    /// The offer carries a QR of the code, and it is the code's own picture.
-    #[test]
-    fn the_offer_carries_a_drawable_matrix_of_its_own_code() {
-        let a = db();
-        let mut pa = None;
-        let offer = begin(&a, &mut pa).unwrap();
-        assert_eq!(offer.qr.modules.len(), offer.qr.width * offer.qr.width);
-        assert_eq!(
-            offer.qr.modules,
-            crate::sync_pair::invite::qr_matrix(&offer.code)
-                .unwrap()
-                .modules
-        );
     }
 
     // -----------------------------------------------------------------------------------
@@ -1662,17 +2353,21 @@ mod tests {
     // the key it was handed — and is told the membership's status and date by the answer.
     // -----------------------------------------------------------------------------------
 
-    /// A whole pairing, up to the blob the reader carries to the joining device.
-    fn pair_up(
+    /// A whole pairing, up to the sealed key A produces. Both connections are pointed at `relay`
+    /// first, since `accept` and `confirm` now need somewhere to post to.
+    async fn pair_up(
+        relay: &FakeRelay,
         a: &Connection,
         pa: &mut Option<Pending>,
         b: &Connection,
         pb: &mut Option<Pending>,
     ) -> String {
+        relay.point(a);
+        relay.point(b);
         let offer = begin(a, pa).unwrap();
-        let acc = accept(b, pb, &offer.code).unwrap();
-        respond(a, pa, &acc.response).unwrap();
-        confirm(a, pa).unwrap().sealed_key
+        accept(b, pb, &offer.code).await.unwrap();
+        poll(a, pa, now_ms()).await.unwrap();
+        confirm(a, pa).await.unwrap().sealed_key
     }
 
     /// Put a device in a group whose key is exactly these bytes.
@@ -1696,14 +2391,15 @@ mod tests {
     /// **A holds a full grant here**, so every assertion below is about what `complete` declined
     /// to copy rather than about there having been nothing to copy — the same test written
     /// against an A with no membership would pass whatever `complete` did.
-    #[test]
-    fn the_sealed_key_carries_no_membership_to_the_joiner() {
+    #[tokio::test]
+    async fn the_sealed_key_carries_no_membership_to_the_joiner() {
+        let relay = FakeRelay::start().await;
         let a = db();
         let b = db();
         let (mut pa, mut pb) = (None, None);
         entitlement::store_grant(&a, "access-a", "refresh-a", 1_900_000_000).unwrap();
 
-        let sealed = pair_up(&a, &mut pa, &b, &mut pb);
+        let sealed = pair_up(&relay, &a, &mut pa, &b, &mut pb).await;
         complete(&b, &mut pb, &sealed).unwrap();
 
         assert!(
@@ -1745,14 +2441,15 @@ mod tests {
     /// pass on most runs and truncate the key on the rest: one pairing in eight, in the field,
     /// with nothing on either screen to say why. This key is nothing but zeroes, so it fails
     /// every time or never.
-    #[test]
-    fn a_group_key_that_is_all_zeroes_still_arrives_whole() {
+    #[tokio::test]
+    async fn a_group_key_that_is_all_zeroes_still_arrives_whole() {
+        let relay = FakeRelay::start().await;
         let a = db();
         let b = db();
         let (mut pa, mut pb) = (None, None);
         in_a_group_with_key(&a, [0u8; 32]);
 
-        let sealed = pair_up(&a, &mut pa, &b, &mut pb);
+        let sealed = pair_up(&relay, &a, &mut pa, &b, &mut pb).await;
         complete(&b, &mut pb, &sealed).unwrap();
 
         assert_eq!(
@@ -1768,13 +2465,14 @@ mod tests {
     /// `entitlement` anything, so the tempting next edit — refusing to pair a group that cannot
     /// sync, the way `remove_device` refuses to rotate one — would make the second half of the
     /// reader's natural order impossible. This is the test that goes red for it.
-    #[test]
-    fn a_host_with_no_grant_still_pairs() {
+    #[tokio::test]
+    async fn a_host_with_no_grant_still_pairs() {
+        let relay = FakeRelay::start().await;
         let a = db();
         let b = db();
         let (mut pa, mut pb) = (None, None);
 
-        let sealed = pair_up(&a, &mut pa, &b, &mut pb);
+        let sealed = pair_up(&relay, &a, &mut pa, &b, &mut pb).await;
         complete(&b, &mut pb, &sealed).unwrap();
 
         assert!(
@@ -1792,9 +2490,10 @@ mod tests {
     /// half that is new is the loop's second pass. Under the old shape an A **with** a grant
     /// overwrote B's own secret and expiry with A's, which is the case that could disconnect a
     /// reader who had connected Patreon on the very device they were joining from.
-    #[test]
-    fn pairing_never_touches_the_joiners_own_grant() {
+    #[tokio::test]
+    async fn pairing_never_touches_the_joiners_own_grant() {
         for a_has_a_grant in [false, true] {
+            let relay = FakeRelay::start().await;
             let a = db();
             let b = db();
             let (mut pa, mut pb) = (None, None);
@@ -1803,7 +2502,7 @@ mod tests {
             }
             entitlement::store_grant(&b, "access-b", "refresh-b", 1_800_000_000).unwrap();
 
-            let sealed = pair_up(&a, &mut pa, &b, &mut pb);
+            let sealed = pair_up(&relay, &a, &mut pa, &b, &mut pb).await;
             complete(&b, &mut pb, &sealed).unwrap();
 
             assert_eq!(

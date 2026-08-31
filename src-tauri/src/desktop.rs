@@ -16,7 +16,7 @@
 // move a move: not one path below changed.
 use crate::sync::AppState;
 use crate::{
-    card, collection, collection_alloc, collection_folders, combos, db, deck, deck_audit,
+    camera, card, collection, collection_alloc, collection_folders, combos, db, deck, deck_audit,
     deck_meta, deck_theory, deck_undo, errors, export, flatten, images, import, index, listview,
     marketplace, marketplace_feed, mirror, nav, paths, reset, schema, scryfall, search, sync,
     sync_engine, sync_pair, tags, update, wishlist, wishlist_folders, zoom,
@@ -495,15 +495,16 @@ pub fn run() {
             mirror::settings::mirror_set_enabled,
             mirror::settings::mirror_set_root,
             mirror::settings::mirror_rebuild,
-            // Pairing (spec §7.5 and §7.6). The panel's read, the five steps of the
-            // handshake, cancelling one, the two things a roster row can be told, and —
-            // since the leave-group spec §2.1 — this device's own way out.
+            // Pairing (spec §7.5 and §7.6). The panel's read, the presses (offer, accept,
+            // confirm, cancel), the one poll that carries both `respond` and `complete` now
+            // that the relay carries the two blobs those used to be commands for, the two
+            // things a roster row can be told, and — since the leave-group spec §2.1 — this
+            // device's own way out.
             sync_pair::pairing::sync_pairing_status,
             sync_pair::pairing::sync_pairing_begin,
             sync_pair::pairing::sync_pairing_accept,
-            sync_pair::pairing::sync_pairing_respond,
             sync_pair::pairing::sync_pairing_confirm,
-            sync_pair::pairing::sync_pairing_complete,
+            sync_pair::pairing::sync_pairing_poll,
             sync_pair::pairing::sync_pairing_cancel,
             sync_pair::pairing::sync_device_rename,
             sync_pair::pairing::sync_device_revoke,
@@ -531,6 +532,19 @@ pub fn run() {
             // activity is already on screen and the OS sizes it.
             #[cfg(desktop)]
             window::open_sized_to_monitor(app.handle());
+
+            // The in-app QR scanner's camera grant — see `camera`'s own doc for why WebView2
+            // needs one at all. Desktop only, in this same block, for the reason the block
+            // above is: Android's grant is the manifest permission instead, and there is no
+            // equivalent "the window now exists" moment on that platform in this file to hang
+            // the call off. `camera::install` is a no-op off Windows, so calling it on Linux and
+            // macOS costs nothing; it is still gated here rather than called unconditionally
+            // because `app.get_webview_window("main")` and everything past it belongs beside the
+            // rest of this window's own setup.
+            #[cfg(desktop)]
+            if let Some(main) = app.get_webview_window("main") {
+                camera::install(&main);
+            }
 
             // Printed as well as returned: a `Box<dyn Error>` out of `setup` reaches the
             // user as an escaped one-line panic, which turns a multi-line message naming
