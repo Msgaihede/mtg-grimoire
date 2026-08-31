@@ -844,7 +844,7 @@ backend.
   every reload — a different storage API, so a shell-cache bust costs nothing but a re-fetch of
   the bundle.
 
-## Where PR 10 got to: 115 of 156 routed, and what the other 41 are
+## Where PR 10 got to: 120 of 157 routed, and what the other 37 are
 
 **Do not hand-count this — run `node scripts/routed-census.mjs`.** It walks every
 `#[tauri::command]` in the crate (both attribute spellings, skipping doc-comment mentions),
