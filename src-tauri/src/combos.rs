@@ -504,7 +504,7 @@ impl StreamRead {
     pub fn push(&mut self, chunk: &[u8]) -> Result<(), ComboError> {
         self.decoded.clear();
         self.decoder.push(chunk, &mut self.decoded)?;
-        take_head(&mut self.head, &self.decoded);
+        crate::feed::frame::take_head(&mut self.head, &self.decoded);
         let file = &mut self.file;
         // The framer's own refusal, lifted through `io::Error` into the `Io` variant this
         // enum already has: a buffer past `feed::frame::MAX_ELEMENT_BYTES` is the
@@ -518,7 +518,7 @@ impl StreamRead {
     pub fn finish(mut self) -> Result<ComboFile, ComboError> {
         self.decoded.clear();
         self.decoder.finish(&mut self.decoded)?;
-        take_head(&mut self.head, &self.decoded);
+        crate::feed::frame::take_head(&mut self.head, &self.decoded);
         {
             let file = &mut self.file;
             self.elements
@@ -556,14 +556,6 @@ pub fn read_stream(
     sink.finish()
 }
 
-/// Keep the first [`HEAD_SCRAPE_BYTES`] of the decoded stream, for [`stamp_from_head`].
-fn take_head(head: &mut Vec<u8>, decoded: &[u8]) {
-    if head.len() < HEAD_SCRAPE_BYTES {
-        let want = HEAD_SCRAPE_BYTES - head.len();
-        head.extend_from_slice(&decoded[..decoded.len().min(want)]);
-    }
-}
-
 /// Reduce one framed element into `file`, counting it either way.
 ///
 /// A variant that will not deserialise is `skipped`, not fatal - [`crate::ingest`]'s rule,
@@ -580,24 +572,18 @@ fn take_element(file: &mut ComboFile, el: &[u8]) {
     }
 }
 
-/// How much of the document's head is kept so the `timestamp` can be scraped out of it.
-///
-/// The key sits within the first few dozen bytes of every file Spellbook has served; this
-/// is slack, not a measurement.
-const HEAD_SCRAPE_BYTES: usize = 512;
-
 /// Pull the document's `"timestamp"` out of its first bytes.
 ///
 /// A scrape and not a parse, because the enclosing object is never modelled: the framer
 /// starts at the first `[`. `None` for a document that omits the key, which is what
 /// [`read_file`] also produces - `ComboFile::stamp` is `Option<String>` precisely because
 /// a file without one is a real state rather than an error.
+///
+/// **The scraper itself lives in [`crate::feed::frame`]**, because `marketplace_feed` wants
+/// exactly this for Card Kingdom's `meta.created_at` and two copies of a five-line parser
+/// are two chances to fix one of them.
 fn stamp_from_head(head: &[u8]) -> Option<String> {
-    let text = String::from_utf8_lossy(head);
-    let rest = text.split_once("\"timestamp\"").map(|(_, r)| r)?;
-    // Past the colon and the opening quote of the value.
-    let rest = rest.split_once('"').map(|(_, r)| r)?;
-    Some(rest.split('"').next()?.to_owned())
+    crate::feed::frame::scrape_string(head, "timestamp")
 }
 
 struct Document<'a> {

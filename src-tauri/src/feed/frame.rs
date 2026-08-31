@@ -208,6 +208,14 @@ pub struct Elements {
     /// The first `[` seen opens the array this frames. The Spellbook document has no other
     /// array before `variants`; if that ever changes, this is the line that breaks.
     entered: bool,
+    /// …and the matching `]` closes it, after which nothing is framed again.
+    ///
+    /// **Without this the framer went on emitting every depth-0 object in the rest of the
+    /// document**, which is not a hypothetical: Card Kingdom's pricelist carries keys after
+    /// `data`, and each one's value was framed as though it were a price row. It never
+    /// produced a *price* — those objects have no `scryfall_id` — but it inflated `rows_seen`
+    /// and `skipped`, which is how the push and pull readers were caught disagreeing.
+    done: bool,
     depth: i32,
     in_string: bool,
     escaped: bool,
@@ -223,6 +231,7 @@ impl Elements {
     pub fn new() -> Self {
         Elements {
             entered: false,
+            done: false,
             depth: 0,
             in_string: false,
             escaped: false,
@@ -248,6 +257,11 @@ impl Elements {
     /// framer that has desynchronised goes on returning `Ok(())` and accumulating for as long
     /// as the document lasts, which is what "63 elements in 610 MB" looked like from outside.
     pub fn push(&mut self, bytes: &[u8], mut f: impl FnMut(&[u8])) -> Result<(), Overlong> {
+        // Everything after the array's own `]` belongs to some other key, and framing it
+        // would invent rows. Dropped rather than buffered, so a long tail costs nothing.
+        if self.done {
+            return Ok(());
+        }
         self.buf.extend_from_slice(bytes);
         if self.buf.len() > self.peak {
             self.peak = self.buf.len();
@@ -271,6 +285,12 @@ impl Elements {
             match b {
                 b'"' => self.in_string = true,
                 b'[' if !self.entered => self.entered = true,
+                // The array's own closing bracket, which can only be seen between elements.
+                // Inside one, `depth` is at least 1 and a `]` there is an element's own.
+                b']' if self.entered && self.depth == 0 => {
+                    self.done = true;
+                    break;
+                }
                 b'{' if self.entered => {
                     if self.depth == 0 {
                         self.start = Some(i);
@@ -289,6 +309,12 @@ impl Elements {
                 _ => {}
             }
             i += 1;
+        }
+
+        if self.done {
+            self.buf.clear();
+            self.scanned = 0;
+            return Ok(());
         }
 
         if consumed > 0 {
@@ -324,6 +350,35 @@ impl Default for Elements {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// How much of a document's head is kept so a top-level stamp can be scraped out of it.
+///
+/// Both feeds that need one put it within the first few dozen bytes — Commander Spellbook's
+/// `timestamp` and Card Kingdom's `meta.created_at`. This is slack, not a measurement.
+pub const HEAD_SCRAPE_BYTES: usize = 512;
+
+/// Keep the first [`HEAD_SCRAPE_BYTES`] of the decoded stream, for [`scrape_string`].
+pub fn take_head(head: &mut Vec<u8>, decoded: &[u8]) {
+    if head.len() < HEAD_SCRAPE_BYTES {
+        let want = HEAD_SCRAPE_BYTES - head.len();
+        head.extend_from_slice(&decoded[..decoded.len().min(want)]);
+    }
+}
+
+/// Pull the value of a top-level string `key` out of a document's first bytes.
+///
+/// **A scrape and not a parse, because [`Elements`] never models the enclosing object**: it
+/// starts at the first `[`, so anything written beside the array — the file's own build stamp
+/// — is not something the framer can hand back. `None` for a document that omits the key,
+/// which is a real state rather than an error: Mana Pool publishes no stamp at all, and Card
+/// Kingdom's would be missing here if it ever moved its `meta` after its `data`.
+pub fn scrape_string(head: &[u8], key: &str) -> Option<String> {
+    let text = String::from_utf8_lossy(head);
+    let rest = text.split_once(&format!("\"{key}\"")).map(|(_, r)| r)?;
+    // Past the colon and the opening quote of the value.
+    let rest = rest.split_once('"').map(|(_, r)| r)?;
+    Some(rest.split('"').next()?.to_owned())
 }
 
 #[cfg(test)]
@@ -629,6 +684,64 @@ mod tests {
             "peak buffer was {}",
             e.peak_buffer()
         );
+    }
+
+    /// **A key after the array is not a row**, and this went unnoticed until the price feed
+    /// got a push reader: Card Kingdom's pricelist carries keys after `data`, and each one's
+    /// object was framed at depth 0 exactly as an element is. It never produced a *price* —
+    /// those objects carry no `scryfall_id` — so the only tell was `rows_seen` disagreeing
+    /// between the pull reader and the push one.
+    #[test]
+    fn nothing_after_the_arrays_closing_bracket_is_framed() {
+        let doc = br#"{"meta":{"created_at":"t"},"data":[{"id":1},{"id":2}],"trailing":{"after":"data"},"more":{"x":1}}"#;
+        let (els, _) = collect_elements(&[doc]);
+        assert_eq!(els, vec![r#"{"id":1}"#, r#"{"id":2}"#]);
+    }
+
+    /// …and the same when the closing bracket lands in a different chunk from the last
+    /// element, which is the only way a browser stream ever delivers it.
+    #[test]
+    fn the_arrays_end_is_recognised_across_a_chunk_boundary() {
+        let doc = br#"{"data":[{"id":1},{"id":2}],"trailing":{"after":"data"}}"#;
+        let mut out = Vec::new();
+        let mut e = Elements::new();
+        for c in doc.chunks(3) {
+            e.push(c, |el| out.push(String::from_utf8_lossy(el).into_owned()))
+                .unwrap();
+        }
+        assert_eq!(out, vec![r#"{"id":1}"#, r#"{"id":2}"#]);
+    }
+
+    /// An empty array frames nothing and does not read as a truncated document.
+    #[test]
+    fn an_empty_array_frames_nothing() {
+        let (els, _) = collect_elements(&[br#"{"data":[],"trailing":{"x":1}}"#]);
+        assert!(els.is_empty(), "{els:?}");
+    }
+
+    /// An array *inside* an element must not be mistaken for the end of the outer one — its
+    /// brackets are at depth 1 or more, which is what the guard tests.
+    #[test]
+    fn an_array_inside_an_element_does_not_end_the_framing() {
+        let doc = br#"{"data":[{"id":1,"tags":["a","b"]},{"id":2,"n":{"deep":[1,2]}}],"t":{"x":1}}"#;
+        let (els, _) = collect_elements(&[doc]);
+        assert_eq!(
+            els,
+            vec![
+                r#"{"id":1,"tags":["a","b"]}"#,
+                r#"{"id":2,"n":{"deep":[1,2]}}"#
+            ]
+        );
+    }
+
+    /// A `]` inside a string is text, not the end of the array — card names and rules text
+    /// really do contain brackets.
+    #[test]
+    fn a_bracket_inside_a_string_does_not_end_the_framing() {
+        let doc = br#"{"data":[{"n":"a ] bracket"},{"n":"second"}]}"#;
+        let (els, _) = collect_elements(&[doc]);
+        assert_eq!(els.len(), 2, "{els:?}");
+        assert_eq!(els[1], r#"{"n":"second"}"#);
     }
 
     /// The message has to name the framer that stalled — a caller sees it as an `Io` error on

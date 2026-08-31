@@ -240,7 +240,36 @@ pub trait FeedProvider: Send + Sync {
     /// several times that as live `serde_json::Value`s, and none of it is needed at once: the
     /// only thing that outlives a row is the deduplicated map, which is ~100 000 entries of a
     /// key and two numbers.
+    ///
+    /// **This is the *pull* half, and a browser cannot drive it** — see [`fold_element`] just
+    /// below, which is the same rule reached from the other side.
+    ///
+    /// [`fold_element`]: FeedProvider::fold_element
     fn parse(&self, body: &mut dyn Read, feed: &mut Feed) -> Result<(), FeedError>;
+
+    /// Fold **one already-framed `data` element**, given its JSON text and its ordinal.
+    ///
+    /// The push-shaped half of [`FeedProvider::parse`], for [`StreamRead`]. `parse` is a pull
+    /// parser — `from_reader` calls `read()` when it wants more and blocks until it gets it —
+    /// and a browser stream is push and async with no thread to block, so the same document
+    /// needs two entrances. **What it must not be is two implementations of the pricing
+    /// rules**: both entrances decode into the same row struct and hand it to the same
+    /// `*_fold` function, so which finish a Card Kingdom variation is, and which Mana Pool
+    /// column is Near Mint, are each written down once.
+    ///
+    /// A row that will not deserialise is `skipped`, not fatal — [`crate::ingest`]'s rule.
+    fn fold_element(&self, json: &[u8], position: i64, feed: &mut Feed);
+
+    /// The top-level key carrying this feed's own build stamp, where it publishes one.
+    ///
+    /// Read by [`StreamRead`] only. The framer starts at the first `[` and never models the
+    /// enclosing object, so a stamp written beside the array has to be scraped out of the
+    /// document's head — `crate::feed::frame::scrape_string`, which
+    /// `combos::stamp_from_head` uses for the same reason. `None` for a feed that publishes
+    /// none, and **nothing may fill it in from the clock**.
+    fn built_at_key(&self) -> Option<&'static str> {
+        None
+    }
 }
 
 /// Every feed this build can fetch. The *only* place a marketplace id is mapped to a feed.
@@ -314,28 +343,47 @@ impl FeedProvider for CardKingdom {
         let built_at = read_document::<CkRow>(body, &mut |row| {
             let position = ordinal;
             ordinal += 1;
-            feed.rows_seen += 1;
-
-            // 832 of 149 989 carry no Scryfall id. Unjoinable, not an error.
-            let Some(card_id) = row.scryfall_id.filter(|id| !id.trim().is_empty()) else {
-                feed.skipped += 1;
-                return;
-            };
-            let Some(price) = row.price_retail.as_ref().and_then(decimal) else {
-                feed.skipped += 1;
-                return;
-            };
-            feed.offer(FeedRow {
-                card_id,
-                finish: ck_finish(row.variation.as_deref(), row.is_foil.as_ref()),
-                price,
-                // Their id where they publish one; the ordinal where they do not.
-                row_id: row.id.unwrap_or(position),
-            });
+            ck_fold(row, position, feed);
         })?;
         feed.feed_built_at = built_at;
         Ok(())
     }
+
+    fn fold_element(&self, json: &[u8], position: i64, feed: &mut Feed) {
+        match serde_json::from_slice::<CkRow>(json) {
+            Ok(row) => ck_fold(row, position, feed),
+            Err(_) => {
+                feed.rows_seen += 1;
+                feed.skipped += 1;
+            }
+        }
+    }
+
+    fn built_at_key(&self) -> Option<&'static str> {
+        Some("created_at")
+    }
+}
+
+/// Card Kingdom's pricing rule for one row — **the only copy**, called by both entrances.
+fn ck_fold(row: CkRow, position: i64, feed: &mut Feed) {
+    feed.rows_seen += 1;
+
+    // 832 of 149 989 carry no Scryfall id. Unjoinable, not an error.
+    let Some(card_id) = row.scryfall_id.filter(|id| !id.trim().is_empty()) else {
+        feed.skipped += 1;
+        return;
+    };
+    let Some(price) = row.price_retail.as_ref().and_then(decimal) else {
+        feed.skipped += 1;
+        return;
+    };
+    feed.offer(FeedRow {
+        card_id,
+        finish: ck_finish(row.variation.as_deref(), row.is_foil.as_ref()),
+        price,
+        // Their id where they publish one; the ordinal where they do not.
+        row_id: row.id.unwrap_or(position),
+    });
 }
 
 /// Card Kingdom's finish rule, which spans two fields:
@@ -426,41 +474,57 @@ impl FeedProvider for ManaPool {
         read_document::<MpRow>(body, &mut |row| {
             let position = ordinal;
             ordinal += 1;
-            feed.rows_seen += 1;
-
-            let Some(card_id) = row.scryfall_id.filter(|id| !id.trim().is_empty()) else {
-                feed.skipped += 1;
-                return;
-            };
-            let quoted = [
-                (NONFOIL, row.price_cents_nm),
-                (FOIL, row.price_cents_nm_foil),
-                (ETCHED, row.price_cents_nm_etched),
-            ];
-            let mut priced = false;
-            for (finish, cents) in quoted {
-                // **A null column means that finish is unpriced: no row, never a zero.** One
-                // row per printing means this loop runs three times for a card that is only
-                // sold in one finish, and two of those must produce nothing at all.
-                let Some(price) = cents.and_then(from_cents) else {
-                    continue;
-                };
-                priced = true;
-                feed.offer(FeedRow {
-                    card_id: card_id.clone(),
-                    finish,
-                    price,
-                    // Mana Pool publishes no per-row id, so the ordinal is the tie-break —
-                    // stable for a payload, which is all a collision needs.
-                    row_id: position,
-                });
-            }
-            if !priced {
-                feed.skipped += 1;
-            }
+            mp_fold(row, position, feed);
         })?;
-        // No `meta.created_at`, and none is invented: `feed_built_at` stays NULL.
+        // No `meta.created_at`, and none is invented: `feed_built_at` stays NULL. That is
+        // also why `built_at_key` is left at its `None` default.
         Ok(())
+    }
+
+    fn fold_element(&self, json: &[u8], position: i64, feed: &mut Feed) {
+        match serde_json::from_slice::<MpRow>(json) {
+            Ok(row) => mp_fold(row, position, feed),
+            Err(_) => {
+                feed.rows_seen += 1;
+                feed.skipped += 1;
+            }
+        }
+    }
+}
+
+/// Mana Pool's pricing rule for one row — **the only copy**, called by both entrances.
+fn mp_fold(row: MpRow, position: i64, feed: &mut Feed) {
+    feed.rows_seen += 1;
+
+    let Some(card_id) = row.scryfall_id.filter(|id| !id.trim().is_empty()) else {
+        feed.skipped += 1;
+        return;
+    };
+    let quoted = [
+        (NONFOIL, row.price_cents_nm),
+        (FOIL, row.price_cents_nm_foil),
+        (ETCHED, row.price_cents_nm_etched),
+    ];
+    let mut priced = false;
+    for (finish, cents) in quoted {
+        // **A null column means that finish is unpriced: no row, never a zero.** One row per
+        // printing means this loop runs three times for a card that is only sold in one
+        // finish, and two of those must produce nothing at all.
+        let Some(price) = cents.and_then(from_cents) else {
+            continue;
+        };
+        priced = true;
+        feed.offer(FeedRow {
+            card_id: card_id.clone(),
+            finish,
+            price,
+            // Mana Pool publishes no per-row id, so the ordinal is the tie-break — stable
+            // for a payload, which is all a collision needs.
+            row_id: position,
+        });
+    }
+    if !priced {
+        feed.skipped += 1;
     }
 }
 
@@ -473,6 +537,119 @@ fn from_cents(cents: i64) -> Option<f64> {
 // ---------------------------------------------------------------------------------------
 // The streaming reader
 // ---------------------------------------------------------------------------------------
+
+/// Reading a price feed as an object the caller pushes bytes into.
+///
+/// **Why this exists beside [`read_document`].** That one streams with
+/// `serde_json::Deserializer::from_reader` plus a `DeserializeSeed` — a *pull* parser, which
+/// calls `read()` when it wants more and blocks until it gets it. A browser stream is push and
+/// async with no thread to block, so `from_reader` cannot be driven from one at all. This
+/// frames each `data` element by brace depth and hands it whole to
+/// [`FeedProvider::fold_element`], which keeps serde doing the part serde is good at — and
+/// keeps the pricing rules in one place rather than two.
+///
+/// `combos::StreamRead` is the same construction against Commander Spellbook's document, down
+/// to the head scrape; the two feeds are the same shape with a different key.
+///
+/// Peak memory is one element plus the deduplicated map — ~100 000 entries of a key and two
+/// numbers, which is what `read_document` also ends with. [`Self::peak_buffer`] is how a
+/// caller checks the first half of that claim.
+pub struct StreamRead {
+    provider: &'static dyn FeedProvider,
+    feed: Feed,
+    decoder: crate::feed::frame::Decoder,
+    elements: crate::feed::frame::Elements,
+    decoded: Vec<u8>,
+    /// Card Kingdom's `meta.created_at` sits before `data`, so it is scraped from the head
+    /// rather than parsed structurally — the framer deliberately does not model the enclosing
+    /// object. Empty for a provider that publishes no stamp.
+    head: Vec<u8>,
+    ordinal: i64,
+    /// Decoded bytes seen, against [`MAX_FEED_BYTES`]. **The browser path has no other size
+    /// guard**: `download` checks the declared `Content-Length` and the running total, and
+    /// nothing on the web target goes through it.
+    bytes: u64,
+}
+
+impl StreamRead {
+    pub fn new(provider: &'static dyn FeedProvider) -> Self {
+        StreamRead {
+            provider,
+            feed: Feed::new(provider.marketplace()),
+            decoder: crate::feed::frame::Decoder::new(),
+            elements: crate::feed::frame::Elements::new(),
+            decoded: Vec::new(),
+            head: Vec::new(),
+            ordinal: 0,
+            bytes: 0,
+        }
+    }
+
+    /// The largest the element framer's buffer has ever been, in bytes.
+    ///
+    /// A price row is a handful of short fields, so anything approaching the document's own
+    /// size means the framer has desynchronised and is silently accumulating rather than
+    /// draining — the failure `combos::StreamRead::peak_buffer` was added for, where a row
+    /// count could not see it.
+    pub fn peak_buffer(&self) -> usize {
+        self.elements.peak_buffer()
+    }
+
+    pub fn push(&mut self, chunk: &[u8]) -> Result<(), FeedError> {
+        self.decoded.clear();
+        self.decoder.push(chunk, &mut self.decoded)?;
+        self.bytes += self.decoded.len() as u64;
+        if self.bytes > MAX_FEED_BYTES {
+            return Err(FeedError::TooLarge {
+                host: host_of_url(self.provider.url()),
+            });
+        }
+        crate::feed::frame::take_head(&mut self.head, &self.decoded);
+        let provider = self.provider;
+        let feed = &mut self.feed;
+        let ordinal = &mut self.ordinal;
+        self.elements
+            .push(&self.decoded, |el| {
+                let position = *ordinal;
+                *ordinal += 1;
+                provider.fold_element(el, position, feed);
+            })
+            .map_err(std::io::Error::from)?;
+        Ok(())
+    }
+
+    pub fn finish(mut self) -> Result<Feed, FeedError> {
+        self.decoded.clear();
+        self.decoder.finish(&mut self.decoded)?;
+        crate::feed::frame::take_head(&mut self.head, &self.decoded);
+        {
+            let provider = self.provider;
+            let feed = &mut self.feed;
+            let ordinal = &mut self.ordinal;
+            self.elements
+                .push(&self.decoded, |el| {
+                    let position = *ordinal;
+                    *ordinal += 1;
+                    provider.fold_element(el, position, feed);
+                })
+                .map_err(std::io::Error::from)?;
+        }
+        self.feed.feed_built_at = self
+            .provider
+            .built_at_key()
+            .and_then(|key| crate::feed::frame::scrape_string(&self.head, key));
+        Ok(self.feed)
+    }
+}
+
+/// The host to name in a [`FeedError`], from a provider's URL.
+///
+/// A `&'static str` because `FeedError::Http` carries one, and the only inputs are the two
+/// `FeedProvider::url` constants. **Ungated, unlike `host_of`**, which is the download path's
+/// and is desktop-only.
+fn host_of_url(url: &'static str) -> &'static str {
+    url.split('/').nth(2).unwrap_or(url)
+}
 
 /// Read `{ … "data": [ … ] … }` from `body`, handing every element to `sink` as it arrives and
 /// returning `meta.created_at` if the document carries one.
@@ -2049,5 +2226,215 @@ mod tests {
     fn the_progress_phases_are_the_ones_the_frontend_mirrors() {
         assert_eq!(FEED_PHASES, ["downloading", "ingesting", "done", "error"]);
         assert_eq!(PROGRESS_EVENT, "marketplace:progress");
+    }
+
+    // ---- the push-shaped reader -------------------------------------------------------
+    //
+    // `StreamRead` is what the web target drives, and no test on any host will ever run
+    // `web::glue`. So what these hold is that it answers what `read_document` answers — the
+    // same prices, the same counts, the same stamp — because the moment the two disagree a
+    // browser prices a collection differently from the desktop beside it.
+
+    /// Push `body` through [`StreamRead`] `chunk` bytes at a time.
+    fn stream(
+        provider: &'static dyn FeedProvider,
+        body: &str,
+        chunk: usize,
+    ) -> Result<Feed, FeedError> {
+        let mut sink = StreamRead::new(provider);
+        for c in body.as_bytes().chunks(chunk) {
+            sink.push(c)?;
+        }
+        sink.finish()
+    }
+
+    fn gzipped(bytes: &[u8]) -> Vec<u8> {
+        use flate2::{write::GzEncoder, Compression};
+        use std::io::Write as _;
+        let mut e = GzEncoder::new(Vec::new(), Compression::fast());
+        e.write_all(bytes).unwrap();
+        e.finish().unwrap()
+    }
+
+    /// The document the two entrances are compared on: every trap the pull parser's own
+    /// tests cover — the string foil flag, etched winning over it, a row with no id, a
+    /// nonsense price, unknown keys before and after `data`, and `meta` carrying the stamp.
+    const CK_BODY: &str = r#"{
+      "version": 2,
+      "meta": {"created_at": "2026-08-11 21:07:02", "base_url": "https://x"},
+      "data": [
+        {"id": 1, "scryfall_id": "a", "variation": "", "is_foil": "false", "price_retail": "0.35"},
+        {"id": 2, "scryfall_id": "a", "variation": "", "is_foil": "false", "price_retail": "0.25"},
+        {"id": 3, "scryfall_id": "b", "variation": "Foil Etched", "is_foil": "true", "price_retail": "9.99"},
+        {"id": 4, "name": "Sealed, with a {brace} and a \"quote\"", "price_retail": "99.99"},
+        {"id": 5, "scryfall_id": "c", "is_foil": "true", "price_retail": "not a price"},
+        {"id": 6, "scryfall_id": "d", "is_foil": "true", "price_retail": "1.50",
+         "condition_values": {"nm_price": "1.50"}}
+      ],
+      "trailing": {"after": "data"}
+    }"#;
+
+    /// **The two entrances must not disagree**, and the chunk size must not change the answer.
+    ///
+    /// Three bytes at a time splits every JSON token, every string and every nested object in
+    /// the middle, which is the only shape a browser stream ever arrives in.
+    #[test]
+    fn a_chunked_push_prices_exactly_what_the_pull_parser_prices() {
+        let pulled = collect(&CardKingdom, CK_BODY).unwrap();
+        let pushed = stream(&CardKingdom, CK_BODY, 3).unwrap();
+
+        assert_eq!(priced(&pushed), priced(&pulled));
+        assert_eq!(pushed.rows_seen, pulled.rows_seen);
+        assert_eq!(pushed.skipped, pulled.skipped);
+        assert_eq!(pushed.collisions, pulled.collisions);
+        assert_eq!(pushed.feed_built_at, pulled.feed_built_at);
+        // …and the answer is the right one, not merely the same one twice.
+        assert_eq!(
+            priced(&pushed),
+            vec![
+                ("a".into(), "nonfoil", 0.25),
+                ("b".into(), "etched", 9.99),
+                ("d".into(), "foil", 1.5),
+            ]
+        );
+        assert_eq!(pushed.feed_built_at.as_deref(), Some("2026-08-11 21:07:02"));
+        assert_eq!(pushed.collisions, 1, "two rows for `a`, the cheaper wins");
+    }
+
+    /// Mana Pool's half of the same claim — three finish columns per row, an ordinal
+    /// tie-break, and no build stamp to scrape.
+    #[test]
+    fn mana_pools_chunked_push_prices_what_its_pull_parser_prices() {
+        let body = r#"{"data": [
+            {"scryfall_id": "a", "price_cents_nm": 218, "price_cents_nm_foil": 500,
+             "price_cents_nm_etched": null},
+            {"scryfall_id": "b", "price_cents_nm": null, "price_cents_nm_foil": null,
+             "price_cents_nm_etched": null},
+            {"scryfall_id": "a", "price_cents_nm": 100}
+        ]}"#;
+        let pulled = collect(&ManaPool, body).unwrap();
+        let pushed = stream(&ManaPool, body, 5).unwrap();
+
+        assert_eq!(priced(&pushed), priced(&pulled));
+        assert_eq!(pushed.rows_seen, 3);
+        assert_eq!(pushed.skipped, 1, "the row quoting nothing");
+        assert_eq!(
+            pushed.feed_built_at, None,
+            "Mana Pool publishes no stamp and none may be invented"
+        );
+        assert_eq!(
+            priced(&pushed),
+            vec![
+                ("a".into(), "foil", 5.0),
+                // The later, cheaper row wins the nonfoil collision.
+                ("a".into(), "nonfoil", 1.0),
+            ]
+        );
+    }
+
+    /// **The browser shape.** `fetch` transparently decodes a `Content-Encoding: gzip`
+    /// response and offers no way to opt out, so the same feed arrives compressed on a
+    /// desktop and plain in a browser. The decoder decides from the two magic bytes.
+    #[test]
+    fn a_gzipped_stream_and_a_plain_one_price_the_same() {
+        let plain = stream(&CardKingdom, CK_BODY, 64).unwrap();
+
+        let gz = gzipped(CK_BODY.as_bytes());
+        let mut sink = StreamRead::new(&CardKingdom);
+        for c in gz.chunks(7) {
+            sink.push(c).unwrap();
+        }
+        let compressed = sink.finish().unwrap();
+
+        assert_eq!(priced(&compressed), priced(&plain));
+        assert_eq!(compressed.feed_built_at, plain.feed_built_at);
+    }
+
+    /// A row serde cannot read is counted and stepped over, never fatal — [`crate::ingest`]'s
+    /// rule. **The push entrance has to decide this for itself**, because the pull parser's
+    /// `next_element` would abort the whole document on the same row.
+    #[test]
+    fn an_unreadable_row_is_skipped_rather_than_ending_the_feed() {
+        let body = r#"{"data": [
+            {"id": 1, "scryfall_id": "a", "is_foil": "false", "price_retail": "0.35"},
+            {"id": "not an integer", "scryfall_id": "b", "price_retail": "1.00"},
+            {"id": 3, "scryfall_id": "c", "is_foil": "false", "price_retail": "0.75"}
+        ]}"#;
+        let feed = stream(&CardKingdom, body, 11).unwrap();
+
+        assert_eq!(
+            priced(&feed),
+            vec![("a".into(), "nonfoil", 0.35), ("c".into(), "nonfoil", 0.75)],
+            "the good rows on either side of the bad one both survive"
+        );
+        assert_eq!(feed.rows_seen, 3);
+        assert_eq!(feed.skipped, 1);
+    }
+
+    /// The framer must drain, and a row count cannot see that it is not.
+    ///
+    /// This is `feed::frame`'s own regression test aimed at this feed's document: a few
+    /// thousand rows pushed 64 bytes at a time must frame every one and leave the buffer
+    /// holding a row, not the payload.
+    #[test]
+    fn a_long_document_frames_every_row_and_keeps_the_buffer_small() {
+        let mut body = String::from(r#"{"meta":{"created_at":"2026-08-11 21:07:02"},"data":["#);
+        for i in 0..3000 {
+            if i > 0 {
+                body.push(',');
+            }
+            body.push_str(&format!(
+                r#"{{"id":{i},"scryfall_id":"card-{i}","is_foil":"false","price_retail":"1.00","pad":"{}"}}"#,
+                "x".repeat(200)
+            ));
+        }
+        body.push_str("]}");
+
+        let mut sink = StreamRead::new(&CardKingdom);
+        for c in body.as_bytes().chunks(64) {
+            sink.push(c).unwrap();
+        }
+        let peak = sink.peak_buffer();
+        let feed = sink.finish().unwrap();
+
+        assert_eq!(feed.rows_seen, 3000);
+        assert_eq!(feed.row_count(), 3000);
+        assert_eq!(feed.feed_built_at.as_deref(), Some("2026-08-11 21:07:02"));
+        // The document is ~800 KB. A framer that stops draining holds all of it.
+        assert!(
+            peak < 8 * 1024,
+            "peak buffer was {peak} bytes; the framer is not draining"
+        );
+    }
+
+    /// **The web path has no `download` in front of it**, so the size guard `download`
+    /// applies to the declared length and the running total has to live in the sink too.
+    /// Without it a browser would build the whole of whatever it was served.
+    #[test]
+    fn a_body_past_the_cap_is_refused_by_the_sink_itself() {
+        let mut sink = StreamRead::new(&CardKingdom);
+        sink.push(br#"{"data":["#).unwrap();
+        let chunk = vec![b'x'; 4 * 1024 * 1024];
+        let mut err = None;
+        // 68 × 4 MiB is past the 256 MiB cap; nothing may get near the end of that.
+        for _ in 0..68 {
+            if let Err(e) = sink.push(&chunk) {
+                err = Some(e);
+                break;
+            }
+        }
+        let e = err.expect("a body past MAX_FEED_BYTES must be refused");
+        assert!(
+            matches!(e, FeedError::TooLarge { .. }) || matches!(e, FeedError::Io(_)),
+            "expected a size or framer refusal, got {e:?}"
+        );
+    }
+
+    /// The host in a refusal has to be the feed's, not the whole URL — it is what the
+    /// sentence a reader sees is built from.
+    #[test]
+    fn the_stream_names_the_host_it_refused() {
+        assert_eq!(host_of_url(CardKingdom.url()), "api.cardkingdom.com");
+        assert_eq!(host_of_url(ManaPool.url()), "manapool.com");
     }
 }
