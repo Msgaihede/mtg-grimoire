@@ -101,3 +101,49 @@ export function compact(rows: Row[], acks: Map<string, number>, nowMs: number): 
   // the tail. Only a row that is both behind everyone *and* older than thirty days goes.
   return rows.filter((row) => row.seq > floor || nowMs - row.storedAt <= TAIL_MS);
 }
+
+/**
+ * A socket, as much of one as the fan-out decision needs. `group.ts` maps a real `WebSocket`
+ * into this so the decision below can be tested without workerd.
+ */
+export interface Notifiable {
+  tag: string | undefined;
+  open: boolean;
+}
+
+/**
+ * The one tag a socket carries. Namespaced because `acceptWebSocket` allows ten tags and a
+ * future one — a group, a protocol version — must not be mistaken for a device id.
+ */
+export function deviceTag(device: string): string {
+  return `d:${device}`;
+}
+
+/**
+ * The frame, which says only "the log moved to N".
+ *
+ * **It carries no envelope and never will.** Delivering over the socket would need a per-device
+ * read cursor this object does not have, `since`'s `(hlcMs, hlcCtr, device)` ordering
+ * reproduced in a stream, and the epoch cursor-hold that `check_keys` guarantees by running
+ * first on every HTTP trip. `from` is here so a device can ignore an echo of its own write
+ * without consulting its cursor.
+ */
+export function headFrame(cursor: number, from: string): string {
+  return JSON.stringify({ t: "head", cursor, from });
+}
+
+/**
+ * Who gets told about a push.
+ *
+ * **Everyone but the pusher, and only sockets that are actually open.** `getWebSockets` may
+ * still return a socket after `close` has been called — a half-closed one sits in `CLOSING` —
+ * and sending to it throws.
+ *
+ * **An untagged socket is notified rather than skipped.** It cannot be proved to be the
+ * pusher's, and the two errors are not symmetric: over-notifying costs one wasted pull that
+ * finds nothing, under-notifying leaves a device silently stale.
+ */
+export function notifyTargets<T extends Notifiable>(sockets: T[], pusher: string): T[] {
+  const own = deviceTag(pusher);
+  return sockets.filter((socket) => socket.open && socket.tag !== own);
+}
