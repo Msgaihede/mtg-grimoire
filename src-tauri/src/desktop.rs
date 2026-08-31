@@ -1341,12 +1341,19 @@ mod tests {
         assert!(gradle.contains("targetSdk = 36"));
     }
 
-    /// The manifest asks for `INTERNET` and nothing else, and every absence is the point: no
-    /// storage permission (the document picker grants access per-URI, which is what
-    /// `picked.rs` opens), no location, no camera. A permission here is a permission a Play
-    /// listing has to justify, and the generated template asked for exactly this one.
+    /// The manifest asks for `INTERNET` and `CAMERA`, and every other absence is still the
+    /// point: no storage permission (the document picker grants access per-URI, which is what
+    /// `picked.rs` opens), no location. A permission here is a permission a Play listing has to
+    /// justify, so the list stays exact rather than "at least these" — a third permission
+    /// nobody decided on must fail this test rather than slip in as a diff nobody reads twice.
+    ///
+    /// **`CAMERA` joined `INTERNET` for the in-app QR scanner** — `camera.rs`'s own doc has the
+    /// desktop half (a scoped `PermissionRequested` handler over WebView2); on Android the grant
+    /// *is* this manifest permission, with no Rust-side handler needed at all. It carries a
+    /// `required="false"` `<uses-feature>` beside it, so the app still installs on a camera-less
+    /// device and the scanner is simply unusable there rather than the app being unavailable.
     #[test]
-    fn the_android_manifest_asks_for_the_internet_and_nothing_else() {
+    fn the_android_manifest_asks_for_the_internet_and_the_camera() {
         let manifest = include_str!("../gen/android/app/src/main/AndroidManifest.xml");
         let asked: Vec<&str> = manifest
             .match_indices("<uses-permission")
@@ -1356,10 +1363,18 @@ mod tests {
                 &rest[..end]
             })
             .collect();
-        assert_eq!(asked.len(), 1, "exactly one permission: {asked:?}");
+        assert_eq!(asked.len(), 2, "exactly INTERNET and CAMERA: {asked:?}");
         assert!(
-            asked[0].contains("android.permission.INTERNET"),
-            "the one permission is INTERNET: {asked:?}"
+            asked
+                .iter()
+                .any(|a| a.contains("android.permission.INTERNET")),
+            "INTERNET must still be asked for: {asked:?}"
+        );
+        assert!(
+            asked
+                .iter()
+                .any(|a| a.contains("android.permission.CAMERA")),
+            "CAMERA is the QR scanner's Android grant: {asked:?}"
         );
     }
 

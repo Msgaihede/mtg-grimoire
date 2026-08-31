@@ -46,11 +46,6 @@ pub struct Pending {
     /// independently by each side from the one thing the invite carries. Never sent anywhere:
     /// it is the *address* the two blobs meet at, not one of the blobs.
     rv: String,
-    /// Whether this side has written its own blob to the rendezvous. Set once, by [`accept`];
-    /// nothing today re-reads it, but it is the honest record of what this side has told the
-    /// relay, for whatever the next thing to read it turns out to be.
-    #[allow(dead_code)]
-    posted: bool,
     /// Unix ms, ten minutes past `begin`/`accept`. Mirrors [`RENDEZVOUS_TTL_MS`] — see there for
     /// why the two numbers are not held together by anything a build can check.
     expires_at: i64,
@@ -199,7 +194,6 @@ pub fn begin(conn: &Connection, pending: &mut Option<Pending>) -> Result<Offer, 
         group_id,
         token,
         rv,
-        posted: false,
         expires_at: now_ms() + RENDEZVOUS_TTL_MS,
         peer_public: None,
         peer_device_id: None,
@@ -215,10 +209,7 @@ pub fn begin(conn: &Connection, pending: &mut Option<Pending>) -> Result<Offer, 
 ///
 /// **Posts before it keeps anything**, the same shape [`confirm`] uses one step further on: if
 /// the post fails — the code was answered already, or the relay could not be reached — nothing
-/// local exists to half-undo, and a reader whose paste failed can simply try again. Because of
-/// that ordering, `posted` is always `true` by the time a `Pending` exists at all here; the field
-/// is still written on `Pending` rather than assumed, so that fact stays true in the type and not
-/// only in this function's body.
+/// local exists to half-undo, and a reader whose paste failed can simply try again.
 pub async fn accept(
     conn: &Connection,
     pending: &mut Option<Pending>,
@@ -260,7 +251,6 @@ pub async fn accept(
         group_id: inv.group_id,
         token: inv.token,
         rv,
-        posted: true,
         expires_at: now_ms() + RENDEZVOUS_TTL_MS,
         peer_public: Some(inv.public_key),
         peer_device_id: None,
