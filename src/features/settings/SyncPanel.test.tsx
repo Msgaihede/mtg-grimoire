@@ -496,25 +496,87 @@ describe("SyncPanel", () => {
 
   /**
    * `pairing::poll`'s own TTL check — the relay's, read off this side's clock rather than the
-   * reader's patience (`src-tauri/src/sync_pair/pairing.rs`'s `EXPIRED`). Without a sentence for
-   * it a dropped offer polls silently forever: the reader sits at a `waiting` or `compare` screen
-   * that will never change again, with nothing on it saying the code has died.
+   * reader's patience. Without a sentence for it a dropped offer polls silently forever: the
+   * reader sits at a `waiting` or `compare` screen that will never change again, with nothing on
+   * it saying the code has died.
    *
-   * **`poll.error` is in `SyncPanel`'s `error` fallback chain, right after `accept.error` and
-   * ahead of `confirm.error`** — a rendezvous failing *while it runs* outranks a stale `confirm`
-   * refusal from earlier in the same attempt, and it is not swallowed the way the effect's own
-   * `syncNow` rejection is: that one hides a harmless failure *after* a success, and this is the
-   * only signal the reader gets that the thing they are waiting for is never coming. `Cancel`
-   * stays on screen regardless, which is what keeps the sentence from stranding anyone.
+   * ⚠️ **This test used to mock a rejection and could not fail.** It called `mockRejectedValue`
+   * — which rejects *every* call — against a harness that sets `retry: false`, and neither is
+   * true in production: the command errored exactly **once** (it cleared its pending offer as it
+   * refused, so the next call answered `Ok(idle)`) and this query inherits `query.ts`'s
+   * `retry: 1`. So `poll.error` was never populated for the expiry case at all, and the mock was
+   * encoding a state the backend could not produce. The fix was to the mechanism rather than to
+   * the mock: the expiry is a `"expired"` **stage** now, so what is mocked below is byte for byte
+   * what the command answers.
+   *
+   * Three assertions, and the last two are the ones the old test could not make: the sentence is
+   * shown, the panel is back at `idle` — so the reader can start another — and the *next* poll's
+   * `"idle"` does not wipe the sentence they were given.
    */
-  it("says so when a pairing has expired", async () => {
-    syncPairingPoll.mockRejectedValue("That pairing code has expired. Start a new one.");
+  it("says so when a pairing expires, and lets the reader start another", async () => {
+    syncPairingPoll.mockResolvedValueOnce({ stage: "waiting", sas: null });
+    syncPairingPoll.mockResolvedValueOnce({ stage: "expired", sas: null });
+    // Every poll after the expiry: the offer was thrown away as it answered, so there is nothing
+    // in flight any more.
+    syncPairingPoll.mockResolvedValue({ stage: "idle", sas: null });
     const user = userEvent.setup();
     render(<SyncPanel />, { wrapper: unpaired });
 
     await user.click(await screen.findByRole("button", { name: /pair a device/i }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(/expired/i);
+    // `refetchInterval` is 1500ms and the expiry is the *second* answer, so the default
+    // one-second wait is not enough — the sibling test two above takes the same 3000.
+    expect(await screen.findByRole("alert", undefined, { timeout: 3000 })).toHaveTextContent(
+      /timed out/i,
+    );
+    expect(await screen.findByRole("button", { name: /pair a device/i })).toBeInTheDocument();
+    expect(screen.queryByTestId("pairing-qr")).not.toBeInTheDocument();
+    // And the `"idle"` polls that follow do not wipe the sentence the reader was given.
+    expect(screen.getByRole("alert")).toHaveTextContent(/timed out/i);
+  });
+
+  /**
+   * ⚠️ **`"idle"` is not the timeout, and this is the reason the panel handles `"expired"`
+   * alone.** The backend answers `"idle"` for everything that is not in flight — a **cancel**
+   * included, and a cancel's own `onSettled` lands after the poll that raced it. A panel that
+   * read `"idle"` as the ten minutes running out would tell a reader who had just pressed Cancel
+   * that their code expired, which is a sentence about something that did not happen.
+   */
+  it("does not call a cancelled pairing expired", async () => {
+    syncPairingPoll.mockResolvedValue({ stage: "idle", sas: null });
+    const user = userEvent.setup();
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    await user.click(await screen.findByRole("button", { name: /pair a device/i }));
+    expect(await screen.findByTestId("pairing-qr")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^cancel$/i }));
+
+    expect(await screen.findByRole("button", { name: /pair a device/i })).toBeInTheDocument();
+    expect(screen.queryByText(/timed out/i)).not.toBeInTheDocument();
+  });
+
+  /**
+   * **A scan whose `accept` is refused leaves the reader the typed box.** `QrScanner` stops its
+   * tracks the moment it decodes and its effect never restarts, so without this the panel sits
+   * on a frozen frame under *Point the camera at the code* with an error under it and no press
+   * that starts the camera again. The paste path has always left its box available for a second
+   * try; this is the scan path getting the same.
+   */
+  it("falls back to the typed box when a scanned code is refused", async () => {
+    syncPairingAccept.mockRejectedValue("That pairing code has already been used.");
+    const user = userEvent.setup();
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    await user.click(await screen.findByRole("button", { name: /scan a code/i }));
+    // jsdom has no `mediaDevices`, so the scanner lands straight on its own fallback textarea —
+    // which is the same `onCode` a decoded frame would call, and the only way to drive it here.
+    await user.type(await screen.findByLabelText(/or type the code/i), "ABCDE-FGHJK");
+    await user.click(screen.getByRole("button", { name: /use this code/i }));
+
+    expect(
+      await screen.findByLabelText(/the code the other device is showing/i),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(/already been used/i);
   });
 
   /**

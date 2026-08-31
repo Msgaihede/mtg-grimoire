@@ -51,8 +51,14 @@ export const CameraUnavailableFallsBackToTyping: Story = {
     const canvas = within(canvasElement);
 
     const alert = await canvas.findByRole("alert");
-    await expect(alert).toHaveTextContent(/camera error/i);
-    await expect(alert).toHaveTextContent(/type the code instead/i);
+    // ⚠️ **Any of `describeError`'s three branches, not the default one.** This asserted
+    // `/camera error/i` — which is the *default* branch's wording, reached here only because
+    // jsdom has no `mediaDevices` at all and the call throws a plain `TypeError`. A real browser
+    // running this story takes `NotFoundError` ("No camera on this device…") or
+    // `NotAllowedError` ("MTG Grimoire needs camera access…"), and the play would have shown as
+    // failing in the Interactions panel for a component that was working exactly as designed.
+    // All three sentences name the camera; what this story is actually about is the box below.
+    await expect(alert).toHaveTextContent(/camera/i);
 
     const box = canvas.getByLabelText(/or type the code/i);
     const submit = canvas.getByRole("button", { name: /use this code/i });

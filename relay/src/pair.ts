@@ -8,6 +8,16 @@ import type { Env } from "./index";
  * browser, so the relay learns nothing about an invite even though it serves the page the invite
  * is opened on. Do not "improve" this by moving the code into a path or query — it would hand the
  * relay A's public key and the one-time token, and the six digits would become the only defence.
+ *
+ * ⚠️ **There is no "Open the app" link and there must not be one until the app reads a launch
+ * intent.** This page carried an `intent://…;scheme=mtggrimoire;…;S.code=…;end` button for part of
+ * a day. Nothing in the app declares that scheme and nothing in it reads `S.code`, so the button
+ * was dead on arrival — and the App Link that was supposed to replace it was worse than dead:
+ * once `assetlinks.json` carried a real fingerprint, Android would have opened the app for
+ * `https://…/pair#<code>` **instead of this page**, with the app having nowhere to read the code
+ * from and this page — the only thing that shows it — no longer reachable from a scan. The
+ * reader's primary path is the app's own in-app scanner, which needs no link at all; this page is
+ * the fallback for a generic camera app, and copying the code is what it is for.
  */
 const PAGE = `<!doctype html>
 <html lang="en"><head>
@@ -32,7 +42,6 @@ a.btn,button{display:inline-block;font:inherit;background:#2A2B36;color:#E8E6F0;
 paste the code below.</p>
 <code id="code"></code>
 <button id="copy" type="button">Copy the code</button>
-<a class="btn" id="open" href="#">Open the app</a>
 <script>
 (function () {
   var raw = location.hash.replace(/^#/, "");
@@ -42,7 +51,6 @@ paste the code below.</p>
       "That link carried no pairing code. Scan the QR code again from the other device.";
     el.remove();
     document.getElementById("copy").remove();
-    document.getElementById("open").remove();
     return;
   }
   el.textContent = raw.replace(/(.{5})(?=.)/g, "$1-");
@@ -50,9 +58,6 @@ paste the code below.</p>
     navigator.clipboard.writeText(raw);
     this.textContent = "Copied";
   });
-  document.getElementById("open").href =
-    "intent://pair#Intent;scheme=mtggrimoire;package=com.mtggrimoire.app;S.code=" +
-    encodeURIComponent(raw) + ";end";
 })();
 </script>
 </main></body></html>`;
@@ -72,25 +77,11 @@ export function handlePair(_env: Env): Response {
   });
 }
 
-/**
- * Android App Links. ⚠️ **`REPLACE_WITH_RELEASE_SHA256` is a deploy step, not a code one** — until
- * the real signing-certificate fingerprint is here the scan opens a chooser rather than the app,
- * which is degraded and not broken. Get it with:
- *   keytool -list -v -keystore <ks> -alias <alias> | findstr SHA256
- */
-export function handleAssetLinks(): Response {
-  const body = [
-    {
-      relation: ["delegate_permission/common.handle_all_urls"],
-      target: {
-        namespace: "android_app",
-        package_name: "com.mtggrimoire.app",
-        sha256_cert_fingerprints: ["REPLACE_WITH_RELEASE_SHA256"],
-      },
-    },
-  ];
-  return new Response(JSON.stringify(body), {
-    status: 200,
-    headers: { "content-type": "application/json" },
-  });
-}
+// ⚠️ **`/.well-known/assetlinks.json` is deliberately gone, and its absence is the fix rather
+// than an oversight.** It served a placeholder fingerprint for part of a day so that the app's
+// `autoVerify` intent-filter could one day succeed. Installing a real fingerprint would have
+// *broken* the scan flow rather than completing it: Android would then open the app for
+// `https://…/pair#<code>`, and the app reads no launch intent, so the code would arrive nowhere
+// and this page would stop being reachable from a camera. The intent-filter is gone from
+// `AndroidManifest.xml` too, with the whole argument written at its site. Re-add both together,
+// after the intent handling exists — never one of them alone.

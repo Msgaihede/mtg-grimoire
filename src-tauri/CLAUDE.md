@@ -770,6 +770,20 @@ with the arithmetic behind the 105-character code and the crate pins, is
   on the table for the migration's sake and is read but never written** — `plan_rotation` still
   skips a stamped row, because a database written by an older build can hold one and a manifest
   naming that device would put it back in the group on every device that adopts.
+- **⚠️ `adopt_epoch` PRUNES and never INSERTS, so a device may only publish a roster it can see
+  the whole of.** A manifest is device ids and sealed blobs — `/keys` answers
+  `devices: Object.keys(manifest.keys)` — and there is no public key anywhere in one, so a device
+  adopting somebody else's rotation *cannot* add a peer it has never met even in principle. It
+  therefore learns **who left** and never **who joined**, and any device that has been told about a
+  join only by adopting an epoch is holding a partial roster. `client::publish_join` reads `/keys`
+  first and publishes **only when the manifest it would publish is a superset of the relay's
+  current one**; otherwise it marks `roster_dirty`, publishes nothing and answers `Ok(())`. Without
+  that check an ordinary pairing *evicts*: the manifest's key set is the roster on every device
+  that adopts it, so a device the publisher never heard of reads a higher epoch with no blob for
+  itself, which `check_keys` defines as the removal notice — a device silently leaving a group
+  nobody removed it from, with no press anywhere that said the roster was changing. **The real fix
+  is a wire change carrying public keys in the manifest** and is not built; until it is, a
+  partial-view device declines rather than breaking the group.
 - **The manifest is deliberately not a thirteenth synced table.** A manifest that *is* the key
   distribution cannot disagree with it, where a synced `device_removals` table could arrive late,
   arrive out of order, or arrive at a device that cannot decrypt it — which is precisely the state

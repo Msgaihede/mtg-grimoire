@@ -70,6 +70,19 @@ nothing: the sealed remainder opens only under the pair key, and anyone holding 
 already run their own handshake, so what used to be withheld until the reader confirmed was
 withheld from a party that never needed it.
 
+**`sync_pairing_poll` answers a `stage`, and there are five of them:
+`idle | waiting | compare | complete | expired`.** ⚠️ **`expired` is a stage rather than an error,
+and that reversal is what makes the ten-minute window visible at all.** The first build refused
+with `Err("That pairing code has expired…")` *and* cleared the pending offer in the same call — so
+the refusal was exactly one call long, and the panel's poll query carries `query.ts`'s `retry: 1`:
+TanStack re-ran it about a second later, found nothing in flight and got `Ok(idle)` back. `poll.error`
+was never populated for the expiry case at all. At ten minutes **nothing on the screen changed** and
+the panel went on polling a rendezvous that no longer existed, with Cancel the only way out; the
+same silence hit the other side whenever one device pressed Cancel. `SyncPanel` handles `expired`
+by ending the flow and drawing `EXPIRED_NOTE`, and handles `idle` **not at all** — deliberately,
+because `idle` is also what the backend answers in the instant after a cancel, and reading it as
+the timeout would tell a reader who had just pressed Cancel that their code ran out.
+
 The four layers behind it, and the boundary between them is that only the last two touch SQLite:
 
 - **`sync_pair::crypto`** — X25519, HKDF-SHA256, XChaCha20-Poly1305, the six digits, and (since
@@ -86,7 +99,15 @@ The four layers behind it, and the boundary between them is that only the last t
 - **`sync_pair::identity`** — the three tables user schema v28 created, plus (since this branch)
   `plan_join`, a third entrance beside `plan_rotation`/`plan_departure` that publishes the roster
   to the group a device just joined — the fix for a device paired by one machine being silently
-  evicted by another's next rotation, which never knew to name it.
+  evicted by another's next rotation, which never knew to name it. ⚠️ **It is a fix for the hub
+  case and not for every case, and the difference is `adopt_epoch`**: that function prunes the
+  roster to the manifest and *never inserts*, because a manifest carries device ids and no public
+  keys, so a device that learned of a join only by adopting an epoch is holding a partial roster
+  and cannot seal a blob to the peer it never met. `client::publish_join` therefore reads `/keys`
+  and publishes **only when what it would publish is a superset of what the relay already holds**;
+  otherwise it marks `roster_dirty` and stays quiet, because publishing from a partial view would
+  *be* the eviction rather than the fix. Carrying public keys in the manifest is the change that
+  would close the rest, and it is a wire change on both sides that this branch does not make.
 - **`sync_pair::pairing`** — the state machine and the nine commands. Two of them do network I/O
   now (`accept`, `confirm`), so they and `poll` run on the blocking pool with a runtime of their
   own — `sync_device_revoke`'s shape, for its reason: the write connection is behind a `Mutex`, a
@@ -255,11 +276,24 @@ behaviour for a pasted bare code exactly. A pasted URL and a pasted code both wo
 hands `decode` whichever the QR held.
 
 **The relay serves `/pair` itself and never learns what it served.** The static page reads
-`location.hash` in the browser — the Worker never sees it — and offers the code large enough to
-read across a desk, a copy button, and an `intent://` link into the Android app, gated on
-`/.well-known/assetlinks.json` carrying the app's signing-certificate fingerprint. That file's
-placeholder value and what it costs until replaced are tracked in
-[the deploy runbook](hosted-relay-deploy.md).
+`location.hash` in the browser — the Worker never sees it — and offers two things: the code large
+enough to read across a desk, and a copy button. **That is the fallback for a reader who scanned
+with their phone's own camera app; the primary path is the app's own scanner, which reads the QR
+directly and never opens a URL at all.**
+
+⚠️ **This paragraph named a third thing — an `intent://` link into the Android app, "gated on
+`/.well-known/assetlinks.json`" — and both halves were wrong, so both are gone (2026-08-31).**
+`assetlinks.json` gates an `https` **App Link**; it has never gated a custom scheme, and the app
+declared no `mtggrimoire` scheme, so that button was dead on arrival. Worse, the App Link it was
+paired with was a *trap*: nothing in this app reads a launch intent, so the day a real signing
+fingerprint went up, Android would have started handing `https://…/pair#<code>` to the app instead
+of the browser — the app opening on its ordinary window with the code nowhere, and this page,
+which is the only thing that shows a camera-app scan to the reader, unreachable from a scan. The
+button, the `autoVerify` intent-filter and the `assetlinks.json` route are all removed;
+`relay/src/pair.ts` and `gen/android/app/src/main/AndroidManifest.xml` each carry the argument at
+their own site, and [the deploy runbook](hosted-relay-deploy.md) records that its step 9 was
+deleted rather than deferred. Deep-linking into the app is a coherent follow-up whose *first* step
+is the intent handling.
 
 ---
 
@@ -669,9 +703,19 @@ permission request going unhandled, which WebView2 reports as `NotSupportedError
 `NotAllowedError` anybody debugging a permission refusal would expect. **That misleading name is
 why this cost a session before this measurement existed, and why it is written down at this
 length now.** The shipped fix is the scoped one — `PermissionRequested` handled through
-`webview2-com`, granting only the request the app made and only while it was asking — over the
-blunt alternative the flag above proves works: left set permanently, it grants camera *and*
-microphone to the whole webview forever, in an app that otherwise asks for neither. The pipeline
+`webview2-com`, granting **`CAMERA` and refusing every other permission kind** — over the blunt
+alternative the flag above proves works, which grants camera *and* microphone to the whole webview
+forever. ⚠️ **"Scoped" is about the permission **kind**, not about time or about which request
+asked.** This sentence read *"granting only the request the app made and only while it was
+asking"* until 2026-08-31 and that was an overstatement of what `camera.rs` does: the handler is
+registered on the window's `ICoreWebView2` for the whole life of the webview, and it answers
+`CAMERA` with `ALLOW` unconditionally, without consulting the requesting origin or whether the
+scanner is on screen. What that costs is bounded by there being exactly one page in this webview
+and one thing in it that asks — nothing is granted to a page that never asks, and the reader's
+camera light is on only while `QrScanner` is mounted, because the *stream* is what turns it on and
+that component stops every track it opens on every exit path. Making the grant conditional on the
+scanner being mounted would need state shared between the page and this handler and buys nothing
+against the threat a single-page desktop app has. The pipeline
 was then confirmed end to end under the *shipped* CSP: `devCsp` and the production `csp` differ
 only in `connect-src` and `style-src`, neither declares `media-src`, so both fall back to
 `default-src 'self'` — and a real camera frame through `<video srcObject>` → `canvas.drawImage` →

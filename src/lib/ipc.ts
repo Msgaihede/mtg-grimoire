@@ -4058,7 +4058,14 @@ export interface PairingSealedKey {
 
 /** What `sync_pairing_poll` answers. `stage` drives the panel and nothing else does. */
 export interface PairingProgress {
-  /** `"idle" | "waiting" | "compare" | "complete"` */
+  /**
+   * `"idle" | "waiting" | "compare" | "complete" | "expired"`
+   *
+   * **`"expired"` is an answer and not an error**, which is what makes the ten-minute timeout
+   * reach the reader at all: the command clears its pending offer as it answers, so a refusal
+   * would have been one call long and this query's `retry: 1` overwrote it with the next call's
+   * `"idle"`. See `SyncPanel`'s `EXPIRED_NOTE`.
+   */
   stage: string;
   /** The six digits, once both sides have them. */
   sas: string | null;

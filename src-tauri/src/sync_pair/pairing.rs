@@ -107,9 +107,10 @@ pub struct PairingStatus {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PairingProgress {
-    /// One of `"idle" | "waiting" | "compare" | "complete"`.
+    /// One of `"idle" | "waiting" | "compare" | "complete" | "expired"`.
     pub stage: String,
-    /// The six digits, once both sides' keys are known — `None` at `"idle"` and `"waiting"`.
+    /// The six digits, once both sides' keys are known — `None` at `"idle"`, `"waiting"` and
+    /// `"expired"`.
     pub sas: Option<String>,
 }
 
@@ -117,6 +118,24 @@ const STAGE_IDLE: &str = "idle";
 const STAGE_WAITING: &str = "waiting";
 const STAGE_COMPARE: &str = "compare";
 const STAGE_COMPLETE: &str = "complete";
+
+/// The ten minutes ran out with nobody pressing anything, on this side.
+///
+/// ⚠️ **A stage and not an error, and that reversal is the whole of what makes the expiry
+/// visible.** [`poll`] used to clear the pending offer and answer `Err(EXPIRED)` — a **one-shot**
+/// refusal, because the very next poll found `pending == None` and answered `Ok(idle)`. The panel
+/// polls through TanStack, whose `retry: 1` re-runs a failed query about a second later, so the
+/// refusal was overwritten by the retry's success before it ever reached `poll.error`: at ten
+/// minutes nothing on screen changed at all and the panel went on polling a rendezvous that no
+/// longer existed, for ever.
+///
+/// **A stage of its own rather than reading `"idle"`-while-in-flight as the expiry**, because the
+/// two say different things. This one names a *reason* the panel can put a sentence to; `"idle"`
+/// is also what a device with nothing in flight has always answered, so a panel that read it as
+/// an expiry would be inventing the reason. The panel ends the attempt on either — see
+/// `SyncPanel.tsx` — since the poll after this one answers `"idle"` and a reader who missed one
+/// tick must not be stranded by that.
+const STAGE_EXPIRED: &str = "expired";
 
 /// Ten minutes, in milliseconds. Mirrors `relay/src/rendezvous.ts`'s `RENDEZVOUS_TTL_MS`.
 ///
@@ -126,9 +145,6 @@ const STAGE_COMPLETE: &str = "complete";
 /// row would poll a 404 that can never resolve into anything but the timeout below; a `Pending`
 /// that expired *first* only costs the reader a fresh offer the relay would still have answered.
 const RENDEZVOUS_TTL_MS: i64 = 10 * 60 * 1000;
-
-/// What [`poll`] says once the ten-minute rendezvous window has passed with nothing resolved.
-const EXPIRED: &str = "That pairing code has expired. Start a new one.";
 
 /// What every step says when there is nothing in flight.
 const NOTHING_IN_FLIGHT: &str = "There is no pairing in progress.";
@@ -563,9 +579,17 @@ pub async fn poll(
     // **The relay's own TTL, read off this side's clock rather than the reader's patience.**
     // Without this a dropped offer polls a 404 forever; with it the panel is told the code timed
     // out and can start over rather than spin.
+    //
+    // ⚠️ **`Ok(expired)` and never `Err`** — see [`STAGE_EXPIRED`]. Clearing `pending` here makes
+    // any refusal exactly one call long, and the panel's query retries on failure, so an error
+    // was overwritten by the retry's `Ok(idle)` before the reader ever saw it. A stage survives
+    // the retry because it *is* the answer rather than the absence of one.
     if now_ms > expires_at {
         *pending = None;
-        return Err(EXPIRED.to_owned());
+        return Ok(PairingProgress {
+            stage: STAGE_EXPIRED.to_owned(),
+            sas: None,
+        });
     }
 
     let me = identity::ensure(conn).map_err(err)?;
@@ -1209,6 +1233,56 @@ mod tests {
             "both sides must meet at the same address with nothing hand-carried but the invite"
         );
         assert_eq!(a_rv, crypto::rendezvous_id(&pa.as_ref().unwrap().token));
+    }
+
+    /// **The ten-minute window, which `poll` takes `now_ms` as a parameter precisely so a test
+    /// can reach.** It was reachable and asserted nowhere until this one.
+    ///
+    /// The offer is thrown away and the answer is the `"expired"` **stage** rather than a
+    /// refusal — see `STAGE_EXPIRED`. An `Err` here would be one call long, because clearing
+    /// `pending` makes the very next poll answer `"idle"`, and the panel's query retries a
+    /// failure about a second later: the retry's success overwrote the refusal before it could
+    /// be drawn, so at ten minutes the reader saw nothing change at all.
+    ///
+    /// **What makes it red**: going back to `Err`, or leaving `pending` in place. The second
+    /// assertion is the one that catches a stage nobody clears.
+    #[tokio::test]
+    async fn an_expired_offer_answers_a_stage_and_throws_the_offer_away() {
+        // The fake relay rather than none at all: the still-live poll below really reaches the
+        // rendezvous, and a test that let it reach `entitlement::RELAY_BASE` would be a unit
+        // test making a request to the deployed Worker.
+        let relay = FakeRelay::start().await;
+        let conn = db();
+        relay.point(&conn);
+        let mut pending = None;
+        begin(&conn, &mut pending).unwrap();
+        let expires_at = pending.as_ref().unwrap().expires_at;
+
+        // The last millisecond inside the window is still live — nothing is at the rendezvous
+        // yet, so the initiator is simply waiting.
+        let live = poll(&conn, &mut pending, expires_at)
+            .await
+            .expect("an empty rendezvous is not a failure");
+        assert_eq!(live.stage, STAGE_WAITING);
+        assert!(pending.is_some(), "the window closed a millisecond early");
+
+        let past = poll(&conn, &mut pending, expires_at + 1)
+            .await
+            .expect("an expiry is an answer, not a refusal");
+        assert_eq!(past.stage, STAGE_EXPIRED);
+        assert!(past.sas.is_none());
+        assert!(
+            pending.is_none(),
+            "an expired offer must be thrown away, or its code would go on working"
+        );
+
+        // And the poll after it: nothing is in flight any more, which is the answer the panel
+        // has to treat as the end of the attempt too, because a reader who missed the tick above
+        // would otherwise be stranded on it.
+        let after = poll(&conn, &mut pending, expires_at + 2)
+            .await
+            .expect("nothing in flight is not a failure");
+        assert_eq!(after.stage, STAGE_IDLE);
     }
 
     /// The sealed blob's layout is unchanged — `<device_id>\0` then a seal over

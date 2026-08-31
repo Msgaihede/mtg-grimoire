@@ -1695,7 +1695,11 @@ describe("the collection folder wrappers name the commands `collection_folders.r
 });
 
 /**
- * Pairing's eight commands — spec §7.5 and §7.6.
+ * Pairing's commands — spec §7.5 and §7.6.
+ *
+ * **The number is deliberately not written down.** This line said *eight* while `desktop.rs`
+ * registered nine; a count is a fact about a tree and every open branch has a different one, which
+ * is the same argument `src-tauri/CLAUDE.md` already makes about this exact list.
  *
  * `invoke` matches arguments **by name**, so a wrapper that spells one differently fails at
  * runtime with a deserialization error and no type error anywhere. These pin the three names

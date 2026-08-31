@@ -29,12 +29,23 @@ of refusing it, and `/rotate` capping its manifest and freeing slots through `ke
 already did.
 
 **A fourth half, from a later branch, is also not deployed**: the pairing rendezvous —
-`POST`/`GET {relay}/p/{rv}/{slot}`, the `pairing_rendezvous` table, and `/pair`'s landing page with
-`/.well-known/assetlinks.json`. It adds a **second** migration file to step 2 (run as its own
-`--command`, never a `--file` — that step says why) and a **new step 9** to the order, for the
-Android signing-certificate fingerprint `assetlinks.json` still carries as the literal placeholder
-`REPLACE_WITH_RELEASE_SHA256`. It changes no existing route path either, so step 6 still deploys
-the same list plus these two new routes.
+`POST`/`GET {relay}/p/{rv}/{slot}`, the `pairing_rendezvous` table, and `/pair`'s landing page. It
+adds a **second** migration file to step 2 (run as its own `--command`, never a `--file` — that
+step says why) and **no new step at all**. It changes no existing route path either, so step 6
+still deploys the same list plus these two new routes.
+
+⚠️ **This paragraph named `/.well-known/assetlinks.json` and a step 9 for its fingerprint until
+2026-08-31, and both are gone — deliberately, and not because the fingerprint is hard to get.**
+Nothing in the app reads a launch intent: there is no `tauri-plugin-deep-link`, no handler for the
+URL an activity is opened with, and nothing that reads a code out of one. So the `autoVerify`
+intent-filter did nothing while the fingerprint was a placeholder, and installing a real one would
+have started it *working* — Android would hand `https://…/pair#<code>` to the app instead of the
+browser, the app would open on its ordinary window with the code nowhere, and the `/pair` page,
+which is the only thing that shows a generic camera app's scan to the reader, would have become
+unreachable from a scan. **The deploy step would have broken the flow it was written to complete.**
+The intent-filter, the `intent://` button on the page and the `assetlinks.json` route are all
+removed; the reader's primary path is the app's own scanner, which needs no link. Deep-linking is a
+follow-up that starts with the intent handling and ends with these, never the other way round.
 
 Designs: [2026-08-29-hosted-relay-and-patreon-design.md](../superpowers/specs/2026-08-29-hosted-relay-and-patreon-design.md),
 [2026-08-30-group-wide-membership-and-removal-design.md](../superpowers/specs/2026-08-30-group-wide-membership-and-removal-design.md),
@@ -245,16 +256,15 @@ reading any of us.**
    None of the five reaches a Durable Object, so the metered line is untouched — but "unauthenticated
    at the edge" is what a rate-limit rule is about, and by that test they belong on this list rather
    than on the other one.
-9. **Set the real Android signing-certificate fingerprint in `assetlinks.json`.**
-   `relay/src/pair.ts`'s `handleAssetLinks` ships
-   `sha256_cert_fingerprints: ["REPLACE_WITH_RELEASE_SHA256"]` until this runs — a deploy step, not
-   a code one. Until it does, a scanned invite link on Android opens a chooser instead of the app,
-   which is degraded rather than broken, because `android:autoVerify` cannot confirm the app owns
-   `/pair` without it. Get the real value from the release keystore and redeploy:
-   ```
-   keytool -list -v -keystore <ks> -alias <alias> | findstr SHA256
-   ```
-   then replace the placeholder in `relay/src/pair.ts` and run step 6 again.
+⚠️ **There is no step 9, and the one that stood here has been deleted rather than deferred.** It
+said to put the release keystore's SHA-256 fingerprint into `/.well-known/assetlinks.json` so
+`android:autoVerify` could confirm the app owns `/pair`. **Running it would have broken the QR
+flow**: the app reads no launch intent, so a verified App Link takes `https://…/pair#<code>` away
+from the browser and gives it to an app with nowhere to read the code from — and the `/pair` page
+is the only thing that shows that code to a reader whose camera app is not this one. The route,
+the manifest's intent-filter and the page's `intent://` button are all gone (2026-08-31);
+`relay/src/pair.ts` and `AndroidManifest.xml` each carry the argument at their own site. Nothing
+about this deploy replaces it.
 
 ---
 

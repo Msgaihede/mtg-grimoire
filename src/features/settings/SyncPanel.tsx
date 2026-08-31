@@ -85,6 +85,24 @@ export const LEAVE_WARNING =
   "somebody removes it there.";
 
 /**
+ * What the panel says when a pairing attempt ran out of time.
+ *
+ * **The sentence is this file's and the fact is Rust's**, which is the boundary rather than a
+ * preference: `pairing::poll` answers a `"expired"` *stage*, and the words a reader reads about
+ * it are presentation. It used to be a `String` error thrown by that command — and the reader
+ * never saw it, because clearing the pending offer made the refusal one call long while the
+ * panel's query retries once, so the retry's `Ok(idle)` overwrote it. At ten minutes nothing on
+ * screen changed and the panel polled a rendezvous that no longer existed for ever.
+ *
+ * It names the way forward, because there is one and it is the same press either side started
+ * from: the flow returns to `"idle"`, where *Pair a device*, *Enter a code* and *Scan a code* all
+ * are.
+ */
+export const EXPIRED_NOTE =
+  "That pairing code timed out — codes are good for ten minutes. Start a new one, or read a " +
+  "fresh code from the other device.";
+
+/**
  * A pairing in flight on this screen, and which half of it this device is playing.
  *
  * **The relay carries the accept and the sealed key now**, so there is no `response` and no
@@ -980,6 +998,15 @@ export function SyncPanel(): JSX.Element {
    */
   const [pairedNote, setPairedNote] = useState<string | null>(null);
   /**
+   * The one line an attempt that ended *without* pairing leaves behind — {@link EXPIRED_NOTE}.
+   *
+   * Its own state rather than {@link pairedNote}'s, because the two are drawn in different tones
+   * and one must never be mistaken for the other: a reader who reads *Paired.* after a timeout
+   * would go looking for a device that is not in the group. It is cleared wherever a new attempt
+   * starts, so a second attempt never opens under the first one's obituary.
+   */
+  const [endedNote, setEndedNote] = useState<string | null>(null);
+  /**
    * Guards the completed-pairing effect below so its two side effects — the sync trip and the
    * cache invalidation — fire **exactly once** per pairing, not once per render while the poll
    * goes on answering `"complete"` (it keeps answering that until `enabled` below actually turns
@@ -1015,6 +1042,7 @@ export function SyncPanel(): JSX.Element {
    */
   const startNewAttempt = () => {
     setPairedNote(null);
+    setEndedNote(null);
     completedRef.current = false;
     client.removeQueries({ queryKey: PAIRING_POLL_KEY, exact: true });
   };
@@ -1028,6 +1056,21 @@ export function SyncPanel(): JSX.Element {
     mutationFn: (code: string) => ipc.syncPairingAccept(code),
     onMutate: startNewAttempt,
     onSuccess: (shake) => setFlow({ kind: "join", sas: shake.sas }),
+    /**
+     * **A refused `accept` from the camera has to leave the reader something to press.**
+     * `QrScanner` stops its tracks the moment it decodes, and its effect has `[]` deps, so a
+     * scan whose `accept` then fails — a 409 on a code somebody else answered, a bent code, an
+     * unreachable relay — leaves a frozen frame under *Point the camera at the code* with the
+     * error sentence below it and nothing that starts the camera again. The paste path has
+     * always left its box on screen for a second try; this gives the scan path the same box.
+     *
+     * **Remounting the scanner instead was the other candidate and is worse.** The camera would
+     * come straight back up pointed at the same QR code, decode it again within a frame or two,
+     * and call `accept` again — a request loop against the relay for exactly the failure
+     * (`ALREADY_USED`) that a retry can never fix. Stepping back to the typed box is the state
+     * a reader can act from, and *Scan a code* is one Cancel away.
+     */
+    onError: () => setFlow((f) => (f.kind === "scanning" ? { kind: "reading" } : f)),
   });
   /**
    * The reader says the digits matched. Answers nothing the reader carries any more — the relay
@@ -1115,6 +1158,28 @@ export function SyncPanel(): JSX.Element {
     setPairedNote("Paired. The other device is now part of this group.");
   }
 
+  /**
+   * The pairing's other end: the attempt ran out of time. Settled during render for the two
+   * blocks above's reason — a flow and a sentence are both React state and nothing external.
+   *
+   * ⚠️ **`"expired"` and deliberately *not* `"idle"`, which was the other candidate.** `idle` is
+   * what the backend answers for anything that is not in flight — including the moment right
+   * after a **cancel**, whose own `onSettled` has not landed yet, and the poll that follows an
+   * expiry this block has already handled. Reading it as the timeout would put *That pairing code
+   * timed out* in front of a reader who had just pressed Cancel, which is a sentence about
+   * something that did not happen. So the reason is a stage of its own: `poll` answers it exactly
+   * once, on the call that crosses the ten minutes, and one answer is enough because a mounted
+   * enabled query renders every answer it gets — the old expiry was invisible because it was an
+   * *error* that the query's own retry then overwrote, not because a stage could be missed.
+   *
+   * `polling` is the loop guard, exactly as above: it reads `flow.kind`, which this write has
+   * just changed to `"idle"`.
+   */
+  if (polling && poll.data?.stage === "expired") {
+    setFlow({ kind: "idle" });
+    setEndedNote(EXPIRED_NOTE);
+  }
+
   useEffect(() => {
     // **The two things that genuinely have to be an effect**: `invalidateQueries` and
     // `syncNow` are both writes outside this component (a cache, and a round trip to the
@@ -1144,15 +1209,23 @@ export function SyncPanel(): JSX.Element {
    *
    * **`poll.error` sits right after `begin`/`accept`, ahead of `confirm` and the roster
    * mutations.** `begin` and `accept` are how an attempt can fail to *start*; `poll` is that same
-   * attempt failing *while it is running* — the crate's own pairing-expiry refusal is exactly
-   * this, a rendezvous that lived its ten minutes with nobody pressing anything. That is a more
-   * fundamental failure than a stale `confirm` refusal from earlier in the same attempt, so it
-   * is asked first. It is **not** swallowed, unlike the `syncNow` rejection in the effect above:
-   * that one hides a harmless failure *after* a success, and this is the only signal the reader
-   * gets that the thing they are waiting for is never coming — a code that has silently died
-   * behind a `waiting` or `compare` screen with nothing on screen saying so. `Cancel` stays
-   * rendered on both those screens regardless of this line, which is what stops the sentence
-   * stranding anyone: reading it still leaves a press that gets back to `idle`.
+   * attempt failing *while it is running* — an unreachable relay, or a rendezvous answer that
+   * will not parse. That is a more fundamental failure than a stale `confirm` refusal from
+   * earlier in the same attempt, so it is asked first. It is **not** swallowed, unlike the
+   * `syncNow` rejection in the effect above: that one hides a harmless failure *after* a success,
+   * and this is the only signal the reader gets that the thing they are waiting for is never
+   * coming. `Cancel` stays rendered on both those screens regardless of this line, which is what
+   * stops the sentence stranding anyone: reading it still leaves a press that gets back to
+   * `idle`.
+   *
+   * ⚠️ **The ten-minute expiry is not one of these and used to be.** `pairing::poll` answered
+   * `Err(EXPIRED)` and cleared the pending offer in the same breath, so the refusal was exactly
+   * one call long — and this query inherits `query.ts`'s `retry: 1`, so TanStack re-ran it a
+   * second later, found nothing in flight and answered `Ok(idle)`. `poll.error` was never
+   * populated for the expiry case at all: at ten minutes nothing on screen changed and the panel
+   * polled a dead rendezvous for ever. It is a `"expired"` **stage** now, settled by the block
+   * above into {@link EXPIRED_NOTE}, because a stage survives a retry where the absence of an
+   * answer does not.
    */
   const error =
     begin.error ??
@@ -1241,6 +1314,7 @@ export function SyncPanel(): JSX.Element {
                 type="button"
                 onClick={() => {
                   setPairedNote(null);
+                  setEndedNote(null);
                   setFlow({ kind: "reading" });
                 }}
                 className={cn(BUTTON, "border-border hover:bg-bg")}
@@ -1251,6 +1325,7 @@ export function SyncPanel(): JSX.Element {
                 type="button"
                 onClick={() => {
                   setPairedNote(null);
+                  setEndedNote(null);
                   setFlow({ kind: "scanning" });
                 }}
                 className={cn(BUTTON, "border-border hover:bg-bg")}
@@ -1396,7 +1471,11 @@ export function SyncPanel(): JSX.Element {
       )}
 
       <PanelAlert tone="plain">{pairedNote}</PanelAlert>
-      <PanelAlert tone="problem">{error ? ipcError(error) : null}</PanelAlert>
+      {/* **One problem line, and a live refusal outranks the obituary.** `error` is whatever
+          just failed; `endedNote` is an attempt that quietly ran out of time. Both are the same
+          kind of thing to a reader — *the thing you were doing is not happening* — so they share
+          a box rather than stacking two red sentences, and the fresher one wins. */}
+      <PanelAlert tone="problem">{error ? ipcError(error) : endedNote}</PanelAlert>
 
       <SupporterSection />
 

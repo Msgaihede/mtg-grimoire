@@ -7,7 +7,7 @@ import {
   handleWebhook,
   reconcile,
 } from "./claim";
-import { handleAssetLinks, handlePair } from "./pair";
+import { handlePair } from "./pair";
 import { required } from "./patreon";
 import { handleRendezvousGet, handleRendezvousPut, sweepRendezvous } from "./rendezvous";
 import { handleKeys, handleRotate } from "./rotate";
@@ -95,12 +95,15 @@ const METHOD: Record<string, string> = {
  * by its HMAC. A bearer token could not guard any of them — three of the four exist precisely
  * because the caller has no token yet.
  *
- * **`/pair` and `/.well-known/assetlinks.json` are guarded by holding no secret at all, rather
- * than by a credential.** `/pair` is a static page that reads the pairing code out of
- * `location.hash` in the browser — the Worker serving it never sees the code, so there is
- * nothing here a gate would protect. `assetlinks.json` is fetched anonymously by Android's App
- * Links verifier by definition; a route Android must reach with no credential cannot sit behind
- * one.
+ * **`/pair` is guarded by holding no secret at all, rather than by a credential.** It is a static
+ * page that reads the pairing code out of `location.hash` in the browser — the Worker serving it
+ * never sees the code, so there is nothing here a gate would protect.
+ *
+ * ⚠️ **`/.well-known/assetlinks.json` stood beside it for part of a day and is deliberately
+ * gone.** It existed only so an Android App Link could one day verify — and verifying it would
+ * have *broken* the scan flow, because the app reads no launch intent and Android would have
+ * taken `https://…/pair#<code>` away from the browser that is currently the only thing able to
+ * show the reader that code. `pair.ts` carries the whole argument.
  *
  * A `Map` and not a `Record`, so a path that is not a route reads as `undefined` rather than as
  * a value the type system has promised is there.
@@ -114,10 +117,6 @@ const CLAIM_ROUTES = new Map<
   ["/token", { method: "POST", handle: handleToken }],
   ["/webhook/patreon", { method: "POST", handle: handleWebhook }],
   ["/pair", { method: "GET", handle: (_request, env) => Promise.resolve(handlePair(env)) }],
-  [
-    "/.well-known/assetlinks.json",
-    { method: "GET", handle: () => Promise.resolve(handleAssetLinks()) },
-  ],
 ]);
 
 function methodNotAllowed(expected: string): Response {

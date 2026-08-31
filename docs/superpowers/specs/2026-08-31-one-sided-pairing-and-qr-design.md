@@ -166,6 +166,21 @@ The manifest gains the filter it has never had — one `VIEW`/`BROWSABLE` intent
 `https://mtg-grimoire-relay.denmark-east.workers.dev/pair`. `android:launchMode="singleTask"` is
 already set, which is what such a filter wants.
 
+> ⚠️ **Overruled at review, on the same day, and reverted in full.** The half of this section
+> after the copy button — the `intent://` link, `assetlinks.json`, and the manifest's intent-filter
+> — was built and then **removed** before this branch opened as a PR. The design missed that
+> **nothing in the app reads a launch intent**: no `tauri-plugin-deep-link`, no handler for the URL
+> an activity is opened with, no reader for a code carried on one. So the `intent://` button was
+> dead (the app declares no such scheme), and the App Link was worse than dead — the moment
+> `assetlinks.json` carried a real fingerprint, `autoVerify` would succeed and Android would hand
+> `https://…/pair#<code>` to the app **instead of** the browser, with the app opening on its
+> ordinary window and this page, the only thing that can show the code to a reader scanning with a
+> generic camera app, no longer reachable from a scan. The deploy step would have broken the flow.
+> What survives is the page, its code and its copy button, which is the whole of what the fallback
+> path needs; the primary path is §3's in-app scanner, which opens no URL at all. Deep-linking
+> stays a coherent follow-up whose **first** step is the intent handling — the manifest filter is
+> its last.
+
 ---
 
 ## 3. The scanner — driven live, 2026-08-31, debug
@@ -416,4 +431,4 @@ string, which is where the *parsing* is worth testing and the camera is not.
 | `jsQR` as a new dependency | Unmaintained since 2021 but stable, **Apache-2.0** (this row said MIT; the installed package and its `LICENSE` file both say Apache-2.0 — corrected in Task 11's docs pass, 2026-08-31), no transitive deps. `zxing-wasm` is the alternative and is much larger. Settle at plan time. |
 | Unauthenticated rendezvous writes | Bounded by §1.5. Same exposure `/claim` already carries. |
 | Old build ↔ new build | Cannot be fixed; §6 states it. |
-| `assetlinks.json` needs the signing cert | A deploy step, not a code one. Until it exists the scan opens a chooser rather than the app — degraded, not broken. |
+| ~~`assetlinks.json` needs the signing cert~~ | **Withdrawn 2026-08-31 — this row had it backwards.** Installing the fingerprint is what would have *broken* the scan, because the app reads no launch intent; the App Link, the `intent://` button and the route are all removed. See §2.4's note. |
