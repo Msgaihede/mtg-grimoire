@@ -38,10 +38,12 @@
 
 /// Installs the camera-permission handler on `window`'s underlying platform webview.
 ///
-/// Best-effort and silent throughout: a window whose webview cannot be reached, or whose
-/// `ICoreWebView2` cannot be retrieved, is left exactly as it was before this call —
-/// WebView2's own default, which denies the camera. Nothing about opening the app may fail
-/// over this.
+/// Best-effort throughout, never silent: a window whose webview cannot be reached, whose
+/// `ICoreWebView2` cannot be retrieved, or whose WebView2 runtime has no `PermissionRequested`
+/// event at all, is left exactly as it was before this call — WebView2's own default, which
+/// denies the camera — but each of those three names itself with `eprintln!` so a reader's
+/// "the scanner doesn't work" has a breadcrumb pointing at this file instead of nothing.
+/// Nothing about opening the app may fail over this.
 ///
 /// A no-op off Windows. Android needs no handler installed here at all (its grant is the
 /// manifest permission), and no other desktop platform this crate ships for is a webview2
@@ -62,13 +64,20 @@ fn install_windows(window: &tauri::WebviewWindow) {
 
     // `with_webview` hands us the platform webview on the WebView2 thread; everything past
     // this point is COM interop and every step is allowed to fail into a no-op rather than
-    // an app that will not open.
-    let _ = window.with_webview(|webview| {
+    // an app that will not open. Each failure still names itself with `eprintln!`, the class
+    // of non-fatal background failure `desktop.rs` already logs the same way (the initial
+    // sync, the update check) — a camera denial with nothing in any log pointing at this file
+    // is indistinguishable from the fix never having shipped at all.
+    if let Err(e) = window.with_webview(|webview| {
         let controller = webview.controller();
         // SAFETY: `CoreWebView2` is a plain COM getter — no lifetime or aliasing requirement
         // beyond `controller` outliving the call, which it does as a local binding.
-        let Ok(core) = (unsafe { controller.CoreWebView2() }) else {
-            return;
+        let core = match unsafe { controller.CoreWebView2() } {
+            Ok(core) => core,
+            Err(e) => {
+                eprintln!("camera permission: no ICoreWebView2 yet (called before the platform webview exists?): {e}");
+                return;
+            }
         };
         let mut token: i64 = 0;
         let handler = PermissionRequestedEventHandler::create(Box::new(|_sender, args| {
@@ -89,8 +98,12 @@ fn install_windows(window: &tauri::WebviewWindow) {
         // `token` is a plain `i64` out-param this module never reads back (nothing here ever
         // calls `remove_PermissionRequested`, so the handler lives for the webview's whole
         // life).
-        let _ = unsafe { core.add_PermissionRequested(&handler, &mut token) };
-    });
+        if let Err(e) = unsafe { core.add_PermissionRequested(&handler, &mut token) } {
+            eprintln!("camera permission: this WebView2 runtime has no PermissionRequested event: {e}");
+        }
+    }) {
+        eprintln!("camera permission: with_webview failed (no platform webview yet?): {e}");
+    }
 }
 
 /// The one decision this module makes: which permission kind gets `ALLOW`.
