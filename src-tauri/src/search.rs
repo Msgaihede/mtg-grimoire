@@ -282,14 +282,20 @@ pub struct CardSummary {
     /// non-fetchable URI treated as no image at all. All three rules are
     /// [`crate::image_uri`]'s and none of them is respelled here.
     ///
-    /// **One key, [`crate::image_uri::LIST_VARIANT`] (`display`), and that is a decision rather
-    /// than a first instalment.** It is the size `WALL_CARD_VARIANT` draws and `CardArt`
-    /// defaults to, which makes it the only one with a reader; `thumb`, `grid` and `art` have
-    /// no caller on any wall, and this repo adds a field together with the thing that reads it.
-    /// **Widening is deliberate future work and costs no type change on either side** — the
-    /// shape is a map, and TypeScript's mirror is already a
-    /// `Partial<Record<ImageVariant, string>>`, so a name added to
-    /// [`crate::image_uri::LIST_VARIANTS`] is the whole of it.
+    /// **Two keys, [`crate::image_uri::LIST_VARIANT`] (`display`) and
+    /// [`crate::image_uri::ART_VARIANT`] (`art`), and the pair is a decision rather than a
+    /// first instalment.** `display` is the size `WALL_CARD_VARIANT` draws and `CardArt`
+    /// defaults to, so it is what every wall reads. `art` was carried by nothing until
+    /// 2026-08-31 and is now read by five surfaces in the deck feature — a deck tile's cover, a
+    /// folder card's member strip, both halves of `DeckCoverPicker` and `TheoryDiffDialog`'s
+    /// row — every one of which drew a blank frame in a browser until it arrived. `thumb` and
+    /// `grid` still have no caller on any wall, and this repo adds a field together with the
+    /// thing that reads it.
+    ///
+    /// **Widening cost no type change on either side**, which was the point of the map: the
+    /// shape is a map, TypeScript's mirror is already a
+    /// `Partial<Record<ImageVariant, string>>`, and a name added to
+    /// [`crate::image_uri::LIST_VARIANTS`] was the whole of it.
     ///
     /// **Face 0 only, and that is the scope rather than an omission.** The walls draw the
     /// front; the flip control lives in the card pane, which is not routed on web.
@@ -320,6 +326,11 @@ pub struct CardSummary {
     /// this crosses a Worker `postMessage` or a Tauri IPC hop and never a network, which is
     /// why the count is *not* what settled the shape. `front_face_selects` carries the third
     /// option that was weighed and declined: the URL is derivable from the row's id, at ~10 B.
+    ///
+    /// **The second variant was re-measured the same way on 2026-08-31 and cost +5 050 B on
+    /// top of that — +17.2%, 101 B a row.** The whole ladder and the arithmetic that made the
+    /// two runs comparable are on [`crate::image_uri::LIST_VARIANTS`], which is where the
+    /// decision lives; this note exists so the figure above is not read as current on its own.
     pub image_uris: Option<BTreeMap<String, String>>,
 }
 
@@ -1012,8 +1023,8 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
         // printings — built by [`crate::collection_source`] rather than written out, so the
         // wall and the Collection page cannot disagree about what the reader has.
         let owned_by_oracle = crate::collection_source::copies_of_oracle(conn, "c.oracle_id");
-        // The front face's picture, as eight `json_extract`s off the `cards` row the query
-        // already has in hand — no join and no second statement. Built by
+        // The front face's picture, as `image_uri::FRONT_FACE_COLUMNS` `json_extract`s off the
+        // `cards` row the query already has in hand — no join and no second statement. Built by
         // [`crate::image_uri::front_face_selects`] rather than written out, because the
         // *precedence* between the two columns is applied in Rust by
         // [`crate::image_uri::front_face_map`], and a `COALESCE` spelled here would be a
@@ -1055,7 +1066,7 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
         // The same badge, by **printing**: an uncollapsed row is one printing, so the count
         // beside it is that printing's.
         let owned_by_printing = crate::collection_source::copies_of_printing(conn, "c.id");
-        // The same eight columns, in the same place: the branches share one row mapping.
+        // The same columns, in the same place: the branches share one row mapping.
         let image_uris = crate::image_uri::front_face_selects("c").join(", ");
         format!(
             "SELECT c.id, c.name, c.set_code, c.set_name, c.collector_number, c.rarity,
@@ -3902,10 +3913,12 @@ mod tests {
     /// a plain printing carries its top-level blob, a **meld** printing carries its *face's*
     /// URL and not the top-level one, and a `soon.jpg` printing carries no map at all rather
     /// than a URL that answers `200` with Scryfall's error page. And the key set itself, which
-    /// is the fourth: `display` alone is a decision, so a widening has to edit a test.
+    /// is the fourth: two of the schema's four variants is a decision, so a widening has to
+    /// edit a test. The fixtures carry all four, so an accidental widening comes back as real
+    /// URLs under real keys and only this assertion can see it.
     ///
     /// Both query shapes, for `results_say_which_cards_are_game_changers`' reason: two select
-    /// lists feed one row mapping, and eight columns added to one of them or at a different
+    /// lists feed one row mapping, and columns added to one of them or at a different
     /// position come back as another column's value rather than as an error.
     #[test]
     fn results_carry_the_front_faces_image_urls() {
@@ -3922,15 +3935,19 @@ mod tests {
             [],
         )
         .unwrap();
-        // A `meld` printing: **both** columns carry `display`, which is the only shape that
-        // can tell the two orders apart. Reversed, this row draws the melded card where its
-        // front belongs and nothing on screen says so.
+        // A `meld` printing: **both** columns carry **both** variants, which is the only shape
+        // that can tell the orders apart. Reversed, this row draws the melded card where its
+        // front belongs and nothing on screen says so; paired up wrong, it draws the crop where
+        // the card belongs, and that is a URL too.
         conn.execute(
             "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,is_paper,
                                 image_uris,face_image_uris,raw)
              VALUES ('img-meld','Bruna','emn','15','en','meld',1,
-                     json_object('display','https://cards.scryfall.io/display/top.webp?3'),
-                     json_array(json_object('display','https://cards.scryfall.io/display/face0.webp?3')),
+                     json_object('display','https://cards.scryfall.io/display/top.webp?3',
+                                 'art','https://cards.scryfall.io/art/top.webp?3'),
+                     json_array(json_object(
+                                 'display','https://cards.scryfall.io/display/face0.webp?3',
+                                 'art','https://cards.scryfall.io/art/face0.webp?3')),
                      '{}')",
             [],
         )
@@ -3967,18 +3984,32 @@ mod tests {
                 "https://cards.scryfall.io/display/p.webp?7",
                 "a top-level blob answers ({collapse:?})"
             );
-            // The narrowing to one variant, fenced on the DTO as well as in the module: a
-            // row that grew back to four would pass every other assertion here.
             assert_eq!(
-                plain.keys().collect::<Vec<_>>(),
-                [crate::image_uri::LIST_VARIANT],
-                "the row carries the wall's variant and no other ({collapse:?})"
+                plain[crate::image_uri::ART_VARIANT],
+                "https://cards.scryfall.io/art/p.webp?7",
+                "and the crop, under its own key ({collapse:?})"
+            );
+            // The narrowing to two of the schema's four, fenced on the DTO as well as in the
+            // module: a row that grew back to four would pass every other assertion here, and
+            // this fixture carries all four so the extra keys would be real URLs.
+            // Spelled out rather than read off `LIST_VARIANTS`: an assertion that reads the
+            // constant it is fencing can never fail when that constant moves.
+            assert_eq!(
+                plain.keys().map(String::as_str).collect::<Vec<_>>(),
+                ["art", "display"],
+                "the row carries what a list row carries and nothing else ({collapse:?})"
             );
 
+            let meld = pick("img-meld").image_uris.as_ref().unwrap();
             assert_eq!(
-                pick("img-meld").image_uris.as_ref().unwrap()[crate::image_uri::LIST_VARIANT],
+                meld[crate::image_uri::LIST_VARIANT],
                 "https://cards.scryfall.io/display/face0.webp?3",
                 "the face wins over the top-level image ({collapse:?})"
+            );
+            assert_eq!(
+                meld[crate::image_uri::ART_VARIANT],
+                "https://cards.scryfall.io/art/face0.webp?3",
+                "for the second variant too, at its own offset ({collapse:?})"
             );
 
             assert_eq!(
@@ -3992,7 +4023,7 @@ mod tests {
                 "a printing with neither column carries nothing ({collapse:?})"
             );
 
-            // The neighbours on either side of the eight new columns still land in their own
+            // The neighbours on either side of the image columns still land in their own
             // fields — the failure a shifted index actually produces.
             let bolt = pick("1");
             assert!(!bolt.wishlisted, "{collapse:?}");

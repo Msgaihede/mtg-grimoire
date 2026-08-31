@@ -20,7 +20,7 @@ import { useTooltip } from "@/components/tooltip/useTooltip";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { cardScaleVars } from "@/lib/cardZoom";
 import { FOCUS } from "@/lib/focus";
-import { ART_ASPECT, cardImageUrl } from "@/lib/images";
+import { ART_ASPECT, cardArtSrc, cardImageUrl } from "@/lib/images";
 import type { DeckRow } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { PRESS } from "@/lib/motion";
@@ -79,6 +79,21 @@ export function deckBadge(deck: DeckRow): DeckBadge {
 }
 
 /**
+ * Has this deck a cover the app is **allowed** to draw — a printing, and an illustrator to
+ * credit it to?
+ *
+ * Split out from {@link coverUrl} on 2026-08-31, and the split is what keeps the empty frame
+ * honest on the web build. There a cover with no URL on the row is `null` from {@link coverUrl}
+ * just as a deck with no cover is, and the frame's three words are the only thing telling a
+ * reader which of the two happened. "No cover" means *you have not chosen one*; a deck that has
+ * chosen one and cannot be handed its bytes says "No image", which is the same sentence a
+ * failed fetch gets and the true one.
+ */
+function hasCover(deck: DeckRow): boolean {
+  return deck.coverCardId !== null && deck.coverArtist !== null;
+}
+
+/**
  * A deck's cover as a URL — or `null` when it has none, or none this app may draw.
  *
  * **A cover this app cannot credit is not drawn at all.** Scryfall's image policy is that an
@@ -103,10 +118,18 @@ export function deckBadge(deck: DeckRow): DeckBadge {
  * point: the gallery and the dialog draw one picture and used to disagree about this exact case.
  * If a third surface ever draws a cover, these three lines want a shared home rather than a
  * third copy.
+ *
+ * **The platform branch is {@link cardArtSrc}'s and is written nowhere else.** `mtgimg://` is a
+ * Tauri custom protocol and wasm cannot register a URL scheme with a browser, so on web the only
+ * picture reachable is the one `deck_list` put on the row — and a deck whose row carries none
+ * answers `null` here, which is the empty frame rather than a broken `<img>`. This went missing
+ * when the walls were routed through `cardArtSrc` (PRs #320/#321), so every deck cover on web
+ * and on the phone was the platform's broken-image glyph from the day #327 made the card-art
+ * crop the *only* cover.
  */
 function coverUrl(deck: DeckRow): string | null {
   return deck.coverCardId !== null && deck.coverArtist !== null
-    ? cardImageUrl(deck.coverCardId, 0, "art")
+    ? cardArtSrc(cardImageUrl(deck.coverCardId, 0, "art"), deck.imageUris?.art)
     : null;
 }
 
@@ -492,6 +515,8 @@ export function DeckTile({
  */
 function Cover({ deck }: { deck: DeckRow }) {
   const url = coverUrl(deck);
+  // Not `url === null`: on web those are two different states — see {@link hasCover}.
+  const chosen = hasCover(deck);
   const image = useImageRetry(url);
 
   return (
@@ -525,7 +550,7 @@ function Cover({ deck }: { deck: DeckRow }) {
         // three words centred in a doubled box at their shipped size read as a caption that
         // missed the zoom.
         <span aria-hidden="true" className="text-[calc(0.7rem*var(--mark-scale,1))] text-dim">
-          {!url ? "No cover" : image.retrying ? "Retrying…" : "No image"}
+          {!chosen ? "No cover" : image.retrying ? "Retrying…" : "No image"}
         </span>
       )}
     </span>

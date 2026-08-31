@@ -617,6 +617,28 @@ pub struct DeckRow {
     /// all conclusions and all TypeScript's; this is the stored fact and the four signals the
     /// rule reads are supplied separately.
     pub bracket: i64,
+    /// **The cover printing's picture, not the deck's** — the row [`Self::cover_card_id`] names,
+    /// read off the same `LEFT JOIN cards` [`Self::cover_artist`] comes from. A deck is not a
+    /// card and has no images of its own; this is the one field on this struct that describes a
+    /// *different* row, which is why it is worth saying twice.
+    ///
+    /// The key a tile wants is [`crate::image_uri::ART_VARIANT`]. A deck's cover is a crop
+    /// rather than a card face, and it is the only cover mechanism there is since custom covers
+    /// went — so `display` is here because [`crate::image_uri::LIST_VARIANTS`] emits the pair
+    /// and not because anything on a gallery reads it.
+    ///
+    /// **Why it is on the wire at all**, [`crate::search::CardSummary::image_uris`]' argument
+    /// in full: `mtgimg://` is a Tauri custom protocol and wasm cannot register a URL scheme
+    /// with a browser, so on web and on Android the URL travels with the row or the tile draws
+    /// nothing. That is what it was doing — every deck cover in a browser was a blank frame the
+    /// moment PR #327 made the card crop the only cover. On desktop this is ignored, because
+    /// `src/lib/images.ts`'s `cardArtSrc` takes the local cache.
+    ///
+    /// `None` for a deck with no cover, for a cover whose printing has left `cards`, and for a
+    /// printing with no fetchable image — three states the tile draws identically, because from
+    /// the reader's side they are one: nothing to show yet. The first two heal on the next sync,
+    /// which is [`Self::cover_artist`]'s own note.
+    pub image_uris: Option<BTreeMap<String, String>>,
 }
 
 /// A name a gallery can show. A deck with no name is a nameless tile, and `decks.name` has
@@ -829,12 +851,21 @@ fn category_name(conn: &Connection, category_id: i64) -> Result<Option<String>, 
 /// `deck_cards.category_id` is `NOT NULL` with an enforced foreign key: a card with no category
 /// is a row the schema cannot hold.
 ///
-/// `'live'` is spelled out rather than interpolated from [`LIVE`] because this is a `const` and
-/// there is nothing to interpolate with;
+/// `'live'` is spelled out rather than interpolated from [`LIVE`] because there is nothing to
+/// interpolate with at that point;
 /// `the_gallery_count_reads_only_live_rows_in_active_categories` is what keeps the literal
 /// honest, and `an_active_maybeboard_is_part_of_the_deck_and_an_inactive_one_is_not` is what
 /// keeps the kind list in step with `SIZE_KINDS`.
-const DECK_SELECT: &str = "SELECT d.id, d.name, d.format_key, fs.display_name, d.description,
+///
+/// **A `LazyLock<String>` rather than a `const`, and the `LEFT JOIN cards` is why.** That join
+/// was here for `c.artist` alone; [`crate::image_uri::front_face_selects`] reads the same row
+/// for the cover printing's picture, and the variants it emits come from
+/// [`crate::image_uri::LIST_VARIANTS`] rather than from anything spellable in a `const`. The
+/// `format!` is spent once per process — `OWNED_SPARE_SQL`'s arrangement one file over, for the
+/// same reason: a live read has to mean whatever the constant means today.
+static DECK_SELECT: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "SELECT d.id, d.name, d.format_key, fs.display_name, d.description,
             d.cover_card_id, d.cover_kind, c.artist, d.archived,
             coalesce((SELECT sum(dc.quantity) FROM deck_cards dc
                         JOIN deck_categories cat ON cat.id = dc.category_id
@@ -844,12 +875,20 @@ const DECK_SELECT: &str = "SELECT d.id, d.name, d.format_key, fs.display_name, d
                          AND cat.kind IN ('main','commander','maybe')), 0),
             d.updated_at, d.folder_id, d.notes, d.theory_enabled,
             d.last_variant, d.last_group_by, d.last_sort_by, d.separate_x_group,
-            d.default_category_id, d.game_key, d.bracket
+            d.default_category_id, d.game_key, d.bracket,
+            {images}
        FROM decks d
        LEFT JOIN format_specs fs ON fs.key = d.format_key
-       LEFT JOIN cards c ON c.id = d.cover_card_id";
+       LEFT JOIN cards c ON c.id = d.cover_card_id",
+        images = crate::image_uri::front_face_selects("c").join(", ")
+    )
+});
 
 fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
+    /// Where `DECK_SELECT`'s image columns start — one past `d.bracket`, the last named
+    /// column. Named rather than inlined for `deck_card_select`'s reason: the pairing
+    /// arithmetic below is `front_face_map`'s and only the *offset* is this function's.
+    const IMAGE_COL: usize = 21;
     Ok(DeckRow {
         id: r.get(0)?,
         name: r.get(1)?,
@@ -899,6 +938,20 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
         // to a bracket, with every field still holding a number SQLite is perfectly happy to
         // give back.
         bracket: r.get(20)?,
+        // **From 21**, last of all, for the reason written four comments up — the
+        // `crate::image_uri::FRONT_FACE_COLUMNS` expressions `front_face_selects` appended, in
+        // the (top-level, face) pairs `front_face_map` folds back up, one pair per variant.
+        //
+        // This read carries a failure the twenty above it do not. Every one of those is caught
+        // by a value of the wrong *kind* turning up in a field; here the pair is
+        // (top-level, face) and `for_face` prefers the face, so a read one column out still
+        // answers a perfectly real URL — the right picture from the wrong slot, or the crop
+        // where the card belongs. No fixture carrying a single column can tell the two apart;
+        // `image_uri`'s `meld` row, which disagrees with itself in both columns and for both
+        // variants, is the shape that can.
+        image_uris: crate::image_uri::front_face_map(|i| {
+            r.get::<_, Option<String>>(IMAGE_COL + i)
+        })?,
     })
 }
 
@@ -906,7 +959,7 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
 /// caller gets back is the row the gallery would have read.
 pub(crate) fn read_deck(conn: &Connection, id: i64) -> Result<Option<DeckRow>, String> {
     conn.query_row(
-        &format!("{DECK_SELECT} WHERE d.id = ?1"),
+        &format!("{} WHERE d.id = ?1", *DECK_SELECT),
         params![id],
         deck_row,
     )
@@ -2262,7 +2315,10 @@ pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
 
 /// The gallery, archived decks last and most recently touched first.
 pub fn list_decks(conn: &Connection) -> Result<Vec<DeckRow>, String> {
-    let sql = format!("{DECK_SELECT} ORDER BY d.archived ASC, d.updated_at DESC, d.id DESC");
+    let sql = format!(
+        "{} ORDER BY d.archived ASC, d.updated_at DESC, d.id DESC",
+        *DECK_SELECT
+    );
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt.query_map([], deck_row).map_err(|e| e.to_string())?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -3436,9 +3492,10 @@ fn deck_card_select(marketplace: crate::sorting::Marketplace) -> String {
             -- beside `c.finishes` at 30, where it would have handed a printing's finishes to
             -- its treatments and a set name to its finishes, both still plausible strings.
             c.promo_types,
-            -- 36 and 37, last of all, for the reason written above `dc.finish`: this read is
+            -- From 36, last of all, for the reason written above `dc.finish`: this read is
             -- positional and a column added anywhere else shifts every index after it into a
-            -- field of the same SQLite type, silently.
+            -- field of the same SQLite type, silently. As many columns as
+            -- `image_uri::FRONT_FACE_COLUMNS` says — two per variant a list row carries.
             {image_uris}
        FROM deck_cards dc
        JOIN deck_categories cat ON cat.id = dc.category_id
@@ -3556,8 +3613,9 @@ fn read_deck_cards(
                 finish: r.get(34)?,
                 // 35, after it, for the same reason.
                 promo_types: r.get(35)?,
-                // 36 and 37 — the pair `front_face_selects` added, folded back up by the
-                // module that added them, face-first precedence and `soon.jpg` fence included.
+                // From 36 — the (top-level, face) pairs `front_face_selects` added, one per
+                // variant, folded back up by the module that added them, face-first precedence
+                // and `soon.jpg` fence included.
                 image_uris: crate::image_uri::front_face_map(|i| {
                     r.get::<_, Option<String>>(IMAGE_COL + i)
                 })?,
@@ -5921,6 +5979,122 @@ mod tests {
         assert_eq!(decks[1].card_count, 0);
     }
 
+    /// **A deck row carries the *cover printing's* picture** — the gallery tile's only way to
+    /// draw a cover on web or on the phone, where `mtgimg://` is a scheme no browser has.
+    ///
+    /// It is the one field on `DeckRow` that describes a different row, and the join it comes
+    /// off is `LEFT JOIN cards c ON c.id = d.cover_card_id` — the same one `cover_artist` uses.
+    /// So the failure this guards is not only an off-by-one: it is also reading the *deck's*
+    /// own row, which has no images at all and would answer `None` for every deck, silently,
+    /// with a suite full of decks that have no cover anyway.
+    ///
+    /// **`bolt-m10` is shaped like a `meld` printing and carries all four variants in both
+    /// columns, every one a different URL**, which is the only shape where every way of getting
+    /// this wrong gives a different answer rather than the right one by luck: face-first
+    /// precedence reversed answers `top.webp`, a pair read one column out answers the other
+    /// variant's, and a widening back to four answers extra keys that are real URLs.
+    ///
+    /// Four states, and three of them are the *same* blank frame to a reader: no cover at all,
+    /// a cover whose printing has left `cards`, and a printing whose only URL is Scryfall's
+    /// error page. `DeckTile` draws all three as "No cover" rather than as a failure.
+    #[test]
+    fn a_deck_row_carries_the_cover_printings_art() {
+        let conn = seeded();
+        conn.execute(
+            "UPDATE cards SET
+                 image_uris = json_object(
+                     'thumb','https://cards.scryfall.io/thumb/top.webp?4',
+                     'grid','https://cards.scryfall.io/grid/top.webp?4',
+                     'display','https://cards.scryfall.io/display/top.webp?4',
+                     'art','https://cards.scryfall.io/art/top.webp?4'),
+                 face_image_uris = json_array(json_object(
+                     'thumb','https://cards.scryfall.io/thumb/face0.webp?4',
+                     'grid','https://cards.scryfall.io/grid/face0.webp?4',
+                     'display','https://cards.scryfall.io/display/face0.webp?4',
+                     'art','https://cards.scryfall.io/art/face0.webp?4'))
+             WHERE id = 'bolt-m10'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE cards SET image_uris = json_object(
+                 'art','https://errors.scryfall.com/soon.jpg')
+             WHERE id = 'bolt-jp'",
+            [],
+        )
+        .unwrap();
+
+        let cover = |card_id: &str| {
+            let deck = create_deck(&conn, &input(card_id, "commander")).unwrap();
+            update_deck(
+                &conn,
+                deck.id,
+                &DeckPatch {
+                    cover_card_id: Some(card_id.to_owned()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            deck.id
+        };
+        let art = cover("bolt-m10");
+        let poisoned = cover("bolt-jp");
+        let orphan = cover("gone-from-the-corpus");
+        let bare = create_deck(&conn, &input("No cover", "commander"))
+            .unwrap()
+            .id;
+
+        // Through `list_decks` *and* `read_deck`: both go through `deck_row`, and this is what
+        // says so rather than the call graph.
+        for reader in ["list", "read"] {
+            let of = |id: i64| -> Option<BTreeMap<String, String>> {
+                if reader == "list" {
+                    list_decks(&conn)
+                        .unwrap()
+                        .into_iter()
+                        .find(|d| d.id == id)
+                        .unwrap()
+                        .image_uris
+                } else {
+                    read_deck(&conn, id).unwrap().unwrap().image_uris
+                }
+            };
+
+            let uris = of(art).unwrap_or_else(|| panic!("the cover has a picture ({reader})"));
+            assert_eq!(
+                uris[crate::image_uri::ART_VARIANT],
+                "https://cards.scryfall.io/art/face0.webp?4",
+                "the tile's crop, from the face and not the top-level blob ({reader})"
+            );
+            assert_eq!(
+                uris[crate::image_uri::LIST_VARIANT],
+                "https://cards.scryfall.io/display/face0.webp?4",
+                "and the card, at its own offset ({reader})"
+            );
+            // Spelled out rather than read off `LIST_VARIANTS`: an assertion that reads the
+            // constant it is fencing can never fail when that constant moves, and the cover
+            // printing here carries all four variants, so a widening comes back as real URLs
+            // under real keys. A widening has to come here and say so.
+            assert_eq!(
+                uris.keys().map(String::as_str).collect::<Vec<_>>(),
+                ["art", "display"],
+                "what a list row carries and nothing else ({reader})"
+            );
+
+            assert_eq!(
+                of(poisoned),
+                None,
+                "an error page is a gap, not a cover ({reader})"
+            );
+            assert_eq!(
+                of(orphan),
+                None,
+                "a cover whose printing has left `cards` draws nothing ({reader})"
+            );
+            assert_eq!(of(bare), None, "and a deck with no cover ({reader})");
+        }
+    }
+
     /// The gallery's caption is about the deck the user has, and two things are not it: a
     /// **theory** row, which is a plan, and a row in a category that has been switched
     /// **off**, which counts toward nothing at all. Neither is a kind check — a main-deck
@@ -7008,6 +7182,20 @@ mod tests {
             separate_x_group: true,
             default_category_id: 12,
             bracket: 3,
+            // Two keys, both real URLs, because this is the one field on the row whose *shape*
+            // crosses the boundary rather than a scalar: `Option<BTreeMap>` has to reach
+            // TypeScript as an object of variant keys and not as a list or a bare string, and
+            // the deck tile reads `art` out of it by name.
+            image_uris: Some(BTreeMap::from([
+                (
+                    "art".to_owned(),
+                    "https://cards.scryfall.io/art/front/0/0/bolt.webp?17".to_owned(),
+                ),
+                (
+                    "display".to_owned(),
+                    "https://cards.scryfall.io/display/front/0/0/bolt.webp?17".to_owned(),
+                ),
+            ])),
         })
         .unwrap();
         assert_eq!(
@@ -7036,7 +7224,14 @@ mod tests {
                 // And a real bracket rather than `0`, third application of the same rule:
                 // zero is [`AUTO_BRACKET`] and would be the answer whether or not the column
                 // reached the wire at all.
-                "bracket": 3
+                "bracket": 3,
+                // The cover printing's picture, spelled out key by key: this is the deck
+                // gallery's only way to draw a cover on web and on the phone, and it is a map
+                // rather than a URL because `LIST_VARIANTS` decides what a row carries.
+                "imageUris": {
+                    "art": "https://cards.scryfall.io/art/front/0/0/bolt.webp?17",
+                    "display": "https://cards.scryfall.io/display/front/0/0/bolt.webp?17"
+                }
             })
         );
 
@@ -9091,18 +9286,27 @@ mod tests {
     /// `mtgimg://` is a Tauri custom protocol and wasm cannot register one with a browser, so
     /// without this a deck opened on the web build is a wall of named, artless frames.
     ///
-    /// **`bolt-m10` is the row that makes the offset visible at all.** 36 and 37 sit directly
+    /// **`bolt-m10` is the row that makes the offset visible at all.** The pair starts directly
     /// after `c.promo_types`, and with only top-level pictures in the fixture a read one column
     /// early lands the top-level URL in the `face` slot and answers correctly anyway — the
     /// mutation survived exactly that way. A `meld`-shaped row carrying **both** columns is the
     /// only shape where the shifted read gives a different, wrong answer, and it pins the
     /// face-first precedence in the same breath.
+    ///
+    /// **Both variants, since 2026-08-31**, and the second one is a second way for the offset
+    /// to be wrong rather than more of the same: with `display` and `art` the select list is
+    /// four expressions, and a read that pairs them up wrong hands the crop back under
+    /// `display` — still a URL, still on the image host, still versioned, and the wrong
+    /// picture. Every row here therefore carries a *different* URL per variant per column.
     #[test]
     fn a_deck_card_carries_the_front_faces_image_url() {
         let conn = seeded();
         conn.execute(
             "UPDATE cards SET image_uris = json_object(
-                 'display','https://cards.scryfall.io/display/front/0/0/x.webp?17')
+                 'thumb','https://cards.scryfall.io/thumb/front/0/0/x.webp?17',
+                 'grid','https://cards.scryfall.io/grid/front/0/0/x.webp?17',
+                 'display','https://cards.scryfall.io/display/front/0/0/x.webp?17',
+                 'art','https://cards.scryfall.io/art/front/0/0/x.webp?17')
              WHERE id = 'bolt-lea'",
             [],
         )
@@ -9119,9 +9323,11 @@ mod tests {
         conn.execute(
             "UPDATE cards SET
                  image_uris = json_object(
-                     'display','https://cards.scryfall.io/display/top.webp?1'),
+                     'display','https://cards.scryfall.io/display/top.webp?1',
+                     'art','https://cards.scryfall.io/art/top.webp?1'),
                  face_image_uris = json_array(json_object(
-                     'display','https://cards.scryfall.io/display/face0.webp?1'))
+                     'display','https://cards.scryfall.io/display/face0.webp?1',
+                     'art','https://cards.scryfall.io/art/face0.webp?1'))
              WHERE id = 'bolt-m10'",
             [],
         )
@@ -9146,22 +9352,36 @@ mod tests {
             "https://cards.scryfall.io/display/front/0/0/x.webp?17"
         );
         assert_eq!(
-            art.keys().collect::<Vec<_>>(),
-            [crate::image_uri::LIST_VARIANT]
+            art[crate::image_uri::ART_VARIANT],
+            "https://cards.scryfall.io/art/front/0/0/x.webp?17",
+            "the crop, under its own key — a pairing read wrong swaps these two"
+        );
+        // Spelled out rather than read off `LIST_VARIANTS`, for the reason
+        // `a_deck_row_carries_the_cover_printings_art` gives: a widening has to edit a test.
+        assert_eq!(
+            art.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["art", "display"],
+            "every variant a list row carries, and nothing else"
         );
         // The two columns an off-by-one would have reached, both still plausible strings.
         assert_eq!(row.promo_types, None, "the column directly before the pair");
         assert_eq!(row.finish, None);
 
-        // The precedence **and** the offset. See the doc above for why no other row here can
-        // fail when the pair is read a column early.
+        // The precedence **and** the offset, for both variants. See the doc above for why no
+        // other row here can fail when the pair is read a column early.
+        let meld = card_row(&detail, "bolt-m10", main)
+            .image_uris
+            .as_ref()
+            .expect("a meld-shaped printing has a front face");
         assert_eq!(
-            card_row(&detail, "bolt-m10", main)
-                .image_uris
-                .as_ref()
-                .expect("a meld-shaped printing has a front face")[crate::image_uri::LIST_VARIANT],
+            meld[crate::image_uri::LIST_VARIANT],
             "https://cards.scryfall.io/display/face0.webp?1",
             "the face wins over the top-level blob, and the pair is read at its own offset"
+        );
+        assert_eq!(
+            meld[crate::image_uri::ART_VARIANT],
+            "https://cards.scryfall.io/art/face0.webp?1",
+            "and the second variant's pair is read at its own offset too"
         );
 
         assert_eq!(

@@ -5,7 +5,13 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import type { CardSummary } from "@/lib/ipc";
 import { cardImageUrl } from "@/lib/images";
+import { isWebTarget } from "@/pwa/target";
 import { card } from "./validation/fixtures";
+
+/** Which build a frame thinks it is in. `isWebTarget()` reads `__CORE__`, a build-time constant
+ *  vitest fixes at `"tauri"`, so the web answer cannot be arranged any other way — see
+ *  `src/pwa/target.ts`. Desktop unless a case says otherwise. */
+vi.mock("@/pwa/target", () => ({ isWebTarget: vi.fn(() => false) }));
 
 const searchCards = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
@@ -70,6 +76,10 @@ function picker(props: Partial<DeckCoverPickerProps> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // `clearAllMocks` wipes the implementation a `vi.fn(() => false)` was created with, so this
+  // is a restore rather than a reset: without it every case after the first reads `undefined`
+  // and the whole file quietly runs on the web branch.
+  vi.mocked(isWebTarget).mockReturnValue(false);
   searchCards.mockResolvedValue(page([]));
 });
 
@@ -267,6 +277,93 @@ describe("DeckCoverPicker", () => {
     expect(
       container.querySelector(`img[src="${cardImageUrl("c-Lightning Bolt", 0, "art")}"]`),
     ).toBeNull();
+  });
+
+  /**
+   * **The picker in a browser, where `mtgimg://` reaches nothing.**
+   *
+   * It is a Tauri custom protocol and wasm cannot register a URL scheme with a browser, so the
+   * preview and every choice tile drew a broken `<img>` on web and on the phone. `cardArtSrc`
+   * is the whole of the branch, and both frames now go through it — the preview from the host's
+   * `coverImageUrl`, the tiles from whichever row they were drawn from.
+   *
+   * The `src` is asserted rather than the prop, so a case cannot pass by reading its own
+   * constant back off the thing it handed in.
+   */
+  describe("on the web build", () => {
+    const SUPPLIED = "https://cards.scryfall.io/art/front/0/0/bolt.webp?1706230661";
+
+    beforeEach(() => {
+      vi.mocked(isWebTarget).mockReturnValue(true);
+    });
+
+    it("draws the preview from the URL the host handed it", () => {
+      const { container } = picker({ coverImageUrl: SUPPLIED });
+
+      expect(container.querySelector(`img[src="${SUPPLIED}"]`)).not.toBeNull();
+      expect(screen.getByText("Art by Christopher Rush")).toBeInTheDocument();
+    });
+
+    /** "No image", not "No cover": a cover **is** chosen, and only the bytes are out of reach.
+     *  `DeckTile`'s frame makes the same split, in the same words, for the same reason. */
+    it("says the picture is missing rather than the cover when no URL was handed in", () => {
+      const { container } = picker();
+
+      expect(container.querySelector("img")).toBeNull();
+      expect(screen.getByText("No image")).toBeInTheDocument();
+      expect(screen.queryByText("No cover")).toBeNull();
+    });
+
+    /** A deck with no cover at all still says so — `coverArtist` is the condition, and it is
+     *  unchanged by which build this is. */
+    it("still says No cover for a cover it cannot credit", () => {
+      picker({ coverArtist: null, coverImageUrl: SUPPLIED });
+
+      expect(screen.getByText("No cover")).toBeInTheDocument();
+      expect(screen.queryByText("No image")).toBeNull();
+    });
+
+    /** A choice tile from the deck's own printings — its URL is the `DeckCard` row's. */
+    it("draws a deck choice tile from that card's own row", () => {
+      picker({
+        deckCards: [
+          card({ name: "Shivan Dragon", imageUris: { art: SUPPLIED } }),
+          card({ name: "Mox Pearl" }),
+        ],
+      });
+
+      expect(screen.getByRole("button", { name: "Shivan Dragon" }).querySelector("img")).toHaveAttribute(
+        "src",
+        SUPPLIED,
+      );
+      // The row that carries none draws an empty, bordered tile — still named, still pickable.
+      expect(screen.getByRole("button", { name: "Mox Pearl" }).querySelector("img")).toBeNull();
+    });
+
+    /** And a search answer's tile — its URL is the `CardSummary` row's. */
+    it("draws a search result tile from that result's own row", async () => {
+      searchCards.mockResolvedValue(page([{ ...found("Goblin Guide"), imageUris: { art: SUPPLIED } }]));
+      picker();
+
+      await userEvent.type(screen.getByLabelText("Search every card"), "gob");
+
+      const tile = await screen.findByRole("button", { name: "Goblin Guide" });
+      expect(tile.querySelector("img")).toHaveAttribute("src", SUPPLIED);
+    });
+  });
+
+  /**
+   * The desktop half of the same branch: the local cache already holds the crop at the right
+   * size, so a row that carries a URL is still drawn from the protocol. Asserted because a
+   * frame that preferred the supplied URL would refetch every tile in the grid over the
+   * network, and nothing on screen would say so.
+   */
+  it("keeps drawing the protocol picture on desktop even when a URL is handed in", () => {
+    const { container } = picker({ coverImageUrl: "https://cards.scryfall.io/art/x.webp?1" });
+
+    const img = container.querySelector("img");
+    expect(img).toHaveAttribute("src", cardImageUrl("c-Lightning Bolt", 0, "art"));
+    expect(img!.getAttribute("src")).not.toContain("scryfall.io");
   });
 
   /**

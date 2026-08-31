@@ -7,6 +7,12 @@ import type { TheoryDiffRow } from "@/lib/ipc";
 import { cardImageUrl } from "@/lib/images";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
+import { isWebTarget } from "@/pwa/target";
+
+/** Which build a card frame thinks it is in. `isWebTarget()` reads `__CORE__`, a build-time
+ *  constant vitest fixes at `"tauri"`, so the web answer cannot be arranged any other way — see
+ *  `src/pwa/target.ts`. Desktop unless a case says otherwise. */
+vi.mock("@/pwa/target", () => ({ isWebTarget: vi.fn(() => false) }));
 
 const deckTheoryDiff = vi.hoisted(() => vi.fn());
 const deckTheoryMissingToWishlist = vi.hoisted(() => vi.fn());
@@ -117,6 +123,8 @@ function wrap(ui: ReactElement) {
 const props = { deckId: 4, open: true, onDismiss: vi.fn(), onClose: vi.fn() };
 
 beforeEach(() => {
+  // Desktop unless a case says otherwise — a leaked `true` would blank every crop in this file.
+  vi.mocked(isWebTarget).mockReturnValue(false);
   deckTheoryDiff.mockReset().mockResolvedValue([row(), SOL_RING, UNPRICED]);
   deckTheoryMissingToWishlist.mockReset().mockResolvedValue(3);
   wishlistAdd.mockReset();
@@ -190,6 +198,66 @@ describe("the theory difference dialog", () => {
     expect(image).toHaveAttribute("src", cardImageUrl("ring-c21", 0, "art"));
     expect(image).toHaveAttribute("alt", "");
     expect(image).toHaveAttribute("draggable", "false");
+  });
+
+  /**
+   * **The same frame in a browser, where `mtgimg://` reaches nothing.**
+   *
+   * It is a Tauri custom protocol and wasm cannot register a URL scheme with a browser, so this
+   * row's thumbnail was a broken-image glyph on web and on the phone — `deck_theory_diff` is in
+   * `web/route.rs`'s `COMMANDS`, so the dialog really does open there. `cardArtSrc` is the whole
+   * of the branch and takes both candidates.
+   *
+   * The `src` is asserted rather than the prop: a case that read back the URL it handed in
+   * could not fail.
+   */
+  describe("on the web build", () => {
+    const SUPPLIED = "https://cards.scryfall.io/art/front/0/0/ring.webp?1706230661";
+
+    beforeEach(() => {
+      vi.mocked(isWebTarget).mockReturnValue(true);
+    });
+
+    it("draws the crop from the URL the row carries", async () => {
+      deckTheoryDiff.mockResolvedValue([{ ...SOL_RING, imageUris: { art: SUPPLIED } }]);
+
+      wrap(<TheoryDiffDialog {...props} />);
+
+      const image = within(await rowFor("Sol Ring")).getByRole("presentation", { hidden: true });
+      expect(image).toHaveAttribute("src", SUPPLIED);
+    });
+
+    /**
+     * **No `<img>` at all rather than one with a src nothing can resolve.** The `bg-surface`
+     * frame stays — it is what holds the line's geometry while the bytes are on their way — so
+     * the row reads exactly as it does on a printing that has no art, which is the honest thing
+     * for it to say.
+     */
+    it("draws no img at all for a row that carries no URL, and keeps the frame", async () => {
+      deckTheoryDiff.mockResolvedValue([SOL_RING]);
+
+      wrap(<TheoryDiffDialog {...props} />);
+
+      const line = await rowFor("Sol Ring");
+      expect(within(line).queryByRole("presentation", { hidden: true })).toBeNull();
+      expect(line.querySelector("img")).toBeNull();
+      // The frame itself is untouched, so the name and the quantity do not shift left.
+      expect(line.querySelector("span.bg-surface")).not.toBeNull();
+    });
+  });
+
+  /** The desktop half: the local cache holds the crop already, so a row carrying a URL is
+   *  still drawn from the protocol rather than refetching it over the network. */
+  it("keeps drawing the protocol crop on desktop when a row hands it a URL", async () => {
+    deckTheoryDiff.mockResolvedValue([
+      { ...SOL_RING, imageUris: { art: "https://cards.scryfall.io/art/x.webp?1" } },
+    ]);
+
+    wrap(<TheoryDiffDialog {...props} />);
+
+    const image = within(await rowFor("Sol Ring")).getByRole("presentation", { hidden: true });
+    expect(image).toHaveAttribute("src", cardImageUrl("ring-c21", 0, "art"));
+    expect(image.getAttribute("src")).not.toContain("scryfall.io");
   });
 
   /**

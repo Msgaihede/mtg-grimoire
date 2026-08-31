@@ -12,8 +12,14 @@ import type {
   FormatSpec,
 } from "@/lib/ipc";
 import { cardImageUrl } from "@/lib/images";
+import { isWebTarget } from "@/pwa/target";
 import { openDropdown, pickOption } from "@/test-dropdown";
 import { card, spec } from "./validation/fixtures";
+
+/** Which build the cover frame thinks it is in. `isWebTarget()` reads `__CORE__`, a build-time
+ *  constant vitest fixes at `"tauri"`, so the web answer cannot be arranged any other way — see
+ *  `src/pwa/target.ts`. Desktop unless a case says otherwise. */
+vi.mock("@/pwa/target", () => ({ isWebTarget: vi.fn(() => false) }));
 
 const deckGet = vi.hoisted(() => vi.fn());
 const deckUpdate = vi.hoisted(() => vi.fn());
@@ -118,6 +124,10 @@ async function loaded() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // A restore rather than a reset: `clearAllMocks` wipes the implementation a
+  // `vi.fn(() => false)` was created with, so without this every case after the first reads
+  // `undefined` and the whole file quietly runs on the web branch.
+  vi.mocked(isWebTarget).mockReturnValue(false);
   deckGet.mockResolvedValue(detail());
   deckUpdate.mockImplementation((_id: number, patch: Record<string, unknown>) =>
     Promise.resolve({ ...BURN, ...patch }),
@@ -408,6 +418,28 @@ describe("DeckSettingsDialog", () => {
     expect(
       dialog.querySelector(`img[src="${cardImageUrl("c-Lightning Bolt", 0, "art")}"]`),
     ).toBeNull();
+  });
+
+  /**
+   * **What this host adds to the picker, and the half a picker test cannot reach.**
+   *
+   * `DeckCoverPicker` takes the URL as a prop and its own suite hands one in — so the picker
+   * could be perfectly correct and this dialog still draw nothing, which is the "tested but
+   * unwired" failure this repo has shipped before. The wire is `row.imageUris?.art`, off the
+   * same `LEFT JOIN cards` the credit comes from, and on the web build it is the only picture a
+   * browser can reach: `mtgimg://` is a Tauri custom protocol and wasm cannot register a URL
+   * scheme with one.
+   */
+  it("hands the picker the cover printing's own URL, which is what a browser draws", async () => {
+    vi.mocked(isWebTarget).mockReturnValue(true);
+    const supplied = "https://cards.scryfall.io/art/front/0/0/bolt.webp?1706230661";
+    deckGet.mockResolvedValue(detail({ imageUris: { art: supplied } }));
+
+    open();
+    const dialog = await loaded();
+
+    expect(dialog.querySelector(`img[src="${supplied}"]`)).not.toBeNull();
+    expect(screen.getByText("Art by Christopher Rush")).toBeInTheDocument();
   });
 
   /**

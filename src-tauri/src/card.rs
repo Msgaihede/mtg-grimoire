@@ -1735,6 +1735,11 @@ mod tests {
     /// (face, top-level) and `for_face` prefers the face, so a read one column early puts the
     /// top-level url into the face slot and answers correctly by accident. Two different urls
     /// are the only thing that tells a correct read from a shifted one.
+    ///
+    /// **Both variants since 2026-08-31**, and the second is a second way to be wrong rather
+    /// than more of the first: with `display` and `art` the select list is four expressions,
+    /// and a pairing read wrong hands the crop back under `display` -- a real URL, on the real
+    /// host, versioned, and the wrong picture.
     fn fixture_with_both_image_columns(id: &str) -> Connection {
         let conn = crate::schema::memory_pair();
         conn.execute(
@@ -1743,8 +1748,10 @@ mod tests {
              VALUES (?1, 'Test Card', 'tst', '1', 'en', 'meld', ?2, ?3, '{}')",
             rusqlite::params![
                 id,
-                r#"{"display":"https://cards.scryfall.io/display/CARD.jpg?1"}"#,
-                r#"[{"display":"https://cards.scryfall.io/display/FACE.jpg?1"}]"#,
+                r#"{"display":"https://cards.scryfall.io/display/CARD.jpg?1",
+                     "art":"https://cards.scryfall.io/art/CARD.jpg?1"}"#,
+                r#"[{"display":"https://cards.scryfall.io/display/FACE.jpg?1",
+                      "art":"https://cards.scryfall.io/art/FACE.jpg?1"}]"#,
             ],
         )
         .unwrap();
@@ -1770,6 +1777,11 @@ mod tests {
             "the face's own art wins over the card's — and a read one column early would \
              answer the card's while looking correct"
         );
+        assert_eq!(
+            uris.get("art").map(String::as_str),
+            Some("https://cards.scryfall.io/art/FACE.jpg?1"),
+            "and the second variant's pair is read at its own offset"
+        );
     }
 
     /// The printings list reads its pair at 19 — 16 fixed columns, then the three prices.
@@ -1782,13 +1794,15 @@ mod tests {
         let out = list_printings(&conn, "o-1", Marketplace::Tcgplayer, None).unwrap();
         let first = out.items.first().expect("one printing");
 
+        let uris = first.image_uris.as_ref().expect("both columns are present");
         assert_eq!(
-            first
-                .image_uris
-                .as_ref()
-                .and_then(|m| m.get("display"))
-                .map(String::as_str),
+            uris.get("display").map(String::as_str),
             Some("https://cards.scryfall.io/display/FACE.jpg?1"),
+        );
+        assert_eq!(
+            uris.get("art").map(String::as_str),
+            Some("https://cards.scryfall.io/art/FACE.jpg?1"),
+            "and the second variant's pair is read at its own offset"
         );
     }
 

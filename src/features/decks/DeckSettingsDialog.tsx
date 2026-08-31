@@ -281,6 +281,10 @@ function Settings({ deckId }: { deckId: number }) {
             cover={{
               coverCardId: row.coverCardId,
               coverArtist: row.coverArtist,
+              // The cover printing's own URL, off the same `LEFT JOIN` `coverArtist` comes
+              // from — the web build's only way to draw the preview, and ignored on desktop.
+              // The gallery tile behind this dialog reads the very same field.
+              coverImageUrl: row.imageUris?.art,
               deckCards: deck.cards,
               // The whole of what this host adds to the picker. `row.coverKind` is not passed
               // and the picker takes none: it is `card_art` on every deck, so a component

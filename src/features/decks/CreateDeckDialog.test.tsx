@@ -5,8 +5,14 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState, type ReactElement } from "react";
 import type { CardDetail, CardSummary, DeckFolder, DeckRow, FormatSpec } from "@/lib/ipc";
 import { cardImageUrl } from "@/lib/images";
+import { isWebTarget } from "@/pwa/target";
 import { openDropdown } from "@/test-dropdown";
 import { spec } from "./validation/fixtures";
+
+/** Which build the cover frame thinks it is in. `isWebTarget()` reads `__CORE__`, a build-time
+ *  constant vitest fixes at `"tauri"`, so the web answer cannot be arranged any other way — see
+ *  `src/pwa/target.ts`. Desktop unless a case says otherwise. */
+vi.mock("@/pwa/target", () => ({ isWebTarget: vi.fn(() => false) }));
 
 const deckCreate = vi.hoisted(() => vi.fn());
 const deckFolderList = vi.hoisted(() => vi.fn());
@@ -231,6 +237,8 @@ async function pickFromSearch(query: string, name = query) {
 }
 
 beforeEach(() => {
+  // Desktop unless a case says otherwise — a leaked `true` would blank every preview here.
+  vi.mocked(isWebTarget).mockReturnValue(false);
   deckCreate.mockReset().mockResolvedValue(MADE);
   deckFolderList.mockReset().mockResolvedValue(FOLDERS);
   formatSpecs.mockReset().mockResolvedValue(PICKER);
@@ -496,6 +504,37 @@ describe("the create deck dialog", () => {
     // The tile beside it still draws the crop — that is `ChoiceTile`'s documented exception —
     // so this is the *preview* refusing, which is the strict half and stays strict.
     expect(preview().querySelector("img")).toBeNull();
+  });
+
+  /**
+   * **The picture rides the same fetch as the credit, and this is the wire that carries it.**
+   *
+   * There is no `DeckRow` yet, so this dialog reads a `CardDetail` for the illustrator — and on
+   * the web build that same answer is the only place a picture can come from, since `mtgimg://`
+   * is a Tauri custom protocol and wasm cannot register a URL scheme with a browser. The picker
+   * takes the URL as a prop and its own suite hands one in, so nothing there could catch this
+   * host failing to pass it: the frame would simply be empty, on the one build nobody's test
+   * renders by default.
+   */
+  it("draws the preview from the fetched card's own URL on the web build", async () => {
+    vi.mocked(isWebTarget).mockReturnValue(true);
+    const supplied = "https://cards.scryfall.io/art/front/0/0/shivan.webp?1706230661";
+    searchCards.mockResolvedValue({
+      items: [found("Shivan Dragon")],
+      total: 1,
+      totalIsCapped: false,
+    });
+    cardDetail.mockResolvedValue({
+      ...detail("s-Shivan Dragon", "Donato Giancola"),
+      imageUris: { art: supplied },
+    });
+    wrap(<Harness />);
+
+    await screen.findByLabelText("Name");
+    await pickFromSearch("Shivan Dragon");
+
+    expect(await screen.findByText("Art by Donato Giancola")).toBeInTheDocument();
+    expect(preview().querySelector("img")).toHaveAttribute("src", supplied);
   });
 
   /**

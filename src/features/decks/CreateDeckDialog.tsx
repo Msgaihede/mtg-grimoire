@@ -469,6 +469,11 @@ function CreateDeckBody({
             // preview's own ruling either way: an `art` crop this app cannot credit is not
             // drawn at all.
             coverArtist: artist.data?.artist ?? null,
+            // Off the same fetched `CardDetail`, and for the same reason: there is no `DeckRow`
+            // to read it from yet. It is the web build's only picture — `cardArtSrc` ignores it
+            // on desktop — so on a browser the preview is empty until this query lands, exactly
+            // as the credit line under it is.
+            coverImageUrl: artist.data?.imageUris?.art ?? null,
             // A deck being made has none. The picker's own empty state says exactly that, and
             // its search box is what does the work here.
             deckCards: [],

@@ -5,7 +5,7 @@ import { useTooltip } from "@/components/tooltip/useTooltip";
 import { DEBOUNCE_MS } from "@/features/search/useCardSearch";
 import { count } from "@/lib/counts";
 import { FOCUS_INSET } from "@/lib/focus";
-import { ART_ASPECT, cardImageUrl } from "@/lib/images";
+import { ART_ASPECT, cardArtSrc, cardImageUrl } from "@/lib/images";
 import { ipc, ipcError, type CardSummary, type DeckCard } from "@/lib/ipc";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
@@ -38,6 +38,17 @@ export interface DeckCoverPickerProps {
   coverCardId: string | null;
   /** Credited under the preview. `null` draws no line — never the word "null". */
   coverArtist: string | null;
+  /**
+   * Where the cover printing's `art` crop is on `cards.scryfall.io` — **the web build's only
+   * way to draw the preview**, and ignored on desktop, where `cardArtSrc` prefers the local
+   * cache. Absent or `null` is "no picture", never a URL to build one from.
+   *
+   * A prop rather than a lookup of this component's own, because the two hosts know it from two
+   * places: the settings dialog has the deck's own `DeckRow.imageUris`, and the create dialog —
+   * which has no deck yet — reads the `CardDetail` it already fetches for the credit line. The
+   * tiles below take theirs the same way, off whichever row the reader is picking from.
+   */
+  coverImageUrl?: string | null;
   /** The deck's own printings, offered when the search box is empty. `[]` at create. */
   deckCards: readonly DeckCard[];
   onPickCard: (cardId: string) => void;
@@ -101,6 +112,7 @@ export interface DeckCoverPickerProps {
 export function DeckCoverPicker({
   coverCardId,
   coverArtist,
+  coverImageUrl,
   deckCards,
   onPickCard,
   idPrefix,
@@ -166,7 +178,11 @@ export function DeckCoverPicker({
     <div className="space-y-3.5">
       <div>
         <p className={cn(CAPTION, "mb-1.5")}>Deck picture</p>
-        <CoverPreview coverCardId={coverCardId} coverArtist={coverArtist} />
+        <CoverPreview
+          coverCardId={coverCardId}
+          coverArtist={coverArtist}
+          coverImageUrl={coverImageUrl}
+        />
         {/* Scryfall's image policy, and the gallery tile's ruling verbatim: an `art` crop has
             no printed frame, so the illustrator is credited wherever one is shown — and a cover
             whose artist is unknown draws no line at all rather than the word "null". The
@@ -246,6 +262,7 @@ export function DeckCoverPicker({
                 <ChoiceTile
                   cardId={card.cardId}
                   name={card.name}
+                  artUrl={card.imageUris?.art}
                   current={coverCardId === card.cardId}
                   onPick={() => onPickCard(card.cardId)}
                 />
@@ -304,6 +321,7 @@ function SearchResults({
             <ChoiceTile
               cardId={row.id}
               name={row.name}
+              artUrl={row.imageUris?.art}
               current={coverCardId === row.id}
               onPick={() => onPickCard(row.id)}
             />
@@ -334,15 +352,23 @@ function SearchResults({
 function CoverPreview({
   coverCardId,
   coverArtist,
+  coverImageUrl,
 }: {
   coverCardId: string | null;
   coverArtist: string | null;
+  coverImageUrl?: string | null;
 }) {
   // The credit is the condition, not a line drawn beside one: an `art` crop with no printed
   // frame may be shown only where the illustrator is named, so a cover this app cannot credit
   // is a cover it does not draw. `DecksPage`'s gallery tile makes the same refusal.
-  const url =
-    coverCardId !== null && coverArtist !== null ? cardImageUrl(coverCardId, 0, "art") : null;
+  //
+  // Whether it is *drawable* is a second question and `cardArtSrc` is the whole of it: on
+  // desktop the protocol URL, on web the row's own URL and `null` when the row has none, since
+  // wasm cannot register a URL scheme with a browser. Kept apart from `chosen` below so the
+  // frame's three words stay true on both builds — `DeckTile.hasCover` makes the same split for
+  // the same reason.
+  const chosen = coverCardId !== null && coverArtist !== null;
+  const url = chosen ? cardArtSrc(cardImageUrl(coverCardId, 0, "art"), coverImageUrl) : null;
   const image = useImageRetry(url);
 
   return (
@@ -371,7 +397,7 @@ function CoverPreview({
         // this app does not know is not drawn at all, and an orphaned cover heals on the next
         // sync — which is why this says "No cover" rather than claiming a failure.
         <span aria-hidden="true" className="text-xs text-dim">
-          {url === null ? "No cover" : image.retrying ? "Retrying…" : "No image"}
+          {!chosen ? "No cover" : image.retrying ? "Retrying…" : "No image"}
         </span>
       )}
     </span>
@@ -384,10 +410,11 @@ function CoverPreview({
  * The `art` crop, at the shape a cover is: this is a picture of what pressing it would do, and
  * a 5:7 card face here would be a preview of a different picture.
  *
- * **Takes an id and a name rather than a row**, because the two sources it is drawn from are two
- * types — a {@link DeckCard} from the deck and a `CardSummary` from the search — and they agree
- * about exactly these two fields. Narrowing to them is also what keeps the tile from acquiring
- * an opinion about which list it is in.
+ * **Takes pieces rather than a row**, because the two sources it is drawn from are two types —
+ * a {@link DeckCard} from the deck and a `CardSummary` from the search — and they agree about
+ * exactly the three fields below. Narrowing to them is also what keeps the tile from acquiring
+ * an opinion about which list it is in. (It was two fields until 2026-08-31; `imageUris` is the
+ * third, and it is on both types for the same reason it is on the tile.)
  *
  * **A known gap against the art-credit rule, recorded here rather than quietly inherited.**
  * The rule is absolute — an `art` crop has no printed frame, so wherever one is shown the
@@ -411,15 +438,27 @@ function CoverPreview({
 function ChoiceTile({
   cardId,
   name,
+  artUrl,
   current,
   onPick,
 }: {
   cardId: string;
   name: string;
+  /**
+   * The `art` crop's URL on `cards.scryfall.io`, off whichever row this tile was drawn from —
+   * `DeckCard.imageUris` for the deck's own printings, `CardSummary.imageUris` for a search
+   * answer. **The web build's only picture**, ignored on desktop by `cardArtSrc`, and `null`
+   * for a row that carries none — which draws the empty, bordered tile below rather than a
+   * broken `<img>`. The tile still names its card, so it is still pickable.
+   *
+   * It is the third field the two sources agree about, which is why the tile can go on taking
+   * pieces rather than a row.
+   */
+  artUrl?: string | null;
   current: boolean;
   onPick: () => void;
 }) {
-  const image = useImageRetry(cardImageUrl(cardId, 0, "art"));
+  const image = useImageRetry(cardArtSrc(cardImageUrl(cardId, 0, "art"), artUrl));
   const tip = useTooltip();
 
   return (

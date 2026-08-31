@@ -5,8 +5,19 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import type { DeckFolder, DeckRow, FormatSpec, ImportMatch, SyncStatus } from "@/lib/ipc";
 import { cardImageUrl } from "@/lib/images";
+import { isWebTarget } from "@/pwa/target";
 import { openDropdown } from "@/test-dropdown";
 import { spec } from "./validation/fixtures";
+
+/**
+ * Which build a cover frame thinks it is in.
+ *
+ * `isWebTarget()` reads `__CORE__`, a build-time constant vitest fixes at `"tauri"`, so the web
+ * answer cannot be arranged any other way — `src/pwa/target.ts`'s own comment says why that is
+ * deliberate. Mocked `false` by default, which is what every case in this file but the web
+ * describe block expects, and reset in `beforeEach` so one case cannot leak into the next.
+ */
+vi.mock("@/pwa/target", () => ({ isWebTarget: vi.fn(() => false) }));
 
 const deckList = vi.hoisted(() => vi.fn());
 /** Read by `DeckSettingsDialog`, which the gallery hosts — and **only** while it is open, which
@@ -239,6 +250,9 @@ async function rightClick(target: HTMLElement) {
 }
 
 beforeEach(() => {
+  // Desktop unless a case says otherwise. A leaked `true` would draw every cover in this file
+  // from a row field the fixtures do not carry, which reads as "the gallery stopped drawing art".
+  vi.mocked(isWebTarget).mockReturnValue(false);
   deckList.mockReset().mockResolvedValue([BURN, DRAFT, FILED]);
   // The hosted settings dialog's own read. Empty lists: this screen's cases are about the deck
   // row, and what the form does with cards, categories and tags is its own suite's.
@@ -466,6 +480,120 @@ describe("DecksPage", () => {
     expect(within(tile).getByText("No cover")).toBeInTheDocument();
     expect(screen.queryByText(/art by/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/null/i)).not.toBeInTheDocument();
+  });
+
+  /**
+   * **The web build has no protocol to ask, and this gallery was the loudest place it showed.**
+   *
+   * `mtgimg://` is registered natively with the webview and wasm cannot register a URL scheme
+   * with a browser, so a tile handed `http://mtgimg.localhost/art/<id>/0` in a browser draws the
+   * platform's broken-image glyph. PRs #320/#321 routed the card walls through `cardArtSrc` and
+   * missed the cover frames — and PR #327 then made the card-art crop the *only* deck cover, so
+   * **every** cover on web and on the phone was that glyph. Confirmed on the device before this
+   * was written.
+   *
+   * The three cases are the three states, and each is a different `<img>` on screen: the row's
+   * own URL drawn, no `<img>` at all, and — the one a browser can never see — the protocol URL
+   * still winning on the desktop build even when the row carries a picture.
+   */
+  describe("the cover frame on the web build, where there is no protocol", () => {
+    /** A real `art` crop URL: the host and the `?<epoch>` are what `is_fetchable` demands, so
+     *  this is the shape the backend can actually put on a row. */
+    const SUPPLIED = "https://cards.scryfall.io/art/front/0/0/0000419b.webp?1706230661";
+
+    beforeEach(() => {
+      vi.mocked(isWebTarget).mockReturnValue(true);
+    });
+
+    it("draws the URL the deck's own row carries", async () => {
+      deckList.mockResolvedValue([{ ...BURN, imageUris: { art: SUPPLIED } }]);
+
+      wrap(<DecksPage />);
+
+      const tile = (await tileFor("Burn")).closest("li")!;
+      expect(tile.querySelector("img")).toHaveAttribute("src", SUPPLIED);
+      // The credit rides the picture, and the picture is on screen.
+      expect(within(tile).getByText("Art by Rebecca Guay")).toBeInTheDocument();
+    });
+
+    /**
+     * **"No image", not "No cover" — and the distinction is the whole of why `hasCover` was
+     * split out of `coverUrl`.** The deck has chosen a cover; what is missing is the bytes.
+     * Telling a reader they have not picked one, when they have, is a sentence that sends them
+     * to the wrong dialog.
+     */
+    it("draws no img at all for a cover whose row carries no URL, and says the picture is what is missing", async () => {
+      deckList.mockResolvedValue([BURN]);
+
+      wrap(<DecksPage />);
+
+      const tile = (await tileFor("Burn")).closest("li")!;
+      expect(tile.querySelector("img")).toBeNull();
+      expect(within(tile).getByText("No image")).toBeInTheDocument();
+      expect(within(tile).queryByText("No cover")).not.toBeInTheDocument();
+    });
+
+    /** A deck that really has no cover still says so, on either build. */
+    it("still says No cover for a deck that has chosen none", async () => {
+      deckList.mockResolvedValue([DRAFT]);
+
+      wrap(<DecksPage />);
+
+      const tile = (await tileFor("Sunday draft")).closest("li")!;
+      expect(within(tile).getByText("No cover")).toBeInTheDocument();
+    });
+
+    /** The strip is the same branch one component over, per member row. */
+    it("draws a folder's member art from the member row's own URL", async () => {
+      deckFolderList.mockResolvedValue([EDH, LEGENDS]);
+      deckList.mockResolvedValue([
+        BURN,
+        { ...DRAFT, folderId: 1 },
+        { ...KENRITH, imageUris: { art: SUPPLIED } },
+      ]);
+
+      wrap(<DecksPage />);
+
+      const card = (
+        await screen.findByRole("button", { name: "Commander folder, 2 decks" })
+      ).closest("li")!;
+      expect(card.querySelector("img")).toHaveAttribute("src", SUPPLIED);
+    });
+
+    /** And a member whose row carries none leaves an empty cell rather than a broken one — the
+     *  strip's existing "the bytes have not arrived" state, which keeps its geometry. */
+    it("leaves a member cell empty when that row carries no URL", async () => {
+      withFolders();
+
+      wrap(<DecksPage />);
+
+      const card = (
+        await screen.findByRole("button", { name: "Commander folder, 2 decks" })
+      ).closest("li")!;
+      expect(card.querySelectorAll("img")).toHaveLength(0);
+      // The credit is about the cover the folder *holds*, not about whether it drew — so it is
+      // still named, exactly as on the desktop build.
+      expect(within(card).getByText("Art by Kieran Yanner")).toBeInTheDocument();
+    });
+  });
+
+  /**
+   * The other side of the branch, and it is the half a browser can never show: on desktop the
+   * local cache already holds the crop at the right size, so a row that carries a URL is still
+   * drawn from the protocol. A frame that preferred the supplied URL would refetch every cover
+   * over the network on a wall the reader has already paid for.
+   */
+  it("keeps drawing the cached protocol picture on desktop when a row hands it a URL", async () => {
+    deckList.mockResolvedValue([
+      { ...BURN, imageUris: { art: "https://cards.scryfall.io/art/front/0/0/x.webp?1" } },
+    ]);
+
+    wrap(<DecksPage />);
+
+    const tile = (await tileFor("Burn")).closest("li")!;
+    const img = tile.querySelector("img");
+    expect(img).toHaveAttribute("src", cardImageUrl(BURN.coverCardId!, 0, "art"));
+    expect(img!.getAttribute("src")).not.toContain("scryfall.io");
   });
 
   /** A filed deck is kept, not shown: it is behind its own disclosure, shut. */

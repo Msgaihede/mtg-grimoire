@@ -1755,8 +1755,20 @@ function Printings({
       ))}
       {/* The one picture the whole list shares, drawn last so it stands over the rows it
           covers, and positioned against the pane rather than against this section — which is
-          why it can be mounted anywhere inside it. */}
-      <PrintingPreview printingId={dwell.printingId} anchor={dwell.anchor} />
+          why it can be mounted anywhere inside it.
+
+          **The URL comes from here because this is the only place that has it.** `dwell` is a
+          timer and carries an id; `Printing.imageUris` is the row's, and on the web build it is
+          the only picture a browser can reach — `mtgimg://` is a Tauri custom protocol and wasm
+          cannot register a URL scheme with one. The `find` runs only while a preview is open,
+          over a list already capped at 400 rows, and `items` is what `dwell.printingId` was
+          taken from, so it can only miss for a row that has just been replaced — in which case
+          the effect above has already taken the picture down. */}
+      <PrintingPreview
+        printingId={dwell.printingId}
+        imageUrl={items.find((p) => p.id === dwell.printingId)?.imageUris?.display}
+        anchor={dwell.anchor}
+      />
     </section>
   );
 }
