@@ -93,3 +93,15 @@ export const RELAY_KEY: QueryKey = ["sync", "relay"];
 
 /** Every row carrying a sentence for the reader — `ipc.syncReviewList`. */
 export const REVIEW_KEY: QueryKey = ["sync", "review"];
+
+/**
+ * What a device sync can have changed on screen.
+ *
+ * **Not `SYNC_INVALIDATED`.** That is the *corpus* root set (`src/lib/useSyncInvalidation.ts`)
+ * and carries `["sets"]`, whose `staleTime` is `Infinity`, and `["card"]` — neither of which
+ * any relay op can touch: a sync applies pulled ops to the reader's own rows, it never rebuilds
+ * the Scryfall corpus. `OWNED_WRITE_KEYS` is already the constant for "a user write happened",
+ * which is exactly what applying a pulled op is; the relay adds `SYNC_KEY` on top, because
+ * `RelayStatus.pending`, `lastSyncAt` and `reviewCount` all move on a round trip too.
+ */
+export const DEVICE_SYNC_INVALIDATED: readonly QueryKey[] = [...OWNED_WRITE_KEYS, SYNC_KEY];
