@@ -534,7 +534,7 @@ fn the_qr_payload_is_the_relay_base_the_fragment_and_nothing_else() {
 
 - [ ] **Step 2: Run them and watch them fail**
 
-Run: `cargo test --manifest-path src-tauri/Cargo.toml sync_pair::crypto sync_pair::invite`
+Run: `cargo test --manifest-path src-tauri/Cargo.toml sync_pair::`
 Expected: FAIL — `cannot find function rendezvous_id`, `cannot find function qr_payload`.
 
 - [ ] **Step 3: Implement `rendezvous_id`**
@@ -607,7 +607,7 @@ pub fn qr_payload(code: &str, relay_base: &str) -> String {
 
 - [ ] **Step 5: Run the tests**
 
-Run: `cargo test --manifest-path src-tauri/Cargo.toml sync_pair::crypto sync_pair::invite`
+Run: `cargo test --manifest-path src-tauri/Cargo.toml sync_pair::`
 Expected: PASS. **Report the number of tests the filter selected** — a filter that matches nothing
 also exits 0.
 
@@ -854,7 +854,7 @@ Write these out fully against the existing helpers in that file — read
 
 - [ ] **Step 2: Run and watch fail**
 
-Run: `cargo test --manifest-path src-tauri/Cargo.toml sync_engine::client rendezvous`
+Run: `cargo test --manifest-path src-tauri/Cargo.toml sync_engine::client`
 Expected: FAIL — unresolved names.
 
 - [ ] **Step 3: Implement**
