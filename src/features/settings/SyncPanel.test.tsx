@@ -13,9 +13,8 @@ import type {
 const syncPairingStatus = vi.hoisted(() => vi.fn());
 const syncPairingBegin = vi.hoisted(() => vi.fn());
 const syncPairingAccept = vi.hoisted(() => vi.fn());
-const syncPairingRespond = vi.hoisted(() => vi.fn());
 const syncPairingConfirm = vi.hoisted(() => vi.fn());
-const syncPairingComplete = vi.hoisted(() => vi.fn());
+const syncPairingPoll = vi.hoisted(() => vi.fn());
 const syncPairingCancel = vi.hoisted(() => vi.fn());
 const syncDeviceRename = vi.hoisted(() => vi.fn());
 const syncDeviceRevoke = vi.hoisted(() => vi.fn());
@@ -25,15 +24,22 @@ const syncPatreonBegin = vi.hoisted(() => vi.fn());
 const syncPatreonClaim = vi.hoisted(() => vi.fn());
 const syncSupporterStatus = vi.hoisted(() => vi.fn());
 const syncNow = vi.hoisted(() => vi.fn());
+/**
+ * **No `syncPairingRespond` and no `syncPairingComplete` — the relay carries the accept and the
+ * sealed key now**, so there is nothing left for either to do. `syncPairingConfirm` survives:
+ * it is still the offering device's one press, and it answers nothing the panel reads any more
+ * (the sealed key travels to the relay from the backend, not back through this mutation). What
+ * replaced both is `syncPairingPoll`, which is how the panel learns where the ceremony has got
+ * to instead of waiting on a paste.
+ */
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
     syncPairingStatus,
     syncPairingBegin,
     syncPairingAccept,
-    syncPairingRespond,
     syncPairingConfirm,
-    syncPairingComplete,
+    syncPairingPoll,
     syncPairingCancel,
     syncDeviceRename,
     syncDeviceRevoke,
@@ -242,10 +248,13 @@ const paired = harness(PAIRED);
 beforeEach(() => {
   syncPairingStatus.mockReset().mockResolvedValue(UNPAIRED);
   syncPairingBegin.mockReset().mockResolvedValue(OFFER);
-  syncPairingAccept.mockReset().mockResolvedValue({ sas: "042913", response: "THEIRBLOB" });
-  syncPairingRespond.mockReset().mockResolvedValue({ sas: "042913", response: "" });
+  // No `response` field — the relay carries this device's answer onward now, so there is
+  // nothing left for a reader to copy back by hand.
+  syncPairingAccept.mockReset().mockResolvedValue({ sas: "042913" });
   syncPairingConfirm.mockReset().mockResolvedValue({ sealedKey: "SEALEDKEY" });
-  syncPairingComplete.mockReset().mockResolvedValue(undefined);
+  // `"idle"` is the safe default: a test that never advances the poll must not accidentally
+  // read as a pairing already under way.
+  syncPairingPoll.mockReset().mockResolvedValue({ stage: "idle", sas: null });
   syncPairingCancel.mockReset().mockResolvedValue(undefined);
   syncDeviceRename.mockReset().mockResolvedValue(undefined);
   syncDeviceRevoke.mockReset().mockResolvedValue(undefined);
@@ -355,34 +364,49 @@ describe("SyncPanel", () => {
     expect(syncPairingConfirm).not.toHaveBeenCalled();
   });
 
-  it("shows the digits once the other device has answered, and only then confirms", async () => {
+  /**
+   * **A — the offering device, from `waiting` to `compare`.** The relay carries the joiner's
+   * answer now, so what used to be a paste ("what the other device answered", "Read their
+   * answer") is the poll finding a peer instead. The QR and the typed code are `"waiting"`'s
+   * alone and gone the moment `"compare"` starts — the invite has done its one job.
+   */
+  it("goes from waiting to compare once the poll finds the other device", async () => {
+    syncPairingPoll.mockResolvedValueOnce({ stage: "waiting", sas: null });
+    syncPairingPoll.mockResolvedValue({ stage: "compare", sas: "042913" });
     const user = userEvent.setup();
     render(<SyncPanel />, { wrapper: unpaired });
 
     await user.click(await screen.findByRole("button", { name: /pair a device/i }));
-    await user.type(
-      await screen.findByLabelText(/what the other device answered/i),
-      "THEIRBLOB",
+    // The ellipsis, not the period: "Nothing to compare yet — still waiting for the other
+    // device." matches the same phrase and would make this assertion ambiguous otherwise.
+    expect(await screen.findByText(/waiting for the other device…/i)).toBeInTheDocument();
+    expect(screen.queryByTestId("pairing-sas")).not.toBeInTheDocument();
+
+    // Real timers rather than faked ones: `refetchInterval` is a real 1.5 s clock the moment the
+    // query is enabled, well before this test ever reaches a `vi.useFakeTimers()` call — mixing
+    // the two let the interval already fire on the real clock, ahead of a later fake advance, and
+    // reading it back afterwards was the flake. A longer `waitFor` budget rides out the real wait.
+    await waitFor(
+      () => expect(screen.getByTestId("pairing-sas")).toHaveTextContent("042913"),
+      { timeout: 3000 },
     );
-    await user.click(screen.getByRole("button", { name: /read their answer/i }));
-
-    expect(await screen.findByTestId("pairing-sas")).toHaveTextContent("042913");
-    const confirm = screen.getByRole("button", { name: /codes match/i });
-    expect(confirm).toHaveAttribute("aria-disabled", "false");
-
-    await user.click(confirm);
-    await waitFor(() => expect(syncPairingConfirm).toHaveBeenCalled());
-    expect(await screen.findByLabelText(/wrapped key for the other device/i)).toHaveValue(
-      "SEALEDKEY",
+    // Gone the moment the digits arrive — a code still on screen would suggest the invite step
+    // is somehow still live.
+    expect(screen.queryByTestId("pairing-qr")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /codes match/i })).toHaveAttribute(
+      "aria-disabled",
+      "false",
     );
   });
 
   /**
-   * The joining side compares too, and the blob it has to carry back is not on screen until it
-   * has said so. This changes no protocol — the answer is already computed — but a reader who
-   * has not looked at the digits has not compared them.
+   * **B — the joining device draws no Codes match button at all, and that is deliberate rather
+   * than missing.** Under a man-in-the-middle the two screens show different numbers, so the
+   * comparison is inherently a two-screen act; the press that matters is the one gating release
+   * of the group key, and that is the offering device's alone. This screen's whole job is to say
+   * where that press is.
    */
-  it("makes the joining device compare before it hands anything back", async () => {
+  it("shows the joining device's digits with no confirm button of its own", async () => {
     const user = userEvent.setup();
     render(<SyncPanel />, { wrapper: unpaired });
 
@@ -391,10 +415,108 @@ describe("SyncPanel", () => {
     await user.click(screen.getByRole("button", { name: /read the code/i }));
 
     expect(await screen.findByTestId("pairing-sas")).toHaveTextContent("042913");
-    expect(screen.queryByLabelText(/your answer/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /codes match/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/press codes match there/i)).toBeInTheDocument();
+  });
 
-    await user.click(screen.getByRole("button", { name: /codes match/i }));
-    expect(await screen.findByLabelText(/your answer/i)).toHaveValue("THEIRBLOB");
+  /**
+   * `"complete"` is settled during render rather than in an effect (`SyncPanel`'s own doc
+   * comment on the two guarded `if`s above its `return`). The flow returns to `"idle"`, the
+   * success line takes its place, and the round trip a freshly paired device owes — the
+   * assertion this test exists for — fires exactly once.
+   */
+  it("returns the panel to idle once the poll answers complete", async () => {
+    syncPairingPoll.mockResolvedValueOnce({ stage: "waiting", sas: null });
+    syncPairingPoll.mockResolvedValue({ stage: "complete", sas: null });
+    const user = userEvent.setup();
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    await user.click(await screen.findByRole("button", { name: /pair a device/i }));
+    // The ellipsis, not the period: "Nothing to compare yet — still waiting for the other
+    // device." matches the same phrase and would make this assertion ambiguous otherwise.
+    expect(await screen.findByText(/waiting for the other device…/i)).toBeInTheDocument();
+
+    // Real timers, `goes from waiting to compare`'s reason: `refetchInterval` is already a real
+    // 1.5 s clock by the time a test could switch to a fake one, and reading the fake advance
+    // back afterwards was the flake. `waitFor`'s own budget rides out the real wait instead.
+    await waitFor(
+      () =>
+        expect(
+          screen.getByText(/paired\. the other device is now part of this group/i),
+        ).toBeInTheDocument(),
+      { timeout: 3000 },
+    );
+    expect(screen.queryByRole("button", { name: /codes match/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /pair a device/i })).toBeInTheDocument();
+    await waitFor(() => expect(syncNow).toHaveBeenCalled());
+  });
+
+  /**
+   * **The stale-cache bug fixed in `db5698a`.** `PAIRING_POLL_KEY` is one query key for every
+   * attempt in a session, and a *disabled* query keeps its last-known `data` rather than
+   * clearing it. So once a first pairing reached `"complete"`, the cache went on holding
+   * `{stage: "complete"}` — and starting a **second** pairing re-enabled that same query key onto
+   * the stale answer, which React Query hands back **synchronously** on the very next render
+   * (a refetch is a promise and cannot resolve mid-render). `SyncPanel`'s own render-time `if`
+   * for `"complete"` fired again immediately, and the just-opened offer screen was put straight
+   * back to `"idle"` before it ever painted: the reader pressed *Pair a device* a second time and
+   * nothing happened, deterministically, every time. `startNewAttempt`'s
+   * `client.removeQueries({ queryKey: PAIRING_POLL_KEY, exact: true })` is the fix — called from
+   * both `begin`'s and `accept`'s `onMutate`, so the scan path is covered by the same one call.
+   *
+   * `pairing-qr` is the fence, per the panel's own contract: it is drawn only during
+   * `"waiting"`, so its appearance after the second press is the offer screen actually having
+   * painted rather than having been bounced straight back to idle.
+   */
+  it("shows a fresh offer screen when a second pairing is started after the first completed", async () => {
+    syncPairingPoll.mockResolvedValueOnce({ stage: "waiting", sas: null });
+    syncPairingPoll.mockResolvedValueOnce({ stage: "complete", sas: null });
+    // The second attempt's own first read — reached only if the stale `"complete"` answer above
+    // was cleared rather than replayed.
+    syncPairingPoll.mockResolvedValue({ stage: "waiting", sas: null });
+    const user = userEvent.setup();
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    await user.click(await screen.findByRole("button", { name: /pair a device/i }));
+    await waitFor(
+      () =>
+        expect(
+          screen.getByText(/paired\. the other device is now part of this group/i),
+        ).toBeInTheDocument(),
+      { timeout: 3000 },
+    );
+
+    await user.click(await screen.findByRole("button", { name: /pair a device/i }));
+    expect(await screen.findByTestId("pairing-qr")).toBeInTheDocument();
+    // And the success line from the *first* attempt does not linger over the second offer.
+    expect(
+      screen.queryByText(/paired\. the other device is now part of this group/i),
+    ).not.toBeInTheDocument();
+  });
+
+  /**
+   * `pairing::poll`'s own TTL check — the relay's, read off this side's clock rather than the
+   * reader's patience (`src-tauri/src/sync_pair/pairing.rs`'s `EXPIRED`). Without it a dropped
+   * offer polls a 404 forever; this is the panel saying the code timed out instead of spinning.
+   *
+   * ⚠️ **Currently RED, and not a mistake in this test.** `SyncPanel`'s `error` fallback chain
+   * (`begin.error ?? accept.error ?? confirm.error ?? rename.error ?? revoke.error ??
+   * leave.error`) never includes `poll.error`, so a rejected `syncPairingPoll` — this TTL check
+   * included — is swallowed with no sentence drawn anywhere; the QR/waiting screen just sits
+   * there forever. Confirmed by removing this test's mock rejection and reproducing the same
+   * "nothing shown" outcome through the fake's own `pairingReadError` fault instead, which is
+   * why `SyncPanel.stories.tsx`'s old `AnswerUnreadable` story could not be kept either — see
+   * the task-10 report. Out of scope here: this file may not touch `SyncPanel.tsx`. Add
+   * `?? poll.error` to that chain and this goes green with no other change.
+   */
+  it("says so when a pairing has expired", async () => {
+    syncPairingPoll.mockRejectedValue("That pairing code has expired. Start a new one.");
+    const user = userEvent.setup();
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    await user.click(await screen.findByRole("button", { name: /pair a device/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/expired/i);
   });
 
   /**
@@ -1127,20 +1249,26 @@ describe("outcomeText", () => {
  * relay was down at that exact moment has nothing to retry with.
  */
 describe("a freshly paired device can reach the sync that entitles it", () => {
-  it("makes a round trip as soon as the pairing completes", async () => {
+  /**
+   * **The joining side, this time** — `returns the panel to idle once the poll answers complete`
+   * above drives it from the offering side, and the doc comment on `SyncPanel`'s completed-
+   * pairing effect is explicit that both sides fire this, not just the joiner: the offering
+   * device wants the joiner's own rows just as much as the joiner wants the group's.
+   */
+  it("makes a round trip once a pairing this device joined completes", async () => {
+    syncPairingPoll.mockResolvedValue({ stage: "complete", sas: null });
     const user = userEvent.setup();
     render(<SyncPanel />, { wrapper: unpaired });
 
     await user.click(await screen.findByRole("button", { name: /enter a code from another/i }));
     await user.type(await screen.findByLabelText(/code the other device is showing/i), "CODE");
     await user.click(screen.getByRole("button", { name: /read the code/i }));
-    await user.click(await screen.findByRole("button", { name: /codes match/i }));
-    await user.type(await screen.findByLabelText(/wrapped key the other device/i), "SEALED");
-    await user.click(screen.getByRole("button", { name: /finish pairing/i }));
 
-    await waitFor(() => expect(syncPairingComplete).toHaveBeenCalled());
     // The assertion the whole block exists for. Nothing else in the app calls this.
     await waitFor(() => expect(syncNow).toHaveBeenCalled());
+    expect(
+      await screen.findByText(/paired\. the other device is now part of this group/i),
+    ).toBeInTheDocument();
   });
 
   it("still offers Sync now to a paired device its membership has not reached yet", async () => {
