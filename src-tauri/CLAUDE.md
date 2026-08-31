@@ -1416,8 +1416,12 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
   the `aarch64-linux-android` one, which is how that was established rather than assumed.
 - **`tauri-plugin-fs` is a dependency with no permission, deliberately, and this paragraph exists
   to stop the next edit granting one.** On Android a file the reader picks is a `content://` URI:
-  `tauri-plugin-dialog`'s `DialogPlugin.kt` fires `ACTION_OPEN_DOCUMENT`/`ACTION_CREATE_DOCUMENT`
+  `tauri-plugin-dialog`'s `DialogPlugin.kt` fires `ACTION_GET_CONTENT`/`ACTION_CREATE_DOCUMENT`
   and returns `uri.toString()`, so `std::fs` of one answers "No such file or directory".
+  (**`ACTION_GET_CONTENT`, not `ACTION_OPEN_DOCUMENT`** — this page said the latter until
+  2026-08-31. The plugin carries a literal `// TODO: ACTION_OPEN_DOCUMENT ??` on the line above,
+  which is presumably where the mistake came from. It is not pedantry: the two take their file
+  filter differently, and `android-target.md` §4 records what that costs.)
   `src/picked.rs` is the one place that knows the difference, and `Fs::open` resolves the URI
   through the ContentResolver into a **`std::fs::File`** built from the descriptor — a Rust-side
   method on managed state, with no `invoke` crossing the boundary. **The page's filesystem access

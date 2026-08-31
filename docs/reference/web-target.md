@@ -844,26 +844,9 @@ backend.
   every reload — a different storage API, so a shell-cache bust costs nothing but a re-fetch of
   the bundle.
 
-## Where PR 10 got to: 115 of 156 routed, and what the other 41 are
+## Where PR 10 got to: 120 of 157 routed, and what the other 37 are
 
-**Do not hand-count this — run commands in the crate   157
-named in COMMANDS       120
-not routed              37
-
-  combos.rs                  combos_refresh
-  deck.rs                    deck_set_cover_image
-  desktop.rs                 sync_run update_apply update_check update_download update_open_release_page
-  export.rs                  export_write_file
-  images.rs                  prefetch_images prewarm_collection
-  import.rs                  import_read_file
-  marketplace_feed.rs        marketplace_feed_refresh
-  mirror/settings.rs         mirror_rebuild mirror_set_enabled mirror_set_root mirror_status
-  mirror/snapshot.rs         mirror_backup_save
-  reset.rs                   cache_clear
-  sync_engine/commands.rs    sync_now sync_patreon_begin sync_patreon_claim sync_relay_status sync_review_clear sync_review_list sync_supporter_status
-  sync_pair/pairing.rs       sync_device_rename sync_device_revoke sync_group_leave sync_pairing_accept sync_pairing_begin sync_pairing_cancel sync_pairing_complete sync_pairing_confirm sync_pairing_respond sync_pairing_status
-  tags/art.rs                art_tags_refresh
-  tags/oracle.rs             oracle_tags_refresh.** It walks every
+**Do not hand-count this — run `node scripts/routed-census.mjs`.** It walks every
 `#[tauri::command]` in the crate (both attribute spellings, skipping doc-comment mentions),
 diffs against `COMMANDS`, and prints exactly the grouping below. `--check <n>` exits non-zero
 when the routed count has moved, so a stale table can be caught by running one command instead
