@@ -48,12 +48,26 @@
 //! so the failure is already on the screen of the reader who caused it. `error_log` is for the
 //! failures nobody was watching.
 //!
-//! **That last paragraph is a condition, not a principle, and it is true today and only today.**
-//! `client`'s own module doc plans a 60-second poll while the window has focus, and spec §8's
-//! cost table is headed *Manual (what ships today)*. **When a poll lands, this argument inverts**
-//! — a refresh that fails in the background is exactly a failure nobody was watching, and the
-//! non-401 paths in [`post_for_grant`] should start calling `errors::record`. The 401 rule does
-//! not invert: a lapse is never an `error_log` row whatever triggered the request.
+//! **That last paragraph named a condition rather than a principle, and the condition has since
+//! fired — by a route it did not predict.** It said a 60-second poll would invert the argument;
+//! no poll ever landed. What reached the background instead was a socket, and the premise above
+//! no longer holds in either half it rested on: `sync_engine::live`'s connection manager reaches
+//! [`access_token`] from its own `credentials` helper on no press at all, so the **Sync now**
+//! button is no longer `client::run_once`'s only caller, and the caller it gained is not one.
+//!
+//! **The outcome this paragraph asked for is achieved anyway — one layer up, not inside this
+//! module.** A `credentials` failure propagates out of `connect_once` into the manager's error
+//! arm, which calls [`crate::errors::record`]: the background failures this paragraph worried
+//! about going unwatched *are* recorded now, and `error_log` gets exactly the row it predicted
+//! would be owed. **That is why [`post_for_grant`]'s non-401 paths still do not call
+//! `errors::record` themselves** — the answer moved to the caller that actually runs unattended,
+//! rather than into every function here.
+//!
+//! **The 401 rule never inverted, and still has not.** A lapse is still never an `error_log` row
+//! whatever triggered the request, and the connection manager honours the same exclusion by
+//! asking [`membership_ended`] before it records anything — this module's reason, carried to the
+//! caller that now needs it: a reader whose pledge lapsed while nobody was watching must still
+//! read "connect again", never "sync is broken".
 //!
 //! Everything here compiles for `wasm32-unknown-unknown`, which is why "now" is
 //! `SELECT unixepoch()` off the connection rather than `SystemTime::now()`: that one panics
