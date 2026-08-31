@@ -86,6 +86,7 @@ const TICK: std::time::Duration = std::time::Duration::from_millis(250);
 
 async fn run(app: tauri::AppHandle, state: Arc<AppState>, writes: Arc<Notify>) {
     let mut sched = Scheduler::new();
+    let mut signal = Signal::new();
     let mut attempt: u32 = 0;
     sched.wake(Wake::Launch, now_ms(), 0);
 
@@ -94,16 +95,18 @@ async fn run(app: tauri::AppHandle, state: Arc<AppState>, writes: Arc<Notify>) {
         // traffic. An installation that has connected nothing opens no socket, which is every
         // installation today.
         if !FOREGROUND.load(Ordering::Relaxed) || !in_a_group(&state).await {
-            emit(&app, LiveState::Off);
+            signal.set(&app, LiveState::Off);
             tokio::time::sleep(IDLE_POLL).await;
             continue;
         }
 
-        emit(&app, LiveState::Connecting);
-        match connect_once(&app, &state, &writes, &mut sched).await {
+        signal.set(&app, LiveState::Connecting);
+        match connect_once(&app, &state, &writes, &mut sched, &mut signal).await {
+            // A clean close, the age limit, or the foreground gate closing under us. None of
+            // the three is a failure, so none of them spends an attempt.
             Ok(()) => attempt = 0,
             Err(_) => {
-                emit(&app, LiveState::Offline);
+                signal.set(&app, LiveState::Offline);
                 let wait = backoff_ms(attempt, jitter());
                 attempt = attempt.saturating_add(1);
                 tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
@@ -124,13 +127,15 @@ const SOCKET_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(12 * 
 
 /// Hold one socket until it dies, acting on what arrives.
 ///
-/// `Ok(())` means "reconnect without a backoff" — a clean close or the age limit. `Err` means
-/// the backoff applies.
+/// `Ok(())` means "the outer loop may go round without a backoff" — a clean close, the age
+/// limit, or [`FOREGROUND`] clearing under us, and none of the three is a failure. Everything
+/// else is `Err` and takes the backoff, **the relay's own 4001 included**: see that arm.
 async fn connect_once(
     app: &tauri::AppHandle,
     state: &Arc<AppState>,
     writes: &Arc<Notify>,
     sched: &mut Scheduler,
+    signal: &mut Signal,
 ) -> Result<(), String> {
     let (base, token, device, group) = credentials(state).await?;
     let url = format!(
@@ -152,7 +157,7 @@ async fn connect_once(
         .map_err(|e| e.to_string())?;
     let (mut tx, mut rx) = socket.split();
 
-    emit(app, LiveState::Live);
+    signal.set(app, LiveState::Live);
     // A fresh socket has missed whatever happened while it was down.
     sched.wake(Wake::Reconnect, now_ms(), 0);
 
@@ -178,6 +183,18 @@ async fn connect_once(
             }
 
             _ = tick.tick() => {
+                // **The foreground gate, read here and not only at the top of `run`.**
+                // `pause()` sets a flag, and without this arm the task would sit in this
+                // `select!` until the socket died of its own accord — so an Android app sent
+                // to the background would keep the connection the gate exists to drop, until
+                // Doze severed it in a way this side does not control and cannot time.
+                //
+                // `Ok` and not `Err`: parking is not a failure. It must neither back off nor
+                // spend an attempt, because the very next thing that happens is `run`'s idle
+                // branch, which parks in `Off` until `resume()`.
+                if !FOREGROUND.load(Ordering::Relaxed) {
+                    return Ok(());
+                }
                 if sched.take_due(now_ms()) {
                     trip(app, state, sched).await;
                 }
@@ -196,10 +213,18 @@ async fn connect_once(
                         }
                     }
                 }
-                // 4001 is the relay saying this group is gone. Returning `Ok` skips the
-                // backoff; the loop in `run` then finds this device is in no group and
-                // settles into `Off` rather than hammering a socket it may not have.
-                Some(Ok(Message::Close(Some(f)))) if u16::from(f.code) == 4001 => return Ok(()),
+                // 4001 is the relay saying this group is gone — and it is `Err`, which is
+                // **the opposite of what the naive reading argues**: "we have been removed,
+                // there is nothing to back off from" assumes local state has already caught
+                // up with the close frame, and it has not. Nothing is cleared by a close;
+                // the grant goes when a round trip finds the keys gone, so `in_a_group`
+                // keeps answering `true` for as long as that takes. An `Ok` would reset
+                // `attempt` and reconnect at once, be told 4001 again, and spin against the
+                // one endpoint — the thundering herd `backoff_ms`'s jitter exists to break,
+                // arriving by a different road.
+                Some(Ok(Message::Close(Some(f)))) if u16::from(f.code) == 4001 => {
+                    return Err("the relay says this group is gone".into());
+                }
                 Some(Ok(Message::Close(_))) | None => {
                     return Err("the relay closed the socket".into());
                 }
@@ -215,6 +240,34 @@ async fn connect_once(
 /// Tell the frontend. Shape matches `SyncLiveEvent` in `src/lib/ipc.ts`.
 fn emit(app: &tauri::AppHandle, state: LiveState) {
     let _ = app.emit("sync:live", serde_json::json!({ "state": state }));
+}
+
+/// The last state the frontend was told, so a state that has not changed is not re-sent.
+///
+/// **This exists because `Off` is the resting state of every installation that has paired
+/// nothing**, which is every installation today. [`run`]'s idle branch comes round every
+/// [`IDLE_POLL`], and an event twelve times a minute repeating what the last one said is a
+/// steady drip on the IPC channel and a re-render on the page for no news at all. The
+/// transitions are the whole signal.
+///
+/// A reconnect cycle still emits every time, and that is not an exception to the rule: it
+/// alternates `Connecting` and `Offline`, so each one really is a change.
+struct Signal {
+    last: Option<LiveState>,
+}
+
+impl Signal {
+    fn new() -> Self {
+        Self { last: None }
+    }
+
+    fn set(&mut self, app: &tauri::AppHandle, state: LiveState) {
+        if self.last == Some(state) {
+            return;
+        }
+        self.last = Some(state);
+        emit(app, state);
+    }
 }
 
 /// Everything the upgrade request needs: the relay's address, a bearer, this device's id and
