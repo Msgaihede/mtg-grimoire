@@ -763,11 +763,30 @@ pub fn run() {
                 let handle = app.clone();
                 let owned = (*state).clone();
                 tauri::async_runtime::spawn(async move {
-                    let _ = tokio::time::timeout(
+                    // **The timeout bounds the *wait*, not the *work*.** `push_now` runs on
+                    // `spawn_blocking`'s OS thread pool, and `tokio::time::timeout` can only stop
+                    // *awaiting* that future — it cannot cancel the thread. If the round trip is
+                    // stuck inside `client::run_once` (a slow or unresponsive relay, bounded only
+                    // by `reqwest`'s own `connect_timeout`/`read_timeout` in `client.rs`), the
+                    // orphaned thread is still holding `state.db`'s write lock when this timeout
+                    // elapses and `handle.exit(0)` is called below.
+                    //
+                    // `exit(0)` does not skip straight to the OS: it synchronously drives
+                    // `RunEvent::Exit` → `checkpoint_on_exit` on this same process, **before**
+                    // anything actually terminates — and that handler makes two more bounded
+                    // attempts on the very same mutex (`flush_records` then `lock_for`). Without
+                    // `EXIT_PUSH_TIMED_OUT` below, a stuck push would compound worst-case shutdown
+                    // to roughly `EXIT_PUSH_BUDGET + 2×EXIT_CHECKPOINT_WAIT` (≈12s) rather than the
+                    // 2s this budget promises on its own.
+                    if tokio::time::timeout(
                         EXIT_PUSH_BUDGET,
                         crate::sync_engine::live::push_now(owned),
                     )
-                    .await;
+                    .await
+                    .is_err()
+                    {
+                        EXIT_PUSH_TIMED_OUT.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
                     handle.exit(0);
                 });
             }
@@ -783,6 +802,17 @@ const EXIT_PUSH_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
 /// So a second `ExitRequested` — or `exit(0)` re-entering — cannot start a second push.
 static EXIT_PUSH_TRIED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Set when the last-push `timeout` above elapsed rather than the push finishing.
+///
+/// **What this actually records:** the *wait* was given up on, not that the *work* stopped —
+/// the `spawn_blocking` thread it was watching may still be running, and may still hold
+/// `state.db`'s write lock, when `checkpoint_on_exit` runs moments later. `checkpoint_on_exit`
+/// reads this to shorten its own two bounded attempts on that same lock
+/// (`EXIT_CHECKPOINT_WAIT_AFTER_A_STUCK_PUSH`) rather than spending the usual 5s on each —
+/// see the comment beside the timeout above for why the two would otherwise compound.
+static EXIT_PUSH_TIMED_OUT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// How long the exit handler will wait for the write connection.
 ///
 /// Nothing short-lived contends for `db` any more: searches and status polls read through
@@ -791,6 +821,18 @@ static EXIT_PUSH_TRIED: std::sync::atomic::AtomicBool = std::sync::atomic::Atomi
 /// this wait is nearly always instant, and five seconds is simply where it stops trying. A
 /// window-less process still sitting on a lock is a process the user believes has quit.
 const EXIT_CHECKPOINT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The same wait, shortened, for the one case where it is very likely to be spent for nothing:
+/// [`EXIT_PUSH_TIMED_OUT`] is set only when the last-push `timeout` already gave up on the write
+/// lock once, after `EXIT_PUSH_BUDGET` (2s) of a relay that was slow or not answering at all. A
+/// thread that has already outlasted that budget rarely releases the lock in the next moment
+/// either, so a second full `EXIT_CHECKPOINT_WAIT` mostly buys nothing — one second is still a
+/// real, honest attempt (the checkpoint is fast whenever the lock is actually free, which is
+/// every ordinary shutdown), and caps the compounded worst case at
+/// `EXIT_PUSH_BUDGET + 2×this` ≈ 4s instead of ≈ 12s, which is the whole point: the checkpoint
+/// is worth trying, never worth a process that outstays its welcome on the taskbar for it.
+const EXIT_CHECKPOINT_WAIT_AFTER_A_STUCK_PUSH: std::time::Duration =
+    std::time::Duration::from_secs(1);
 
 /// Fold the write-ahead log back into `mtg.db` on the way out.
 ///
@@ -815,13 +857,27 @@ fn checkpoint_on_exit(app: &tauri::AppHandle) {
     // Bound to a local rather than matched in tail position: the guard borrows from
     // `state`, and a `match` at the end of the body would still hold it when `state` is
     // dropped.
+    //
+    // **Shortened when the last-push `timeout` in `ExitRequested` already gave up on this
+    // same lock** — see [`EXIT_PUSH_TIMED_OUT`]'s doc. `push_now`'s `spawn_blocking` thread may
+    // still be holding it here: a `timeout` around a `spawn_blocking` future stops *awaiting*
+    // it, not the OS thread underneath, so a push stuck in the network can still own the write
+    // connection when `RunEvent::Exit` runs this function moments later. Two full
+    // `EXIT_CHECKPOINT_WAIT`s stacked on top of a budget already spent waiting on a slow relay
+    // is exactly the "process the user believes has quit" symptom this whole feature exists to
+    // avoid — see [`EXIT_CHECKPOINT_WAIT_AFTER_A_STUCK_PUSH`] for the arithmetic.
+    let wait = if EXIT_PUSH_TIMED_OUT.load(std::sync::atomic::Ordering::SeqCst) {
+        EXIT_CHECKPOINT_WAIT_AFTER_A_STUCK_PUSH
+    } else {
+        EXIT_CHECKPOINT_WAIT
+    };
     // Before the checkpoint, and with the same wait: any `image_cache` row still owed is
     // bytes already on disk that nothing will ever serve, so paying the queue off here is
     // the difference between a warm cache and re-fetching those images forever. It is one
     // upsert per owed row and the queue is empty on a normal exit.
-    state.images.flush_records(&state.db, EXIT_CHECKPOINT_WAIT);
+    state.images.flush_records(&state.db, wait);
 
-    let held = db::lock_for(&state.db, EXIT_CHECKPOINT_WAIT);
+    let held = db::lock_for(&state.db, wait);
     match held {
         Some(conn) => {
             let _ = db::checkpoint_truncate(&conn);
