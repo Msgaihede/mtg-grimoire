@@ -1,4 +1,4 @@
-import { compact, since, type Row } from "./log";
+import { compact, deviceTag, headFrame, notifyTargets, since, type Row } from "./log";
 
 /**
  * One Durable Object per pairing group. It stores sealed envelopes, hands them back in the
@@ -58,7 +58,16 @@ export class Group implements DurableObject {
    */
   private readonly ownName: string | undefined;
 
+  /**
+   * The `DurableObjectState` itself, kept for the hibernation API — `acceptWebSocket`,
+   * `getWebSockets` and `getTags` all hang off it. This class `implements DurableObject`
+   * rather than extending it, so there is no inherited `ctx` and this field is the only
+   * handle. Cloudflare's samples all say `this.ctx`; here it is `this.state`.
+   */
+  private readonly state: DurableObjectState;
+
   constructor(state: DurableObjectState) {
+    this.state = state;
     this.sql = state.storage.sql;
     this.ownName = state.id.name;
 
@@ -103,7 +112,7 @@ export class Group implements DurableObject {
       case "ack":
         return this.ack(request);
       case "ws":
-        return this.ws();
+        return this.ws(request, url);
       case "drop":
         return this.drop();
       default:
@@ -165,6 +174,8 @@ export class Group implements DurableObject {
         Date.now(),
       )
       .one();
+
+    this.notify(stored.seq, envelope.device);
 
     return json({ cursor: stored.seq });
   }
@@ -240,15 +251,92 @@ export class Group implements DurableObject {
   }
 
   /**
-   * The route §7.7 describes and this PR does not build. It is kept in the object's shape so
-   * the PR that adds hibernatable WebSockets adds a handler rather than a route: `reqwest` has
-   * no WebSocket client, `tokio-tungstenite` does not compile to `wasm32-unknown-unknown`, and
-   * a socket from the page would need `tauri.conf.json`'s `connect-src` widened — a decision
-   * to take once, for all three targets, in that PR. Until then the client polls.
+   * Tell every other connected device that the log moved.
+   *
+   * **No coalescing, and that is deliberate.** A 50 000-row import is 250 sequential POSTs, so
+   * a burst emits 250 frames per peer — but outgoing messages are free, the object is already
+   * awake handling the push, and the receiving device debounces ~1 s and makes one round trip.
+   * Coalescing here would need a timer or an alarm, and both block hibernation. If a live pass
+   * ever shows the burst mattering, the escape hatch is a `?notify=1` flag the client sets on
+   * the final chunk of a push run — named so it is not re-derived, and not built.
    */
-  private ws(): Response {
-    return json({ error: "websocket fan-out is not implemented; use pull" }, 501);
+  private notify(cursor: number, from: string): void {
+    const sockets = this.state.getWebSockets().map((ws) => ({
+      ws,
+      tag: this.state.getTags(ws)[0],
+      open: ws.readyState === WebSocket.OPEN,
+    }));
+    const frame = headFrame(cursor, from);
+    for (const target of notifyTargets(sockets, from)) {
+      target.ws.send(frame);
+    }
   }
+
+  /**
+   * §7.7's fan-out, as a hint rather than a delivery.
+   *
+   * **`acceptWebSocket` and never `accept()`.** The latter bills duration for the entire time
+   * the socket is connected, at a flat 128 MB — one idle connection is ~10 800 of the
+   * 13 000 GB-s/day free allowance. Worse, a single `accept()` anywhere disables hibernation
+   * for the whole object. There is no error either way; the only signal is the bill.
+   *
+   * **No session map and no constructor rehydration.** Every Cloudflare sample builds a
+   * `Map<WebSocket, …>` in `fetch` and rebuilds it from `getWebSockets()` on wake, because
+   * in-memory state is discarded at hibernation. `getWebSockets()` already returns hibernated
+   * sockets — that is what makes the samples work — so calling it at fan-out time is the whole
+   * mechanism, and the path this repo could not test (`evictDurableObject` needs
+   * `@cloudflare/vitest-pool-workers`) does not exist to be got wrong.
+   */
+  private ws(request: Request, url: URL): Response {
+    // Lower-cased before comparing: RFC 6455 makes the token case-insensitive, every
+    // Cloudflare sample compares case-sensitively, and whether the runtime normalises first
+    // is not documented.
+    const upgrade = request.headers.get("Upgrade")?.toLowerCase();
+    if (upgrade !== "websocket") {
+      return json({ error: "expected Upgrade: websocket" }, 426);
+    }
+
+    const device = url.searchParams.get("device") ?? "";
+    if (device === "") return json({ error: "device required" }, 400);
+
+    // Numeric keys `0` and `1`, not `client`/`server` — which is why every sample destructures
+    // through `Object.values`. Index 0 is the end handed back to the caller.
+    const [client, server] = Object.values(new WebSocketPair());
+
+    this.state.acceptWebSocket(server, [deviceTag(device)]);
+
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  /**
+   * Required so a stray frame is consumed rather than dropped.
+   *
+   * **A missing or misspelled handler is a silent no-op** — `workerd` drops the message with no
+   * error and no log, while still waking the object and still billing the request. That failure
+   * reads exactly like "the client is not sending anything", so the handler exists even though
+   * nothing is expected to arrive: the client's keepalive is a *protocol* ping, which the
+   * runtime answers itself without waking anything and without calling this.
+   */
+  // Both parameters are unused by design — the runtime calls this by name, and there is
+  // nothing to inspect. `no-unused-vars`'s `args: "after-used"` only forgives a leading unused
+  // parameter that precedes one that IS used (see `index.ts`'s `scheduled`); neither parameter
+  // here has that cover, so the disable is necessary rather than decorative (see `pair.ts`).
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  webSocketMessage(_ws: WebSocket, _message: string | ArrayBuffer): void {}
+
+  /**
+   * Nothing to clean up — `getWebSockets()` is the registry, not a list this class maintains.
+   *
+   * **`ws.close()` here would be redundant.** `compatibility_date` is `2026-08-27`, past
+   * `2026-04-07`, so `web_socket_auto_reply_to_close` is on by default and the runtime
+   * completes the close handshake itself. On an older date, omitting it gave the client a
+   * `1006`; that trap is closed for this Worker.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  webSocketClose(_ws: WebSocket, _code: number, _reason: string, _wasClean: boolean): void {}
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  webSocketError(_ws: WebSocket, _error: unknown): void {}
 
   /**
    * Empty this group's log. Called only by the entitlement layer when a membership ends
@@ -261,6 +349,12 @@ export class Group implements DurableObject {
   private drop(): Response {
     this.sql.exec(`DELETE FROM log`);
     this.sql.exec(`DELETE FROM acks`);
+    // 4001 is in the private range, so the Rust client can tell "you were removed" from any
+    // transport-level close. There is no close-all API; the loop is it. `state.abort()` would
+    // also do it and is the wrong tool — it logs an error application code cannot catch.
+    for (const ws of this.state.getWebSockets()) {
+      ws.close(4001, "group dropped");
+    }
     return new Response(null, { status: 204 });
   }
 
