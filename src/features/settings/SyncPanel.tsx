@@ -1138,10 +1138,26 @@ export function SyncPanel(): JSX.Element {
     void ipc.syncNow().catch(() => undefined);
   }, [poll.data, client]);
 
-  /** Whichever press last refused. One line, because only one thing is ever in flight here. */
+  /**
+   * Whichever press last refused — or, now, whichever *poll* did. One line, because only one
+   * thing is ever in flight here.
+   *
+   * **`poll.error` sits right after `begin`/`accept`, ahead of `confirm` and the roster
+   * mutations.** `begin` and `accept` are how an attempt can fail to *start*; `poll` is that same
+   * attempt failing *while it is running* — the crate's own pairing-expiry refusal is exactly
+   * this, a rendezvous that lived its ten minutes with nobody pressing anything. That is a more
+   * fundamental failure than a stale `confirm` refusal from earlier in the same attempt, so it
+   * is asked first. It is **not** swallowed, unlike the `syncNow` rejection in the effect above:
+   * that one hides a harmless failure *after* a success, and this is the only signal the reader
+   * gets that the thing they are waiting for is never coming — a code that has silently died
+   * behind a `waiting` or `compare` screen with nothing on screen saying so. `Cancel` stays
+   * rendered on both those screens regardless of this line, which is what stops the sentence
+   * stranding anyone: reading it still leaves a press that gets back to `idle`.
+   */
   const error =
     begin.error ??
     accept.error ??
+    poll.error ??
     confirm.error ??
     rename.error ??
     revoke.error ??
