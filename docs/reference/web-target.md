@@ -1198,13 +1198,33 @@ survivor is equivalent by construction:
   is **not deleted** and answers `false` — which this code would then report as a file that
   would not go.
 
-### Two things found on the way, both open
+### Two things found on the way
 
-- **`sw.ts`'s `sweep()` deletes without `ignoreVary`.** It is the eviction path, it predates
-  this work, and it has the same exposure the paragraph above describes: a picture whose stored
-  response carries a `Vary` would refuse to be evicted and the ledger would forget it anyway,
-  putting the cache permanently over its cap with no way back. `swCore.test.ts`'s sweep only
-  checks `.match(`, so nothing goes red. Not fixed here — it is the eviction path's own change.
+- **`sw.ts`'s `sweep()` deletes without `ignoreVary` — and that is a latent hazard with, by
+  measurement, no current exposure.** This bullet first read *"a live correctness bug"*: the
+  eviction path deletes by URL string, `Cache.delete` runs the same matching algorithm as
+  `Cache.match`, so a stored response whose `Vary` disagrees refuses to be deleted while
+  `forget` drops it from the ledger anyway — the cache then sits over its cap with no way back
+  down. **That was inferred from the API contract rather than measured, and the measurement
+  says the first condition never holds.** Probed live 2026-08-31 against `cards.scryfall.io`,
+  the only origin `routeFor` sends to the image route: a real card image answers **200,
+  83 658 B, `image/jpeg`, and no `vary` header at all** — the same three ways, plain, with an
+  `Origin:` and with a webp-negotiating `Accept:`. `access-control-allow-origin` is a static
+  `*`, which is *why* there is no `Vary: Origin` to begin with. A stored response with no
+  `Vary` matches unconditionally, so the bare delete cannot fail for this reason today.
+
+  **Narrower still, and worth writing down because it is the half that would change first.**
+  Card art is a plain `<img>` — there is no `crossOrigin` anywhere in `src/` — so the request
+  the worker stores is `no-cors` and carries no `Origin` header either; even a future
+  `Vary: Origin` would compare `""` against `""` and still match. The only `Vary` that could
+  ever bite here is one naming a header an `<img>` *does* send and a `new Request(url)` does
+  not, which in practice means `Accept`.
+
+  **Left as it stands, on the measurement rather than on tidiness** — and it goes live silently
+  if that origin ever negotiates, or if `GRIMOIRE_IMAGE_ORIGIN` is pointed at a proxy that
+  does, because `swCore.test.ts`'s sweep only checks `.match(` and nothing here would go red.
+  The clear path added by this work passes `{ ignoreVary: true }` regardless, where it is a
+  type-level requirement costing nothing; by this measurement that is belt-and-braces too.
 - **Two comments in `src-tauri/src/web/route.rs` have expired.** The `COMMANDS` block says the
   Local cache button *"is the one control on the Settings page that still answers `unknown
   command` in a browser"*, which is no longer true of any control; the test's own doc says the
