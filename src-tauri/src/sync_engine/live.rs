@@ -159,6 +159,26 @@ async fn run(app: tauri::AppHandle, state: Arc<AppState>, writes: Arc<Notify>) {
         }
 
         signal.set(&app, LiveState::Connecting);
+
+        // **Spec §6.4: "the connection manager's first act is a full round trip, then the
+        // socket."** This arm is that act, and it is here rather than only in
+        // [`connect_once`]'s tick because a round trip is plain HTTPS and the socket is an
+        // upgrade — two different things to be allowed to do. On a network that permits the one
+        // and refuses the other, which is what a corporate or hotel proxy usually is, a device
+        // whose only `take_due` lived inside the connected loop got **no automatic sync at
+        // all**: not the launch catch-up, not a local write, nothing but the exit push and the
+        // button. With this it degrades instead to one trip per backoff cycle — bounded, and
+        // honest about what it can reach.
+        //
+        // The `Reconnect` wake [`connect_once`] arms once the upgrade completes is not made
+        // redundant by this and is deliberately kept: it closes the window between this trip's
+        // pull and the socket starting to listen, which is the only gap a frame could fall
+        // into. Two trips per connection is what §6.4 asks for in as many words, and a
+        // connection is a rare event — twelve hours of [`SOCKET_MAX_AGE`], or a reconnect.
+        if sched.take_due(now_ms()) {
+            trip(&app, &state, &mut sched).await;
+        }
+
         let ended = connect_once(&app, &state, &writes, &mut sched, &mut signal).await;
 
         // **Every decision below is [`super::schedule`]'s.** This arm classifies nothing: it
