@@ -129,9 +129,20 @@ qrcode = { version = "0.14", default-features = false }
 # ── Desktop and Android ──────────────────────────────────────────────────────────
 # Everything here is either impossible in a browser or pointless there. `bundled` is
 # libsqlite3-sys compiling sqlite3.c with the host compiler, which is right on Windows and
-# impossible in a webview; `tokio`'s `fs` has no browser counterpart; `zip`, `image` and
-# `sha2` serve the portable updater and the cover-image encoder, both desktop-only by
-# spec §6.3.
+# impossible in a webview; `tokio`'s `fs` has no browser counterpart; `zip` and `sha2` serve
+# the portable updater, desktop-only by spec §6.3.
+#
+# **`image` was here too and is gone as of 2026-08-31.** It decoded whatever a reader picked as
+# a custom deck cover and re-encoded it to WEBP; custom covers were removed in favour of the
+# card-art crop, which is a `cover_card_id` and needs no encoder.
+#
+# **What went is the *direct* dependency and our feature request, not the crate.** `image` is
+# still built, because `arboard` (under `tauri-plugin-clipboard-manager`) and
+# `tauri-plugin-mcp-bridge` both pull it — `cargo tree -i image` is the question to ask, and it
+# is the reason `cargo check` still prints `Checking image`. So this is a hygiene change rather
+# than a size win: nothing in `src-tauri/src` names the crate any more, and no format is listed
+# here that no code asks for. Which formats survive is now a fact about those two crates'
+# feature sets and is deliberately not written down, since it would rot on their next bump.
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 # `hooks` is what the plain-text mirror watches through: an `update_hook` on the one write
 # connection sees every insert, update and delete with the table's name, so no command has to
@@ -144,9 +155,10 @@ rusqlite = { version = "0.40", features = ["bundled", "hooks"] }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 # The system file picker. The webview cannot name a file on disk on its own, and the commands
-# behind it — `deck_set_cover_image`, `import_read_file`, `export_write_file`, and the mirror's
-# "Change folder…" — take a path the backend reads or writes rather than bytes, so this plugin
-# is what stands between a button and a command that already exists.
+# behind it — `import_read_file`, `export_write_file`, and the mirror's "Change folder…" — take
+# a path the backend reads or writes rather than bytes, so this plugin is what stands between a
+# button and a command that already exists. (`deck_set_cover_image` was a fourth until custom
+# deck covers were removed on 2026-08-31.)
 # `capabilities/default.json` grants `dialog:allow-open` **and `dialog:allow-save`** — the
 # second since the export dialog shipped, which this comment went on denying for a whole plan.
 # The other three verbs (message, ask, confirm) are not permitted; the app's own questions are
@@ -195,19 +207,6 @@ tauri-plugin-mcp-bridge = "0.12"
 # `sync` is the semaphore that caps concurrent image fetches; `time` is the sleep the
 # image cache's pacer and its 429 penalty are made of.
 tokio = { version = "1", features = ["fs", "io-util", "rt", "sync", "time"] }
-# Decoding whatever a user picks as a custom deck cover and re-encoding it to WEBP at the
-# `art` crop's 626x457, so a cover and a card's art are interchangeable in every tile.
-# `default-features = false` drops rayon and eleven formats nobody will hand a file-picker;
-# what is left is the five a person actually has on disk plus `webp`, which is both the
-# decoder for a WEBP they picked and — through `image-webp` — the only encoder in the tree.
-image = { version = "0.25", default-features = false, features = [
-    "png",
-    "jpeg",
-    "gif",
-    "bmp",
-    "webp",
-] }
-
 # ── Web ──────────────────────────────────────────────────────────────────────────
 # ⚠️ NEVER add `default-features = false` to this rusqlite line. `ffi-sqlite-wasm-rs` — the
 # FFI backend that makes wasm work at all — is in rusqlite's DEFAULT feature set, and
@@ -257,10 +256,12 @@ webview2-com = "0.38"
 
 # Android only, and reached only from Rust. A file the reader picks on Android is a
 # `content://` URI, not a path: `tauri-plugin-dialog`'s DialogPlugin.kt fires
-# ACTION_OPEN_DOCUMENT / ACTION_CREATE_DOCUMENT and returns `uri.toString()`. This plugin's
+# ACTION_GET_CONTENT / ACTION_CREATE_DOCUMENT and returns `uri.toString()`. This plugin's
 # `Fs::open` resolves such a URI through the ContentResolver and hands back a std::fs::File
 # built from the descriptor -- which is what lets `picked.rs` keep every byte-handling path
-# downstream unchanged, `image::ImageReader`'s need for `Seek` included.
+# downstream unchanged. (It answered a concrete `File` rather than a boxed `Read` because
+# `image::ImageReader` needed `Seek`; that encoder is gone, and the concrete type stays because
+# nothing gains from boxing it.)
 #
 # **No `fs:` permission is granted to it, on any platform.** The ACL gates commands the
 # webview invokes; this is a Rust-side handle on managed state. The page's filesystem access

@@ -4699,8 +4699,9 @@ describe("the deck row itself", () => {
       coverCardId: BOLT.id,
       folderId: folder.id,
       theoryEnabled: true,
-      // A create never sets a *custom* cover: that one needs a path on disk and a deck id, so
-      // it can only be `deck_set_cover_image` afterwards.
+      // The column's DDL default, and the only kind there is: a create used to be unable to set
+      // the *custom* one, which needed a path on disk and a deck id, and that whole half is
+      // deleted.
       coverKind: "card_art",
     });
     // Joined from `cards` rather than echoed back, which is the half a store of DTOs would get
@@ -5601,7 +5602,14 @@ describe("the busy fault", () => {
     // and no arguments of its own, exactly as `sync_pairing_confirm` beside it needs none in
     // `args` above. So the two changes compose to 88 → 87, and this line was **re-counted by
     // running the sweep across the merge**, not by adding the two deltas on paper.
-    expect(names).toHaveLength(87);
+    //
+    // Card-art-only covers then took **one**, 87 → 86: `deck_set_cover_image` is gone with the
+    // whole custom-cover feature — the crate command, the `/cover/<deckId>` route, the encoder
+    // and the `data/covers/` directory — because the picture never survived a sync, the path
+    // being stored absolute. It was a write and it took `refuseIfBusy`, so this is a plain
+    // deletion from the list rather than a handler moving to `unlocked`. Re-counted by running
+    // the sweep, not by subtracting on paper.
+    expect(names).toHaveLength(86);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -8039,20 +8047,24 @@ describe("categories, tags, folders, history and the plan", () => {
     expect(heldByFolder()).toBe(3);
   });
 
-  it("puts a custom cover on without clearing the card underneath it", () => {
+  /**
+   * **A cover is a card id, and this is what is left of the pair that used to be here.**
+   *
+   * The deleted case drove `deck_set_cover_image` — a path the backend re-encoded, which set
+   * `coverKind` to `custom` and deliberately left `coverCardId` alone, so switching back to card
+   * art lost nothing. That command is gone from the crate and from this fake, along with the
+   * route, the encoder and the directory, because the picture never survived a sync. What the
+   * pair was really pinning is the half that remains: a cover write is a patch, it writes
+   * `card_art`, and it is audited under `cover`.
+   */
+  it("sets a card-art cover through the patch, and records it", () => {
     const { db, w } = testbed();
-    const row = w.deck_set_cover_image({ deckId: 1, sourcePath: "C:\\pictures\\sleeve.png" });
 
-    expect(row.coverKind).toBe("custom");
-    // Switching back to card art is `deck_update({ coverCardId })` and loses nothing either way,
-    // which is only coherent because `coverKind` is the one answer to which is showing.
-    expect(row.coverCardId).not.toBeNull();
-    expect(w.deck_update({ id: 1, patch: { coverCardId: row.coverCardId! } }).coverKind).toBe(
-      "card_art",
-    );
-    // Recorded even when both sides read `custom`: the payload does not name the file, so the
-    // two sides matching is what "a different picture" looks like from here.
-    expect(db.deckAudit.filter((a) => a.payload.includes('"field":"cover"'))).toHaveLength(2);
+    const row = w.deck_update({ id: 1, patch: { coverCardId: BOLT.id } });
+
+    expect(row.coverCardId).toBe(BOLT.id);
+    expect(row.coverKind).toBe("card_art");
+    expect(db.deckAudit.filter((a) => a.payload.includes('"field":"cover"'))).toHaveLength(1);
   });
 
   it("refuses every satellite read under the deckMeta fault, and the deck itself under none", () => {

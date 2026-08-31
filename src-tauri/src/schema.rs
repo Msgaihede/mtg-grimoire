@@ -298,9 +298,11 @@ pub const LEGACY_SINGLE_FILE_VERSION: i64 = 26;
 /// log. 30 is the pairing baseline's one column, `sync_devices.baselined_at` — when this
 /// device last handed that peer a full copy of its rows. 31 is the twelfth synced table,
 /// `device_names` — what each device in the group is called, and the only thing about a peer
-/// that travels, because the roster that holds the keys must never itself sync. The user's
-/// ladder can never restart, because its rungs describe rows nothing else can produce.
-pub const USER_SCHEMA_VERSION: i64 = 31;
+/// that travels, because the roster that holds the keys must never itself sync. 32 is the
+/// first rung here that writes no shape at all: it flips every `decks.cover_kind` that still
+/// says `'custom'` to `'card_art'`, because the reader-picked cover picture is gone. The
+/// user's ladder can never restart, because its rungs describe rows nothing else can produce.
+pub const USER_SCHEMA_VERSION: i64 = 32;
 
 /// `corpus.db`'s version, on a number line of its own.
 ///
@@ -4598,6 +4600,52 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
         tx.commit()?;
     }
 
+    // v32: the reader-picked deck cover is gone, and every deck that had one now draws its
+    // card art.
+    //
+    // **The first rung on this ladder that writes no shape at all** — `migrate_single_file`'s
+    // v22 one number line down, and it owes what that one owes: no line in [`USER_SCHEMA_SQL`],
+    // because that literal describes a *shape* and this rung does not change one, and no rewind
+    // constant in the test module, because a v31 database and a v32 database are the same
+    // schema and differ only in what one column holds. Nothing is FTS-indexed, no `cards` rowid
+    // is renumbered, and no rebuild is owed.
+    //
+    // **The `CHECK` goes on naming `'custom'` and that is deliberate.** SQLite has no
+    // `ALTER … CHECK`, so narrowing the vocabulary is a whole-table rebuild — v29's `error_log`
+    // is what one costs — and there is nothing to buy with it: after this rung no writer in the
+    // crate spells `'custom'`, so the only value the constraint still permits is one nothing can
+    // produce. `cover_image_path` stays for the same kind of reason and a sharper one: it is on
+    // `crate::sync_engine::capture`'s `decks` spec, and a field taken off a spec is a wire
+    // change. Both go together in a later rung, once every device in a group is past this one.
+    //
+    // **On a paired device the flip travels, and that is the wanted behaviour rather than a
+    // side effect to suppress.** The capture triggers are persistent, so on any machine that
+    // has launched before they are already in the file when this rung runs — this is the first
+    // rung to `UPDATE` a *captured* column with them live. Each flipped deck therefore writes
+    // one `put` carrying `cover_kind`, and a peer still on the old build is moved to the state
+    // it was going to reach anyway. An unpaired device records nothing: the trigger's cross
+    // join against `sync_group` produces no row.
+    //
+    // **What it does not reach is a file [`crate::split::convert`] made**, and that is left open
+    // rather than missed. That path builds the user half with [`create_user_schema`] and stamps
+    // [`USER_SCHEMA_VERSION`] directly, so no rung here runs on it — the same hole
+    // [`mint_missing_uids`] and the clock repair below were each written to close, and every
+    // pre-27 `mtg.db` still in the field takes it exactly once. What makes this one different
+    // from those two is that a leftover `'custom'` is **already a supported state**: it is what
+    // a peer on the old rung pushes over sync, so [`crate::deck`] has to tolerate one whatever
+    // this rung does, reads it as card art, and repairs the row the next time the reader picks
+    // a cover. There is nothing here for a repair to protect that is not protected one module
+    // over. The rung that narrows the `CHECK` and drops `cover_image_path` is the one that has
+    // to care, and it must repeat this `UPDATE` rather than assume this one ran.
+    if v < 32 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch("UPDATE decks SET cover_kind = 'card_art' WHERE cover_kind = 'custom';")?;
+        // Literal `32`, for the reason every step before it writes its own: this step is what
+        // *makes* a database version 32.
+        tx.execute_batch("PRAGMA main.user_version = 32;")?;
+        tx.commit()?;
+    }
+
     // **The clock, repaired on every launch at every version — and this is not belt-and-braces.**
     //
     // Every capture trigger ends `FROM sync_clock c, sync_identity i, sync_group g`. That is a
@@ -5719,6 +5767,26 @@ pub(crate) mod tests {
         conn
     }
 
+    /// A user file at 31 — the shape every machine carries the day before card-art-only covers
+    /// land, and the only population the v32 rung is *for*.
+    ///
+    /// **Head wearing the previous number, and that is the honest construction rather than a
+    /// shortcut** — [`v22_database`]'s argument one number line up. v32 writes no shape at all;
+    /// it flips the contents of one column, so a v31 database and a v32 one *are* the same
+    /// schema and renumbering is the whole of the difference. There is no `UNDO_V32` for the
+    /// same reason, and no fixture below owes it a line.
+    ///
+    /// What makes a test built on this a real upgrade and not a fresh install is what the test
+    /// seeds afterwards: a `decks` row saying `'custom'`, which no database created at head can
+    /// ever come to hold, because nothing writes that value any more.
+    fn user_file_at_31() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        create_user_schema(&conn, "main").unwrap();
+        conn.execute_batch("PRAGMA main.user_version = 31;")
+            .unwrap();
+        conn
+    }
+
     /// A user file at 27 — the shape [`crate::split::convert`] left on every machine that
     /// upgraded before pairing landed, and the only population the v28 rung is *for*.
     ///
@@ -6106,7 +6174,7 @@ pub(crate) mod tests {
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, USER_SCHEMA_VERSION);
-        assert_eq!(USER_SCHEMA_VERSION, 31);
+        assert_eq!(USER_SCHEMA_VERSION, 32);
     }
 
     /// **It is synced, and `sync_devices` still is not.** The whole point is that a NAME
@@ -6136,6 +6204,171 @@ pub(crate) mod tests {
         assert_eq!(
             cols,
             ["device_id", "name", "created_at", "updated_at", "sync_uid"]
+        );
+    }
+
+    // ---- v32: the reader-picked cover is gone ----------------------------------------
+
+    /// **The rung, on a real upgrade path.** A v31 file holding a deck whose cover is a
+    /// picture reads `card_art` afterwards, and the card the deck already named is untouched.
+    ///
+    /// The fixture is what makes this mean anything: a database created at head can never hold
+    /// `'custom'`, because after this change nothing writes it — so a test that started from a
+    /// fresh install would assert about a row the rung had nothing to do with, and would go on
+    /// passing with the rung deleted.
+    ///
+    /// **`cover_card_id` is asserted because it is the whole of the feature now.** Setting a
+    /// picture left the card id alone, so almost every deck being flipped here already carries
+    /// one, and a rung that cleared it would turn a deck with a cover into a deck with the
+    /// placeholder — the one loss this change was written to avoid.
+    #[test]
+    fn migrating_a_v31_user_file_turns_every_custom_cover_into_card_art() {
+        let conn = user_file_at_31();
+        conn.execute_batch(
+            "INSERT INTO decks
+                 (id, name, format_key, cover_kind, cover_card_id, cover_image_path,
+                  created_at, updated_at)
+             VALUES (1, 'Picture', 'commander', 'custom', 'bolt-id',
+                     'D:\\covers\\1.webp', 0, 0);",
+        )
+        .unwrap();
+
+        migrate_user(&conn).unwrap();
+        // Twice, because a rung that is not idempotent breaks on the second launch and on
+        // nobody's machine before that.
+        migrate_user(&conn).unwrap();
+
+        let (kind, card): (String, Option<String>) = conn
+            .query_row(
+                "SELECT cover_kind, cover_card_id FROM decks WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(kind, "card_art", "the rung did not flip the custom cover");
+        assert_eq!(
+            card.as_deref(),
+            Some("bolt-id"),
+            "the rung must not disturb the card the deck already named"
+        );
+
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, USER_SCHEMA_VERSION);
+    }
+
+    /// A deck that was already drawing its card art is left exactly as it was.
+    ///
+    /// **The `WHERE` clause is deliberately not what this asserts, because nothing can.** The
+    /// two values are `'custom'` and `'card_art'` and the target is `'card_art'`, so a bare
+    /// `UPDATE decks SET cover_kind = 'card_art'` is the same statement with a wider row count
+    /// — no test can tell them apart, and the clause is there to keep the write off rows that
+    /// do not need it rather than to change an outcome.
+    ///
+    /// What this **does** hold shut is every row the rung's `WHERE` excludes, which is the half
+    /// of its behaviour the test above cannot see: a deck that already had a cover card keeps
+    /// it, and one that never had a cover keeps its NULL — the placeholder deck, a supported
+    /// state rather than an error. It is what fails if the flip is ever written backwards.
+    /// Measured by mutation: reversing the rung to
+    /// `SET cover_kind = 'custom' WHERE cover_kind = 'card_art'` fails here and in the test
+    /// above; clearing `cover_card_id` as well fails only above, because these rows are exactly
+    /// the ones such a rung would not reach.
+    #[test]
+    fn migrating_a_v31_user_file_leaves_a_card_art_cover_alone() {
+        let conn = user_file_at_31();
+        conn.execute_batch(
+            "INSERT INTO decks
+                 (id, name, format_key, cover_kind, cover_card_id, created_at, updated_at)
+             VALUES (1, 'Already art', 'commander', 'card_art', 'bolt-id', 0, 0),
+                    (2, 'No cover',    'commander', 'card_art', NULL,      0, 0);",
+        )
+        .unwrap();
+
+        migrate_user(&conn).unwrap();
+
+        let rows: Vec<(i64, String, Option<String>)> = {
+            let mut stmt = conn
+                .prepare("SELECT id, cover_kind, cover_card_id FROM decks ORDER BY id")
+                .unwrap();
+            let out = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            out
+        };
+        assert_eq!(
+            rows,
+            vec![
+                (1, "card_art".to_owned(), Some("bolt-id".to_owned())),
+                (2, "card_art".to_owned(), None),
+            ]
+        );
+    }
+
+    /// The v31 fixture really sits one step below head, and that is the whole of what makes
+    /// the two tests above upgrade tests.
+    ///
+    /// `the_v27_fixture_carries_none_of_v28`'s job, and it has to be done differently here: v32
+    /// creates no table and no column, so there is nothing absent to look for and no shape to
+    /// compare. **The version is the only thing that distinguishes a v31 file from a v32 one**,
+    /// so it is asserted against [`USER_SCHEMA_VERSION`] rather than against the literal the
+    /// fixture itself writes — a fixture stamped at head would leave `migrate_user` with no
+    /// rung to run, the seeded row would keep whatever it was given, and both tests above would
+    /// pass while testing nothing.
+    #[test]
+    fn the_v31_fixture_really_sits_one_step_below_head() {
+        let conn = user_file_at_31();
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            version,
+            USER_SCHEMA_VERSION - 1,
+            "one step below head, or the rung under test never runs"
+        );
+    }
+
+    /// A legacy single file climbs the whole way and arrives with no custom cover left.
+    ///
+    /// The test above isolates the rung; this one is the other population — a database that
+    /// walks `migrate_single_file` and then every user rung in one launch.
+    ///
+    /// **It is the only test here that runs this rung beside the others, so it is the one that
+    /// has to check the version it arrives at**, and that assertion was added because moving
+    /// the rung above `if v < 31` left the rest of the test perfectly green: `migrate_user`
+    /// reads the version once and then runs every block in source order, so a rung out of place
+    /// still does its work and is then stamped over by the lower one it jumped.
+    #[test]
+    fn a_legacy_file_climbing_to_head_loses_its_custom_covers() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_single_file(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO decks (id, name, format_key, cover_kind, cover_card_id,
+                                created_at, updated_at)
+             VALUES (1, 'Picture', 'commander', 'custom', 'bolt-id', 0, 0);",
+        )
+        .unwrap();
+
+        migrate_user(&conn).unwrap();
+
+        let (kind, card): (String, Option<String>) = conn
+            .query_row(
+                "SELECT cover_kind, cover_card_id FROM decks WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(kind, "card_art");
+        assert_eq!(card.as_deref(), Some("bolt-id"));
+
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            version, USER_SCHEMA_VERSION,
+            "every rung ran, and each stamped after the one below it"
         );
     }
 

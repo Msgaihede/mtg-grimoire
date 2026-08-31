@@ -13,18 +13,6 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   ipc: { searchCards },
 }));
 
-/**
- * The system file picker.
- *
- * Mocked for the reason `DeckSettingsDialog.test.tsx` mocks it: there is no OS dialog in jsdom,
- * and the real `open` reaches `invoke`, which needs `window.__TAURI_INTERNALS__` and would throw
- * identically for all three answers a picker can give. The three are exercised on the dialog's
- * own suite; here the mock exists so pressing Upload does not explode a test about something
- * else.
- */
-const pickFile = vi.hoisted(() => vi.fn());
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: pickFile }));
-
 import { coverChoices, DeckCoverPicker, type DeckCoverPickerProps } from "./DeckCoverPicker";
 
 /** One search result — `DeckEditor.test.tsx`'s builder, cut to what a cover tile reads. */
@@ -67,29 +55,22 @@ function wrap(ui: ReactElement) {
 /** The picker with a cover it can credit and nothing else going on. */
 function picker(props: Partial<DeckCoverPickerProps> = {}) {
   const onPickCard = vi.fn();
-  const onPickFile = vi.fn();
   const view = wrap(
     <DeckCoverPicker
       coverCardId="c-Lightning Bolt"
-      coverKind="card_art"
       coverArtist="Christopher Rush"
-      customCoverUrl={null}
       deckCards={[]}
       onPickCard={onPickCard}
-      onPickFile={onPickFile}
-      pendingFileName={null}
-      uploading={false}
       idPrefix="cover"
       {...props}
     />,
   );
-  return { onPickCard, onPickFile, ...view };
+  return { onPickCard, ...view };
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
   searchCards.mockResolvedValue(page([]));
-  pickFile.mockResolvedValue("C:\\pics\\dragon.png");
 });
 
 describe("DeckCoverPicker", () => {
@@ -265,25 +246,6 @@ describe("DeckCoverPicker", () => {
     expect(await screen.findByText(/Showing 1 of 5,000\+ matches/)).toBeInTheDocument();
   });
 
-  /**
-   * At create there is no deck id, so there is no `/cover/<deckId>` to draw and no bytes to
-   * draw from — the picker names the file instead of pretending to a preview.
-   */
-  it("shows a chosen file's name when there is no deck to upload it against", () => {
-    picker({ pendingFileName: "dragon.png", coverCardId: null, coverArtist: null });
-
-    expect(screen.getByText("dragon.png")).toBeInTheDocument();
-    expect(screen.queryByText("No cover")).toBeNull();
-  });
-
-  /** A pending file is what the deck will wear, so the card art's credit line stands down —
-   *  a line crediting an illustrator over a picture nobody can see would credit the wrong one. */
-  it("draws no art credit while a file is waiting to be applied", () => {
-    picker({ pendingFileName: "dragon.png" });
-
-    expect(screen.queryByText(/Art by/)).toBeNull();
-  });
-
   /** Scryfall's image policy: an `art` crop has no printed frame, so the illustrator is credited
    *  wherever one is shown. */
   it("draws a cover it can credit, with the credit", () => {
@@ -308,26 +270,27 @@ describe("DeckCoverPicker", () => {
   });
 
   /**
-   * A custom cover is the reader's own picture served at a route that names the **deck**, so
-   * there is no Scryfall artist to credit and none is drawn — while the frame quite properly
-   * draws the picture.
+   * **The file half of this picker is gone, and its absence is the assertion.**
+   *
+   * A cover could also be a picture the reader chose off disk: an `Upload an image…` button
+   * here, an `onPickFile` beside `onPickCard`, a `PendingFile` frame naming a file the create
+   * dialog had no deck id to send yet, and a `custom` preview drawn from a `/cover/<deckId>`
+   * URL. All of it is deleted — the command, the route, the encoder and the directory with it
+   * — because the picture never survived a sync and every device but the uploader already drew
+   * the card art.
+   *
+   * Written as a case rather than left to the type, because a **prop** that no longer exists is
+   * a compile error while a **control** that came back would be caught by nothing here: every
+   * other case in this suite would go on passing beside a second way to set a cover.
    */
-  it("draws a custom cover from the URL it was given, uncredited", () => {
-    const url = "http://mtgimg.localhost/cover/4";
-    const { container } = picker({ coverKind: "custom", customCoverUrl: url });
+  it("offers no way to set a cover but a card", () => {
+    picker({ deckCards: [card({ name: "Lightning Bolt" })] });
 
-    expect(container.querySelector(`img[src="${url}"]`)).not.toBeNull();
-    expect(screen.queryByText(/Art by/)).toBeNull();
-  });
-
-  /** The picker's answer is a **path**, handed straight back to the host — the backend reads
-   *  the file, not the webview. */
-  it("hands the picked path back to the host", async () => {
-    const { onPickFile } = picker();
-
-    await userEvent.click(screen.getByRole("button", { name: "Upload an image…" }));
-
-    await waitFor(() => expect(onPickFile).toHaveBeenCalledWith("C:\\pics\\dragon.png"));
+    expect(screen.queryByRole("button", { name: /upload/i })).toBeNull();
+    // The re-encode's own sentence, which stood under that button.
+    expect(screen.queryByText(/re-encoded/i)).toBeNull();
+    // The grid is the whole picker: the deck's one printing, and no other press on the panel.
+    expect(screen.getAllByRole("button")).toHaveLength(1);
   });
 });
 

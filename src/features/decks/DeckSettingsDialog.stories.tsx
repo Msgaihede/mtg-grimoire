@@ -19,18 +19,15 @@ const FRAME_WAIT = 5_000;
  * Escape rung and the ✕ with nothing inside them. What is storied *here* is the half that only
  * exists because the deck does: the read, the writes, and the states they leave the panel in.
  *
- * **Every backend on this screen is the fake's now** — `deck_get`, `deck_update`,
- * `format_specs_list`, `deck_folder_list`, `deck_set_folder`, `deck_set_cover_image` and
- * `search_cards` (the cover picker's "Search every card" box) — so picking art really writes,
- * the credit line underneath the picture really changes, the Folder select really files the
- * deck, and the notes field and the theory switch really stick.
- *
- * **One gap is left, and it is not the fake's to close.** The upload's picker is the operating
- * system's: `open()` from `@tauri-apps/plugin-dialog` reaches Tauri's `invoke`, and outside the
- * app window there is nothing behind it. So the press ends in a refusal line, which is exactly
- * what the component does when a picker cannot be opened — see {@link PickerUnavailable}. The two
- * answers a *working* picker gives, a chosen path and a cancel, are unit-tested instead, because
- * only the OS can produce either.
+ * **Every backend on this screen is the fake's** — `deck_get`, `deck_update`,
+ * `format_specs_list`, `deck_folder_list`, `deck_set_folder` and `search_cards` (the cover
+ * picker's "Search every card" box) — so picking art really writes, the credit line underneath
+ * the picture really changes, the Folder select really files the deck, and the notes field and
+ * the theory switch really stick. `deck_set_cover_image` was on that list and is deleted with
+ * the custom cover; **the one gap this screen had went with it**. That gap was the upload's file
+ * picker: `open()` from `@tauri-apps/plugin-dialog` reaches Tauri's `invoke`, and outside the app
+ * window there is nothing behind it, so the press could only ever end in a refusal line here.
+ * Every control on this panel is drivable in the workbench now.
  */
 const meta = {
   title: "Decks/Settings dialog",
@@ -166,8 +163,9 @@ export const NotesAndTheory: Story = {
 };
 
 /**
- * Picking a card's art is `deckUpdate({ coverCardId })` — the patch, never
- * `deckSetCoverImage`, which is for a file on disk and sets `coverKind: "custom"`.
+ * Picking a card's art is `deckUpdate({ coverCardId })`, and since 2026-08-31 there is no second
+ * command it could have been: `deckSetCoverImage` took a file on disk and set
+ * `coverKind: "custom"`, and it is deleted with the whole custom-cover feature.
  *
  * The proof that the right command went out is the **credit line**: `coverArtist` is a lookup
  * the backend does on the way out of the write, so a line that changes to the new card's
@@ -205,33 +203,6 @@ export const CommanderDeck: Story = {
 
     const first = within(choices).getAllByRole("button")[0];
     await expect(first).toHaveAccessibleName(/Kenrith/);
-  },
-};
-
-/**
- * The upload, pressed.
- *
- * **The picker is the operating system's, so it is the one control on this screen that cannot
- * work in a browser.** `open()` from `@tauri-apps/plugin-dialog` reaches Tauri's `invoke`, and
- * outside the app window there is nothing behind it — so the press ends in the refusal line
- * beside the button rather than in a file dialog. That is the honest state to story: what a
- * reader sees here is exactly what the component does when the picker cannot be opened, which
- * is a path the unit tests also cover with a rejection.
- *
- * The two answers a *working* picker gives are unit-tested rather than storied, for the same
- * reason: a chosen path and a cancel are both things only the OS can produce.
- */
-export const PickerUnavailable: Story = {
-  play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
-
-    await userEvent.click(await canvas.findByRole("button", { name: "Upload an image…" }));
-
-    await expect(await canvas.findByRole("alert")).toHaveTextContent(
-      /Could not open the file picker/,
-    );
-    // The button comes back: a picker that would not open is not a control that is now spent.
-    await expect(canvas.getByRole("button", { name: "Upload an image…" })).toBeEnabled();
   },
 };
 

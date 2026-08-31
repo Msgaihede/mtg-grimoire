@@ -140,7 +140,10 @@ are all things no suite could have seen.
   warning, no unhandled rejection. Everything else was `502` from `mtgimg://` — see the
   unverified note below.
 
-**Three bugs found, all open** (none fixed in this pass):
+**Three bugs found, none fixed in this pass. Two are still open; the second is closed and its
+row is struck rather than deleted** — see it for the two separate closures it turned out to
+have had, because "somebody fixed it and nobody struck the row" and "we deleted the feature"
+are resolutions a later reader has to be able to tell apart:
 
 1. **The editor's title row collapses the deck name to 18px and overflows into the format
    select, at the app's own default window.** The row is `flex min-w-0 flex-1` holding the name
@@ -154,12 +157,34 @@ are all things no suite could have seen.
 "Deck format"]`. Fine at 1360 (76px) and above, and fine at 1024 (459px) where the toolbar
    wraps — so the broken band is roughly **1060–1350px and the shipped 1280×800 sits inside it**.
    Only bites when `theory_enabled` is on, which is why nothing caught it.
-2. **A custom deck cover never appears in the gallery.** `DecksPage`'s `Cover` takes only
-   `cardId` and builds `cardImageUrl(cardId, 0, "art")`; it has no `custom` arm, never reads
-   `deck.coverKind` and never forms the `/cover/<deckId>` URL that `DeckSettingsDialog` uses. So
-   a deck with `cover_kind = 'custom'` and a real file on disk renders **"No cover"** on the tile
-   — the one place the picture exists to be seen — while the settings dialog you chose it in
-   shows it correctly. Confirmed after a full reload, with the route itself proven working.
+2. ~~**A custom deck cover never appears in the gallery.**~~ **Closed, and the honest account is
+   that it was closed twice.** It was *repaired* at some point after this pass — `DeckTile`'s
+   `coverUrl` grew the `coverKind === "custom"` arm the finding asked for, `DecksPage.test.tsx`
+   pinned it, and **nobody came back to strike this row**, so it sat here reading as open against
+   code that no longer had the defect. It was struck on 2026-08-31, when custom deck covers were
+   deleted and there stopped being a picture for a tile to fail to draw — which is a second,
+   stronger closure of a bug that was already fixed, not the fix itself.
+   **Both halves are the record here**: a finding list that is not re-read against the code is a
+   finding list that lies in the safe direction, and the deletion is what made re-reading it
+   unavoidable. The original text, kept in full because it is the evidence the removal was argued
+   from: `DecksPage`'s `Cover` took only `cardId` and built `cardImageUrl(cardId, 0, "art")`; it had no
+   `custom` arm, never read `deck.coverKind` and never formed the `/cover/<deckId>` URL that
+   `DeckSettingsDialog` used. So a deck with `cover_kind = 'custom'` and a real file on disk
+   rendered **"No cover"** on the tile — the one place the picture existed to be seen — while the
+   settings dialog you chose it in showed it correctly. Confirmed after a full reload, with the
+   route itself proven working.
+
+   **What made the feature worth removing — after it had been repaired — is that the broken
+   tile's behaviour was already the behaviour every other device had.** The file lived beside one
+   database and only its absolute path synced, so a phone or a second desktop had nothing to draw
+   and fell back to the card art, which is exactly what this gallery had been doing by accident.
+   Repairing the tile made one device disagree with the rest of the group; deleting the feature
+   made them agree. Custom covers are gone; a cover
+   is `decks.cover_card_id` and the tile's one arm is the whole feature. A deck that had a
+   picture and no cover card now shows the **no-cover placeholder**, which is a state the gallery
+   already supported. `DecksPage.test.tsx` keeps a `coverKind: "custom"` row on purpose — it is
+   what an un-upgraded peer can still push over sync — and asserts the tile draws card art for
+   it rather than branching.
 3. **Table view starves the card name.** Seven fixed columns take **696px of 963px**, leaving the
    two `fr` columns 147px between them: **Card name gets 84px** (`minmax(0,2fr)`) and Type 63px,
    truncating names to ~10 characters, while the empty Tags column holds 112px and Owned 64px.
@@ -170,8 +195,13 @@ are all things no suite could have seen.
   machine (a bare HTTPS HEAD times out; `api.scryfall.com` answers), so every fetch failed and
   `data/images` was never created. What this _does_ prove is that the `mtgimg://` handler is
   registered and routing — the failures were the app's own **502**, its documented "failed
-  fetch", not a browser-level protocol error — and the `/cover/` route needs no network and was
+  fetch", not a browser-level protocol error — and the `/cover/` route needed no network and was
   verified end to end. But **no card image has been seen decoding in this build.**
+  ⚠️ **That second proof is no longer available.** `/cover/` was deleted on 2026-08-31 with the
+  custom cover, and every route the protocol has left goes to `cards.scryfall.io` — so on a
+  machine where that host is unreachable there is now *nothing* on `mtgimg://` that can be
+  driven end to end, and the handler's registration has to be inferred from the shape of the
+  failure alone. Probe the MTU (below) before concluding anything about the handler.
   **Diagnosed 2026-08-11, and it is not the app: a path-MTU black hole.** The host is _not_
   unreachable — DNS answers (OVH, `57.130.33.1`/`15.204.104.240`, not Cloudflare like the API
   host) and the TCP connect completes in **51 ms**. The TLS handshake is what never finishes:
@@ -185,6 +215,10 @@ are all things no suite could have seen.
 - **The system file picker was not driven.** `dialog:allow-open` opens a native window that CDP
   cannot reach, so `deck_set_cover_image` was exercised by invoking the command directly with a
   path. The encode → write → serve → render half is measured; **the picker → path half is not.**
+  **Moot since 2026-08-31**: the command is gone and a cover is picked from a grid of cards
+  inside the page, which CDP drives like any other control. `import_read_file` is the remaining
+  `dialog:allow-open` caller and inherits the gap whole —
+  [decks-storage.md](decks-storage.md) is where that now stands.
 - **The whole-card frame (2026-08-12) has never been seen painted.** Its geometry is pinned by
   `CardStack.test.tsx` — the derivation, the two Tailwind literals and the no-reflow property —
   and its _pixels_ are unproven for the reason directly above: no card image has decoded in this
@@ -233,6 +267,12 @@ Enter` created the deck and opened the editor. The two textareas keep their newl
   opens a native window CDP cannot reach. So at create, _path → shown filename → upload after the
   INSERT_ is covered by tests and the **click → path** step is not — and neither is the refused
   upload's "Open deck" state, which needs that same picker to reach.
+  **Both of those states stopped existing on 2026-08-31.** The create dialog had to hold an
+  upload back until the INSERT answered an id, because `deck_set_cover_image` needed a deck to
+  attach a file to; a `coverCardId` is just a column on `DeckInput`, so the create is one write
+  with nothing deferred and nothing to refuse. What the pass above measured of that flow — a
+  cover picked from the search, surviving the round trip and keeping its credit — is the half
+  that survived and is still the whole of it.
 
 ## The stats band, driven 2026-08-14
 

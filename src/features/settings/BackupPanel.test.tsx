@@ -15,9 +15,10 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 /** The one control here the operating system owns. `open()` reaches Tauri's `invoke`, which
- *  jsdom has nothing behind — so the module is mocked, exactly as the four other suites that
- *  touch a picker do it (`DeckCoverPicker`, `CreateDeckDialog`, `DeckSettingsDialog`,
- *  `ImportDialog`). */
+ *  jsdom has nothing behind — so the module is mocked, the way every suite that touches a
+ *  picker does it. (The list that used to sit here named three deck suites that no longer mock
+ *  the plugin at all and omitted three that do; `grep -rln 'vi.mock("@tauri-apps/plugin-dialog"'
+ *  src/` is the reliable form of the question.) */
 const pickFolder = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: pickFolder }));
 

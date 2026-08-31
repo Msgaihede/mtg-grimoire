@@ -46,11 +46,24 @@ on a single device loses that picture. A deck with `cover_kind = 'custom'` and a
 ## Global constraints
 
 - **`cover_image_path` is NOT removed from `sync_engine/capture.rs`'s `decks` `Spec` in this
-  work.** There is no documented rule for changing a `Spec`'s field list and no unknown-field
-  handling in `apply/`, so removing a field now is an unbudgeted wire risk against devices still
-  sending it. **Phase 1 (this plan): stop writing it and stop reading it. Phase 2 (later, once
-  every device is past this rung): drop the column and the Spec entry.** Leave a comment at the
-  Spec entry saying exactly this.
+  work** — but ⚠️ **the reason given here was wrong, and it was checked rather than assumed.**
+
+  This plan originally said there was "no documented rule for changing a `Spec`'s field list and
+  no unknown-field handling in `apply/`", making removal an unbudgeted wire risk. **That is
+  false.** `apply::updates` (`apply.rs:1011`) and `apply::creations` (`:1047`) both iterate
+  **`spec.fields` — the *local* spec** — and look each one up with `combined.fields.get(*f)`.
+  So a field an incoming op carries that the local spec does not name is never looked up and is
+  silently ignored, and a field the local spec names that the op does not carry is skipped by
+  the same `get`. `merge::fold` folds a `BTreeMap` with no spec reference at all. **Removing a
+  `Spec` field is therefore safe in both directions.**
+
+  The field stays anyway, for a smaller reason than the one first given: nothing reads the
+  column, so leaving it on the wire costs one stale value that is never written again, and that
+  is not worth a second change to the sync surface in the same week the relay work is moving.
+  **What was genuinely missing is that none of this is written down anywhere** — the only census
+  fence, `capture::tests::every_column_a_spec_names_exists_on_its_table`, runs one direction
+  (spec ⊆ table) and would not have caught a removal either way. The comment at the Spec entry
+  records the finding.
 - **`sweep_dir` in `reset.rs` STAYS.** `clear_cache` uses it for `data/images/` and `data/tmp/`.
   Only the `covers` *call site* and the `covers` parameter go.
 - **Never mutation-test anything that deletes a file or directory.** See the note above; this is

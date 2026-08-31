@@ -15,11 +15,15 @@ use serde_json::Value;
 
 /// Every command this build routes, in the order they were added.
 ///
-/// **This is still not the whole surface.** The app has 154 commands. The first four here are
+/// **This is still not the whole surface**, and the number is deliberately not written down:
+/// `node scripts/routed-census.mjs` counts the crate, this list and the difference, and the
+/// sentence that stood here said **154** while the census said 156, having rotted twice with
+/// nothing going red — a prose-only edit routes to neither CI job. The first four here are
 /// the browse, which is the read path spec 8 requires measured in wasm rather than guessed;
 /// the thirteen after them are the Decks destination's reads and the thirty-three after those
-/// are its writes - the whole deck cluster except `deck_set_cover_image`. The rest arrive with
-/// their modules - see `lib.rs`'s module map for which are still desktop-only.
+/// are its writes - **the whole deck cluster**, with no exception left to name: it read
+/// "except `deck_set_cover_image`" until custom deck covers went on 2026-08-31. The rest arrive
+/// with their modules - see `lib.rs`'s module map for which are still desktop-only.
 ///
 /// **Compiling for wasm and being routed are two different things, and the deck cluster is
 /// the proof.** Those modules have compiled for the target since PR 10a; until a name
@@ -48,9 +52,10 @@ pub const COMMANDS: &[&str] = &[
     "deck_theory_slots",
     "deck_theory_diff",
     "deck_undo_state",
-    // Decks, write path. **`deck_set_cover_image` is not here and never will be**: it writes a
-    // file into a covers directory, so `deck::set_cover_image` does not compile for wasm at
-    // all. It is the eleventh name on §6.3's desktop-only list.
+    // Decks, write path. **Complete since 2026-08-31.** One name was permanently missing from
+    // it — `deck_set_cover_image`, the eleventh on §6.3's desktop-only list, which wrote a file
+    // into a covers directory and did not compile for wasm at all — and it is missing now
+    // because the command does not exist on any target.
     "deck_create",
     "deck_update",
     "deck_delete",
@@ -433,9 +438,6 @@ pub fn call(
         // `cargo test` runs on the desktop, so the guard is real; it is not the target the
         // bug would ship to.
         //
-        // **`deck_set_cover_image` is deliberately absent** and is the eleventh name on §6.3's
-        // desktop-only list. It writes a file into a covers directory, and a browser has none
-        // — `deck::set_cover_image` does not compile for wasm at all.
         "deck_create" => {
             let deck: crate::deck::DeckInput = field(command, args, "deck")?;
             encode(
@@ -455,15 +457,15 @@ pub fn call(
             )
         }
 
-        // `None` for the covers directory, on both of these and for the same reason: the
-        // desktop wrapper reads it off the `AppHandle` and the web target has no such folder.
-        // The parameter was already `Option<&Path>`, so this is the answer it was shaped for
-        // rather than a stub.
+        // **These two took a `None` for the covers directory and no longer take anything.**
+        // The desktop wrapper read that path off the `AppHandle` and a browser has no such
+        // folder, so `None` was the true answer rather than a stub; custom deck covers went on
+        // 2026-08-31 and both signatures lost the argument on every target.
         "deck_delete" => {
             let id: i64 = field(command, args, "id")?;
             encode(
                 command,
-                crate::sync::with_write(state, |c| crate::deck::delete_deck(c, id, None))
+                crate::sync::with_write(state, |c| crate::deck::delete_deck(c, id))
                     .map_err(RouteError::Failed)?,
             )
         }
@@ -472,7 +474,7 @@ pub fn call(
             let id: i64 = field(command, args, "id")?;
             encode(
                 command,
-                crate::sync::with_write(state, |c| crate::deck::duplicate_deck(c, id, None))
+                crate::sync::with_write(state, |c| crate::deck::duplicate_deck(c, id))
                     .map_err(RouteError::Failed)?,
             )
         }
@@ -1675,16 +1677,15 @@ pub fn call(
                 .map_err(RouteError::Failed)?,
         ),
 
-        // **`None` for the covers directory, and it is the load-bearing argument on this
-        // line.** `clear_decks` hands that path to `sweep_dir`, which deletes everything
-        // under it recursively; its own doc already defines `None` as "the directory could
-        // not be resolved, so the rows go and the pictures they pointed at are inert". A
-        // browser has no covers directory at all — `crate::paths` does not compile here —
-        // so `None` is not a fallback, it is the true answer, and there is no value this
-        // target could pass that would be safe to sweep.
+        // **This line carried the load-bearing `None` in this table and now carries nothing.**
+        // `clear_decks` handed that path to `sweep_dir`, which deletes everything under it
+        // recursively, and a browser has no covers directory at all — `crate::paths` does not
+        // compile here — so `None` was the true answer rather than a fallback, and there was no
+        // value this target could have passed that would have been safe to sweep. Custom deck
+        // covers went on 2026-08-31: `clear_decks` touches no filesystem on any target now.
         "decks_clear" => encode(
             command,
-            crate::sync::with_write(state, |c| crate::reset::clear_decks(c, None))
+            crate::sync::with_write(state, crate::reset::clear_decks)
                 .map_err(RouteError::Failed)?,
         ),
 
@@ -2259,12 +2260,13 @@ mod tests {
     /// `every_advertised_command_is_actually_routed` can say: that one only proves an arm
     /// exists. Seeded, cleared, and the emptiness read back off the connection.
     ///
-    /// **`decks_clear` is the one worth a test of its own and it does not get one here**,
-    /// because the thing to prove about it cannot be proved from this side: its `covers`
-    /// argument is hard-coded `None` in the arm, and `None` is the only value a browser
-    /// could pass. What a wrong value would do — `sweep_dir` recursively deleting whatever
-    /// directory it was handed — is `reset.rs`'s own concern and is fenced there. All this
-    /// asserts is that the arm runs and empties the table.
+    /// **`decks_clear` is not among them, and the reason it is not has changed.** It was
+    /// excluded because the thing to prove about it could not be proved from this side: its
+    /// `covers` argument was hard-coded `None` in the arm, `None` was the only value a browser
+    /// could pass, and what a wrong value would do — `sweep_dir` recursively deleting whatever
+    /// directory it was handed — was `reset.rs`'s own concern and fenced there. Custom deck
+    /// covers went on 2026-08-31 and that argument no longer exists, so the arm is now an
+    /// ordinary write with nothing left about it that is this table's to fence.
     #[test]
     fn the_three_clears_empty_their_tables_through_the_route() {
         let s = state("web-route-clears");

@@ -9,7 +9,6 @@ import { openDropdown } from "@/test-dropdown";
 import { spec } from "./validation/fixtures";
 
 const deckCreate = vi.hoisted(() => vi.fn());
-const deckSetCoverImage = vi.hoisted(() => vi.fn());
 const deckFolderList = vi.hoisted(() => vi.fn());
 const formatSpecs = vi.hoisted(() => vi.fn());
 const searchCards = vi.hoisted(() => vi.fn());
@@ -18,20 +17,8 @@ const searchCards = vi.hoisted(() => vi.fn());
 const cardDetail = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { deckCreate, deckSetCoverImage, deckFolderList, formatSpecs, searchCards, cardDetail },
+  ipc: { deckCreate, deckFolderList, formatSpecs, searchCards, cardDetail },
 }));
-
-/**
- * The system file picker.
- *
- * Mocked because there is no OS dialog in jsdom — the real `open` reaches `invoke`, which needs
- * `window.__TAURI_INTERNALS__` and would throw the same way for every answer. Which is also why
- * the upload arm can only be driven from here: a story cannot produce a path, so the two states
- * that follow one (the picture saved, and the picture refused over a deck that now exists) are
- * unit tests rather than stories.
- */
-const pickFile = vi.hoisted(() => vi.fn());
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: pickFile }));
 
 import { CreateDeckDialog } from "./CreateDeckDialog";
 import { useDecks } from "./useDecks";
@@ -82,10 +69,6 @@ const MADE: DeckRow = {
   bracket: 0,
   updatedAt: 1786266000,
 };
-
-/** The same deck as the *upload* answers with: the cover write returns the deck as the gallery
- *  would now read it, `coverKind` already `custom`. */
-const PICTURED: DeckRow = { ...MADE, coverKind: "custom", updatedAt: 1786266100 };
 
 /** One search result — the cover picker's grid reads a name and an id and nothing else. */
 function found(name: string): CardSummary {
@@ -249,12 +232,10 @@ async function pickFromSearch(query: string, name = query) {
 
 beforeEach(() => {
   deckCreate.mockReset().mockResolvedValue(MADE);
-  deckSetCoverImage.mockReset().mockResolvedValue(PICTURED);
   deckFolderList.mockReset().mockResolvedValue(FOLDERS);
   formatSpecs.mockReset().mockResolvedValue(PICKER);
   searchCards.mockReset().mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
   cardDetail.mockReset().mockResolvedValue(detail("s-Shivan Dragon", "Donato Giancola"));
-  pickFile.mockReset().mockResolvedValue("C:\\pics\\dragon-hoard.png");
   onCreated.mockReset();
   onDismiss.mockReset();
   onClose.mockReset();
@@ -567,57 +548,43 @@ describe("the create deck dialog", () => {
   });
 
   /**
-   * The upload arm, which **needs a deck id and is therefore always a follow-up**:
-   * `deck_set_cover_image` takes a path and a deck id, so a file chosen here can only be applied
-   * once the INSERT has answered.
+   * **One press is one write, and the two-step create is gone.**
+   *
+   * A cover could be a picture off disk until 2026-08-31, and `deck_set_cover_image` took a path
+   * **and a deck id** — so a file chosen here could only be applied once the INSERT had
+   * answered. Two cases stood here for that: the upload running after the create and `onCreated`
+   * being handed the row the *upload* answered with, and the state in the middle nobody wanted,
+   * where the deck existed and its picture did not (the deck held in `made`, a second failure
+   * line, and the button renaming itself to **Open deck** so a second press could not make a
+   * second deck). None of it is reachable: a cover is a card id and travels in the create.
+   *
+   * The claim below is what those two were protecting — one deck per press, and the deck the
+   * INSERT answered with is the one the gallery is sent to — asserted against the one write
+   * that is left. The **Open deck** label is asserted absent because it was the only visible
+   * sign of the middle state, and a control that came back would be caught by nothing else here.
    */
-  it("uploads a chosen picture once the deck exists", async () => {
+  it("makes the deck in one write and opens the row the create answered with", async () => {
+    searchCards.mockResolvedValue({
+      items: [found("Shivan Dragon")],
+      total: 1,
+      totalIsCapped: false,
+    });
     wrap(<Harness />);
 
     await userEvent.type(await screen.findByLabelText("Name"), "Sunday burn");
-    await userEvent.click(screen.getByRole("button", { name: "Upload an image…" }));
-    // Named rather than previewed: there is no `/cover/<deckId>` route yet, and the picker
-    // hands back a path rather than bytes. The **basename** of it, both separators.
-    expect(await screen.findByText("dragon-hoard.png")).toBeInTheDocument();
-
+    await pickFromSearch("Shivan Dragon");
     await userEvent.click(submitButton());
 
     await waitFor(() =>
-      expect(deckSetCoverImage).toHaveBeenCalledWith(9, "C:\\pics\\dragon-hoard.png"),
+      expect(deckCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "Sunday burn", coverCardId: "s-Shivan Dragon" }),
+      ),
     );
-    // The row the *upload* answered with, not the one the create did: `coverKind` is already
-    // `custom` on it, and the gallery opens the deck as it now is.
-    await waitFor(() => expect(onCreated).toHaveBeenCalledWith(PICTURED));
-  });
-
-  /**
-   * The one non-obvious state in the file: **the deck was made and its picture was not.**
-   *
-   * A refused picture must neither lose the deck nor make a second one, so the deck is held, the
-   * line says what happened, and the control is renamed to what pressing it now does.
-   */
-  it("keeps the deck when its picture cannot be saved, and offers to open it", async () => {
-    deckSetCoverImage.mockRejectedValue("That file is not an image this app can read.");
-    wrap(<Harness />);
-
-    await userEvent.type(await screen.findByLabelText("Name"), "Sunday burn");
-    await userEvent.click(screen.getByRole("button", { name: "Upload an image…" }));
-    await screen.findByText("dragon-hoard.png");
-    await userEvent.click(submitButton());
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "The deck was made, but its picture could not be saved — " +
-        "That file is not an image this app can read.",
-    );
-    // Nobody has been sent to the deck yet, and the dialog is still up holding it.
-    expect(onCreated).not.toHaveBeenCalled();
-
-    const open = await screen.findByRole("button", { name: "Open deck" });
-    await userEvent.click(open);
-
-    expect(onCreated).toHaveBeenCalledWith(MADE);
-    // The whole claim: one deck, however many times the control is pressed.
+    await waitFor(() => expect(onCreated).toHaveBeenCalledWith(MADE));
     expect(deckCreate).toHaveBeenCalledTimes(1);
+    // The verb keeps its one name: there is no state left for a second label to be about.
+    expect(screen.queryByRole("button", { name: "Open deck" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /upload/i })).toBeNull();
   });
 
   /** Escape closes one layer per press, and hands the caret back to whatever opened it. */

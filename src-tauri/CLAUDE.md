@@ -116,14 +116,20 @@ both plus the frontend.
   every upgraded one, and a fresh worktree is a fresh install, so nothing else here can see it.
   The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
-  numbers from there (`USER_SCHEMA_VERSION` **30** since the pairing baseline landed,
+  numbers from there (`USER_SCHEMA_VERSION` **32** since custom deck covers went,
   `CORPUS_SCHEMA_VERSION` 1, deliberately
   incomparable). This line read **v25** while that was head, and
   [the ladder's history](../docs/reference/data-and-sync.md) is the story. (This line read
   **v18** for two whole rungs, then **v20** for two more, then **v23** for one and **v24** for
   one, because a prose-only edit routes to neither CI job: v19 added `deck_cards.finish`, v20 the
   art-tag tables, v21 the app-wide tag list, v22 the `slug_norm` repair, v23 the wishlist's
-  folders, v24 the collection's and v25 the deck groups, and nothing went red for any of them.)
+  folders, v24 the collection's and v25 the deck groups, and nothing went red for any of them.
+  **Then the user half's number read 30 for two more rungs, through v31 and v32**, and
+  `data-and-sync.md` carried the same wrong pair on the same day — the same failure as the six
+  above, in the one place a `grep USER_SCHEMA_VERSION src-tauri/src/schema.rs` settles it. v31
+  added `device_names`, the twelfth synced table; v32 flips every `decks.cover_kind` still
+  reading `'custom'` to `'card_art'` and is the first rung on either ladder that changes no
+  shape at all.)
 - **v24 and v25 are one spec's rung split in two, and the split is deliberate.** v24 creates
   `collection_folders` in its **final** shape — `kind` and `deck_id` columns and both partial
   unique indexes included — and files nothing into it. **v25 inserts the single `removed` folder
@@ -1220,13 +1226,21 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
   every reader's history. **The reversal's own row records no step**, so the stack stays linear.
   `undone_at` persists (undo survives a restart); the redo queue is the webview's and does not.
   Every deck write records one — `undoing_any_card_write_restores_the_deck_exactly` and its two
-  siblings drive the list and compare the deck row for row. **Five deliberate absences**, each
+  siblings drive the list and compare the deck row for row. **Four deliberate absences**, each
   argued at its own site: `deck_create`/`duplicate`/`delete`, `deck_folder_delete` (per-deck
-  cursor against an N-deck press, over a real foreign key), rows predating v17, the cover
-  *file* behind `deck_set_cover_image`, and — since schema v25 —
-  `collection_alloc::deck_to_collection`, whose cut moves a `collection_entries` row this journal
-  cannot express, so a step would restore the list and not the custody. The history row is **not**
-  in that absence: a cut records the one `deck_set_card_quantity` wrote. Full detail:
+  cursor against an N-deck press, over a real foreign key), rows predating v17, and — since
+  schema v25 — `collection_alloc::deck_to_collection`, whose cut moves a `collection_entries` row
+  this journal cannot express, so a step would restore the list and not the custody. The history
+  row is **not** in that absence: a cut records the one `deck_set_card_quantity` wrote.
+  **It was five, and the fifth closed by deletion on 2026-08-31**: the cover *file* behind
+  `deck_set_cover_image`, whose undo restored three columns and not the bytes, because
+  `images::cover_file` was one path per deck and a second upload overwrote the first. Custom
+  covers went and so did that whole write. **`cover_image_path` nevertheless stays in
+  `deck_undo::DECK_FIELDS` and must not be tidied out** — measured, not assumed: `read_deck_row`
+  records *all* of `DECK_FIELDS` into every step, so every step already on a reader's disk names
+  it, and `apply` refuses a step naming a field the list does not carry. Taking it off breaks
+  Ctrl+Z for every deck edit made before the upgrade, on every existing database, and a fresh
+  worktree stays green throughout. Full detail:
   [decks-storage.md](../docs/reference/decks-storage.md) and
   [collection-folders.md](../docs/reference/collection-folders.md).
 - **Two fences every deck write opens with, neither enforced by the DDL**: the variant must be
@@ -1340,28 +1354,39 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
 - `cards.scryfall.io` is the **only** host images come from; an off-host URI is refused. A URI
   with no `?<epoch>` cache-buster is refused at resolution, and `is_current` compares that
   stored URI character for character — that is the whole of freshness.
-- The second route is `/cover/<deckId>`, which touches Scryfall not at all. The `i64` parse is
-  the whole path-traversal fence, since the id becomes a filename.
+- **There is one route.** There was a second — `/cover/<deckId>`, which touched Scryfall not at
+  all, and whose `i64` parse was the whole path-traversal fence because the id became a filename.
+  It went with the custom deck cover on 2026-08-31: a cover is `decks.cover_card_id` now, so a
+  deck's picture is an ordinary card image and the card route already serves it. Nothing replaced
+  it, and the CSP is unchanged in both directions — `img-src` covered a fifth *path* for free,
+  which was the argument for building it as a route rather than a new source.
+  [image-cache.md](../docs/reference/image-cache.md) keeps the encoder's shape and the traversal
+  test's four refused paths.
 
 ## Tauri capabilities
 
 - **`@tauri-apps/plugin-dialog` names files and never opens them, and the capability says so.**
   `capabilities/desktop.json` and `capabilities/mobile.json` both grant
-  **`dialog:allow-open`** (choosing a deck cover) and
+  **`dialog:allow-open`** (choosing a decklist to import; it was granted for choosing a deck
+  cover, and that caller went on 2026-08-31 while the grant stayed, because
+  `import_read_file` had always needed it too) and
   **`dialog:allow-save`** (naming an export's destination, added 2026-08-14) — never
   `dialog:default`, so message, ask and confirm stay unreachable from the webview however the
   plugin is initialised. The app's own questions are drawn in the page instead, which is
   deliberate rather than an oversight: a native message box cannot be styled, driven over CDP or
   read by the story runner.
 - **A dialog verb answers a _path_, and a path is not permission to touch what is at it — which is
-  why every one of them has a Rust command behind it.** `deck_set_cover_image` takes the path
-  `open()` gave and Rust reads the image; `import_read_file` (`import.rs`) takes a path
-  from the same picker and Rust reads the decklist; `export_write_file` (`export.rs`) takes the
-  path `save()` gave and Rust writes the text. Doing any of that from the page would need an `fs:`
+  why every one of them has a Rust command behind it.** `import_read_file` (`import.rs`) takes
+  the path `open()` gave and Rust reads the decklist; `export_write_file` (`export.rs`) takes the
+  path `save()` gave and Rust writes the text. Doing either from the page would need an `fs:`
   permission, and **no `fs:` permission is granted anywhere**. So this is the app's **habit** now
   rather than one precedent, and it is the shape to copy: the day one of these is "simplified"
   into a `readTextFile`/`writeTextFile` from the page, the answer is another twelve-line command,
-  never a wider capability. **`rfd` entered `Cargo.lock` transitively** as one of the dialog
+  never a wider capability. **There was a third, `deck_set_cover_image`** — it took the path
+  `open()` gave and Rust read the *image* — and it is the one place this habit has ever been
+  undone: custom deck covers went on 2026-08-31 and a cover became a card id, so the picker it
+  needed is not narrower, it is absent. Deleting the caller is the cheapest form of this rule
+  there is, and `picked.rs`'s module doc counts the survivors. **`rfd` entered `Cargo.lock` transitively** as one of the dialog
   plugin's own dependencies and is **unreachable**. **`tauri-plugin-fs` came in the same way and
   is no longer unreachable — on Android only**, where `lib.rs` registers it under
   `#[cfg(target_os = "android")]` because a picked file there is a `content://` URI rather than a
@@ -1456,7 +1481,11 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
   is unchanged: none**, and
   `the_mobile_capability_drops_every_verb_the_platform_has_no_answer_for` asserts no `fs:` entry
   exists. `open_read` answers a concrete `File` rather than a boxed `Read` because
-  `image::ImageReader` needs `Seek` and `encode_cover` reopens its source.
+  `image::ImageReader` needed `Seek` and `encode_cover` reopened its source. **That caller went
+  on 2026-08-31 with the custom deck cover and the return type did not follow it** — both
+  survivors read a decklist straight through and would take a plain `Read` — because `Seek` is a
+  property of the descriptor the ContentResolver hands back, not of whoever happens to be
+  reading it, and narrowing a return type to today's callers is how the next one becomes a port.
 - **Android is native, and the wasm constraints are the web target's alone.** The mobile build is
   this same crate compiled for `aarch64-linux-android`, so it has `rusqlite` with `bundled`, a
   real filesystem, `tokio`, threads and WAL. It is the fact most easily lost, and a plan that
@@ -1581,13 +1610,13 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
 | --- | --- |
 | [data-and-sync.md](../docs/reference/data-and-sync.md) | Data dir, sync timings, the schema ladder, every search-performance measurement |
 | [scryfall.md](../docs/reference/scryfall.md) | Rate limits, the penalty, bulk data, `error_log`, pre-warm keys |
-| [image-cache.md](../docs/reference/image-cache.md) | Cache layout, concurrency, placeholders, the cover route |
+| [image-cache.md](../docs/reference/image-cache.md) | Cache layout, concurrency, placeholders, and the `/cover/` route as it was before 2026-08-31 — the encoder, the traversal fence and why the CSP never moved for it |
 | [search-faceting.md](../docs/reference/search-faceting.md) | `src/index/` — why the index is in memory, and the fail-open rule |
 | [in-app-updates.md](../docs/reference/in-app-updates.md) | `update.rs` — why the portable swap is hand-written |
 | [decks-storage.md](../docs/reference/decks-storage.md) | The deck tables, the card commands, how owned/missing is answered, the audit log, the decklist import |
 | [commander-brackets.md](../docs/reference/commander-brackets.md) | `combos.rs` and the v26 rung — the feed measured end to end, what is kept and what is skipped, the match query, and `decks.bracket` |
 | [wishlist-folders.md](../docs/reference/wishlist-folders.md) | The wishlist's cabinet (v23) — the four-term grain, the merge rule, the root-add duplicate |
 | [collection-folders.md](../docs/reference/collection-folders.md) | The collection's cabinet (v24–v25) — the eleventh grain term, the deck groups and `Recently removed`, the conversion that made them, what a zero quantity now costs |
-| [sync.md](../docs/reference/sync.md) | `sync_pair/`, `sync_engine/` and user schema v30 — the pairing protocol step by step and the six digits; then the eleven synced tables, how a row is named across devices, the three SQLite facts the capture triggers' shape follows from, §7.3's five rules against the test that proves each, the envelope measured, the relay's endpoints, and what is not built |
+| [sync.md](../docs/reference/sync.md) | `sync_pair/`, `sync_engine/` and the user-schema rungs sync owns, v29 to v31 — the pairing protocol step by step and the six digits; then the eleven synced tables, how a row is named across devices, the three SQLite facts the capture triggers' shape follows from, §7.3's five rules against the test that proves each, the envelope measured, the relay's endpoints, and what is not built |
 | [web-target.md](../docs/reference/web-target.md) | The browser build — the module map, the OPFS pair, the measured browse and facet, and the first run's open memory failure |
 | [text-mirror.md](../docs/reference/text-mirror.md) | `mirror/` — the layout, the dirty map, why the pruner reads a manifest instead of guessing, what a pass costs measured, and the bugs still open |

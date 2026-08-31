@@ -320,10 +320,20 @@ reader to configure the deck they had just made; it now asks all of them.
   inside a control that names its card. The **preview** is strict at both surfaces: no artist, no
   picture. At create there is no `DeckRow` to read one from, so the host fetches it with
   `card_detail` — the credit arrives with the picture and never before it.
-- **The upload arm is the one thing a create cannot do in one call**, because
-  `deck_set_cover_image` takes a path _and a deck id_. It runs after the create; if it is
-  refused, the dialog holds the deck it made, says so, and turns its button into **Open deck** —
-  a created deck is never lost, and pressing again never makes a second one.
+- **A cover is a card id, and the create is one write again** (2026-08-31). The reader-picked
+  *file* cover is deleted whole — `deck_set_cover_image`, the `/cover/<deckId>` route, the
+  encoder and the `data/covers/` directory — and a migration flips every `cover_kind = 'custom'`
+  row to `card_art`. `coverKind` and `coverCardId` both stay; **nothing may branch on the first**,
+  which is why `DeckCoverPicker` no longer takes it as a prop and `DeckTile` no longer tests it.
+  The argument is that the picture **never survived a sync**: `cover_image_path` was stored
+  absolute, so a second device was handed a `D:\…` that resolved to nothing and drew the card art
+  — which is to say every device but the one that uploaded already showed what every device shows
+  now. What went with it here is the half this bullet used to be about: `deck_set_cover_image`
+  took a path _and a deck id_, so the file was the one answer on the create form that could not
+  travel in the INSERT, which made the create a two-step write with a state in the middle (the
+  deck exists, its picture does not) that needed a held `DeckRow`, a second failure line and an
+  **Open deck** label so a second press could not make a second deck. None of that is reachable
+  and none of it is left.
 - **`CAPTION` and `FIELD` live in `formFields.ts`**, not in `cardControl.tsx`: that module's
   subject is a deck card drawn as a control and it pulls in the drag machinery, which a dialog
   asking for a deck's name has no business importing. **`FOCUS` and `FOCUS_INSET` are
@@ -2389,10 +2399,16 @@ longer-form record of the two hand-rolled comboboxes and their shared panel is
 
 ## Known open bugs
 
-Three, all found by driving the shipped window and **none of them fixed** — all from the
-2026-08-11 builder pass: the title row collapsing the deck name at 1060–1350px, a custom deck
-cover never appearing in the gallery, and Table view starving the card name. Detail:
+Two, both found by driving the shipped window and **neither of them fixed** — both from the
+2026-08-11 builder pass: the title row collapsing the deck name at 1060–1350px, and Table view
+starving the card name. Detail:
 [docs/reference/decks-live-findings.md](../../../docs/reference/decks-live-findings.md).
+
+It was **three** until 2026-08-31, and the third was *a custom deck cover never appearing in the
+gallery*. **That entry was already stale when it was struck**: `DeckTile`'s `coverUrl` had grown
+the `coverKind` arm the finding asked for and `DecksPage.test.tsx` pinned it, so it had been fixed
+and this list had not been re-read. What settles it now is a deletion rather than a repair — there
+is no custom cover left for a tile to fail to draw.
 
 The 2026-08-12 import pass found four more and **all four are fixed**, each with a test that fails
 against the code before it: the preview tally ignoring the commander choice (the `## Import`

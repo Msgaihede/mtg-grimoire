@@ -122,41 +122,6 @@ export function cardArtSrc(
 }
 
 /**
- * The URL for a deck's **custom** cover — the picture the reader uploaded, which the backend
- * re-encodes into the same 626×457 shape a card's `art` crop has so that one tile can wear
- * either without the layout shifting.
- *
- * A fifth route beside the four card variants, and it cannot collide with one: `cover` is not a
- * variant word, so `Variant::parse` answers `None` for it and the two path shapes are disjoint
- * (`images.rs`'s `COVER_ROUTE`).
- *
- * **It names the deck, not the picture.** The bytes behind it change when the reader uploads
- * again while the URL does not, which is why `images.rs` serves it `no-store` — and **never add
- * a cache-buster here**: a `?v=` would be a second URL for one deck's cover, which is the thing
- * this function exists to prevent.
- *
- * **`no-store` is not on its own enough, and believing it was is how a replaced cover shipped
- * still showing the old file.** A header governs what happens to a *request*; a browser holding
- * a decoded `<img>` whose `src` has not changed has no reason to make one, so it goes on
- * painting what it already has and the header never gets a say. So the header is half of it, and
- * the other half is at the caller: anything that must notice a *replacement* — the gallery tile,
- * a preview watching for its own upload to land — changes the element's React `key`, which
- * throws the decoded frame away and makes the request `no-store` then answers freshly. Neither
- * half works alone.
- *
- * A deck with no file on disk answers **404**, never a placeholder, chosen so the fault is
- * visible rather than hidden behind a grey rectangle that looks like a picture. It reaches a
- * caller as an ordinary `<img>` error.
- *
- * Here rather than in either surface that draws one, because it was written out twice — the
- * gallery tile and the settings dialog's preview draw the same picture — and two literals for
- * one route is how a route ends up with two spellings.
- */
-export function deckCoverUrl(deckId: number): string {
-  return `${imageOrigin(navigator.userAgent)}/cover/${deckId}`;
-}
-
-/**
  * The shortest wait a failed image is allowed to come back after.
  *
  * The protocol answers a rate limit with `503` + `Retry-After`, and `images.rs` clamps

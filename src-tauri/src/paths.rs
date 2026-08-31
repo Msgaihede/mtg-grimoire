@@ -42,31 +42,6 @@ pub fn resolve_data_dir(exe_dir: &Path, appdata_dir: &Path) -> PathBuf {
     }
 }
 
-/// `<data dir>/covers`, created on demand.
-///
-/// The custom deck cover images, one `<deckId>.webp` each. **Safe to delete, exactly like
-/// `images/`** — and for a stricter reason than that folder's: a deck whose cover file is gone
-/// falls straight back to its card art in the webview, because `mtgimg://…/cover/<id>` answers
-/// 404 rather than a placeholder. Nothing here is the user's only copy of anything; the file
-/// they picked it from is still wherever they picked it from.
-///
-/// Takes the `AppHandle` rather than a path because it is called from the protocol handler,
-/// which has one and has nothing else — the data directory is resolved once at startup and
-/// lives on [`crate::sync::AppState`] from then on.
-pub fn covers_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    use tauri::Manager;
-
-    let state = app
-        .try_state::<std::sync::Arc<crate::sync::AppState>>()
-        // The webview and the app's own startup genuinely race at launch (see
-        // `images::not_ready`), so this is a real state rather than a defensive impossibility.
-        .ok_or_else(|| "the app is still starting".to_owned())?;
-    let dir = state.data_dir.join("covers");
-    fs::create_dir_all(&dir)
-        .map(|()| dir.clone())
-        .map_err(|e| format!("could not create {}: {e}", dir.display()))
-}
-
 /// Can this app actually put files in `dir`? Creates it if it is not there yet.
 ///
 /// Creating a directory says nothing about being able to write *into* it — an

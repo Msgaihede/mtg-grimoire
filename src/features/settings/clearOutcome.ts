@@ -72,20 +72,20 @@ export function wishlistOutcome(entries: number): string {
 }
 
 /**
- * What emptying the decks did — up to three numbers, and only the ones that happened.
+ * What emptying the decks did — up to two numbers, and only the ones that happened.
  *
  * **Folders are named even at zero decks**, which is the one asymmetry here: a reader can hold
  * an empty folder tree with no decks in it, and pressing this button is how it goes. So "no
  * decks" is not automatically "nothing happened".
  *
- * Covers are last and are the smallest claim of the three — they are files beside the database
- * rather than rows, and only a deck the reader gave a picture to has one.
+ * There was a third and smallest claim, `cover image` — files beside the database rather than
+ * rows, and only on a deck the reader had given a picture to. Custom covers went on 2026-08-31,
+ * `DecksCleared` lost the field with them, and a clear is a `DELETE` over rows and nothing else.
  */
 export function decksOutcome(r: DecksCleared): string {
   const parts: string[] = [];
   if (r.decks > 0) parts.push(counted(r.decks, "deck"));
   if (r.folders > 0) parts.push(counted(r.folders, "folder"));
-  if (r.covers > 0) parts.push(counted(r.covers, "cover image"));
   if (parts.length === 0) return "There were no decks or folders to clear.";
   return `Cleared ${list(parts)}.`;
 }

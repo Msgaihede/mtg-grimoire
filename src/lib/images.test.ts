@@ -4,7 +4,6 @@ import imageUriRs from "../../src-tauri/src/image_uri.rs?raw";
 import {
   cardArtSrc,
   cardImageUrl,
-  deckCoverUrl,
   imageOrigin,
   imageRetryDelayMs,
   IMAGE_VARIANTS,
@@ -125,32 +124,6 @@ describe("cardArtSrc", () => {
     const actual = await vi.importActual<typeof import("@/pwa/target")>("@/pwa/target");
 
     expect(actual.isWebTarget()).toBe(false);
-  });
-});
-
-describe("deckCoverUrl", () => {
-  it("spells the path the Rust handler parses", () => {
-    expect(deckCoverUrl(4)).toMatch(/\/cover\/4$/);
-    expect(deckCoverUrl(4).startsWith(imageOrigin(navigator.userAgent))).toBe(true);
-  });
-
-  /**
-   * **It names the deck, not the picture** — which is what makes the bytes behind it able to
-   * change while it does not, and why `images.rs` serves the route `no-store`. A cache-buster
-   * here would be a second mechanism for a solved problem; this pins its absence, because the
-   * obvious "fix" for a stale cover is to add one.
-   */
-  it("carries no cache-buster, because the route answers no-store", () => {
-    expect(deckCoverUrl(4)).toBe(deckCoverUrl(4));
-    expect(deckCoverUrl(4)).not.toMatch(/[?#]/);
-  });
-
-  /** It cannot be mistaken for a card image: `cover` is not one of the four variant words, so
-   *  `Variant::parse` answers `None` and the two path shapes are disjoint. */
-  it("cannot collide with a card image path", () => {
-    const cover = deckCoverUrl(1);
-
-    expect(IMAGE_VARIANTS.some((v) => cover.includes(`/${v}/`))).toBe(false);
   });
 });
 

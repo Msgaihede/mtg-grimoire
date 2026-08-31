@@ -1,5 +1,35 @@
 # Changelog
 
+<!-- Hand-written, because release-please builds its sections from commit subjects and this one
+     needs the paragraph rather than the subject line. release-please inserts a new release
+     section beneath this block (its splitter looks for `## [`, which `## Unreleased` does not
+     match), so fold this into that release's notes when it lands and delete the heading. -->
+
+## Unreleased
+
+### ⚠ BREAKING CHANGES
+
+* **decks: custom deck cover pictures are gone, and a picture you uploaded is not recoverable.**
+  A deck cover is now one thing — the art crop of a card you pick from the cover grid — on every
+  platform. The file picker, the `Upload an image…` button, the re-encoder and the
+  `mtgimg://…/cover/<deckId>` URL behind it have all been deleted, and schema **v32** flips every
+  deck still marked `cover_kind = 'custom'` to `card_art` on the first launch of this build.
+
+  **What each deck looks like afterwards.** Setting a custom cover never cleared the deck's cover
+  card, so a deck that had picked art before uploading a picture goes back to drawing that art —
+  which is already what every *other* device in a sync group had been showing it as, because the
+  uploaded file lived beside one database and only the absolute path to it ever travelled. A deck
+  that had **only** a custom cover and no cover card shows the **no-cover placeholder**, and
+  picking any card from the deck restores a cover in two clicks.
+
+  **`data/covers/` is left where it is, and nothing reads it.** The `<deckId>.webp` files an
+  existing install already wrote stay on disk after the upgrade; they are safe to delete by hand
+  at any time, and the app never opens the folder again. Cleaning it up was considered and
+  deliberately not done: the only way to remove a directory of unknown contents is a recursive
+  delete, and taking the last recursive delete out of the deck path is one of the things this
+  change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
+  its two (`data/images/`, `data/tmp/`) and is unchanged.
+
 ## [0.17.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.16.0...v0.17.0) (2026-08-26)
 
 

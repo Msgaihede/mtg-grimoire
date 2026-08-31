@@ -33,7 +33,7 @@ beforeEach(() => {
   invalidate = vi.spyOn(client, "invalidateQueries").mockReturnValue(Promise.resolve());
   collectionClear.mockReset().mockResolvedValue({ entries: 12 });
   wishlistClear.mockReset().mockResolvedValue(4);
-  decksClear.mockReset().mockResolvedValue({ decks: 2, folders: 1, covers: 0 });
+  decksClear.mockReset().mockResolvedValue({ decks: 2, folders: 1 });
   cacheClear.mockReset().mockResolvedValue({ files: 20, bytes: 4_000, rows: 20, failed: 0 });
 });
 

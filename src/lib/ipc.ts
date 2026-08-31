@@ -2166,14 +2166,12 @@ export interface DeckInput {
   /** The deck's long-form notes — the v8 column, and not {@link DeckInput.description}. */
   notes?: string;
   /**
-   * Point the new deck's cover at a printing's art crop.
+   * Point the new deck's cover at a printing's art crop — **the whole of what a cover is**.
    *
-   * **`coverKind` is not settable at create**: it keeps its DDL default, `card_art`, which is
-   * the kind this field *is* — so a deck born with a card cover already draws it and needs no
-   * follow-up. A *custom picture* does need one, and always will: that is
-   * {@link ipc.deckSetCoverImage}, which takes a path on disk and a **deck id**, so it cannot
-   * run until the deck exists. The create dialog holds a chosen file until the deck is made
-   * and uploads it after. See {@link DeckCoverKind} for why a deck carries both at once.
+   * `coverKind` is not settable here and does not need to be: it keeps its DDL default,
+   * `card_art`, which is the only kind there is. A deck born with this field already draws its
+   * cover and needs no follow-up, so a create is one call again — see {@link DeckCoverKind}
+   * for what the second call used to be and why it is gone.
    *
    * A soft reference like every card id in a user table: nothing checks the printing is in
    * `cards`, and an orphaned cover heals on the next sync.
@@ -2248,9 +2246,9 @@ export interface DeckPatch {
    *  "New deck" one through {@link DeckInput.description} at birth, the settings one through
    *  here. */
   description?: string;
-  /** Point the cover at a printing's art crop. Sending it also sets `coverKind` back to
-   *  `card_art`, so a deck showing an uploaded picture returns to card art without the file
-   *  being deleted — see {@link DeckRow.coverKind}. */
+  /** Point the cover at a printing's art crop — the one way a cover is set. Sending it also
+   *  writes `coverKind` as `card_art`, which is what it already was: see
+   *  {@link DeckCoverKind} for why that write is a leftover rather than a branch. */
   coverCardId?: string;
   /** Filed away: sorted last in the gallery, never deleted. This is what a gallery's
    *  "remove" should reach for — `deckDelete` really deletes. */
@@ -2319,17 +2317,28 @@ export interface DeckPatch {
 }
 
 /**
- * Which of a deck's two cover fields a tile should draw — `decks.cover_kind`, and the only
- * thing that decides it.
+ * `decks.cover_kind` — **a column with one live value, kept as a union because the column's
+ * own CHECK still has two.**
  *
- * `card_art` means {@link DeckRow.coverCardId}'s art crop; `custom` means the file the reader
- * picked, served by the image protocol at `<origin>/cover/<deckId>` (a fifth route beside the
- * four card variants — the CSP was not edited for it).
+ * `card_art` means {@link DeckRow.coverCardId}'s art crop, and it is the whole of what a cover
+ * is. `custom` meant a picture the reader picked off disk, re-encoded beside the database and
+ * served by the image protocol at `<origin>/cover/<deckId>`; **that half is deleted** — the
+ * command, the route, the encoder and the directory are all gone, and a migration flips every
+ * surviving `custom` row to `card_art`.
  *
- * **A deck can carry both at once and usually does**: setting a custom cover leaves the card
- * id alone and picking a card leaves the file on disk, so switching back and forth costs
- * nothing and loses nothing. That is only coherent because this column is the one answer to
- * "which one is showing".
+ * **Why the word is still in the type.** The mirror's job is to say what can come back out of
+ * the row: `cover_kind`'s CHECK is `IN ('card_art','custom')` and is not rewritten by the
+ * migration, and `cover_kind` is a synced field, so a device still on an older rung can put
+ * the retired word on the wire. Narrowing this to a single-member union would make that arrival
+ * a type error rather than a value nothing branches on, which is the wrong shape for a
+ * hand-written mirror that nothing type-checks against the crate.
+ *
+ * **Nothing in the app may branch on it, and that is the deletion's whole point.** A tile, a
+ * preview and a picker each drew one of two pictures off this field; they draw the card's art
+ * crop unconditionally now, which is what every *receiving* device already drew — the file
+ * never survived a sync, because the path was stored absolute. So a `custom` row that reaches
+ * this build from an old one draws its card art, which is the same picture that device's
+ * neighbours were already showing it.
  */
 export type DeckCoverKind = "card_art" | "custom";
 
@@ -2403,8 +2412,11 @@ export interface DeckRow {
   gameKey: DeckGame;
   description: string | null;
   coverCardId: string | null;
-  /** Which of the two covers is showing. See {@link DeckCoverKind} — a deck usually carries
-   *  both, and this is the one answer to which one a tile draws. */
+  /**
+   * `card_art` on every deck this build can produce. See {@link DeckCoverKind}: the second
+   * word survives in the column's CHECK and on the sync wire, and **nothing may branch on
+   * it** — a cover is {@link DeckRow.coverCardId}'s art crop and nothing else.
+   */
   coverKind: DeckCoverKind;
   /**
    * The cover printing's illustrator, `null` when `cards` has no row for it.
@@ -2413,9 +2425,10 @@ export interface DeckRow {
    * frame, so wherever one is shown the artist must be credited. Task 11's ruling is that a
    * cover with no artist is **not drawn** — an orphaned cover heals on the next sync.
    *
-   * It is about {@link DeckRow.coverCardId} and only that: a `custom` cover is the reader's
-   * own picture and has no Scryfall artist to credit, so this stays `null` while the tile
-   * quite properly draws one.
+   * It is about {@link DeckRow.coverCardId} and only that — the backend's
+   * `LEFT JOIN cards c ON c.id = d.cover_card_id` — so it is `null` exactly when a cover
+   * cannot be drawn, and the credit and the picture are one condition rather than two that
+   * have to be kept in step. They were two while a deck could wear a file instead.
    */
   coverArtist: string | null;
   archived: boolean;
@@ -3878,12 +3891,18 @@ export interface CollectionCleared {
  *
  * `folders` is its own number because the schema keeps folders their own thing —
  * `decks.folder_id` is `ON DELETE SET NULL`, so clearing them is a second statement the
- * backend takes deliberately. `covers` is files beside the database, not rows.
+ * backend takes deliberately.
+ *
+ * **It carried a third field, `covers`, and losing it is `reset.rs`'s only shape change**: that
+ * number counted *files* beside the database rather than rows, and it went with the custom
+ * cover on 2026-08-31. A deck is rows now, so the clear is a `DELETE` and nothing else. Two
+ * numbers, and this mirror is hand-written with nothing checking it against the crate — a field
+ * left here would have arrived `undefined` and read as zero, which is a sentence quietly
+ * dropping a count rather than anything going red.
  */
 export interface DecksCleared {
   decks: number;
   folders: number;
-  covers: number;
 }
 
 /**
@@ -4641,9 +4660,10 @@ export const ipc = {
    * travels in this one call rather than as a create followed by a patch and a filing, which
    * would be three transactions with a half-made deck to unwind between them.
    *
-   * The one thing it cannot do is a *custom* cover picture: that is
-   * {@link ipc.deckSetCoverImage}, which needs the id this call answers with, so it is always
-   * a follow-up and always has to handle failing on its own — the deck exists by then.
+   * **There is nothing left that it cannot do.** A cover used to be the exception — a picture
+   * off disk needed the id this call answers with, so the create dialog made the deck and then
+   * uploaded, which is a two-step write with a deck-exists-but-has-no-picture state in the
+   * middle. A cover is {@link DeckInput.coverCardId} now, a string, and it travels here.
    */
   deckCreate: (deck: DeckInput) => invoke<DeckRow>("deck_create", { deck }),
   /** Rename, re-format, cover and archive all arrive here. */
@@ -4655,21 +4675,6 @@ export const ipc = {
   /** Copy the deck: its categories and tags as new rows, its cards in **both** variants
    *  remapped onto them — never `archived`. A copy is a draft. */
   deckDuplicate: (id: number) => invoke<DeckRow>("deck_duplicate", { id }),
-  /**
-   * Point the deck at a picture on disk: decode it, re-encode it as this app's cover shape
-   * (626×457, the same crop a card cover draws) and store it beside the database.
-   *
-   * `sourcePath` is a **path the backend reads**, not bytes and not a `file://` URL — the
-   * file picker's answer, handed straight across. The re-encode happens *before* the write
-   * lock is taken, so a big photograph does not put every collection edit in the app behind
-   * one file dialog.
-   *
-   * Answers the deck as the gallery would read it, with {@link DeckRow.coverKind} now
-   * `custom`. It does **not** clear {@link DeckRow.coverCardId}: switching back to card art is
-   * `deckUpdate(id, { coverCardId })` and loses nothing either way.
-   */
-  deckSetCoverImage: (deckId: number, sourcePath: string) =>
-    invoke<DeckRow>("deck_set_cover_image", { deckId, sourcePath }),
   /**
    * File the deck under a folder — or, with `folderId: null`, back at the **root** of the
    * tree.
@@ -5219,8 +5224,9 @@ export const ipc = {
   decksClear: () => invoke<DecksCleared>("decks_clear"),
   /**
    * The fourth, and the one that is not destructive: `data/images/` and `data/tmp/`, both of
-   * which the app refetches on demand. It never touches `data/covers/` — a deck cover is a
-   * picture the reader chose — and never a table but `image_cache`.
+   * which the app refetches on demand, and never a table but `image_cache`. (It used to name
+   * a third directory it deliberately spared, `data/covers/`; there is no such directory any
+   * more — a cover is a card id, so there is no file to spare.)
    *
    * **Rejects while a sync is running**, in a sentence meant to be shown: the corpus download
    * puts 77 MB in `data/tmp/` and reads it back, so a sweep landing between the two fails a
@@ -5670,8 +5676,8 @@ export const ipc = {
    * Write an export at a path the reader chose in the OS save dialog.
    *
    * Rust writes the file because `dialog:allow-save` answers a *path* and nothing more, and
-   * writing at it from here would need an `fs:` permission this app grants nowhere. Same
-   * shape as `deck_set_cover_image`.
+   * writing at it from here would need an `fs:` permission this app grants nowhere. It is the
+   * last command of that shape: `deck_set_cover_image` was the other, and it is gone.
    */
   exportWriteFile: (path: string, contents: string) =>
     invoke<void>("export_write_file", { path, contents }),

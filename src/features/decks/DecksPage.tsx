@@ -345,11 +345,15 @@ export function DecksPage() {
   //
   // A card cover is an `art` crop, the same variant the deck builder uses and a different
   // URL on the CDN from the `grid` the search wall warms — so without this every tile on a
-  // first visit is a cold fetch, from a plain scroller that mounts them all at once. Custom
-  // covers are deliberately not included: they are served from `/cover/<deckId>`, which
-  // touches Scryfall not at all and needs no warming.
+  // first visit is a cold fetch, from a plain scroller that mounts them all at once.
+  //
+  // **`coverKind` is not consulted, and used to be.** It skipped `custom` rows, because those
+  // were served from a `/cover/<deckId>` route that touched Scryfall not at all. That route is
+  // gone and so is the picture behind it: a row still carrying the retired word now draws its
+  // `coverCardId`'s art like every other, so it is exactly what wants warming. Reading the
+  // column here would skip the one tile whose art is not yet in the cache.
   const coverKey = (query.data ?? [])
-    .map((d) => (d.coverKind === "custom" ? "" : (d.coverCardId ?? "")))
+    .map((d) => d.coverCardId ?? "")
     .filter((id) => id !== "")
     .join(",");
   useEffect(() => {

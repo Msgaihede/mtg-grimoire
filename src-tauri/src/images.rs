@@ -944,15 +944,14 @@ fn not_ready() -> tauri::http::Response<Vec<u8>> {
 /// elsewhere `mtgimg://localhost/…`, so a handler that looked at the host would be a
 /// handler that worked on exactly one platform.
 ///
-/// **Two routes**, and the cover one is tried first because it is the narrower shape: a card
-/// image is `/<variant>/<card id>/<face>` over the four [`Variant`] words, a deck cover is
-/// `/cover/<deck id>`, and `cover` is not a variant so the two can never both match.
+/// **One route.** A card image is `/<variant>/<card id>/<face>` over the four [`Variant`]
+/// words, and that is the whole protocol. There was a second — `/cover/<deck id>`, the file a
+/// reader picked as a deck's cover — which went with the custom cover itself on 2026-08-31: a
+/// cover is now `decks.cover_card_id`, the art crop of a card, which this route already serves
+/// as an ordinary card image.
 pub async fn serve(app: &tauri::AppHandle, path: &str) -> tauri::http::Response<Vec<u8>> {
     use tauri::Manager;
 
-    if let Some(deck_id) = parse_cover_path(path) {
-        return serve_cover(app, deck_id).await;
-    }
     let Some(key) = parse_request_path(path) else {
         return fail(
             tauri::http::StatusCode::NOT_FOUND,
@@ -970,237 +969,6 @@ pub async fn serve(app: &tauri::AppHandle, path: &str) -> tauri::http::Response<
             .get(&state.client, &state.db_read, &state.db, &key)
             .await,
     )
-}
-
-// ---------------------------------------------------------------------------------------
-// Deck covers
-// ---------------------------------------------------------------------------------------
-
-/// The first path segment of the fifth route, beside the four [`crate::schema::IMAGE_VARIANTS`].
-///
-/// A **path** on the origin the app already has, not an origin of its own, and that is the
-/// whole design: `app.security.csp` names `mtgimg:` and `http://mtgimg.localhost` and needs no
-/// edit to carry this — see `the_shipped_csp_is_untouched`. A cover served from any other
-/// scheme would be a new CSP source, and a new CSP source is the one change in this app that
-/// nothing else can fail to notice.
-///
-/// It cannot collide with a variant: [`Variant::parse`] answers `None` for `"cover"`, so a
-/// request is one route or the other and never ambiguous.
-pub const COVER_ROUTE: &str = "cover";
-
-/// The shape a custom cover is stored at, and why it is that shape.
-///
-/// [`Variant::Art`] is Scryfall's **art crop** — 626×457, the picture without the printed frame
-/// — which is what every deck tile in the app already draws for a card cover. Storing a custom
-/// cover at the same dimensions is what makes the two interchangeable: one tile, one aspect
-/// ratio, no layout that shifts depending on which kind of cover a deck happens to have.
-pub const COVER_VARIANT: Variant = Variant::Art;
-
-/// `/cover/<deckId>` → the deck id, or `None` for anything else.
-///
-/// Validated rather than sanitised, exactly as [`parse_request_path`] is and for the same
-/// reason: the id becomes a **file name** under the data directory. Parsing it as an `i64` is
-/// the whole fence — no `.`, no `/`, no `%2e` survives `str::parse`, so there is no way to
-/// obtain a path for `..` or for an absolute path. `decks.id` is `INTEGER PRIMARY KEY`, so a
-/// non-positive id names no deck and is refused here rather than reaching the filesystem as
-/// `-1.webp`.
-pub fn parse_cover_path(path: &str) -> Option<i64> {
-    let mut parts = path.trim_start_matches('/').split('/');
-    if parts.next()? != COVER_ROUTE {
-        return None;
-    }
-    let deck_id: i64 = parts.next()?.parse().ok()?;
-    // A third segment means the URL is not the one this app builds, and guessing at what it
-    // meant is how a path traversal gets in.
-    if parts.next().is_some() {
-        return None;
-    }
-    (deck_id > 0).then_some(deck_id)
-}
-
-/// Where one deck's cover lives, whether or not anything is there.
-pub fn cover_file(covers: &std::path::Path, deck_id: i64) -> PathBuf {
-    covers.join(format!("{deck_id}.webp"))
-}
-
-/// The HTTP answer for a cover request. Separated from [`serve_cover`] for [`respond`]'s
-/// reason: this is the whole contract with the renderer and it is pure, while `serve_cover`
-/// needs a running Tauri app.
-///
-/// **`no-store`, and it is the one image in this app that has to be.** Every other 200 here is
-/// bytes whose URI *is* their version — Scryfall's `?<epoch>` cache-buster moves when the art
-/// is re-scanned, so a day of caching is bounded by the thing that ended it. A cover has a
-/// stable URL by construction (`/cover/<deckId>` is the deck, not the picture) and its bytes
-/// are *meant* to change under it: the user picks a new file and the same URL must answer with
-/// it. Anything cacheable here is a deck showing its old cover until the app is restarted.
-///
-/// **A missing file is a 404, never a placeholder.** A deck with no custom cover falls back to
-/// its card art in the webview, and a placeholder served here would hide that fallback behind
-/// a grey rectangle — the picture the deck *does* have would never be drawn.
-pub fn cover_response(bytes: Option<Vec<u8>>) -> tauri::http::Response<Vec<u8>> {
-    use tauri::http::{header, Response, StatusCode};
-
-    match bytes {
-        Some(bytes) => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, WEBP)
-            .header(header::CACHE_CONTROL, "no-store")
-            .body(bytes)
-            .expect("cover response"),
-        None => fail(StatusCode::NOT_FOUND, "no cover image", None),
-    }
-}
-
-/// Read one deck's cover off disk and answer it.
-///
-/// A covers directory that cannot even be resolved is the same answer as an empty one: there
-/// is no cover, and the deck draws its card art. That is a deliberate flattening — the two
-/// causes (no data directory yet, no file) differ to nobody looking at a tile, and the honest
-/// alternative would be a 502 that makes a deck with no custom cover look broken.
-async fn serve_cover(app: &tauri::AppHandle, deck_id: i64) -> tauri::http::Response<Vec<u8>> {
-    let bytes = match crate::paths::covers_dir(app) {
-        Ok(covers) => tokio::fs::read(cover_file(&covers, deck_id)).await.ok(),
-        Err(_) => None,
-    };
-    cover_response(bytes)
-}
-
-/// Largest source image a cover may be decoded from, **in total pixels**.
-///
-/// Not a policy about photographs — it is the memory bound, and it has to be a *product*
-/// rather than a per-side cap. `image` allocates the whole decoded buffer, at least four bytes
-/// a pixel, before anything is resized, and this limit used to be twenty thousand *a side*:
-/// 20 000 × 20 000 was inside it, which is the 1.6 GB allocation the comment named as the
-/// cliff it meant to stay short of. A portable app that OOMs because someone picked a scanned
-/// poster is an app that lost their session.
-///
-/// A hundred megapixels is **400 MB** decoded at 8-bit RGBA — past every consumer camera made,
-/// the 100 MP medium-format backs included, and a quarter of that cliff. A phone's 200 MP mode
-/// is refused in a sentence, which is what a user is owed instead.
-///
-/// **It is checked against the file's own header before a pixel is decoded**, because that is
-/// the only strict fence there is: `image` documents `max_image_width`/`max_image_height` as
-/// strict and `max_alloc` as "non-strict by default and some decoders may ignore it", so a
-/// budget expressed only through `Limits` would be advice. `max_alloc` is set from the same
-/// number anyway, as the second fence for a header that lied.
-pub(crate) const MAX_COVER_SOURCE_PIXELS: u64 = 100_000_000;
-
-/// Decode whatever the user picked and re-encode it as this app's cover shape.
-///
-/// **The format is guessed from the file's own bytes, never from its extension** — a `.png`
-/// that is really a JPEG is a thing that happens to real files, and an extension is not
-/// evidence. `with_guessed_format` reads the magic number.
-///
-/// `resize_to_fill` rather than `resize`: a cover fills a tile, so the picture is scaled to
-/// cover 626×457 and centre-cropped rather than letterboxed into it. Lanczos3 because this
-/// runs once per cover and the result is looked at for as long as the deck exists.
-///
-/// Converted to RGBA8 before encoding, which is not a detail: `image-webp`'s encoder takes
-/// 8-bit RGB or RGBA and nothing else, so a 16-bit PNG — which is what half the art sites
-/// serve — would otherwise fail at the last step with an "unsupported color type" a user could
-/// do nothing about. Alpha is **kept** rather than flattened, because dropping the channel
-/// composites a transparent pixel onto whatever its RGB happened to be, which is usually black.
-///
-/// The encoding is lossless (that is the whole of `image-webp`'s encoder), so a photographic
-/// cover lands larger than a lossy WEBP of the same picture would. It is one file per deck at
-/// a fixed 626×457, which is a few hundred kilobytes — the trade is a pure-Rust encoder in a
-/// portable app against a native `libwebp` build, and the file count here is the number of
-/// decks a person has.
-pub fn encode_cover(source: &std::path::Path) -> Result<Vec<u8>, String> {
-    let label = source.display().to_string();
-    encode_cover_from(
-        || {
-            std::fs::File::open(source)
-                .map_err(|e| format!("could not open {}: {e}", source.display()))
-        },
-        &label,
-    )
-}
-
-/// [`encode_cover`], for a file the reader picked on Android.
-///
-/// The source there is a `content://` URI rather than a path, so it is opened through
-/// [`crate::picked::open_read`] — which hands back a [`std::fs::File`] built from the
-/// descriptor the ContentResolver gave, and is therefore `Seek` as well as `Read`. That is not
-/// a detail: the two-pass bound below **reopens** the source, because `into_dimensions`
-/// consumes its reader, and a boxed `Read` could do neither.
-pub fn encode_cover_picked(app: &tauri::AppHandle, picked: &str) -> Result<Vec<u8>, String> {
-    encode_cover_from(|| crate::picked::open_read(app, picked), picked)
-}
-
-/// The whole of the cover encode, over a *reopenable* source rather than a path.
-///
-/// `open` is called **twice**, and that is the existing two-pass bound rather than waste: the
-/// header is read on a pass of its own so [`MAX_COVER_SOURCE_PIXELS`] is checked as a product
-/// before anything is decoded, and `into_dimensions` consumes the reader it is given. Reading
-/// the whole file into a `Vec` first would make one open do — and would also put an arbitrarily
-/// large photo in a phone's memory before the ceiling that exists to prevent exactly that had
-/// been consulted.
-///
-/// `label` is what a refusal names. For a path it is `source.display()`, for a picked file the
-/// URI itself; either way the user gets back the thing they chose.
-fn encode_cover_from<F>(open: F, label: &str) -> Result<Vec<u8>, String>
-where
-    F: Fn() -> Result<std::fs::File, String>,
-{
-    let (width, height) = COVER_VARIANT.dimensions();
-    let reader = || {
-        image::ImageReader::new(std::io::BufReader::new(open()?))
-            .with_guessed_format()
-            .map_err(|e| format!("could not read {label}: {e}"))
-    };
-    let (w, h) = reader()?
-        .into_dimensions()
-        .map_err(|e| format!("{label} is not an image this app can read: {e}"))?;
-    if u64::from(w) * u64::from(h) > MAX_COVER_SOURCE_PIXELS {
-        return Err(format!(
-            "{label} is {w} × {h}, which is too large a picture to make a deck cover from."
-        ));
-    }
-    let mut reader = reader()?;
-    let mut limits = image::Limits::default();
-    limits.max_alloc = Some(MAX_COVER_SOURCE_PIXELS * 4);
-    reader.limits(limits);
-    let decoded = reader
-        .decode()
-        .map_err(|e| format!("{label} is not an image this app can read: {e}"))?;
-    let filled = decoded
-        .resize_to_fill(width, height, image::imageops::FilterType::Lanczos3)
-        .to_rgba8();
-    let mut out = Vec::new();
-    filled
-        .write_to(
-            &mut std::io::Cursor::new(&mut out),
-            image::ImageFormat::WebP,
-        )
-        .map_err(|e| format!("could not encode the cover image: {e}"))?;
-    Ok(out)
-}
-
-/// Write one deck's cover, replacing whatever was there.
-pub fn write_cover(covers: &std::path::Path, deck_id: i64, bytes: &[u8]) -> Result<(), String> {
-    let path = cover_file(covers, deck_id);
-    std::fs::write(&path, bytes).map_err(|e| format!("could not write {}: {e}", path.display()))
-}
-
-/// Delete one deck's cover. **Best-effort**: a file that is not there is a success, and a
-/// failure is the caller's to log rather than to fail on — a deck the user deleted is deleted
-/// whatever the disk says about a picture of it.
-pub fn remove_cover(covers: &std::path::Path, deck_id: i64) -> std::io::Result<()> {
-    match std::fs::remove_file(cover_file(covers, deck_id)) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        other => other,
-    }
-}
-
-/// Give one deck a copy of another's cover file.
-///
-/// **A missing source is an error here, unlike in [`remove_cover`]**, and the asymmetry is the
-/// point: a delete that finds nothing already has what it wanted, while a copy that finds
-/// nothing has produced nothing — and its caller ([`crate::deck::duplicate_deck`]) has to know,
-/// because the copy is carrying a `cover_kind` of `custom` that only this file can honour.
-pub fn copy_cover(covers: &std::path::Path, from: i64, to: i64) -> std::io::Result<()> {
-    std::fs::copy(cover_file(covers, from), cover_file(covers, to)).map(|_| ())
 }
 
 /// Images **one** prefetch call will warm — two pages of results.
@@ -1330,11 +1098,12 @@ pub const COLLECTION_PREWARM: Variant = Variant::Display;
 ///
 /// **Four deck surfaces are deliberately not covered by this and still draw `Art`**: the
 /// gallery's deck tiles and its folder strips, `DeckSettingsDialog`'s cover picker and preview —
-/// all three of which draw a *cover*, which is 626×457 by construction ([`COVER_VARIANT`], because
-/// [`encode_cover`] writes a user's own file at exactly that shape) — and the theory diff, whose
-/// picture is a 32×44 decoration in a list that spells the card's name out beside it. Those fetch
-/// on demand; a dialog the reader opens deliberately does not need warming, and the gallery warms
-/// its own covers in `DecksPage`.
+/// all three of which draw a *cover*, and a cover is [`Variant::Art`] itself since 2026-08-31:
+/// `decks.cover_card_id`'s art crop is the only kind there is, so those surfaces are asking for
+/// exactly the picture this constant would have warmed at a different size — and the theory diff,
+/// whose picture is a 32×44 decoration in a list that spells the card's name out beside it. Those
+/// fetch on demand; a dialog the reader opens deliberately does not need warming, and the gallery
+/// warms its own covers in `DecksPage`.
 pub const DECK_PREWARM: Variant = Variant::Display;
 
 /// The cards the user owns, wants, or has put in a deck, that have no cached image yet —
@@ -2541,25 +2310,6 @@ mod tests {
         r.headers().get(name).and_then(|v| v.to_str().ok())
     }
 
-    /// An empty scratch directory under `%TEMP%`, named for **this process** as well as for the
-    /// test.
-    ///
-    /// The pid is a precaution, not a fix for anything measured. Every one of these tests
-    /// removes its directory and recreates it a moment later, and on Windows a directory in the
-    /// pending-delete state and a file an indexer or scanner has just opened both surface as
-    /// `Access is denied` — so two `cargo test` processes sharing a fixed name (a rerun started
-    /// before the last one's cleanup landed, an editor running the suite alongside a terminal)
-    /// have a window in which one can fail the other. One red run of this suite has been seen
-    /// and never reproduced in twenty-four more; **this does not diagnose it**, it removes a
-    /// failure mode that could have caused it.
-    fn scratch(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("mtgtest-covers-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
     /// Bytes, and permission to keep them for a day — not forever. The URL is stable
     /// across Scryfall re-scanning a card, so an immutable cache would pin a superseded
     /// picture inside the webview until the app is reinstalled.
@@ -2599,82 +2349,21 @@ mod tests {
         assert_eq!(r.body(), &svg.into_bytes());
     }
 
-    /// The fifth route, both answers. A cover that is there is bytes the webview may **not**
-    /// keep — a cover's URL is the deck, not the picture, so the same URL has to answer with a
-    /// new file the moment the user picks one. A cover that is not there is a **404 and never a
-    /// placeholder**: the deck falls back to its card art in the webview, and a grey rectangle
-    /// served from here would hide the picture the deck actually has.
-    #[test]
-    fn a_cover_route_serves_the_file_and_404s_when_there_is_none() {
-        let dir = scratch("route");
-        std::fs::write(cover_file(&dir, 7), b"webp-bytes").unwrap();
-
-        let served = cover_response(std::fs::read(cover_file(&dir, 7)).ok());
-        let missing = cover_response(std::fs::read(cover_file(&dir, 8)).ok());
-        let _ = std::fs::remove_dir_all(&dir);
-
-        assert_eq!(served.status(), tauri::http::StatusCode::OK);
-        assert_eq!(header(&served, "content-type"), Some(WEBP));
-        assert_eq!(
-            header(&served, "cache-control"),
-            Some("no-store"),
-            "a cover's bytes are meant to change under a stable URL"
-        );
-        assert_eq!(served.body(), b"webp-bytes");
-
-        assert_eq!(missing.status(), tauri::http::StatusCode::NOT_FOUND);
-        assert_eq!(header(&missing, "cache-control"), Some("no-store"));
-    }
-
-    /// The route is a **path**, and the id becomes a file name — so it is validated the way
-    /// [`parse_request_path`] validates a card id, not sanitised. Parsing as an `i64` is the
-    /// whole fence: nothing with a separator in it, in any encoding, survives it.
-    #[test]
-    fn a_cover_path_is_parsed_or_refused_and_never_repaired() {
-        assert_eq!(parse_cover_path("/cover/7"), Some(7));
-        assert_eq!(
-            parse_cover_path("cover/7"),
-            Some(7),
-            "the leading slash is optional"
-        );
-
-        for refused in [
-            "/cover",
-            "/cover/",
-            "/cover/7/8",
-            "/cover/../../mtg.db",
-            "/cover/..%2fmtg.db",
-            "/cover/7.webp",
-            "/cover/abc",
-            "/cover/0",
-            "/cover/-1",
-            "/grid/7",
-        ] {
-            assert_eq!(
-                parse_cover_path(refused),
-                None,
-                "`{refused}` must be refused"
-            );
-        }
-
-        // And the two routes cannot both match: `cover` is not one of the four variants, so a
-        // card request is never read as a cover and a cover request is never read as a card.
-        assert!(Variant::parse(COVER_ROUTE).is_none());
-        assert!(parse_cover_path("/art/0000419b-0bba-4488-8f7a-6194544ce91d/0").is_none());
-    }
-
-    /// **The cover route needs no CSP change, and that is why it is a route on this origin.**
+    /// **`img-src` is pinned whole, and that is the point of having this beside
+    /// `desktop.rs`'s guard.**
     ///
     /// `app.security.csp` is configuration, so nothing else in the build can fail when it is
-    /// loosened — `lib.rs`'s `the_shipped_csp_allows_ipc_and_images_and_nothing_wild` is the
-    /// standing guard, and this is the claim *this* feature makes against it. A cover is an
-    /// `<img>`, so `img-src` is the one directive it could have touched, and it is pinned here
-    /// **whole**: a source added to it fails this test by name. Serving a cover from `file:`,
-    /// `asset:` or a `blob:` would each have been exactly that, and a new source is the one
-    /// change in this app that nothing else notices.
+    /// loosened — `desktop.rs`'s `the_shipped_csp_allows_ipc_and_images_and_nothing_wild`
+    /// asserts the sources the app needs are *present* and that no wildcard is, which a new
+    /// source passes. This asserts the one directive every picture in the app goes through is
+    /// **exactly** these four and nothing else: a source added to it fails here by name.
     ///
-    /// `data:` is on the list already and is not the cover route's doing — it is the inline
-    /// SVG placeholder's, which predates this by two plans.
+    /// It was written for the deck-cover route, which was a path on `mtgimg:` precisely so it
+    /// would need no new source; that route went on 2026-08-31 and the pin outlived it, because
+    /// serving any image from `file:`, `asset:` or a `blob:` is the same change and would still
+    /// be the one nothing else in this app notices.
+    ///
+    /// `data:` is on the list already — it is the inline SVG placeholder's.
     #[test]
     fn the_shipped_csp_is_untouched() {
         let conf: serde_json::Value =
@@ -2688,129 +2377,7 @@ mod tests {
             .expect("the CSP must name img-src");
         assert_eq!(
             img_src, "img-src 'self' data: mtgimg: http://mtgimg.localhost",
-            "a deck cover is a path on `mtgimg:`, so img-src must not have grown"
-        );
-        assert!(
-            !csp.contains(COVER_ROUTE),
-            "the route is a path, not a source: {csp}"
-        );
-    }
-
-    /// A cover is stored at the **art crop's** dimensions, whatever shape the source was, so a
-    /// custom cover and a card's art are interchangeable in every tile — one aspect ratio, no
-    /// layout that shifts depending on which kind of cover a deck happens to have.
-    ///
-    /// Driven through a real PNG rather than a fixture file, so the whole pipeline runs:
-    /// format guessed from the bytes, decoded, resampled to fill, re-encoded as WEBP. The
-    /// source is deliberately the wrong aspect ratio *and* 16-bit-adjacent RGBA, which is what
-    /// the `to_rgba8` conversion is for.
-    #[test]
-    fn a_cover_is_re_encoded_to_the_art_crops_shape() {
-        let dir = scratch("encode");
-        let source = dir.join("source.png");
-        // Tall and narrow, so `resize_to_fill` has to crop rather than merely scale.
-        let mut png = image::RgbaImage::new(64, 256);
-        for (x, y, pixel) in png.enumerate_pixels_mut() {
-            *pixel = image::Rgba([x as u8, y as u8, 128, 255]);
-        }
-        png.save(&source).unwrap();
-
-        let encoded = encode_cover(&source).unwrap();
-
-        let decoded = image::load_from_memory(&encoded).unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(
-            (decoded.width(), decoded.height()),
-            COVER_VARIANT.dimensions(),
-            "626x457, the `art` crop"
-        );
-        assert_eq!(COVER_VARIANT.dimensions(), (626, 457));
-    }
-
-    /// A file that is not an image is refused in words naming the file, rather than by a panic
-    /// or by a cover written from nonsense — the user picked it out of a file dialog, and the
-    /// thing they need told is which file.
-    #[test]
-    fn a_source_that_is_not_an_image_is_refused_by_name() {
-        let dir = scratch("refuse");
-        let source = dir.join("notes.txt");
-        std::fs::write(&source, b"this is not a picture").unwrap();
-
-        let refused = encode_cover(&source).unwrap_err();
-        let absent = encode_cover(&dir.join("gone.png")).unwrap_err();
-        let _ = std::fs::remove_dir_all(&dir);
-
-        assert!(refused.contains("notes.txt"), "{refused}");
-        assert!(absent.contains("gone.png"), "{absent}");
-    }
-
-    /// [`MAX_COVER_SOURCE_PIXELS`] bounds the **product**, and it is read off the header before
-    /// a pixel is decoded. Both halves are what this test is for, and the fixture proves them
-    /// together: a PNG that is nothing but a valid `IHDR` claiming 20 000 × 20 000, with no
-    /// image data at all behind it. 20 000 a side was *inside* the old per-side cap; 400
-    /// megapixels is four times the new one; and since there is nothing to decode, a refusal
-    /// that arrives at all is a refusal that arrived from the header.
-    ///
-    /// Written by hand rather than encoded, because encoding a source over the limit means
-    /// allocating the 400 MB this constant exists to refuse.
-    #[test]
-    fn a_source_too_large_to_decode_is_refused_from_its_header_alone() {
-        /// The one thing a hand-built PNG chunk needs that cannot be typed out: `png` validates
-        /// every chunk's CRC-32 and stops at a bad one, which would refuse this file for the
-        /// wrong reason.
-        fn crc32(bytes: &[u8]) -> u32 {
-            let mut crc = 0xFFFF_FFFF_u32;
-            for &byte in bytes {
-                crc ^= u32::from(byte);
-                for _ in 0..8 {
-                    crc = if crc & 1 == 1 {
-                        (crc >> 1) ^ 0xEDB8_8320
-                    } else {
-                        crc >> 1
-                    };
-                }
-            }
-            !crc
-        }
-
-        /// `<length><type><data><crc>`, the shape every PNG chunk has.
-        fn chunk(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
-            let mut body = Vec::from(*kind);
-            body.extend_from_slice(data);
-            let mut out = Vec::new();
-            out.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
-            out.extend_from_slice(&body);
-            out.extend_from_slice(&crc32(&body).to_be_bytes());
-            out
-        }
-
-        let dir = scratch("oversize");
-        let source = dir.join("poster.png");
-        let mut ihdr = Vec::new();
-        ihdr.extend_from_slice(&20_000_u32.to_be_bytes());
-        ihdr.extend_from_slice(&20_000_u32.to_be_bytes());
-        // 8-bit, colour type 6 (RGBA), deflate, adaptive filtering, no interlace.
-        ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
-        let mut png = Vec::from([0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
-        png.extend_from_slice(&chunk(b"IHDR", &ihdr));
-        // An empty `IDAT` is where the header ends and the picture would begin. There are 400
-        // million pixels' worth of nothing behind it, which is the point.
-        png.extend_from_slice(&chunk(b"IDAT", &[]));
-        png.extend_from_slice(&chunk(b"IEND", &[]));
-        std::fs::write(&source, &png).unwrap();
-
-        let refused = encode_cover(&source).unwrap_err();
-
-        let _ = std::fs::remove_dir_all(&dir);
-        assert!(refused.contains("poster.png"), "{refused}");
-        assert!(
-            refused.contains("20000 × 20000"),
-            "the refusal says how big the picture was: {refused}"
-        );
-        assert_eq!(
-            20_000_u64 * 20_000,
-            400_000_000,
-            "which is four times the budget, and was inside the old per-side cap"
+            "every picture in this app is a path on `mtgimg:`, so img-src must not have grown"
         );
     }
 
