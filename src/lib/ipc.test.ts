@@ -1744,7 +1744,7 @@ describe("pairing", () => {
     // same number and not the same code, and the reader is comparing characters.
     expect(shake.sas).toBe("042913");
     // `PairingHandshake` no longer has a `response` field to carry to the other device — the
-    // relay is what carries it now (spec §2.2).
+    // relay is what carries it now (spec §1).
     expect(shake).not.toHaveProperty("response");
   });
 

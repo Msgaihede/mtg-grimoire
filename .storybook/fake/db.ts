@@ -834,7 +834,7 @@ export interface FakeUpdate {
  * both raised by the handler itself. What is left is the offering device's own read of what the
  * relay is holding for it failing to open, which in the crate is an AEAD refusing to
  * authenticate: nothing a person types produces a *well-formed* message that will not decrypt.
- * **It moved with the read it describes**: a relay carries both blobs now (§2.2), so there is no
+ * **It moved with the read it describes**: a relay carries both blobs now (§1), so there is no
  * more `sync_pairing_respond` for a reader to press — the read happens inside `sync_pairing_poll`
  * instead, on the offering device's first look at what has arrived, and that is the one place
  * this fault sits.
@@ -983,7 +983,19 @@ export interface FakePending {
   /** The six digits, once both sides know each other's key. `null` on an offer nobody has
    *  answered yet, which is the state the panel's *Codes match* button is disabled in. */
   sas: string | null;
-  /** Set by `sync_pairing_confirm`, so a spent offer cannot serve a second joiner. */
+  /**
+   * True once this side of the ceremony is done — by `sync_pairing_confirm` on the offering
+   * device, or by `sync_pairing_poll` itself on the joining device, the moment it runs the old
+   * `complete` body and joins the group.
+   *
+   * **Checked before either branch, and `pending` is never cleared on success — for both
+   * sides.** A poll after completion has to keep answering `"complete"` rather than falling
+   * through to the `pending === null` guard and reporting `"idle"`, which would read as the
+   * pairing having been un-done. Nulling `pending` on success shipped once, on the joining
+   * branch only, and it made a *third* poll regress a paired device back to "no pairing in
+   * progress" — the fake's own bug, not the crate's: nothing clears `Pending` there but cancel
+   * and expiry.
+   */
   spent: boolean;
   /**
    * Whether `sync_pairing_poll` has already been asked once for this pending pairing.
@@ -12120,7 +12132,7 @@ export function writeHandlers(db: FakeDb) {
      * accepted, which is the one place a story is kinder than the app.
      *
      * **The digits are the whole answer now.** A relay carries this device's own reply onward
-     * (§2.2), so there is nothing left for a reader to copy back by hand — `PairingHandshake`
+     * (§1), so there is nothing left for a reader to copy back by hand — `PairingHandshake`
      * lost the field that used to hold it.
      */
     sync_pairing_accept: (args: { code: string }): PairingHandshake => {
@@ -12183,14 +12195,21 @@ export function writeHandlers(db: FakeDb) {
      * **`pairingReadError` sits on the offering device's first read**, exactly where
      * `sync_pairing_respond` used to sit before a relay made it a step inside this one: nothing
      * is typed here either way, which is the whole reason it is a fault.
+     *
+     * **`pending.spent` is checked before either branch and is the one thing a third, fourth or
+     * fifth poll ever sees once it is true**, on both sides alike — see {@link FakePending.spent}
+     * for the shape this fixes. That is what makes the two sides "structurally the same 'look
+     * again' shape" ({@link FakePairing}'s doc comment) actually true rather than true of only
+     * one of them: first ask learns nothing new, second ask reveals the next stage, and every ask
+     * after that is `"complete"`, stably, because nothing here ever nulls `pending` on success.
      */
     sync_pairing_poll: (): PairingProgress => {
       refuseIfBusy(db);
       const pending = db.pairing.pending;
       if (pending === null) return { stage: "idle", sas: null };
+      if (pending.spent) return { stage: "complete", sas: null };
 
       if (pending.initiator) {
-        if (pending.spent) return { stage: "complete", sas: null };
         if (pending.sas === null) {
           if (!pending.polled) {
             pending.polled = true;
@@ -12204,7 +12223,8 @@ export function writeHandlers(db: FakeDb) {
 
       // The joining device already has its digits, from `accept`. What is left is the offering
       // device pressing *Codes match* — which, with no second world here to press it in, the
-      // second poll stands in for.
+      // second poll stands in for: it runs the old `complete` body and marks `spent`, exactly as
+      // `sync_pairing_confirm` does for the offering device, rather than clearing `pending`.
       if (!pending.polled) {
         pending.polled = true;
         return { stage: "compare", sas: pending.sas };
@@ -12215,7 +12235,7 @@ export function writeHandlers(db: FakeDb) {
         { deviceId: db.pairing.deviceId, name: db.pairing.deviceName, addedAt: now, revokedAt: null },
         { deviceId: "b000ffffffffffffffffffffffffffff", name: "Paired device", addedAt: now, revokedAt: null },
       ];
-      db.pairing.pending = null;
+      pending.spent = true;
       return { stage: "complete", sas: null };
     },
 
