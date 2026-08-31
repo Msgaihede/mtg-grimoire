@@ -1692,11 +1692,14 @@ describe("the collection folder wrappers name the commands `collection_folders.r
 });
 
 /**
- * Pairing's nine commands — spec §7.5 and §7.6.
+ * Pairing's eight commands — spec §7.5 and §7.6.
  *
  * `invoke` matches arguments **by name**, so a wrapper that spells one differently fails at
- * runtime with a deserialization error and no type error anywhere. These pin the five names
- * Rust declares: `code`, `response`, `sealedKey`, `deviceId` and `name`.
+ * runtime with a deserialization error and no type error anywhere. These pin the three names
+ * Rust declares: `code`, `deviceId` and `name`. **`response` and `sealedKey` are gone from this
+ * list** (they were `sync_pairing_respond`'s and `sync_pairing_complete`'s own): a relay carries
+ * both blobs now, so the two commands that used to hand them to a reader for hand-carrying are
+ * folded into `sync_pairing_poll`, which takes no arguments of its own.
  */
 describe("pairing", () => {
   const status = {
@@ -1731,8 +1734,8 @@ describe("pairing", () => {
     expect(offer.qr.modules[0]).toBe(true);
   });
 
-  it("sends the typed code under `code` and answers six digits", async () => {
-    invoke.mockResolvedValue({ sas: "042913", response: "BLOB" });
+  it("sends the typed code under `code` and answers six digits, and nothing to carry back", async () => {
+    invoke.mockResolvedValue({ sas: "042913" });
 
     const shake = await ipc.syncPairingAccept("ABCDE-FGHJK");
 
@@ -1740,14 +1743,9 @@ describe("pairing", () => {
     // A string and not a number, and the leading zero is why: `042913` and `42913` are the
     // same number and not the same code, and the reader is comparing characters.
     expect(shake.sas).toBe("042913");
-  });
-
-  it("sends the joiner's blob under `response`", async () => {
-    invoke.mockResolvedValue({ sas: "042913", response: "" });
-
-    await ipc.syncPairingRespond("BLOB");
-
-    expect(invoke).toHaveBeenCalledWith("sync_pairing_respond", { response: "BLOB" });
+    // `PairingHandshake` no longer has a `response` field to carry to the other device — the
+    // relay is what carries it now (spec §2.2).
+    expect(shake).not.toHaveProperty("response");
   });
 
   it("confirms with no arguments and answers the sealed key", async () => {
@@ -1759,12 +1757,28 @@ describe("pairing", () => {
     expect(sealed.sealedKey).toBe("SEALED");
   });
 
-  it("sends the sealed key under `sealedKey`", async () => {
-    invoke.mockResolvedValue(undefined);
+  /**
+   * `sync_pairing_poll` replaces `sync_pairing_respond` and `sync_pairing_complete` — one
+   * command, no arguments, asked on an interval rather than pressed once a paste box is filled.
+   */
+  it("polls with no arguments and answers idle when nothing is in flight", async () => {
+    invoke.mockResolvedValue({ stage: "idle", sas: null });
 
-    await ipc.syncPairingComplete("SEALED");
+    const progress = await ipc.syncPairingPoll();
 
-    expect(invoke).toHaveBeenCalledWith("sync_pairing_complete", { sealedKey: "SEALED" });
+    expect(invoke).toHaveBeenCalledWith("sync_pairing_poll");
+    expect(progress.stage).toBe("idle");
+    expect(progress.sas).toBeNull();
+  });
+
+  it("polls and answers the six digits once both sides have them", async () => {
+    invoke.mockResolvedValue({ stage: "compare", sas: "042913" });
+
+    const progress = await ipc.syncPairingPoll();
+
+    expect(invoke).toHaveBeenCalledWith("sync_pairing_poll");
+    expect(progress.stage).toBe("compare");
+    expect(progress.sas).toBe("042913");
   });
 
   it("cancels with no arguments", async () => {

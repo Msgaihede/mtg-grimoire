@@ -5583,7 +5583,13 @@ describe("the busy fault", () => {
     // that is worth this loop's attention rather than in spite of it: everything *after* the door
     // in that command is best effort by design (spec §2.1), so `refuseIfBusy` is the one refusal
     // it has and a handler that forgot it would look identical from outside.
-    expect(names).toHaveLength(88);
+    // One-sided pairing then moved it by **minus one**, 88 -> 87: `sync_pairing_respond` and
+    // `sync_pairing_complete` are gone (a relay carries both blobs now, spec §2.2) and
+    // `sync_pairing_poll` replaces them — two handlers out, one in. It takes `sync::with_write`
+    // and no arguments of its own, exactly as `sync_pairing_confirm` beside it needs none in
+    // `args` above, so this is the second move this comment records that goes *down*, and
+    // re-measured rather than reasoned about for the same reason the first one was.
+    expect(names).toHaveLength(87);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,

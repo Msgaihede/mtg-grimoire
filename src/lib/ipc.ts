@@ -32,8 +32,8 @@
  * `MirrorStatus`                                 — `src-tauri/src/mirror/settings.rs`
  * `PassReport`                                   — `src-tauri/src/mirror/run.rs`
  * `TagTerms`                                     — `src-tauri/src/filters.rs`
- * `PairingStatus`/`PairingOffer`/`PairingHandshake`/
- * `PairingSealedKey`/`QrMatrix`/`PairedDevice`     — `src-tauri/src/sync_pair/pairing.rs`,
+ * `PairingStatus`/`PairingOffer`/`PairingHandshake`/`PairingSealedKey`/
+ * `PairingProgress`/`QrMatrix`/`PairedDevice`      — `src-tauri/src/sync_pair/pairing.rs`,
  *                                                  `.../identity.rs`, `.../invite.rs`
  *
  * **Seven settings carry no struct at all.** Each is one `app_meta` row: two answered as a bare
@@ -3936,20 +3936,26 @@ export interface PairingOffer {
 }
 
 /**
- * The six digits to compare, and the blob to carry back.
+ * The six digits to compare.
  *
- * `response` is empty on the offering device — A has nothing further to hand B until Confirm.
  * **The digits are what the reader compares and the whole of what defeats a man in the middle**
  * (spec §7.5 step 3), so the panel must never auto-advance past them.
  */
 export interface PairingHandshake {
   sas: string;
-  response: string;
 }
 
 /** The wrapped group key, for the reader to carry to the joining device. */
 export interface PairingSealedKey {
   sealedKey: string;
+}
+
+/** What `sync_pairing_poll` answers. `stage` drives the panel and nothing else does. */
+export interface PairingProgress {
+  /** `"idle" | "waiting" | "compare" | "complete"` */
+  stage: string;
+  /** The six digits, once both sides have them. */
+  sas: string | null;
 }
 
 /**
@@ -5600,11 +5606,8 @@ export const ipc = {
   syncPairingStatus: () => invoke<PairingStatus>("sync_pairing_status"),
   /** Start offering a pairing. Replaces any offer already in flight. */
   syncPairingBegin: () => invoke<PairingOffer>("sync_pairing_begin"),
-  /** Read an offer on the joining device. Answers the six digits and a blob to carry back. */
+  /** Read an offer on the joining device. Answers the six digits. */
   syncPairingAccept: (code: string) => invoke<PairingHandshake>("sync_pairing_accept", { code }),
-  /** Read the joiner's blob on the offering device. Answers the same six digits. */
-  syncPairingRespond: (response: string) =>
-    invoke<PairingHandshake>("sync_pairing_respond", { response }),
   /**
    * The reader says the digits matched. Answers the sealed group key.
    *
@@ -5613,10 +5616,10 @@ export const ipc = {
    * man-in-the-middle defence at all while looking completely normal.
    */
   syncPairingConfirm: () => invoke<PairingSealedKey>("sync_pairing_confirm"),
-  /** The joining device unwraps the key and is in the group. */
-  syncPairingComplete: (sealedKey: string) => invoke<void>("sync_pairing_complete", { sealedKey }),
   /** Throw away whatever is in flight. The code that was on screen stops working. */
   syncPairingCancel: () => invoke<void>("sync_pairing_cancel"),
+  /** Where a pairing has got to. Polled while one is in flight; answers `idle` when none is. */
+  syncPairingPoll: () => invoke<PairingProgress>("sync_pairing_poll"),
   /**
    * The relay, what is waiting to be sent, and what wants looking at.
    *
