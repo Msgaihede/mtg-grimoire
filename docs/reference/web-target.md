@@ -77,19 +77,25 @@ the real 43-column one, `raw` included**.
   `Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp` and
   it passed both ways. **Do not add those headers**, and do not let a future service worker
   re-attach them.
-- **114 commands of 154**, as of 2026-08-30. The first four are the browse —
+- **115 commands of 156**, as of 2026-08-31. The first four are the browse —
   `sync_status`, `search_cards`, `list_sets`, `facet_cards` — which is the read path spec §8
   wanted measured in wasm rather than guessed. The rest are the Decks destination (PR 10b's
   thirteen reads and 10c's thirty-three writes), the Collection (10d's seventeen), the
-  Wishlist (10e's fourteen), the card pane (10f's six), the Tagger (10g's ten of twelve) and
-  Settings (10h's fourteen). Adding one, once its module is in the map, is a line in
-  `web::route::COMMANDS` and a `match` arm. **What the remaining 40 are, and why none of
-  them is an oversight, is tabulated at the foot of this file.**
+  Wishlist (10e's fourteen), the card pane (10f's six), the Tagger (10g's ten of twelve),
+  Settings (10h's fourteen) and the backup archive (`mirror_backup_zip`, 2026-08-31 — the
+  crate gained two that day and one of them is routed). Adding one, once its module is in the
+  map, is a line in `web::route::COMMANDS` and a `match` arm. **What the remaining 41 are, and
+  why none of them is an oversight, is tabulated at the foot of this file.**
+
+  `route.rs`'s `every_advertised_command_is_actually_routed` pins the routed number and is the
+  reason it cannot rot; the crate total is prose and has drifted before, so re-count it in the
+  same commit that changes it.
 
   ⚠️ **This is not the intended end state.** Decided 2026-08-29, after the phone layout made
   the boundary visible: **all of them but ten**, by destination, worst broken first. The survey,
-  the ten that stay desktop-only and the reason each is a different feature rather than a port are
-  at the foot of this file.
+  the ones that stay desktop-only and the reason each is a different feature rather than a port
+  are at the foot of this file. **That ten is eight since 2026-08-31**: two of the five updater
+  commands report rather than replace, and both are routed.
 
 ## The module map
 
@@ -97,26 +103,50 @@ the real 43-column one, `raw` included**.
 
 | Compiled for wasm | Desktop/Android only |
 | --- | --- |
-| `app_meta` · `card` · `card_row` · `collection` · `collection_alloc` · `collection_folders` · `collection_source` · `combos` · `db` · `deck` · `deck_audit` · `deck_meta` · `deck_theory` · `deck_undo` · `errors` · `feed` · `filters` · `flatten` · `listview` · `image_uri` · `index` · `ingest` · `legalities` · `maintenance` · `marketplace` · `schema` · `search` · `slug` · `nav` · `sorting` · `split` · `sync` · `sync_engine` · `sync_pair` · `tags` · `web` · `wishlist` · `wishlist_folders` · `zoom` | `export` · `images` · `import` · `marketplace_feed` · `mirror` · `paths` · `picked` · `reconcile` · `reset` · `scryfall` · `transfer` · `update` · `window` |
+| `app_meta` · `card` · `card_row` · `collection` · `collection_alloc` · `collection_folders` · `collection_source` · `combos` · `db` · `deck` · `deck_audit` · `deck_meta` · `deck_theory` · `deck_undo` · `errors` · `feed` · `filters` · `flatten` · `listview` · `image_uri` · `index` · `ingest` · `legalities` · `maintenance` · `marketplace` · `reset` · `schema` · `search` · `slug` · `nav` · `sorting` · `split` · `sync` · `sync_engine` · `sync_pair` · `tags` · `transfer` · `update` · `web` · `wishlist` · `wishlist_folders` · `zoom` · **`mirror`** — `layout`, `paths`, `read`, `readme`, `snapshot` | `export` · `images` · `import` · `marketplace_feed` · **`mirror`** — `run`, `settings`, `watch` · `paths` · `picked` · `reconcile` · `scryfall` · `window` |
 
-**Seventeen modules have moved left**: eleven on 2026-08-29 (PR 10a) — the deck domain, the
+**Nineteen modules have moved left**: eleven on 2026-08-29 (PR 10a) — the deck domain, the
 collection, the wishlist, both folder tables and `marketplace` — then `card` (PR 10f) and
 `tags` (PR 10g), and the four view-state modules `flatten`, `listview`, `nav` and `zoom`
-(PR 10h), all on 2026-08-30. **Nothing in the first twelve changed**: they were on the right
-because each file *ends* in a block of `#[tauri::command]` wrappers, and the gate sat on the
-module instead of on the wrappers. **`tags` is the exception and the first real split** — its
-ingest half is gated item by item inside an otherwise portable module, because that half
-downloads. See the PR 10a and 10g sections at the foot of this file.
+(PR 10h), all on 2026-08-30; then `reset` and `update` on 2026-08-31. **Nothing in the first
+twelve changed**: they were on the right because each file *ends* in a block of
+`#[tauri::command]` wrappers, and the gate sat on the module instead of on the wrappers.
+**`tags` was the exception and the first real split** — its ingest half is gated item by item
+inside an otherwise portable module, because that half downloads. **`update` is the second
+and the largest**: about two thirds of that file is gated where it stands. See the PR 10a,
+10g and the 2026-08-31 sections at the foot of this file.
 
-**Four of the exclusions are permanent** (spec §6.3): the plain-text `mirror`, the Rust
-`transfer` writer that exists only for it, the portable `update` swap, and `window`'s Win32
-snap layouts. The rest are "not yet" — they arrive with the commands that need them. `images`
-is neither: on web the image cache is Cache Storage rather than a filesystem, so it is a
-rewrite and not a port.
+**One module is permanently excluded whole** — `window`'s Win32 snap layouts. Everything else
+on the right is either "not yet" or **half of a module whose other half already crossed**, and
+after 2026-08-31 that second case is the interesting one:
+
+* **`update` is split by what it does.** §6.3 named "the portable `update` swap", and the swap
+  is exactly what stayed: the `.exe` replacement, the staging, the digest check and the
+  relaunch, along with `Updater` itself — its `reqwest` client sets `user_agent`,
+  `connect_timeout` and `read_timeout`, none of which the wasm backend has. What crossed is the
+  half that *reports*: `UpdateStatus`, `update::history` and the version comparison under them
+  are a `serde` struct and two `app_meta` reads.
+* **`mirror` is split by where its output goes.** The folder — `run`, `settings`, `watch` — is
+  desktop's, because OPFS and an Android private directory are invisible to the programs a
+  mirror exists for. The renderer is not, so web and Android get the same files as one archive.
+* **`transfer` crossed whole**, which follows from the above: it is pure formatting with no
+  filesystem and no clock, and it is the second implementation the golden fence exists for.
+
+`images` is none of these: on web the image cache is Cache Storage rather than a filesystem, so
+it is a rewrite and not a port.
+
+**`mirror` and `transfer` were two of that permanent four until 2026-08-31**, and `mirror` is the
+one module in the table on both sides. What made the folder impossible here — OPFS is invisible to
+every other program, so a mirror in it would be the feature's name without the feature — says
+nothing about the *renderer*, which never touched a filesystem. So the gate moved off the module
+and onto `run`, `settings` and `watch`; `transfer` came with the rest, unchanged and still fenced
+by `src/features/transfer/__golden__/`. What the browser does with it is
+`mirror_backup_zip` — the same files, rendered on demand and handed over as one archive. Full
+record in [text-mirror.md](text-mirror.md#web-and-android-the-same-files-as-one-archive).
 
 **A module's column is a fact about its contents; being *routed* is a separate question.**
 Everything on the left compiles for the target. What the browser can actually call is
-`web::route::COMMANDS`, which is 114 of 154.
+`web::route::COMMANDS`, which is 115 of 156.
 
 `split` is the odd one in the left column. It compiles there and can never succeed —
 every path in it is `std::fs`, which builds for wasm and answers `Unsupported` — and gating it
@@ -234,10 +264,12 @@ were not sharing one database — the second had silently been given a different
 - **The other 132 commands**, and the modules in the right-hand column above.
 - **The image cache.** On web it is Cache Storage, which is a rewrite rather than a port.
 - **The price feeds**, and **Mana Pool is unavailable on web at all** (spec §5.3): it sends no
-  `Access-Control-Allow-Origin`. Card Kingdom does.
+  `Access-Control-Allow-Origin`. Card Kingdom does. *(PR 11 built the path; the CORS finding
+  stands, so Mana Pool's export is expected to fail in a browser.)*
 - **`ingest_combos` is written and exported but has never been run.** Reaching it needs a
   `ToWorker` case the app does not have, and adding one only to measure would have been
-  scaffolding rather than a path the app has. Not measured, deliberately.
+  scaffolding rather than a path the app has. Not measured, deliberately. *(PR 11 added the
+  `ToWorker` case. It still has not been run in a browser.)*
 - **The PWA shell** — manifest, service worker, update bar, evicted-corpus recovery. PR 5.
 - **Sync, pairing, the relay.** Phase 3.
 - **Mobile layout.** Phase 5.
@@ -303,7 +335,10 @@ desktop bundle and therefore out of the portable exe. Verified: `npm run build` 
   something is wrong.
 - **A dropped `#[wasm_bindgen]` attribute compiles clean, with no error and no warning**, because
   the function stays `pub` in a `pub mod`. Only loading the module in a browser can catch it —
-  so `scripts/build-wasm.mjs` greps the generated glue for all five entry points instead.
+  so `scripts/build-wasm.mjs` greps the generated glue for every entry point the Worker
+  imports instead. **That list is `EXPORTS` in the script and has to grow with the surface** —
+  it stood at five until PR 11 added `ingest_tags` and `ingest_prices`, and an export missing
+  from it is exactly the failure the gate exists for, unguarded.
 
 ## What is owed
 
@@ -359,7 +394,7 @@ of `main` at PR #301 with a 117 606-card corpus. Each nav destination was opened
 | Decks | ✅ *(routed 10b/10c, driven on the phone 2026-08-30)* | `deck_folder_list`, `deck_list` |
 | Collection | ✅ *(routed 10d, driven 2026-08-30)* | `collection_list` |
 | Wishlist | ✅ *(routed 10e, driven 2026-08-30)* | `wishlist_list` |
-| Settings | ❌ *(routed 2026-08-30 - PR 10h, except `update_history` which is one of the permanent ten; not yet driven on the device)* | `update_history`, `tags_muted`, `error_log_list` |
+| Settings | ❌ *(routed 2026-08-30 - PR 10h; `update_history` and `update_status` followed on 2026-08-31, and three of the four data clears with them; not yet driven on the device)* | `update_history`, `tags_muted`, `error_log_list` |
 | The card pane, from Search | ❌ *(routed 2026-08-30 - PR 10f, the bug that started all of this; not yet driven on the device)* | `card_detail` — *"Could not read this card — unknown command `card_detail`"* |
 
 **Nothing regressed.** `web/route.rs`'s own doc has always said so: *"This is a first slice and not
@@ -399,9 +434,12 @@ across 32 files.**
 **The ten that stay desktop-only are the ones §6.3 already named**, and the reason each is not a
 port but a different feature:
 
-- **`mirror/settings.rs`, 5.** The plain-text mirror writes a folder on disk *for other programs to
+- **`mirror/settings.rs`, 4.** The plain-text mirror writes a folder on disk *for other programs to
   read*. In OPFS nothing else can read it, so a web mirror would be the feature's name without the
-  feature. `transfer` exists only to serve it and carries no commands of its own.
+  feature. **Reduced from five to four on 2026-08-31**, and the fifth was not ported — it was
+  replaced: `mirror_backup_zip` renders the same files on demand and hands the page one archive,
+  which is what a browser *can* deliver. `mirror_status`, `mirror_set_enabled`, `mirror_set_root`
+  and `mirror_rebuild` are the folder and stay here.
 - **`desktop.rs`'s updater, 5** — `update_check`, `update_download`, `update_apply`,
   `update_history`, `update_open_release_page`. The portable updater swaps an `.exe`. **A PWA
   already updates through its service worker**, which ships and works; routing these would be a
@@ -409,6 +447,21 @@ port but a different feature:
 
 On web those ten are hidden rather than broken, through the seam `SettingsPage` already uses to
 hide the Backup panel on Android.
+
+> **Revised 2026-08-31 — the ten are eight, and the second bullet was two claims wearing one
+> sentence.** "A PWA updates through its service worker" is true, and it settles `update_download`,
+> `update_apply` and `update_open_release_page`: those replace a file, and nothing in a browser
+> should. It does **not** settle `update_history`, which is two `app_meta` reads and no network at
+> all, or the *version* half of `update_status`. Both are routed now.
+>
+> **And "hidden rather than broken" turned out to be the wrong half of the fix**, which is what
+> PR #315 found on the phone and what the next section records: hiding a panel because the backend
+> cannot answer is the same mistake as gating a feature on an answer that never arrives. The
+> backend answers.
+>
+> **`update_check` is the one that is neither routed nor merely waiting**: it cannot be a
+> `match` arm in `web::route::call` at all, because that function is synchronous — the Worker's
+> `#[wasm_bindgen] call` is — and it reaches the network. See below.
 
 **The remaining ~142 are ports, and most are one shape**: lift the pure function out of the `cfg`
 gate into a module that compiles everywhere, then add a `match` arm to `web::route`.
@@ -791,32 +844,35 @@ backend.
   every reload — a different storage API, so a shell-cache bust costs nothing but a re-fetch of
   the bundle.
 
-## Where PR 10 got to: 114 of 154 routed, and what the other 40 are
+## Where PR 10 got to: 115 of 156 routed, and what the other 41 are
 
 Counted 2026-08-30 by walking every `#[tauri::command]` in the crate — both attribute
-spellings, skipping doc-comment mentions — and diffing against `COMMANDS`. **The crate is 154
-now, not the 152 measured on 2026-08-29**: the hosted-relay work added two.
+spellings, skipping doc-comment mentions — and diffing against `COMMANDS`. **The crate was 154
+that day, not the 152 measured on 2026-08-29**: the hosted-relay work added two. **It is 156
+since 2026-08-31**: the backup archive added `mirror_backup_zip`, which is routed, and
+`mirror_backup_save`, which is Android's and cannot be.
 
 | | |
 | --- | --- |
-| Commands in the crate | **154** |
-| Routed | **114** |
-| Not routed | **40** |
+| Commands in the crate | **156** |
+| Routed | **120** |
+| Not routed | **36** |
 
-**The 40, and none of them is an oversight:**
+**The 36, and none of them is an oversight:**
 
 | Count | What | Why not |
 | --- | --- | --- |
 | **16** | `sync_pair/pairing` (9) and `sync_engine/commands` (7) | The pairing and membership surface. `lib.rs` states `pairing` "does not and never will" compile for wasm; the relay work is live and moving, so this is its own decision rather than a port |
-| **7** | `desktop.rs` | The five §6.3 updater commands, `update_status`, and `sync_run` — the web target runs its own ingest through `glue.rs` |
-| **5** | `reset.rs` (4) and `deck_set_cover_image` | OPFS deletion, and a covers directory a browser has none of |
-| **4** | `mirror/settings.rs` | §6.3: a mirror in OPFS cannot be read by the programs a mirror exists for |
+| **5** | `desktop.rs` | Seven commands, two of which were routed on 2026-08-31: `update_status` and `update_history` report rather than replace. What is left is the five §6.3 updater commands and `sync_run` — the web target runs its own ingest through `glue.rs` |
+| **2** | `cache_clear`, `deck_set_cover_image` | Three of `reset`'s four clears were routed on 2026-08-31 — they are pure SQLite and always were. `cache_clear` sweeps a directory of image files, which on this target is Cache Storage; the cover directory a browser has none of |
+| **4** | `mirror/settings.rs` | These four *are* the folder — where it is, whether it runs, when it last ran, rebuild it now — and a folder in OPFS cannot be read by the programs a mirror exists for |
+| **1** | `mirror_backup_save` | Android's door onto the same archive `mirror_backup_zip` routes: it writes at a destination a save dialog answered, which a browser has no way to name. Not a gap — the browser's door is the routed one |
 | **2** | `import_read_file`, `export_write_file` | §6.2's `<input type=file>` and `Blob` |
 | **4** | The four `*_refresh` (oracle tags, art tags, combos, marketplace feed) | Each downloads through `state.client` |
 | **2** | `images.rs` | The byte cache is Cache Storage on web — a rewrite, not a port |
 
-**PR 10i closed the last two gaps**, so every one of the 40 is now a decision with a reason
-above it rather than something nobody got to. `marketplace_feed` got `tags`' split — the
+**PR 10i closed the last two gaps**, so every one of these is a decision with a reason above it
+rather than something nobody got to. `marketplace_feed` got `tags`' split — the
 status query kept, the download gated — and `import` got the same: `import_resolve` and
 `deck_import_commit` are ordinary SQLite, and only `import_read_file` ever needed a file
 handle. **The page can already paste a decklist without touching a file**, so those two are the
@@ -831,3 +887,206 @@ looked like the status command's function and is not — that one belongs to `re
 command maps `PROVIDERS` over `read_status` itself. The fix compiled, passed, and would have
 left the actual command still calling the panicking clock. **A name matching is not a call
 graph**; the wrapper is.
+
+---
+
+## PR 11 — the three optional feeds download in a browser
+
+**Shipped 2026-08-31.** `combos_refresh`, `oracle_tags_refresh`, `art_tags_refresh` and
+`marketplace_feed_refresh` work on the web target. The line in the table above that reads
+"Each downloads through `state.client`" is now the *history* of those four rather than their
+state.
+
+**`COMMANDS` did not move, and that is the point.** A refresh is `async` and makes a network
+call; `web::route` is synchronous, takes the connection and makes neither. So the four are
+`#[wasm_bindgen]` entries beside `ingest_cards` — `ingest_combos`, `ingest_tags` (one function
+for both taxonomies, because `tags/` is one engine with two bindings) and `ingest_prices` —
+and `src/lib/core/browser.ts` diverts the four command *names* onto them. Nothing above the
+core knows: `ipc.combosRefresh(true)` reaches the export in a browser and the Tauri command on
+a desktop, `ipc.onCombosProgress` reaches the same `combos:progress` channel on both, and no
+Settings panel grew an `isWebTarget()` branch.
+
+### What each ingest needed
+
+| Feed | Desktop | What the browser needed |
+| --- | --- | --- |
+| Combos | `combos::StreamRead`, already push-shaped | A TypeScript caller, and progress |
+| Oracle / art tags | `tags::ingest_gz`, a **path** and a pull loop | `tags::StreamTags`, a push sink; `ingest_gz` is a 64 KiB read loop over it |
+| Price feeds | `read_document`, a pull parser | `marketplace_feed::StreamRead`, `Elements` plus a head scrape |
+
+**Both new sinks are `crate::ingest::StreamIngest`'s arrangement.** One drain, two drivers: the
+state the read loop kept in locals moves into the sink, the file driver becomes a read loop,
+and the browser writes the other driver. The desktop's numbers do not move — the tags
+equivalence test drives the same fixture through both drivers and compares `TagStats` and every
+closure row.
+
+**The price feed's pull parser could not be shared and its pricing rules had to be.**
+`read_document` calls `read()` when it wants more and blocks; a browser stream is push and
+async with no thread to block. So `FeedProvider` grew `fold_element`, and both entrances decode
+into the same `CkRow`/`MpRow` and call the same `ck_fold`/`mp_fold`. Mutating the etched-before-
+foil order fails the pull test *and* the push test, which is the check that the fold is really
+one copy.
+
+### Three things this found
+
+**`Elements` never noticed the array's closing `]`.** It framed every depth-0 object in the
+*rest* of the document as though it were an element — and Card Kingdom's pricelist carries keys
+after `data`. It produced no wrong price (those objects carry no `scryfall_id`) and inflated
+`rows_seen` and `skipped`, so the only way it showed was the push and pull readers disagreeing
+by one row. The combo document has the same shape and had the same latent bug.
+
+**Both framers returned `Ok(())` for ever while accumulating.** That is exactly the spike's
+failure — 63 elements in 610.2 MB, the buffer grown to 609.82 MB, **no error** — and
+`peak_buffer()` only *reports* it afterwards. `Elements::push` and `Lines::push` answer
+`Result<(), Overlong>` now and refuse past **8 MiB**, four times the largest peak this repo has
+measured (2.01 MB against the real combo document), so a legitimate feed cannot reach it while
+a desynchronised framer passes it within a document's first few chunks. Every caller lifts it
+through `io::Error` into the `Io` variant its own enum already has.
+
+**A size guard whose test could not fail.** `StreamRead`'s byte budget was first tested by
+pushing non-draining bytes at the real 256 MiB cap — so the framer refused at 8 MiB and the
+assertion accepted `TooLarge` *or* `Io`. Deleting the entire guard left it green. The budget is
+a named constructor argument now (`StreamRead::with_limit`), because a document that *drains*
+cannot trip the framer and 256 MiB of well-formed JSON is not a fixture.
+
+### What the browser cannot do that the desktop can
+
+- **No ETag, and therefore no 304.** A cross-origin `fetch` exposes no `ETag` response header
+  unless the host names it in `Access-Control-Expose-Headers`, so every refresh here downloads
+  where the desktop's would be one conditional request and no bytes. The weekly throttle is
+  honoured instead of ignored — `force` skips it, exactly as on the desktop — and the tag
+  ingest still stores the descriptor's `updated_at`, which is the *other* half of the desktop's
+  freshness evidence.
+- **No `mirror.mark_all()` after a price refresh.** There is no plain-text mirror in a browser,
+  which is the argument `web::route`'s `set_marketplace` arm already makes.
+- **No `error_log` row on a failed refresh.** The desktop's `note_failure` is on the gated
+  download path; every failure here is a rejected promise the panel is already watching, which
+  is `entitlement.rs`'s standing argument for the same omission — a press is on the screen of
+  the reader who made it.
+
+### Not verified
+
+- **Nobody has run any of the three in a browser.** `cargo clippy --target
+  wasm32-unknown-unknown` is silent, `npm run build:wasm` emits all seven entry points, and the
+  suites cover both sinks on the host — but the sinks are what the suites reach, and `glue.rs`
+  is compiled only for wasm and is therefore covered by nothing.
+- **CORS is unproven for two of the three hosts.** Scryfall answers
+  `Access-Control-Allow-Origin: *` (verified 2026-08-27), which is what makes the tag feeds
+  plausible. `json.commanderspellbook.com` and `api.cardkingdom.com` have **not** been probed
+  from a browser origin on this branch, and this page already records that **Mana Pool sends
+  no `Access-Control-Allow-Origin` at all** (spec §5.3) — so `ingest_prices("manapool")` is
+  expected to fail in a browser, and the export exists so that the failure is a sentence in the
+  panel rather than an unknown command.
+- **Neither tag feed has a UI caller on any target.** The backend refreshes them on its own
+  weekly schedule and no button anywhere calls `oracle_tags_refresh` or `art_tags_refresh`, so
+  the web path exists and nothing presses it. That is unchanged from the desktop rather than a
+  gap this work opened.
+
+
+## 2026-08-31: three of the four clears, and the Updates panel comes back
+
+**`COMMANDS` reaches 119.** Two modules moved into the every-target block — `reset` whole,
+`update` in half — and five arms went in: `collection_clear`, `wishlist_clear`,
+`decks_clear`, `update_status` and `update_history`.
+
+### `reset`: the gate was on the module and belonged on four wrappers
+
+Measured by ungating the module and running `cargo check --target wasm32-unknown-unknown`:
+**one error that is not a command wrapper**, and it is `clear_cache` reaching
+`crate::images::Cache`. The other three clears are `&Connection` in and a DTO out, exactly
+like the eleven modules PR 10a moved, and the four `#[tauri::command]`s at the foot of the
+file are what was holding the whole thing on the desktop side. The gate moved onto them, and
+onto the four imports only they and `clear_cache` reach.
+
+**`cache_clear` stays unrouted, and it is a rewrite rather than a missing arm.**
+`reset::clear_cache` takes a `&crate::images::Cache` and sweeps a directory of files; on this
+target the byte cache is Cache Storage, which is the same call `lib.rs` has always made about
+`images` itself. Until that lands, **the Local cache panel's button is the one control on the
+Settings page that still answers `unknown command` in a browser** — which is a real gap and
+is written here rather than left to be found on the phone. A test in `route.rs` asserts
+`cache_clear` is *not* in `COMMANDS`, because the failure in the other direction is silent:
+an arm added without the rewrite compiles on the desktop leg and takes the wasm build red on
+a branch nobody ran `--target` on.
+
+**`decks_clear` passes `None` for its covers directory, and that argument is load-bearing.**
+`clear_decks` hands it to `sweep_dir`, which deletes everything under it *recursively*. A
+browser has no covers directory — `crate::paths` does not compile there — so `None` is the
+true answer rather than a fallback, and there is no value this target could pass that would
+be safe to sweep. The same argument is why no mutation test in this work was allowed to
+change it: a cargo test binary's working directory is `src-tauri/`, and a previous run of
+this task made `covers` resolve to that directory and deleted 93 source files.
+
+### `update`: §6.3 named the swap, and only the swap was ever permanent
+
+**About two thirds of `update.rs` is now gated where it stands** — `Updater` and its
+`BusyGuard`, `Staged`, `check`/`check_inner`, the whole download-verify-stage half, the
+swap and the relaunch, plus nine constants and helpers that only they reach. `Updater`
+itself is the hard stop: its `reqwest::Client` sets `user_agent`, `connect_timeout` and
+`read_timeout`, none of which the wasm backend has — the same three `web::net` says it
+cannot set.
+
+**`SystemTime::now()` for the fourth time.** `unix_now()` is in this file's *Pure decisions*
+section and is not portable at all: on `wasm32-unknown-unknown` that call **panics** rather
+than failing, which arrives in the Worker's `onerror` with nothing the page can show. `sync`,
+`tags` and `marketplace_feed` were each caught by it first. Here the fix is a gate rather
+than a `SELECT unixepoch()`, because the only caller is `check_inner`, which is the desktop's.
+
+`status` was split into `status_for(state, kind, busy, staged)`, which is the whole of what an
+`Updater` was being consulted about. Everything else still comes off `app_meta`.
+
+### The reason it is worth routing two commands that can answer so little
+
+On web `available` is always `None` and `update_history` always `[]`, because only
+`update_check` writes those rows and **`app_meta` is not one of the twelve synced tables** —
+so no desktop check fills them in either. What a browser gets is the current version, the
+install kind, and "not checked yet".
+
+That is not the point. **The point is `installKind`.** `UpdatePanel` decides what to draw
+from it, and while the command did not answer at all the panel read `undefined` as *not*
+managed and drew a Download button over a page that can download nothing — the bug PR #315
+found on the phone. #315 fixed it by hiding the whole panel behind `!isWebTarget()`, which
+was right while nothing on the panel worked and is the same shape of mistake one level up:
+a build-time constant standing in for an answer the backend could not give.
+
+**`InstallKind::Web` is that answer**, and it is `Managed`'s sibling rather than a reuse of
+it. Both mean "something else installs this and the app does not replace itself"; the reader
+is owed the name of the thing that does, and "Updates arrive through Google Play" to somebody
+at a laptop is the same wrong answer `Managed` exists to stop `Other` giving a phone. The
+panel is on the page on every target again, and on web it is the About screen #315 said was
+worth having: the mark, the name, the version, and one sentence naming the service worker.
+
+### `update_check` is absent on this target, not broken and not "not yet"
+
+`web::route::call` is **synchronous**, because the Worker's `#[wasm_bindgen] call` is. An
+`async fn` cannot be a `match` arm there whatever it fetches with — so this is a different
+situation from the four `*_refresh` commands, which are unrouted for the same underlying
+reason but could in principle be reached the way the two ingests are.
+
+The two network operations this target *does* perform are `glue::ingest_cards` and
+`glue::ingest_combos`: bespoke `async` `#[wasm_bindgen]` entry points, each with its own
+`postMessage` kind in `src/workers/protocol.ts` and its own handler in `db.ts`. A web
+`update_check` would have to become one of those, plus a branch in `ipc.updateCheck` to route
+around `invoke`. `web::net::get_json` could do the fetch; nothing else about the shape fits.
+**Not attempted here**, and the panel offers a browser no Check button, so nothing calls it.
+(`ingest_combos` is itself a standing example of the cost: the glue function exists and no
+`ToWorker` kind reaches it.)
+
+### What the mutations found
+
+Ten mutations, six in Rust and four in TypeScript; **none touched a path, a directory, or
+anything reachable by `sweep_dir`**. Two survived and both were worth the round:
+
+- **`useUpdate`'s status effect had no test at all.** Re-adding #315's
+  `if (isWebTarget()) return` killed nothing — the file covered the three pure helpers beside
+  the hook and stopped there. Without that effect the web panel has no `status`, so it cannot
+  tell "a browser" from "not asked yet" and draws neither the version nor the sentence. Two
+  tests now cover it: read once on web, keep polling everywhere else.
+- **A `null` that could not be observed.** `elsewhere` was `null` for an absent status and
+  `undefined` for a self-updating one, and nothing could tell them apart — both falsy, and
+  `selfUpdating` short-circuits on `status` before reading either. Collapsed to `undefined`.
+
+**And one defect the round found in the Storybook fake**: `pickAsset` read
+`if (kind === "other") return null` and fell through to `NSIS_SUFFIX` for everything else, so
+it handed a *managed* install the Windows setup — a mock encoding a state the backend refuses,
+green for ever because nothing else in the workbench disagreed with it. It is an allow-list
+now, like the Rust it mirrors.

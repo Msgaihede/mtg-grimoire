@@ -1,5 +1,6 @@
 import { CircleArrowUp, CircleCheck, Download, ExternalLink, RefreshCw } from "lucide-react";
 import { GrimoireMark } from "@/components/GrimoireMark";
+import type { InstallKind } from "@/lib/ipc";
 import type { ReleaseHistory } from "@/lib/useReleaseHistory";
 import { formatBytes, formatChecked, type Update } from "@/lib/useUpdate";
 import { cn } from "@/lib/utils";
@@ -7,6 +8,23 @@ import { BUTTON } from "./controls";
 import { PanelAlert, SettingsSection } from "./panelChrome";
 import { ReleaseNotes } from "./ReleaseNotes";
 import { VersionHistory } from "./VersionHistory";
+
+/**
+ * The one sentence for a build that something else replaces, per install kind.
+ *
+ * **A lookup rather than a ternary**, so the union in `@/lib/ipc` is what decides whether a
+ * kind belongs here: adding a sixth `InstallKind` makes this object's type ask the question,
+ * where an `=== "managed" || === "web"` chain would quietly answer "self-updating" for it and
+ * draw a Download button. The three that are absent — `portable`, `nsis`, `other` — are the
+ * three where this app is the thing that installs itself, or where nothing knows what does.
+ */
+const ELSEWHERE: Partial<Record<InstallKind, string>> = {
+  managed: "Updates arrive through Google Play.",
+  // Not "reload the page", which is the mechanism rather than the promise, and not accurate
+  // either: the service worker fetches the new build in the background and it is live at the
+  // *next* start. `src/pwa` owns that flow and already tells the reader when one is waiting.
+  web: "Updates arrive through your browser.",
+};
 
 /**
  * The download bar.
@@ -73,18 +91,29 @@ export function UpdatePanel({
   const { status, progress, busy, action, error } = update;
   const release = status?.available ?? null;
   /**
-   * The Play Store installed this app and the store is what replaces it, so every control on
-   * this panel is about something the app cannot do.
+   * Who replaces this build — the answer that decides whether this panel offers controls at
+   * all, and the one that has to come from the backend.
    *
-   * **Read off `installKind` rather than off `isAndroid()`**, and the difference is the point:
-   * the backend already answered this question — `Updater::new` calls
-   * `install_kind_for(cfg!(mobile), …)` before it touches the disk — and asking the user agent
-   * here would be a second, independent answer to one question, free to disagree. It is also
-   * deliberately not `other`: that one means "we could not tell, here is the release page", and
-   * this app's release page offers a Windows exe and an NSIS installer, which is a worse answer
-   * on a phone than no answer at all.
+   * **Read off `installKind` rather than off `isAndroid()` or `isWebTarget()`**, and the
+   * difference is the point: the backend already answered this question, and asking the user
+   * agent here would be a second, independent answer to one question, free to disagree.
+   *
+   * **The trap this walked into once is worth keeping written down.** Until 2026-08-31 the
+   * web build did not answer `update_status` at all, so `installKind` was `undefined`, so
+   * this test said "not managed" and the panel drew a Download button over a page that can
+   * download nothing — **a feature gated on a backend answer is ungated wherever the backend
+   * cannot answer.** PR #315 fixed the symptom by hiding the whole panel on web; the fix now
+   * is that the browser answers `"web"`, which is a real answer this test can read.
+   *
+   * `ELSEWHERE` is the two kinds where something else does the replacing, and each names
+   * *what*: a reader told "updates arrive elsewhere" with no elsewhere has been told nothing.
+   * Neither is `other` — that one means "we could not tell, here is the release page", and
+   * this app's release page offers a Windows exe and an NSIS installer, which is a worse
+   * answer to a phone or a browser than no answer at all.
    */
-  const managed = status?.installKind === "managed";
+  const elsewhere = status ? ELSEWHERE[status.installKind] : undefined;
+  /** Nothing on this panel presses until the backend has said which kind of install this is. */
+  const selfUpdating = status !== null && elsewhere === undefined;
 
   return (
     <SettingsSection id="updates" title="Updates">
@@ -126,7 +155,7 @@ export function UpdatePanel({
             <p className="text-xs text-dim">{formatChecked(status?.lastCheckAt ?? null)}</p>
           </div>
         </div>
-        {!managed && (
+        {selfUpdating && (
           <button
             type="button"
             onClick={update.check}
@@ -140,10 +169,10 @@ export function UpdatePanel({
         )}
       </div>
 
-      {managed ? (
+      {elsewhere ? (
         <p className="border-t border-border pt-4 text-sm text-dim">
-          <span className="text-text">Updates arrive through Google Play.</span> This build
-          cannot replace itself, and there is nothing to check for here.
+          <span className="text-text">{elsewhere}</span> This build cannot replace itself, and
+          there is nothing to check for here.
         </p>
       ) : release ? (
         <div className="space-y-3 border-t border-border pt-4">
@@ -209,8 +238,11 @@ export function UpdatePanel({
       )}
 
       {/* Hidden with the rest of it: the list is populated by the very check that is not run
-          here, so on a managed install it is an empty accordion promising nothing. */}
-      {!managed && (
+          here, so wherever something else does the updating it is an empty accordion
+          promising nothing. `update_history` answers on every target now — in a browser it
+          answers `[]`, because only a check ever writes that row — so what is hidden here is
+          an empty section rather than a broken call. */}
+      {selfUpdating && (
         <VersionHistory history={history} currentVersion={status?.currentVersion} />
       )}
 

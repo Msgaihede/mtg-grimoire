@@ -632,6 +632,27 @@ shared_cell` walks both into two databases and compares them column by column.
 seven formats, so the day the app will not start the cards are still the reader's. Full record,
 with the measurements: [text-mirror.md](../docs/reference/text-mirror.md).
 
+- **The gate is on three files, not on the module, and putting it back on the module breaks the
+  browser.** `layout`, `paths`, `read`, `readme` and `snapshot` compile for every target — they
+  touch no filesystem and no clock — and `run`, `settings` and `watch` carry
+  `#[cfg(not(target_family = "wasm"))]` inside `mirror/mod.rs`. **Web and Android have no folder
+  and get the same files as one archive instead** (`mirror::snapshot`, `mirror_backup_zip` /
+  `mirror_backup_save`): OPFS is invisible to every other program and `tauri-plugin-dialog`'s
+  manifest records Android as having no folder picker, so a continuously-written folder there
+  would be the feature's name without the feature. `mirror_status`, `mirror_set_enabled`,
+  `mirror_set_root` and `mirror_rebuild` stay desktop-only, and `BackupPanel` splits above its
+  hooks so the archive half never polls a command `web::route` does not answer.
+- **One renderer, and a second one would be a third writer outside the golden fence.**
+  `snapshot::render` is what both `run::run_pass` and `snapshot::render_all` call.
+  `every_file_in_the_archive_is_byte_identical_to_the_one_the_mirror_writes` runs a real pass into
+  a `tempfile` root and compares, so that is checked rather than argued from the call graph — and
+  `each_list_is_rendered_with_its_own_surfaces_columns` covers what the comparison structurally
+  cannot: a change to which fields `render` asks for moves both sides together and left all 140
+  `mirror` tests green when it was mutated on 2026-08-31.
+- **`SystemTime::now()` PANICS on wasm rather than erroring, so the archive's clock is
+  `SELECT strftime(…)`.** It only ever falls back — a clock that will not answer costs the file
+  its date and nothing else. The same trap is why `zip` keeps `default-features = false`: with the
+  `time` feature on, `DateTime::default_for_write()` reaches for that clock on its own.
 - **There is one `update_hook`, on the one write connection, and it is the whole of how the
   mirror learns anything.** `watch::install_hook` is installed on `AppState.db` from `setup`, and
   every user-facing write in this crate goes through `sync::with_write` on that connection — so
@@ -1479,6 +1500,40 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
   "ported" module still answers `unknown command`. [`web::route`] is a `match` on the command
   *name*; a module can build for the target and route nothing. The two are deliberately separate
   PRs — the gate move cannot change desktop behaviour, the routing cannot fail to compile.
+- **A download is a `#[wasm_bindgen]` export, never a routed command, and the name looking like
+  every other command's is the trap.** `web::route::COMMANDS` answers *queries*: synchronous,
+  connection-only, no network. `combos_refresh`, `oracle_tags_refresh`, `art_tags_refresh` and
+  `marketplace_feed_refresh` are none of those, so they are entries in `web::glue` beside
+  `ingest_cards` — `ingest_combos`, `ingest_tags`, `ingest_prices` — and
+  `src/lib/core/browser.ts` diverts the four command *names* onto them. **The branch lives in
+  the core and nowhere else**: no Settings panel has an `isWebTarget()` in it, `ipc.combosRefresh`
+  reaches the export on a browser and the Tauri command on a desktop, and progress arrives on
+  the desktop's own event name because Rust builds the `{ event, payload }` envelope. Adding one
+  of these four to `COMMANDS` would be the wrong seam.
+- **`web::glue` is compiled only for wasm, so no test on any host reaches a line of it.** Every
+  ingest therefore keeps its *sink* in the every-target module the data lives in —
+  `ingest::StreamIngest`, `combos::StreamRead`, `tags::StreamTags`,
+  `marketplace_feed::StreamRead` — and `glue.rs` is a driver over it. A rule that migrates into
+  that file is a rule with no coverage.
+- **Every bulk ingest is push-shaped, and the file driver is the second driver rather than the
+  first.** `Deserializer::from_reader` and `BufRead::lines()` are *pull* parsers: they call
+  `read()` when they want more and block until they get it, and `wasm32-unknown-unknown` has no
+  thread to block while an awaited `Stream` resolves. So the state a read loop kept in locals
+  lives in a sink, `ingest_gz` is a 64 KiB read loop over it, and the browser writes the other
+  driver. One drain, two drivers.
+- **`feed::frame`'s two framers refuse rather than accumulate**, and the guard is not
+  diagnostics: the spike's framer found 63 elements in a 610.2 MB document and grew its buffer
+  to 609.82 MB *without erroring*. `Elements::push` and `Lines::push` answer
+  `Result<(), Overlong>` and cap at 8 MiB — four times the largest peak ever measured here
+  (2.01 MB against the real combo document). `peak_buffer()` is still what a test reads; this is
+  what stops a real run paying for it. **`Elements` stops at the array's own `]`**: without that
+  it framed every depth-0 object in the rest of the document, and both feeds carry keys after
+  their array.
+- **A browser reads no ETag, so no ingest here can take a 304.** A cross-origin `fetch` exposes
+  no `ETag` header unless the host names it in `Access-Control-Expose-Headers`. Each export
+  honours the weekly throttle instead — `force` skips it, exactly as the desktop command's does
+  — and the tag ingest still stores the descriptor's `updated_at`, which is the other half of
+  the desktop's freshness evidence.
 - **`-D warnings` on the wasm clippy job makes a stranded import a red build**, and moving a gate
   strands them by the dozen. Gate the `use` line with the same attribute rather than deleting it;
   desktop still needs it. For a **private helper** whose only callers were the commands, prefer

@@ -320,3 +320,34 @@ describe("foldCopies", () => {
     expect(foil.add?.id).toBe(2);
   });
 });
+
+/**
+ * **The picture a browser can reach.** `collection_list` is routed on web and `mtgimg://` is a
+ * Tauri custom protocol wasm cannot register there, so a tile that dropped this field would draw
+ * a named, artless frame in the deck editor's docked Collection tab while the card tab beside it
+ * drew pictures.
+ *
+ * Asserted on the fold rather than on a render, because the fold is where it can be lost: this
+ * tab does not go through `CollectionPage`, so the two mappings are two places one field has to
+ * be carried.
+ */
+describe("a folded tile's art", () => {
+  const SCRYFALL = { display: "https://cards.scryfall.io/display/front/b/o/bolt.webp?1706230661" };
+
+  it("carries the row's own image URLs onto the tile", () => {
+    const [tile] = foldCopies([row({ imageUris: SCRYFALL })], sourceFrom({}));
+
+    expect(tile.imageUris).toEqual(SCRYFALL);
+  });
+
+  /**
+   * A printing whose only URL is Scryfall's `soon.jpg` placeholder reaches the page with **no
+   * entry at all** — the backend refuses a URI it cannot version or one from a host that does not
+   * serve card art — and the tile must pass that absence on rather than invent a URL from it.
+   */
+  it("passes on a row with no picture as no picture", () => {
+    const [tile] = foldCopies([row()], sourceFrom({}));
+
+    expect(tile.imageUris).toBeUndefined();
+  });
+});

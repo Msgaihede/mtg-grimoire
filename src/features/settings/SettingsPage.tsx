@@ -1,6 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
 import { BackupPanel } from "@/features/settings/BackupPanel";
-import { isAndroid } from "@/lib/platform";
 import { CachePanel } from "@/features/settings/CachePanel";
 import { CombosPanel } from "@/features/settings/CombosPanel";
 import { DangerZonePanel } from "@/features/settings/DangerZonePanel";
@@ -112,20 +111,27 @@ export function SettingsPage({ update }: { update: Update }) {
 
   return (
     <div className="mx-auto max-w-2xl space-y-8 py-2">
-      {/* **Not on the web target**, where every control on it is about something the app
-          cannot do: `update_status`, `update_check`, `update_download`, `update_apply` and
-          `update_history` are five of §6.3's ten desktop-only commands, because **a PWA
-          updates through its service worker** — which ships and works. `!isWebTarget()`
-          rather than the panel's own `installKind === "managed"` test, and the difference
-          matters: that one reads an answer from `update_status`, which on a browser never
-          arrives, so the panel decided it was *not* managed and drew the controls anyway.
-          Driven on the phone 2026-08-30, this was the last `unknown command` in the app.
+      {/* **Drawn on every target again, and this reverses half of PR #315.** That change hid
+          the whole panel behind `!isWebTarget()`, which was right while nothing on it worked:
+          `update_status` and `update_history` answered `unknown command` in a browser, and the
+          panel's own `installKind === "managed"` test could not save it, because that reads an
+          answer from `update_status` — so on web it read the *absence* as "not managed" and
+          drew the controls anyway. Driven on the phone 2026-08-30, that was the last
+          `unknown command` in the app.
 
-          What it costs is the nearest thing to an About screen — the mark, the version and
-          the last check. **Nothing is lost**, because with no `update_status` to read it was
-          already drawing "MTG Grimoire …" with no version at all. A web About panel is worth
-          having and is a different thing to build. */}
-      {!isWebTarget() && <UpdatePanel update={update} history={history} />}
+          What it cost was the nearest thing to an About screen, which #315 said out loud was
+          worth having and was a different thing to build. This is that thing: `update_status`
+          and `update_history` are routed by `web::route` now, the browser answers
+          `installKind: "web"`, and the panel draws the mark, the name and the version and
+          names the service worker in place of a Download button. **The gate moved from the
+          build target onto a backend answer**, which is the general lesson #315 wrote down.
+
+          `update_check`, `update_download`, `update_apply` and `update_open_release_page` are
+          still desktop's, and nothing above reaches them: the panel offers a browser no
+          button that calls one. `update_check` in particular is *absent* rather than unrouted
+          — `web::route::call` is synchronous, so no `async` command can be an arm there at
+          all. Its arm in that file says so. */}
+      <UpdatePanel update={update} history={history} />
 
       <MarketplacePanel marketplace={marketplace} />
 
@@ -207,18 +213,21 @@ export function SettingsPage({ update }: { update: Update }) {
           other what can be swept out of it. Above it rather than below for the ordering rule:
           the mirror deletes nothing a reader owns, and Clear cache does.
 
-          **Desktop only, and the decision is the mirror's purpose rather than a limitation.**
-          The mirror's whole point is a folder a reader opens in a text editor, syncs with
-          Dropbox or greps; on Android that directory is reachable mainly through a file-manager
-          app and often not by other apps at all, so the feature would exist without delivering
-          what it is for. The picker it needs is not there either — `tauri-plugin-dialog`'s own
-          manifest records Android support as "partial — Does not support folder picker", so a
-          reader could not choose the root.
+          **On every platform since 2026-08-31, and the `!isAndroid()` that used to stand here is
+          the interesting part of the history.** The mirror's whole point is a folder a reader
+          opens in a text editor, syncs with Dropbox or greps; on Android that directory is
+          reachable mainly through a file-manager app and often not by other apps at all, and
+          `tauri-plugin-dialog`'s manifest records the platform as having no folder picker, so
+          the root could not even be chosen. All of that is still true — so the panel was hidden
+          outright, which took the *feature* away along with the folder.
 
-          Rust agrees from the other side: `lib.rs` installs neither the mirror's update hook nor
-          its thread on mobile, so `mirror_status` would answer about a mirror that cannot
-          run. */}
-      {!isAndroid() && <BackupPanel />}
+          It is back because the folder and the backup are not the same thing. `BackupPanel`
+          now dispatches on the platform itself: the folder where there is one, and everywhere
+          else a button that renders the same files and hands over one archive. The gate that
+          matters moved inside it, where a component can pick which backend it reads —
+          `mirror_status` is not routed on the web target at all, and on Android it answers
+          about a thread `lib.rs` never starts. */}
+      <BackupPanel />
 
       <CachePanel cache={cache} />
 

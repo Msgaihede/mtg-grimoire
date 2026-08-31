@@ -20,6 +20,25 @@ interface Glue {
   open(directory: string): Promise<string>;
   call(requestJson: string): string;
   ingest_cards(descriptorUrl: string, onProgress: (n: number) => void): Promise<string>;
+  /**
+   * The three optional bulk feeds, each a `#[wasm_bindgen]` entry beside `ingest_cards`
+   * rather than a routed command — a refresh is `async` and makes a network call, and
+   * `web::route` answers neither.
+   *
+   * **`onProgress` receives one JSON string, not a number.** It is an
+   * `{ event, payload }` envelope, and the event *name* comes from Rust — where
+   * `combos::PROGRESS_EVENT`, `Dataset::progress_event` and
+   * `marketplace_feed::PROGRESS_EVENT` already live. A second table of those strings on
+   * this side would be a place for them to drift, and the symptom would be a progress line
+   * that never moves rather than an error.
+   */
+  ingest_combos(force: boolean, onProgress: (json: string) => void): Promise<string>;
+  ingest_tags(
+    dataset: string,
+    force: boolean,
+    onProgress: (json: string) => void,
+  ): Promise<string>;
+  ingest_prices(marketplace: string, onProgress: (json: string) => void): Promise<string>;
   close(): void;
 }
 
@@ -153,16 +172,61 @@ async function handle(message: ToWorker): Promise<void> {
         );
         return;
       }
+      case "feed-refresh": {
+        // Progress arrives as the envelope Rust built and is forwarded verbatim, so it
+        // reaches `core.listen("combos:progress", …)` on exactly the channel the desktop's
+        // Tauri event uses. Nothing here knows which feed is running.
+        const forward = (payload: string) => {
+          const event = JSON.parse(payload) as { event: string; payload: unknown };
+          send({ kind: "event", event: event.event, payload: event.payload });
+        };
+        const answer = JSON.parse(await runFeed(wasm, message, forward)) as
+          | { kind: "ok"; result: unknown }
+          | { kind: "err"; message: string };
+        // **The ordinary `ok`/`err` pair, keyed on the id** — so `browser.ts` resolves it
+        // through the same pending map every command uses, and a refresh that fails rejects
+        // the mutation the panel is already watching.
+        send(
+          answer.kind === "ok"
+            ? { kind: "ok", id: message.id, result: answer.result }
+            : { kind: "err", id: message.id, message: answer.message },
+        );
+        return;
+      }
     }
   } catch (err) {
     // A wasm trap surfaces here and NOWHERE the page can read — probe 2 spent a run sitting
     // at "running…" for exactly this reason. Forwarding it by hand is the only way a failure
     // in the Worker becomes something a reader can be shown.
     const text = err instanceof Error ? (err.stack ?? err.message) : String(err);
-    if (message.kind === "call") send({ kind: "err", id: message.id, message: text });
+    if (message.kind === "call" || message.kind === "feed-refresh")
+      send({ kind: "err", id: message.id, message: text });
     else if (message.kind === "open")
       send({ kind: "opened", opened: { kind: "failed", message: text } });
     else send({ kind: "corpus-failed", message: text });
+  }
+}
+
+/**
+ * One `feed-refresh` message onto the export it names.
+ *
+ * Exported so the suite can drive it without a Worker: the alternative is a test that stands
+ * up `self.addEventListener`, and the branch worth pinning is which export a message reaches
+ * with which arguments — a `force` dropped here is a Refresh button that does nothing for six
+ * days out of seven, and nothing about that looks like a bug.
+ */
+export function runFeed(
+  wasm: Glue,
+  message: Extract<ToWorker, { kind: "feed-refresh" }>,
+  onProgress: (json: string) => void,
+): Promise<string> {
+  switch (message.feed) {
+    case "combos":
+      return wasm.ingest_combos(message.force, onProgress);
+    case "tags":
+      return wasm.ingest_tags(message.dataset, message.force, onProgress);
+    case "prices":
+      return wasm.ingest_prices(message.marketplace, onProgress);
   }
 }
 

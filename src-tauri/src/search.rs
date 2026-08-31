@@ -294,13 +294,20 @@ pub struct CardSummary {
     /// **Face 0 only, and that is the scope rather than an omission.** The walls draw the
     /// front; the flip control lives in the card pane, which is not routed on web.
     ///
-    /// **It is on this DTO and on no other, and the reason is `web/route.rs`'s `COMMANDS`
-    /// list.** `search_cards` is the one card-bearing command a browser can call, so the
-    /// search wall is the one wall that can draw art there; `mtgimg://` is a Tauri custom
-    /// protocol and wasm cannot register a URL scheme with a browser, so the URL has to
-    /// travel with the row or not at all. Adding the same field to the collection's, the
-    /// wishlist's and the deck editor's DTOs would widen three payloads on the desktop,
-    /// where `mtgimg://` already works, and change nothing anywhere else.
+    /// **It was on this DTO and on no other until 2026-08-31, and the argument for that was
+    /// simply wrong about `web/route.rs`'s `COMMANDS` list.** `search_cards` is not the one
+    /// card-bearing command a browser can call: `collection_list`, `wishlist_list` and
+    /// `deck_get` are all routed too, so the collection, the wishlist and the deck editor each
+    /// drew named, artless frames on web while the search wall beside them drew pictures. The
+    /// device pass of 2026-08-30 could not see it because both lists were empty (`Cards 0`,
+    /// `Wishes 0`). The three now carry the same field, built from the same helpers:
+    /// [`crate::collection::CollectionRow::image_uris`],
+    /// [`crate::wishlist::WishRow::image_uris`] and [`crate::deck::DeckCardRow::image_uris`].
+    ///
+    /// What the old note had right is the rest of it: `mtgimg://` is a Tauri custom protocol
+    /// and wasm cannot register a URL scheme with a browser, so the URL travels with the row or
+    /// the browser has no picture at all — and on the desktop every one of these is ignored,
+    /// because `cardArtSrc` takes the local cache.
     ///
     /// `None` when the printing has no fetchable image — the same answer
     /// `images::Placeholder::NoImage` stands for, in a shape a DTO can carry. 162 of the live

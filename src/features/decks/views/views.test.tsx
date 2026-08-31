@@ -1,4 +1,9 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { isWebTarget } from "@/pwa/target";
+
+// The build flag `cardArtSrc` branches on. `false` is what `__CORE__` already answers under
+// vitest, so this changes nothing here until a case below asks for a browser.
+vi.mock("@/pwa/target", () => ({ isWebTarget: vi.fn(() => false) }));
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from "react";
@@ -3630,5 +3635,50 @@ describe("StackView arrow keys", () => {
     await user.keyboard("{ArrowRight}");
 
     expect(control(RAMP.id, "Sol Ring")).toHaveFocus();
+  });
+});
+
+/**
+ * **The deck editor's Grid view in a browser.** `deck_get` is routed on web and `mtgimg://` is
+ * not reachable there, so a deck opened in a browser was a wall of named, artless frames.
+ *
+ * This tile draws `components/CardArt`, so all it has to do is hand the URL down — which is the
+ * whole of what these two cases check. Its sibling, `CardStack`, builds its own `<img>` and
+ * therefore has to call `cardArtSrc` itself; that is tested in `CardStack.test.tsx`, and the two
+ * being different shapes is exactly why neither test covers the other.
+ */
+describe("the deck grid's art", () => {
+  const SCRYFALL = { display: "https://cards.scryfall.io/display/front/s/o/sol.webp?1706230661" };
+
+  afterEach(() => {
+    vi.mocked(isWebTarget).mockReturnValue(false);
+  });
+
+  const draw = () =>
+    render(
+      <GridView
+        groups={buildGroups(
+          [{ ...card({ name: "Sol Ring" }), imageUris: SCRYFALL }],
+          [RAMP],
+          "category",
+          "alphabetical",
+        )}
+        marketplace={TCG}
+      />,
+    );
+
+  it("draws the row's own picture in a browser", () => {
+    vi.mocked(isWebTarget).mockReturnValue(true);
+    draw();
+
+    expect(screen.getByAltText("Sol Ring")).toHaveAttribute("src", SCRYFALL.display);
+  });
+
+  it("keeps drawing the cached protocol picture on desktop", () => {
+    draw();
+
+    const src = screen.getByAltText("Sol Ring").getAttribute("src");
+    expect(src).toContain("mtgimg");
+    expect(src).not.toContain("scryfall.io");
   });
 });

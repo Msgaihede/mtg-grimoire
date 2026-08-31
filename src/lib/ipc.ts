@@ -591,6 +591,18 @@ export interface CardDetail {
   promoTypes: string | null;
   imageStatus: string | null;
   faces: CardFace[];
+  /**
+   * Where this printing's picture is, per variant — **the web target's only way to draw one.**
+   *
+   * `mtgimg://` is registered natively with the webview and wasm cannot register a URL scheme
+   * with a browser, so a card pane in a browser can reach no picture the row did not hand it.
+   * {@link cardArtSrc} is the whole of that branch and ignores this on desktop, where the local
+   * cache already holds the right bytes at the right size.
+   *
+   * A printing carrying neither picture column answers `null` — the frame's "no art" state,
+   * and **never a URL to build one from**.
+   */
+  imageUris?: Partial<Record<ImageVariant, string>> | null;
 }
 
 /** One row of the "all printings" list. */
@@ -628,6 +640,18 @@ export interface Printing {
   frameEffects: string | null;
   borderColor: string | null;
   layout: string;
+  /**
+   * Where this printing's picture is, per variant — **the web target's only way to draw one.**
+   *
+   * `mtgimg://` is registered natively with the webview and wasm cannot register a URL scheme
+   * with a browser, so a card pane in a browser can reach no picture the row did not hand it.
+   * {@link cardArtSrc} is the whole of that branch and ignores this on desktop, where the local
+   * cache already holds the right bytes at the right size.
+   *
+   * A printing carrying neither picture column answers `null` — the frame's "no art" state,
+   * and **never a URL to build one from**.
+   */
+  imageUris?: Partial<Record<ImageVariant, string>> | null;
 }
 
 /**
@@ -1180,6 +1204,21 @@ export interface CollectionRow {
    * `null` is an orphan — the printing this entry names has left `cards`.
    */
   legalities: string | null;
+  /**
+   * The front face's image URLs, keyed by the app's own variant names — `null` when Scryfall
+   * has no usable picture for this printing.
+   *
+   * The same field, with the same rules and for the same reason, as
+   * {@link CardSummary.imageUris}: the web build has no `mtgimg://` to ask, so a collection
+   * tile draws `imageUris?.[WALL_CARD_VARIANT]` there or draws the no-art frame. On Tauri it is
+   * ignored and the local cache wins. Front face only, `Partial`, and **a missing entry means
+   * "no art"** — never a reason to build a URL of your own, because the backend has already
+   * refused a URI it cannot version or one from a host that does not serve card art.
+   *
+   * Mirrors `CollectionRow::image_uris` in `src-tauri/src/collection.rs`; `ipc.test.ts`'s
+   * field-name pin is the only fence.
+   */
+  imageUris?: Partial<Record<ImageVariant, string>> | null;
 }
 
 export interface CollectionPage {
@@ -1378,6 +1417,19 @@ export interface WishRow {
    * wish's oracle card. `null` is a genuine orphan — no pinned printing, no oracle match.
    */
   legalities: string | null;
+  /**
+   * The front face's image URLs of **the printing this wish is drawn as** — {@link
+   * WishRow.artCardId}'s printing, never {@link WishRow.cardId}'s, because an any-printing wish
+   * has no printing of its own. One join answers all three, so the picture, the id and the
+   * price can never disagree about which piece of cardboard is on screen.
+   *
+   * The same rules as {@link CardSummary.imageUris}: front face, `Partial`, a missing entry is
+   * "no art", and the whole field is ignored on Tauri. `wishlist_list` is routed on web, where
+   * `mtgimg://` cannot be reached at all.
+   *
+   * Mirrors `WishRow::image_uris` in `src-tauri/src/wishlist.rs`.
+   */
+  imageUris?: Partial<Record<ImageVariant, string>> | null;
 }
 
 export interface WishlistPage {
@@ -2716,6 +2768,18 @@ export interface DeckCard {
    *   an unfiled collection reads as a deck full of red until they drag.
    */
   ownedQuantity: number;
+  /**
+   * The front face's image URLs, keyed by the app's own variant names — `null` when Scryfall
+   * has no usable picture for this printing.
+   *
+   * Read at `DECK_CARD_VARIANT`, which is the same `display` {@link CardSummary.imageUris} is
+   * read at, by both deck surfaces that draw a card: `views/GridView` hands it to `CardArt`'s
+   * `imageUrl`, and `CardStack` — which builds its own `<img>` src — puts it through
+   * `cardArtSrc` itself. Ignored on Tauri; on web it is the only picture there is.
+   *
+   * Mirrors `DeckCardRow::image_uris` in `src-tauri/src/deck.rs`.
+   */
+  imageUris?: Partial<Record<ImageVariant, string>> | null;
 }
 
 /**
@@ -3203,8 +3267,15 @@ export interface ReconciledEvent {
  * worse answer on a phone than no answer. `managed` means something else installs this app,
  * which is true, is typed, and makes this union exhaustive so `UpdatePanel` cannot forget the
  * case.
+ *
+ * `web` is the browser build, and it is `managed`'s sibling rather than a repeat of it: both
+ * mean "something else installs this and the app does not replace itself", and the reader is
+ * owed the name of the thing that does. A **service worker** is what replaces a PWA, and
+ * saying "Google Play" to somebody holding a laptop is the same wrong answer `managed` exists
+ * to stop `other` giving a phone. Answered by `web::route`, which is the only place in the
+ * crate that knows it is running in a browser.
  */
-export type InstallKind = "portable" | "nsis" | "managed" | "other";
+export type InstallKind = "portable" | "nsis" | "managed" | "other" | "web";
 
 /** One downloadable file on a GitHub release. Mirrors `update::Asset`. */
 export interface UpdateAsset {
@@ -3890,6 +3961,41 @@ export interface MirrorStatus {
   lastReport: PassReport | null;
   /** The sentence to show when the last pass could not write, or `null` when it went fine. */
   lastError: string | null;
+}
+
+/**
+ * One backup archive — `src-tauri/src/mirror/snapshot.rs`.
+ *
+ * **What web and Android get instead of the folder**, and the trade is written down rather than
+ * hidden: the mirror writes ~350 files so that *other* programs can read them, and neither OPFS
+ * nor an Android app's private directory is a folder any other program can open. So those two
+ * targets render the same files on demand and hand over one zip — a snapshot rather than a live
+ * mirror.
+ *
+ * **`base64` is `null` when Rust has already written the file**, which is the one field that
+ * says which door the bytes went out of. `mirrorBackupSave` picks that door on Android, where
+ * the destination is a `content://` URI and a megabyte of base64 through the webview and
+ * straight back would be two copies of the archive for nothing; `mirrorBackupZip` picks the
+ * other, which is the only one a browser has.
+ */
+export interface BackupZip {
+  /** A suggestion, not a promise — `mtg-grimoire-backup-2026-08-31.zip`, or the stem alone if
+   *  the database's clock would not answer. Nothing parses it. */
+  fileName: string;
+  /** Entries in the archive, `README.txt` included. */
+  files: number;
+  /**
+   * Lists that could not be read, and so are **missing from the archive**.
+   *
+   * {@link PassReport.failed}'s rule with one difference that matters: a folder the reader can
+   * look at shows them a missing deck, and a zip they have already mailed to themselves does
+   * not. So this number travels to the panel and is said in the tone a refusal gets.
+   */
+  failed: number;
+  /** The archive's size in bytes. */
+  byteLength: number;
+  /** The archive itself, standard base64 — or `null` when Rust wrote it at a picked path. */
+  base64: string | null;
 }
 
 /**
@@ -5596,6 +5702,31 @@ export const ipc = {
    * by hand read as unchanged, which is the one state this command exists to get out of.
    */
   mirrorRebuild: () => invoke<PassReport>("mirror_rebuild"),
+  /**
+   * Render the whole backup and hand this page the archive.
+   *
+   * **The browser's door, and the only one it has.** The four calls above are the folder —
+   * where it is, whether it runs, when it last ran — and a browser has nowhere to put a folder
+   * other programs can read. This one renders the same files through the same Rust writer the
+   * mirror pass uses and answers the zip's bytes as base64, which the page turns into a
+   * download.
+   *
+   * Routed on web (`web::route`) and registered on the Tauri builds too, because it is the same
+   * archive either way and a command that exists on one target only is a command nothing here
+   * can test.
+   */
+  mirrorBackupZip: () => invoke<BackupZip>("mirror_backup_zip"),
+  /**
+   * Render the whole backup and write it at a path the reader chose in the OS save dialog.
+   *
+   * **Android's door**, and it exists rather than reusing {@link ipc.mirrorBackupZip} for the
+   * same reason {@link ipc.exportWriteFile} exists: what `dialog:allow-save` answers on a phone
+   * is a `content://` URI naming a row `ACTION_CREATE_DOCUMENT` has already created, not a path
+   * the page could ever write to — and handing the webview a megabyte of base64 to hand
+   * straight back would be two copies of the archive through IPC for nothing. Rust builds it
+   * and Rust writes it; {@link BackupZip.base64} comes back `null`.
+   */
+  mirrorBackupSave: (path: string) => invoke<BackupZip>("mirror_backup_save", { path }),
   /**
    * This device, the group it is in, and the roster — the pairing panel's only read.
    *

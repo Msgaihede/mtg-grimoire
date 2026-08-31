@@ -102,6 +102,7 @@ import { SPECS } from "@/features/decks/validation/fixtures";
 // re-exports it from the real module unchanged — so both programs read the same tuple.
 import { IMAGE_VARIANTS } from "@/lib/images";
 import type {
+  BackupZip,
   CardDetail,
   CacheCleared,
   CardFace,
@@ -5034,11 +5035,24 @@ export function isNewer(candidate: string, current: string): boolean {
   return false;
 }
 
-/** `update::pick_asset` — matched on the tail of the name, lowercased. `other` picks
- *  nothing, which is the whole of what makes an install kind un-updatable. */
+/**
+ * `update::pick_asset` — matched on the tail of the name, lowercased.
+ *
+ * **Three of the five kinds pick nothing**, which is the whole of what makes an install
+ * un-updatable from inside the app: `other` because nothing knows what would install it,
+ * `managed` and `web` because something else already does — the store on a phone, the
+ * service worker in a browser.
+ *
+ * **Written as an allow-list rather than as `kind === "other"`, and that was a real defect.**
+ * The old form fell through to `NSIS_SUFFIX` for anything it did not name, so it handed a
+ * *managed* install the Windows setup — a mock encoding a state the backend refuses, which
+ * stays green for ever because nothing else in the workbench disagrees with it. Rust lists
+ * all three by name for the same reason, so a sixth kind makes the compiler ask.
+ */
 export function pickAsset(assets: UpdateAsset[], kind: InstallKind): UpdateAsset | null {
-  if (kind === "other") return null;
-  const suffix = kind === "portable" ? PORTABLE_SUFFIX : NSIS_SUFFIX;
+  const suffix =
+    kind === "portable" ? PORTABLE_SUFFIX : kind === "nsis" ? NSIS_SUFFIX : null;
+  if (suffix === null) return null;
   return assets.find((a) => a.name.toLowerCase().endsWith(suffix)) ?? null;
 }
 
@@ -7155,6 +7169,16 @@ function isAbsolutePath(path: string): boolean {
  *
  * and one more for `README.txt`, which is part of the deliverable rather than decoration.
  */
+/**
+ * An empty zip archive, base64 — the 22-byte end-of-central-directory record and nothing else.
+ *
+ * `PK\x05\x06` then eighteen zero bytes. Every unzip program accepts it as an archive holding no
+ * entries, which is what makes it the right stand-in: a workbench that handed the panel an
+ * invented string would have the browser save a file that will not open, teaching a failure the
+ * app does not have.
+ */
+const EMPTY_ZIP_BASE64 = "UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA==";
+
 function mirrorFileCount(db: FakeDb): number {
   const FORMATS = 7;
   const decks = db.decks.length + db.decks.filter((d) => d.theoryEnabled).length;
@@ -12106,6 +12130,50 @@ export function writeHandlers(db: FakeDb) {
       db.mirror.lastError = null;
       return report;
     },
+
+    /**
+     * `mirror::snapshot::mirror_backup_zip` — the whole backup as one archive.
+     *
+     * **What web and Android have instead of the folder**, so it is the one mirror command the
+     * workbench answers that the desktop panel never calls. The file count is
+     * {@link mirrorFileCount}'s, because the archive holds exactly what a pass would write with
+     * `.mirror-manifest` left out — a zip prunes nothing, so it records nothing to prune with.
+     *
+     * **The bytes are a real, empty zip and deliberately not a fake string.** A story that
+     * pressed the button would otherwise hand `atob` something that decodes to nonsense, and the
+     * browser would save a file that will not open — a workbench teaching a failure the app does
+     * not have. This is the 22-byte end-of-central-directory record, which every unzip program
+     * accepts as an archive with nothing in it. The *count* is honest and the *contents* are
+     * empty, which is the same bargain `mirror_rebuild` above already makes.
+     *
+     * `mirrorRootUnwritable` is **not** a fault here, and that is the platform rather than an
+     * omission: there is no root to be unwritable, which is the whole reason this command exists.
+     */
+    mirror_backup_zip: (): BackupZip => {
+      const files = mirrorFileCount(db);
+      return {
+        fileName: `mtg-grimoire-backup-${new Date().toISOString().slice(0, 10)}.zip`,
+        files,
+        failed: 0,
+        // ~1.4 kB a file is what the measured 100-file mirror deflated to, per file.
+        byteLength: files * 1_400,
+        base64: EMPTY_ZIP_BASE64,
+      };
+    },
+
+    /**
+     * `mirror::snapshot::mirror_backup_save` — the same archive, written where the reader said.
+     *
+     * Android's door. **It takes no argument at all**, where the command takes a path: this fake
+     * has no filesystem, and one that pretended to would teach a model the app does not have — so
+     * the destination is dropped by the dispatcher rather than named here. `base64` comes back
+     * `null`, which is the field the panel reads to know Rust wrote the file itself, so a story
+     * here draws "Saved" rather than naming a file the reader typed.
+     */
+    mirror_backup_save: (): BackupZip => ({
+      ...writeHandlers(db).mirror_backup_zip(),
+      base64: null,
+    }),
 
     /**
      * `sync_pairing_begin` — start offering a pairing.

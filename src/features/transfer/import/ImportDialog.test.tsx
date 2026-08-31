@@ -54,6 +54,16 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 const pickFile = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: pickFile }));
 
+/**
+ * Which build is answering, for the one test that wants the web one.
+ *
+ * `isWebTarget()` reads `__CORE__`, a build-time constant vitest fixes at `"tauri"` — so
+ * mocking this module is the only way to reach the browser branch of `transfer/files.ts`, and
+ * every other test in this file wants the native one. Defaults to `false` for that reason.
+ */
+const isWebTarget = vi.hoisted(() => vi.fn(() => false));
+vi.mock("@/pwa/target", () => ({ isWebTarget }));
+
 import type { ImportDestination } from "./destination";
 import { collectionDestination } from "./destinations/CollectionPreview";
 import type { DeckImportInto } from "./destinations/DeckPreview";
@@ -375,6 +385,7 @@ beforeEach(() => {
   collectionImportCommit.mockReset().mockResolvedValue({ added: 1, updated: 0, removed: 0 });
   wishlistImportCommit.mockReset().mockResolvedValue({ added: 1, updated: 0, removed: 0 });
   pickFile.mockReset().mockResolvedValue(null);
+  isWebTarget.mockReturnValue(false);
   onDismiss.mockReset();
   onClose.mockReset();
   onImported.mockReset();
@@ -1008,6 +1019,36 @@ describe("the import dialog", () => {
     await waitFor(() => expect(pickFile).toHaveBeenCalled());
     expect(importReadFile).not.toHaveBeenCalled();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  /**
+   * **The same button, the same box, and no backend in the path at all.** On the web target
+   * `dialog:allow-open` reaches nothing and there is no path to hand `import_read_file` — the
+   * browser's own `<input type=file>` gives the page a `File` and the page reads it. This is
+   * the whole of what Task 5 changes about the import, driven from the button the reader
+   * presses; `transfer/files.test.ts` is where the mechanism itself is pinned.
+   */
+  it("reads the file in the page on the web target, with no backend call", async () => {
+    isWebTarget.mockReturnValue(true);
+    wrap(<Harness />);
+    await panel();
+
+    await userEvent.click(screen.getByRole("button", { name: "Choose file…" }));
+
+    const input = document.body.querySelector<HTMLInputElement>("input[type=file]");
+    expect(input).not.toBeNull();
+    const file = new File(["4 Lightning Bolt\n2 Sol Ring"], "burn.txt", { type: "text/plain" });
+    Object.defineProperty(input, "files", {
+      configurable: true,
+      value: { 0: file, length: 1, item: (i: number) => (i === 0 ? file : null) },
+    });
+    input?.dispatchEvent(new Event("change"));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Decklist")).toHaveValue("4 Lightning Bolt\n2 Sol Ring"),
+    );
+    expect(importReadFile).not.toHaveBeenCalled();
+    expect(pickFile).not.toHaveBeenCalled();
   });
 
   it("shows the file reader's refusal beside the button", async () => {

@@ -126,7 +126,7 @@ function syncStatus(over: Partial<SyncStatus> = {}): SyncStatus {
 
 const folderPanel = () => screen.getByRole("region", { name: "Data folder" });
 
-describe("the Backup panel is desktop-only", () => {
+describe("the Backup panel is on every platform", () => {
   it("is on the page under jsdom, which is the desktop shape", () => {
     render(wrap(<SettingsPage update={NO_UPDATE} />));
 
@@ -134,42 +134,58 @@ describe("the Backup panel is desktop-only", () => {
   });
 
   /**
-   * The mirror writes a folder a reader opens in a text editor, syncs with Dropbox or greps —
-   * none of which an Android app's own directory affords — and `tauri-plugin-dialog`'s manifest
-   * records Android as having no folder picker, so the root could not be chosen either. Rust
-   * agrees from the other side: `lib.rs` installs neither the mirror's hook nor its thread on
-   * mobile.
+   * **This assertion was the opposite until 2026-08-31, and the reversal is the point.** The
+   * panel used to be hidden outright on Android, because the mirror writes a folder a reader
+   * opens in a text editor, syncs with Dropbox or greps — none of which an Android app's own
+   * directory affords — and `tauri-plugin-dialog`'s manifest records the platform as having no
+   * folder picker, so the root could not be chosen either. All of that is still true; hiding the
+   * panel took the *backup* away along with the folder, which is more than the reason supported.
+   *
+   * `BackupPanel` now dispatches on the platform itself and draws the archive here, so the page
+   * mounts it unconditionally. **`BackupArchivePanel.test.tsx` is where the two shapes are told
+   * apart** — this file mocks the panel to a stub, so all it can see is whether it is on the
+   * page at all.
    */
-  it("is gone on Android, while the rest of the page stays", () => {
+  it("stays on Android, where it draws the archive instead of the folder", () => {
     pretendAndroid();
 
     render(wrap(<SettingsPage update={NO_UPDATE} />));
 
-    expect(screen.queryByText("panel:backup")).not.toBeInTheDocument();
-    // The page itself still rendered, so this is the gate rather than a failed mount.
+    expect(screen.getByText("panel:backup")).toBeInTheDocument();
+    // The rest of the page still rendered, so this is about the panel rather than a failed mount.
     expect(screen.getByText("panel:cache")).toBeInTheDocument();
     expect(screen.getByText("panel:update")).toBeInTheDocument();
   });
 });
 
-describe("the Updates panel is not on the web target", () => {
+describe("the Updates panel is drawn on every target", () => {
   /**
-   * **Found by driving the phone on 2026-08-30, not by this suite.** After PR 10 routed 114 of
-   * the crate's 154 commands, `update_history` was the only `unknown command` left anywhere in
-   * the app — and it was *printed on the Settings page*, where the documented behaviour is
-   * that §6.3's ten desktop-only commands are hidden rather than broken.
+   * **This reverses PR #315, and the history is why the reversal is not a regression.**
    *
-   * The panel's own `installKind === "managed"` test could not have caught it: that reads an
-   * answer from `update_status`, which is itself desktop-only, so on a browser it never
-   * arrives and the panel concluded it was *not* managed and drew the controls.
+   * Driving the phone on 2026-08-30 found `update_history` printing `unknown command` on this
+   * page — the last one left in the app after PR 10 routed 114 commands — so #315 hid the
+   * whole panel behind `!isWebTarget()`. That was right while none of the five updater
+   * commands answered. Two of them answer now: `update_status` and `update_history` are
+   * routed by `web::route`, and a browser gets `installKind: "web"`.
+   *
+   * **So the decision moved out of this file**, and that is the point rather than a
+   * refactor. #315's own write-up named the general lesson — *a feature gated on a backend
+   * answer is ungated wherever the backend cannot answer* — and a build-time constant
+   * standing in for an answer the backend could not give is the other half of the same
+   * mistake. What each install kind draws is now `UpdatePanel`'s, tested against a real
+   * `installKind` in `UpdatePanel.test.tsx`; all this page decides is that the panel exists.
+   *
+   * The panel is stubbed here, so these two assert reachability and nothing about content —
+   * which is the whole of what this file can honestly say about it.
    */
-  it("is gone on the web build, while the rest of the page stays", async () => {
+  it("is on the page on the web build, as it is everywhere else", async () => {
     const { isWebTarget } = await import("@/pwa/target");
     vi.mocked(isWebTarget).mockReturnValue(true);
 
     render(wrap(<SettingsPage update={NO_UPDATE} />));
 
-    expect(screen.queryByText("panel:update")).not.toBeInTheDocument();
+    expect(screen.getByText("panel:update")).toBeInTheDocument();
+    // The page itself still rendered, so this is the panel and not a failed mount.
     expect(screen.getByText("panel:cache")).toBeInTheDocument();
   });
 

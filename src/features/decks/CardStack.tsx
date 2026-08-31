@@ -16,7 +16,7 @@ import {
 import { playedFinish } from "@/lib/finish";
 import { finishTreatments } from "@/lib/treatment";
 import { FOCUS, FOCUS_INSET } from "@/lib/focus";
-import { cardImageUrl } from "@/lib/images";
+import { cardArtSrc, cardImageUrl } from "@/lib/images";
 import type { DeckCard } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import type { Currency } from "@/lib/marketplace";
@@ -820,7 +820,16 @@ function StackedCard({
   // printing has left the card database — nothing tries to draw a picture of a card that is not
   // there, and the hook's null story is "no state machine at all".
   const face = useImageRetry(
-    card.needsReview === null ? cardImageUrl(card.cardId, 0, DECK_CARD_VARIANT) : null,
+    // **`cardArtSrc`, unlike the three walls above, is called here rather than inside
+    // `CardArt`** — this view builds its own `<img>` (the height is the stack's, not 5:7), so
+    // it is the one deck surface that has to make the desktop/web choice itself. Both
+    // candidates go in and one URL comes out: the protocol on Tauri, the row's own URL on web,
+    // and `null` for an orphan or a printing with no picture, which is what the frame under it
+    // already draws for.
+    cardArtSrc(
+      card.needsReview === null ? cardImageUrl(card.cardId, 0, DECK_CARD_VARIANT) : null,
+      card.imageUris?.[DECK_CARD_VARIANT],
+    ),
   );
   const finish = playedFinish(card.finish, card.finishes);
   // What that copy is *called*, if anything — the same reading the deck's other three views

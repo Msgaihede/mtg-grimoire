@@ -1,4 +1,9 @@
 import { render, screen, within } from "@testing-library/react";
+import { isWebTarget } from "@/pwa/target";
+
+// The build flag `cardArtSrc` branches on. `false` is what `__CORE__` already answers under
+// vitest, so this changes nothing here until a case below asks for a browser.
+vi.mock("@/pwa/target", () => ({ isWebTarget: vi.fn(() => false) }));
 import { DND_SOURCE_ATTR } from "@/lib/dndTarget";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -518,5 +523,46 @@ describe("the tile the wishlist's wall is given at the phone width", () => {
     // suite. Spelled here because what this case is about is that the prop is *absent* — a wall
     // passing 144 unconditionally would pass the case above.
     expect(tileOf(container)).toHaveStyle({ width: "170px" });
+  });
+});
+
+/**
+ * **The wishlist wall in a browser** — the same failure, and the same fix, as the collection's:
+ * `wishlist_list` is routed on web and `mtgimg://` cannot be reached there, so a row that
+ * carries no URL is a named, artless frame.
+ *
+ * The second case is this wall's own question rather than a copy of the collection's. A wish for
+ * *any* printing has no `cardId` at all; it is drawn as whichever printing the backend's join
+ * chose, which is what `artCardId` names — so the picture has to follow that id, and a tile
+ * reading `cardId` would draw nothing on exactly the rows a wishlist is mostly made of.
+ */
+describe("a wish's art", () => {
+  const SCRYFALL = { display: "https://cards.scryfall.io/display/front/c/1/c1.webp?1706230661" };
+
+  afterEach(() => {
+    vi.mocked(isWebTarget).mockReturnValue(false);
+  });
+
+  it("draws the pinned printing's own picture in a browser", () => {
+    vi.mocked(isWebTarget).mockReturnValue(true);
+    wall([{ ...BOLT, imageUris: SCRYFALL }]);
+
+    expect(screen.getByAltText("Lightning Bolt")).toHaveAttribute("src", SCRYFALL.display);
+  });
+
+  it("draws an any-printing wish as the printing the backend chose for it", () => {
+    vi.mocked(isWebTarget).mockReturnValue(true);
+    wall([{ ...ANY, imageUris: SCRYFALL }]);
+
+    expect(screen.getByAltText("Ancestral Recall")).toHaveAttribute("src", SCRYFALL.display);
+  });
+
+  /** The local cache still wins on the desktop; the field rides on both builds. */
+  it("keeps drawing the cached protocol picture on desktop", () => {
+    wall([{ ...BOLT, imageUris: SCRYFALL }]);
+
+    const src = screen.getByAltText("Lightning Bolt").getAttribute("src");
+    expect(src).toContain("mtgimg");
+    expect(src).not.toContain("scryfall.io");
   });
 });

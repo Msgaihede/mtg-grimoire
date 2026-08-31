@@ -37,7 +37,7 @@ import { consumeCaretNote } from "@/lib/caretWalk";
 import { FINISH_LABEL, parseFinishes, soleFinish } from "@/lib/finish";
 import { finishTreatments, treatmentName } from "@/lib/treatment";
 import { FOCUS } from "@/lib/focus";
-import { CARD_ASPECT, cardImageUrl } from "@/lib/images";
+import { CARD_ASPECT, cardArtSrc, cardImageUrl } from "@/lib/images";
 import {
   ipc,
   ipcError,
@@ -980,9 +980,20 @@ function Art({
 
   // What the frame is actually a picture *of*. A meld view replaces the card's own art with a
   // counterpart's — a different printing, so a different id, and always its only side.
+  //
+  // **Through `cardArtSrc`, which is what makes this frame draw at all in a browser.** A
+  // `mtgimg://` URL is registered natively with the webview and wasm cannot register a scheme,
+  // so handing one to a browser `<img>` paints a *broken* image where a card belongs — worse
+  // than the empty frame a `null` gives. On desktop the protocol URL still wins, because the
+  // local cache holds the right bytes at the right size.
+  //
+  // **The meld counterpart has no supplied URL and answers `null` on web.** It is a *different
+  // printing*, so its picture is not on this card's row, and `card_meld_parts` carries no image
+  // columns — a known gap rather than an oversight, and it costs the meld view its art in a
+  // browser while every other card in the pane draws.
   const src = meld.melded
-    ? cardImageUrl(meld.melded.id, 0, "display")
-    : cardImageUrl(card.id, face, "display");
+    ? cardArtSrc(cardImageUrl(meld.melded.id, 0, "display"), null)
+    : cardArtSrc(cardImageUrl(card.id, face, "display"), card.imageUris?.display);
   const pictured = meld.melded?.name || shown?.name || card.name;
 
   /**
@@ -1165,7 +1176,7 @@ function Art({
             transform: angle === 0 ? undefined : `rotate(${angle}deg)`,
           }}
         >
-          {broken === src ? (
+          {src === null || broken === src ? (
             // A rate-limited image is a 503 the `<img>` cannot read, so this says what is known
             // rather than guessing: the card is still identified, and the way back is stated.
             <div
@@ -1176,7 +1187,13 @@ function Art({
             >
               <span className="text-sm">{pictured}</span>
               <span className="text-xs text-dim">
-                No image yet — it may still be downloading. Reopen the card to try again.
+                {src === null
+                  ? // The row carried no picture at all, which on the web target is the honest
+                    // end of the road rather than a delay: there is no local cache to fill and
+                    // no second place to look. Saying “still downloading” here would promise
+                    // something that is never going to happen.
+                    "No image for this printing."
+                  : "No image yet — it may still be downloading. Reopen the card to try again."}
               </span>
             </div>
           ) : (

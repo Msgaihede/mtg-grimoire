@@ -17,6 +17,17 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ save }));
 const copyText = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/clipboard", () => ({ copyText }));
 
+/**
+ * Which build is answering, for the one test that wants the web one.
+ *
+ * `isWebTarget()` reads `__CORE__`, a build-time constant vitest fixes at `"tauri"`, so mocking
+ * this module is the only way to reach the browser branch of `transfer/files.ts` — where a save
+ * is a `Blob` behind an `<a download>` and no path exists at all. Every other test here wants
+ * the native branch, which is why it defaults to `false`.
+ */
+const isWebTarget = vi.hoisted(() => vi.fn(() => false));
+vi.mock("@/pwa/target", () => ({ isWebTarget }));
+
 import { ipc } from "@/lib/ipc";
 import { save as saveMock } from "@tauri-apps/plugin-dialog";
 import { copyText as copyTextMock } from "@/lib/clipboard";
@@ -86,6 +97,7 @@ beforeEach(() => {
   save.mockResolvedValue(null);
   copyText.mockReset();
   copyText.mockResolvedValue(undefined);
+  isWebTarget.mockReturnValue(false);
   // The chosen format and fields now live in `useAppStore`'s `exportPrefs` rather than in this
   // component's own `useState`, so — unlike before — they survive from one test to the next
   // unless this file resets the store itself.
@@ -508,6 +520,38 @@ describe("ExportDialog", () => {
     );
     await user.click(screen.getByRole("button", { name: /Save as/ }));
     expect(vi.mocked(ipc.exportWriteFile)).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The same button, and no backend in the path at all.** On the web target
+   * `dialog:allow-save` reaches nothing and there is no path to hand `export_write_file` — the
+   * text goes out as a `Blob` behind an `<a download>`, which is the browser's own save. This
+   * is the whole of what Task 5 changes about the export, driven from the button the reader
+   * presses; `transfer/files.test.ts` pins the mechanism and the revoke.
+   */
+  it("hands the export to the browser as a download on the web target", async () => {
+    const user = userEvent.setup();
+    isWebTarget.mockReturnValue(true);
+    const clicked: HTMLAnchorElement[] = [];
+    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:grimoire/export");
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    // Spied rather than allowed through: jsdom answers a real anchor click with "Not
+    // implemented: navigation to another Document".
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      clicked.push(this);
+    });
+
+    render(<ExportDialog {...props} />);
+    await user.click(screen.getByRole("button", { name: /Save as/ }));
+
+    expect(clicked).toHaveLength(1);
+    // The name the native save dialog would have suggested, extension and all.
+    expect(clicked[0].download).toBe("Removal.txt");
+    expect(vi.mocked(saveMock)).not.toHaveBeenCalled();
+    expect(vi.mocked(ipc.exportWriteFile)).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
   });
 
   it("reports a refused write rather than closing on it", async () => {

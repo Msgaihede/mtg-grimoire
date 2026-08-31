@@ -5309,6 +5309,14 @@ describe("the busy fault", () => {
       // not to the database. Its two neighbours (`mirror_set_enabled`, `mirror_set_root`) take
       // `sync::with_write` and are in the loop below with everything else.
       "mirror_rebuild",
+      // The backup archive, both doors, unlocked for `mirror_rebuild`'s reason exactly:
+      // `mirror::snapshot::build_now` opens a **read-only connection of its own** and falls back
+      // to the shared read connection only if it cannot — it never reaches for the write one, so
+      // there is no `BUSY` for either to answer. They are in `writeHandlers` because they
+      // *produce* something (a download, or a file at a picked path), not because they write a
+      // row.
+      "mirror_backup_zip",
+      "mirror_backup_save",
       // The eleventh, and the first that touches **no connection of any kind**: pairing's
       // cancel clears `AppState.pairing`, a mutex of its own that has nothing to do with
       // the database, so there is no `BUSY` for it to answer. Its seven neighbours all take
@@ -5583,12 +5591,16 @@ describe("the busy fault", () => {
     // that is worth this loop's attention rather than in spite of it: everything *after* the door
     // in that command is best effort by design (spec §2.1), so `refuseIfBusy` is the one refusal
     // it has and a handler that forgot it would look identical from outside.
-    // One-sided pairing then moved it by **minus one**, 88 -> 87: `sync_pairing_respond` and
+    // The backup archive then added **two handlers and no refusals**, so its own delta was zero:
+    // `mirror_backup_zip` and `mirror_backup_save` both joined `unlocked` above, for
+    // `mirror_rebuild`'s reason.
+    //
+    // One-sided pairing then moved it by **minus one**: `sync_pairing_respond` and
     // `sync_pairing_complete` are gone (a relay carries both blobs now, spec §1) and
     // `sync_pairing_poll` replaces them — two handlers out, one in. It takes `sync::with_write`
     // and no arguments of its own, exactly as `sync_pairing_confirm` beside it needs none in
-    // `args` above, so this is the second move this comment records that goes *down*, and
-    // re-measured rather than reasoned about for the same reason the first one was.
+    // `args` above. So the two changes compose to 88 → 87, and this line was **re-counted by
+    // running the sweep across the merge**, not by adding the two deltas on paper.
     expect(names).toHaveLength(87);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
