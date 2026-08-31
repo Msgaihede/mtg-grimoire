@@ -132,6 +132,82 @@ export function forget(ledger: Ledger, urls: readonly string[]): Ledger {
   return { used, size, bytes, cap: ledger.cap };
 }
 
+/**
+ * The two calls a clear makes on the image cache, and nothing else.
+ *
+ * **Structural, in `routeFor`'s idiom, and that is what puts this file's one Cache Storage
+ * operation under vitest.** jsdom implements no `caches` at all, so a signature naming `Cache`
+ * itself would be a function nothing in this repo could call; a real `Cache` satisfies this,
+ * and a test writes an object literal.
+ *
+ * **`ignoreVary` is required rather than optional, and it is required for `fromShell`'s
+ * reason one layer down.** `Cache.delete` runs the same request-matching algorithm as
+ * `Cache.match`, so a stored response carrying a `Vary` the incoming request disagrees about
+ * is *not* deleted and answers `false` — which this file would then report as a file that
+ * would not go. Making the option part of the type is the only fence available here: nothing
+ * sweeps this module's text the way `swCore.test.ts` sweeps `sw.ts`'s.
+ */
+export interface ClearableCache {
+  keys(): Promise<readonly { url: string }[]>;
+  delete(url: string, options: { ignoreVary: true }): Promise<boolean>;
+}
+
+/**
+ * What one clear freed, as the worker reports it back over the port.
+ *
+ * **`rows` is deliberately not here.** It is `image_cache`'s, it is SQLite's, and this file
+ * has neither — the page adds it where the `CacheCleared` DTO is assembled, and the reason it
+ * is always 0 there is written at that site.
+ */
+export interface ImageClearReport {
+  files: number;
+  bytes: number;
+  failed: number;
+}
+
+/**
+ * Empty the image cache, and leave the ledger describing what is actually left.
+ *
+ * **Both halves or neither, which is why this is one function rather than two calls at the
+ * caller.** A clear that deleted the files and left the ledger alone would leave the worker
+ * certain it was holding 256 MB of pictures that are gone — {@link forget}'s failure exactly,
+ * reached from the other end — and {@link evictions} would then delete from an empty cache on
+ * every request for as long as the worker lived. The ledger returned here is the caller's to
+ * write, and the caller writes it through `ledgerWriter`'s queue.
+ *
+ * **The ledger's own entry is skipped rather than deleted**, because the alternative is a
+ * window with no ledger in the cache at all: `mutateLedger` writes it back a moment later, and
+ * an `image()` running between the two would build a fresh empty one and admit against it.
+ * Skipping it also keeps it out of `files`, which counts pictures and not bookkeeping.
+ *
+ * **A stored key is an absolute URL and `LEDGER_KEY` is a path**, which is the trap here:
+ * `cache.put(LEDGER_KEY, …)` resolves that path against the page's origin, so `cache.keys()`
+ * hands back `https://<origin>/__grimoire_image_ledger__` and a `===` against the constant is
+ * silently false. It would still have worked — the entry would be deleted and rewritten — but
+ * `files` would count the ledger as a picture, on a cache holding nothing else.
+ *
+ * **`bytes` is the ledger's own count and can under-report.** Only the ledger knows what an
+ * entry cost: an `<img>` fetch is `no-cors`, so the stored response is opaque and its
+ * `blob().size` is 0 whatever arrived — see {@link measuredSize}. A picture in the cache that
+ * no ledger entry describes (anything cached before the read-modify-write race was fixed)
+ * therefore counts as a file and as no bytes, which is the honest answer rather than an
+ * invented one.
+ */
+export async function clearImages(
+  cache: ClearableCache,
+  ledger: Ledger,
+): Promise<{ report: ImageClearReport; ledger: Ledger }> {
+  const pictures = (await cache.keys()).filter((entry) => !entry.url.endsWith(LEDGER_KEY));
+  const deleted = await Promise.all(
+    pictures.map((entry) => cache.delete(entry.url, { ignoreVary: true })),
+  );
+  const files = deleted.filter(Boolean).length;
+  return {
+    report: { files, bytes: ledger.bytes, failed: deleted.length - files },
+    ledger: forget(ledger, Object.keys(ledger.size)),
+  };
+}
+
 export function serializeLedger(ledger: Ledger): string {
   return JSON.stringify(ledger);
 }

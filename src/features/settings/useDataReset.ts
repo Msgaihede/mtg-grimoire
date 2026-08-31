@@ -148,6 +148,13 @@ export function useDangerZone(): {
  * decoded into a painted `<img>` stays correct — the bytes it was made from are simply no longer
  * on disk. The next request for a key that is gone is a miss, and a miss re-fetches. So the only
  * thing this hook does after a success is say what it freed.
+ *
+ * **On the web target it is a different cache entirely, and that changes nothing here.**
+ * `ipc.cacheClear()` is diverted in `src/lib/core/browser.ts` onto the service worker's
+ * `IMAGE_CACHE` — there is no `data/images/` and no protocol handler in a browser, and the
+ * pictures come straight from `cards.scryfall.io` into an `<img>`. Both are outside TanStack
+ * Query for the same reason, both answer the same `CacheCleared`, and neither this hook nor
+ * `CachePanel` takes a branch. The web half is `src/pwa/imageCacheClear.ts`.
  */
 export function useLocalCache(): { clear: ClearAction; status: ClearStatus | null } {
   const [outcome, setOutcome] = useState<string | null>(null);
