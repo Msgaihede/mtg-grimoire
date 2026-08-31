@@ -2349,6 +2349,33 @@ mod tests {
         }
     }
 
+    /// **The tombstone hazard [`plan_excluding`]'s own doc comment calls load-bearing, exercised
+    /// against a join rather than against `room_for`'s arithmetic.** `revoked_at` stopped being
+    /// written by `commit_rotation`, but a database an older build already wrote can still hold a
+    /// stamped row — and a fresh manifest naming it would put a removed device back in the group
+    /// on every peer that adopts this epoch. `the_device_cap_counts_live_rows_and_never_the_joiner`
+    /// stamps a row too, but only to prove `room_for`'s count excludes it; nothing before this
+    /// test proved the manifest itself does.
+    #[test]
+    fn a_join_rotation_excludes_a_row_an_older_build_stamped() {
+        let conn = seeded_group_of_two();
+        add_device(&conn, "ghost", &[9u8; 32], "Ghost").unwrap();
+        conn.execute(
+            "UPDATE sync_devices SET revoked_at = unixepoch() WHERE device_id = 'ghost'",
+            [],
+        )
+        .unwrap();
+        add_device(&conn, "cccccccccccccccccccccccccccccccc", &[3u8; 32], "Phone").unwrap();
+
+        let plan = plan_join(&conn).expect("a join must plan");
+        let named: Vec<&str> = plan.keys.iter().map(|(d, _)| d.as_str()).collect();
+
+        assert!(
+            !named.contains(&"ghost"),
+            "a stamped row must never be named by a fresh manifest: {named:?}"
+        );
+    }
+
     /// A join is a rotation like its two siblings, and costs an epoch the same way — which is
     /// what makes `sync_engine::baseline`'s epoch-boundary re-arm carry every peer's last words
     /// across the join instead of stalling one at the old epoch.
@@ -2363,15 +2390,30 @@ mod tests {
     /// `plan_rotation`'s own contract, carried to its third sibling: a `/rotate` the relay
     /// refuses must leave the group exactly as it was, so the reader — or in this case the
     /// pairing ceremony itself — can press again.
+    ///
+    /// **Asserts `sync_devices`' row count as well as `group()`**, matching
+    /// `planning_a_rotation_changes_no_row` and `a_departure_names_everyone_but_this_device` —
+    /// its two siblings already hold both halves of "writes nothing" and this one held only the
+    /// group half. Without the count, a regression that inserted or deleted a `sync_devices` row
+    /// while planning would leave `group()` untouched and this test green while the very
+    /// contract its own name claims was broken.
     #[test]
     fn planning_a_join_writes_nothing() {
         let conn = seeded_group_of_two();
         let before = group(&conn).unwrap().unwrap();
         add_device(&conn, "cccccccccccccccccccccccccccccccc", &[3u8; 32], "Phone").unwrap();
+        let devices_before_planning = count(&conn, "sync_devices");
+
         let _ = plan_join(&conn).unwrap();
+
         let after = group(&conn).unwrap().unwrap();
         assert_eq!(before.epoch, after.epoch);
         assert_eq!(before.group_key, after.group_key);
+        assert_eq!(
+            count(&conn, "sync_devices"),
+            devices_before_planning,
+            "planning a join inserted or deleted a sync_devices row"
+        );
     }
 
     /// The mark round-trips, and starts clear: a fresh group has published nothing and so owes
