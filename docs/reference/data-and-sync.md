@@ -204,6 +204,25 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   wall that can draw art at all — `mtgimg://` is a Tauri protocol and wasm cannot register a URL
   scheme, so on web the URL travels with the row or there is no picture.
 
+- **2026-08-31 doubled those two `json_extract`s to four, and the query cost was *not*
+  re-measured.** `image_uri::LIST_VARIANTS` gained `art` beside `display`, because a deck cover,
+  a folder card's member strip, both halves of the cover picker and the theory diff all draw the
+  frameless crop and every one of them was a blank frame in a browser — five surfaces, five
+  readers, which is what that constant's doc asks for before a name goes on it. **The payload
+  was re-measured** the same way the figure above was taken (debug, `run_search`, a byte copy of
+  the dev pair, one collapsed 50-row page, `serde_json`): 23 196 B with no field → 29 346 B with
+  `display` → **34 396 B with both, so +5 050 B, +17.2 %, 101 B a row**. The same run reproduces
+  2026-08-29's four-variant figure exactly (+21 600 B, +93.1 %), which is what makes the two
+  comparable.
+
+  **The stopwatch half is a gap and is written down as one.** The shape is unchanged — the
+  `json_extract`s read a `cards` row the query is already holding, for the 50 rows the page
+  produces, and the collapsed column is dominated by the count walking to `TOTAL_CAP` — so a
+  cost that could not be resolved at two columns is not going to resolve at four; but "predicted"
+  is not "measured", and the table above is a measurement. What would settle it is that table's
+  own method: two release binaries from one tree, `FRONT_FACE_COLUMNS`' expressions replaced by
+  `NULL` in one, run alternately, medians of the pooled samples.
+
   **One caveat, because it nearly became a fiction.** The first with-and-without pair taken this
   session read 28.4 / 146.6 against 61.4 / 318.9 — a 2× "regression" that reproduced on a second
   run. It was the machine: rebuilding the *with* binary and running it again gave 57.7 / 276.7

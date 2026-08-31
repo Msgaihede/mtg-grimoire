@@ -618,6 +618,10 @@ mod tests {
             // way. It is here because `DeckRow` has no `Default`, which is the whole of what
             // this builder is for.
             bracket: 0,
+            // The cover printing's picture, and `None` for `cover_card_id`'s reason one line
+            // per field up: a deck with no cover has none. The mirror writes plain text and can
+            // draw nothing, so this is here only because the struct has no `Default`.
+            image_uris: None,
         }
     }
 

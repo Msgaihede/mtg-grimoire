@@ -1984,6 +1984,21 @@ export interface TheoryDiffRow {
    * under both filters at its full quantity, because the full quantity is what a press writes.
    */
   heldAsOtherPrinting: number;
+  /**
+   * Where this row's printing's picture is, per variant — the web target's only way to draw the
+   * thumbnail beside the name.
+   *
+   * The dialog draws `art` (626×457), which is the crop the deck's own views draw, so that one
+   * card is not pictured two ways on one screen. The same rules as
+   * {@link CardSummary.imageUris}: front face only, `Partial`, `null` for a printing that has
+   * left `cards` or carries no usable URL, ignored on desktop by `cardArtSrc` — and **never a
+   * URL to build one from**.
+   *
+   * Mirrors `TheoryDiffRow::image_uris` in `src-tauri/src/deck_theory.rs`. Nothing type-checks
+   * this file against the crate — `ipc.test.ts`'s field-name pin reads both and is the only
+   * fence.
+   */
+  imageUris?: Partial<Record<ImageVariant, string>> | null;
 }
 
 /**
@@ -2431,6 +2446,27 @@ export interface DeckRow {
    * have to be kept in step. They were two while a deck could wear a file instead.
    */
   coverArtist: string | null;
+  /**
+   * Where the **cover printing's** picture is, per variant — the web target's only way to draw
+   * a deck cover.
+   *
+   * **About {@link DeckRow.coverCardId} and nothing else**, exactly as {@link coverArtist} is:
+   * it comes off the same `LEFT JOIN cards c ON c.id = d.cover_card_id`, so a deck with no
+   * cover — or a cover whose printing has left `cards` — carries `null` here as well. A deck is
+   * not a card and has no picture of its own; this is the card it points at.
+   *
+   * The gallery reads `art`, which is the only variant a cover is ever drawn at
+   * (`DeckTile`'s frame, `FolderCard`'s strip and `DeckCoverPicker`'s preview alike, and the
+   * folder strip is why this is on the *row* rather than fetched per tile: a folder card draws
+   * three of its members' covers and holds three `DeckRow`s to do it). It is `Partial` for
+   * {@link CardSummary.imageUris}' reason and carries the same fence: on desktop `cardArtSrc`
+   * ignores it and the local cache wins, on web it is the whole of what a browser can reach,
+   * and a missing entry is "no art" rather than a URL to build one from.
+   *
+   * Mirrors `DeckRow::image_uris` in `src-tauri/src/deck.rs`. Nothing type-checks this file
+   * against the crate — `ipc.test.ts`'s field-name pin reads both and is the only fence.
+   */
+  imageUris?: Partial<Record<ImageVariant, string>> | null;
   archived: boolean;
   /**
    * `live` copies in **active** categories of kind `main`, `commander` or `maybe` — what "a

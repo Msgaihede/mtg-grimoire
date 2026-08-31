@@ -7,7 +7,7 @@ import {
   type HTMLAttributes,
 } from "react";
 import { CardImage } from "@/components/CardImage";
-import { cardImageUrl } from "@/lib/images";
+import { cardArtSrc, cardImageUrl } from "@/lib/images";
 import { LAYER } from "@/lib/layers";
 import { shouldFlipUp } from "@/lib/shouldFlipUp";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
@@ -222,15 +222,32 @@ export function usePrintingDwell(): PrintingDwell {
  */
 export function PrintingPreview({
   printingId,
+  imageUrl,
   anchor,
 }: {
   printingId: string | null;
+  /**
+   * Where that printing's `display` image is on `cards.scryfall.io` — `Printing.imageUris`,
+   * the row's own answer, **and the web build's only way to draw this at all**.
+   *
+   * **Threaded down rather than looked up here, and the reason is the seam this file sits on.**
+   * `mtgimg://` is a Tauri custom protocol and wasm cannot register a URL scheme with a browser,
+   * so `cardArtSrc` needs both candidates — and only one of them can be built from an id. This
+   * component is handed an *id* by `usePrintingDwell`, which knows nothing about printings; the
+   * rows it hangs off are `CardDetailPane`'s, and that is the one place holding the `Printing`
+   * the id names. So the URL comes from there, beside the id, and the hook stays a timer.
+   *
+   * Absent or `null` is "no picture": the frame draws nothing, which is exactly what it already
+   * does while the bytes are on their way. A preview is on screen for a second at a time, so an
+   * empty one is the right failure — a broken `<img>` glyph hanging off a row is not.
+   */
+  imageUrl?: string | null;
   anchor: HTMLElement | null;
 }) {
   if (printingId === null || anchor === null) return null;
   // Keyed on the printing, so a new row is a new frame with its own image state rather than
   // one frame that inherits the last picture's failed fetch.
-  return <Preview key={printingId} printingId={printingId} anchor={anchor} />;
+  return <Preview key={printingId} printingId={printingId} imageUrl={imageUrl} anchor={anchor} />;
 }
 
 /** Where the picture sits, and how big it is. */
@@ -294,13 +311,24 @@ export function previewBox(row: PreviewRect, view: PreviewRect): Box {
   };
 }
 
-function Preview({ printingId, anchor }: { printingId: string; anchor: HTMLElement }) {
+function Preview({
+  printingId,
+  imageUrl,
+  anchor,
+}: {
+  printingId: string;
+  imageUrl?: string | null;
+  anchor: HTMLElement;
+}) {
   const frameRef = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState<Box | null>(null);
   // The one retry schedule every card frame in the app shares. A preview lives for as long as
   // a pointer rests, so a retry rarely lands inside one — what this buys is the frame not
   // being left holding a URL that has already failed.
-  const image = useImageRetry(cardImageUrl(printingId, 0, "display"));
+  //
+  // Both candidates through `cardArtSrc`, which is the whole of the desktop/web branch: the
+  // local cache's bytes on Tauri, the row's own URL in a browser, `null` when there is neither.
+  const image = useImageRetry(cardArtSrc(cardImageUrl(printingId, 0, "display"), imageUrl));
 
   // `useLayoutEffect`, so the picture is never painted at the top of the pane on its way to the
   // row it belongs to. Measured once: the component is keyed on the printing, so a different

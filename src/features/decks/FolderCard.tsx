@@ -15,7 +15,7 @@ import { plural } from "@/lib/counts";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { useFolderDropTarget, type FolderDrag, type FolderEdge } from "@/lib/folderDrag";
 import { FOCUS } from "@/lib/focus";
-import { cardImageUrl } from "@/lib/images";
+import { cardArtSrc, cardImageUrl } from "@/lib/images";
 import type { DeckRow } from "@/lib/ipc";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
@@ -149,7 +149,17 @@ export function FolderCard({
   const arts = members
     .flatMap((deck) =>
       deck.coverCardId !== null && deck.coverArtist !== null
-        ? [{ id: deck.id, cardId: deck.coverCardId, artist: deck.coverArtist }]
+        ? [
+            {
+              id: deck.id,
+              cardId: deck.coverCardId,
+              artist: deck.coverArtist,
+              // The web build's only picture of this cover — see {@link MemberArt}. Carried
+              // beside the id rather than looked up again, because it is the *row's* answer
+              // about that card and the strip is already holding the row.
+              artUrl: deck.imageUris?.art ?? null,
+            },
+          ]
         : [],
     )
     .slice(0, FOLDER_ARTS);
@@ -211,7 +221,7 @@ export function FolderCard({
                 {node.count === 0 ? "Empty" : "No cover art"}
               </span>
             ) : (
-              arts.map((art) => <MemberArt key={art.id} cardId={art.cardId} />)
+              arts.map((art) => <MemberArt key={art.id} cardId={art.cardId} artUrl={art.artUrl} />)
             )}
           </span>
           {/* The same four sizes a deck tile scales, in the same order and off the same variable —
@@ -271,9 +281,16 @@ export function FolderCard({
 }
 
 /** One member cover in a folder card's strip. Its own component because {@link useImageRetry}
- *  is a hook and a strip is a loop. */
-function MemberArt({ cardId }: { cardId: string }) {
-  const image = useImageRetry(cardImageUrl(cardId, 0, "art"));
+ *  is a hook and a strip is a loop.
+ *
+ *  **Both candidates go to `cardArtSrc`, which is the whole of the desktop/web branch and is
+ *  written nowhere else.** `mtgimg://` is a Tauri custom protocol and wasm cannot register a URL
+ *  scheme with a browser, so on web the picture is whatever `deck_list` put on that member's own
+ *  row — and `null` when it put none. A `null` draws the empty `bg-surface` cell below, which is
+ *  the same thing this frame shows while the bytes are on their way: the strip keeps its
+ *  geometry either way, and no broken `<img>` is ever left in it. */
+function MemberArt({ cardId, artUrl }: { cardId: string; artUrl: string | null }) {
+  const image = useImageRetry(cardArtSrc(cardImageUrl(cardId, 0, "art"), artUrl));
   return (
     <span className="min-w-0 flex-1 overflow-hidden bg-surface">
       {image.src && (

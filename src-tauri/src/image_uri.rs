@@ -17,7 +17,8 @@
 //! Three things live here and nothing else does:
 //!
 //! * **Which two columns a picture can be in** — [`TOP_LEVEL_COLUMN`] and [`FACE_COLUMN`],
-//!   read by [`row`] for one variant and by [`front_face_selects`] for all four.
+//!   read by [`row`] for one variant and by [`front_face_selects`] for every
+//!   [`LIST_VARIANTS`] entry at once.
 //! * **The precedence between them** — [`for_face`], face first and top-level as the
 //!   fallback, and only for face 0.
 //! * **Whether the URI is one this app will use at all** — [`is_fetchable`].
@@ -150,40 +151,85 @@ pub fn for_face(top: Option<String>, face: Option<String>, face_index: u8) -> Op
     face.or_else(|| (face_index == 0).then_some(top).flatten())
 }
 
-/// The one variant a **list row** carries, and the Rust half of a mirror TypeScript owns.
+/// The **card-shaped** variant a list row carries, and the Rust half of a mirror TypeScript
+/// owns.
 ///
 /// `src/lib/images.ts`'s `WALL_CARD_VARIANT` is `"display"` and `CardArt` defaults to it, so
-/// this is the only size any wall draws. **Nothing in the build compares the two spellings** —
+/// this is the size every wall draws. **Nothing in the build compares the two spellings** —
 /// that is a real gap and it belongs with whatever consumes this on the TypeScript side, not
 /// here; what is fenced here is that the name is a column that exists
 /// ([`tests::the_list_variant_is_one_the_schema_stores`]).
 pub const LIST_VARIANT: &str = "display";
 
-/// The variants [`front_face_selects`] emits, in order — **one today, and the array is the
+/// The **crop** a list row carries beside [`LIST_VARIANT`] — Scryfall's `art`, the frameless
+/// illustration.
+///
+/// It is a second name rather than a second size of the first: `display` is a picture of a
+/// *card* and `art` is a picture of what is *on* one, so nothing that wants one is served by
+/// the other. Five surfaces draw it — a deck tile's cover, a folder card's member strip, both
+/// halves of `DeckCoverPicker` and `TheoryDiffDialog`'s row — and **every one of them owes a
+/// credit line**, because a crop with no printed frame may be shown only where the illustrator
+/// is named. That obligation is TypeScript's and is stated in `src/CLAUDE.md`; what is fenced
+/// here is only that the name is a column the ingest writes.
+pub const ART_VARIANT: &str = "art";
+
+/// The variants [`front_face_selects`] emits, in order — **two today, and the array is the
 /// whole of how that widens.**
 ///
 /// The DTO shape is a map rather than a single string precisely so this can grow without a
 /// wire change or a TypeScript edit: `Partial<Record<ImageVariant, string>>` already permits
-/// one key or four. Adding a name here adds two SQL columns, two entries in the map and
-/// nothing else.
+/// one key or four. Adding a name here adds **two SQL columns and one map key** — the
+/// (top-level, face) pair [`front_face_selects`] emits and the one entry [`front_face_map`]
+/// folds it into — and nothing else. (This line read "two entries in the map" until 2026-08-31,
+/// which is the *columns* counted twice: a variant is one key, whichever of its two columns
+/// answers.)
 ///
-/// **Why one, decided by Markus on 2026-08-29, and the byte count was not the argument.** All
-/// four variants cost +21 600 B on a 50-row page — a Worker `postMessage` on web and a Tauri
-/// IPC hop on the desktop, a local structured clone and never a network round trip, so +93%
-/// was affordable in absolute terms. What decided it is that **three of the four had no
-/// caller**: this repo adds a field and its reader together rather than shipping three URLs
-/// against a surface that might want them. Widening is the same five lines in reverse, on the
-/// day something asks.
-pub const LIST_VARIANTS: [&str; 1] = [LIST_VARIANT];
+/// **Why one until 2026-08-31, decided by Markus on 2026-08-29, and the byte count was not the
+/// argument.** All four variants cost +21 600 B on a 50-row page — a Worker `postMessage` on
+/// web and a Tauri IPC hop on the desktop, a local structured clone and never a network round
+/// trip, so +93% was affordable in absolute terms. What decided it is that **three of the four
+/// had no caller**: this repo adds a field and its reader together rather than shipping three
+/// URLs against a surface that might want them. Widening was left as the same five lines in
+/// reverse, on the day something asks.
+///
+/// **`art` is that day, and its caller is five surfaces that are blank on web and on the phone
+/// right now.** PR #327 made a card-art crop the *only* deck-cover mechanism, so every deck
+/// cover in a browser draws `http://mtgimg.localhost/art/<id>/0`, which is a Tauri custom
+/// protocol no browser has registered and never will — wasm cannot register a URL scheme. The
+/// other four are the same failure on smaller surfaces. `thumb` and `grid` still have no
+/// caller and are still off the list, which is the 2026-08-29 rule surviving the change rather
+/// than being overturned by it.
+///
+/// **The price of the second name, re-measured 2026-08-31** (debug build, a byte copy of the
+/// dev corpus, one collapsed 50-row page through `run_search`, the whole `SearchResponse`
+/// serialised with `serde_json`, the list swapped and the page re-taken for each figure):
+/// **23 196 B with no field at all → 29 346 B carrying `display` → 34 396 B carrying `display`
+/// and `art` → 44 796 B carrying all four.** So the second variant costs **+5 050 B, which is
+/// +17.2% over the one-variant page and +48.3% over no field at all — 101 B a row**, against
+/// the first one's +6 150 B / +26.5%. It is the cheaper of the two because an `art` URL
+/// averages 92 B where a `display` URL averages 96, and because the row has already paid for
+/// the `"imageUris"` key and its braces.
+///
+/// **The 2026-08-29 arithmetic reproduces exactly**, four variants over no field at all still
+/// being +21 600 B and +93.1% on today's corpus, which is what makes the two measurements
+/// comparable rather than two different experiments. It was affordable then and the two-variant
+/// number is less than a quarter of it — but the byte count was not the argument then and is
+/// not the argument now: the reason `art` is on the list is that five surfaces read it, and the
+/// reason `thumb` and `grid` are not is that nothing does.
+pub const LIST_VARIANTS: [&str; 2] = [LIST_VARIANT, ART_VARIANT];
 
 /// How many columns [`front_face_selects`] adds to a `SELECT`.
 pub const FRONT_FACE_COLUMNS: usize = LIST_VARIANTS.len() * 2;
 
-/// The front face's `(top_level, face)` pair for every [`crate::schema::IMAGE_VARIANTS`]
-/// entry, in that order — [`FRONT_FACE_COLUMNS`] expressions, flattened, top-level first.
+/// The front face's `(top_level, face)` pair for every [`LIST_VARIANTS`] entry, in that
+/// order — [`FRONT_FACE_COLUMNS`] expressions, flattened, top-level first. **Not
+/// [`crate::schema::IMAGE_VARIANTS`]**, which is the wider list of what the ingest *stores*;
+/// this is the narrower list of what a row *carries*, and the gap between the two is the whole
+/// of the decision on [`LIST_VARIANTS`].
 ///
-/// For a caller that already has the `cards` row in its `FROM`: a list query reads eight
-/// `json_extract`s off the row it is already holding rather than joining or querying again.
+/// For a caller that already has the `cards` row in its `FROM`: a list query reads
+/// [`FRONT_FACE_COLUMNS`] `json_extract`s off the row it is already holding rather than
+/// joining or querying again.
 /// The precedence is deliberately **not** spelled here as a `COALESCE` — [`for_face`] is the
 /// one implementation of it, and this hands both halves back for that function to decide
 /// between.
@@ -255,6 +301,14 @@ mod tests {
 
     /// A normal card (top-level images), a transform (per-face), and a `meld`-shaped row
     /// that carries **both** — which is the only shape the precedence can be measured on.
+    ///
+    /// **Every row carries a *different* picture in every slot it has**, and that is what makes
+    /// an off-by-one in [`front_face_selects`]/[`front_face_map`] visible. With two variants the
+    /// select list is four expressions — `display`'s top-level, `display`'s face, `art`'s
+    /// top-level, `art`'s face — and a reader one column out still gets a real URL back, from
+    /// the wrong variant or the wrong column. On `meld`, whose top-level and face 0 disagree for
+    /// *both* variants, every one of those mistakes changes an assertion below; on a fixture
+    /// carrying one column, or the same URL in both, none of them does.
     fn seeded() -> Connection {
         let conn = crate::schema::memory_pair();
         conn.execute(
@@ -273,17 +327,22 @@ mod tests {
              VALUES ('delver','Delver','isd','51','en','transform',
                      json_array(
                        json_object('grid','https://cards.scryfall.io/grid/front/a/b/y.webp?9',
-                                   'display','https://cards.scryfall.io/display/front/a/b/y.webp?9'),
+                                   'display','https://cards.scryfall.io/display/front/a/b/y.webp?9',
+                                   'art','https://cards.scryfall.io/art/front/a/b/y.webp?9'),
                        json_object('grid','https://cards.scryfall.io/grid/back/a/b/y.webp?9',
-                                   'display','https://cards.scryfall.io/display/back/a/b/y.webp?9')), '{}')",
+                                   'display','https://cards.scryfall.io/display/back/a/b/y.webp?9',
+                                   'art','https://cards.scryfall.io/art/back/a/b/y.webp?9')), '{}')",
             [],
         )
         .unwrap();
         conn.execute(
             "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, image_uris, face_image_uris, raw)
              VALUES ('meld','Bruna','emn','15','en','meld',
-                     json_object('display','https://cards.scryfall.io/display/top.webp?1'),
-                     json_array(json_object('display','https://cards.scryfall.io/display/face0.webp?1')), '{}')",
+                     json_object('display','https://cards.scryfall.io/display/top.webp?1',
+                                 'art','https://cards.scryfall.io/art/top.webp?1'),
+                     json_array(json_object(
+                                 'display','https://cards.scryfall.io/display/face0.webp?1',
+                                 'art','https://cards.scryfall.io/art/face0.webp?1')), '{}')",
             [],
         )
         .unwrap();
@@ -401,12 +460,12 @@ mod tests {
         }
     }
 
-    /// [`LIST_VARIANT`] is interpolated into a `json_extract` path, so it may only ever be one
-    /// of the four names the ingest actually writes.
+    /// Every [`LIST_VARIANTS`] entry is interpolated into a `json_extract` path, so each may
+    /// only ever be one of the four names the ingest actually writes.
     ///
     /// Two failures in one: a name outside [`crate::schema::IMAGE_VARIANTS`] is a key no row
-    /// has — every card would come back with no picture and nothing would error — and it is
-    /// also the one string in this module that reaches SQL unbound.
+    /// has — every card would come back with no picture and nothing would error — and they are
+    /// the only strings in this module that reach SQL unbound.
     #[test]
     fn the_list_variant_is_one_the_schema_stores() {
         for variant in LIST_VARIANTS {
@@ -416,6 +475,33 @@ mod tests {
             );
         }
         assert_eq!(FRONT_FACE_COLUMNS, LIST_VARIANTS.len() * 2);
+    }
+
+    /// **What a list row carries is a decision, and this is where the decision is written
+    /// down** — the list is `display` and `art`, in that order, and not the four the ingest
+    /// stores.
+    ///
+    /// It is a separate test from the one above because the two fail for opposite reasons: that
+    /// one catches a name the schema has no column for, and this one catches a name the schema
+    /// *does* have a column for being added or dropped without anybody deciding to. A widening
+    /// to `thumb` or `grid` is a real change with a real byte cost
+    /// ([`LIST_VARIANTS`] carries both measurements) and must come through this line; a
+    /// narrowing back to one blanks every deck cover on web and on the phone, which is the
+    /// state 2026-08-31 was spent fixing.
+    ///
+    /// The order is pinned as well as the membership, because [`front_face_selects`] emits the
+    /// columns in it and [`front_face_map`] pairs them back up by position: reversing it puts
+    /// the crop under `display` and the card under `art`, with two real URLs and no error.
+    #[test]
+    fn a_list_row_carries_the_card_and_the_crop_and_nothing_else() {
+        // Compared as *slices*, deliberately: `assert_eq!` on two arrays of different lengths
+        // is a type error, and a widening that could not compile this file would never reach
+        // the eight fences in `deck`, `deck_theory`, `card`, `collection`, `wishlist` and
+        // `search` that have something of their own to say about it.
+        assert_eq!(&LIST_VARIANTS[..], &["display", "art"][..]);
+        assert_eq!(LIST_VARIANT, "display");
+        assert_eq!(ART_VARIANT, "art");
+        assert_eq!(FRONT_FACE_COLUMNS, 4);
     }
 
     /// The select list and the reader that folds it back up are one pairing, and the test
@@ -438,19 +524,20 @@ mod tests {
         };
 
         let bolt = map("bolt").expect("a top-level blob answers the list variant");
-        // Every key, not just the one asked for: the narrowing to `display` is a *decision*
-        // and this is where it is fenced. A widening has to come here and say so, and an
-        // accidental one — iterating `IMAGE_VARIANTS` again — fails on this line.
-        assert_eq!(bolt.keys().collect::<Vec<_>>(), [LIST_VARIANT]);
+        // Every key, not just the ones asked for: the narrowing to two of the schema's four is
+        // a *decision* and this is where it is fenced. A widening has to come here and say so,
+        // and an accidental one — iterating `IMAGE_VARIANTS` again — fails on this line.
+        assert_eq!(bolt.keys().collect::<Vec<_>>(), [ART_VARIANT, LIST_VARIANT]);
         assert_eq!(
             bolt[LIST_VARIANT],
             "https://cards.scryfall.io/display/front/0/0/x.webp?17"
         );
-        assert!(
-            !bolt
-                .values()
-                .any(|u| u.contains("/art/") || u.contains("/grid/")),
-            "a pair read at the wrong offset lands another variant's URL under `display`"
+        // The whole reason the pair is read from the *same* row: this fixture carries all four
+        // variants, so a column read one place out lands `thumb`'s or `grid`'s URL under a key
+        // that is neither, and every value would still be a URL.
+        assert_eq!(
+            bolt[ART_VARIANT],
+            "https://cards.scryfall.io/art/front/0/0/x.webp?17"
         );
 
         // The transform, whose picture is on its faces and not in a top-level blob at all.
@@ -459,12 +546,23 @@ mod tests {
             delver[LIST_VARIANT],
             "https://cards.scryfall.io/display/front/a/b/y.webp?9"
         );
+        assert_eq!(
+            delver[ART_VARIANT],
+            "https://cards.scryfall.io/art/front/a/b/y.webp?9"
+        );
 
-        // And the precedence, through the whole pipeline this time.
+        // And the precedence, through the whole pipeline this time — for **both** variants,
+        // because each has its own pair of columns and each pair is applied by its own
+        // `for_face`. `meld` is the row where top-level and face disagree, so a pair read at
+        // the wrong offset — or a select list emitted face-first — answers `top.webp` here.
         let meld = map("meld").expect("a meld printing has a front face");
         assert_eq!(
             meld[LIST_VARIANT],
             "https://cards.scryfall.io/display/face0.webp?1"
+        );
+        assert_eq!(
+            meld[ART_VARIANT],
+            "https://cards.scryfall.io/art/face0.webp?1"
         );
     }
 

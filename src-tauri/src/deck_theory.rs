@@ -160,6 +160,26 @@ pub struct TheoryDiffRow {
     /// reader who asked for that printing asked for that printing; netting this out would turn
     /// the button into the app deciding the substitution is good enough.
     pub held_as_other_printing: i64,
+    /// Where [`Self::card_id`]'s picture is, per variant — read off the `LEFT JOIN cards` that
+    /// is already in [`diff_select`] for the oracle id, and built by
+    /// [`crate::image_uri::front_face_selects`] / `front_face_map` so the face-first precedence
+    /// and the `soon.jpg` fence are that module's and not respelled here.
+    ///
+    /// The key the dialog reads is [`crate::image_uri::ART_VARIANT`]: a diff row draws the crop
+    /// beside the name, at the arrangement the editor's zone rows use, so `display` rides along
+    /// because [`crate::image_uri::LIST_VARIANTS`] emits the pair rather than because anything
+    /// on this dialog wants it.
+    ///
+    /// **Why it is on the wire**, [`crate::search::CardSummary::image_uris`]' argument in full:
+    /// `mtgimg://` is a Tauri custom protocol and wasm cannot register a URL scheme with a
+    /// browser, so on web and on Android a row draws its own picture or draws none. On desktop
+    /// it is ignored — `src/lib/images.ts`'s `cardArtSrc` takes the local cache.
+    ///
+    /// **`None` is the ordinary answer for an orphan**, whose printing has left `cards` and
+    /// whose join therefore answers NULL in both columns — the same rows
+    /// [`Self::held_as_other_printing`] is `0` for, and one of the three states the frame
+    /// draws as a quiet blank.
+    pub image_uris: Option<std::collections::BTreeMap<String, String>>,
 }
 
 /// A diff row and the oracle id its group was built on.
@@ -233,13 +253,20 @@ fn diff_select(marketplace: crate::sorting::Marketplace) -> String {
     format!(
         "SELECT dc.variant, dc.card_id, dc.name, dc.set_code,
             dc.collector_number, dc.quantity, cat.name, c.oracle_id, dc.finish,
-            {price}
+            {price},
+            -- Last, and the reads below are positional, so a column added anywhere else
+            -- shifts every index after it into a field of the same SQLite type. Built by
+            -- `image_uri::front_face_selects` off the `cards` row this select already joins
+            -- for `c.oracle_id`, so the precedence between the two columns stays that
+            -- module's rather than being respelled as a `COALESCE` here.
+            {image_uris}
        FROM deck_cards dc
        JOIN deck_categories cat ON cat.id = dc.category_id
        LEFT JOIN cards c ON c.id = dc.card_id
       WHERE dc.deck_id = ?1 AND cat.is_active = 1
       ORDER BY cat.sort_order, cat.id, dc.name, dc.id",
-        price = crate::sorting::deck_card_price_expr(marketplace)
+        price = crate::sorting::deck_card_price_expr(marketplace),
+        image_uris = crate::image_uri::front_face_selects("c").join(", ")
     )
 }
 
@@ -333,6 +360,9 @@ fn grouped_diff(
     deck_id: i64,
     marketplace: crate::sorting::Marketplace,
 ) -> Result<Vec<Grouped>, String> {
+    /// Where `diff_select`'s image columns start — one past the price expression, which is the
+    /// last named column.
+    const IMAGE_COL: usize = 10;
     // Both variants in one read: two reads could not be compared, because a card write between
     // them would put a copy on one side of the subtraction and not the other.
     let sql = diff_select(marketplace);
@@ -350,6 +380,16 @@ fn grouped_diff(
                 r.get::<_, Option<String>>(7)?, // oracle_id
                 r.get::<_, Option<String>>(8)?, // finish
                 r.get::<_, Option<f64>>(9)?,    // unit price
+                // **From 10**, last of all, for the reason written into `diff_select` — the
+                // `image_uri::FRONT_FACE_COLUMNS` expressions it appended, folded back into the
+                // front face's variant → URL map by the module that emitted them.
+                //
+                // The offset is written here beside the read because this is the one column
+                // group whose off-by-one is invisible: each variant's pair is
+                // (top-level, face), `for_face` prefers the face, so a read one column out
+                // still answers a real URL — another variant's, or the top-level blob where the
+                // face's belongs. `image_uri`'s `meld` fixture is the shape that can fail on it.
+                crate::image_uri::front_face_map(|i| r.get::<_, Option<String>>(IMAGE_COL + i))?,
             ))
         })
         .map_err(|e| e.to_string())?;
@@ -377,6 +417,7 @@ fn grouped_diff(
             oracle,
             finish,
             unit_price,
+            image_uris,
         ) = row.map_err(|e| e.to_string())?;
         // The exact card — printing and finish — see [`Grouped`]. `category` is read for the
         // row's caption and is deliberately *not* in the key: where a card sits is placement,
@@ -401,6 +442,7 @@ fn grouped_diff(
                             finish,
                             owned_spare: 0,
                             held_as_other_printing: 0,
+                            image_uris,
                         },
                     },
                 ));
@@ -1261,6 +1303,94 @@ mod tests {
         assert_eq!(
             (diff[0].card_id.as_str(), diff[0].quantity),
             ("bolt-lea", 1)
+        );
+    }
+
+    /// **A diff row carries its printing's picture** — the dialog draws the `art` crop beside
+    /// each name, and on web and on Android that URL travels with the row or the frame stays
+    /// blank: `mtgimg://` is a Tauri custom protocol and wasm can register no scheme.
+    ///
+    /// **`bolt-m10` is shaped like a `meld` printing here** — all four variants in *both*
+    /// columns, every one a different URL — because that is the only shape where each way of
+    /// getting the read wrong gives a different answer instead of the right one by luck. The
+    /// pair `front_face_selects` emits is `(top-level, face)` and `for_face` prefers the face,
+    /// so a read one column out still hands back a real URL on the real host with a real
+    /// version: the crop under `display`, or the top-level blob where the face's belongs.
+    ///
+    /// `serra-lea` carries neither column, which is the ordinary state of 162 of the live
+    /// corpus's rows, and `bolt-lea` publishes Scryfall's error page — `None` for both, which
+    /// is the frame's quiet blank rather than a URL a browser will request.
+    #[test]
+    fn a_diff_row_carries_the_printings_art() {
+        let conn = seeded();
+        conn.execute(
+            "UPDATE cards SET
+                 image_uris = json_object(
+                     'thumb','https://cards.scryfall.io/thumb/top.webp?5',
+                     'grid','https://cards.scryfall.io/grid/top.webp?5',
+                     'display','https://cards.scryfall.io/display/top.webp?5',
+                     'art','https://cards.scryfall.io/art/top.webp?5'),
+                 face_image_uris = json_array(json_object(
+                     'thumb','https://cards.scryfall.io/thumb/face0.webp?5',
+                     'grid','https://cards.scryfall.io/grid/face0.webp?5',
+                     'display','https://cards.scryfall.io/display/face0.webp?5',
+                     'art','https://cards.scryfall.io/art/face0.webp?5'))
+              WHERE id = 'bolt-m10'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE cards SET image_uris = json_object(
+                 'art','https://errors.scryfall.com/soon.jpg')
+              WHERE id = 'bolt-lea'",
+            [],
+        )
+        .unwrap();
+
+        let id = deck(&conn, "Burn");
+        let main = category(&conn, id, "Main deck");
+        add(&conn, id, "bolt-m10", main, THEORY, 1);
+        add(&conn, id, "bolt-lea", main, THEORY, 1);
+        add(&conn, id, "serra-lea", main, THEORY, 1);
+
+        let diff = theory_diff(&conn, id, ANY_MARKET).unwrap();
+        let of = |card_id: &str| {
+            diff.iter()
+                .find(|r| r.card_id == card_id)
+                .unwrap_or_else(|| panic!("no `{card_id}` on the list"))
+                .image_uris
+                .clone()
+        };
+
+        let uris = of("bolt-m10").expect("a printing with pictures");
+        assert_eq!(
+            uris[crate::image_uri::ART_VARIANT],
+            "https://cards.scryfall.io/art/face0.webp?5",
+            "the crop the row draws, from the face and not the top-level blob"
+        );
+        assert_eq!(
+            uris[crate::image_uri::LIST_VARIANT],
+            "https://cards.scryfall.io/display/face0.webp?5",
+            "and the card, at its own offset"
+        );
+        // Spelled out rather than read off `LIST_VARIANTS`: an assertion that reads the
+        // constant it is fencing can never fail when that constant moves, and `bolt-m10` here
+        // carries all four variants, so a widening comes back as real URLs under real keys.
+        assert_eq!(
+            uris.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["art", "display"],
+            "what a list row carries and nothing else"
+        );
+
+        assert_eq!(
+            of("bolt-lea"),
+            None,
+            "an error page is a gap, not a picture"
+        );
+        assert_eq!(
+            of("serra-lea"),
+            None,
+            "and a printing with neither column carries nothing"
         );
     }
 
@@ -2172,6 +2302,20 @@ mod tests {
             finish: Some("foil".to_owned()),
             owned_spare: 1,
             held_as_other_printing: 1,
+            // Two keys, both real URLs, because this is the one field on the row whose *shape*
+            // crosses the boundary rather than a scalar: `Option<BTreeMap>` has to reach
+            // TypeScript as an object of variant keys, and the dialog reads `art` out of it by
+            // name.
+            image_uris: Some(std::collections::BTreeMap::from([
+                (
+                    "art".to_owned(),
+                    "https://cards.scryfall.io/art/front/0/0/bolt.webp?17".to_owned(),
+                ),
+                (
+                    "display".to_owned(),
+                    "https://cards.scryfall.io/display/front/0/0/bolt.webp?17".to_owned(),
+                ),
+            ])),
         })
         .unwrap();
         assert_eq!(
@@ -2180,7 +2324,11 @@ mod tests {
                 "cardId": "bolt-lea", "name": "Lightning Bolt", "categoryName": "Main deck",
                 "quantity": 2, "unitPrice": 400.0,
                 "setCode": "lea", "collectorNumber": "161", "finish": "foil", "ownedSpare": 1,
-                "heldAsOtherPrinting": 1
+                "heldAsOtherPrinting": 1,
+                "imageUris": {
+                    "art": "https://cards.scryfall.io/art/front/0/0/bolt.webp?17",
+                    "display": "https://cards.scryfall.io/display/front/0/0/bolt.webp?17"
+                }
             })
         );
     }

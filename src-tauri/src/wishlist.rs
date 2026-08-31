@@ -961,7 +961,8 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
                   WHERE o.id <> w.id AND o.oracle_id IS NOT NULL
                     AND o.oracle_id = w.oracle_id) AS elsewhere,
                 w.folder_id,
-                -- 21 and 22, on the end like every appended column above. An any-printing wish
+                -- From 21, on the end like every appended column above, and as many as
+                -- `image_uri::FRONT_FACE_COLUMNS` says. An any-printing wish
                 -- is drawn as whichever printing the join chose for it, which is the printing
                 -- `c.id` and the price beside it are already about.
                 {image_uris}
@@ -1002,8 +1003,9 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
                     legalities: r.get(18)?,
                     elsewhere: r.get(19)?,
                     folder_id: r.get(20)?,
-                    // 21 and 22 — the pair `front_face_selects` added, folded back up by the
-                    // module that added them, precedence and `soon.jpg` fence included.
+                    // From 21 — the (top-level, face) pairs `front_face_selects` added, one per
+                    // variant, folded back up by the module that added them, precedence and
+                    // `soon.jpg` fence included.
                     image_uris: crate::image_uri::front_face_map(|i| {
                         r.get::<_, Option<String>>(IMAGE_COL + i)
                     })?,
@@ -2080,9 +2082,11 @@ mod tests {
         conn.execute(
             "UPDATE cards SET
                  image_uris = json_object(
-                     'display','https://cards.scryfall.io/display/top/' || id || '.webp?17'),
+                     'display','https://cards.scryfall.io/display/top/' || id || '.webp?17',
+                     'art','https://cards.scryfall.io/art/top/' || id || '.webp?17'),
                  face_image_uris = json_array(json_object(
-                     'display','https://cards.scryfall.io/display/face/' || id || '.webp?17'))",
+                     'display','https://cards.scryfall.io/display/face/' || id || '.webp?17',
+                     'art','https://cards.scryfall.io/art/face/' || id || '.webp?17'))",
             [],
         )
         .unwrap();
@@ -2114,6 +2118,12 @@ mod tests {
             "https://cards.scryfall.io/display/face/bolt-lea.webp?17",
             "a pinned wish is drawn as its own printing"
         );
+        // And the second variant, at its own offset: with two of them the select list is four
+        // expressions, and a pairing read wrong hands the crop back under `display`.
+        assert_eq!(
+            pinned.image_uris.as_ref().unwrap()[crate::image_uri::ART_VARIANT],
+            "https://cards.scryfall.io/art/face/bolt-lea.webp?17",
+        );
         // Not merely "has a picture": the art has to be of the printing the join chose, which
         // is the one `art_card_id` names. A picture taken from a second join passes the
         // assertion above and fails this one.
@@ -2131,7 +2141,9 @@ mod tests {
         // columns, because either one alone would leave the other answering.
         conn.execute(
             "UPDATE cards SET
-                 image_uris = json_object('display','https://errors.scryfall.com/soon.jpg'),
+                 image_uris = json_object(
+                     'display','https://errors.scryfall.com/soon.jpg',
+                     'art','https://errors.scryfall.com/soon.jpg'),
                  face_image_uris = NULL",
             [],
         )
