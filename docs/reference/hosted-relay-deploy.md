@@ -28,9 +28,18 @@ of refusing it, and `/rotate` capping its manifest and freeing slots through `ke
 **one migration file** to step 2 and changes no route path, so step 6 deploys the same list it
 already did.
 
+**A fourth half, from a later branch, is also not deployed**: the pairing rendezvous —
+`POST`/`GET {relay}/p/{rv}/{slot}`, the `pairing_rendezvous` table, and `/pair`'s landing page with
+`/.well-known/assetlinks.json`. It adds a **second** migration file to step 2 (run as its own
+`--command`, never a `--file` — that step says why) and a **new step 9** to the order, for the
+Android signing-certificate fingerprint `assetlinks.json` still carries as the literal placeholder
+`REPLACE_WITH_RELEASE_SHA256`. It changes no existing route path either, so step 6 still deploys
+the same list plus these two new routes.
+
 Designs: [2026-08-29-hosted-relay-and-patreon-design.md](../superpowers/specs/2026-08-29-hosted-relay-and-patreon-design.md),
-[2026-08-30-group-wide-membership-and-removal-design.md](../superpowers/specs/2026-08-30-group-wide-membership-and-removal-design.md)
-and [2026-08-30-leave-group-and-device-caps-design.md](../superpowers/specs/2026-08-30-leave-group-and-device-caps-design.md).
+[2026-08-30-group-wide-membership-and-removal-design.md](../superpowers/specs/2026-08-30-group-wide-membership-and-removal-design.md),
+[2026-08-30-leave-group-and-device-caps-design.md](../superpowers/specs/2026-08-30-leave-group-and-device-caps-design.md)
+and [2026-08-31-one-sided-pairing-and-qr-design.md](../superpowers/specs/2026-08-31-one-sided-pairing-and-qr-design.md).
 
 **No agent may run any of this.** `wrangler dev --local` is the only wrangler command an agent may
 run — it runs workerd locally, contacts nothing and needs no login. Everything below is Markus's.
@@ -135,10 +144,20 @@ reading any of us.**
      --command "ALTER TABLE entitlements ADD COLUMN group_epoch INTEGER"
    npx wrangler d1 execute mtg-grimoire-relay --remote \
      --command "ALTER TABLE entitlements ADD COLUMN group_auth TEXT"
+   npx wrangler d1 execute mtg-grimoire-relay --remote \
+     --command "CREATE TABLE IF NOT EXISTS pairing_rendezvous (rv TEXT NOT NULL, slot TEXT NOT NULL CHECK (slot IN ('offer', 'join')), blob TEXT NOT NULL, expires_at INTEGER NOT NULL, PRIMARY KEY (rv, slot))"
    ```
    Both migration files are `IF NOT EXISTS` throughout and safe to run any number of times. Each
    `ALTER` is its own invocation so a `duplicate column name` — the correct answer on a database
    that already has it — costs nothing else.
+
+   ⚠️ **`relay/migrations/2026-08-31-pairing-rendezvous.sql` is run as its own `--command`, never
+   through `--file`, even though the checked-in file holds only this one statement.** The file
+   exists for the same reason the other two do — a readable record of the SQL — but this step's own
+   opening paragraph is the reason not to point `--file` at it: an atomic multi-statement execute is
+   what turned a harmless re-run into the 2026-08-30 outage, and the fix adopted here is to never
+   give `--file` a second chance at that failure mode rather than to argue this particular file is
+   safe because it happens to hold one statement today.
 
    ⚠️ **`group_devices` must be applied BEFORE the deploy that ships `admitDevice`, not after.**
    Both `/token` doors call it on every trip, so a Worker pointed at a database without the table
@@ -215,15 +234,27 @@ reading any of us.**
    request cap. Decided 2026-08-29: stay free, watch the ceiling. The ceiling is a **cliff, not a
    slope** — past it *every* reader errors at once, so without the alarm the first signal is
    complaints.
-8. **Add rate-limiting rules on `/claim`, `/token`, `/g/{group}/rotate` and `/g/{group}/keys`.**
-   The bill argument in `index.ts` — "junk is refused for the price of a Worker invocation alone"
-   — holds for the three routes behind the bearer gate and **not** for these four, which each
-   cost a D1 read before anything can refuse them. ⚠️ **This step named two until 2026-08-30**:
-   `/rotate` and `/keys` are `/g/…` routes that deliberately stand *ahead* of the gate, because a
-   device that has just been rotated away from cannot mint a token and `/keys` exists to answer
-   exactly that device. Neither reaches a Durable Object, so the metered line is untouched — but
-   "unauthenticated at the edge" is what a rate-limit rule is about, and by that test they belong
-   on this list rather than on the other one.
+8. **Add rate-limiting rules on `/claim`, `/token`, `/g/{group}/rotate`, `/g/{group}/keys` and
+   `/p/{rv}/{offer,join}`.** The bill argument in `index.ts` — "junk is refused for the price of a
+   Worker invocation alone" — holds for the three routes behind the bearer gate and **not** for
+   these five, which each cost a D1 read before anything can refuse them. ⚠️ **This step named two
+   until 2026-08-30, and four until 2026-08-31**: `/rotate` and `/keys` are `/g/…` routes that
+   deliberately stand *ahead* of the gate, because a device that has just been rotated away from
+   cannot mint a token and `/keys` exists to answer exactly that device; `/p/{rv}/{slot}` is the
+   pairing rendezvous, unauthenticated by design because the joining device has no token yet either.
+   None of the five reaches a Durable Object, so the metered line is untouched — but "unauthenticated
+   at the edge" is what a rate-limit rule is about, and by that test they belong on this list rather
+   than on the other one.
+9. **Set the real Android signing-certificate fingerprint in `assetlinks.json`.**
+   `relay/src/pair.ts`'s `handleAssetLinks` ships
+   `sha256_cert_fingerprints: ["REPLACE_WITH_RELEASE_SHA256"]` until this runs — a deploy step, not
+   a code one. Until it does, a scanned invite link on Android opens a chooser instead of the app,
+   which is degraded rather than broken, because `android:autoVerify` cannot confirm the app owns
+   `/pair` without it. Get the real value from the release keystore and redeploy:
+   ```
+   keytool -list -v -keystore <ks> -alias <alias> | findstr SHA256
+   ```
+   then replace the placeholder in `relay/src/pair.ts` and run step 6 again.
 
 ---
 

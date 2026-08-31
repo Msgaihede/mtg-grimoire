@@ -693,9 +693,16 @@ with the arithmetic behind the 105-character code and the crate pins, is
   computed over the *derived* key and both public keys **in role order**, so a relay that
   substituted its own key moves both halves of the transcript and the two codes disagree — which
   is the entire security argument. There is no auto-accept, no skip flag and no "trust this
-  device": `confirm` is a press, the panel's button carries `aria-disabled` until the digits
-  exist *and* its handler refuses, and the joining side does not reveal the blob it carries back
-  until the reader has said the numbers agree.
+  device": `confirm` is a press, and the panel's button carries `aria-disabled` until the digits
+  exist *and* its handler refuses. **This bullet used to say the joining side withholds its blob
+  until the reader confirms; since 2026-08-31 that is false, and on purpose.** `accept` posts B's
+  answer to the relay's rendezvous immediately, before any human has looked at anything — B has no
+  *Codes match* button at all, only a *Cancel*. **This is not a security regression**: the SAS
+  remains the sole gate on anything being *committed* — `confirm` is still what seals and posts the
+  group key, and still the only press either side has that moves the group forward — and B's answer
+  leaks nothing on its own, because the sealed remainder opens only under the pair key. What used to
+  be withheld until confirmation was withheld from a party that never needed it: anyone holding the
+  invite could already run their own handshake and produce the same answer.
 - **`sync_identity`, `sync_group` and `sync_devices` never sync.** They are this device's
   secrets. They are `None` in `watch::surface_of` for the sharpest reason on that list: a
   mirrored file quoting any of them would write a key into a folder the reader syncs with
@@ -799,15 +806,22 @@ with the arithmetic behind the 105-character code and the crate pins, is
   outlives the webview, which is what a reader who opens Settings twice needs, and dies with the
   process, which is what makes the token one-time in fact. It holds the derived pair key, which
   is the second reason it is not a table.
-- **Both hand-carried blobs put one public field in the clear ahead of the sealed remainder**, and
-  each is bound to its seal: the joiner's key is repeated inside the sealed bytes and compared,
-  and the initiator's device id is the AEAD's associated data. Each side needs that value to
-  derive the key that opens the rest, and both are public by construction.
+- **Both blobs put one public field in the clear ahead of the sealed remainder**, and each is bound
+  to its seal: the joiner's key is repeated inside the sealed bytes and compared, and the
+  initiator's device id is the AEAD's associated data. Each side needs that value to derive the key
+  that opens the rest, and both are public by construction. **Neither blob is hand-carried since
+  2026-08-31** — both now cross at the relay's rendezvous instead; only the invite still crosses by
+  hand or camera. The byte layout is unchanged, because the rendezvous only changed how a blob
+  travels, never what is in it.
 - **`chacha20poly1305` is pinned at 0.10 and not 0.11**, and the reason is `cargo tree -d`: 0.11
   moves RustCrypto's array types to `hybrid-array`, which stands a second array stack beside the
   `generic-array 0.14` that `sha2 0.10` already puts in this tree.
-- **Pairing itself makes no network request**, and the transport that does is
-  `sync_engine/`, below.
+- **⚠️ Pairing used to make no network request at all, and that stopped being true on 2026-08-31.**
+  `accept` and `confirm` each post one blob to the relay's pairing rendezvous
+  (`/p/{rv}/{join,offer}`) before they return, and `poll` reads the other side's back — so pairing
+  now needs the relay reachable, the same as the transport in `sync_engine/`, below, though through
+  a different, unauthenticated route the token gate never sees. `crypto`, `invite` and `identity`
+  stay pure and I/O-free; only `pairing.rs` itself touches the network.
 
 ## Hard rules — sync (`sync_engine/`)
 

@@ -24,12 +24,16 @@ stamps were the previous day when checked on 2026-08-20. The week is
 `tags::{oracle,art}::REFRESH_INTERVAL_SECS`, a choice this app made about how often to ask — so a
 taxonomy up to seven days behind Scryfall is the design working, not a stale download.
 
-**Sync is the fourth network dependency and the only one that is not a download.** Nothing is
-fetched and nothing is sent until a reader connects a Patreon membership — **that alone is the
-boundary**, because claiming makes a group of one when the device is in none, so a single
-connected device pushes and pulls with nothing ever paired to it. Pairing is what a *second*
-device needs, not what the first transmission waits for. An installation that has not connected
-has sync off, which is the state every existing installation is in. **The relay is one Cloudflare
+**Sync is the fourth network dependency and the only one that is not a download.** Nothing about a
+*membership* is fetched or sent until a reader connects one — **that is the boundary for
+entitlement**, because claiming makes a group of one when the device is in none, so a single
+connected device pushes and pulls with nothing ever paired to it. **Pairing crosses a boundary of
+its own since 2026-08-31, and it used to need none at all**: two devices still meet with an X25519
+handshake and six digits compared on both screens, but a short-lived, unauthenticated
+**rendezvous** on the same relay now carries everything but the invite, so pairing itself needs the
+relay reachable before either device holds a membership — two devices can no longer pair with no
+signal and connect Patreon afterwards. An installation that has connected nothing has sync off,
+which is the state every existing installation is in. **The relay is one Cloudflare
 Worker Markus runs**, not one each reader deploys — that was the original premise and nobody
 would ever have done it. **Its address is compiled into the binary as `RELAY_BASE`, is in this
 repository, and is public**, in exactly the way every application's API base URL is public: the

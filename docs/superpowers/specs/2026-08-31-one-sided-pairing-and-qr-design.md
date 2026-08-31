@@ -413,7 +413,7 @@ string, which is where the *parsing* is worth testing and the camera is not.
 | --- | --- |
 | Android camera permission | **Unverified.** §3.6 names the test. Worst case, a Kotlin shim. |
 | WebView2 `PermissionRequested` handler | Unwritten; §3.5's flag is the proven fallback. |
-| `jsQR` as a new dependency | Unmaintained since 2021 but stable, MIT, no transitive deps. `zxing-wasm` is the alternative and is much larger. Settle at plan time. |
+| `jsQR` as a new dependency | Unmaintained since 2021 but stable, **Apache-2.0** (this row said MIT; the installed package and its `LICENSE` file both say Apache-2.0 — corrected in Task 11's docs pass, 2026-08-31), no transitive deps. `zxing-wasm` is the alternative and is much larger. Settle at plan time. |
 | Unauthenticated rendezvous writes | Bounded by §1.5. Same exposure `/claim` already carries. |
 | Old build ↔ new build | Cannot be fixed; §6 states it. |
 | `assetlinks.json` needs the signing cert | A deploy step, not a code one. Until it exists the scan opens a chooser rather than the app — degraded, not broken. |

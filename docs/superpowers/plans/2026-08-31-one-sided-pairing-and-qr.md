@@ -1188,9 +1188,10 @@ git commit -m "feat(sync): one code, one screen to compare, and a Scan button"
 - Produces: `export function QrScanner({ onCode, onCancel }: { onCode: (text: string) => void;
   onCancel: () => void }): JSX.Element`
 
-- [ ] **Step 1:** `npm install jsqr` — MIT, no transitive dependencies. Not `zxing-wasm`, which is
-  far larger for a job this size, and not `BarcodeDetector`, which is **`undefined` in WebView2**
-  (measured 2026-08-31).
+- [ ] **Step 1:** `npm install jsqr` — **Apache-2.0** (this line said MIT; corrected in Task 11's
+  docs pass, 2026-08-31 — the installed package and its `LICENSE` both say Apache-2.0), no
+  transitive dependencies. Not `zxing-wasm`, which is far larger for a job this size, and not
+  `BarcodeDetector`, which is **`undefined` in WebView2** (measured 2026-08-31).
 
 - [ ] **Step 2: Write the component.** `getUserMedia({ video: { facingMode: "environment" } })` →
   `<video srcObject muted playsInline>` → a `requestAnimationFrame` loop drawing to an offscreen
