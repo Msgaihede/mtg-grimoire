@@ -180,11 +180,8 @@ impl<'a> StreamIngest<'a> {
         {
             let stats = &mut self.stats;
             let batch = &mut self.batch;
-            // `?` through `io::Error`: a stream with no newline in 8 MiB is not JSONL, and
-            // the framer refusing it is the guard `feed::frame::Overlong` documents.
             self.lines
-                .push(&self.decoded, |line| Self::take_line(stats, batch, line))
-                .map_err(std::io::Error::from)?;
+                .push(&self.decoded, |line| Self::take_line(stats, batch, line));
         }
         flush_full_batches(self.db, &mut self.stats, &mut self.batch, progress)
     }
@@ -205,8 +202,7 @@ impl<'a> StreamIngest<'a> {
             let stats = &mut self.stats;
             let batch = &mut self.batch;
             self.lines
-                .push(&self.decoded, |line| Self::take_line(stats, batch, line))
-                .map_err(std::io::Error::from)?;
+                .push(&self.decoded, |line| Self::take_line(stats, batch, line));
             self.lines
                 .finish(|line| Self::take_line(stats, batch, line));
         }

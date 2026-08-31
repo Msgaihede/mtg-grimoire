@@ -506,12 +506,8 @@ impl StreamRead {
         self.decoder.push(chunk, &mut self.decoded)?;
         take_head(&mut self.head, &self.decoded);
         let file = &mut self.file;
-        // The framer's own refusal, lifted through `io::Error` into the `Io` variant this
-        // enum already has: a buffer past `feed::frame::MAX_ELEMENT_BYTES` is the
-        // desynchronisation `peak_buffer` can only report on afterwards.
         self.elements
-            .push(&self.decoded, |el| take_element(file, el))
-            .map_err(std::io::Error::from)?;
+            .push(&self.decoded, |el| take_element(file, el));
         Ok(())
     }
 
@@ -522,8 +518,7 @@ impl StreamRead {
         {
             let file = &mut self.file;
             self.elements
-                .push(&self.decoded, |el| take_element(file, el))
-                .map_err(std::io::Error::from)?;
+                .push(&self.decoded, |el| take_element(file, el));
         }
         self.file.stamp = stamp_from_head(&self.head);
         Ok(self.file)

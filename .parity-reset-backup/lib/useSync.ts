@@ -1,0 +1,183 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import { count } from "@/lib/counts";
+import { ipc, ipcError, type SyncStatus } from "@/lib/ipc";
+import { useFeedDownload } from "@/pwa/FeedDownloadProvider";
+
+/** How often the header re-reads `sync_status` when nothing is happening. */
+const POLL_IDLE_MS = 30_000;
+/** …and while a sync is in flight, where the count and the phase are moving. */
+const POLL_SYNCING_MS = 1_000;
+/** How long "Already up to date" stays on screen after a Refresh that found nothing. */
+export const UP_TO_DATE_MS = 5_000;
+
+/**
+ * Fold a fresh poll into what the UI already knows.
+ *
+ * Since `sync::status` reads through the read-only connection this is no longer a
+ * once-a-day event — mid-sync polls now carry real numbers. It stays for the case the
+ * nullable fields exist for: the database going away underneath a running app, which for
+ * something that runs off a USB stick is a Tuesday. A `null` there means "not readable
+ * right now", not "zero" and not "cleared": rendering it literally would blank the card
+ * count and throw away an error banner the user has not read yet.
+ *
+ * `cardCount` is the discriminator: `status()` fills it in for every poll whose count
+ * query ran at all — an empty database is a real `0` — so a non-null count means the
+ * whole group was read and its nulls are real, including a `lastError` the last run
+ * cleared, which must be allowed to land. `null` is the count that could not run, which
+ * `sync.rs`'s `a_count_that_cannot_be_read_is_none_and_never_zero` pins on the other side.
+ */
+export function mergeStatus(prev: SyncStatus | null, next: SyncStatus): SyncStatus {
+  if (next.cardCount !== null) return next;
+  return {
+    ...next,
+    cardCount: prev?.cardCount ?? null,
+    lastCheckAt: prev?.lastCheckAt ?? null,
+    bulkUpdatedAt: prev?.bulkUpdatedAt ?? null,
+    lastError: prev?.lastError ?? null,
+    // Carried like the rest. Nothing rendered it when this function was written, so its
+    // absence was invisible; the card detail pane and the settings view will render it,
+    // and a count that blinked to "unknown" on an unreadable poll would read as an
+    // ingest that suddenly stopped skipping lines.
+    lastIngestSkipped: prev?.lastIngestSkipped ?? null,
+  };
+}
+
+/** The date part of Scryfall's `updated_at` (`2026-08-03T21:16:27.869+00:00`). */
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}/;
+
+/**
+ * The header's one-line summary: `116,568 cards · data from 2026-08-03`.
+ *
+ * Every part is optional, because every part can genuinely be unknown before the first
+ * sync finishes — so this drops what it does not have rather than printing `null cards`
+ * or a zero that reads as "your collection is empty".
+ */
+export function statusLine(status: SyncStatus | null): string | null {
+  if (!status) return null;
+  if (status.cardCount === 0) return "No card data yet";
+
+  const parts: string[] = [];
+  if (status.cardCount !== null) parts.push(`${count(status.cardCount)} cards`);
+  const date = status.bulkUpdatedAt?.match(ISO_DATE)?.[0];
+  if (date) parts.push(`data from ${date}`);
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+export interface Sync {
+  /** The last readable status, or `null` before the first poll answers. */
+  status: SyncStatus | null;
+  /** What the banner should say: this session's failure, else the persisted one. */
+  error: string | null;
+  /** Start a forced sync (skipping the 24 h check window). */
+  refresh: () => void;
+  /** True from the click until `sync_run` settles. */
+  refreshing: boolean;
+  /**
+   * The last Refresh came back with nothing new (spec §4.5: "already up to date").
+   * Transient — it clears itself after {@link UP_TO_DATE_MS}, because it is an answer to
+   * one click and not a state of the app.
+   */
+  upToDate: boolean;
+}
+
+/**
+ * Polls `sync_status` and owns the Refresh action.
+ *
+ * The spinner is driven by the `sync_run` promise rather than by `sync:progress`,
+ * because a run inside the 24 h check window returns *without emitting a single event* —
+ * a spinner waiting for one would never stop. For the same reason the status is re-read
+ * as soon as that promise settles, instead of waiting for the poll timer.
+ *
+ * Plain hooks rather than TanStack Query: this is one endpoint with a bespoke merge rule
+ * and an adaptive interval, and neither is what a query cache is for. (It also used to mean
+ * `AppShell` needed no provider at all; that stopped being true when the sidebar's nav
+ * entries became drop targets and started writing to a deck and the wishlist. This hook is
+ * unchanged either way — the reason above is the one that was load-bearing.)
+ */
+export function useSync(): Sync {
+  const [status, setStatus] = useState<SyncStatus | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [runError, setRunError] = useState<string | null>(null);
+  const [upToDate, setUpToDate] = useState(false);
+  const upToDateTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // Bumped to restart the poll loop immediately; see `refresh`.
+  const [pollNonce, setPollNonce] = useState(0);
+  // The merge needs the previous value, and reading it from a ref keeps the state
+  // updater pure (StrictMode invokes updaters twice in development).
+  const latest = useRef<SyncStatus | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const poll = async () => {
+      try {
+        const next = await ipc.syncStatus();
+        if (cancelled) return;
+        const merged = mergeStatus(latest.current, next);
+        latest.current = merged;
+        setStatus(merged);
+        // A rejection is this session's account of one click, and it goes stale the
+        // moment nothing is running any more: `sync_run` failures are persisted to
+        // `lastError` too, so keeping the local copy would shadow a fresher backend
+        // message for the rest of the session ("sync already running", pinned forever).
+        if (!merged.syncing) setRunError(null);
+      } catch {
+        // A status read that failed is not worth a banner: the next one is seconds away,
+        // and a sync that failed has already persisted its reason to `lastError`.
+        if (cancelled) return;
+      }
+      // Chained timeouts, not an interval: the cadence depends on the answer, and two
+      // polls must never overlap.
+      timer = setTimeout(poll, latest.current?.syncing ? POLL_SYNCING_MS : POLL_IDLE_MS);
+    };
+    void poll();
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [pollNonce]);
+
+  // The timeout below outlives a fast unmount otherwise, and fires `setUpToDate` on a
+  // component that is gone.
+  useEffect(() => () => clearTimeout(upToDateTimer.current), []);
+
+  // Web only in effect: on desktop this guard is a synchronous pass-through, so the body
+  // below runs in the same tick it always did. See `FeedDownloadProvider`.
+  const askFirst = useFeedDownload();
+  const refresh = useCallback(() => {
+    askFirst("corpus", () => {
+    setRefreshing(true);
+    setRunError(null);
+    // A second click restarts the message rather than letting the first click's timer
+    // cut the second click's answer short.
+    setUpToDate(false);
+    clearTimeout(upToDateTimer.current);
+    ipc
+      .syncRun(true)
+      .then((outcome) => {
+        // The 304 case, and the throttle case, and "the file has not rotated" — every
+        // way a run can succeed without ingesting anything. Without this the button
+        // spins for a moment and nothing whatever changes on screen, which reads as a
+        // Refresh that did not work.
+        if (outcome.updated) return;
+        setUpToDate(true);
+        upToDateTimer.current = setTimeout(() => setUpToDate(false), UP_TO_DATE_MS);
+      })
+      .catch((e: unknown) => setRunError(ipcError(e)))
+      .finally(() => {
+        setRefreshing(false);
+        setPollNonce((n) => n + 1);
+      });
+    });
+  }, [askFirst]);
+
+  return {
+    status,
+    refreshing,
+    refresh,
+    upToDate,
+    error: runError ?? status?.lastError ?? null,
+  };
+}

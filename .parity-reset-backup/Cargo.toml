@@ -1,0 +1,276 @@
+[package]
+name = "mtg-grimoire"
+version = "0.17.0"
+description = "MTG Grimoire"
+authors = ["Markus Seerup"]
+license = "AGPL-3.0-or-later"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "mtg_grimoire_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+# ── Every target ─────────────────────────────────────────────────────────────────
+# What is here compiles for `wasm32-unknown-unknown` as well as for the desktop and Android
+# builds. `src/lib.rs`'s module map is the other half of this split and the two must agree:
+# a module in its "Every target" column may only reach crates named in this table.
+[dependencies]
+# What makes two tag names the same name. `deck_tags` is one global list since schema v21 and
+# its uniqueness grain is a **key** rather than the word itself: NFC, then Unicode lowercase,
+# then NFC again - so "Cafe" spelled with a precomposed e-acute, with a combining accent, and
+# in capitals is one label rather than three rows a reader cannot tell apart. SQLite cannot
+# answer this on its own: `COLLATE NOCASE` is ASCII-only and the bundled build carries no
+# normalisation at all, which is why the key is computed here and stored. Two small tables and
+# no dependencies of its own.
+unicode-normalization = "0.1"
+flate2 = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+# rustls, never native-tls (no OpenSSL/schannel dependency in a portable build), and
+# deliberately NO `gzip` feature: Scryfall bulk data is a real .gz *file*, not a
+# Content-Encoding, so transparent decompression would corrupt the download.
+#
+# Spike-verified 2026-08-27: this exact line, `default-features = false` and all, compiles
+# clean for wasm32 — the wasm backend is `fetch` and ignores the TLS feature — and
+# `bytes_stream()` is available there because `stream` is on.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+futures-util = "0.3"
+
+# HKDF-SHA256's hash, and the updater's integrity check: every GitHub release asset carries a
+# `digest` (`sha256:…`, measured live 2026-08-09 on all five), which is what stands in for the
+# minisign signature a hand-written updater gives up. Every-target because `crypto::pair_key`
+# is.
+sha2 = "0.10"
+# Pairing (spec §7.5) and the sync envelope (§7.7). Five crates, and the version choices are
+# one decision rather than five.
+#
+# **Every-target since PR 7, and that is the spec's premise rather than a convenience.** One
+# dataset across three platforms means one conflict engine, and `sync_engine::wire` seals every
+# batch with `sync_pair::crypto` - so a browser that could not open an envelope would be a
+# browser that cannot sync, which is the whole feature.
+#
+# Verified 2026-08-28 with `cargo clippy --lib --target wasm32-unknown-unknown — -D warnings`:
+# all five compile there, and **two dependency edits were what it took**, both recorded on the
+# lines below. Neither is a workaround; each removes something the tree did not need.
+#
+# `x25519-dalek` gets `getrandom` so `StaticSecret::random()` exists and this crate never has to
+# hold an RNG of its own, and `static_secrets` because a device's key is reused for every pairing
+# it ever does — an `EphemeralSecret` is consumed by its one `diffie_hellman`.
+x25519-dalek = { version = "3", features = ["static_secrets", "getrandom"] }
+# **0.10 and deliberately not 0.11.** 0.11 moves RustCrypto's array types to `hybrid-array`,
+# which would stand a second array stack beside the `sha2 0.10 -> digest 0.10 -> crypto-common
+# 0.1 -> generic-array 0.14` this tree already carries. 0.10 and `hkdf 0.12` sit on that one.
+# XChaCha20-Poly1305 rather than the 96-bit-nonce variant: a 192-bit nonce can be drawn at
+# random for every message with no counter to keep, and a counter kept across three devices and
+# a restore-from-backup is exactly the thing that gets reused.
+#
+# **`default-features = false` drops `getrandom`, and that is the first of the two wasm edits.**
+# The default feature set enables `aead/getrandom`, which pulls `rand_core 0.6` and with it
+# **`getrandom 0.2`** - a third major of that crate, and the only one in the tree that refuses
+# `wasm32-unknown-unknown` outright (`compile_error!`, pointing at a `js` feature). Nothing here
+# uses what it buys: `AeadCore::generate_nonce` is unreachable, because `crypto::seal` draws its
+# own 24 bytes through `crypto::random_bytes`. So the fix is a subtraction.
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
+hkdf = "0.12"
+# Random bytes for the group key, the group id, the device id, the pairing token and every
+# nonce. `fill` is the whole API this uses, and it is spelled the same in 0.3 and 0.4 — so the
+# pin follows whichever major `x25519-dalek` resolved, and moving it is a one-word edit with no
+# code change. `cargo tree -d` is the check.
+#
+# **It moved from 0.3 to 0.4 on 2026-08-28, and that is the second wasm edit** — the one this
+# comment already told the next reader to make. `x25519-dalek 3.0.0` resolves **0.4.3**, so
+# declaring 0.3 stood two majors of the same crate in the tree and only one of them had a
+# browser backend switched on; the wasm build failed inside the *other* one. No code changed.
+#
+# **On wasm it also needs `wasm_js`**, which the web block below adds — features across target
+# blocks are additive, so the two lines are one dependency. In 0.3 that feature had to be paired
+# with `--cfg getrandom_backend="wasm_js"` in a `.cargo/config.toml`; **0.4 needs no build flag**,
+# which was established by deleting the file and watching the wasm build stay green.
+getrandom = "0.4"
+# The sealed envelope as a JSON string. **base64url and not hex**: the relay stores ciphertext
+# as TEXT in a Durable Object, and hex would be twice the bytes over the wire and against the
+# 2 MB per-row cap where base64 is four thirds; URL-safe so the blob can be a path segment
+# later without anything having to escape it. `default-features = false` drops `std`, which is
+# what makes it compile for wasm alongside everything else in this block; `alloc` is the whole
+# API `Engine::encode`/`decode` needs.
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
+# The invite as a picture. This app renders the matrix itself in the webview — see
+# `sync_pair::invite::qr_matrix` — so the crate's own `image` and `svg` renderers are dead
+# weight and `default-features = false` drops them. Building the matrix is the fact; drawing it
+# is the page's, which is this repo's boundary applied to a QR code.
+qrcode = { version = "0.14", default-features = false }
+
+# ── Desktop and Android ──────────────────────────────────────────────────────────
+# Everything here is either impossible in a browser or pointless there. `bundled` is
+# libsqlite3-sys compiling sqlite3.c with the host compiler, which is right on Windows and
+# impossible in a webview; `tokio`'s `fs` has no browser counterpart; `zip`, `image` and
+# `sha2` serve the portable updater and the cover-image encoder, both desktop-only by
+# spec §6.3.
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+# `hooks` is what the plain-text mirror watches through: an `update_hook` on the one write
+# connection sees every insert, update and delete with the table's name, so no command has to
+# remember to tell the mirror anything and none added later can forget to. Verified in the
+# vendored manifest on 2026-08-25: `hooks = []` pulls in **no additional crates**, and the
+# `Cargo.lock` diff for this change is therefore **empty** — a lockfile records resolved versions
+# and dependency edges, never feature selections, so an empty diff is the evidence rather than a
+# missing one.
+rusqlite = { version = "0.40", features = ["bundled", "hooks"] }
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+# The system file picker. The webview cannot name a file on disk on its own, and the commands
+# behind it — `deck_set_cover_image`, `import_read_file`, `export_write_file`, and the mirror's
+# "Change folder…" — take a path the backend reads or writes rather than bytes, so this plugin
+# is what stands between a button and a command that already exists.
+# `capabilities/default.json` grants `dialog:allow-open` **and `dialog:allow-save`** — the
+# second since the export dialog shipped, which this comment went on denying for a whole plan.
+# The other three verbs (message, ask, confirm) are not permitted; the app's own questions are
+# drawn in the page. Never `dialog:default`.
+tauri-plugin-dialog = "2"
+# The one write it is here for: putting a decklist export on the clipboard. Grants
+# `clipboard-manager:allow-write-text` and nothing else — not `:default`, which also grants
+# the read, and nothing here reads the clipboard.
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-single-instance = "2"
+# Windows 11 Snap Layouts, and the *only* thing it is here for. `tauri.conf.json` sets
+# `decorations: false` so the app can draw its own caption (`src/components/TitleBar.tsx`),
+# and an undecorated window loses the flyout Windows raises when the pointer rests on a real
+# maximize button — because that flyout is the OS answering `HTMAXBUTTON` to its own
+# `WM_NCHITTEST`, which a `<button>` in a webview is never asked. This plugin parks a
+# transparent Win32 child window over the button's rectangle and answers it.
+#
+# It draws nothing: the caption buttons stay ours, in lucide, and the plugin finds the maximize
+# one by DOM id (`SNAP_BUTTON_ID`, shared with the frontend through `src/lib/window.ts`).
+# `tauri-plugin-decoration` was the other candidate and renders its own HTML controls, which
+# would have replaced those buttons and needed a CSP loosened for its stylesheet.
+#
+# **A plain dependency rather than `[target.'cfg(windows)'.dependencies]`, for the reason the
+# mcp-bridge paragraph below gives**: `tauri-build` discovers a plugin's ACL permissions
+# through the dependency graph, so target-gating it would leave `capabilities/default.json`'s
+# two `snap-layout:` entries unresolvable on the Linux half of the CI matrix. The crate ships a
+# dummy implementation for every non-Windows target and compiles to nothing there.
+#
+# **`cfg(not(target_family = "wasm"))` is not that target-gate and does not reintroduce its
+# problem**, because `build.rs` returns early for a wasm `TARGET` and never asks
+# `tauri_build::build()` to resolve an ACL there at all. Every target that still runs
+# `tauri_build` — Windows, Linux, Android — sees this line.
+tauri-plugin-snap-layout = "1"
+# The other half of the Tauri MCP server in `.mcp.json`. That package is only ever a *client*:
+# it dials a WebSocket this plugin opens inside the running app, so without the plugin nothing
+# listens and `driver_session` answers `connected: false` forever. Registered under
+# `#[cfg(debug_assertions)]` in `lib.rs` — a release build compiles the crate and never opens
+# the port. It stays a plain dependency rather than an optional one on purpose: `tauri-build`
+# discovers a plugin's ACL permissions through the dependency graph, so dropping it from the
+# release profile would leave `capabilities/default.json`'s `mcp-bridge:` entries unresolvable
+# and fail the build that needs them least.
+tauri-plugin-mcp-bridge = "0.12"
+# `rt` is not optional: tokio::fs runs every operation through spawn_blocking, which
+# needs a runtime handle. It reaches us through tauri's tokio today, but this crate
+# must not depend on another crate's feature selection to compile.
+# `sync` is the semaphore that caps concurrent image fetches; `time` is the sleep the
+# image cache's pacer and its 429 penalty are made of.
+tokio = { version = "1", features = ["fs", "io-util", "rt", "sync", "time"] }
+# Reading one entry — `mtg-grimoire.exe` — out of the portable release archive.
+# `deflate` only: `Compress-Archive` writes plain deflate, and the default feature set
+# drags in bzip2, zstd, lzma and AES for formats this will never see.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+# Decoding whatever a user picks as a custom deck cover and re-encoding it to WEBP at the
+# `art` crop's 626x457, so a cover and a card's art are interchangeable in every tile.
+# `default-features = false` drops rayon and eleven formats nobody will hand a file-picker;
+# what is left is the five a person actually has on disk plus `webp`, which is both the
+# decoder for a WEBP they picked and — through `image-webp` — the only encoder in the tree.
+image = { version = "0.25", default-features = false, features = [
+    "png",
+    "jpeg",
+    "gif",
+    "bmp",
+    "webp",
+] }
+
+# ── Web ──────────────────────────────────────────────────────────────────────────
+# ⚠️ NEVER add `default-features = false` to this rusqlite line. `ffi-sqlite-wasm-rs` — the
+# FFI backend that makes wasm work at all — is in rusqlite's DEFAULT feature set, and
+# switching it off fails the build with `unresolved import libsqlite3_sys`, which reads
+# exactly like "wasm is unsupported" and is the opposite of the truth. It cost the spike a
+# build; see the research doc's Assumption 1.
+#
+# `hooks` and not `bundled`: `hooks` was asserted live in a browser (probe 1 —
+# `update_hook` fired three times for three writes), and `bundled` is a host C compile.
+# SQLite here is 3.53.0 with FTS5, DBSTAT, COLUMN_METADATA and PREUPDATE_HOOK.
+[target.'cfg(target_family = "wasm")'.dependencies]
+rusqlite = { version = "0.40", features = ["hooks"] }
+# The browser's `crypto.getRandomValues`. A feature and a `—cfg` are both needed and they do
+# different jobs: this makes the backend available, and `.cargo/config.toml` selects it.
+getrandom = { version = "0.4", features = ["wasm_js"] }
+# The OPFS VFS. Same author as the FFI crate rusqlite already depends on, and both sit on
+# `rsqlite-vfs 0.1`, so the versions align without pinning. Its README marks all three of
+# its VFSes "No COOP/COEP requirements", and that was tested rather than quoted.
+sqlite-wasm-vfs = "0.2"
+# Pinned to the patch, because `wasm-bindgen-cli` must match the crate EXACTLY and a
+# mismatch is a runtime failure with an unhelpful message. `scripts/build-wasm.mjs`
+# re-checks the pair before every build.
+wasm-bindgen = "=0.2.127"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+console_error_panic_hook = "0.1"
+
+[target.'cfg(target_family = "wasm")'.dependencies.web-sys]
+version = "0.3"
+features = ["Navigator", "StorageManager", "WorkerGlobalScope", "WorkerNavigator", "console"]
+
+# Waiting for the process an update replaced to actually terminate, which is the one thing
+# std cannot express: there is no portable "is this PID alive". `0.61` is already in the
+# tree via tauri/tao, so this adds no build. Two functions, hence two features.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+] }
+
+# Android only, and reached only from Rust. A file the reader picks on Android is a
+# `content://` URI, not a path: `tauri-plugin-dialog`'s DialogPlugin.kt fires
+# ACTION_OPEN_DOCUMENT / ACTION_CREATE_DOCUMENT and returns `uri.toString()`. This plugin's
+# `Fs::open` resolves such a URI through the ContentResolver and hands back a std::fs::File
+# built from the descriptor -- which is what lets `picked.rs` keep every byte-handling path
+# downstream unchanged, `image::ImageReader`'s need for `Seek` included.
+#
+# **No `fs:` permission is granted to it, on any platform.** The ACL gates commands the
+# webview invokes; this is a Rust-side handle on managed state. The page's filesystem access
+# is unchanged: none. See `capabilities/mobile.json` and the test
+# `the_mobile_capability_drops_every_verb_the_platform_has_no_answer_for`.
+#
+# It was already in `Cargo.lock` transitively -- `tauri-plugin-dialog` depends on it -- so
+# this adds a direct edge rather than a new crate. No `url` dependency comes with it either:
+# `FilePath: FromStr` is infallible and makes the path-or-URL decision itself.
+[target.'cfg(target_os = "android")'.dependencies]
+tauri-plugin-fs = "2"
+# Reading one static field — `android.os.Build.MODEL` — so a phone on the pairing roster reads
+# "OnePlus 12" rather than the same string as every other device in the group. There is no
+# hostname to ask for here: Android answers `localhost` on every handset ever made, which is why
+# `sync_pair::identity::mint_name`'s three arms are three different questions rather than one.
+#
+# **It was already in `Cargo.lock` transitively — `tao`, `wry` and `tauri` all depend on it — so
+# this adds a direct edge rather than a new crate**, `tauri-plugin-fs`'s case above. The `0.21`
+# range is the one those three resolve, so cargo unifies to a single package and the `JavaVM` a
+# `tao` context hands back is the same type this crate names.
+#
+# **`ndk-context` is deliberately absent, and that is the correction worth recording.** It is the
+# textbook route to a `JavaVM` and it is *not* in this tree at all: nothing calls
+# `initialize_android_context`, so `android_context()` would answer a null pointer and the model
+# lookup would fall back on every phone forever. The VM comes from
+# `tauri::tao::platform::android::prelude::main_android_context` instead — the runtime this app
+# is actually built on, holding the pointer the activity gave it.
+jni = "0.21"
+
+[dev-dependencies]
+httpmock = "0.8"
+tokio = { version = "1", features = ["macros", "rt"] }
+tempfile = "3"
