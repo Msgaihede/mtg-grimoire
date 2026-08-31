@@ -1002,14 +1002,14 @@ record, with every measurement, is
   ended, and routing it through `errors::record` like a network failure tells the reader their
   sync is broken when in fact their pledge lapsed — the wrong sentence, pointing at the wrong fix
   (spec §10).
-- **That exception is a condition and not a principle, and it is true today and only today.**
-  Every path in `entitlement.rs` is a press — Settings' connect button, its paste field, and the
-  **Sync now** button, which is `run_once`'s only caller — so the failure is already on the
-  screen of the reader who caused it, and `error_log` is for the failures nobody was watching.
-  **`client.rs`'s own module doc still plans a 60-second poll, and when one lands the argument
-  inverts**: a refresh that fails in the background is exactly a failure nobody was watching, and
-  the non-401 paths in `entitlement::post_for_grant` owe an `errors::record` then. **The 401 rule
-  does not invert** — a lapse is never an `error_log` row, whatever triggered the request.
+- **The rule above only ever held conditionally, and the condition has since fired — not through
+  the poll it named, but through the socket that shipped instead.** `sync_engine::live`'s
+  connection manager reaches `access_token` in the background, so `run_once` has a second caller
+  now and it is not a press: "every path is a press" no longer holds. **The background failures
+  this predicted are recorded now, by the connection manager's own error arm, not by
+  `entitlement.rs`.** **The 401 rule still does not invert**: a lapse is never an `error_log`
+  row, and the manager excludes one the same way, by asking `membership_ended` first. Full
+  reasoning in `entitlement.rs`'s module doc.
 - **`sync_engine` compiles for `wasm32-unknown-unknown` and that is a requirement, not a bonus** —
   spec §2's one-implementation rule. Only `sync_engine::commands` is gated off it, because a
   `#[tauri::command]` does not exist in a browser. So are `sync_pair::pairing` and nothing else in
