@@ -496,18 +496,16 @@ describe("SyncPanel", () => {
 
   /**
    * `pairing::poll`'s own TTL check — the relay's, read off this side's clock rather than the
-   * reader's patience (`src-tauri/src/sync_pair/pairing.rs`'s `EXPIRED`). Without it a dropped
-   * offer polls a 404 forever; this is the panel saying the code timed out instead of spinning.
+   * reader's patience (`src-tauri/src/sync_pair/pairing.rs`'s `EXPIRED`). Without a sentence for
+   * it a dropped offer polls silently forever: the reader sits at a `waiting` or `compare` screen
+   * that will never change again, with nothing on it saying the code has died.
    *
-   * ⚠️ **Currently RED, and not a mistake in this test.** `SyncPanel`'s `error` fallback chain
-   * (`begin.error ?? accept.error ?? confirm.error ?? rename.error ?? revoke.error ??
-   * leave.error`) never includes `poll.error`, so a rejected `syncPairingPoll` — this TTL check
-   * included — is swallowed with no sentence drawn anywhere; the QR/waiting screen just sits
-   * there forever. Confirmed by removing this test's mock rejection and reproducing the same
-   * "nothing shown" outcome through the fake's own `pairingReadError` fault instead, which is
-   * why `SyncPanel.stories.tsx`'s old `AnswerUnreadable` story could not be kept either — see
-   * the task-10 report. Out of scope here: this file may not touch `SyncPanel.tsx`. Add
-   * `?? poll.error` to that chain and this goes green with no other change.
+   * **`poll.error` is in `SyncPanel`'s `error` fallback chain, right after `accept.error` and
+   * ahead of `confirm.error`** — a rendezvous failing *while it runs* outranks a stale `confirm`
+   * refusal from earlier in the same attempt, and it is not swallowed the way the effect's own
+   * `syncNow` rejection is: that one hides a harmless failure *after* a success, and this is the
+   * only signal the reader gets that the thing they are waiting for is never coming. `Cancel`
+   * stays on screen regardless, which is what keeps the sentence from stranding anyone.
    */
   it("says so when a pairing has expired", async () => {
     syncPairingPoll.mockRejectedValue("That pairing code has expired. Start a new one.");

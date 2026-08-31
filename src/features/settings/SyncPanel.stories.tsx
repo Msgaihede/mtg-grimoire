@@ -213,6 +213,41 @@ export const CeremonyCompletes: Story = {
 };
 
 /**
+ * The one refusal in this flow a reader cannot produce by typing.
+ *
+ * Every other way it can fail is a *shape* — a code of the wrong length, a character outside the
+ * alphabet, a step pressed out of order — and all of those are raised by the handler itself.
+ * What is left is the blob failing to open, which in the crate is an AEAD refusing to
+ * authenticate. So it is a fault, and it lands on this one step.
+ *
+ * ⚠️ **It lands on the offering device's *poll* now, not on a paste.** The fake's own
+ * `sync_pairing_poll` throws it on that device's second read — where `sync_pairing_respond` used
+ * to sit before a relay folded that step into the poll (see `db.ts`'s own comment on the fault).
+ * That read is a *query*, and until `1b2989f` a query's rejection reached the panel nowhere; this
+ * story could not be written at all for a while, because there was nothing on screen for a play
+ * to assert. `poll.error` joining `SyncPanel`'s `error` chain is what makes it visible again.
+ */
+export const AnswerUnreadable: Story = {
+  parameters: { fake: { fault: "pairingReadError" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await userEvent.click(await canvas.findByRole("button", { name: /pair a device/i }));
+    await expect(await canvas.findByTestId("pairing-qr")).toBeInTheDocument();
+
+    // The fault sits on the *second* poll — the first still answers `"waiting"` — so this waits
+    // out the same real 1.5 s tick `DigitsToCompare` does.
+    await expect(
+      await canvas.findByRole("alert", {}, { timeout: 5000 }),
+    ).toHaveTextContent(/could not be read/i);
+    // The code is still on screen and the offer is still live: a refusal here has changed
+    // nothing, and the reader's other device can still scan or type it.
+    await expect(canvas.getByTestId("pairing-qr")).toBeInTheDocument();
+    await expect(canvas.queryByTestId("pairing-sas")).not.toBeInTheDocument();
+  },
+};
+
+/**
  * A code of the wrong length, refused in the crate's own words.
  *
  * **This refusal is reachable from a keyboard, which is why it is not a fault.** Half a paste is
