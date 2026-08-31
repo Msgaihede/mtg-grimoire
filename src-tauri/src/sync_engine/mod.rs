@@ -37,4 +37,5 @@ pub mod commands;
 pub mod entitlement;
 pub mod hlc;
 pub mod merge;
+pub mod schedule;
 pub mod wire;
