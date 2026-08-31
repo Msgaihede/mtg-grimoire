@@ -103,6 +103,16 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     onCollectionReconciled: vi.fn().mockReturnValue(() => {}),
     onMarketplaceProgress: vi.fn().mockReturnValue(() => {}),
     onOracleTagProgress: vi.fn().mockReturnValue(() => {}),
+    // Task 10's and Task 11's four — `AppShell` mounts `useDeviceSyncInvalidation` and
+    // `useDeviceSyncLive` beside the listeners above, and its Android foreground effect calls
+    // `syncLiveForeground`. Same reason as every entry in this block: a bare call inside a
+    // mount effect, so a missing mock is a synchronous `TypeError` rather than a rejection
+    // anything can catch. `"off"` is the resting state every installation that has paired
+    // nothing is in, which both of this file's shell-mounting tests stand in.
+    onSyncApplied: vi.fn().mockReturnValue(() => {}),
+    onSyncLive: vi.fn().mockReturnValue(() => {}),
+    syncLiveState: vi.fn().mockResolvedValue("off"),
+    syncLiveForeground: vi.fn().mockResolvedValue(undefined),
     marketplaceFeedStatus: vi.fn().mockResolvedValue([]),
     deckAddCard,
     deckGet,
