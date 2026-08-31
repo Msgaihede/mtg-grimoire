@@ -5009,11 +5009,24 @@ export function isNewer(candidate: string, current: string): boolean {
   return false;
 }
 
-/** `update::pick_asset` — matched on the tail of the name, lowercased. `other` picks
- *  nothing, which is the whole of what makes an install kind un-updatable. */
+/**
+ * `update::pick_asset` — matched on the tail of the name, lowercased.
+ *
+ * **Three of the five kinds pick nothing**, which is the whole of what makes an install
+ * un-updatable from inside the app: `other` because nothing knows what would install it,
+ * `managed` and `web` because something else already does — the store on a phone, the
+ * service worker in a browser.
+ *
+ * **Written as an allow-list rather than as `kind === "other"`, and that was a real defect.**
+ * The old form fell through to `NSIS_SUFFIX` for anything it did not name, so it handed a
+ * *managed* install the Windows setup — a mock encoding a state the backend refuses, which
+ * stays green for ever because nothing else in the workbench disagrees with it. Rust lists
+ * all three by name for the same reason, so a sixth kind makes the compiler ask.
+ */
 export function pickAsset(assets: UpdateAsset[], kind: InstallKind): UpdateAsset | null {
-  if (kind === "other") return null;
-  const suffix = kind === "portable" ? PORTABLE_SUFFIX : NSIS_SUFFIX;
+  const suffix =
+    kind === "portable" ? PORTABLE_SUFFIX : kind === "nsis" ? NSIS_SUFFIX : null;
+  if (suffix === null) return null;
   return assets.find((a) => a.name.toLowerCase().endsWith(suffix)) ?? null;
 }
 

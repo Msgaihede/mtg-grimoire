@@ -98,11 +98,6 @@ export function useUpdate(): Update {
   const [nonce, setNonce] = useState(0);
 
   useEffect(() => {
-    // **The web target has no updater to poll**, and the `catch` below is what made that
-    // invisible: `update_status` is one of §6.3's desktop-only commands, so on a browser this
-    // was a failing IPC call once a minute for the life of the tab, swallowed every time.
-    // Found on the phone 2026-08-30 while chasing the one `unknown command` still on screen.
-    if (isWebTarget()) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const poll = async () => {
@@ -114,7 +109,15 @@ export function useUpdate(): Update {
         // read says nothing about whether an update exists.
       }
       // Chained timeouts rather than an interval, so two reads can never overlap.
-      timer = setTimeout(poll, POLL_MS);
+      //
+      // **Read once on the web target, rather than not at all.** `update_status` answers
+      // there since 2026-08-31 — it is `installKind: "web"` and two `app_meta` reads — and
+      // `UpdatePanel` needs that answer to know it must not draw a Download button. What it
+      // does not need is a second read: this poll exists for exactly one thing, the check
+      // Rust spawns at startup and emits no event for, and a browser runs no such check. So
+      // the answer cannot change while the tab is open, and re-asking every minute would be
+      // a write-lock acquisition a minute for a constant.
+      if (!isWebTarget()) timer = setTimeout(poll, POLL_MS);
     };
     void poll();
     return () => {

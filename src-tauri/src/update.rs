@@ -25,14 +25,30 @@
 //!   release page. Guessing is how a user ends up with two copies of the app.
 
 use crate::sync::AppState;
+#[cfg(not(target_family = "wasm"))]
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+// With the download gated away, [`verify_digest`] is the only thing left that hashes, and
+// it goes with it — so this import would be unused on wasm, which CI treats as a red build.
+#[cfg(not(target_family = "wasm"))]
 use sha2::{Digest, Sha256};
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(not(target_family = "wasm"))]
+use std::path::PathBuf;
+// **Gated rather than deleted**, because CI runs
+// `cargo clippy --lib --target wasm32-unknown-unknown -- -D warnings` and an unused import
+// is a red build there. Every name below is reachable only from [`Updater`], from the check
+// that fills it, or from the download-and-swap half of this file — all of which carry the
+// same gate. **`SystemTime` is the one worth naming twice**: it does not merely go unused on
+// wasm, `SystemTime::now()` *panics* there, and [`unix_now`] is the only thing that calls it.
+#[cfg(not(target_family = "wasm"))]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(not(target_family = "wasm"))]
 use std::sync::{Arc, Mutex};
+#[cfg(not(target_family = "wasm"))]
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+#[cfg(not(target_family = "wasm"))]
 use tauri::Emitter;
 
 /// The repository the app updates itself from. Not derived from `CARGO_PKG_REPOSITORY`:
@@ -62,6 +78,7 @@ const K_HISTORY: &str = "update_release_history";
 /// otherwise, so this is the figure the request would carry anyway, written down because a
 /// reader of the version history is entitled to know where the list stops. The repository has
 /// eleven releases today; the cap matters the year it does not.
+#[cfg(not(target_family = "wasm"))]
 const HISTORY_PER_PAGE: u32 = 30;
 
 /// What the two Windows artifacts are called, as **suffixes**.
@@ -78,15 +95,18 @@ const PORTABLE_SUFFIX: &str = "-windows-x64-portable.zip";
 const NSIS_SUFFIX: &str = "_x64-setup.exe";
 
 /// The one entry read out of the portable archive.
+#[cfg(not(target_family = "wasm"))]
 const PORTABLE_EXE: &str = "mtg-grimoire.exe";
 
 /// Refuse an asset larger than this before a byte is read. The Windows artifacts are
 /// 4.8–6.5 MB; this is a bound on what a bad answer can make this process spend, not a
 /// statement about the release.
+#[cfg(not(target_family = "wasm"))]
 const MAX_ASSET_BYTES: u64 = 256 * 1024 * 1024;
 
 /// Bytes between `update:progress` events. A chunk-by-chunk callback fires far more often
 /// than a progress bar can use.
+#[cfg(not(target_family = "wasm"))]
 const PROGRESS_EMIT_BYTES: u64 = 256 * 1024;
 
 /// How long a freshly launched successor waits for the process it replaced to exit.
@@ -115,6 +135,17 @@ pub enum InstallKind {
     /// someone holding a phone is worse than saying nothing. This one has an answer and it is
     /// "the store has it".
     Managed,
+    /// A page in a browser, which the **service worker** replaces. Sibling of
+    /// [`InstallKind::Managed`] and deliberately not the same value: both mean "something
+    /// else installs this and this app does not update itself", and a reader is owed the
+    /// name of the thing that does. Saying "Google Play" to somebody holding a laptop is the
+    /// same wrong answer that variant's own doc refuses to give a phone.
+    ///
+    /// **It is answered by [`crate::web::route`] and by nothing else**, because that is the
+    /// only place in the crate that knows it is running in a browser. [`install_kind_for`]
+    /// never returns it: that function probes a filesystem beside an executable, and on this
+    /// target there is neither.
+    Web,
     /// An MSI install, a Linux build, or anything unrecognised. Gets the release page and
     /// nothing else — see the module docs.
     Other,
@@ -212,6 +243,7 @@ pub struct UpdateProgress {
     pub total: u64,
 }
 
+#[cfg(not(target_family = "wasm"))]
 /// What a completed download left behind, and what [`apply`] will do with it.
 #[derive(Clone, Debug)]
 struct Staged {
@@ -222,6 +254,7 @@ struct Staged {
     version: String,
 }
 
+#[cfg(not(target_family = "wasm"))]
 /// Runtime state for the updater. Managed by Tauri beside `AppState`, rather than inside
 /// it: nothing here needs the database except the two `app_meta` reads, which take a
 /// connection as an argument like every other read in this app.
@@ -242,15 +275,18 @@ pub struct Updater {
     staged: Mutex<Option<Staged>>,
 }
 
+#[cfg(not(target_family = "wasm"))]
 /// Clears `busy` however the operation ends.
 struct BusyGuard<'a>(&'a AtomicBool);
 
+#[cfg(not(target_family = "wasm"))]
 impl Drop for BusyGuard<'_> {
     fn drop(&mut self) {
         self.0.store(false, Ordering::SeqCst);
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl Updater {
     pub fn new(api_base: String, exe: PathBuf) -> Updater {
         let kind = install_kind_for(cfg!(mobile), exe.parent());
@@ -301,6 +337,7 @@ impl Updater {
 /// sixty existing `crate::app_meta::get_app_meta` call sites keep reading the way they read.
 pub use crate::app_meta::{get_app_meta, set_app_meta};
 
+#[cfg(not(target_family = "wasm"))]
 fn clear_app_meta(conn: &Connection, key: &str) -> rusqlite::Result<()> {
     conn.execute("DELETE FROM app_meta WHERE key = ?1", params![key])?;
     Ok(())
@@ -312,6 +349,13 @@ fn clear_app_meta(conn: &Connection, key: &str) -> rusqlite::Result<()> {
 
 /// Seconds since the Unix epoch. A clock before 1970 reads as 0, which makes every check
 /// due — `sync::unix_now`'s rule.
+///
+/// **Gated, and this is the fourth module to need it.** `SystemTime::now()` does not fail on
+/// `wasm32-unknown-unknown`, it **panics** — which arrives in the Worker's `onerror` with
+/// nothing the page can show. `sync`, `tags` and `combos` were each caught by it before this
+/// one; where a wasm caller needs a clock it reads `SELECT unixepoch()` off the connection.
+/// Nothing here does, because the only caller is [`check_inner`], which is desktop's.
+#[cfg(not(target_family = "wasm"))]
 fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -415,9 +459,12 @@ pub fn pick_asset(assets: &[Asset], kind: InstallKind) -> Option<&Asset> {
     let suffix = match kind {
         InstallKind::Portable => PORTABLE_SUFFIX,
         InstallKind::Nsis => NSIS_SUFFIX,
-        // Neither can download anything, for opposite reasons: `Other` because nothing here
-        // knows what would install it, `Managed` because something else already does.
-        InstallKind::Managed | InstallKind::Other => return None,
+        // None of the three can download anything. `Other` because nothing here knows what
+        // would install it; `Managed` and `Web` because something else already does — the
+        // store on a phone, the service worker in a browser. **Listed rather than swept up by
+        // a `_`**, so the day a fourth kind is added the compiler asks what it downloads
+        // instead of quietly answering `None` for it.
+        InstallKind::Managed | InstallKind::Web | InstallKind::Other => return None,
     };
     assets
         .iter()
@@ -429,6 +476,7 @@ pub fn pick_asset(assets: &[Asset], kind: InstallKind) -> Option<&Asset> {
 /// An absent digest is a **failure**, not a pass. This is the only integrity check the
 /// design has — there is no minisign signature behind it — so "the field was missing" must
 /// never be the path of least resistance into running a downloaded executable.
+#[cfg(not(target_family = "wasm"))]
 fn verify_digest(expected: Option<&str>, actual: &[u8]) -> Result<(), String> {
     let Some(expected) = expected else {
         return Err(
@@ -462,6 +510,7 @@ fn verify_digest(expected: Option<&str>, actual: &[u8]) -> Result<(), String> {
 /// Built by appending to the whole file name rather than with `Path::with_extension`, which
 /// would replace `.exe` and give `mtg-grimoire.old` — a name that is not the running image
 /// and would leave the real one behind.
+#[cfg(not(target_family = "wasm"))]
 fn sibling(path: &Path, suffix: &str) -> PathBuf {
     let mut name = path.file_name().unwrap_or_default().to_os_string();
     name.push(suffix);
@@ -482,6 +531,7 @@ fn sibling(path: &Path, suffix: &str) -> PathBuf {
 ///
 /// An entry that will not parse is skipped rather than failing the page: one malformed
 /// release five versions back must not cost the reader their update check.
+#[cfg(not(target_family = "wasm"))]
 fn parse_release_page(v: &serde_json::Value) -> Vec<ReleaseInfo> {
     v.as_array()
         .map(|list| {
@@ -504,11 +554,13 @@ fn parse_release_page(v: &serde_json::Value) -> Vec<ReleaseInfo> {
 /// instead would quietly change what this app offers the day a patch for an older line is
 /// published after a newer minor — and [`is_newer`] is the guard that decides whether the
 /// answer is an update at all, so nothing is lost by leaving the ordering to GitHub.
+#[cfg(not(target_family = "wasm"))]
 fn latest_of(page: &[ReleaseInfo]) -> Option<&ReleaseInfo> {
     page.first()
 }
 
 /// Parse one release object into the shape the rest of the module uses.
+#[cfg(not(target_family = "wasm"))]
 fn parse_release(v: &serde_json::Value) -> Result<ReleaseInfo, String> {
     let tag = v["tag_name"]
         .as_str()
@@ -547,7 +599,34 @@ fn parse_release(v: &serde_json::Value) -> Result<ReleaseInfo, String> {
 /// re-compared against the running version every time, which is what makes it
 /// self-clearing — after an update lands, yesterday's cached release is no longer newer and
 /// the notice goes away with no bookkeeping.
+#[cfg(not(target_family = "wasm"))]
 pub fn status(state: &AppState, updater: &Updater) -> UpdateStatus {
+    status_for(
+        state,
+        updater.kind,
+        updater.busy.load(Ordering::SeqCst),
+        crate::sync::lock_plain(&updater.staged).is_some(),
+    )
+}
+
+/// The same answer, for a target that has no [`Updater`] to read it off.
+///
+/// **The split is what makes the Updates panel decidable in a browser**, and the bug it
+/// repairs is the one PR #315 found on the phone: `UpdatePanel` tests `installKind`, that
+/// answer comes from this DTO, and where the command did not answer at all the panel read the
+/// *absence* as "not managed" and drew a Download button over a page that cannot download
+/// anything. **A feature gated on a backend answer is ungated wherever the backend cannot
+/// answer** — so the fix is for the backend to answer, which is what this function is for.
+///
+/// The three parameters are the whole of what an `Updater` was being consulted about. A web
+/// caller passes [`InstallKind::Web`], `false` and `false`: nothing there can be busy with a
+/// check it cannot run, and nothing can be staged where there is no file to stage.
+///
+/// Everything else is read from `app_meta`, on every target. **On web both keys are always
+/// empty and that is honest rather than broken**: only [`check`] writes them, `app_meta` is
+/// not one of the synced tables, and so a browser answers "not checked yet" — which is
+/// exactly what it is.
+pub fn status_for(state: &AppState, kind: InstallKind, busy: bool, staged: bool) -> UpdateStatus {
     let conn = crate::sync::lock_db_read(state);
     let last_check_at = get_app_meta(&conn, K_LAST_CHECK_AT);
     let cached: Option<ReleaseInfo> = get_app_meta(&conn, K_LATEST_SEEN)
@@ -557,16 +636,16 @@ pub fn status(state: &AppState, updater: &Updater) -> UpdateStatus {
 
     let asset = cached
         .as_ref()
-        .and_then(|r| pick_asset(&r.assets, updater.kind))
+        .and_then(|r| pick_asset(&r.assets, kind))
         .cloned();
     UpdateStatus {
         current_version: current_version().to_owned(),
-        install_kind: updater.kind,
+        install_kind: kind,
         available: cached,
         asset,
         last_check_at,
-        busy: updater.busy.load(Ordering::SeqCst),
-        staged: crate::sync::lock_plain(&updater.staged).is_some(),
+        busy,
+        staged,
     }
 }
 
@@ -589,6 +668,16 @@ pub fn history(state: &AppState) -> Vec<ReleaseNote> {
 }
 
 /// Ask GitHub for the latest release, honouring the 24 h throttle unless `force`.
+///
+/// **Desktop's, and `update_check` is therefore absent on web rather than broken.** Not for
+/// want of a way to fetch — [`crate::web::net::get_json`] would do it — but for want of a way
+/// to *call* it: `web::route::call` is synchronous, because the Worker's `#[wasm_bindgen]
+/// call` is, so no `async` command can be a `match` arm there at all. The two async entry
+/// points that do exist (`glue::ingest_cards`, `glue::ingest_combos`) are bespoke
+/// `#[wasm_bindgen]` functions with their own `postMessage` kinds, which is the same reason
+/// all four `*_refresh` commands are unrouted. A browser is offered no Check button, so
+/// nothing calls this and nothing sees an `unknown command`.
+#[cfg(not(target_family = "wasm"))]
 pub async fn check(
     state: &Arc<AppState>,
     updater: &Arc<Updater>,
@@ -601,6 +690,7 @@ pub async fn check(
     result
 }
 
+#[cfg(not(target_family = "wasm"))]
 /// Note a failed dealing with GitHub in the error log.
 ///
 /// **Classified from this module's own message strings**, which is only acceptable because
@@ -635,6 +725,7 @@ fn note_github(state: &Arc<AppState>, operation: &str, message: &str) {
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 async fn check_inner(
     state: &Arc<AppState>,
     updater: &Arc<Updater>,
@@ -745,6 +836,7 @@ async fn check_inner(
 ///
 /// Nothing is swapped here and nothing is launched. A download that succeeds leaves the app
 /// running exactly as it was, with one more file on disk.
+#[cfg(not(target_family = "wasm"))]
 pub async fn download(
     state: &Arc<AppState>,
     updater: &Arc<Updater>,
@@ -757,6 +849,7 @@ pub async fn download(
     result
 }
 
+#[cfg(not(target_family = "wasm"))]
 async fn download_inner(
     state: &Arc<AppState>,
     updater: &Arc<Updater>,
@@ -826,7 +919,7 @@ async fn download_inner(
                 version: release.version.clone(),
             }
         }
-        InstallKind::Managed | InstallKind::Other => {
+        InstallKind::Managed | InstallKind::Web | InstallKind::Other => {
             let _ = std::fs::remove_file(&part);
             return Err("this kind of install cannot be updated from inside the app.".into());
         }
@@ -841,6 +934,7 @@ async fn download_inner(
 /// The size bound is enforced against the running total rather than against
 /// `Content-Length`: a header is a claim, and a chunked response makes no claim at all —
 /// `scryfall::Client::download`'s rule, for its reason.
+#[cfg(not(target_family = "wasm"))]
 async fn stream_to_file(
     updater: &Arc<Updater>,
     app: &tauri::AppHandle,
@@ -916,6 +1010,7 @@ async fn stream_to_file(
 /// Matched on the file name rather than on a full path, because the archive's layout is the
 /// release workflow's business and `Compress-Archive` has changed how it stores single
 /// files before.
+#[cfg(not(target_family = "wasm"))]
 fn extract_portable_exe(archive: &Path, dest: &Path) -> Result<(), String> {
     let file = std::fs::File::open(archive)
         .map_err(|e| format!("could not open the downloaded archive: {e}"))?;
@@ -955,6 +1050,7 @@ fn extract_portable_exe(archive: &Path, dest: &Path) -> Result<(), String> {
 ///
 /// The exit is scheduled rather than immediate: a command that tears its own webview down
 /// inline never delivers its answer, and the caller needs to know this did not fail.
+#[cfg(not(target_family = "wasm"))]
 pub fn apply(updater: &Arc<Updater>, app: &tauri::AppHandle) -> Result<(), String> {
     let staged = crate::sync::lock_plain(&updater.staged)
         .clone()
@@ -976,11 +1072,12 @@ pub fn apply(updater: &Arc<Updater>, app: &tauri::AppHandle) -> Result<(), Strin
                 .spawn()
                 .map_err(|e| format!("could not start the installer: {e}"))?;
         }
-        // Unreachable in practice — nothing can be staged for either, because `pick_asset`
-        // refuses them and `download` refuses them again. Kept as a refusal rather than an
+        // Unreachable in practice — nothing can be staged for any of them, because
+        // `pick_asset` refuses them and `download` refuses them again. `Web` is doubly so:
+        // this whole function is gated off that target. Kept as a refusal rather than an
         // `unreachable!()` for the reason this module refuses everything else in words: a
         // panic in the updater takes the window with it.
-        InstallKind::Managed | InstallKind::Other => {
+        InstallKind::Managed | InstallKind::Web | InstallKind::Other => {
             return Err("this kind of install cannot be updated from inside the app.".into())
         }
     }
@@ -1004,6 +1101,7 @@ pub fn apply(updater: &Arc<Updater>, app: &tauri::AppHandle) -> Result<(), Strin
 /// If the second rename fails the first is undone, so a failure here leaves a working app
 /// exactly where it was. That is the case worth the code — the window is still up, and an
 /// app that has renamed itself out of existence cannot be relaunched by the user.
+#[cfg(not(target_family = "wasm"))]
 fn swap_and_relaunch(exe: &Path, staged: &Path) -> Result<(), String> {
     let old = sibling(exe, ".old");
     // A leftover from an earlier update whose successor never got to clean up. It is not
@@ -1034,6 +1132,7 @@ fn swap_and_relaunch(exe: &Path, staged: &Path) -> Result<(), String> {
 ///
 /// `OpenProcess` failing means it is already gone — the usual case for a process that never
 /// existed, and the correct answer for one that has just exited.
+#[cfg(not(target_family = "wasm"))]
 #[cfg(windows)]
 fn wait_for_process(pid: u32) {
     use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0};
@@ -1061,6 +1160,7 @@ fn wait_for_process(pid: u32) {
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[cfg(not(windows))]
 fn wait_for_process(_pid: u32) {}
 
@@ -1084,6 +1184,7 @@ fn wait_for_process(_pid: u32) {}
 ///
 /// Called before `tauri::Builder::default()`, because by the time a plugin has initialised
 /// the decision has already been made.
+#[cfg(not(target_family = "wasm"))]
 pub fn await_predecessor(exe: &Path, pid: Option<u32>) {
     if let Some(pid) = pid {
         let started = std::time::Instant::now();
@@ -1103,6 +1204,7 @@ pub fn await_predecessor(exe: &Path, pid: Option<u32>) {
 ///
 /// `None` for a launch with the flag and no id — a hand-run of the successor path — which
 /// waits for nothing and simply cleans up.
+#[cfg(not(target_family = "wasm"))]
 pub fn predecessor_pid<I: IntoIterator<Item = String>>(args: I) -> Option<u32> {
     let mut args = args.into_iter().skip_while(|a| a != AWAIT_FLAG);
     args.next()?;
@@ -1115,6 +1217,7 @@ pub fn predecessor_pid<I: IntoIterator<Item = String>>(args: I) -> Option<u32> {
 /// Runs on every launch, and is a no-op on nearly all of them. The staged file goes too —
 /// staging lives for one session by design, and a `.new` of unknown provenance is not
 /// something a later launch should quietly install.
+#[cfg(not(target_family = "wasm"))]
 pub fn clean_up(exe: &Path) {
     let _ = std::fs::remove_file(sibling(exe, ".old"));
     let _ = std::fs::remove_file(sibling(exe, ".new"));
@@ -1591,17 +1694,79 @@ mod tests {
         let progress = serde_json::to_value(UpdateProgress { done: 5, total: 10 }).unwrap();
         assert_eq!(progress, serde_json::json!({"done": 5, "total": 10}));
 
-        // The four install kinds are a closed union on the other side too. `src/lib/ipc.ts`
+        // The five install kinds are a closed union on the other side too. `src/lib/ipc.ts`
         // mirrors this by hand, and a rename here with no rename there is a status the panel
-        // renders as no branch at all.
+        // renders as no branch at all — which is exactly what a browser got while `web` did
+        // not exist and `installKind` arrived `undefined`.
         for (kind, name) in [
             (InstallKind::Portable, "portable"),
             (InstallKind::Nsis, "nsis"),
             (InstallKind::Managed, "managed"),
+            (InstallKind::Web, "web"),
             (InstallKind::Other, "other"),
         ] {
             assert_eq!(serde_json::to_value(kind).unwrap(), name);
         }
+    }
+
+    /// **[`status_for`] answers without an [`Updater`], which is what makes the Updates
+    /// panel decidable in a browser.**
+    ///
+    /// Driven with a cached release in `app_meta` on purpose: the interesting half is that
+    /// everything except the three parameters still comes off the database, so a web caller
+    /// gets the same self-clearing comparison against the running version that the desktop
+    /// does. What differs is only the kind — and therefore the asset, which `pick_asset`
+    /// refuses for `Web` exactly as it refuses it for `Managed`.
+    #[test]
+    fn status_for_answers_off_the_database_without_an_updater() {
+        let (state, _dir) = file_state("status-for");
+        let mut release = parse_release(&live_payload()).unwrap();
+        // **The payload's own `v0.2.0` is not newer than this build and would be filtered
+        // out**, which would make every assertion below pass for the wrong reason. Derived
+        // from the running version rather than written down, so this does not rot at the
+        // next release — `status_for` re-compares the cache through `is_newer` on every
+        // read, which is the behaviour being relied on here.
+        let major: u32 = current_version()
+            .split('.')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        release.version = format!("{}.0.0", major + 1);
+        {
+            let conn = crate::sync::lock_db(&state);
+            set_app_meta(&conn, K_LAST_CHECK_AT, "1800000000").unwrap();
+            set_app_meta(
+                &conn,
+                K_LATEST_SEEN,
+                &serde_json::to_string(&release).unwrap(),
+            )
+            .unwrap();
+        }
+
+        // A portable install is offered the release and the asset it could install.
+        let portable = status_for(&state, InstallKind::Portable, false, false);
+        assert_eq!(portable.install_kind, InstallKind::Portable);
+        assert_eq!(portable.last_check_at.as_deref(), Some("1800000000"));
+        assert!(portable.available.is_some());
+        assert!(portable.asset.is_some());
+
+        // The same database read as a browser: the news survives, the download does not.
+        let web = status_for(&state, InstallKind::Web, false, false);
+        assert_eq!(web.install_kind, InstallKind::Web);
+        assert_eq!(web.last_check_at.as_deref(), Some("1800000000"));
+        assert!(
+            web.available.is_some(),
+            "the cached release is a fact about the database, not about the install kind"
+        );
+        assert!(
+            web.asset.is_none(),
+            "nothing on this target can install an asset, so none may be offered"
+        );
+        // The two flags are the caller's, and a browser has nothing to report for either.
+        assert!(!web.busy);
+        assert!(!web.staged);
+        assert_eq!(web.current_version, current_version());
     }
 
     /// The cache is re-compared against the running version on every read, which is what
