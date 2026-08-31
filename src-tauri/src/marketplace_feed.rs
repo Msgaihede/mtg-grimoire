@@ -565,14 +565,32 @@ pub struct StreamRead {
     /// object. Empty for a provider that publishes no stamp.
     head: Vec<u8>,
     ordinal: i64,
-    /// Decoded bytes seen, against [`MAX_FEED_BYTES`]. **The browser path has no other size
-    /// guard**: `download` checks the declared `Content-Length` and the running total, and
-    /// nothing on the web target goes through it.
+    /// Decoded bytes seen, against [`Self::limit`].
     bytes: u64,
+    /// How many decoded bytes this sink will take before refusing.
+    ///
+    /// **The browser path has no other size guard against a well-formed body**: `download`
+    /// checks the declared `Content-Length` and the running total, and nothing on the web
+    /// target goes through it. `feed::frame`'s own cap is a different question — it refuses a
+    /// framer that has *stopped draining*, which is a malformed document rather than a large
+    /// one, and it therefore fires long before this does on garbage and never on a real feed.
+    limit: u64,
 }
 
 impl StreamRead {
+    /// A sink budgeted at [`MAX_FEED_BYTES`], which is what a download is worth taking.
     pub fn new(provider: &'static dyn FeedProvider) -> Self {
+        Self::with_limit(provider, MAX_FEED_BYTES)
+    }
+
+    /// …and one budgeted at whatever the caller can afford.
+    ///
+    /// A named budget rather than a constant read inside `push`, because the guard is
+    /// otherwise unreachable from a test: to reach 256 MiB with a document that *drains*
+    /// takes a quarter of a gigabyte of well-formed JSON, and a document that does not drain
+    /// trips the framer's cap first. A test that accepted either refusal would be no test at
+    /// all — measured 2026-08-31, that exact assertion survived deleting this whole guard.
+    pub fn with_limit(provider: &'static dyn FeedProvider, limit: u64) -> Self {
         StreamRead {
             provider,
             feed: Feed::new(provider.marketplace()),
@@ -582,6 +600,7 @@ impl StreamRead {
             head: Vec::new(),
             ordinal: 0,
             bytes: 0,
+            limit,
         }
     }
 
@@ -599,7 +618,7 @@ impl StreamRead {
         self.decoded.clear();
         self.decoder.push(chunk, &mut self.decoded)?;
         self.bytes += self.decoded.len() as u64;
-        if self.bytes > MAX_FEED_BYTES {
+        if self.bytes > self.limit {
             return Err(FeedError::TooLarge {
                 host: host_of_url(self.provider.url()),
             });
@@ -2410,24 +2429,46 @@ mod tests {
     /// **The web path has no `download` in front of it**, so the size guard `download`
     /// applies to the declared length and the running total has to live in the sink too.
     /// Without it a browser would build the whole of whatever it was served.
+    ///
+    /// **The body here is perfectly well-formed and drains**, which is the only way to reach
+    /// this guard rather than the framer's: `feed::frame`'s cap refuses a framer that has
+    /// stopped draining, and garbage trips that one first.
+    ///
+    /// ⚠️ **The first version of this test was unfailable** (2026-08-31). It pushed
+    /// non-draining bytes at the real 256 MiB budget, so the framer refused at 8 MiB and the
+    /// assertion accepted `TooLarge` *or* `Io` — deleting this entire guard left it green.
+    /// The named budget is what made the guard reachable, and the assertion names one error.
     #[test]
-    fn a_body_past_the_cap_is_refused_by_the_sink_itself() {
-        let mut sink = StreamRead::new(&CardKingdom);
-        sink.push(br#"{"data":["#).unwrap();
-        let chunk = vec![b'x'; 4 * 1024 * 1024];
-        let mut err = None;
-        // 68 × 4 MiB is past the 256 MiB cap; nothing may get near the end of that.
-        for _ in 0..68 {
-            if let Err(e) = sink.push(&chunk) {
-                err = Some(e);
-                break;
+    fn a_well_formed_body_past_the_budget_is_refused_by_the_sink_itself() {
+        let mut body = String::from(r#"{"data":["#);
+        for i in 0..40 {
+            if i > 0 {
+                body.push(',');
             }
+            body.push_str(&format!(
+                r#"{{"id":{i},"scryfall_id":"c{i}","is_foil":"false","price_retail":"1.00"}}"#
+            ));
         }
-        let e = err.expect("a body past MAX_FEED_BYTES must be refused");
+        body.push_str("]}");
+        assert!(body.len() > 1024, "the fixture has to pass the budget");
+
+        let mut small = StreamRead::with_limit(&CardKingdom, 1024);
+        let refusal = body
+            .as_bytes()
+            .chunks(256)
+            .find_map(|c| small.push(c).err())
+            .expect("a body past the budget must be refused");
+        // One error and not "either of two": a refusal from the framer would mean this guard
+        // was never reached, which is exactly how the previous version of this passed.
         assert!(
-            matches!(e, FeedError::TooLarge { .. }) || matches!(e, FeedError::Io(_)),
-            "expected a size or framer refusal, got {e:?}"
+            matches!(&refusal, FeedError::TooLarge { host } if *host == "api.cardkingdom.com"),
+            "expected TooLarge naming the host, got {refusal:?}"
         );
+
+        // …and the same body sails through the default budget, so the refusal above is the
+        // budget rather than anything about the document.
+        let feed = stream(&CardKingdom, &body, 256).unwrap();
+        assert_eq!(feed.row_count(), 40);
     }
 
     /// The host in a refusal has to be the feed's, not the whole URL — it is what the
