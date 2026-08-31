@@ -130,6 +130,76 @@ describe("the browser core", () => {
     expect(() => off()).not.toThrow();
   });
 
+  /**
+   * **A refresh is a download, so it goes to a wasm export rather than to `web::route`** —
+   * and the divert lives here so that no Settings panel needs an `isWebTarget()` branch.
+   * `ipc.combosRefresh(true)` reaches the export on a browser and the Tauri command on a
+   * desktop, and the panel cannot tell.
+   */
+  it("diverts the four download commands to a feed refresh", async () => {
+    const c = core();
+    const answer = c.call("combos_refresh", { force: true });
+    expect(worker.posted).toEqual([{ kind: "feed-refresh", id: 1, feed: "combos", force: true }]);
+    // The ordinary `ok` on the same id: the promise, the rejection and the progress events
+    // are all the ones every other call already gets.
+    worker.reply({ kind: "ok", id: 1, result: { combos: 105_478 } });
+    await expect(answer).resolves.toEqual({ combos: 105_478 });
+  });
+
+  it("diverts both tag refreshes and the price feed too", () => {
+    const c = core();
+    c.call("oracle_tags_refresh", { force: false });
+    c.call("art_tags_refresh", { force: true });
+    c.call("marketplace_feed_refresh", { marketplace: "cardkingdom" });
+    expect(worker.posted).toEqual([
+      { kind: "feed-refresh", id: 1, feed: "tags", dataset: "oracle", force: false },
+      { kind: "feed-refresh", id: 2, feed: "tags", dataset: "art", force: true },
+      { kind: "feed-refresh", id: 3, feed: "prices", marketplace: "cardkingdom" },
+    ]);
+  });
+
+  /**
+   * The *status* reads share a prefix with the refreshes and must not be diverted: they are
+   * ordinary routed commands, and sending one to an export that does not exist would hang
+   * the panel's query for ever with nothing on screen to say why.
+   */
+  it("leaves the status commands as ordinary calls", () => {
+    const c = core();
+    c.call("combos_status");
+    c.call("marketplace_feed_status");
+    c.call("oracle_tags_status");
+    expect(worker.posted).toEqual([
+      { kind: "call", id: 1, command: "combos_status" },
+      { kind: "call", id: 2, command: "marketplace_feed_status" },
+      { kind: "call", id: 3, command: "oracle_tags_status" },
+    ]);
+  });
+
+  /** A refresh that failed rejects the mutation the panel is already watching. */
+  it("rejects a failed refresh on its own id", async () => {
+    const c = core();
+    const answer = c.call("combos_refresh", { force: true });
+    worker.reply({ kind: "err", id: 1, message: "could not reach Commander Spellbook" });
+    await expect(answer).rejects.toThrow("could not reach Commander Spellbook");
+  });
+
+  /**
+   * The progress channel is the desktop's own event name, forwarded by the Worker — so
+   * `ipc.onCombosProgress`, which is `core.listen("combos:progress", …)`, needs no browser
+   * branch at all.
+   */
+  it("hands a feed's progress event to the listener the panel registered", () => {
+    const c = core();
+    const seen = vi.fn();
+    c.listen("combos:progress", seen);
+    worker.reply({
+      kind: "event",
+      event: "combos:progress",
+      payload: { phase: "downloading", done: 1, total: 2 },
+    });
+    expect(seen).toHaveBeenCalledWith({ phase: "downloading", done: 1, total: 2 });
+  });
+
   it("reuses one Worker across every call and subscription", async () => {
     const c = core();
     const one = c.call("list_sets");

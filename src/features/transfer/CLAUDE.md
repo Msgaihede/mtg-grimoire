@@ -7,6 +7,53 @@ beyond the deck editor. Deck-specific rules this module reads or reaches into �
 validation, formats — still live in
 [`src/features/decks/CLAUDE.md`](../decks/CLAUDE.md).
 
+## `files.ts` — the only thing here that differs by target
+
+**Everything else in this directory is pure TypeScript over strings**: the parser, the planners,
+the seven writers, the field registry. What it asks the backend for is `import_resolve` and the
+three commits, all of them ordinary SQLite and all of them routed on the web target — so the
+whole of the browser port of import and export is the two *file handles*, and they live in
+`files.ts`. `ImportDialog` and `ExportDialog` call it and know nothing about which build they are
+in.
+
+- **On desktop and Android a picker answers a _name_ and Rust does the I/O**; in a browser the
+  page holds the file and there is no name at all. `pickDecklist` answers a `PickedDecklist` —
+  `{ kind: "path" }` or `{ kind: "file" }` — `readDecklist` turns either into text, and
+  `saveExport` either names a path and calls `export_write_file` or hands a `Blob` to an
+  `<a download>`. `import_read_file` and `export_write_file` are therefore **not routed on the
+  web target and must not be**: `import.rs` and `export.rs` each carry a cargo test asserting
+  that absence, so routing one is a red build rather than a command that can only refuse.
+- **Picking and reading stay two steps on both branches**, because the two failures are two
+  sentences the reader can act on — a picker that would not open, and a file that would not
+  read. Collapsed into one call, "that file is over 1 MB" arrives worded as a broken picker.
+- **The 1 MB cap is deliberately implemented twice**, here and in `import.rs`'s `read_bounded`.
+  On the web branch no Rust command is in the path, so the cap has to be applied by whoever holds
+  the bytes; the number and the refusal's sentence are the same on both sides on purpose, and
+  `files.test.ts` spells that sentence out as a literal rather than reading the module's own
+  constant. The Rust half reads `MAX + 1` and measures (a `content://` URI has no size to stat);
+  a `File` carries its size, so this half asks first.
+- **`cancel` is what settles the browser picker's promise.** A file input reports nothing when
+  its dialog is dismissed, so without that listener the `Choose file…` button stays disabled for
+  the life of the dialog. It is a real event on every engine this target already requires — the
+  same generation as the OPFS access handles the database runs on — and "detect it with a
+  `window` focus timer" is folklore rather than an API.
+- **The object URL is revoked on a later task, never on the line after `click()`.** Revoking
+  synchronously races the user agent's own fetch of the blob, and the download that loses that
+  race fails with nothing on screen to say why.
+- **A test that wants the browser branch mocks `@/pwa/target`.** `isWebTarget()` reads
+  `__CORE__`, a build-time constant vitest fixes at `"tauri"`, so nothing else reaches it —
+  `files.test.ts`, `ImportDialog.test.tsx` and `ExportDialog.test.tsx` each hold that mock at
+  `false` and flip it in the one test that is about the web.
+- **Android is not a third branch here and does not want one.** A picked file there is a
+  `content://` URI rather than a path, and `src-tauri/src/picked.rs` is the one place that knows
+  it — `Fs::open` resolves the URI through the ContentResolver into a `std::fs::File`, so
+  everything above it is unchanged. **Two things about that seam are worth carrying**, both read
+  out of `tauri-plugin-dialog-2.7.2` on 2026-08-31: a cancelled Android picker *rejects* in
+  Kotlin and the plugin's own Rust turns that into the same `null` desktop answers, so this file
+  needs no branch for it; and `parseFiltersOption` drops any extension `MimeTypeMap` cannot name,
+  so **`.dec` and `.dek` are filtered out of the Android picker** while `.txt` and `.csv` survive.
+  That is a live gap rather than a rule.
+
 ## Import
 
 `import/` is `parse.ts` (text → lines), `destinations/deck.ts` (lines + the printings Rust
@@ -207,9 +254,11 @@ Pathway` is one card and there are seven such names in the reference list alone,
   `deck_create` then that commit with a **hand-rolled rollback** — two commands are two
   transactions, and a refused import must not leave half a deck in the gallery. The commit's
   refusal is what the caller hears, never the clean-up delete's.
-- **The file picker's own half is unverified**, for the reason `deck_set_cover_image`'s is:
-  `dialog:allow-open` opens a native window CDP cannot reach. Path → text → preview is tested;
-  click → path is not.
+- **The _native_ file picker's own half is unverified**, for the reason `deck_set_cover_image`'s
+  is: `dialog:allow-open` opens a native window CDP cannot reach. Path → text → preview is
+  tested; click → path is not. **The browser's is the exception and is driven end to end** —
+  an `<input type=file>` is an ordinary element, so `files.test.ts` and `ImportDialog.test.tsx`
+  both go press → input → `File` → text → box with nothing stubbed but the target flag.
 - **Driven in the shipped window 2026-08-12** (`npm run tauri dev`, a **debug** build): the
   gallery path end to end put **105 of 105** reference-list lines and all **117 copies** into a
   new deck, `import_resolve` cost **120.4 ms** and `deck_import_commit` **7.9 ms** through
@@ -435,11 +484,14 @@ measured on: [import-export.md](../../../docs/reference/import-export.md).
   every format, CSV included** — a header row over no rows is a file claiming to be a decklist and
   is not one — and **that now covers a list a format empties for itself**: an Arena export of a
   deck that is entirely maybeboard is `""`, not a `Deck` heading over nothing.
-- **Rust writes the file, and that is a permission decision rather than a division of labour.**
-  `save()` answers a _path_; writing bytes at it from the page would need an `fs:` permission this
-  app grants nowhere, so `export_write_file` takes the path and the text — the same shape
-  `deck_set_cover_image` has, for the same reason.
-  [`src-tauri/CLAUDE.md`](../../../src-tauri/CLAUDE.md) has both.
+- **Rust writes the file _where there is a filesystem to write to_, and that is a permission
+  decision rather than a division of labour.** `save()` answers a _path_; writing bytes at it from
+  the page would need an `fs:` permission this app grants nowhere, so `export_write_file` takes
+  the path and the text — the same shape `deck_set_cover_image` has, for the same reason.
+  [`src-tauri/CLAUDE.md`](../../../src-tauri/CLAUDE.md) has both. **In a browser the argument
+  inverts and there is no path at all**: a `Blob` behind an `<a download>` is the user agent's own
+  save and the only mechanism a page has, so that command is not routed there. `files.ts` is the
+  branch and this dialog does not know which side it is on.
 - **The preview opens shut** (2026-08-18), which is `DeckSearchPanel`'s collapsed default one rung
   down: a decklist is the tallest thing this dialog draws and the least of what a reader came for,
   and the two presses that do the work are Copy and Save as…. Shut, the dialog is the format row,
@@ -460,9 +512,12 @@ measured on: [import-export.md](../../../docs/reference/import-export.md).
   which still holds the last text copied — so the format radios clear it on every press. And the
   clipboard write can itself be refused, because it is a real Tauri plugin command rather than a
   browser API, so it reports through the same `role="alert"` line a refused save uses.
-- **The picker's own half is unverifiable**, exactly as the importer's `open` is:
+- **The _native_ picker's own half is unverifiable**, exactly as the importer's `open` is:
   `dialog:allow-save` opens a native window CDP cannot reach and no test or browser can drive.
-  Path → written file is covered; click → path is not.
+  Path → written file is covered; click → path is not. **The browser's save is the exception and
+  is driven end to end**, because there is no native window in it at all: `files.test.ts` and
+  `ExportDialog.test.tsx` both assert the `<a download>`'s name, the blob's bytes and the deferred
+  revoke, from the press.
 
 ## The golden fence, and the second writer in Rust
 

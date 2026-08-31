@@ -246,10 +246,12 @@ were not sharing one database — the second had silently been given a different
 - **The other 132 commands**, and the modules in the right-hand column above.
 - **The image cache.** On web it is Cache Storage, which is a rewrite rather than a port.
 - **The price feeds**, and **Mana Pool is unavailable on web at all** (spec §5.3): it sends no
-  `Access-Control-Allow-Origin`. Card Kingdom does.
+  `Access-Control-Allow-Origin`. Card Kingdom does. *(PR 11 built the path; the CORS finding
+  stands, so Mana Pool's export is expected to fail in a browser.)*
 - **`ingest_combos` is written and exported but has never been run.** Reaching it needs a
   `ToWorker` case the app does not have, and adding one only to measure would have been
-  scaffolding rather than a path the app has. Not measured, deliberately.
+  scaffolding rather than a path the app has. Not measured, deliberately. *(PR 11 added the
+  `ToWorker` case. It still has not been run in a browser.)*
 - **The PWA shell** — manifest, service worker, update bar, evicted-corpus recovery. PR 5.
 - **Sync, pairing, the relay.** Phase 3.
 - **Mobile layout.** Phase 5.
@@ -315,7 +317,10 @@ desktop bundle and therefore out of the portable exe. Verified: `npm run build` 
   something is wrong.
 - **A dropped `#[wasm_bindgen]` attribute compiles clean, with no error and no warning**, because
   the function stays `pub` in a `pub mod`. Only loading the module in a browser can catch it —
-  so `scripts/build-wasm.mjs` greps the generated glue for all five entry points instead.
+  so `scripts/build-wasm.mjs` greps the generated glue for every entry point the Worker
+  imports instead. **That list is `EXPORTS` in the script and has to grow with the surface** —
+  it stood at five until PR 11 added `ingest_tags` and `ingest_prices`, and an export missing
+  from it is exactly the failure the gate exists for, unguarded.
 
 ## What is owed
 
@@ -858,6 +863,100 @@ looked like the status command's function and is not — that one belongs to `re
 command maps `PROVIDERS` over `read_status` itself. The fix compiled, passed, and would have
 left the actual command still calling the panicking clock. **A name matching is not a call
 graph**; the wrapper is.
+
+---
+
+## PR 11 — the three optional feeds download in a browser
+
+**Shipped 2026-08-31.** `combos_refresh`, `oracle_tags_refresh`, `art_tags_refresh` and
+`marketplace_feed_refresh` work on the web target. The line in the table above that reads
+"Each downloads through `state.client`" is now the *history* of those four rather than their
+state.
+
+**`COMMANDS` did not move, and that is the point.** A refresh is `async` and makes a network
+call; `web::route` is synchronous, takes the connection and makes neither. So the four are
+`#[wasm_bindgen]` entries beside `ingest_cards` — `ingest_combos`, `ingest_tags` (one function
+for both taxonomies, because `tags/` is one engine with two bindings) and `ingest_prices` —
+and `src/lib/core/browser.ts` diverts the four command *names* onto them. Nothing above the
+core knows: `ipc.combosRefresh(true)` reaches the export in a browser and the Tauri command on
+a desktop, `ipc.onCombosProgress` reaches the same `combos:progress` channel on both, and no
+Settings panel grew an `isWebTarget()` branch.
+
+### What each ingest needed
+
+| Feed | Desktop | What the browser needed |
+| --- | --- | --- |
+| Combos | `combos::StreamRead`, already push-shaped | A TypeScript caller, and progress |
+| Oracle / art tags | `tags::ingest_gz`, a **path** and a pull loop | `tags::StreamTags`, a push sink; `ingest_gz` is a 64 KiB read loop over it |
+| Price feeds | `read_document`, a pull parser | `marketplace_feed::StreamRead`, `Elements` plus a head scrape |
+
+**Both new sinks are `crate::ingest::StreamIngest`'s arrangement.** One drain, two drivers: the
+state the read loop kept in locals moves into the sink, the file driver becomes a read loop,
+and the browser writes the other driver. The desktop's numbers do not move — the tags
+equivalence test drives the same fixture through both drivers and compares `TagStats` and every
+closure row.
+
+**The price feed's pull parser could not be shared and its pricing rules had to be.**
+`read_document` calls `read()` when it wants more and blocks; a browser stream is push and
+async with no thread to block. So `FeedProvider` grew `fold_element`, and both entrances decode
+into the same `CkRow`/`MpRow` and call the same `ck_fold`/`mp_fold`. Mutating the etched-before-
+foil order fails the pull test *and* the push test, which is the check that the fold is really
+one copy.
+
+### Three things this found
+
+**`Elements` never noticed the array's closing `]`.** It framed every depth-0 object in the
+*rest* of the document as though it were an element — and Card Kingdom's pricelist carries keys
+after `data`. It produced no wrong price (those objects carry no `scryfall_id`) and inflated
+`rows_seen` and `skipped`, so the only way it showed was the push and pull readers disagreeing
+by one row. The combo document has the same shape and had the same latent bug.
+
+**Both framers returned `Ok(())` for ever while accumulating.** That is exactly the spike's
+failure — 63 elements in 610.2 MB, the buffer grown to 609.82 MB, **no error** — and
+`peak_buffer()` only *reports* it afterwards. `Elements::push` and `Lines::push` answer
+`Result<(), Overlong>` now and refuse past **8 MiB**, four times the largest peak this repo has
+measured (2.01 MB against the real combo document), so a legitimate feed cannot reach it while
+a desynchronised framer passes it within a document's first few chunks. Every caller lifts it
+through `io::Error` into the `Io` variant its own enum already has.
+
+**A size guard whose test could not fail.** `StreamRead`'s byte budget was first tested by
+pushing non-draining bytes at the real 256 MiB cap — so the framer refused at 8 MiB and the
+assertion accepted `TooLarge` *or* `Io`. Deleting the entire guard left it green. The budget is
+a named constructor argument now (`StreamRead::with_limit`), because a document that *drains*
+cannot trip the framer and 256 MiB of well-formed JSON is not a fixture.
+
+### What the browser cannot do that the desktop can
+
+- **No ETag, and therefore no 304.** A cross-origin `fetch` exposes no `ETag` response header
+  unless the host names it in `Access-Control-Expose-Headers`, so every refresh here downloads
+  where the desktop's would be one conditional request and no bytes. The weekly throttle is
+  honoured instead of ignored — `force` skips it, exactly as on the desktop — and the tag
+  ingest still stores the descriptor's `updated_at`, which is the *other* half of the desktop's
+  freshness evidence.
+- **No `mirror.mark_all()` after a price refresh.** There is no plain-text mirror in a browser,
+  which is the argument `web::route`'s `set_marketplace` arm already makes.
+- **No `error_log` row on a failed refresh.** The desktop's `note_failure` is on the gated
+  download path; every failure here is a rejected promise the panel is already watching, which
+  is `entitlement.rs`'s standing argument for the same omission — a press is on the screen of
+  the reader who made it.
+
+### Not verified
+
+- **Nobody has run any of the three in a browser.** `cargo clippy --target
+  wasm32-unknown-unknown` is silent, `npm run build:wasm` emits all seven entry points, and the
+  suites cover both sinks on the host — but the sinks are what the suites reach, and `glue.rs`
+  is compiled only for wasm and is therefore covered by nothing.
+- **CORS is unproven for two of the three hosts.** Scryfall answers
+  `Access-Control-Allow-Origin: *` (verified 2026-08-27), which is what makes the tag feeds
+  plausible. `json.commanderspellbook.com` and `api.cardkingdom.com` have **not** been probed
+  from a browser origin on this branch, and this page already records that **Mana Pool sends
+  no `Access-Control-Allow-Origin` at all** (spec §5.3) — so `ingest_prices("manapool")` is
+  expected to fail in a browser, and the export exists so that the failure is a sentence in the
+  panel rather than an unknown command.
+- **Neither tag feed has a UI caller on any target.** The backend refreshes them on its own
+  weekly schedule and no button anywhere calls `oracle_tags_refresh` or `art_tags_refresh`, so
+  the web path exists and nothing presses it. That is unchanged from the desktop rather than a
+  gap this work opened.
 
 
 ## 2026-08-31: three of the four clears, and the Updates panel comes back

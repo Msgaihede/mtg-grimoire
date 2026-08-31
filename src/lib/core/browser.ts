@@ -1,3 +1,4 @@
+import { feedRefreshFor } from "@/workers/protocol";
 import type { FromWorker, Opened, ToWorker } from "@/workers/protocol";
 import type { Core } from "./types";
 
@@ -98,6 +99,17 @@ export function createBrowserCore(spawn: () => Worker): BrowserCore {
       const answer = new Promise<T>((resolve, reject) => {
         pending.set(id, { resolve: resolve as (v: never) => void, reject });
       });
+      // **Four command names are a download rather than a query, and they are diverted
+      // here.** `web::route::COMMANDS` is synchronous, takes the connection and makes no
+      // network call, so each refresh is a `#[wasm_bindgen]` entry instead — and the branch
+      // belongs in this one place rather than in every Settings panel. The answer still
+      // comes back as `ok`/`err` on this id, so the promise, the rejection and the progress
+      // events are the ones every other call already gets.
+      const feed = feedRefreshFor(command, args);
+      if (feed !== undefined) {
+        post({ kind: "feed-refresh", id, ...feed });
+        return answer;
+      }
       // `args` omitted rather than sent as `undefined`, mirroring `core/tauri.ts`: the
       // key's absence is what `wire::Request`'s `#[serde(default)]` reads as `{}`.
       post(

@@ -29,6 +29,7 @@ import {
 } from "@/lib/ipc";
 import { OWNED_WRITE_KEYS } from "@/lib/query";
 import { DEFAULT_VARIANT } from "@/features/decks/useDeck";
+import { readDecklist, type PickedDecklist } from "../files";
 
 /**
  * The reader saying they have physically built this deck — the same lines a second time, at the
@@ -303,9 +304,19 @@ export function useImport() {
     onError: (_refusal, variables) => invalidate(variables.collectionItems),
   });
 
-  /** The picker answers a path and Rust opens the file — which is the whole of why
-   *  `dialog:allow-open` is enough and no `fs:` permission exists anywhere in this app. */
-  const readFile = useMutation({ mutationFn: (path: string) => ipc.importReadFile(path) });
+  /**
+   * The text behind whatever the picker answered.
+   *
+   * **The mutation takes a `PickedDecklist` rather than a path, and that is the whole of what
+   * the web target cost this hook.** On desktop and Android the picker answers a *path* and
+   * Rust opens the file, which is why `dialog:allow-open` is enough and no `fs:` permission
+   * exists anywhere in this app; in a browser there is no path and the page is holding the
+   * bytes already. `transfer/files.ts` is where the two are told apart — and it stays a
+   * *mutation* on both, because a file read is a wait the button has to be disabled for.
+   */
+  const readFile = useMutation({
+    mutationFn: (picked: PickedDecklist) => readDecklist(picked),
+  });
 
   /**
    * A decklist as a deck of its own: `deck_create`, then the same commit, then the deck.
