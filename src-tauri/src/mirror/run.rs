@@ -1420,7 +1420,7 @@ mod tests {
         let (conn, dir, id) = seeded_db_and_temp_root();
         let mut cache = DigestCache::default();
         run_pass(&conn, dir.path(), Dirty::ALL, &mut cache).unwrap();
-        crate::deck::delete_deck(&conn, id, None).unwrap();
+        crate::deck::delete_deck(&conn, id).unwrap();
         run_pass(&conn, dir.path(), Dirty::ALL, &mut cache).unwrap();
         assert!(dir.path().join("README.txt").is_file());
         assert!(dir.path().join(MANIFEST_NAME).is_file());

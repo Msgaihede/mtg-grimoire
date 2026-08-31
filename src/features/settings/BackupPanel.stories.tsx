@@ -191,8 +191,9 @@ export const RootUnwritable: Story = {
  * The picker is the operating system's: `open()` from `@tauri-apps/plugin-dialog` reaches
  * Tauri's `invoke`, and outside the app window there is nothing behind it. So the press ends in
  * the refusal line rather than in a folder dialog, which is exactly what the panel does when a
- * picker cannot be opened — `DeckCoverPicker`'s `PickerUnavailable` is the same gap in the same
- * shape.
+ * picker cannot be opened. (`DeckCoverPicker` carried a `PickerUnavailable` story making the
+ * same point until 2026-08-31; it went with custom deck covers, so this is now the only place
+ * the workbench shows that gap.)
  *
  * The two answers a *working* picker gives — a chosen folder and a cancel — are unit-tested
  * instead, because only the OS can produce either.

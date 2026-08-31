@@ -16,10 +16,13 @@ import {
 /**
  * The cover picker, stubbed.
  *
- * It is a component with a backend of its own — a card search, an image cache and a file picker
- * — and none of that is what this file is about. What *is* about this file is that the props
- * arrive unread and unaltered, which is what the stub echoes back into the DOM. The picker's own
- * behaviour is `DeckCoverPicker.test.tsx`'s.
+ * It is a component with a backend of its own — a card search and an image cache — and none of
+ * that is what this file is about. What *is* about this file is that the props arrive unread and
+ * unaltered, which is what the stub echoes back into the DOM. The picker's own behaviour is
+ * `DeckCoverPicker.test.tsx`'s.
+ *
+ * The stub echoed a third attribute, `data-uploading`, until the custom cover was deleted: the
+ * picker had a file picker of its own and a re-encode to be pending on, and neither exists now.
  */
 vi.mock("./DeckCoverPicker", () => ({
   DeckCoverPicker: (props: DeckCoverPickerProps) => (
@@ -27,7 +30,6 @@ vi.mock("./DeckCoverPicker", () => ({
       data-testid="cover"
       data-cover-card={props.coverCardId ?? ""}
       data-prefix={props.idPrefix}
-      data-uploading={String(props.uploading)}
     />
   ),
 }));
@@ -81,14 +83,9 @@ const PATHS = [
 
 const COVER: DeckCoverPickerProps = {
   coverCardId: "c-Lightning Bolt",
-  coverKind: "card_art",
   coverArtist: "Christopher Rush",
-  customCoverUrl: null,
   deckCards: [],
   onPickCard: vi.fn(),
-  onPickFile: vi.fn(),
-  pendingFileName: null,
-  uploading: false,
   idPrefix: "cover",
 };
 
@@ -166,7 +163,6 @@ describe("DeckSettingsForm", () => {
     expect(cover).toHaveAttribute("data-cover-card", "c-Lightning Bolt");
     // Its own prefix, not the form's: the picker's ids are the host's to keep in one namespace.
     expect(cover).toHaveAttribute("data-prefix", "cover");
-    expect(cover).toHaveAttribute("data-uploading", "false");
   });
 
   /**

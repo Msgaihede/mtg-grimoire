@@ -7,10 +7,11 @@
 //! answers `No such file or directory`, which reads exactly like the reader picked a file that
 //! vanished.
 //!
-//! **The three commands behind the three pickers all funnel here** —
-//! [`crate::import::import_read_file`], [`crate::export::export_write_file`] and
-//! [`crate::deck::deck_set_cover_image`] — so there is one place that knows the difference and
-//! three that do not.
+//! **The two commands behind the two pickers both funnel here** —
+//! [`crate::import::import_read_file`] and [`crate::export::export_write_file`] — so there is
+//! one place that knows the difference and two that do not. There was a third,
+//! `deck_set_cover_image`, until custom deck covers were removed on 2026-08-31; a cover is now
+//! a card id, so nothing about it reaches a file picker at all.
 //!
 //! **No `fs:` permission is granted anywhere and none is needed.** Tauri's ACL gates commands
 //! the *webview* invokes; [`tauri_plugin_fs::Fs::open`] is a Rust-side method on a managed
@@ -22,9 +23,10 @@
 //! **Both branches answer a [`std::fs::File`]**, which is why nothing downstream changes.
 //! `tauri_plugin_fs::Fs::open` asks the Kotlin side for a file descriptor through the
 //! ContentResolver and builds a `File` from the raw fd (`tauri-plugin-fs-2.5.1/src/android.rs`),
-//! so the reader that comes back is `Read` **and `Seek`** — which
-//! [`crate::images::encode_cover_picked`] needs, because `image::ImageReader` requires `Seek`
-//! and reads the header on a pass of its own before decoding.
+//! so the reader that comes back is `Read` **and `Seek`**. Nothing left here needs the second
+//! half — both survivors read a decklist straight through — but the cover encoder did, on a
+//! header pass of its own before decoding, and it is a property of the descriptor rather than
+//! of who happens to be reading it.
 
 /// The scheme every Android document-provider URI carries.
 const CONTENT: &str = "content://";

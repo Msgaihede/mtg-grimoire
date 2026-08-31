@@ -1,7 +1,6 @@
 import { useId, useMemo, useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
-import { deckCoverUrl } from "@/lib/images";
 import type { DeckCard, DeckCategory, DeckRow } from "@/lib/ipc";
 import { openDropdown, pickOption } from "@/test-dropdown";
 import { AUTO_CATEGORY } from "./autoCategory";
@@ -117,8 +116,6 @@ function Body({
     cardId: row?.coverCardId ?? null,
     artist: row?.coverArtist ?? null,
   }));
-  const [pendingFileName, setPendingFileName] = useState<string | null>(null);
-
   /** `pickerFormats` is the **host's** call, which is why the form takes a sorted list rather
    *  than sorting one: only a host knows whether the deck's own format has to be folded in —
    *  and, since the game select landed, which platform to narrow the list to. Narrowed against
@@ -140,15 +137,9 @@ function Body({
 
   const coverProps: DeckCoverPickerProps = {
     coverCardId: cover.cardId,
-    coverKind: row?.coverKind ?? "card_art",
     coverArtist: cover.artist,
-    customCoverUrl: row ? deckCoverUrl(row.id) : null,
-    customCoverKey: row?.updatedAt,
     deckCards: cards,
     onPickCard: (cardId) => setCover({ cardId, artist: null }),
-    onPickFile: setPendingFileName,
-    pendingFileName,
-    uploading: false,
     idPrefix: `${id}-cover`,
   };
 

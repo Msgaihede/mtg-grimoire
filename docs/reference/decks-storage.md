@@ -43,12 +43,19 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   hand, and **`deck_tags` needs a statement of its own since schema v21** for the reason one
   bullet up: nothing cascades onto it any more, and a reader who has just deleted every deck they
   own would otherwise open the Tags dialog onto forty labels attached to nothing, with no deck
-  left to reach them from. The covers are a third step and are swept **whole** rather than removed one id at a
-  time, which `deck::delete_deck` must not do: after this command there are no decks left, so
-  every `<id>.webp` in `data/covers/` is an orphan by construction — including one left by the
-  seam `set_cover_image` documents, a commit that failed after the bytes landed. The sweep runs
-  **after the commit**, because the other order costs a deck whose cover vanished for a
-  transaction that rolled back.
+  left to reach them from. **There was a third step and it was not a `DELETE` at all**: the
+  covers were swept **whole** rather than removed one id at a time, which `deck::delete_deck`
+  must not do, because after this command there are no decks left and every `<id>.webp` in
+  `data/covers/` is an orphan by construction — including one left by the seam `set_cover_image`
+  documented, a commit that failed after the bytes landed. The sweep ran **after the commit**,
+  because the other order costs a deck whose cover vanished for a transaction that rolled back.
+  **That step went on 2026-08-31 with the custom deck cover**, so this command is rows again on
+  every target: no `covers` parameter, no `sweep_dir`, and `DecksCleared` carries `decks` and
+  `folders` and no longer a `covers` file count. `data/covers/` is left standing on an install
+  that has one and nothing ever opens it again — see [image-cache.md](image-cache.md) for why
+  that is a decision rather than an omission. It is also why the argument for the post-commit
+  ordering is preserved above rather than deleted: the next command that has to destroy bytes and
+  rows in one press owes the same answer, and this is where it was worked out.
   **Since v25 this is also the one place this command reaches the collection**, and it reaches it
   by cascade alone: each deck's `collection_folders` group goes with its deck, and every copy that
   was in one surfaces at the **root** — not in `Recently removed`, which is `delete_deck`'s
@@ -472,16 +479,29 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
     trusting it. **They ended with one `allocate_deck` run until schema v25 and now end with
     nothing**: what a deck owns is where its collection rows sit, and putting a `deck_cards` row
     back does not move a card.
-  - **Four things are deliberately out of reach, and each has a reason rather than a gap.**
+  - **Three things are deliberately out of reach, and each has a reason rather than a gap** (it
+    was four until 2026-08-31; the fourth is the last paragraph here).
     `deck_create`/`deck_duplicate`/`deck_delete` are gallery writes with no editor open, and
     undoing "this deck was born" means deleting the deck the reader is standing in.
     `deck_folder_delete` records history and **no step**: the cursor is per deck, that press
     changes N of them, and `decks.folder_id` is a real foreign key — so restoring one deck's id
     without resurrecting the shared subtree is an FK failure rather than a partial success. Rows
     written before v17 carry no step and none can be invented, which is the honest floor of "as
-    far back as the history allows". And `deck_set_cover_image` restores its three columns but
-    **not the file**: `images::cover_file` is one path per deck, so a second upload overwrites
-    the first and only the row comes back.
+    far back as the history allows". And `deck_set_cover_image` restored its three columns but
+    **not the file**: `images::cover_file` was one path per deck, so a second upload overwrote the
+    first and only the row came back.
+    **That fourth absence closed by deletion on 2026-08-31.** Custom deck covers went, and with
+    them the only deck write whose undo could restore a row and not the thing the row pointed at
+    — a cover is `cover_card_id` now, which the ordinary `deck` step carries whole. So the count
+    in the sentence above dropped from four to three. **`cover_image_path` stays in
+    `deck_undo.rs`'s `DECK_FIELDS` and must not be tidied out of it**, which was measured rather
+    than assumed. `read_deck_row` records **all** of `DECK_FIELDS` into every step, so every step
+    already on a reader's disk names that column, and `apply` refuses a step naming a field the
+    list does not carry. Handed an `Op::Deck` naming only `cover_image_path`, `apply` answers
+    `Ok(())` with the entry present and *"`cover_image_path` is not a deck column an undo step
+    may write"* without it — so taking it off breaks Ctrl+Z for every deck edit made before the
+    upgrade, on every existing database, while a fresh worktree (whose steps were all written
+    after) stays green.
 - **`deck_create` makes a whole deck in one INSERT, not a name to be configured afterwards**
   (changed 2026-08-14). `DeckInput` carries `name`, `formatKey`, `description`, `notes`,
   `coverCardId`, `folderId` and `theoryEnabled`, because the "New deck" dialog now hosts the same
@@ -492,9 +512,15 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   **(1)** nothing here is written with `coalesce(?n, column)` — this is an INSERT, so an absent
   `folderId` genuinely is the top level and means it, where `DeckPatch.folderId` cannot un-file a
   deck at all (`deck_set_folder` is still the only command that reaches the root of an existing
-  deck's tree). **(2)** `cover_kind` is not settable and keeps its DDL default `card_art`; a
-  custom picture is `deck_set_cover_image`, which takes a **path** and a **deck id**, so it can
-  only ever be a follow-up call. **(3)** `theoryEnabled` at create sets the column and **moves**
+  deck's tree). **(2)** `cover_kind` is not settable and keeps its DDL default `card_art` — which
+  since 2026-08-31 is the only word this app writes at all, so the rule now costs nothing where
+  it used to cost a round trip. Until then the *other* word was reached by
+  `deck_set_cover_image`, which took a **path** and a **deck id** and could therefore only ever
+  be a follow-up call; custom deck covers went and that command with them, so a deck's cover is
+  `coverCardId` and is born in the same INSERT as everything else. **`cover_kind` is still a
+  column, still spells `'custom'` in its `CHECK`, and still syncs** — nothing *produces* the word
+  any more, and a row arriving from a device on an older rung that carries it is tolerated, read
+  as card art, and repaired the next time the reader picks a cover. **(3)** `theoryEnabled` at create sets the column and **moves**
   nothing, there being no live cards to move — `update_deck`'s route runs
   `deck_theory::move_live_into_theory`, making the deck the reader already has into the plan and
   leaving live empty, and it does so only on the off → on _transition_. So a deck **born** with
@@ -839,9 +865,11 @@ labels_it_made` is the proof that the reader's own tags are not swept with them.
   (`Dakkon, Shadow Slayer` is the mechanism — `mh2` and `amh2` share a release date and the art
   series wins the `id` tie-break). Asked in sequence the exact name always answers first. A
   `MULTI-INDEX OR` **is** indexed, measured — and still wrong.
-- **`import_read_file` takes a path, not bytes**, which is the same contract
-  `deck_set_cover_image` uses and the whole reason `dialog:allow-open` is sufficient and **no
-  `fs:` permission is granted anywhere**: a webview that can only _name_ a file needs none. The
+- **`import_read_file` takes a path, not bytes**, which is the whole reason `dialog:allow-open`
+  is sufficient and **no `fs:` permission is granted anywhere**: a webview that can only _name_ a
+  file needs none. The contract was shared with `export_write_file` and `deck_set_cover_image`;
+  since custom deck covers went on 2026-08-31 it is shared with `export_write_file` alone, and
+  `dialog:allow-open` is granted for this command rather than for two. The
   1 MB cap (`MAX_IMPORT_BYTES`, shared with the paste path so the two cannot disagree) is read off
   the **metadata**, so a 200 MB file pointed at by mistake is refused without ever being pulled
   into memory. Decoding is `from_utf8_lossy` **deliberately**: a Windows-1252 apostrophe in one
@@ -918,8 +946,10 @@ labels_it_made` is the proof that the reader's own tags are not swept with them.
   shelf up: **no `fs:` permission is granted anywhere**.
 - **Unverified, and not by choice: the file picker's own half.** `dialog:allow-open` opens a
   native window CDP cannot reach, so `import_read_file` was exercised by invoking the command
-  with a path — exactly as `deck_set_cover_image` was. The path → text → preview half is measured;
-  the **click → path half is not**.
+  with a path — exactly as `deck_set_cover_image` was, when there was one. The path → text →
+  preview half is measured; the **click → path half is not**, and with the cover command deleted
+  on 2026-08-31 the import is the only `dialog:allow-open` caller left for that gap to be closed
+  against (`export_write_file` goes through `allow-save`, and has the same gap of its own).
 - **Driven in the shipped window 2026-08-12**, `npm run tauri dev` — so a **debug** build with
   Vite serving the frontend (`/src/main.tsx` in the page's script list, which is the cheap proof
   that no stale embedded `dist/` is being measured), the live 116 695-card corpus, 1280×800.

@@ -1161,8 +1161,10 @@ pub async fn deck_import_commit(
 /// A decklist file the reader picked, as text.
 ///
 /// **It takes a path, not bytes** — the page asks the OS for a name and Rust opens the file,
-/// which is the same contract [`crate::deck::deck_set_cover_image`] uses and the whole reason
-/// `dialog:allow-open` is sufficient and **no `fs:` permission is granted anywhere**. A
+/// which is the same contract [`crate::export::export_write_file`] uses in the other direction
+/// and the whole reason `dialog:allow-open` is sufficient and **no `fs:` permission is granted
+/// anywhere**. (`deck_set_cover_image` was the third command on this contract and the one that
+/// established it; custom deck covers went on 2026-08-31 and took it with them.) A
 /// webview that could read a file itself would need one; a webview that can only name a file
 /// needs none.
 ///

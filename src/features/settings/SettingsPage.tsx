@@ -187,7 +187,7 @@ export function SettingsPage({ update }: { update: Update }) {
 
           **Here rather than inside `Local cache` below**, which was the other candidate. The
           count's own sentence blames the *folder* — read-only, or full — and Clear cache's text
-          says in as many words that the collection, the decks and the covers kept in that folder
+          says in as many words that the collection and the decks kept in that folder
           are **not** what it sweeps; a path printed under that heading would read as the cache's
           own directory rather than as the place everything lives. It sits above `Backup` and
           `Local cache` because those two are this page's other panels about that folder and this

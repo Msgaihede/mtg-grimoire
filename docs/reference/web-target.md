@@ -77,15 +77,19 @@ the real 43-column one, `raw` included**.
   `Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp` and
   it passed both ways. **Do not add those headers**, and do not let a future service worker
   re-attach them.
-- **115 commands of 156**, as of 2026-08-31. The first four are the browse —
+- **120 commands of 155**, re-derived 2026-08-31 with `node scripts/routed-census.mjs` and
+  correct only for as long as nobody adds one; the script is the answer, this line is a
+  reminder that there is one. (It read **115 of 156** until that re-derivation, which was two
+  numbers written by hand beside a script that prints both.) The first four are the browse —
   `sync_status`, `search_cards`, `list_sets`, `facet_cards` — which is the read path spec §8
   wanted measured in wasm rather than guessed. The rest are the Decks destination (PR 10b's
   thirteen reads and 10c's thirty-three writes), the Collection (10d's seventeen), the
   Wishlist (10e's fourteen), the card pane (10f's six), the Tagger (10g's ten of twelve),
   Settings (10h's fourteen) and the backup archive (`mirror_backup_zip`, 2026-08-31 — the
   crate gained two that day and one of them is routed). Adding one, once its module is in the
-  map, is a line in `web::route::COMMANDS` and a `match` arm. **What the remaining 41 are, and
-  why none of them is an oversight, is tabulated at the foot of this file.**
+  map, is a line in `web::route::COMMANDS` and a `match` arm. **What the remaining 35 are, and
+  why none of them is an oversight, is tabulated at the foot of this file** — grouped by file,
+  exactly as the script prints them.
 
   `route.rs`'s `every_advertised_command_is_actually_routed` pins the routed number and is the
   reason it cannot rot; the crate total is prose and has drifted before, so re-count it in the
@@ -146,7 +150,9 @@ record in [text-mirror.md](text-mirror.md#web-and-android-the-same-files-as-one-
 
 **A module's column is a fact about its contents; being *routed* is a separate question.**
 Everything on the left compiles for the target. What the browser can actually call is
-`web::route::COMMANDS`, which is 115 of 156.
+`web::route::COMMANDS`, which is **120 of 155** — `node scripts/routed-census.mjs`, re-derived
+2026-08-31. (This sentence said 115 of 156, the same hand-written pair *What the web target is*
+carried; two copies of a number a script prints is two chances to be wrong, and both were.)
 
 `split` is the odd one in the left column. It compiles there and can never succeed —
 every path in it is `std::fs`, which builds for wasm and answers `Unsupported` — and gating it
@@ -493,6 +499,13 @@ its two commands, which is exactly why `run_search` is reachable from `web::rout
 | …after the `app_meta` carve-out | **13** |
 | …after gating five `unfinished` helpers and the covers seam | **0** |
 
+**The covers seam in that last row no longer exists to gate**, and the row is kept as the
+measurement it was. Custom deck covers went on 2026-08-31, so `deck.rs` reaches nothing in
+`images.rs` any more and the `covers: Option<&Path>` parameter it was all threaded through is
+gone from `delete_deck`, `duplicate_deck` and `clear_decks` alike. Re-running the experiment
+today would reach **0** one gate sooner; nobody has re-run it, and the number to compare against
+is the one above.
+
 Of the 93, **44 were `cannot find module or crate 'tauri'`** — helpers *outside* a command
 wrapper, almost all of them the one-line `fn unfinished(e: tauri::Error) -> String`. Those are
 mechanical. The rest split into the four modules below and the cascade between siblings.
@@ -505,12 +518,19 @@ mechanical. The rest split into the four modules below and the cascade between s
   an `.exe`. Now [`app_meta.rs`](../../src-tauri/src/app_meta.rs), ungated, with all **61** call
   sites moved. **A `pub use` re-export from `update` was tried first and does not work**: a name
   re-exported from a gated module is invisible on wasm exactly when it is needed.
-- **Covers.** `deck.rs` calls `images::{cover_file, write_cover, remove_cover, copy_cover}`,
-  every one reached through a `covers: Option<&Path>` that is `None` on web. Gated rather than
-  stubbed — a `write_cover` that silently did nothing would be a cover that looks saved and is
-  not. `copy_cover_file` was restructured into a two-arm `copied_cover` helper, which retired an
+- **Covers — the seam that no longer exists, kept because it is the clearest of the three.**
+  `deck.rs` called `images::{cover_file, write_cover, remove_cover, copy_cover}`, every one
+  reached through a `covers: Option<&Path>` that was `None` on web. Gated rather than stubbed —
+  a `write_cover` that silently did nothing would be a cover that looks saved and is not.
+  `copy_cover_file` was restructured into a two-arm `copied_cover` helper, which retired an
   `.expect("a copy cannot have happened without a directory")` by putting that argument in the
   return type instead of in a panic message.
+  **All four functions, the parameter and the helper were deleted on 2026-08-31** with the custom
+  deck cover itself: a cover is `decks.cover_card_id` now, which is a string every target already
+  syncs and draws. The seam is worth reading anyway, because the *shape* recurs — a domain module
+  reaching a filesystem module through one optional path argument — and because the resolution
+  here is the third option neither "gate" nor "stub" names: the feature the seam existed for
+  turned out to be one the other targets had already been doing without.
 - **`marketplace::set_marketplace_now` reads `AppState.mirror`.** The *setting* is every
   target's and `deck_meta`'s readback quotes it; telling a mirror about a change is not.
 
@@ -601,11 +621,20 @@ ran. A mutation has to leave the code compiling, or it measures rustc rather tha
 **Shipped 2026-08-29.** Thirty-three more arms, so the whole deck cluster is routed except one.
 `COMMANDS` is **50 of 152**.
 
-**`deck_set_cover_image` is the eleventh name on §6.3's desktop-only list**, and it is not
-"not yet": it writes a file into a covers directory, and `deck::set_cover_image` does not
-compile for wasm at all. Every *other* covers-touching command routes, because `delete_deck`
-and `duplicate_deck` take `covers: Option<&Path>` and web passes `None` — the answer that
-parameter was shaped for.
+**`deck_set_cover_image` was the eleventh name on §6.3's desktop-only list**, and it was not
+"not yet": it wrote a file into a covers directory, and `deck::set_cover_image` did not compile
+for wasm at all. Every *other* covers-touching command routed, because `delete_deck` and
+`duplicate_deck` took `covers: Option<&Path>` and web passed `None` — the answer that parameter
+was shaped for.
+
+**It was deleted on 2026-08-31 rather than ported, and the deck cluster is now routed without an
+exception.** Custom deck covers went whole: a cover is `decks.cover_card_id`, a card id that is
+already an ordinary synced string and already draws identically here. The `covers` parameter went
+with the command, so `delete_deck`, `duplicate_deck` and `clear_decks` take nothing — there is no
+longer a `None` for this target to pass, which is a smaller `route.rs` and one less thing a
+future arm can get wrong. The sentence about §6.3's eleventh name is kept because that list is
+what the port was planned against, and because "the one deck command that could not follow" is
+the shape of argument worth recognising again, not because the name is still on it.
 
 ### `with_write`, and a guard that only guards one target
 
@@ -844,7 +873,7 @@ backend.
   every reload — a different storage API, so a shell-cache bust costs nothing but a re-fetch of
   the bundle.
 
-## Where PR 10 got to: 120 of 157 routed, and what the other 37 are
+## Where PR 10 got to: 120 of 155 routed, and what the other 35 are
 
 **Do not hand-count this — run `node scripts/routed-census.mjs`.** It walks every
 `#[tauri::command]` in the crate (both attribute spellings, skipping doc-comment mentions),
@@ -852,43 +881,54 @@ diffs against `COMMANDS`, and prints exactly the grouping below. `--check <n>` e
 when the routed count has moved, so a stale table can be caught by running one command instead
 of by noticing.
 
-**That script exists because this table has already rotted twice, in both directions.** It read
-**155** when the answer was 152 — a grep counted the doc comments that *mention* the attribute
-while explaining why a command is `(async)`, and missed the seven `#[tauri::command(async)]`
-spellings, and the two errors did not cancel. Then it read **156 / 36** for a day after
-`sync_group_leave` landed on another branch. **A prose-only edit routes to neither CI job**, so
-neither mistake made anything go red; both were found by re-deriving the number rather than by
-reading it.
+**That script exists because this table has already rotted three times, in every direction.** It
+read **155** when the answer was 152 (a coincidence with today's total, and worth naming as one
+before it is read as continuity) — a grep counted the doc comments that *mention* the
+attribute while explaining why a command is `(async)`, and missed the seven
+`#[tauri::command(async)]` spellings, and the two errors did not cancel. Then it read **156 / 36**
+for a day after `sync_group_leave` landed on another branch. Then it read **157 / 37** from
+2026-08-30 until the card-art-only cover work re-derived it on 2026-08-31, and *that* one is the
+instructive rot, because the script had been sitting in the repo the whole time: the number was
+written by hand anyway, and the hand was one out on the crate total **and** one out on
+`sync_pair/pairing`, which has nine commands and was tabulated as ten. **A prose-only edit routes
+to neither CI job**, so none of the three made anything go red; every one was found by
+re-deriving the number rather than by reading it. Do not hand-count the row breakdown either —
+the script prints it grouped by file, which is the grouping below.
 
-The crate has grown three times during this work and each is somebody else's commit rather than
-a miscount: 152 on 2026-08-29, 154 once the hosted-relay work landed, 156 with the backup
-archive's two, and **157** with `sync_group_leave`.
+The crate has grown during this work and each step is somebody else's commit rather than a
+miscount: 152 on 2026-08-29, 154 once the hosted-relay work landed, and 156 with the backup
+archive's two — `sync_group_leave` is inside that last figure rather than a fourth step on top of
+it, which is where the stray **157** came from. It has now shrunk once, to **155**, which is the
+first time that has happened: `deck_set_cover_image` was deleted with the custom deck cover on
+2026-08-31.
 
 | | |
 | --- | --- |
-| Commands in the crate | **157** |
+| Commands in the crate | **155** |
 | Routed | **120** |
-| Not routed | **37** |
+| Not routed | **35** |
 
-**Re-run 2026-08-31 after the update check landed: unchanged, deliberately.** `COMMANDS`
-membership is what this script counts, and it is *not* the same question as "does the web
-target answer this command". **Five of the 37 below are served through `glue.rs` instead** —
-the four `*_refresh` and `update_check` — because each is `async` and makes a network call
-while `route::call` is synchronous and makes neither. `src/lib/core/browser.ts` diverts those
-five names, so a panel calling one reaches the export in a browser and the Tauri command on a
-desktop. Read the rows below as "not a `COMMANDS` arm", never as "not available"; the "Why
-not" column says which of the two each one is.
+**Re-derived 2026-08-31 after custom deck covers were removed.** The routed figure did not move
+and could not have: `deck_set_cover_image` was never in `COMMANDS`, so deleting it takes one off
+each of the other two columns and leaves 120 where it was. `COMMANDS` membership is what this
+script counts, and it is *not* the same question as "does the web target answer this command".
+**Five of the 35 below are served through `glue.rs` instead** — the four `*_refresh` and
+`update_check` — because each is `async` and makes a network call while `route::call` is
+synchronous and makes neither. `src/lib/core/browser.ts` diverts those five names, so a panel
+calling one reaches the export in a browser and the Tauri command on a desktop. Read the rows
+below as "not a `COMMANDS` arm", never as "not available"; the "Why not" column says which of the
+two each one is.
 
-**The 37, and none of them is an oversight:**
+**The 35, and none of them is an oversight:**
 
 | Count | What | Why not |
 | --- | --- | --- |
-| **17** | `sync_pair/pairing` (10) and `sync_engine/commands` (7) | The pairing and membership surface. `lib.rs` states `pairing` "does not and never will" compile for wasm; the relay work is live and moving, so this is its own decision rather than a port |
+| **16** | `sync_pair/pairing` (9) and `sync_engine/commands` (7) | The pairing and membership surface. `lib.rs` states `pairing` "does not and never will" compile for wasm; the relay work is live and moving, so this is its own decision rather than a port. **This row said 17 (pairing 10) until 2026-08-31 and pairing has had nine since `sync_group_leave` landed** — the miscount above, not a command that went anywhere |
 | **5** | `desktop.rs` | Seven `update_*` commands plus `sync_run`, of which two are routed: `update_status` and `update_history` report rather than replace. Of the five left, **`update_check` is answered by `glue::update_check`** and only four are genuinely absent — `update_download`, `update_apply`, `update_open_release_page` (they stage, swap and relaunch an `.exe`, or open a URL through a Tauri plugin) and `sync_run`, whose ingest is `glue.rs`'s own |
-| **2** | `cache_clear`, `deck_set_cover_image` | Three of `reset`'s four clears were routed on 2026-08-31 — they are pure SQLite and always were. `cache_clear` sweeps a directory of image files, which on this target is Cache Storage, so it is **answered by the service worker** rather than by an arm — diverted in `src/lib/core/browser.ts` the way the four `*_refresh` are, and pinned out of `COMMANDS` by a test. The cover directory a browser has none of |
+| **1** | `cache_clear` | Three of `reset`'s four clears were routed on 2026-08-31 — they are pure SQLite and always were. `cache_clear` sweeps a directory of image files, which on this target is Cache Storage, so it is **answered by the service worker** rather than by an arm — diverted in `src/lib/core/browser.ts` the way the four `*_refresh` are, and pinned out of `COMMANDS` by a test. **This row was `cache_clear, deck_set_cover_image` and counted 2**; the cover command was deleted outright on 2026-08-31, so the one thing here a browser had no directory for is now the only thing here |
 | **4** | `mirror/settings.rs` | These four *are* the folder — where it is, whether it runs, when it last ran, rebuild it now — and a folder in OPFS cannot be read by the programs a mirror exists for |
 | **1** | `mirror_backup_save` | Android's door onto the same archive `mirror_backup_zip` routes: it writes at a destination a save dialog answered, which a browser has no way to name. Not a gap — the browser's door is the routed one |
-| **2** | `import_read_file`, `export_write_file` | §6.2's `<input type=file>` and `Blob` |
+| **2** | `import_read_file`, `export_write_file` | §6.2's `<input type=file>` and `Blob`. The count in this row is unchanged, but **the seam behind it went from three commands to two** on 2026-08-31 — `deck_set_cover_image` took a picked path exactly as these do, and was tabulated up beside `cache_clear` instead, because a browser's missing *covers directory* was the louder reason. `picked.rs`'s module doc and [android-target.md](android-target.md)'s §4 are the other two places that "three" was written down |
 | **4** | The four `*_refresh` (oracle tags, art tags, combos, marketplace feed) | Each is `async` and downloads — so each is a `#[wasm_bindgen]` entry in `glue.rs` with its name diverted in `browser.ts`, and **all four work**. PR 11 |
 | **2** | `images.rs` | The byte cache is Cache Storage on web — a rewrite, not a port |
 
@@ -1034,13 +1074,23 @@ a branch nobody ran `--target` on.
 > not move and the `route.rs` test still holds, so everything above stays true except the
 > sentence about the button.
 
-**`decks_clear` passes `None` for its covers directory, and that argument is load-bearing.**
-`clear_decks` hands it to `sweep_dir`, which deletes everything under it *recursively*. A
-browser has no covers directory — `crate::paths` does not compile there — so `None` is the
-true answer rather than a fallback, and there is no value this target could pass that would
-be safe to sweep. The same argument is why no mutation test in this work was allowed to
-change it: a cargo test binary's working directory is `src-tauri/`, and a previous run of
-this task made `covers` resolve to that directory and deleted 93 source files.
+**`decks_clear` passed `None` for its covers directory, and that argument was load-bearing.**
+`clear_decks` handed it to `sweep_dir`, which deletes everything under it *recursively*. A
+browser has no covers directory — `crate::paths` does not compile there — so `None` was the
+true answer rather than a fallback, and there was no value this target could have passed that
+would have been safe to sweep. The same argument is why no mutation test in this work was
+allowed to change it: a cargo test binary's working directory is `src-tauri/`, and a previous
+run of this task made `covers` resolve to that directory and deleted 93 source files.
+
+**The parameter is gone as of 2026-08-31, and that incident is a named reason it went.**
+Removing the custom deck cover took `clear_decks`'s `covers` argument, its `sweep_dir` call and
+`DecksCleared::covers` with it, so *clearing the decks now touches no filesystem on any target* —
+the one recursive delete that could be pointed somewhere unintended is no longer on this path at
+all. `sweep_dir` itself stays: `clear_cache` still sweeps `data/images/` and `data/tmp/`, both of
+which are named constants under the data directory rather than a parameter a caller supplies,
+and both of which this target answers through the service worker instead. The paragraph above is
+kept in the past tense because the reasoning — a `None` that is the truth rather than a stub —
+is the pattern to copy the next time a desktop-only path has to compile here.
 
 ### `update`: §6.3 named the swap, and only the swap was ever permanent
 
@@ -1278,9 +1328,30 @@ caller's test is *presence*: a bare `boolean` would make `updateCheck(false)` �
 throttle-honouring call — indistinguishable from every other command in the app, and every
 `search_cards` would be posted as an update check.
 
-**`node scripts/routed-census.mjs` still reads 120 / 37, and the table above now says why.**
-It counts `COMMANDS` membership, which since PR 11 is not the same question as "does the web
-target answer this". Five of the 37 are served through `glue.rs`.
+**`node scripts/routed-census.mjs` reads 120 / 35, and the table above says why.** It counts
+`COMMANDS` membership, which since PR 11 is not the same question as "does the web target answer
+this". Five of the 35 are served through `glue.rs`. The routed half has not moved through either
+change — PR 11 diverted names rather than adding arms, and the cover work deleted a command that
+was never in `COMMANDS`.
+
+⚠️ **This line said the script "still reads 120 / 37", which was true when written and was
+false a few hours later — and the reason is the whole case for the script.** A first pass at
+this note recorded it as a number guessed without running the command. It was not:
+`git show fb512e5:src-tauri/src/sync_pair/pairing.rs` carries **ten** `#[tauri::command]`s, so
+the crate really did answer **157 / 120 / 37** that day.
+
+What moved it was **PR #324**, which landed the same afternoon and reshaped the pairing surface:
+`sync_pairing_respond` and `sync_pairing_complete` both went, `sync_pairing_poll` arrived, a net
+**−1**. Then the cover work deleted `deck_set_cover_image`, another −1. 157 → 156 → **155**, with
+`sync_pair/pairing` now **nine** rather than ten, and not one of those three steps was an
+arithmetic mistake by anybody.
+
+**That is exactly the failure the census script exists for, and it is worth being precise about
+which failure it is.** A hand-written total is not usually wrong when it is written — it is
+wrong two merges later, in a repository where eight branches are open and a prose-only edit
+routes to neither CI job. The lesson is not "run the command before quoting it", which this
+author did; it is **do not paste a total into prose at all** when `--check` can assert it and a
+reader can re-derive it in one command.
 
 ### Both risks were measured against the live endpoint rather than assumed
 

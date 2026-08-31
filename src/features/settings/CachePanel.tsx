@@ -32,7 +32,7 @@ export function CachePanel({ cache }: { cache: LocalCache }): JSX.Element {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="min-w-0 text-sm text-dim">
           Card images and the leftovers of each download. All of it is fetched again when it is
-          next needed — your collection, decks and deck covers are not touched.
+          next needed — your collection and decks are not touched.
         </p>
         <button
           type="button"

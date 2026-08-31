@@ -614,24 +614,20 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
-   * The two deck writes that are **not** a `DeckPatch`, and the reason neither can be one.
+   * The deck write that is **not** a `DeckPatch`, and the reason it cannot be one.
    *
    * `deck_update` writes every column with `coalesce(?n, column)`, which reads a bound NULL as
    * "leave it" — so a patch has no way to say *clear this*. Filing a deck back at the **root**
    * of the folder tree is exactly that sentence, which is why `deck_set_folder` exists and
-   * takes an `Option<i64>` of its own where `null` means the root. And a cover image is a file
-   * on disk rather than a column, so it arrives as the path the picker answered.
+   * takes an `Option<i64>` of its own where `null` means the root.
+   *
+   * **It was two, and the other was `deck_set_cover_image`** — a cover could be a file on disk
+   * rather than a column, so it arrived as the path the picker answered. That command is gone
+   * with the whole custom-cover feature; a cover is `DeckPatch.coverCardId`, a string, and this
+   * module has no second exception left.
    */
-  it("sends the two deck writes a patch cannot express under their own names", async () => {
+  it("sends the deck write a patch cannot express under its own name", async () => {
     invoke.mockResolvedValue({ id: 4 });
-
-    await ipc.deckSetCoverImage(4, "C:\\pics\\dragon.png");
-    // `deckId` and `sourcePath` — the command takes neither `id` nor `path`, and Tauri fills
-    // parameters by name.
-    expect(invoke).toHaveBeenCalledWith("deck_set_cover_image", {
-      deckId: 4,
-      sourcePath: "C:\\pics\\dragon.png",
-    });
 
     await ipc.deckSetFolder(4, 2);
     expect(invoke).toHaveBeenCalledWith("deck_set_folder", { deckId: 4, folderId: 2 });

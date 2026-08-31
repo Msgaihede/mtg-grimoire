@@ -24,7 +24,7 @@ describe("CachePanel", () => {
     render(<CachePanel cache={cache()} />);
 
     expect(panel()).toHaveTextContent("fetched again when it is next needed");
-    expect(panel()).toHaveTextContent("collection, decks and deck covers are not touched");
+    expect(panel()).toHaveTextContent("collection and decks are not touched");
   });
 
   /**

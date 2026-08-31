@@ -611,20 +611,20 @@ describe("the seeded rows agree with the cards they name", () => {
 
   /**
    * Every seeded cover names a printing the corpus still has — **or names none at all**, which
-   * is the one deck showing a cover of the reader's own.
+   * is the one deck with no cover.
    *
-   * `coverCardId` and `coverKind` are separate columns because a deck may carry both, and
-   * `coverArtist` follows the *card id*: an uploaded picture has no Scryfall illustrator, so a
-   * deck that has only ever had one credits nobody. That is deck 4, and it is the only null.
+   * `coverArtist` follows the *card id*, so a deck with no card id credits nobody and draws
+   * nothing; that is deck 4, and it is the only null. It read `coverKind: "custom"` until
+   * 2026-08-31 and this case asserted so — the custom cover is deleted and every seeded deck is
+   * `card_art` now, which is asserted here rather than left implied, because a seed that
+   * reintroduced the retired word would otherwise pass.
    */
   it("starter's cover cards are printings the corpus still has", () => {
     const db = seed("starter");
     const known = new Set(db.cards.map((c) => c.id));
     for (const deck of db.decks) {
-      if (deck.coverCardId === null) {
-        expect(deck.coverKind).toBe("custom");
-        continue;
-      }
+      expect(deck.coverKind).toBe("card_art");
+      if (deck.coverCardId === null) continue;
       expect(known.has(deck.coverCardId)).toBe(true);
     }
     expect(db.decks.filter((d) => d.coverCardId === null).map((d) => d.id)).toEqual([4]);

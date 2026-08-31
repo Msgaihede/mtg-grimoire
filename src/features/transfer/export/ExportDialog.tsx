@@ -25,8 +25,9 @@
  * `<a download>`. This file passes one file name and catches one refusal, and the branch folds
  * away at build time.
  *
- * **The _native_ picker's own half is unverifiable**, for the reason `deck_set_cover_image`'s is
- * (`src/features/transfer/CLAUDE.md`'s Import section says the same of the open dialog):
+ * **The _native_ picker's own half is unverifiable**, for the reason the cover picker's was
+ * before it was removed (`src/features/transfer/CLAUDE.md`'s Import section says the same of the
+ * open dialog):
  * `dialog:allow-save` opens a native window CDP cannot reach, and nothing in a test or a browser
  * can drive it either. So this file's tests cover **path → write**, not **click → path** — `save`
  * from `@tauri-apps/plugin-dialog` is mocked to answer a path directly, the same way
@@ -46,8 +47,9 @@
  *
  * **A cancelled save answers `null`, and that is the one bug worth naming in prose.** `save()`
  * resolves `null` on Cancel, and writing *that* string to disk — `ipc.exportWriteFile(path,
- * text)` called with `path` still `null` — is exactly the trap `deck_set_cover_image`'s callers
- * already avoid. The guard is `saveExport`'s now rather than this file's, which is the right
+ * text)` called with `path` still `null` — is exactly the trap the deck cover's own callers
+ * avoided before that command was removed. The guard is `saveExport`'s now rather than this
+ * file's, which is the right
  * place for it: it sits beside the `save()` whose answer it is about, so no second caller of that
  * dialog can forget it. And a refused write is still reported rather than closing the dialog on
  * it: the reader's text is still on screen and still copyable, so the failure costs them nothing

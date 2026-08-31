@@ -205,8 +205,9 @@ export const Default: Story = {
  * printing in the database instead, uncollapsed, because different printings are different art
  * and collapsing them would hide exactly the choice being made.
  *
- * The picked id travels in the `deck_create` itself: `coverKind` is not settable at create and
- * keeps its `card_art` default, which is the kind a picked card *is*.
+ * The picked id travels in the `deck_create` itself, which since 2026-08-31 is the whole of what
+ * a cover can be — so the create is one write again. `coverKind` is not settable here and keeps
+ * its `card_art` default, which is the only kind there is.
  *
  * **The preview draws it, credit and all — and the credit is a round trip.** An `art` crop has
  * no printed frame, so Scryfall's image policy credits the illustrator wherever one is shown,

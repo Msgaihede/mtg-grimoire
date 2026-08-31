@@ -199,15 +199,21 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   artist's name must appear elsewhere in the same interface. A `grid`/`thumb`/`display` image
   carries the printed credit itself and needs nothing; the 626×457 `art` variant does not.
   This has been ruled on twice and is written here because four surfaces cite it as living
-  here. Two consequences hold everywhere a **cover** is drawn — the gallery's deck tiles, its
-  folder strips and `DeckSettingsDialog`'s `CoverPreview`, all three of which print the
+  here. One consequence holds everywhere a **cover** is drawn — the gallery's deck tiles, its
+  folder strips and `DeckCoverPicker`'s `CoverPreview`, all three of which print the
   artist: **a card cover whose artist is unknown is not drawn at all** (`DeckRow.coverArtist`
   is `null` when `cards` has no row for that printing; the orphan heals on the next sync rather
-  than being shown uncredited), and **a custom cover carries no artist and needs none**,
-  because the rule is Scryfall's and a user's own file is not Scryfall's — which is also why a
-  folder strip drops custom covers rather than crediting some of its tiles and not others.
+  than being shown uncredited).
+  **There were two, and the second went with the custom cover on 2026-08-31.** It read: *a
+  custom cover carries no artist and needs none*, because the rule is Scryfall's and a user's own
+  file is not Scryfall's — which was also why a folder strip dropped custom covers rather than
+  crediting some of its tiles and not others. **Every cover is now a card's `art` crop**, so the
+  rule applies to all of them without an exemption to carry, and the strip's drop-rule collapses
+  into the one above: a tile is drawn when its artist is known and skipped when it is not, and
+  there is no second kind of picture for that sentence to have to except.
   **The standing gap is down to two, and it closed by accident rather than by a credit line**
-  (`DeckSettingsDialog.tsx`'s `ChoiceTile` doc): it was four — the deck's stack rows
+  (`DeckCoverPicker.tsx`'s `ChoiceTile` doc — that file, not `DeckSettingsDialog.tsx`, which
+  hosts the picker and is where this pointer used to send a reader): it was four — the deck's stack rows
   (`CardStack`), its grid tiles (`views/GridView`), the theory diff's rows and the cover picker's
   own tiles — and the first two now draw the **whole card**, which carries its printed credit. So
   the remaining two are the theory diff and the picker, both still uncredited because

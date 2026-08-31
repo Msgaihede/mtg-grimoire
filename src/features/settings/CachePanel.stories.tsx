@@ -33,9 +33,11 @@ const meta = {
           "fetched again on demand with no user action, which is the whole definition this " +
           "button works to: `Cache::get` already treats a row whose file is gone as a miss.\n\n" +
           "**What it deliberately leaves alone** is as much of the design as what it takes. " +
-          "`data/covers/` holds the pictures a reader *chose* for their decks — safe to delete " +
-          "in the sense that the deck falls back to card art, and not safe in the sense that " +
-          "only they can pick it again. The price and Oracle Tag tables stay too: those " +
+          "`data/covers/` was the argument here until 2026-08-31: it held the pictures a reader " +
+          "*chose* for their decks, and was the one thing this button could destroy that nobody " +
+          "could fetch again. Custom covers are gone — a cover is a `cover_card_id` now, which " +
+          "is card art like every other picture on screen — so the sweep has nothing left it " +
+          "could take irreversibly. The price and Oracle Tag tables stay: those " +
           "re-download on a **button** rather than on demand, so emptying them would leave " +
           "every price an em dash until someone noticed.\n\n" +
           "So the confirmation asks for no typed word — see `ConfirmDialog`'s " +

@@ -4,12 +4,14 @@
 //! nothing more; writing bytes at that path from the webview would need an `fs:` permission,
 //! and this app grants none anywhere on purpose — `tauri-plugin-fs` is in `Cargo.lock`
 //! transitively and is unreachable because the ACL would deny it. `deck_set_cover_image`
-//! established the pattern in the other direction: the page asks for a name and Rust opens
-//! the file, so no filesystem permission of any kind is needed.
+//! established the pattern in the other direction — the page asks for a name and Rust opens
+//! the file, so no filesystem permission of any kind is needed — and it is named here as
+//! history rather than as a sibling: it went with custom deck covers on 2026-08-31, leaving
+//! this and [`crate::import::import_read_file`] as the two commands still standing on it.
 //!
 //! There is no path fence here and none is owed. The path is one the reader picked in the
-//! OS's own save dialog a moment earlier — the same trust `deck_set_cover_image` places in
-//! the open dialog's answer — and a fence would only ever refuse a directory they chose.
+//! OS's own save dialog a moment earlier — the same trust the import places in the open
+//! dialog's answer — and a fence would only ever refuse a directory they chose.
 
 /// Write `contents` at `path`, replacing whatever was there.
 ///
