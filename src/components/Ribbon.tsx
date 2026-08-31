@@ -111,6 +111,21 @@ const DEVICE_SYNC_TOOLTIP: Record<Exclude<LiveState, "off">, string> = {
 };
 
 /**
+ * The accessible name of the marker, per socket state.
+ *
+ * **A map rather than `"Sync " + deviceSync`, which is what this was.** That produced
+ * "Sync connecting" and "Sync live" — the state's wire spelling with a word bolted on front,
+ * read out as-is by a screen reader. The `LiveState` values are an enum shared with Rust and
+ * are not English; the label a person hears has to be written as English somewhere, and beside
+ * {@link DEVICE_SYNC_TOOLTIP} is where the other sentence about each state already lives.
+ */
+const DEVICE_SYNC_LABEL: Record<Exclude<LiveState, "off">, string> = {
+  connecting: "Sync is reconnecting",
+  live: "Sync is live",
+  offline: "Sync is offline",
+};
+
+/**
  * The global ribbon: one 56px row that owns every action which is not about the view
  * below it.
  *
@@ -303,6 +318,15 @@ export function Ribbon({
               marker at the moment it happened, for the one event this whole feature exists to
               surface.
 
+              ⚠️ **The `sr-only` span is what makes that paragraph true, and it was missing.**
+              A live region announces the *text* inside it when that text changes; this button's
+              only child was an `aria-hidden` icon, so the region had no text at all and a
+              changed `aria-label` is not reliably announced as a live update. The region was
+              live and permanently silent — the argument above describing a flip nothing said.
+              The sentence is {@link DEVICE_SYNC_TOOLTIP}'s, so the hover and the announcement
+              cannot drift, and it is invisible for the reason every other `sr-only` in this app
+              is: the icon is the sighted reader's copy of it.
+
               **Floored for a finger exactly like its two siblings**, and for their reason:
               `TOUCH_FLOOR`'s own comment measured `Refresh data` and the update button at 38px
               icon-only, under `--target-min`'s 44px. This marker is icon-only *unconditionally*
@@ -313,7 +337,7 @@ export function Ribbon({
             <button
               type="button"
               onClick={onOpenSync}
-              aria-label={"Sync " + deviceSync}
+              aria-label={DEVICE_SYNC_LABEL[deviceSync]}
               aria-live="polite"
               style={narrow ? TOUCH_FLOOR : undefined}
               {...tip(DEVICE_SYNC_TOOLTIP[deviceSync])}
@@ -336,6 +360,9 @@ export function Ribbon({
               ) : (
                 <Wifi className="size-4" aria-hidden="true" />
               )}
+              {/* The live region's text. Without it the region has nothing to announce — see
+                  the paragraph above. */}
+              <span className="sr-only">{DEVICE_SYNC_TOOLTIP[deviceSync]}</span>
             </button>
           )}
           {/* A fade, and deliberately **not** `statusLine`: this line is a flex item in a

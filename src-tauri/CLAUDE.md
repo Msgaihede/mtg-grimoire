@@ -875,8 +875,10 @@ record, with every measurement, is
   landed, and there is no such setting any more**: `sync_relay_set_url` and `valid_relay_url` are
   deleted, `RelayStatus` no longer carries a `relayUrl`, and what the panel draws in its place is
   `sync_supporter_status`'s answer.
-- **Eleven tables sync and `schema::SYNCED_TABLES` is the census.** The spec says twelve and names
-  `deck_allocations`, which schema v25 dropped. `capture::TABLES` is held to that constant by a
+- **Twelve tables sync and `schema::SYNCED_TABLES` is the census.** ⚠️ **This line said *eleven*
+  from schema v25 until 2026-08-31**, on the argument that the spec's twelfth was
+  `deck_allocations`, which v25 dropped — true when written, and made wrong by v31 adding
+  `device_names` back to twelve without this page moving. `capture::TABLES` is held to that constant by a
   test, and a second test asserts every column a capture spec names exists on its table — a
   misspelt column is not a compile error and not a runtime error either until the trigger fires,
   at which point it is a *write* that starts failing for the reader in a command that has nothing
@@ -1588,6 +1590,6 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
 | [commander-brackets.md](../docs/reference/commander-brackets.md) | `combos.rs` and the v26 rung — the feed measured end to end, what is kept and what is skipped, the match query, and `decks.bracket` |
 | [wishlist-folders.md](../docs/reference/wishlist-folders.md) | The wishlist's cabinet (v23) — the four-term grain, the merge rule, the root-add duplicate |
 | [collection-folders.md](../docs/reference/collection-folders.md) | The collection's cabinet (v24–v25) — the eleventh grain term, the deck groups and `Recently removed`, the conversion that made them, what a zero quantity now costs |
-| [sync.md](../docs/reference/sync.md) | `sync_pair/`, `sync_engine/` and user schema v30 — the pairing protocol step by step and the six digits; then the eleven synced tables, how a row is named across devices, the three SQLite facts the capture triggers' shape follows from, §7.3's five rules against the test that proves each, the envelope measured, the relay's endpoints, and what is not built |
+| [sync.md](../docs/reference/sync.md) | `sync_pair/`, `sync_engine/` and user schema v30 — the pairing protocol step by step and the six digits; then the twelve synced tables, how a row is named across devices, the three SQLite facts the capture triggers' shape follows from, §7.3's five rules against the test that proves each, the envelope measured, the relay's endpoints, and what is not built |
 | [web-target.md](../docs/reference/web-target.md) | The browser build — the module map, the OPFS pair, the measured browse and facet, and the first run's open memory failure |
 | [text-mirror.md](../docs/reference/text-mirror.md) | `mirror/` — the layout, the dirty map, why the pruner reads a manifest instead of guessing, what a pass costs measured, and the bugs still open |

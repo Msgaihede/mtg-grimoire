@@ -9,8 +9,13 @@
 //! Both were true and neither was the obstacle they looked like, because the socket that shipped
 //! is opened from **this process**, not from the page: [`super::live`]'s connection manager holds
 //! a `tokio-tungstenite` client behind `cfg(not(target_family = "wasm"))` — so the wasm build
-//! never names it — over `reqwest`'s own CSP-governed connection to the relay, the one this file
-//! already made. Neither blocker survived contact with where the socket actually lives; see the
+//! never names it — alongside the `reqwest` connection to the relay this file already made.
+//! ⚠️ **Neither of those is "under" the CSP, and the phrasing this doc carried for a day said
+//! they were.** A Content-Security-Policy governs what the *webview* may fetch; a native HTTP or
+//! WebSocket client in the Rust process is outside its reach entirely — exempt, not permitted.
+//! The claim that matters is unchanged and is the stronger one: `tauri.conf.json` was not edited,
+//! and nothing was granted to the page. Neither blocker survived contact with where the socket
+//! actually lives; see the
 //! design spec §3 for the fuller argument, including the fourth reason the record never had: a
 //! browser's own `WebSocket` cannot set an `Authorization` header, and this one does.
 //!

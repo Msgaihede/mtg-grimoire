@@ -12,6 +12,8 @@ vi.mock("@tauri-apps/api/event", () => ({ listen }));
 import collectionRs from "../../src-tauri/src/collection.rs?raw";
 import deckRs from "../../src-tauri/src/deck.rs?raw";
 import searchRs from "../../src-tauri/src/search.rs?raw";
+import syncCommandsRs from "../../src-tauri/src/sync_engine/commands.rs?raw";
+import syncLiveRs from "../../src-tauri/src/sync_engine/live.rs?raw";
 import wishlistRs from "../../src-tauri/src/wishlist.rs?raw";
 import ipcSource from "./ipc.ts?raw";
 import {
@@ -1471,6 +1473,46 @@ it("subscribes to sync:live and hands the payload through unwrapped", async () =
   expect(seen).toEqual([{ state: "connecting" }]);
   stop();
   expect(unlisten).toHaveBeenCalledTimes(1);
+});
+
+/**
+ * **The two tests above pin only this side of the seam, and that is the failure this repo has
+ * already had twice.** A Rust↔`ipc.ts` contract has no compiler and no shared type: renaming
+ * `app.emit("sync:applied", …)` in the crate leaves every assertion here green, because they
+ * assert that `onSyncApplied` subscribes to the string *this file* wrote down — a listener
+ * hearing nothing, forever, with both suites passing.
+ *
+ * So the string is read out of the crate, the same way the DTO mirrors below read their struct
+ * fields. Two emitters, because the events come from two places: `sync_engine/live.rs` emits
+ * both from the background loop, and `sync_engine/commands.rs` emits `sync:applied` again for
+ * the manual **Sync now** press.
+ *
+ * The `raw.includes` shape is deliberately crude — this is a name check and not a parse. What
+ * it can catch is the whole class that has bitten: a rename on either side, a hyphen for a
+ * colon, an underscore for a hyphen.
+ */
+describe("the sync event names agree with the crate that emits them", () => {
+  const emitters: [name: string, source: string][] = [
+    ["sync_engine/live.rs", syncLiveRs],
+    ["sync_engine/commands.rs", syncCommandsRs],
+  ];
+
+  // Not `toContain` on the raw sources alone: a pass has to mean "both ends spell it", never
+  // "neither end was read", so each source is checked for length first.
+  it.each(emitters)("%s was read", (_name, source) => {
+    expect(source.length).toBeGreaterThan(1_000);
+  });
+
+  it("emits sync:applied on both sides of the boundary", () => {
+    expect(syncLiveRs).toContain('app.emit("sync:applied"');
+    expect(syncCommandsRs).toContain('app.emit("sync:applied"');
+    expect(ipcSource).toContain('"sync:applied"');
+  });
+
+  it("emits sync:live on both sides of the boundary", () => {
+    expect(syncLiveRs).toContain('app.emit("sync:live"');
+    expect(ipcSource).toContain('"sync:live"');
+  });
 });
 
 /**

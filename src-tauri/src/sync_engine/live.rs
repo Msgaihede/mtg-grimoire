@@ -245,6 +245,28 @@ impl Ended {
     }
 }
 
+/// The relay's base URL as a WebSocket origin.
+///
+/// **Both schemes, and the `http` half is not hypothetical.** [`client::RELAY_URL`] is a
+/// `sync_state` override with no UI whose entire purpose is to point a dev build or a test at a
+/// Worker of its own, and `wrangler dev` serves `http://127.0.0.1:8787`. A lone
+/// `replacen("https://", "wss://", 1)` left that untouched and `connect_async` refuses an `http`
+/// URL outright, so the one configuration the override exists for was the one that could never
+/// open a socket.
+///
+/// Anything else — a base already spelled `wss://`, or a scheme this does not know — is handed
+/// back unchanged and left to fail on its own terms, which is a better error than a rewrite
+/// guessing at what was meant.
+fn ws_origin(base: &str) -> String {
+    if let Some(rest) = base.strip_prefix("https://") {
+        format!("wss://{rest}")
+    } else if let Some(rest) = base.strip_prefix("http://") {
+        format!("ws://{rest}")
+    } else {
+        base.to_owned()
+    }
+}
+
 /// Hold one socket until it dies, reporting what happened to it.
 async fn connect_once(
     app: &tauri::AppHandle,
@@ -257,10 +279,7 @@ async fn connect_once(
         Ok(credentials) => credentials,
         Err(e) => return Ended::failed(e),
     };
-    let url = format!(
-        "{}/g/{group}/ws?device={device}",
-        base.replacen("https://", "wss://", 1)
-    );
+    let url = format!("{}/g/{group}/ws?device={device}", ws_origin(&base));
     // `tokio-tungstenite` builds an arbitrary upgrade request, so the bearer gate the relay
     // already has at `index.ts:169-181` works unchanged. **A browser could not do this** — its
     // `WebSocket` constructor cannot set a header — which is one of the reasons the socket lives
@@ -880,5 +899,24 @@ mod tests {
             outbox_has_work(&state).await,
             "an edit to a synced table is exactly what the doorbell is for"
         );
+    }
+
+    /// A dev override is the only thing `relay_url` is for, and `wrangler dev` serves plain
+    /// `http`. `connect_async` refuses that scheme outright, so leaving it unconverted made the
+    /// override useless for the one job it has.
+    #[test]
+    fn a_dev_http_base_becomes_a_ws_socket() {
+        assert_eq!(ws_origin("http://127.0.0.1:8787"), "ws://127.0.0.1:8787");
+        assert_eq!(ws_origin("https://relay.example"), "wss://relay.example");
+        // Only the scheme, and only once: a host that happens to contain the string must not
+        // be rewritten.
+        assert_eq!(
+            ws_origin("https://relay.example/http://x"),
+            "wss://relay.example/http://x"
+        );
+        // Already a socket URL, or a scheme this does not know: handed back to fail on its own
+        // terms rather than guessed at.
+        assert_eq!(ws_origin("wss://relay.example"), "wss://relay.example");
+        assert_eq!(ws_origin("relay.example"), "relay.example");
     }
 }

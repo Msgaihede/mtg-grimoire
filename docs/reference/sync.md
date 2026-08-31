@@ -1678,9 +1678,14 @@ frame is a hint and is never itself the cursor advancing.
 2. **"A WebSocket from the page would need the CSP widened."** It would not, and this is the half
    the record had backwards: `connect-src 'self' ipc: http://ipc.localhost` governs the
    **webview's** connections, and the socket that shipped is opened by `tokio-tungstenite` inside
-   the Rust process — the same process that already reaches the relay over `reqwest` under that
-   exact CSP, proven live by the 2026-08-29 two-device pass. `tauri.conf.json` was not edited by
-   this change. A fourth reason the record never named: a browser's own `WebSocket` constructor
+   the Rust process — the same process that already reaches the relay over `reqwest`, proven live
+   by the 2026-08-29 two-device pass. ⚠️ **That clause read "over `reqwest` under that exact CSP"
+   for part of 2026-08-31, and "under" is the wrong word for what a CSP does.** A
+   Content-Security-Policy is a webview mechanism: it governs fetches the *page* makes, and a
+   native HTTP or WebSocket client in the Rust process is **exempt** from it rather than permitted
+   by it. Nothing in `connect-src` was ever consulted for either connection. The substantive claim
+   is unchanged and is the stronger one: `tauri.conf.json` was not edited by this change and the
+   page was granted nothing. A fourth reason the record never named: a browser's own `WebSocket` constructor
    cannot set an `Authorization` header, so a socket opened from the page would have forced the
    relay's bearer gate onto a query parameter or a subprotocol — a relay change, and a worse one.
    Opening it from Rust keeps the existing gate unchanged.
@@ -2048,9 +2053,32 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   and on `/claim`, `/claim`'s rebind and `/rotate`'s `keepOnly` are all written and tested and
   none of it is running: the live `/token` still accepts a body with no `device`. The migration
   file and the order it goes in are in the runbook.
-- ~~**No WebSocket fan-out for the rewrap either.**~~ **Built 2026-08-31** — `/keys` is checked on
-  the same doorbell as every other pull now, so a removal reaches a remaining device within a few
-  seconds of the next `head` frame rather than at that device's next manual sync.
+- ~~**No WebSocket fan-out for the rewrap either.**~~ **Partly built 2026-08-31** — `check_keys`
+  runs at the top of every round trip, so a removal is now picked up by *whatever* wakes a device:
+  a `head` frame, a local write, launch, a reconnect. ⚠️ **This bullet claimed "within a few
+  seconds of the next `head` frame" for part of that day and it is false — there is no frame.**
+  A rotation never reaches the Durable Object at all: `index.ts` answers `/rotate` and `/keys`
+  ahead of the bearer gate, out of D1, precisely because a rotated-away device cannot mint a
+  token — and `notify()` is called from `push` and nowhere else, so nothing broadcasts. **A quiet
+  group therefore learns of a removal at its next trip for some other reason**, which on an idle
+  device is the next launch or the next reconnect. Still a large improvement on the manual press
+  it replaced, and still not a fan-out. Closing it properly means either a notify on the rotate
+  path — which would have to reach the object the rotate deliberately avoids — or the removing
+  device pushing something after it publishes.
+- **A round trip holds the write connection across the network, so a user edit can be told the
+  database is busy.** `live::trip` and `commands::sync_now` both wrap the whole of
+  `client::run_once` in `sync::with_write`, and that closure is `check_keys` → `push` → `pull` →
+  `emit_baselines` → `ack` — five HTTP requests, one of them a `push` that loops a batch at a
+  time. A write the reader makes while one is in flight waits out `db::WRITE_LOCK_WAIT` and then
+  answers `db::BUSY`: *"the database is busy finishing a sync"*, after five seconds, over a
+  keystroke. **It is not new** — that is the shape `sync_now` has always had, and pressing the
+  button has always been able to do it — but automatic sync makes it reachable without a press.
+  Two things keep it rare rather than fixed: trips are single-flight, and since the outbox gate
+  the local-write trip fires three seconds after writing goes *quiet*, so the reader is usually
+  not mid-edit when one starts. Fixing it properly means holding the connection only for the
+  statements that need it and letting the network happen outside — a change to this crate's write
+  discipline with its own failure modes (a push and a concurrent edit interleaving on `sync_ops`),
+  and it needs a spec rather than a patch at the end of a branch.
 - **`sync_ops` has no retention rule.** `pushed_at` is stamped and the row is kept, because the
   log is also this device's memory of what it did — add-wins and the cycle-break both read
   it. Nothing prunes it, so it grows for the life of the install: at the measured 453—698 B per

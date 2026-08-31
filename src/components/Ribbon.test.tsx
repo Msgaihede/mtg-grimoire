@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { TOOLTIP_OPEN_MS, TooltipProvider } from "@/components/tooltip/TooltipProvider";
@@ -261,7 +261,41 @@ describe("Ribbon", () => {
    */
   it("shows an offline marker when the socket is down", () => {
     render(<Ribbon {...props({ deviceSync: "offline" })} />);
-    expect(screen.getByLabelText("Sync offline")).toBeInTheDocument();
+    expect(screen.getByLabelText("Sync is offline")).toBeInTheDocument();
+  });
+
+  /**
+   * **The label is written English rather than the wire word with a prefix.** It was
+   * `"Sync " + deviceSync`, which reads out as "Sync connecting" and "Sync live" — `LiveState`
+   * is an enum shared with Rust and is not a sentence. Asserted per state, because the map is
+   * the only thing standing between the enum and what a person hears.
+   */
+  it.each([
+    ["connecting", "Sync is reconnecting"],
+    ["live", "Sync is live"],
+    ["offline", "Sync is offline"],
+  ] as const)("names the %s marker in English", (state, label) => {
+    render(<Ribbon {...props({ deviceSync: state })} />);
+    expect(screen.getByLabelText(label)).toBeInTheDocument();
+  });
+
+  /**
+   * **The marker's `aria-live` region has to contain text, and for a while it contained none.**
+   * Its only child was an `aria-hidden` icon, so the region was live and permanently silent: a
+   * live region announces the text that changed inside it, and a changed `aria-label` is not
+   * reliably announced as a live update. The `sr-only` sentence is what it announces, and it is
+   * the same sentence the hover shows.
+   *
+   * `within` the marker rather than the whole row: the tooltip's own copy of that sentence
+   * mounts elsewhere when a pointer is over the button, and this assertion must be about the
+   * region.
+   */
+  it("gives the live region a sentence to announce", () => {
+    render(<Ribbon {...props({ deviceSync: "offline" })} />);
+    const marker = screen.getByLabelText("Sync is offline");
+    expect(marker).toHaveAttribute("aria-live", "polite");
+    const said = within(marker).getByText(/connection to your other devices dropped/i);
+    expect(said).toHaveClass("sr-only");
   });
 
   /**

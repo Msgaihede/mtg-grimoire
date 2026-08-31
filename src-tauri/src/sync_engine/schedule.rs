@@ -27,7 +27,11 @@ pub const WRITE_DEBOUNCE_MS: u64 = 3_000;
 /// billed — the only keepalive that keeps hibernation.
 pub const PING_SECS: u64 = 45;
 
-/// The shortest and longest a reconnect waits.
+/// The shortest wait, and the cap on the **base** the jitter is then added to.
+///
+/// ⚠️ `BACKOFF_MAX_MS` is not the longest a reconnect waits, and reading it as one has already
+/// misled a doc comment. [`backoff_ms`] adds up to a full `base` of jitter *on top of* the
+/// capped base, so the real ceiling is twice this — ~120 s, not 60.
 const BACKOFF_MIN_MS: u64 = 1_000;
 const BACKOFF_MAX_MS: u64 = 60_000;
 
@@ -44,8 +48,6 @@ pub enum Wake {
     Reconnect,
     /// Android returned to the foreground.
     Resume,
-    /// The window is closing and there is something pending.
-    Exit,
 }
 
 /// The single-flight, debounced schedule.
@@ -84,7 +86,12 @@ impl Scheduler {
                 now_ms.saturating_add(FRAME_DEBOUNCE_MS)
             }
             Wake::LocalWrite => now_ms.saturating_add(WRITE_DEBOUNCE_MS),
-            Wake::Launch | Wake::Reconnect | Wake::Resume | Wake::Exit => now_ms,
+            // **There is no `Exit` here, and there was one until this review.** The shutdown
+            // push does not go through a scheduler at all: `desktop.rs`'s `ExitRequested` arm
+            // asks `live::anything_pending` and calls `live::push_now` directly, inside its own
+            // hard budget, because by then this loop may already be gone. A variant nothing
+            // constructs is a mechanism a reader believes in.
+            Wake::Launch | Wake::Reconnect | Wake::Resume => now_ms,
         };
         // **Three cases, and only one of them moves a deadline later.**
         //
@@ -146,6 +153,12 @@ impl Scheduler {
 /// the relay in the same instant. An unjittered backoff would reconnect every device of every
 /// group together, turning a deploy into a thundering herd against the object that just came
 /// back.
+///
+/// **The jitter is added to the capped base, not folded into it**, so the ceiling this returns
+/// is `2 × BACKOFF_MAX_MS` — about two minutes, not one. That is deliberate: a spread that is a
+/// fixed fraction of the wait keeps its spreading power at every rung, where a jitter squeezed
+/// under the cap would collapse to nothing exactly at the top of the ladder, which is where
+/// every device is at once after a deploy.
 pub fn backoff_ms(attempt: u32, jitter: f64) -> u64 {
     let base = BACKOFF_MIN_MS
         .saturating_mul(1u64 << attempt.min(6))
