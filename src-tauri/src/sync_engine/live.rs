@@ -286,8 +286,20 @@ async fn connect_once(
 
             // A transaction committed on this device. See [`spawn`] on why the producer of this
             // signal must use `notify_one`.
+            //
+            // **Spec §6.3's second half: `commit_hook` wakes, [`the outbox`](outbox_has_work)
+            // decides.** The wake is deliberately indiscriminate — one signal per transaction,
+            // whatever it wrote — so *this* is the only place that can tell a user edit from
+            // everything else that commits on this connection, and without it the loop does not
+            // close: [`client::round_trip`] ends by stamping `LAST_SYNC_AT`, that commit rings
+            // this bell, and an ungated arm would schedule the next trip three seconds later,
+            // for ever. The same gate is what keeps the Scryfall ingest's one commit per 2 000
+            // rows, every image-cache flush, every price and tag ingest and every `error_log`
+            // row off the relay: none of them is a synced table, so none of them leaves an op.
             () = writes.notified() => {
-                sched.wake(Wake::LocalWrite, now_ms(), 0);
+                if outbox_has_work(state).await {
+                    sched.wake(Wake::LocalWrite, now_ms(), 0);
+                }
             }
 
             _ = tick.tick() => {
@@ -572,7 +584,17 @@ async fn trip(app: &tauri::AppHandle, state: &Arc<AppState>, sched: &mut Schedul
 /// than a missed push, and answering `false` costs nothing a normal exit does not already
 /// forgive: the op stays `pushed_at IS NULL` and the next launch's ordinary sync tries again.
 pub fn anything_pending(state: &Arc<AppState>) -> bool {
-    let Some(conn) = crate::db::lock_for(&state.db_read, std::time::Duration::ZERO) else {
+    unpushed(&state.db_read, std::time::Duration::ZERO)
+}
+
+/// The one `count(*)` both gates are, over whichever connection the caller can afford and for
+/// however long that caller is willing to wait for it.
+///
+/// `false` when the lock could not be had inside `wait`, which is a deliberate answer rather
+/// than an error: both callers have a real one for "could not ask", and both are documented
+/// where they call this.
+fn unpushed(db: &std::sync::Mutex<rusqlite::Connection>, wait: std::time::Duration) -> bool {
+    let Some(conn) = crate::db::lock_for(db, wait) else {
         return false;
     };
     conn.query_row(
@@ -582,6 +604,40 @@ pub fn anything_pending(state: &Arc<AppState>) -> bool {
     )
     .map(|n| n > 0)
     .unwrap_or(false)
+}
+
+/// How long the local-write gate waits for the write connection.
+///
+/// One second and not [`crate::db::WRITE_LOCK_WAIT`]'s five, because nothing here is a person
+/// waiting on a button: giving up costs one delayed push, never an op. `sync_ops` is durable and
+/// `pushed_at IS NULL` survives everything, so the next commit, the next `head` frame or the
+/// next reconnect asks again. It is not [`anything_pending`]'s `Duration::ZERO` either — that
+/// caller is inside a shutdown budget and this one is not, and a wake silently dropped because
+/// the write connection happened to be busy for a moment is a real edit that never syncs.
+const WAKE_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Is there anything for the relay after the commit that just rang the doorbell?
+///
+/// **The write connection and not `db_read`, and that is the whole correctness of this gate.**
+/// A commit hook fires *before* its transaction commits — that is exactly why returning `true`
+/// from one aborts the write, as `mirror::watch`'s own comment says — so a read taken off the
+/// other connection the moment the notification arrives may still be looking at the snapshot the
+/// commit is in the middle of replacing, and answering `false` there would drop a real edit on
+/// the floor with nothing to raise it again. The writer holds `AppState::db` for the whole of
+/// [`crate::sync::with_write`], so taking that same mutex is what orders this question *after*
+/// the commit that asked it.
+///
+/// **It cannot contend with a round trip**, which is the other reason it can afford the write
+/// connection: trips are single-flight and [`trip`] is awaited inside the same `select!` as this
+/// arm, so the loop is never in both places at once.
+///
+/// On the blocking pool for [`credentials`]' reason — a `MutexGuard` on a connection is not
+/// `Send` and must not be held across an `.await`.
+async fn outbox_has_work(state: &Arc<AppState>) -> bool {
+    let owned = state.clone();
+    tokio::task::spawn_blocking(move || unpushed(&owned.db, WAKE_LOCK_WAIT))
+        .await
+        .unwrap_or(false)
 }
 
 /// One last round trip on the way out, best effort and with nobody left to tell if it fails.
@@ -698,5 +754,111 @@ mod tests {
     async fn push_now_is_a_quiet_no_op_with_no_group() {
         let state = file_state("no-group");
         push_now(state).await;
+    }
+
+    // -----------------------------------------------------------------------------------
+    // The local-write gate — spec §6.3's "the outbox decides"
+    // -----------------------------------------------------------------------------------
+
+    /// A device that is in a group and capturing, which is what the capture triggers need
+    /// before they will write anything at all.
+    ///
+    /// **All three rows are load-bearing and none is decoration.** Every trigger's body ends
+    /// `SELECT … FROM sync_clock c, sync_identity i, sync_group g` — a cross join — so a table
+    /// that is empty makes the whole `SELECT` produce nothing and no op is written. That is
+    /// what a device which has paired nothing looks like, and it is also what `split::convert`
+    /// leaves behind: it runs the schema ladder but not `schema::prepare_database`, so this
+    /// fixture has neither the capture triggers nor a `sync_clock` row until it makes them.
+    /// Measured rather than assumed — without the clock seed the "a user edit is pending" case
+    /// below failed with `sync_ops` empty, which is the same shape as a broken gate.
+    fn in_a_group_state(name: &str) -> Arc<AppState> {
+        let state = file_state(name);
+        {
+            let conn = state.db.lock().unwrap();
+            crate::sync_engine::capture::install(&conn).unwrap();
+            conn.execute(
+                "INSERT OR IGNORE INTO sync_clock (id, ms, ctr) VALUES (1, 0, 0)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO sync_identity (id, device_id, secret_key, public_key, name,
+                                            created_at)
+                 VALUES (1, 'dev1', x'00', x'01', 'dev1', 0)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO sync_group (id, group_id, epoch, group_key, joined_at)
+                 VALUES (1, '0123456789abcdef', 1, ?1, 0)",
+                rusqlite::params![vec![7u8; 32]],
+            )
+            .unwrap();
+        }
+        state
+    }
+
+    /// **The loop C1 was: a round trip's own last commit must not schedule the next one.**
+    ///
+    /// `client::round_trip` ends by writing [`client::LAST_SYNC_AT`] into `sync_state` on the
+    /// very connection the commit hook is installed on, so that stamp rings the doorbell like
+    /// any other transaction. `sync_state` is not on `schema::SYNCED_TABLES`, so it carries no
+    /// capture trigger and leaves no op — and this is the assertion that the arm's gate reads
+    /// that and schedules nothing. Ungated, this stamp scheduled a trip 3 s later, which wrote
+    /// the stamp again, for ever.
+    #[tokio::test]
+    async fn a_round_trips_own_last_sync_stamp_leaves_nothing_to_push() {
+        let state = in_a_group_state("last-sync-stamp");
+        {
+            let conn = state.db.lock().unwrap();
+            client::set_state(&conn, client::LAST_SYNC_AT, "1756600000").unwrap();
+        }
+        assert!(
+            !outbox_has_work(&state).await,
+            "the round trip's own stamp must not schedule the next round trip"
+        );
+    }
+
+    /// The other half of the same loop: a **failing** trip writes an `error_log` row inside the
+    /// same closure, and that commit rings the same bell. `error_log` is not synced either, so
+    /// a trip that fails forever must not retry itself every three seconds forever.
+    #[tokio::test]
+    async fn a_failed_trips_error_row_leaves_nothing_to_push() {
+        let state = in_a_group_state("error-row");
+        {
+            let conn = state.db.lock().unwrap();
+            crate::errors::record(
+                &conn,
+                Source::Relay,
+                OPERATION,
+                Kind::Other,
+                "the relay did not answer",
+                None,
+            );
+        }
+        assert!(
+            !outbox_has_work(&state).await,
+            "a background failure must not schedule its own retry storm"
+        );
+    }
+
+    /// And the case the whole wake exists for, so the gate above is not simply "never". A write
+    /// to a synced table fires the capture trigger in the same transaction, so by the time the
+    /// commit hook's notification is answered the op is there.
+    #[tokio::test]
+    async fn a_user_edit_is_something_to_push() {
+        let state = in_a_group_state("user-edit");
+        {
+            let conn = state.db.lock().unwrap();
+            conn.execute(
+                "INSERT INTO decks (name, created_at, updated_at) VALUES ('Bant', 0, 0)",
+                [],
+            )
+            .unwrap();
+        }
+        assert!(
+            outbox_has_work(&state).await,
+            "an edit to a synced table is exactly what the doorbell is for"
+        );
     }
 }

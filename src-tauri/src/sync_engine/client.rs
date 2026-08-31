@@ -29,7 +29,14 @@
 //! commit, so a transaction that keeps writing for a minute pushes once, at the end — armed off
 //! the mirror's own `commit_hook`, for the reason `db.rs`'s `CrossFileFence` doc gives: the
 //! update hook the mirror uses does not fire for `WITHOUT ROWID` tables, and two of the twelve
-//! synced ones are exactly that. Every wake — a frame, a local write, launch, reconnect, Android
+//! synced ones are exactly that.
+//!
+//! **That hook fires for every transaction, so the debounce is armed only after the outbox has
+//! been asked** — `sync_ops WHERE pushed_at IS NULL`, in [`super::live`]'s `outbox_has_work`.
+//! Spec §6.3 states it as two halves and both are load-bearing: without the second, [`run_once`]
+//! stamping [`LAST_SYNC_AT`] at the end of every trip would arm the debounce that runs the next
+//! trip, for ever, and the Scryfall ingest's commit per 2 000 rows would ring the relay's
+//! doorbell as loudly as a deck edit. Every wake — a frame, a local write, launch, reconnect, Android
 //! resume, exit — feeds one single-flight queue, so at most one round trip is ever in flight and
 //! the rest coalesce into it rather than queuing a second.
 //!

@@ -254,9 +254,18 @@ pub fn install_hook(
         // of the twelve synced tables are exactly that (`muted_tags`, and `device_names` since
         // user schema v31). A row-level wake would silently never sync a mute or a rename.
         //
-        // This says only "a transaction committed". Whether anything is owed is answered by
-        // the outbox — `sync_ops WHERE pushed_at IS NULL`, one partial-index scan — which is
-        // also why a round trip's own commits schedule nothing: by then the outbox is empty.
+        // **This says only "a transaction committed", and deciding is somebody else's job** —
+        // spec §6.3's "`commit_hook` wakes, the outbox decides". The decider is
+        // `sync_engine::live`'s `outbox_has_work`, on the arm that receives this signal:
+        // `sync_ops WHERE pushed_at IS NULL`, one partial-index scan. That is what keeps the
+        // Scryfall ingest, the image cache, the price and tag feeds and every `error_log` row
+        // off the relay — none of them is a synced table — and it is what closes the loop a
+        // round trip would otherwise be, since `round_trip` ends by stamping `last_sync_at` on
+        // this very connection and so rings this bell itself.
+        //
+        // ⚠️ **This comment described that gate for a day before the gate existed**, and the
+        // cost was a trip every three seconds for ever. If the sentence above is ever true
+        // again only of the design, delete it rather than leave it standing.
         //
         // `notify_one` does not block and cannot fail, which is what a commit hook requires.
         settling_writes.notify_one();
