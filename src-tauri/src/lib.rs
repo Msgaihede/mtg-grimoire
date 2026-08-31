@@ -79,6 +79,17 @@ pub mod maintenance;
 /// `AppState.mirror` (a field wasm's `AppState` does not have), carries the gate instead.
 pub mod marketplace;
 pub mod nav;
+/// **Three of Settings' four clears, moved here on 2026-08-31** — the deck domain's move a
+/// day earlier, arrived at from the same finding. `clear_collection`, `clear_wishlist` and
+/// `clear_decks` are `&Connection` in and a DTO out; what was holding the whole module on
+/// the other side was the block of `#[tauri::command]` wrappers at its foot, and the gate
+/// moved onto them.
+///
+/// **`clear_cache` is the one that did not come**, and it is the only thing in the file that
+/// does not compile here: its `cache` parameter is [`images`]' type, and on web the byte
+/// cache is Cache Storage rather than a directory. That is the same rewrite-not-a-port
+/// `images` itself is, and it carries its own gate at its own site.
+pub mod reset;
 pub mod schema;
 pub mod search;
 pub mod slug;
@@ -104,6 +115,20 @@ pub mod sync_engine;
 /// SQLite tables, and [`sync_engine::wire`] seals every batch with the first of them. A
 /// browser that could not open an envelope would be a browser that cannot sync.
 pub mod sync_pair;
+/// **The version, the release history and the clock they were read at — but never the swap.**
+/// This module was §6.3's second permanent exclusion and only half of it ever was one: the
+/// `.exe` replacement, the staging and the relaunch are Windows to the bone, while
+/// `UpdateStatus`, [`update::history`] and the pure version comparison underneath them are a
+/// `serde` struct and two `app_meta` reads. The half that swaps a file keeps the gate, item
+/// by item; the half that *reports* is here, so `update_status` and `update_history` can be
+/// answered on a target that has no executable to replace.
+///
+/// **What that buys is not a Download button, it is a decidable one.** `UpdatePanel` chooses
+/// what to draw from `installKind`, which is an answer from this module — so where the
+/// command did not answer at all, the panel read the silence as "not managed" and offered
+/// controls a browser cannot honour. [`update::InstallKind::Web`] is the answer that was
+/// missing.
+pub mod update;
 pub mod web;
 pub mod wishlist;
 pub mod wishlist_folders;
@@ -125,14 +150,10 @@ pub mod picked;
 #[cfg(not(target_family = "wasm"))]
 pub mod reconcile;
 #[cfg(not(target_family = "wasm"))]
-pub mod reset;
-#[cfg(not(target_family = "wasm"))]
 pub mod scryfall;
 pub mod tags;
 #[cfg(not(target_family = "wasm"))]
 pub mod transfer;
-#[cfg(not(target_family = "wasm"))]
-pub mod update;
 // Desktop only. `open_sized_to_monitor` calls `WebviewWindow::center()`, which tauri
 // declares `#[cfg(desktop)]` (tauri/src/window/mod.rs:1924) — so this module is not merely
 // useless on a phone, it does not compile there. Android's window is the activity and the

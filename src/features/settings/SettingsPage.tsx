@@ -112,20 +112,27 @@ export function SettingsPage({ update }: { update: Update }) {
 
   return (
     <div className="mx-auto max-w-2xl space-y-8 py-2">
-      {/* **Not on the web target**, where every control on it is about something the app
-          cannot do: `update_status`, `update_check`, `update_download`, `update_apply` and
-          `update_history` are five of §6.3's ten desktop-only commands, because **a PWA
-          updates through its service worker** — which ships and works. `!isWebTarget()`
-          rather than the panel's own `installKind === "managed"` test, and the difference
-          matters: that one reads an answer from `update_status`, which on a browser never
-          arrives, so the panel decided it was *not* managed and drew the controls anyway.
-          Driven on the phone 2026-08-30, this was the last `unknown command` in the app.
+      {/* **Drawn on every target again, and this reverses half of PR #315.** That change hid
+          the whole panel behind `!isWebTarget()`, which was right while nothing on it worked:
+          `update_status` and `update_history` answered `unknown command` in a browser, and the
+          panel's own `installKind === "managed"` test could not save it, because that reads an
+          answer from `update_status` — so on web it read the *absence* as "not managed" and
+          drew the controls anyway. Driven on the phone 2026-08-30, that was the last
+          `unknown command` in the app.
 
-          What it costs is the nearest thing to an About screen — the mark, the version and
-          the last check. **Nothing is lost**, because with no `update_status` to read it was
-          already drawing "MTG Grimoire …" with no version at all. A web About panel is worth
-          having and is a different thing to build. */}
-      {!isWebTarget() && <UpdatePanel update={update} history={history} />}
+          What it cost was the nearest thing to an About screen, which #315 said out loud was
+          worth having and was a different thing to build. This is that thing: `update_status`
+          and `update_history` are routed by `web::route` now, the browser answers
+          `installKind: "web"`, and the panel draws the mark, the name and the version and
+          names the service worker in place of a Download button. **The gate moved from the
+          build target onto a backend answer**, which is the general lesson #315 wrote down.
+
+          `update_check`, `update_download`, `update_apply` and `update_open_release_page` are
+          still desktop's, and nothing above reaches them: the panel offers a browser no
+          button that calls one. `update_check` in particular is *absent* rather than unrouted
+          — `web::route::call` is synchronous, so no `async` command can be an arm there at
+          all. Its arm in that file says so. */}
+      <UpdatePanel update={update} history={history} />
 
       <MarketplacePanel marketplace={marketplace} />
 

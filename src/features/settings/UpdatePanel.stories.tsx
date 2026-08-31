@@ -335,6 +335,37 @@ export const Staged: Story = {
 };
 
 /**
+ * A browser, where the **service worker** replaces this build.
+ *
+ * **The panel goes quiet, and what is left is the About screen** — the mark, the name and the
+ * version. That is the whole of what this panel is on the web target, and it is deliberately
+ * not nothing: PR #315 hid the panel here entirely, and said in as many words that a web
+ * About screen was worth having and was a different thing to build.
+ *
+ * **The sentence names the browser rather than the Play Store**, which is the only difference
+ * from `managed` and is the reason `web` is its own `InstallKind` instead of reusing it.
+ * Telling somebody at a laptop that their updates arrive through Google Play is the same
+ * wrong answer `managed` exists to stop `other` giving a phone.
+ *
+ * The fixture still carries an available release, so what is absent below is absent because
+ * of `installKind` and not because there was nothing to draw.
+ */
+export const UpdatedByTheBrowser: Story = {
+  args: { update: update({ status: status({ installKind: "web" }), action: "none" }) },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByText(/Updates arrive through your browser/)).toBeVisible();
+    await expect(canvas.queryByText(/Google Play/)).toBeNull();
+    await expect(canvas.queryByRole("button", { name: /^Check now$/ })).toBeNull();
+    await expect(canvas.queryByRole("button", { name: /^Download/ })).toBeNull();
+    await expect(canvas.queryByRole("button", { name: "View on GitHub" })).toBeNull();
+    await expect(canvas.queryByText(/is available/)).toBeNull();
+    // The About half is what the panel is here for.
+    await expect(canvas.getByText(/MTG Grimoire/)).toBeVisible();
+  },
+};
+
+/**
  * An MSI install, or any Linux build — a release it can see and cannot install.
  *
  * `pick_asset` matches on the tail of an asset name and answers nothing at all for
