@@ -870,17 +870,26 @@ archive's two, and **157** with `sync_group_leave`.
 | Routed | **120** |
 | Not routed | **37** |
 
+**Re-run 2026-08-31 after the update check landed: unchanged, deliberately.** `COMMANDS`
+membership is what this script counts, and it is *not* the same question as "does the web
+target answer this command". **Five of the 37 below are served through `glue.rs` instead** —
+the four `*_refresh` and `update_check` — because each is `async` and makes a network call
+while `route::call` is synchronous and makes neither. `src/lib/core/browser.ts` diverts those
+five names, so a panel calling one reaches the export in a browser and the Tauri command on a
+desktop. Read the rows below as "not a `COMMANDS` arm", never as "not available"; the "Why
+not" column says which of the two each one is.
+
 **The 37, and none of them is an oversight:**
 
 | Count | What | Why not |
 | --- | --- | --- |
 | **17** | `sync_pair/pairing` (10) and `sync_engine/commands` (7) | The pairing and membership surface. `lib.rs` states `pairing` "does not and never will" compile for wasm; the relay work is live and moving, so this is its own decision rather than a port |
-| **5** | `desktop.rs` | Seven commands, two of which were routed on 2026-08-31: `update_status` and `update_history` report rather than replace. What is left is the five §6.3 updater commands and `sync_run` — the web target runs its own ingest through `glue.rs` |
+| **5** | `desktop.rs` | Seven `update_*` commands plus `sync_run`, of which two are routed: `update_status` and `update_history` report rather than replace. Of the five left, **`update_check` is answered by `glue::update_check`** and only four are genuinely absent — `update_download`, `update_apply`, `update_open_release_page` (they stage, swap and relaunch an `.exe`, or open a URL through a Tauri plugin) and `sync_run`, whose ingest is `glue.rs`'s own |
 | **2** | `cache_clear`, `deck_set_cover_image` | Three of `reset`'s four clears were routed on 2026-08-31 — they are pure SQLite and always were. `cache_clear` sweeps a directory of image files, which on this target is Cache Storage, so it is **answered by the service worker** rather than by an arm — diverted in `src/lib/core/browser.ts` the way the four `*_refresh` are, and pinned out of `COMMANDS` by a test. The cover directory a browser has none of |
 | **4** | `mirror/settings.rs` | These four *are* the folder — where it is, whether it runs, when it last ran, rebuild it now — and a folder in OPFS cannot be read by the programs a mirror exists for |
 | **1** | `mirror_backup_save` | Android's door onto the same archive `mirror_backup_zip` routes: it writes at a destination a save dialog answered, which a browser has no way to name. Not a gap — the browser's door is the routed one |
 | **2** | `import_read_file`, `export_write_file` | §6.2's `<input type=file>` and `Blob` |
-| **4** | The four `*_refresh` (oracle tags, art tags, combos, marketplace feed) | Each downloads through `state.client` |
+| **4** | The four `*_refresh` (oracle tags, art tags, combos, marketplace feed) | Each is `async` and downloads — so each is a `#[wasm_bindgen]` entry in `glue.rs` with its name diverted in `browser.ts`, and **all four work**. PR 11 |
 | **2** | `images.rs` | The byte cache is Cache Storage on web — a rewrite, not a port |
 
 **PR 10i closed the last two gaps**, so every one of these is a decision with a reason above it
@@ -1072,21 +1081,20 @@ at a laptop is the same wrong answer `Managed` exists to stop `Other` giving a p
 panel is on the page on every target again, and on web it is the About screen #315 said was
 worth having: the mark, the name, the version, and one sentence naming the service worker.
 
-### `update_check` is absent on this target, not broken and not "not yet"
+### `update_check` is absent from `COMMANDS`, not broken and not "not yet"
 
 `web::route::call` is **synchronous**, because the Worker's `#[wasm_bindgen] call` is. An
-`async fn` cannot be a `match` arm there whatever it fetches with — so this is a different
-situation from the four `*_refresh` commands, which are unrouted for the same underlying
-reason but could in principle be reached the way the two ingests are.
+`async fn` cannot be a `match` arm there whatever it fetches with — so `update_check` cannot
+be an arm, for the same underlying reason the four `*_refresh` commands are not.
 
-The two network operations this target *does* perform are `glue::ingest_cards` and
-`glue::ingest_combos`: bespoke `async` `#[wasm_bindgen]` entry points, each with its own
-`postMessage` kind in `src/workers/protocol.ts` and its own handler in `db.ts`. A web
-`update_check` would have to become one of those, plus a branch in `ipc.updateCheck` to route
-around `invoke`. `web::net::get_json` could do the fetch; nothing else about the shape fits.
-**Not attempted here**, and the panel offers a browser no Check button, so nothing calls it.
-(`ingest_combos` is itself a standing example of the cost: the glue function exists and no
-`ToWorker` kind reaches it.)
+> **This paragraph said "not attempted here" and was superseded the same day** — see
+> *2026-08-31: the update check reaches a browser and a phone*, below. Its own next sentence
+> was already stale when it was written: PR 11 gave all three feed refreshes a `ToWorker`
+> kind, so `ingest_combos` had a caller.
+
+That is the answer: a bespoke `async` `#[wasm_bindgen]` entry point with its own
+`postMessage` kind in `src/workers/protocol.ts` and its own handler in `db.ts`, and the
+command *name* diverted in `src/lib/core/browser.ts` rather than a branch in `ipc.updateCheck`.
 
 ### What the mutations found
 
@@ -1240,3 +1248,143 @@ would settle: that the reply arrives at all, that `files` matches what the wall 
 cache, and that a picture whose response carries a `Vary` really does need the `ignoreVary`
 this code passes. Use `web:build` + `vite preview`; a dev-server reading cannot answer any
 question about this route.
+
+
+## 2026-08-31: the update check reaches a browser and a phone
+
+**"Check and notes, no download."** `update_check` answers on the web target and on Android;
+`update_download`, `update_apply` and `update_open_release_page` stay the desktop's. What that
+buys is not a Download button — `update::pick_asset` still refuses `InstallKind::Web` and
+`Managed` — it is the **release notes and the version history**, which are written by the same
+one request and by nothing else.
+
+**That is why routing `update_status` and `update_history` earlier the same day was half a
+feature.** `update_history` reads `app_meta.update_release_history`; the only writer of that
+row is a check; `app_meta` is not one of the synced tables, so no *other* device's check fills
+it in either. A browser's version history therefore answered `[]` permanently, and the panel
+hid the section rather than draw an empty accordion. The section is drawn on every target now.
+
+### `COMMANDS` did not move, for PR 11's reason exactly
+
+`web::route::call` is synchronous, because the Worker's `#[wasm_bindgen] call` is, so no
+`async fn` can be a `match` arm there whatever it fetches with. So this is
+`glue::update_check` — a `#[wasm_bindgen]` entry beside `ingest_cards` and the three feed
+ingests — with a `{ kind: "update-check", id, force }` message in `src/workers/protocol.ts`,
+a handler in `db.ts`, and the command *name* diverted in `src/lib/core/browser.ts` by
+`updateCheckForce`, `feedRefreshFor`'s sibling.
+
+**`updateCheckForce` answers `boolean | undefined` and the `undefined` is load-bearing.** The
+caller's test is *presence*: a bare `boolean` would make `updateCheck(false)` — a real,
+throttle-honouring call — indistinguishable from every other command in the app, and every
+`search_cards` would be posted as an update check.
+
+**`node scripts/routed-census.mjs` still reads 120 / 37, and the table above now says why.**
+It counts `COMMANDS` membership, which since PR 11 is not the same question as "does the web
+target answer this". Five of the 37 are served through `glue.rs`.
+
+### Both risks were measured against the live endpoint rather than assumed
+
+- **CORS: fine.** `GET https://api.github.com/repos/Msgaihede/mtg-grimoire/releases?per_page=30`
+  with an `Origin:` header answers `200` and `Access-Control-Allow-Origin: *` (2026-08-31).
+- **The two request headers preflight, and the preflight is answered.** `Accept` is
+  CORS-safelisted; `X-GitHub-Api-Version` is not, so the request is preflighted. `OPTIONS`
+  answers **204** with `access-control-allow-headers` naming `X-GitHub-Api-Version` and
+  `access-control-max-age: 86400`, and carries **no `X-RateLimit-*` of its own** — one extra
+  round trip a day against a check that is throttled to one a day. Both headers are sent, the
+  same two the desktop sends.
+- **`User-Agent` is the one that could have been fatal, and is not.** GitHub refuses a request
+  that carries none: `curl -H "User-Agent:"` answers **403**, body *"Request forbidden by
+  administrative rules. Please make sure your request has a User-Agent header"*. `fetch`
+  forbids setting that header, so `web::net` cannot send the app-identifying string
+  `scryfall::USER_AGENT` the desktop's `reqwest::Client` carries — **but the browser sends its
+  own**, and a request with a browser UA and no other header answers `200`. So the check works
+  and the UA is Chrome's rather than ours, which is the same trade `web/net.rs`'s header
+  already records for Scryfall. No proxy, and nothing to work around.
+
+### The seam: everything after the bytes is one copy
+
+`update.rs` is still two thirds gated where it stands — `Updater`, `BusyGuard`, `Staged`, the
+download-verify-stage half, the swap, the relaunch. What came out from under the gate is the
+half that has nothing to do with an `.exe`:
+
+| Now portable | What it is |
+| --- | --- |
+| `releases_url(api_base)` | The one URL, `per_page` included |
+| `classify_status(code)` | `404` → `PageStatus::Missing`, `403`/`429` → the rate-limit sentence, non-2xx → `GitHub answered {code}` |
+| `page_from_body(body)` | Parse, then drop drafts and prereleases |
+| `record_check(conn, now, page)` | The three `app_meta` writes, empty page included |
+| `last_check_at(conn)` | The throttle's stamp, `None` for anything unreadable |
+| `parse_release`, `parse_release_page`, `latest_of`, `clear_app_meta`, `HISTORY_PER_PAGE` | Reached by the five above |
+
+`check_inner` and `glue::update_check` are both a fetch plus those five in order. **What is
+deliberately not shared** is the `Updater`'s `busy` flag — a process-wide claim over a download
+this target cannot make — and `note_github`'s `error_log` row: a browser's check is always a
+button press whose failure rejects the promise the panel is already watching, which is PR 11's
+rule for the three feeds. The desktop needs the log because *its* check also runs unattended at
+startup with no window listening.
+
+**`SystemTime::now()` for the fifth time, and it did not bite.** `update::unix_now` stays
+gated; `glue::update_check` reads `now_seconds`, which is `SELECT unixepoch()` off the
+connection — the answer `tags`, `combos` and `marketplace_feed` each arrived at after a latent
+Worker crash. The throttle is honoured here exactly as on the desktop, and `force` is what the
+Check now button sends.
+
+### Android already had the command, and only the UI was in the way
+
+**`desktop.rs` is gated `#[cfg(not(target_family = "wasm"))]`, which is desktop *and* mobile**
+— its own header says so — so `update_check` has been in the `invoke_handler` on Android all
+along, with a working `reqwest` behind it. What is `#[cfg(desktop)]` is the *startup* check
+spawned in `setup`, and that stays: on a phone the store is what notices a release, and a
+launch-time request would spend one out of sixty an hour on something nobody pressed.
+
+So the Android half of this work is entirely `UpdatePanel`, and it is one flag split into two:
+
+- `selfUpdating` — can this build replace itself? Governs Download / Restart to finish / the
+  release page, and nothing else now.
+- `canCheck` — `status !== null`. Governs the Check now button and the version history.
+
+Reading one flag for both questions is what drew a Download button over a page that can
+download nothing (PR #315). Splitting it is what lets a phone read a changelog.
+
+**Two smaller decisions in the same file.** The `elsewhere` sentence lost its tail *"and there
+is nothing to check for here"*, which is no longer true. And **"Checking for updates…" is now
+drawn only where something really is checking** — a desktop's startup check, or the first
+frame on any target while `status` is still `null`. A browser that has never asked is told
+nothing at all there: the `elsewhere` sentence points at the button, and `VersionHistory`
+already says *"No releases have been read yet. Check for updates to fetch them."*
+
+### What the mutations found
+
+**Twenty mutations, twelve in Rust and eight in TypeScript, and every one was caught** —
+after one round. None touched a path, a directory, or anything reachable by a delete: every
+Rust mutation is inside a pure decision or an `app_meta` write, and the staging/swap half was
+excluded outright.
+
+**One survived on the first pass and is worth the round on its own.** `check_inner` propagates
+a failed `app_meta` write for a real page and swallows it for a 404 — an asymmetry that has
+been in that arm since it was written and had **no test at all**: collapsing it to swallow
+everything left every test in the module green. It matters because a page that arrived and
+could not be recorded hands the caller a `status` built from rows that are not the ones the
+page described, and re-asks on every launch because the stamp never landed.
+`a_page_that_cannot_be_recorded_is_an_error_and_a_missing_repository_is_not` drops the
+`app_meta` table and drives both codes; both directions of the mutation now fail.
+
+**A gate that could not fail, found the same way.** `scripts/build-wasm.mjs` greps the
+generated glue for every export the Worker imports — the check that catches a deleted
+`#[wasm_bindgen]` attribute, which the compiler cannot. Adding an export without adding it to
+`EXPORTS` leaves that gate silently one short, so `update_check` is on the list.
+
+**And one seam added for a mutation rather than for a test.** `db.ts`'s `runUpdateCheck` is a
+one-line passthrough, exported for `runFeed`'s reason: what a single-export handler can still
+get wrong is dropping the `force`, and a Check now button that answers instantly with
+yesterday's page for a day at a time does not look like a bug from any angle.
+
+### Not verified
+
+- **Nobody has pressed the button in a browser or on the phone.** `glue.rs` is compiled only
+  for wasm and is covered by nothing — the standing note above about the three feed ingests —
+  so the coverage here is the five portable functions plus the TypeScript divert, and the wasm
+  entry point is the thin call sequence over them. `npm run build:wasm` emits every export on
+  its list, `update_check` included.
+- **The 403/429 arm has never been seen from a browser.** It is the same code path the desktop
+  tests against `httpmock`, and 60 requests an hour is not a budget a manual pass can exhaust.

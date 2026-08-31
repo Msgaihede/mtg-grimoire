@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { once, runFeed } from "./db";
-import { feedRefreshFor, type ToWorker } from "./protocol";
+import { once, runFeed, runUpdateCheck } from "./db";
+import { feedRefreshFor, updateCheckForce, type ToWorker } from "./protocol";
 
 /**
  * `once` is what stops the Worker instantiating the wasm module twice, which is what killed
@@ -202,5 +202,71 @@ describe("the feed refresh mapping", () => {
       event: "combos:progress",
       payload: { phase: "done" },
     });
+  });
+});
+
+/**
+ * `update_check` sits on the same seam as the four refreshes and is not one of them: it
+ * downloads nothing, reports no progress, and writes three `app_meta` rows. What it shares is
+ * the reason it cannot be a `web::route::COMMANDS` entry — `route::call` is synchronous —
+ * so the *name* is diverted and the panel never learns which target it is on.
+ */
+describe("the update check divert", () => {
+  it("claims update_check and reads its force flag", () => {
+    expect(updateCheckForce("update_check", { force: true })).toBe(true);
+    expect(updateCheckForce("update_check", { force: false })).toBe(false);
+  });
+
+  /**
+   * **`undefined` for "not this command", and that is not the same as `false`.** The caller's
+   * test is presence: a `boolean` return would make `updateCheck(false)` — a real,
+   * throttle-honouring call — indistinguishable from `search_cards`, and every command in the
+   * app would be posted as an update check.
+   */
+  it("claims nothing else, including the rest of the updater", () => {
+    for (const command of [
+      "update_status",
+      "update_history",
+      "update_download",
+      "update_apply",
+      "update_open_release_page",
+      "combos_refresh",
+      "search_cards",
+    ]) {
+      expect(updateCheckForce(command, { force: true })).toBeUndefined();
+    }
+    // And the two mappings are disjoint, which is what lets `browser.ts` test them in order.
+    expect(feedRefreshFor("update_check", { force: true })).toBeUndefined();
+  });
+
+  /**
+   * An absent or non-boolean `force` is `false` — `feedRefreshFor`'s rule, for a milder
+   * version of its reason. Forcing here spends one request out of GitHub's sixty an hour
+   * rather than 27.5 MB, but a throttle that any caller can accidentally skip is not one.
+   */
+  it("reads an absent or non-boolean force as false", () => {
+    expect(updateCheckForce("update_check")).toBe(false);
+    expect(updateCheckForce("update_check", {})).toBe(false);
+    expect(updateCheckForce("update_check", { force: "yes" })).toBe(false);
+  });
+
+  /**
+   * The flag has to survive the last hop too. `useUpdate.check` sends `force: true` because
+   * a reader who presses Check now is asking for *now*; a `false` arriving at the export is
+   * `update::should_check` answering "not due" and the panel reporting success having asked
+   * nobody anything.
+   */
+  it("hands the force flag to the export rather than a constant", async () => {
+    const update_check = vi.fn<(force: boolean) => Promise<string>>(async () =>
+      JSON.stringify({ kind: "ok", result: { currentVersion: "0.17.0" } }),
+    );
+    const g = { update_check } as unknown as Parameters<typeof runUpdateCheck>[0];
+
+    const forced = await runUpdateCheck(g, { kind: "update-check", id: 1, force: true });
+    expect(update_check.mock.calls[0]?.[0]).toBe(true);
+    expect(JSON.parse(forced)).toEqual({ kind: "ok", result: { currentVersion: "0.17.0" } });
+
+    await runUpdateCheck(g, { kind: "update-check", id: 2, force: false });
+    expect(update_check.mock.calls[1]?.[0]).toBe(false);
   });
 });

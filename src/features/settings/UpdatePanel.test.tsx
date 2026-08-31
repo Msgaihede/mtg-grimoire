@@ -114,25 +114,42 @@ describe("UpdatePanel", () => {
   /**
    * Android, where the Play Store installed this app and the store is what replaces it.
    *
-   * **The whole panel goes quiet, which is the difference from `other`.** That one still
-   * delivers the news and offers the release page — right for an MSI install on the machine
-   * that page's assets are built for, and wrong on a phone, where every asset is a Windows
-   * one. So `managed` hides the Check-now button, the release block and the version history,
-   * and says the one true sentence instead.
+   * **The install half goes quiet and the reading half does not**, which is what changed on
+   * 2026-08-31 and reverses half of what this test used to assert. The panel drew nothing at
+   * all here, on the reasoning that a check with no download behind it answers nothing — true
+   * only while `update_check` was desktop's, because the release notes and the version
+   * history are written by that same one request and by nothing else. `update_check` is
+   * registered on Android (`desktop.rs` is gated `not(target_family = "wasm")`, so it compiles
+   * for mobile) and reaches `glue::update_check` in a browser, so both can ask.
+   *
+   * What stays hidden is `other`'s offer of the release page — right for an MSI install on
+   * the machine that page's assets are built for, and wrong on a phone, where every asset is
+   * a Windows one.
    *
    * A release IS offered in this fixture on purpose: the fixture's `available` is set, so a
-   * panel that merely happened to have nothing to show would pass this test. What must be
-   * absent is absent because of `installKind`.
+   * panel that merely happened to have nothing to show would pass this test. `asset` is
+   * `null`, because `update::pick_asset` refuses this kind — a fixture carrying one would be
+   * a mock encoding a state the backend cannot produce.
    */
-  it("says the store owns the update on a managed install, and offers nothing", () => {
-    render(panel(update({ status: status({ installKind: "managed" }), action: "none" })));
+  it("says the store owns the update on a managed install, and offers no download", () => {
+    render(
+      panel(
+        update({ status: status({ installKind: "managed", asset: null }), action: "none" }),
+        history({ releases: [note("0.2.0"), note("0.1.0")] }),
+      ),
+    );
 
     expect(screen.getByText(/Updates arrive through Google Play/)).toBeInTheDocument();
-    expect(screen.getByText(/nothing to check for here/)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^Check now$/ })).not.toBeInTheDocument();
+    // What it *can* do: ask, and read what the release changed.
+    expect(screen.getByRole("button", { name: /^Check now$/ })).toBeEnabled();
+    expect(screen.getByText(/is available/)).toBeInTheDocument();
+    expect(screen.getByText(/sortable table headers/)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Version history/ })).toBeInTheDocument();
+    // What it cannot: nothing here stages, swaps or hands a phone a Windows installer.
     expect(screen.queryByRole("button", { name: /^Download/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Restart to finish/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /release page/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /View on GitHub/ })).not.toBeInTheDocument();
-    expect(screen.queryByText(/is available/)).not.toBeInTheDocument();
     // The About half of the panel stays: this is still where the version is read.
     expect(screen.getByText(/MTG Grimoire/)).toBeInTheDocument();
   });
@@ -151,22 +168,60 @@ describe("UpdatePanel", () => {
    * hiding was the only thing that did not depend on an answer. The panel decides for itself
    * again now, off an answer that exists.
    */
-  it("names the service worker on the web build, and offers nothing", () => {
-    render(panel(update({ status: status({ installKind: "web" }), action: "none" })));
+  it("names the service worker on the web build, and offers no download", () => {
+    const check = vi.fn();
+    render(
+      panel(update({ status: status({ installKind: "web", asset: null }), action: "none", check })));
 
     expect(screen.getByText(/Updates arrive through your browser/)).toBeInTheDocument();
-    expect(screen.getByText(/nothing to check for here/)).toBeInTheDocument();
     // Not Google Play. Naming the wrong updater is the failure this variant exists to avoid.
     expect(screen.queryByText(/Google Play/)).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^Check now$/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Check now$/ })).toBeEnabled();
+    expect(screen.getByText(/is available/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Download/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Restart to finish/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /release page/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /View on GitHub/ })).not.toBeInTheDocument();
-    expect(screen.queryByText(/is available/)).not.toBeInTheDocument();
     // **The About half is the whole reason the panel is back on the page in a browser.**
     // #315 removed it saying a web About panel was worth having and was a different thing to
     // build; this is it, and the version is the fact it exists to carry.
     expect(screen.getByText(/MTG Grimoire/)).toBeInTheDocument();
     expect(screen.getByText("0.2.0")).toBeInTheDocument();
+  });
+
+  /**
+   * The Check button reaches the hook on a target that cannot download, which is the whole
+   * of what this work added. `useUpdate.check` calls `ipc.updateCheck(true)`, which
+   * `core/browser.ts` diverts onto `glue::update_check`.
+   */
+  it("runs the check through the hook on the web build", async () => {
+    const check = vi.fn();
+    render(panel(update({ status: status({ installKind: "web", asset: null }), check })));
+    await userEvent.click(screen.getByRole("button", { name: /^Check now$/ }));
+    expect(check).toHaveBeenCalledOnce();
+  });
+
+  /**
+   * **Before any check has run, a browser is told nothing is available rather than that
+   * something is happening.** No startup check exists on this target — `desktop.rs` spawns
+   * one under `#[cfg(desktop)]` — so "Checking for updates…" there would be the panel
+   * describing a thing nobody started. The `elsewhere` sentence and the history's own empty
+   * line are what point at the button instead.
+   */
+  it("promises no check nobody started on a browser that has never asked", () => {
+    render(
+      panel(
+        update({
+          status: status({ installKind: "web", available: null, asset: null, lastCheckAt: null }),
+          action: "none",
+        }),
+      ),
+    );
+
+    expect(screen.queryByText(/Checking for updates/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/latest version/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Updates arrive through your browser/)).toBeInTheDocument();
+    expect(screen.getByText(/No releases have been read yet/)).toBeInTheDocument();
   });
 
   /**
@@ -178,12 +233,18 @@ describe("UpdatePanel", () => {
    * which is `true` for `null`: a panel with no answer yet offered Check now, and on a
    * browser it offered it permanently. An absent answer must read as "not yet", never as
    * "not managed".
+   *
+   * **Still true now that every install kind can check**: `canCheck` is `status !== null`,
+   * not `true`, so widening what the button is drawn for did not widen it to no answer at
+   * all. And "Checking for updates…" is honest here on every target, because what is in
+   * flight is the status read itself.
    */
   it("offers no controls before the backend has answered", () => {
     render(panel(update({ status: null, action: "none" })));
 
     expect(screen.queryByRole("button", { name: /^Check now$/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Download/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /Version history/ })).not.toBeInTheDocument();
     // It says so rather than going blank, which is what the panel has always done here.
     expect(screen.getByText(/Checking for updates…/)).toBeInTheDocument();
   });

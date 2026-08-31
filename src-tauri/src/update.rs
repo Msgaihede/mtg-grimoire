@@ -25,7 +25,9 @@
 //!   release page. Guessing is how a user ends up with two copies of the app.
 
 use crate::sync::AppState;
-#[cfg(not(target_family = "wasm"))]
+// **Ungated since the check became portable.** `clear_app_meta` and [`record_check`] are what
+// one `/releases` answer *does* to the database, and a browser makes that same answer — so the
+// connection type and `params!` are needed on every target now.
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 // With the download gated away, [`verify_digest`] is the only thing left that hashes, and
@@ -78,7 +80,8 @@ const K_HISTORY: &str = "update_release_history";
 /// otherwise, so this is the figure the request would carry anyway, written down because a
 /// reader of the version history is entitled to know where the list stops. The repository has
 /// eleven releases today; the cap matters the year it does not.
-#[cfg(not(target_family = "wasm"))]
+///
+/// **Ungated**, because [`releases_url`] is what both targets build their one request from.
 const HISTORY_PER_PAGE: u32 = 30;
 
 /// What the two Windows artifacts are called, as **suffixes**.
@@ -337,7 +340,9 @@ impl Updater {
 /// sixty existing `crate::app_meta::get_app_meta` call sites keep reading the way they read.
 pub use crate::app_meta::{get_app_meta, set_app_meta};
 
-#[cfg(not(target_family = "wasm"))]
+/// The one delete this module makes. Not in [`crate::app_meta`] because nothing else in the
+/// crate removes a key — a view-state setting is overwritten, never cleared — and a
+/// vocabulary of one caller belongs beside its caller.
 fn clear_app_meta(conn: &Connection, key: &str) -> rusqlite::Result<()> {
     conn.execute("DELETE FROM app_meta WHERE key = ?1", params![key])?;
     Ok(())
@@ -531,7 +536,6 @@ fn sibling(path: &Path, suffix: &str) -> PathBuf {
 ///
 /// An entry that will not parse is skipped rather than failing the page: one malformed
 /// release five versions back must not cost the reader their update check.
-#[cfg(not(target_family = "wasm"))]
 fn parse_release_page(v: &serde_json::Value) -> Vec<ReleaseInfo> {
     v.as_array()
         .map(|list| {
@@ -554,13 +558,11 @@ fn parse_release_page(v: &serde_json::Value) -> Vec<ReleaseInfo> {
 /// instead would quietly change what this app offers the day a patch for an older line is
 /// published after a newer minor — and [`is_newer`] is the guard that decides whether the
 /// answer is an update at all, so nothing is lost by leaving the ordering to GitHub.
-#[cfg(not(target_family = "wasm"))]
 fn latest_of(page: &[ReleaseInfo]) -> Option<&ReleaseInfo> {
     page.first()
 }
 
 /// Parse one release object into the shape the rest of the module uses.
-#[cfg(not(target_family = "wasm"))]
 fn parse_release(v: &serde_json::Value) -> Result<ReleaseInfo, String> {
     let tag = v["tag_name"]
         .as_str()
@@ -592,6 +594,107 @@ fn parse_release(v: &serde_json::Value) -> Result<ReleaseInfo, String> {
     })
 }
 
+/// The one URL a check asks for.
+///
+/// **One request answering two questions** — the newest release the app might move to, and
+/// the version history the panel draws — which is why it is `/releases` and not
+/// `/releases/latest`. A second endpoint for the history would spend a second request out of
+/// GitHub's 60/hour per IP to fetch a superset of what this one already returns.
+///
+/// `api_base` is a parameter for [`Updater::new`]'s reason: tests point it at a mock. The
+/// browser has no `Updater` and passes [`GITHUB_API`] itself.
+pub fn releases_url(api_base: &str) -> String {
+    format!("{api_base}/repos/{REPO}/releases?per_page={HISTORY_PER_PAGE}")
+}
+
+/// What a `/releases` status code means, before any body has been read.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PageStatus {
+    /// A page came back. Read it.
+    Read,
+    /// The repository is not there at all (404). **Not an error the reader can act on** —
+    /// record the check and answer "nothing new". `/releases` answers `200 []` rather than
+    /// 404 for a repository with no releases, so this arm is narrower than it looks and the
+    /// empty page is [`record_check`]'s business instead.
+    Missing,
+}
+
+/// Classify one response.
+///
+/// **Portable, and shared, because a browser gets exactly these codes.** `fetch` and
+/// `reqwest` differ in how they *make* the request — a browser cannot set `User-Agent` and
+/// has no connect timeout — but the answer is GitHub's either way, and two copies of "403
+/// means rate limited" is two places for one rule to drift.
+pub fn classify_status(code: u16) -> Result<PageStatus, String> {
+    if code == 404 {
+        return Ok(PageStatus::Missing);
+    }
+    if code == 403 || code == 429 {
+        return Err("GitHub is rate limiting update checks right now. Try again later.".into());
+    }
+    if !(200..300).contains(&code) {
+        return Err(format!("GitHub answered {code} for the latest release."));
+    }
+    Ok(PageStatus::Read)
+}
+
+/// Write what one check learned: the timestamp, the newest release, and the history.
+///
+/// **The whole of a check's effect on the database, on every target.** The fetch differs
+/// between a desktop and a browser and nothing else does, so this is the half both call —
+/// which is what keeps `update_history` answering the same shape of list wherever it is read.
+///
+/// An empty `page` is a *legitimate* answer, not a failure: a repository with no releases, or
+/// one publishing nothing but prereleases (both are filtered in [`parse_release_page`]), and
+/// [`PageStatus::Missing`] as well. All three clear both cached keys rather than leaving
+/// yesterday's answer standing under today's timestamp.
+///
+/// The newest release is cached **whether or not it is newer than the running build**:
+/// [`status_for`] re-compares against `CARGO_PKG_VERSION` on every read, so storing it
+/// unconditionally keeps one rule instead of two and makes the cache correct across an update
+/// with no clearing step.
+///
+/// `now` is a parameter rather than a clock read here, and that is the fourth module's worth
+/// of the same trap: `SystemTime::now()` **panics** on `wasm32-unknown-unknown`. The desktop
+/// passes [`unix_now`]; the browser passes `SELECT unixepoch()`.
+pub fn record_check(conn: &Connection, now: u64, page: &[ReleaseInfo]) -> Result<(), String> {
+    set_app_meta(conn, K_LAST_CHECK_AT, &now.to_string()).map_err(|e| e.to_string())?;
+    match latest_of(page).map(serde_json::to_string) {
+        Some(Ok(json)) => set_app_meta(conn, K_LATEST_SEEN, &json).map_err(|e| e.to_string())?,
+        _ => clear_app_meta(conn, K_LATEST_SEEN).map_err(|e| e.to_string())?,
+    }
+    let notes: Vec<ReleaseNote> = page.iter().map(ReleaseNote::from).collect();
+    match serde_json::to_string(&notes) {
+        Ok(json) if !notes.is_empty() => {
+            set_app_meta(conn, K_HISTORY, &json).map_err(|e| e.to_string())?
+        }
+        _ => clear_app_meta(conn, K_HISTORY).map_err(|e| e.to_string())?,
+    }
+    Ok(())
+}
+
+/// When the last check ran, in unix seconds. `None` for "never", and for a row that will not
+/// parse as a number — both mean the throttle has nothing to measure against, which
+/// [`should_check`] reads as due.
+///
+/// **A function rather than a `pub` key**, so `K_LAST_CHECK_AT` keeps its one reader per
+/// target and a caller cannot spell it slightly differently. The browser needs it because its
+/// check honours the same 24 h throttle the desktop's does.
+pub fn last_check_at(conn: &Connection) -> Option<u64> {
+    get_app_meta(conn, K_LAST_CHECK_AT).and_then(|s| s.parse::<u64>().ok())
+}
+
+/// One `/releases` body into the page it describes.
+///
+/// Split from [`record_check`] so the parse failure and the write failure are two different
+/// sentences: "GitHub's answer was not readable JSON" is about the network, and a failed
+/// `app_meta` write is about the disk.
+pub fn page_from_body(body: &str) -> Result<Vec<ReleaseInfo>, String> {
+    let value: serde_json::Value = serde_json::from_str(body)
+        .map_err(|e| format!("GitHub's answer was not readable JSON: {e}"))?;
+    Ok(parse_release_page(&value))
+}
+
 /// Build the status from what is already known, touching nothing but the database.
 ///
 /// This is what the ribbon reads at launch: the last seen release is cached in `app_meta`,
@@ -619,13 +722,14 @@ pub fn status(state: &AppState, updater: &Updater) -> UpdateStatus {
 /// answer** — so the fix is for the backend to answer, which is what this function is for.
 ///
 /// The three parameters are the whole of what an `Updater` was being consulted about. A web
-/// caller passes [`InstallKind::Web`], `false` and `false`: nothing there can be busy with a
-/// check it cannot run, and nothing can be staged where there is no file to stage.
+/// caller passes [`InstallKind::Web`], `false` and `false`: `busy` is a claim over a download
+/// this target cannot make, and nothing can be staged where there is no file to stage.
 ///
-/// Everything else is read from `app_meta`, on every target. **On web both keys are always
-/// empty and that is honest rather than broken**: only [`check`] writes them, `app_meta` is
-/// not one of the synced tables, and so a browser answers "not checked yet" — which is
-/// exactly what it is.
+/// Everything else is read from `app_meta`, on every target. **Both keys are empty until
+/// something checks, and since 2026-08-31 a browser can** —
+/// [`crate::web::glue::update_check`] writes them through the same [`record_check`] the
+/// desktop uses. Before that press they read "not checked yet", which is exactly what it is:
+/// `app_meta` is not one of the synced tables, so no other device's check fills them in.
 pub fn status_for(state: &AppState, kind: InstallKind, busy: bool, staged: bool) -> UpdateStatus {
     let conn = crate::sync::lock_db_read(state);
     let last_check_at = get_app_meta(&conn, K_LAST_CHECK_AT);
@@ -655,11 +759,16 @@ pub fn current_version() -> &'static str {
 
 /// Every release the last check saw, newest first — the version history, read from cache.
 ///
-/// **No network of its own, ever.** The page this answers from is written by [`check`], which
+/// **No network of its own, ever.** The page this answers from is written by a check, which
 /// already fetches it to decide whether an update exists; asking GitHub again when a reader
 /// expands the history would spend a second request out of 60/hour to re-learn something
 /// already on disk. An install that has never checked answers an empty list, and the panel
 /// says so rather than pretending the app has no past.
+///
+/// **A browser fills this in now.** It answered `[]` for ever until 2026-08-31, because the
+/// only writer was [`check`] and that was desktop's — which is what made routing this command
+/// a promise the target could not keep. [`crate::web::glue::update_check`] is the writer that
+/// was missing.
 pub fn history(state: &AppState) -> Vec<ReleaseNote> {
     let conn = crate::sync::lock_db_read(state);
     get_app_meta(&conn, K_HISTORY)
@@ -669,14 +778,25 @@ pub fn history(state: &AppState) -> Vec<ReleaseNote> {
 
 /// Ask GitHub for the latest release, honouring the 24 h throttle unless `force`.
 ///
-/// **Desktop's, and `update_check` is therefore absent on web rather than broken.** Not for
-/// want of a way to fetch — [`crate::web::net::get_json`] would do it — but for want of a way
-/// to *call* it: `web::route::call` is synchronous, because the Worker's `#[wasm_bindgen]
-/// call` is, so no `async` command can be a `match` arm there at all. The two async entry
-/// points that do exist (`glue::ingest_cards`, `glue::ingest_combos`) are bespoke
-/// `#[wasm_bindgen]` functions with their own `postMessage` kinds, which is the same reason
-/// all four `*_refresh` commands are unrouted. A browser is offered no Check button, so
-/// nothing calls this and nothing sees an `unknown command`.
+/// **This wrapper is desktop's and Android's; the browser's is
+/// [`crate::web::glue::update_check`].** Not because a browser cannot fetch — it can, and
+/// `api.github.com` answers `Access-Control-Allow-Origin: *` — but because `web::route::call`
+/// is *synchronous*, since the Worker's `#[wasm_bindgen] call` is, so no `async` command can
+/// be a `match` arm there at all. That is the same seam the four `*_refresh` commands sit on:
+/// a bespoke `#[wasm_bindgen]` entry point with its own `postMessage` kind, and the command
+/// *name* diverted onto it in `src/lib/core/browser.ts`. **`COMMANDS` does not move**, and
+/// `route.rs`'s own arm comment says why.
+///
+/// What the two share is everything after the bytes arrive — [`classify_status`],
+/// [`page_from_body`] and [`record_check`] — so an update check means the same thing to
+/// `app_meta` wherever it ran.
+///
+/// **Two things here are the desktop's alone and are deliberately not ported.** The
+/// [`Updater`]'s `busy` flag, which is a `Mutex`-guarded process-wide claim over a download
+/// this target cannot make; and [`note_github`], because a browser's check is always a button
+/// press whose failure rejects the promise the panel is already watching — `entitlement.rs`'s
+/// standing argument, and PR 11's for the three feeds. The desktop needs the error log
+/// because *its* check also runs unattended at startup with no window listening.
 #[cfg(not(target_family = "wasm"))]
 pub async fn check(
     state: &Arc<AppState>,
@@ -732,10 +852,7 @@ async fn check_inner(
     force: bool,
 ) -> Result<UpdateStatus, String> {
     let now = unix_now();
-    let last = {
-        let conn = crate::sync::lock_db_read(state);
-        get_app_meta(&conn, K_LAST_CHECK_AT).and_then(|s| s.parse::<u64>().ok())
-    };
+    let last = last_check_at(&crate::sync::lock_db_read(state));
     if !should_check(last, now, force) {
         return Ok(status(state, updater));
     }
@@ -749,14 +866,7 @@ async fn check_inner(
         return Err("an update check is already running".into());
     };
 
-    // `/releases` rather than `/releases/latest`, and it is **one request answering two
-    // questions**: the newest release the app might move to, and the version history the
-    // panel draws. A second endpoint for the history would spend a second request out of
-    // 60/hour per IP to fetch a superset of what this one already returns.
-    let url = format!(
-        "{}/repos/{REPO}/releases?per_page={HISTORY_PER_PAGE}",
-        updater.api_base
-    );
+    let url = releases_url(&updater.api_base);
     let resp = updater
         .http
         .get(&url)
@@ -766,61 +876,35 @@ async fn check_inner(
         .await
         .map_err(|e| format!("could not reach GitHub: {e}"))?;
 
-    let code = resp.status().as_u16();
-    if code == 404 {
-        // A repository that is not there at all. `/releases` answers `200 []` rather than
-        // 404 for a repository with no releases — that case is the empty page below — so
-        // this arm is narrower than it was under `/releases/latest`, and kept because the
-        // response to both is the same: not an error the user can act on, and not worth a
-        // banner. Record the check and answer "nothing new".
-        let conn = crate::sync::lock_db(state);
-        let _ = set_app_meta(&conn, K_LAST_CHECK_AT, &now.to_string());
-        let _ = clear_app_meta(&conn, K_LATEST_SEEN);
-        let _ = clear_app_meta(&conn, K_HISTORY);
-        drop(conn);
-        drop(guard);
-        return Ok(status(state, updater));
-    }
-    if code == 403 || code == 429 {
-        return Err("GitHub is rate limiting update checks right now. Try again later.".into());
-    }
-    if !(200..300).contains(&code) {
-        return Err(format!("GitHub answered {code} for the latest release."));
-    }
-
-    // `text()` and then `serde_json`, rather than `resp.json()`: the latter needs reqwest's
-    // `json` feature, and this crate builds reqwest with `default-features = false` on
-    // purpose. One less feature for one extra line.
-    let body = resp
-        .text()
-        .await
-        .map_err(|e| format!("could not read GitHub's answer: {e}"))?;
-    let body: serde_json::Value = serde_json::from_str(&body)
-        .map_err(|e| format!("GitHub's answer was not readable JSON: {e}"))?;
-    let page = parse_release_page(&body);
-    let notes: Vec<ReleaseNote> = page.iter().map(ReleaseNote::from).collect();
+    // **The three arms after the request are [`classify_status`], [`page_from_body`] and
+    // [`record_check`], and a browser calls the same three.** What differs between the two
+    // targets is how the bytes are asked for; what a `/releases` answer *means* is GitHub's
+    // and is written once. See [`crate::web::glue::update_check`].
+    let answer = classify_status(resp.status().as_u16())?;
+    let page = match answer {
+        // A repository that is not there at all: record the check, cache nothing, answer
+        // "nothing new". Nothing is read off the response — there is no page to read.
+        PageStatus::Missing => Vec::new(),
+        // `text()` and then `serde_json`, rather than `resp.json()`: the latter needs
+        // reqwest's `json` feature, and this crate builds reqwest with
+        // `default-features = false` on purpose. One less feature for one extra line.
+        PageStatus::Read => page_from_body(
+            &resp
+                .text()
+                .await
+                .map_err(|e| format!("could not read GitHub's answer: {e}"))?,
+        )?,
+    };
 
     {
         let conn = crate::sync::lock_db(state);
-        set_app_meta(&conn, K_LAST_CHECK_AT, &now.to_string()).map_err(|e| e.to_string())?;
-        // Cached whether or not it is newer: `status` re-compares against the running
-        // version on every read, so storing it unconditionally keeps one rule instead of
-        // two and makes the cache correct across an update without a clearing step.
-        //
-        // A page with nothing on it — a repository with no releases, or one publishing
-        // nothing but prereleases — clears both keys rather than leaving yesterday's answer
-        // standing, which is the same thing the 404 arm above does.
-        match latest_of(&page).map(serde_json::to_string) {
-            Some(Ok(json)) => {
-                set_app_meta(&conn, K_LATEST_SEEN, &json).map_err(|e| e.to_string())?
-            }
-            _ => clear_app_meta(&conn, K_LATEST_SEEN).map_err(|e| e.to_string())?,
-        }
-        match serde_json::to_string(&notes) {
-            Ok(json) if !notes.is_empty() => {
-                set_app_meta(&conn, K_HISTORY, &json).map_err(|e| e.to_string())?
-            }
-            _ => clear_app_meta(&conn, K_HISTORY).map_err(|e| e.to_string())?,
+        let written = record_check(&conn, now, &page);
+        // **Propagated for a real page and swallowed for a missing repository**, which is
+        // the asymmetry this arm has carried since it was written: the 404 case has already
+        // decided to report success, and a failed `app_meta` write on the way out of it
+        // would turn "nothing new" into a banner about a repository the reader does not own.
+        if answer == PageStatus::Read {
+            written?;
         }
     }
     // Before the answer, never after. See the guard's binding above.
@@ -1780,6 +1864,198 @@ mod tests {
         assert!(!is_newer(&release.version, "0.3.0"));
     }
 
+    // ── The half both targets share ─────────────────────────────────────────────────
+    //
+    // `releases_url`, `classify_status`, `page_from_body`, `record_check` and
+    // `last_check_at` are what `check_inner` and `crate::web::glue::update_check` have in
+    // common: everything after the bytes arrive. **`glue.rs` is compiled only for wasm and is
+    // covered by nothing**, which is `web-target.md`'s own standing note about the four feed
+    // ingests — so this block is where the browser's check is actually tested, and the wasm
+    // entry point is the thin call sequence over it.
+
+    /// One page, one request, and the size asked for rather than left to GitHub's default.
+    ///
+    /// The base is a parameter for the same reason `Updater::new` takes one — a mock — and
+    /// the browser passes [`GITHUB_API`] itself, having no `Updater` to hold it.
+    #[test]
+    fn the_check_asks_one_url_for_both_the_offer_and_the_history() {
+        assert_eq!(
+            releases_url("https://api.github.com"),
+            "https://api.github.com/repos/Msgaihede/mtg-grimoire/releases?per_page=30"
+        );
+        assert_eq!(
+            releases_url("http://127.0.0.1:9"),
+            format!("http://127.0.0.1:9/repos/{REPO}/releases?per_page={HISTORY_PER_PAGE}")
+        );
+    }
+
+    /// **Three meanings, and only one of them is shown to the reader.**
+    ///
+    /// A browser gets exactly these codes from `api.github.com`, so classifying them twice
+    /// would be one rule in two places. The rate-limit sentence is matched on the words the
+    /// panel prints, and `note_github` classifies its own `error_log` row off the same
+    /// phrase — a rewording here is a `Kind::Other` there.
+    #[test]
+    fn a_status_code_means_the_same_thing_on_both_targets() {
+        assert_eq!(classify_status(200), Ok(PageStatus::Read));
+        assert_eq!(classify_status(299), Ok(PageStatus::Read));
+        // Not 200, and still a page rather than a refusal — the 2xx band is the test, and a
+        // narrower one would turn a 204 into a banner.
+        assert_eq!(classify_status(204), Ok(PageStatus::Read));
+        assert_eq!(classify_status(404), Ok(PageStatus::Missing));
+        for code in [403u16, 429] {
+            let message = classify_status(code).unwrap_err();
+            assert!(
+                message.contains("rate limiting"),
+                "{code} must say why, and `note_github` matches on that word: {message}"
+            );
+        }
+        assert!(classify_status(500).unwrap_err().contains("500"));
+        assert!(classify_status(301).unwrap_err().contains("301"));
+        assert!(classify_status(199).unwrap_err().contains("199"));
+    }
+
+    /// A body that will not parse is a sentence about *GitHub's answer*, not about the disk.
+    /// That distinction is the whole reason this is a function apart from [`record_check`].
+    #[test]
+    fn a_body_that_is_not_json_says_so_and_a_page_is_filtered_on_the_way_through() {
+        let message = page_from_body("<html>502 Bad Gateway</html>").unwrap_err();
+        assert!(message.contains("not readable JSON"), "{message}");
+
+        // The draft and the prerelease are gone; the two real releases survive, newest first.
+        let page = page_from_body(&live_page().to_string()).unwrap();
+        assert_eq!(
+            page.iter().map(|r| r.tag.as_str()).collect::<Vec<_>>(),
+            ["v0.3.0", "v0.2.0"]
+        );
+        // A document that is not an array at all is an empty page rather than a failure —
+        // `parse_release_page`'s rule, and the arm a hand-written proxy would land on.
+        assert!(page_from_body("{}").unwrap().is_empty());
+    }
+
+    /// **What routing the check buys: `update_history` stops answering `[]`.**
+    ///
+    /// This is the browser's whole path below the `#[wasm_bindgen]` layer — a page in, three
+    /// `app_meta` rows out, and the two already-routed read commands answering off them. Run
+    /// with [`InstallKind::Web`] on purpose: the notice and the notes appear, and `asset`
+    /// stays `None` because `pick_asset` refuses that kind, which is "check and notes, no
+    /// download" expressed as a DTO rather than as a branch in the panel.
+    #[test]
+    fn recording_a_page_is_what_makes_the_history_and_the_notice_answer() {
+        let (state, _dir) = file_state("record-check");
+        assert!(
+            history(&state).is_empty(),
+            "nothing checked, nothing to show"
+        );
+
+        // Newer than whatever this build is, derived rather than written down —
+        // `status_for` re-compares on every read, so a literal would rot at the next release.
+        let major: u32 = current_version()
+            .split('.')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        let ahead = format!("{}.0.0", major + 1);
+        let page = page_from_body(
+            &serde_json::json!([
+                {"tag_name": format!("v{ahead}"), "draft": false, "prerelease": false,
+                 "published_at": "2026-08-31T00:00:00Z",
+                 "html_url": "https://example.invalid/next",
+                 "body": "### Features\n* what a browser is now allowed to read\n",
+                 "assets": [{"name": format!("mtg-grimoire-{ahead}-windows-x64-portable.zip"),
+                             "size": 6453913, "digest": "sha256:abc",
+                             "browser_download_url": "https://example.invalid/p.zip"}]},
+                {"tag_name": "v0.1.0", "draft": false, "prerelease": false,
+                 "published_at": "2026-08-01T00:00:00Z",
+                 "html_url": "https://example.invalid/first",
+                 "body": "the first one", "assets": []}
+            ])
+            .to_string(),
+        )
+        .unwrap();
+
+        {
+            let conn = crate::sync::lock_db(&state);
+            record_check(&conn, 1_800_000_000, &page).unwrap();
+            assert_eq!(last_check_at(&conn), Some(1_800_000_000));
+        }
+
+        let notes = history(&state);
+        assert_eq!(
+            notes.iter().map(|n| n.version.as_str()).collect::<Vec<_>>(),
+            [ahead.as_str(), "0.1.0"],
+            "the history is the whole page, newest first"
+        );
+        assert!(notes[0]
+            .notes
+            .contains("what a browser is now allowed to read"));
+
+        let web = status_for(&state, InstallKind::Web, false, false);
+        assert_eq!(web.last_check_at.as_deref(), Some("1800000000"));
+        assert_eq!(
+            web.available.as_ref().map(|r| r.version.as_str()),
+            Some(ahead.as_str())
+        );
+        assert!(
+            web.asset.is_none(),
+            "check and notes, no download: a browser is offered nothing to fetch"
+        );
+        // The same rows read as a portable install would read them, which is what says the
+        // cache is the release rather than the target's opinion of it.
+        let portable = status_for(&state, InstallKind::Portable, false, false);
+        assert_eq!(portable.asset.map(|a| a.size), Some(6453913));
+    }
+
+    /// A check that finds nothing clears rather than leaving yesterday's answer standing
+    /// under today's stamp — and it still stamps, because the check *ran*.
+    ///
+    /// Three ways to reach an empty page and they are deliberately one arm: a repository
+    /// with no releases (`200 []`), one publishing nothing but drafts and prereleases, and
+    /// [`PageStatus::Missing`], which passes `&[]` from the caller.
+    #[test]
+    fn recording_an_empty_page_clears_the_cache_and_still_stamps_the_check() {
+        let (state, _dir) = file_state("record-empty");
+        let page = page_from_body(&live_page().to_string()).unwrap();
+        {
+            let conn = crate::sync::lock_db(&state);
+            record_check(&conn, 1_800_000_000, &page).unwrap();
+            assert!(get_app_meta(&conn, K_LATEST_SEEN).is_some());
+            assert!(get_app_meta(&conn, K_HISTORY).is_some());
+
+            record_check(&conn, 1_800_009_999, &[]).unwrap();
+            assert_eq!(
+                get_app_meta(&conn, K_LATEST_SEEN),
+                None,
+                "an empty page must not leave the old release cached"
+            );
+            assert_eq!(get_app_meta(&conn, K_HISTORY), None);
+            assert_eq!(last_check_at(&conn), Some(1_800_009_999));
+        }
+        assert!(history(&state).is_empty());
+        assert!(status_for(&state, InstallKind::Web, false, false)
+            .available
+            .is_none());
+    }
+
+    /// A stamp that is missing, blank or not a number all read as "never", which
+    /// [`should_check`] treats as due. Failing *open* is the only safe direction: the cost
+    /// of a spurious check is one request out of sixty an hour.
+    #[test]
+    fn a_missing_or_unreadable_check_stamp_reads_as_never() {
+        let (state, _dir) = file_state("stamp");
+        let conn = crate::sync::lock_db(&state);
+        assert_eq!(last_check_at(&conn), None);
+        for junk in ["", "  ", "yesterday", "-1", "1800000000.5"] {
+            set_app_meta(&conn, K_LAST_CHECK_AT, junk).unwrap();
+            assert_eq!(last_check_at(&conn), None, "`{junk}` is not a stamp");
+            assert!(should_check(last_check_at(&conn), 1_800_000_000, false));
+        }
+        set_app_meta(&conn, K_LAST_CHECK_AT, "1800000000").unwrap();
+        assert_eq!(last_check_at(&conn), Some(1_800_000_000));
+        assert!(!should_check(last_check_at(&conn), 1_800_000_001, false));
+    }
+
     /// A real `AppState` on a real file: `check` reads the throttle through `db_read` and
     /// writes the cache through `db`, and an in-memory pair cannot stand in for that (two
     /// in-memory connections are two different databases). `sync::tests::file_state`'s
@@ -1993,6 +2269,66 @@ mod tests {
                 "{name}: the check is stamped, or every launch asks again"
             );
             assert!(history(&state).is_empty(), "{name}");
+
+            drop(state);
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// **A check that could not write down what it learned says so, and the 404 arm does
+    /// not.** That asymmetry is a real branch in `check_inner` and it was untested until
+    /// 2026-08-31 — mutating it to swallow *every* failure left all 36 tests in this module
+    /// green.
+    ///
+    /// A page that arrived and could not be recorded is worse than a failed request: the
+    /// caller is handed a `status` built from `app_meta` rows that are not the ones the page
+    /// described, and every later launch re-asks because the stamp never landed. The 404 arm
+    /// has already decided to report success, so a failed write on the way out of it must not
+    /// become a banner about a repository the reader does not own.
+    ///
+    /// Dropping `app_meta` is the cheapest way to make a write genuinely fail —
+    /// `app_meta::tests`' own trick, one file over.
+    #[tokio::test]
+    async fn a_page_that_cannot_be_recorded_is_an_error_and_a_missing_repository_is_not() {
+        for (name, status_code, body, must_fail) in [
+            (
+                "unwritable-page",
+                200,
+                serde_json::json!([{
+                    "tag_name": "v9.9.9", "draft": false, "prerelease": false,
+                    "html_url": "", "body": "the notes", "assets": []
+                }]),
+                true,
+            ),
+            (
+                "unwritable-404",
+                404,
+                serde_json::json!({"message": "Not Found"}),
+                false,
+            ),
+        ] {
+            let server = httpmock::MockServer::start_async().await;
+            server
+                .mock_async(|when, then| {
+                    when.method("GET").path(format!("/repos/{REPO}/releases"));
+                    then.status(status_code).json_body(body.clone());
+                })
+                .await;
+
+            let (state, dir) = file_state(name);
+            {
+                let conn = crate::sync::lock_db(&state);
+                conn.execute("DROP TABLE app_meta", []).unwrap();
+            }
+            let updater = updater_at(server.base_url(), InstallKind::Portable);
+
+            let answered = check(&state, &updater, true).await;
+            assert_eq!(
+                answered.is_err(),
+                must_fail,
+                "{name}: {:?}",
+                answered.as_ref().err()
+            );
 
             drop(state);
             let _ = std::fs::remove_dir_all(&dir);

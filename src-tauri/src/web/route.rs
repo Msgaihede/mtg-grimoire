@@ -1690,29 +1690,36 @@ pub fn call(
 
         // ── The updater, reporting only ──────────────────────────────────────────────
         //
-        // **`update_check` is absent from this table and cannot be added to it**, which is
-        // a different thing from the four `*_refresh` commands merely not being here yet.
-        // This function is synchronous — the Worker's `#[wasm_bindgen] call` is — so an
-        // `async fn` cannot be a `match` arm at all, whatever it fetches with. The two
-        // network operations this target does perform are `glue::ingest_cards` and
-        // `glue::ingest_combos`: bespoke `async` `#[wasm_bindgen]` entry points with their
-        // own `postMessage` kinds, which is what a web `update_check` would have to become.
-        // Nothing calls it in the meantime: `UpdatePanel` reads `installKind` below and
-        // offers a browser no Check button.
+        // **`update_check` is absent from this table and cannot be added to it — and it
+        // works anyway.** This function is synchronous, because the Worker's
+        // `#[wasm_bindgen] call` is, so an `async fn` cannot be a `match` arm at all whatever
+        // it fetches with. That is the same seam the four `*_refresh` commands sit on, and
+        // the same answer: `crate::web::glue::update_check` is a bespoke `async`
+        // `#[wasm_bindgen]` entry point with its own `postMessage` kind, and
+        // `src/lib/core/browser.ts` diverts the command *name* onto it. So `COMMANDS` is not
+        // the census of what a browser can do — `scripts/routed-census.mjs` counts membership
+        // here, and five names it lists as unrouted are served through `glue.rs` instead.
+        //
+        // **What that makes true is the arm below.** Only a check writes the `app_meta` row
+        // `update_history` reads, so until 2026-08-31 this pair was two routed commands that
+        // could answer nothing on this target. The download half stays gone: `pick_asset`
+        // refuses `InstallKind::Web`, and there is no `.exe` beside a tab to replace.
         //
         // `Web`, `false`, `false` — and `status_for` takes the read connection itself, like
-        // every other read in this table. Nothing here can be busy with a check it cannot
-        // run, and nothing can be staged where there is no file to stage.
+        // every other read in this table. Nothing here can be busy with a *download*, and
+        // nothing can be staged where there is no file to stage.
         "update_status" => encode(
             command,
             crate::update::status_for(state, crate::update::InstallKind::Web, false, false),
         ),
 
         // Two `app_meta` reads and no network, on every target — `update::history`'s own
-        // doc is explicit that it never fetches. **In a browser it always answers an empty
-        // list**, because only `update_check` writes that row and `app_meta` is not one of
-        // the synced tables. That is the same "never fetched" state the Tagger models, and
-        // it is why the panel draws no version history there.
+        // doc is explicit that it never fetches. **It answered an empty list in a browser
+        // for as long as `update_check` was desktop's**, because that command is the only
+        // writer of the row and `app_meta` is not one of the synced tables, so no other
+        // device's check filled it in either. `glue::update_check` is the writer that was
+        // missing; before the first press this is still the Tagger's "never fetched" state,
+        // and `VersionHistory` says so in words.
         "update_history" => encode(command, crate::update::history(state)),
         // ── The backup ──────────────────────────────────────────────────────────────
         //
