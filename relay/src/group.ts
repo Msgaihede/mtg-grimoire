@@ -369,18 +369,11 @@ export class Group implements DurableObject {
   }
 
   private rows(): Row[] {
-    return this.sql
-      .exec<LogRow>(`SELECT seq, device, epoch, hlc_ms, hlc_ctr, sealed, stored_at FROM log`)
-      .toArray()
-      .map((row) => ({
-        seq: row.seq,
-        device: row.device,
-        epoch: row.epoch,
-        hlcMs: row.hlc_ms,
-        hlcCtr: row.hlc_ctr,
-        sealed: row.sealed,
-        storedAt: row.stored_at,
-      }));
+    return this.toRows(
+      this.sql
+        .exec<LogRow>(`SELECT seq, device, epoch, hlc_ms, hlc_ctr, sealed, stored_at FROM log`)
+        .toArray(),
+    );
   }
 
   /**
@@ -395,21 +388,32 @@ export class Group implements DurableObject {
    * and a bounded read would compute it against a slice.
    */
   private rowsSince(cursor: number): Row[] {
-    return this.sql
-      .exec<LogRow>(
-        `SELECT seq, device, epoch, hlc_ms, hlc_ctr, sealed, stored_at
-           FROM log WHERE seq > ?`,
-        cursor,
-      )
-      .toArray()
-      .map((row) => ({
-        seq: row.seq,
-        device: row.device,
-        epoch: row.epoch,
-        hlcMs: row.hlc_ms,
-        hlcCtr: row.hlc_ctr,
-        sealed: row.sealed,
-        storedAt: row.stored_at,
-      }));
+    return this.toRows(
+      this.sql
+        .exec<LogRow>(
+          `SELECT seq, device, epoch, hlc_ms, hlc_ctr, sealed, stored_at
+             FROM log WHERE seq > ?`,
+          cursor,
+        )
+        .toArray(),
+    );
+  }
+
+  /**
+   * The `LogRow` → `Row` shape shared by `rows()` and `rowsSince()` — same columns, different
+   * `WHERE`. Kept as one mapper so a `Row` field added or renamed has one call site instead of
+   * two silently drifting; the two *query* methods stay separate on purpose (see `rowsSince`'s
+   * comment on `compactNow`).
+   */
+  private toRows(raw: LogRow[]): Row[] {
+    return raw.map((row) => ({
+      seq: row.seq,
+      device: row.device,
+      epoch: row.epoch,
+      hlcMs: row.hlc_ms,
+      hlcCtr: row.hlc_ctr,
+      sealed: row.sealed,
+      storedAt: row.stored_at,
+    }));
   }
 }
