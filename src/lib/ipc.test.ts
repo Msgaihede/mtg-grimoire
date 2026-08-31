@@ -22,6 +22,8 @@ import {
   type ComboProgress,
   type FeedProgressEvent,
   type OracleTagProgressEvent,
+  type RelayOutcome,
+  type SyncLiveEvent,
   type SyncProgressEvent,
 } from "@/lib/ipc";
 
@@ -1412,6 +1414,73 @@ it("unwraps the sync:progress payload and returns the unlisten handle", async ()
 });
 
 /**
+ * `sync:applied` and `sync:live` — the connection manager's two events (`sync_engine/live.rs`,
+ * `sync_engine/commands.rs`). Same trap as every event name in this file: the string is the
+ * whole contract and nothing in the type system holds it, so a subscriber spelling either one
+ * differently — a hyphen, an underscore — hears nothing at all, forever, with no error
+ * anywhere. `RelayOutcome` already exists above as `syncNow`'s answer; `onSyncApplied` hands
+ * that same shape through unwrapped rather than redeclaring it.
+ */
+it("subscribes to sync:applied and hands the payload through unwrapped", async () => {
+  const unlisten = vi.fn();
+  let emit: ((evt: { payload: RelayOutcome }) => void) | undefined;
+  listen.mockImplementation(
+    (_name: string, handler: (evt: { payload: RelayOutcome }) => void) => {
+      emit = handler;
+      return Promise.resolve(unlisten);
+    },
+  );
+  const seen: RelayOutcome[] = [];
+  const outcome: RelayOutcome = {
+    pushed: 1,
+    pulled: 2,
+    unreadable: 0,
+    applied: 3,
+    resurrected: 0,
+    cyclesBroken: 0,
+    skipped: 0,
+    deferred: 0,
+    baselineOps: 0,
+    baselineHistory: 0,
+  };
+
+  const stop = await ipc.onSyncApplied((o) => seen.push(o));
+  emit?.({ payload: outcome });
+
+  expect(listen).toHaveBeenCalledWith("sync:applied", expect.any(Function));
+  expect(seen[0]).toEqual(outcome);
+  stop();
+  expect(unlisten).toHaveBeenCalledTimes(1);
+});
+
+it("subscribes to sync:live and hands the payload through unwrapped", async () => {
+  const unlisten = vi.fn();
+  let emit: ((evt: { payload: SyncLiveEvent }) => void) | undefined;
+  listen.mockImplementation(
+    (_name: string, handler: (evt: { payload: SyncLiveEvent }) => void) => {
+      emit = handler;
+      return Promise.resolve(unlisten);
+    },
+  );
+  const seen: SyncLiveEvent[] = [];
+
+  const stop = await ipc.onSyncLive((e) => seen.push(e));
+  emit?.({ payload: { state: "connecting" } });
+
+  expect(listen).toHaveBeenCalledWith("sync:live", expect.any(Function));
+  expect(seen).toEqual([{ state: "connecting" }]);
+  stop();
+  expect(unlisten).toHaveBeenCalledTimes(1);
+});
+
+it("returns a working unsubscribe from each", () => {
+  listen.mockResolvedValue(vi.fn());
+
+  expect(typeof ipc.onSyncApplied(() => {})).toBe("function");
+  expect(typeof ipc.onSyncLive(() => {})).toBe("function");
+});
+
+/**
  * `marketplace:progress` — its **own** event rather than a ninth `SyncPhase`.
  *
  * The name is the whole contract and there is nothing in the type system holding it: a
@@ -1928,6 +1997,21 @@ describe("pairing", () => {
     // which is the state every existing installation is in and is not an error.
     expect(await ipc.syncNow()).toBeNull();
     expect(invoke).toHaveBeenCalledWith("sync_now");
+  });
+
+  it("tells the socket whether the app is in front under `on`", async () => {
+    invoke.mockResolvedValue(undefined);
+
+    await ipc.syncLiveForeground(true);
+
+    expect(invoke).toHaveBeenCalledWith("sync_live_foreground", { on: true });
+  });
+
+  it("reads the socket's current state with no arguments", async () => {
+    invoke.mockResolvedValue("connecting");
+
+    expect(await ipc.syncLiveState()).toBe("connecting");
+    expect(invoke).toHaveBeenCalledWith("sync_live_state");
   });
 
   it("lists the review queue with no arguments and clears one row by table and uid", async () => {
