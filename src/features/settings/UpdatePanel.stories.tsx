@@ -337,18 +337,21 @@ export const Staged: Story = {
 /**
  * A browser, where the **service worker** replaces this build.
  *
- * **The panel goes quiet, and what is left is the About screen** — the mark, the name and the
- * version. That is the whole of what this panel is on the web target, and it is deliberately
- * not nothing: PR #315 hid the panel here entirely, and said in as many words that a web
- * About screen was worth having and was a different thing to build.
+ * **Check and notes, no download** — the panel's shape since 2026-08-31, and it reverses half
+ * of what this story used to show. It drew nothing but the About screen here, because
+ * `update_check` was desktop's and a check button with nothing behind it answers nothing.
+ * That reasoning was wrong in one place: the release *notes* and the version history are
+ * written by the very same `/releases` request, so hiding the button hid the changelog too.
+ * `glue::update_check` is that request in a browser, and Android has had the command all
+ * along — `desktop.rs` is gated `not(target_family = "wasm")`, so it compiles for mobile.
+ *
+ * What stays gone is everything that replaces a file: no Download, no Restart, and no release
+ * page — that last is `other`'s answer, and its assets are a Windows exe and an NSIS setup.
  *
  * **The sentence names the browser rather than the Play Store**, which is the only difference
  * from `managed` and is the reason `web` is its own `InstallKind` instead of reusing it.
  * Telling somebody at a laptop that their updates arrive through Google Play is the same
  * wrong answer `managed` exists to stop `other` giving a phone.
- *
- * The fixture still carries an available release, so what is absent below is absent because
- * of `installKind` and not because there was nothing to draw.
  */
 export const UpdatedByTheBrowser: Story = {
   args: { update: update({ status: status({ installKind: "web" }), action: "none" }) },
@@ -356,11 +359,16 @@ export const UpdatedByTheBrowser: Story = {
     const canvas = within(canvasElement);
     await expect(canvas.getByText(/Updates arrive through your browser/)).toBeVisible();
     await expect(canvas.queryByText(/Google Play/)).toBeNull();
-    await expect(canvas.queryByRole("button", { name: /^Check now$/ })).toBeNull();
+    // What it can do: ask, and read what the release changed.
+    await expect(canvas.getByRole("button", { name: /^Check now$/ })).toBeEnabled();
+    await expect(canvas.getByText(/is available/)).toBeVisible();
+    await expect(canvas.getByRole("heading", { name: /Version history/ })).toBeVisible();
+    // What it cannot: nothing here stages, swaps, or offers a Windows installer.
     await expect(canvas.queryByRole("button", { name: /^Download/ })).toBeNull();
+    await expect(canvas.queryByRole("button", { name: /Restart to finish/ })).toBeNull();
+    await expect(canvas.queryByRole("button", { name: "Open the release page" })).toBeNull();
     await expect(canvas.queryByRole("button", { name: "View on GitHub" })).toBeNull();
-    await expect(canvas.queryByText(/is available/)).toBeNull();
-    // The About half is what the panel is here for.
+    // The About half the panel came back for is still here.
     await expect(canvas.getByText(/MTG Grimoire/)).toBeVisible();
   },
 };

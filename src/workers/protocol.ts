@@ -31,7 +31,18 @@ export type ToWorker =
   | { kind: "open"; directory: string }
   | { kind: "call"; id: number; command: string; args?: Record<string, unknown> }
   | { kind: "ingest-cards"; descriptorUrl: string }
-  | ({ kind: "feed-refresh"; id: number } & FeedRefresh);
+  | ({ kind: "feed-refresh"; id: number } & FeedRefresh)
+  /**
+   * Ask GitHub what has been released — the fifth command that is a network call rather
+   * than a query, and the only one that is not a download.
+   *
+   * **Its own kind rather than a fourth `FeedRefresh`**, because it is not a feed: nothing
+   * is ingested, no progress is reported, and what it writes is three `app_meta` rows. What
+   * it shares with those four is the seam — `async` and networked, so a `#[wasm_bindgen]`
+   * entry rather than a `web::route` arm — which is what {@link feedRefreshFor} is about
+   * and what {@link updateCheckForce} joins it in.
+   */
+  | { kind: "update-check"; id: number; force: boolean };
 
 /** Worker → page. */
 export type FromWorker =
@@ -90,4 +101,27 @@ export function feedRefreshFor(
     default:
       return undefined;
   }
+}
+
+/**
+ * `update_check`'s `force`, or `undefined` for every other command.
+ *
+ * **The same rule {@link feedRefreshFor} states, applied to the one command that asks a
+ * question instead of downloading anything.** `update_check` is `async` and reaches
+ * `api.github.com`, so it is `glue::update_check` rather than a `web::route::COMMANDS`
+ * entry; the core diverts the name and `UpdatePanel` never learns which target it is on.
+ *
+ * **`undefined` rather than `false` for "not this command"**, so the caller's test is
+ * presence and not truth — `updateCheck(false)` is a real call, and a `boolean` return would
+ * make the un-forced check indistinguishable from every other command in the app.
+ *
+ * `download`, `apply` and `open_release_page` are deliberately absent: they stage and swap a
+ * Windows executable, and `update::pick_asset` already answers `None` for `InstallKind::Web`
+ * and `Managed`, so the panel offers no button that would reach one.
+ */
+export function updateCheckForce(
+  command: string,
+  args?: Record<string, unknown>,
+): boolean | undefined {
+  return command === "update_check" ? args?.force === true : undefined;
 }

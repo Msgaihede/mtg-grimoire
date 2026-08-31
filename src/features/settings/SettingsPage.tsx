@@ -126,11 +126,19 @@ export function SettingsPage({ update }: { update: Update }) {
           names the service worker in place of a Download button. **The gate moved from the
           build target onto a backend answer**, which is the general lesson #315 wrote down.
 
-          `update_check`, `update_download`, `update_apply` and `update_open_release_page` are
-          still desktop's, and nothing above reaches them: the panel offers a browser no
-          button that calls one. `update_check` in particular is *absent* rather than unrouted
-          — `web::route::call` is synchronous, so no `async` command can be an arm there at
-          all. Its arm in that file says so. */}
+          **`update_check` followed on 2026-08-31, and the download did not** — "check and
+          notes, no download". It is still *absent* from `COMMANDS` rather than unrouted:
+          `web::route::call` is synchronous, so no `async` command can be an arm there at all.
+          It is `glue::update_check`, a `#[wasm_bindgen]` entry beside the four feed ingests,
+          with the name diverted in `src/lib/core/browser.ts` — which is why nothing on this
+          page took a branch for it. What it buys is the panel's other half: only a check ever
+          writes the `app_meta` row `update_history` reads, so routing that command without
+          this one was a version history that answered `[]` for ever.
+
+          `update_download`, `update_apply` and `update_open_release_page` stay desktop's —
+          they verify a checksum, unpack a zip beside a running `.exe` and relaunch it — and
+          `update::pick_asset` answers `None` for `web` and `managed`, so the panel offers no
+          button that reaches one. */}
       <UpdatePanel update={update} history={history} />
 
       <MarketplacePanel marketplace={marketplace} />
