@@ -194,7 +194,15 @@ tauri-plugin-mcp-bridge = "0.12"
 # must not depend on another crate's feature selection to compile.
 # `sync` is the semaphore that caps concurrent image fetches; `time` is the sleep the
 # image cache's pacer and its 429 penalty are made of.
-tokio = { version = "1", features = ["fs", "io-util", "rt", "sync", "time"] }
+# `macros` is `sync_engine::live`'s `tokio::select!` and nothing else. It compiles without it
+# today only because something else in the graph turns it on, and a feature this crate's own
+# source names must be a feature this crate asks for - the artifact is unchanged either way.
+tokio = { version = "1", features = ["fs", "io-util", "macros", "rt", "sync", "time"] }
+# The relay doorbell. **`rustls-tls-webpki-roots` and never the `native-tls` default**:
+# `reqwest` above is `rustls-tls`, and a second TLS stack would put schannel into a portable
+# exe for no gain. In this block and not `[dependencies]` because `sync_engine` compiles for
+# wasm32 — see `lib.rs`'s module doc — so the crate must be invisible there.
+tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 # Decoding whatever a user picks as a custom deck cover and re-encoding it to WEBP at the
 # `art` crop's 626x457, so a cover and a card's art are interchangeable in every tile.
 # `default-features = false` drops rayon and eleven formats nobody will hand a file-picker;
