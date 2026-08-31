@@ -162,10 +162,38 @@ const mutateLedger = ledgerWriter(
   async (ledger) => writeLedger(await caches.open(IMAGE_CACHE), ledger),
 );
 
-/** Delete what the ledger says to, and take those bytes off the count in the same step. */
+/**
+ * Delete what the ledger says to, and take those bytes off the count in the same step.
+ *
+ * **`ignoreVary` here is insurance rather than a fix, and the difference is worth keeping
+ * straight: this has never been broken.** `Cache.delete` runs the same matching algorithm as
+ * `Cache.match`, so a stored response whose `Vary` disagreed with the request synthesised from
+ * a bare URL would refuse to go while {@link forget} dropped it from the ledger anyway. That
+ * needs a `Vary`, and there is not one: probed live on 2026-08-31, a card image from
+ * `cards.scryfall.io` — the only origin `routeFor` sends here — answers 200, `image/jpeg` and
+ * **no `vary` header at all**, the same plain, with an `Origin:` and with a webp-negotiating
+ * `Accept:`. Its `access-control-allow-origin` is a static `*`, which is why there is no
+ * `Vary: Origin` in the first place. Narrower still: card art is a plain `<img>`, so what is
+ * stored is a `no-cors` request carrying no `Origin` either.
+ *
+ * Two reasons it is passed anyway, neither of which is exposure.
+ *
+ * **The asymmetry fails silently and points somewhere else.** `image()` reads with the option
+ * and this line would evict without it, so if that origin ever negotiates — or
+ * `GRIMOIRE_IMAGE_ORIGIN` is aimed at a proxy that does — the read goes on matching while the
+ * eviction quietly stops, and the cache grows past its cap with nothing in the symptom naming
+ * the cause. `swCore.test.ts` sweeps this file for the option precisely because nothing else
+ * here could go red for it.
+ *
+ * **And it is the more correct call for this use.** The ledger is keyed by URL, so an eviction
+ * means *this URL is gone*. With no `Vary` the two spellings are identical; with one, ignoring
+ * it takes every variant of that URL, which is what a URL-keyed cap sweep wants — the
+ * alternative evicts a single variant and leaves the rest holding bytes the ledger no longer
+ * counts and nothing can ever reach again.
+ */
 async function sweep(cache: Cache, ledger: Ledger): Promise<Ledger> {
   const gone = evictions(ledger);
-  await Promise.all(gone.map((url) => cache.delete(url)));
+  await Promise.all(gone.map((url) => cache.delete(url, { ignoreVary: true })));
   return forget(ledger, gone);
 }
 

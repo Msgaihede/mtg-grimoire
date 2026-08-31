@@ -1220,11 +1220,25 @@ survivor is equivalent by construction:
   ever bite here is one naming a header an `<img>` *does* send and a `new Request(url)` does
   not, which in practice means `Accept`.
 
-  **Left as it stands, on the measurement rather than on tidiness** — and it goes live silently
-  if that origin ever negotiates, or if `GRIMOIRE_IMAGE_ORIGIN` is pointed at a proxy that
-  does, because `swCore.test.ts`'s sweep only checks `.match(` and nothing here would go red.
-  The clear path added by this work passes `{ ignoreVary: true }` regardless, where it is a
-  type-level requirement costing nothing; by this measurement that is belt-and-braces too.
+  **The option was added anyway, and a reader must not take that for a bug fix** — there was
+  never an incident here and going to look for one is wasted time. Two reasons, neither of them
+  exposure. **The asymmetry fails silently and points somewhere else**: `image()` reads with the
+  option and the eviction deleted without it, so if that origin ever negotiates — or
+  `GRIMOIRE_IMAGE_ORIGIN` is aimed at a proxy that does — the read keeps matching while the
+  evict quietly stops, and a cache growing past its cap names nothing that would lead anyone
+  back here. **And it is the more correct call for this use**: the ledger is keyed by URL, so an
+  eviction means *this URL is gone*, and ignoring `Vary` takes every variant of it — where the
+  alternative evicts one variant and leaves the rest holding bytes the ledger no longer counts
+  and nothing can reach again. Three lines of insurance at zero current probability.
+
+  `swCore.test.ts`'s sweep now covers deletes as well as reads, and **the exclusion it rests on
+  is asserted rather than assumed**: `caches.delete(name)` in `activate` drops a whole stale
+  shell cache and takes no query options, and it escapes the delete family only because the
+  character after `cache` is an `s` rather than a dot. A second test counts every delete in the
+  file and demands the two families account for all of them, so a third spelling nobody
+  classified fails there instead of slipping past the sweep unchecked. Four mutations, all
+  killed: backing the option out, emptying the delete family, pointing the entry-delete pattern
+  at nothing, and adding an unclassified third delete.
 - **Two comments in `src-tauri/src/web/route.rs` have expired.** The `COMMANDS` block says the
   Local cache button *"is the one control on the Settings page that still answers `unknown
   command` in a browser"*, which is no longer true of any control; the test's own doc says the

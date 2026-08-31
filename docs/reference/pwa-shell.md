@@ -111,6 +111,21 @@ worker (`web:dev`, a private window) gets a truthful *"There was nothing cached 
 rather than an error, because the worker is the only thing that has ever written to that cache.
 The whole record is in [web-target.md](web-target.md).
 
+**Every Cache Storage query in the worker ignores `Vary`, deletes included since 2026-08-31 —
+and that last part is insurance rather than a repair.** The eviction pass deleted by bare URL,
+and `Cache.delete` runs the same matching algorithm as `Cache.match`, so a stored response whose
+`Vary` disagreed would refuse to go while the ledger forgot it anyway. That needs a `Vary` and
+there is not one: probed live that day, a card image from `cards.scryfall.io` answers **200,
+83 658 B, `image/jpeg`, and no `vary` header at all** — plain, with an `Origin:`, and with a
+webp-negotiating `Accept:`; its `access-control-allow-origin` is a static `*`, which is why
+there is no `Vary: Origin` to begin with. Card art is a plain `<img>`, so what is stored is a
+`no-cors` request carrying no `Origin` either. **Nothing here was ever broken**, and the option
+is passed for two other reasons: the read and the evict must not be able to drift apart
+silently — `image()` reads with it, and a cache growing past its cap would name nothing that
+led back to an eviction that had quietly stopped — and, the ledger being keyed by URL, ignoring
+`Vary` deletes every variant of that URL, which is what a URL-keyed cap sweep wants. The blank
+offline shell above is why this file's rule is absolute rather than case-by-case.
+
 **The clear goes through `ledgerWriter` like every other ledger update**, and the reason is
 sharper here than for the cap: a clear that raced an admit and wrote back the ledger it read
 first would leave the worker counting a picture it had just deleted, for the life of the
