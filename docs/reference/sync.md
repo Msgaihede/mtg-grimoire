@@ -73,10 +73,13 @@ withheld from a party that never needed it.
 The four layers behind it, and the boundary between them is that only the last two touch SQLite:
 
 - **`sync_pair::crypto`** — X25519, HKDF-SHA256, XChaCha20-Poly1305, the six digits, and (since
-  this branch) `rendezvous_id` — a one-way HKDF derivation, salted by the pairing's own one-time
-  token, of the address the two relay-borne blobs meet at. No database, no I/O, no clock.
-  Everything is a pure function of its arguments, which is why the man-in-the-middle test is a
-  real three-party exchange in a few microseconds rather than a mock.
+  this branch) `rendezvous_id` — a one-way HKDF derivation of the address the two relay-borne blobs
+  meet at, taking the pairing's own one-time token as **input keying material with no salt** —
+  the opposite of `pair_key`'s use of that same token as the salt, and deliberate: the two
+  derivations have to stay unrelated, or the relay's address and the pairing key would share
+  structure. No database, no I/O, no clock. Everything is a pure function of its arguments, which
+  is why the man-in-the-middle test is a real three-party exchange in a few microseconds rather
+  than a mock.
 - **`sync_pair::invite`** — the 64-byte payload as a typed code and as a QR *module matrix* — since
   this branch, drawn over [a URL rather than the bare
   code](#the-qr-carries-a-url-and-the-code-rides-in-the-fragment).
