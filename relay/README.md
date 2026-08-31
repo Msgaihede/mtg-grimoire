@@ -496,19 +496,43 @@ stays a one-switch change if the alarm ever fires.
 **KV is ruled out of the hot path**: 1 000 writes/day on the free plan. **No R2.** One
 SQLite-backed Durable Object per pairing group, one D1 table beside it, and nothing else.
 
-## What is not built: the WebSocket
+## The WebSocket is built — and two of the three reasons below were about the wrong socket
 
-§7.7 of the spec says the Durable Object "fans out to connected devices over hibernatable
-WebSockets". This ships HTTP pull-and-push instead, and `/g/{group}/ws` is a `501` that keeps the
-route in the object's shape. Three reasons:
+⚠️ **Superseded 2026-08-31.** This section used to argue `/g/{group}/ws` stayed a `501`. It is
+built now — see
+[the live-sync design](../docs/superpowers/specs/2026-08-31-live-sync-design.md). The three
+reasons below are kept as history: two of them were about a WebSocket opened **from the page**,
+and the one that shipped opens from the app's own Rust process instead, so neither blocker
+survived contact with where the socket actually lives.
 
-1. **`reqwest` has no WebSocket client**, and `tokio-tungstenite` does not compile to
-   `wasm32-unknown-unknown` — which would make the web target's core un-buildable.
-2. **A socket from the page would need the CSP widened.** `tauri.conf.json` grants
-   `connect-src 'self' ipc: http://ipc.localhost` and nothing else. Widening it is a decision to
-   take once, for all three targets, in the PR where the browser's own `WebSocket` is available.
-3. **Polling is comfortably inside the free tier**, as the table above shows — and it is the
-   *manual* row that ships, which is cheaper still.
+`GET /g/{group}/ws` now upgrades to a hibernatable WebSocket, behind the same bearer gate every
+`/g/…` route sits behind — `/rotate` and `/keys` excepted. On every push the Durable Object
+sends the group's other connected sockets a `{"t":"head","cursor":N,"from":"<device>"}` frame —
+no card data, ever — and a device that hears one runs the ordinary HTTP round trip above. The
+socket only ever decides *when* that trip happens; a frame is a hint, never the cursor advancing
+on its own.
 
-What is lost is latency: a change made on a phone shows on the desktop within a minute rather than
-instantly. What is kept is a core that still compiles to wasm and a CSP that still grants nothing.
+1. **"`reqwest` has no WebSocket client, and `tokio-tungstenite` does not compile to
+   `wasm32-unknown-unknown`."** True, and it turned out not to be the obstacle it looked like:
+   nothing on the wasm target names the crate. It sits in `Cargo.toml`'s existing
+   `[target.'cfg(not(target_family = "wasm"))'.dependencies]` block, and the one module that
+   touches it — `sync_engine::live` — carries that same gate on every line, not just the
+   dependency.
+2. **"A socket from the page would need the CSP widened."** It would not, and this is the half the
+   record had backwards: `connect-src 'self' ipc: http://ipc.localhost` governs the **webview's**
+   connections, and the socket that shipped is opened by `tokio-tungstenite` inside the app's Rust
+   process — the same process that already reaches this relay over `reqwest` under that exact CSP.
+   `tauri.conf.json` was not touched. A fourth reason the record never named: a browser's own
+   `WebSocket` cannot set an `Authorization` header, so a socket from the page would have forced
+   the bearer gate above onto a query parameter or a subprotocol. Opening it from Rust needed no
+   change to the gate at all.
+3. **"Polling is comfortably inside the free tier."** There never was a poll to be comfortable —
+   see [sync.md](../docs/reference/sync.md) for that correction. The cost of what shipped instead
+   is re-derived in the design spec §11: an idle, connected group costs about ~25 DO requests/day,
+   a busy one (50 edits, 3 devices) about ~225, against the manual ~70/day the table above
+   measures — three times the manual figure at the busiest, and paid only when somebody edits
+   rather than on every tick of a clock. The free plan and the ~70% notification stand.
+
+What changed: a phone's edit now reaches a connected desktop within a few seconds, rather than at
+the next **Sync now** press. What did not: the core still compiles to wasm and the CSP still
+grants nothing.

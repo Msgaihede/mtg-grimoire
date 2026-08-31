@@ -147,8 +147,10 @@ tauri-plugin-opener = "2"
 # behind it — `deck_set_cover_image`, `import_read_file`, `export_write_file`, and the mirror's
 # "Change folder…" — take a path the backend reads or writes rather than bytes, so this plugin
 # is what stands between a button and a command that already exists.
-# `capabilities/default.json` grants `dialog:allow-open` **and `dialog:allow-save`** — the
-# second since the export dialog shipped, which this comment went on denying for a whole plan.
+# `capabilities/desktop.json` and `capabilities/mobile.json` both grant `dialog:allow-open`
+# **and `dialog:allow-save`** — the second since the export dialog shipped, which this comment
+# went on denying for a whole plan. (The file was `capabilities/default.json` until the Android
+# target split it in two; there is no `default.json` any more.)
 # The other three verbs (message, ask, confirm) are not permitted; the app's own questions are
 # drawn in the page. Never `dialog:default`.
 tauri-plugin-dialog = "2"
@@ -171,8 +173,9 @@ tauri-plugin-single-instance = "2"
 #
 # **A plain dependency rather than `[target.'cfg(windows)'.dependencies]`, for the reason the
 # mcp-bridge paragraph below gives**: `tauri-build` discovers a plugin's ACL permissions
-# through the dependency graph, so target-gating it would leave `capabilities/default.json`'s
-# two `snap-layout:` entries unresolvable on the Linux half of the CI matrix. The crate ships a
+# through the dependency graph, so target-gating it would leave `capabilities/desktop.json`'s
+# two `snap-layout:` entries unresolvable on the Linux half of the CI matrix — `mobile.json`
+# grants neither, on purpose (no caption, no maximize button to overlay). The crate ships a
 # dummy implementation for every non-Windows target and compiles to nothing there.
 #
 # **`cfg(not(target_family = "wasm"))` is not that target-gate and does not reintroduce its
@@ -186,8 +189,9 @@ tauri-plugin-snap-layout = "1"
 # `#[cfg(debug_assertions)]` in `lib.rs` — a release build compiles the crate and never opens
 # the port. It stays a plain dependency rather than an optional one on purpose: `tauri-build`
 # discovers a plugin's ACL permissions through the dependency graph, so dropping it from the
-# release profile would leave `capabilities/default.json`'s `mcp-bridge:` entries unresolvable
-# and fail the build that needs them least.
+# release profile would leave `capabilities/desktop.json`'s `mcp-bridge:` entries unresolvable
+# and fail the build that needs them least. (`mobile.json` grants none — an unauthenticated
+# WebSocket that evaluates arbitrary JavaScript has no place on a phone.)
 tauri-plugin-mcp-bridge = "0.12"
 # `rt` is not optional: tokio::fs runs every operation through spawn_blocking, which
 # needs a runtime handle. It reaches us through tauri's tokio today, but this crate

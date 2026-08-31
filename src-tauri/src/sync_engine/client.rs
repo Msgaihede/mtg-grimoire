@@ -1,27 +1,43 @@
 //! Push, pull, and how often.
 //!
-//! # What this does not build: the WebSocket
+//! # What ships: the socket, not a poll
 //!
-//! Spec §7.7 says the Durable Object "fans out to connected devices over **hibernatable
-//! WebSockets**". **This ships HTTP pull-and-push instead**, and the Durable Object keeps a
-//! `/ws` route in its shape for the PR that adds it. Three reasons, in order of weight:
+//! **There is no poll and there never was.** This doc used to plan one — pull on open, pull
+//! every 60 s while the window has focus, push 2 s after the write mask goes quiet — and named
+//! two reasons the alternative, a WebSocket, was not built: `tokio-tungstenite` does not compile
+//! to `wasm32-unknown-unknown`, and a socket opened **from the page** would need the CSP widened.
+//! Both were true and neither was the obstacle they looked like, because the socket that shipped
+//! is opened from **this process**, not from the page: [`super::live`]'s connection manager holds
+//! a `tokio-tungstenite` client behind `cfg(not(target_family = "wasm"))` — so the wasm build
+//! never names it — over `reqwest`'s own CSP-governed connection to the relay, the one this file
+//! already made. Neither blocker survived contact with where the socket actually lives; see the
+//! design spec §3 for the fuller argument, including the fourth reason the record never had: a
+//! browser's own `WebSocket` cannot set an `Authorization` header, and this one does.
 //!
-//! 1. **`reqwest` has no WebSocket client**, and the obvious addition — `tokio-tungstenite` —
-//!    does not compile to `wasm32-unknown-unknown`. Adding it would make the web target's core
-//!    un-buildable, which is the one thing this whole phase is arranged not to do.
-//! 2. **A WebSocket from the page would need the CSP widened.** `tauri.conf.json` grants
-//!    `connect-src 'self' ipc: http://ipc.localhost` and nothing else. Widening it is a decision
-//!    to take once, for all three targets, in the PR where the browser's own `WebSocket` is
-//!    available in the DB Worker.
-//! 3. **Polling is comfortably inside the free tier and this is arithmetic, not optimism.**
-//!    Pull on open, pull every 60 s while the window has focus, push 2 s after the write mask
-//!    goes quiet — `mirror::watch`'s own debounce, which this repo has already proven. Eight
-//!    hours of use is `28 800 / 60` = 480 pulls per device per day; three devices sharing one
-//!    group is **1 440**, which is **1.4%** of 100 000.
+//! **What runs**: a hibernatable WebSocket at `GET /g/{group}/ws`, held open for as long as the
+//! app is entitled-or-paired and in a group. It carries no card data — on every push the Durable
+//! Object sends the group's other sockets a `{"t":"head","cursor":N,"from":"<device>"}` doorbell,
+//! and a device that hears one runs exactly the HTTP round trip already in this file
+//! ([`run_once`]), the same one the **Sync now** button has always called. A frame is a hint and
+//! never a fact: it only ever brings a trip *forward*, never substitutes for one.
 //!
-//! What is lost is latency: a change made on a phone shows on the desktop within a minute
-//! rather than instantly. What is kept is a core that still compiles to wasm and a CSP that
-//! still grants nothing.
+//! **All the timing lives in [`super::schedule`], as a pure function of an explicit clock with no
+//! I/O**, and it comes down to two debounces. [`super::schedule::FRAME_DEBOUNCE_MS`] (1 s)
+//! coalesces a burst of `head` frames — a 50 000-row import is 250 sequential pushes and
+//! therefore 250 frames, and the receiving peer must react once, not 250 times.
+//! [`super::schedule::WRITE_DEBOUNCE_MS`] (3 s) waits out a local write and slides on every
+//! commit, so a transaction that keeps writing for a minute pushes once, at the end — armed off
+//! the mirror's own `commit_hook`, for the reason `db.rs`'s `CrossFileFence` doc gives: the
+//! update hook the mirror uses does not fire for `WITHOUT ROWID` tables, and two of the twelve
+//! synced ones are exactly that. Every wake — a frame, a local write, launch, reconnect, Android
+//! resume, exit — feeds one single-flight queue, so at most one round trip is ever in flight and
+//! the rest coalesce into it rather than queuing a second.
+//!
+//! What is lost against instant delivery is nothing measurable in practice: "within a few
+//! seconds, always" is the design's own bar (spec §2), and the two debounces above are what holds
+//! the request count down without missing it. See [`super::live`] for the connection manager
+//! itself — when it opens a socket, the jittered reconnect backoff, and the protocol ping that
+//! keeps a hibernating socket alive for free.
 
 use crate::errors::{self, Kind, Source};
 use crate::sync_engine::apply::{self, ApplyReport};
