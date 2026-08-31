@@ -77,14 +77,19 @@ the real 43-column one, `raw` included**.
   `Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp` and
   it passed both ways. **Do not add those headers**, and do not let a future service worker
   re-attach them.
-- **114 commands of 154**, as of 2026-08-30. The first four are the browse —
+- **115 commands of 156**, as of 2026-08-31. The first four are the browse —
   `sync_status`, `search_cards`, `list_sets`, `facet_cards` — which is the read path spec §8
   wanted measured in wasm rather than guessed. The rest are the Decks destination (PR 10b's
   thirteen reads and 10c's thirty-three writes), the Collection (10d's seventeen), the
-  Wishlist (10e's fourteen), the card pane (10f's six), the Tagger (10g's ten of twelve) and
-  Settings (10h's fourteen). Adding one, once its module is in the map, is a line in
-  `web::route::COMMANDS` and a `match` arm. **What the remaining 40 are, and why none of
-  them is an oversight, is tabulated at the foot of this file.**
+  Wishlist (10e's fourteen), the card pane (10f's six), the Tagger (10g's ten of twelve),
+  Settings (10h's fourteen) and the backup archive (`mirror_backup_zip`, 2026-08-31 — the
+  crate gained two that day and one of them is routed). Adding one, once its module is in the
+  map, is a line in `web::route::COMMANDS` and a `match` arm. **What the remaining 41 are, and
+  why none of them is an oversight, is tabulated at the foot of this file.**
+
+  `route.rs`'s `every_advertised_command_is_actually_routed` pins the routed number and is the
+  reason it cannot rot; the crate total is prose and has drifted before, so re-count it in the
+  same commit that changes it.
 
   ⚠️ **This is not the intended end state.** Decided 2026-08-29, after the phone layout made
   the boundary visible: **all of them but ten**, by destination, worst broken first. The survey,
@@ -97,7 +102,7 @@ the real 43-column one, `raw` included**.
 
 | Compiled for wasm | Desktop/Android only |
 | --- | --- |
-| `app_meta` · `card` · `card_row` · `collection` · `collection_alloc` · `collection_folders` · `collection_source` · `combos` · `db` · `deck` · `deck_audit` · `deck_meta` · `deck_theory` · `deck_undo` · `errors` · `feed` · `filters` · `flatten` · `listview` · `image_uri` · `index` · `ingest` · `legalities` · `maintenance` · `marketplace` · `schema` · `search` · `slug` · `nav` · `sorting` · `split` · `sync` · `sync_engine` · `sync_pair` · `tags` · `web` · `wishlist` · `wishlist_folders` · `zoom` | `export` · `images` · `import` · `marketplace_feed` · `mirror` · `paths` · `picked` · `reconcile` · `reset` · `scryfall` · `transfer` · `update` · `window` |
+| `app_meta` · `card` · `card_row` · `collection` · `collection_alloc` · `collection_folders` · `collection_source` · `combos` · `db` · `deck` · `deck_audit` · `deck_meta` · `deck_theory` · `deck_undo` · `errors` · `feed` · `filters` · `flatten` · `listview` · `image_uri` · `index` · `ingest` · `legalities` · `maintenance` · `marketplace` · `schema` · `search` · `slug` · `nav` · `sorting` · `split` · `sync` · `sync_engine` · `sync_pair` · `tags` · `web` · `wishlist` · `wishlist_folders` · `zoom` · `transfer` · **`mirror`** — `layout`, `paths`, `read`, `readme`, `snapshot` | `export` · `images` · `import` · `marketplace_feed` · **`mirror`** — `run`, `settings`, `watch` · `paths` · `picked` · `reconcile` · `reset` · `scryfall` · `update` · `window` |
 
 **Seventeen modules have moved left**: eleven on 2026-08-29 (PR 10a) — the deck domain, the
 collection, the wishlist, both folder tables and `marketplace` — then `card` (PR 10f) and
@@ -108,15 +113,23 @@ module instead of on the wrappers. **`tags` is the exception and the first real 
 ingest half is gated item by item inside an otherwise portable module, because that half
 downloads. See the PR 10a and 10g sections at the foot of this file.
 
-**Four of the exclusions are permanent** (spec §6.3): the plain-text `mirror`, the Rust
-`transfer` writer that exists only for it, the portable `update` swap, and `window`'s Win32
-snap layouts. The rest are "not yet" — they arrive with the commands that need them. `images`
-is neither: on web the image cache is Cache Storage rather than a filesystem, so it is a
+**Two of the exclusions are permanent** (spec §6.3): the portable `update` swap and `window`'s
+Win32 snap layouts. The rest are "not yet" — they arrive with the commands that need them.
+`images` is neither: on web the image cache is Cache Storage rather than a filesystem, so it is a
 rewrite and not a port.
+
+**`mirror` and `transfer` were two of that permanent four until 2026-08-31**, and `mirror` is the
+one module in the table on both sides. What made the folder impossible here — OPFS is invisible to
+every other program, so a mirror in it would be the feature's name without the feature — says
+nothing about the *renderer*, which never touched a filesystem. So the gate moved off the module
+and onto `run`, `settings` and `watch`; `transfer` came with the rest, unchanged and still fenced
+by `src/features/transfer/__golden__/`. What the browser does with it is
+`mirror_backup_zip` — the same files, rendered on demand and handed over as one archive. Full
+record in [text-mirror.md](text-mirror.md#web-and-android-the-same-files-as-one-archive).
 
 **A module's column is a fact about its contents; being *routed* is a separate question.**
 Everything on the left compiles for the target. What the browser can actually call is
-`web::route::COMMANDS`, which is 114 of 154.
+`web::route::COMMANDS`, which is 115 of 156.
 
 `split` is the odd one in the left column. It compiles there and can never succeed —
 every path in it is `std::fs`, which builds for wasm and answers `Unsupported` — and gating it
@@ -399,9 +412,12 @@ across 32 files.**
 **The ten that stay desktop-only are the ones §6.3 already named**, and the reason each is not a
 port but a different feature:
 
-- **`mirror/settings.rs`, 5.** The plain-text mirror writes a folder on disk *for other programs to
+- **`mirror/settings.rs`, 4.** The plain-text mirror writes a folder on disk *for other programs to
   read*. In OPFS nothing else can read it, so a web mirror would be the feature's name without the
-  feature. `transfer` exists only to serve it and carries no commands of its own.
+  feature. **Reduced from five to four on 2026-08-31**, and the fifth was not ported — it was
+  replaced: `mirror_backup_zip` renders the same files on demand and hands the page one archive,
+  which is what a browser *can* deliver. `mirror_status`, `mirror_set_enabled`, `mirror_set_root`
+  and `mirror_rebuild` are the folder and stay here.
 - **`desktop.rs`'s updater, 5** — `update_check`, `update_download`, `update_apply`,
   `update_history`, `update_open_release_page`. The portable updater swaps an `.exe`. **A PWA
   already updates through its service worker**, which ships and works; routing these would be a
@@ -791,32 +807,35 @@ backend.
   every reload — a different storage API, so a shell-cache bust costs nothing but a re-fetch of
   the bundle.
 
-## Where PR 10 got to: 114 of 154 routed, and what the other 40 are
+## Where PR 10 got to: 115 of 156 routed, and what the other 41 are
 
 Counted 2026-08-30 by walking every `#[tauri::command]` in the crate — both attribute
-spellings, skipping doc-comment mentions — and diffing against `COMMANDS`. **The crate is 154
-now, not the 152 measured on 2026-08-29**: the hosted-relay work added two.
+spellings, skipping doc-comment mentions — and diffing against `COMMANDS`. **The crate was 154
+that day, not the 152 measured on 2026-08-29**: the hosted-relay work added two. **It is 156
+since 2026-08-31**: the backup archive added `mirror_backup_zip`, which is routed, and
+`mirror_backup_save`, which is Android's and cannot be.
 
 | | |
 | --- | --- |
-| Commands in the crate | **154** |
-| Routed | **114** |
-| Not routed | **40** |
+| Commands in the crate | **156** |
+| Routed | **115** |
+| Not routed | **41** |
 
-**The 40, and none of them is an oversight:**
+**The 41, and none of them is an oversight:**
 
 | Count | What | Why not |
 | --- | --- | --- |
 | **16** | `sync_pair/pairing` (9) and `sync_engine/commands` (7) | The pairing and membership surface. `lib.rs` states `pairing` "does not and never will" compile for wasm; the relay work is live and moving, so this is its own decision rather than a port |
 | **7** | `desktop.rs` | The five §6.3 updater commands, `update_status`, and `sync_run` — the web target runs its own ingest through `glue.rs` |
 | **5** | `reset.rs` (4) and `deck_set_cover_image` | OPFS deletion, and a covers directory a browser has none of |
-| **4** | `mirror/settings.rs` | §6.3: a mirror in OPFS cannot be read by the programs a mirror exists for |
+| **4** | `mirror/settings.rs` | §6.3: a mirror in OPFS cannot be read by the programs a mirror exists for. These four *are* the folder — where it is, whether it runs, when it last ran, rebuild it now |
+| **1** | `mirror_backup_save` | Android's door onto the same archive `mirror_backup_zip` routes: it writes at a destination a save dialog answered, which a browser has no way to name. Not a gap — the browser's door is the routed one |
 | **2** | `import_read_file`, `export_write_file` | §6.2's `<input type=file>` and `Blob` |
 | **4** | The four `*_refresh` (oracle tags, art tags, combos, marketplace feed) | Each downloads through `state.client` |
 | **2** | `images.rs` | The byte cache is Cache Storage on web — a rewrite, not a port |
 
-**PR 10i closed the last two gaps**, so every one of the 40 is now a decision with a reason
-above it rather than something nobody got to. `marketplace_feed` got `tags`' split — the
+**PR 10i closed the last two gaps**, so every one of these is a decision with a reason above it
+rather than something nobody got to. `marketplace_feed` got `tags`' split — the
 status query kept, the download gated — and `import` got the same: `import_resolve` and
 `deck_import_commit` are ordinary SQLite, and only `import_read_file` ever needed a file
 handle. **The page can already paste a decklist without touching a file**, so those two are the

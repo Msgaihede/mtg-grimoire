@@ -1,12 +1,21 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { open as pickFolder } from "@tauri-apps/plugin-dialog";
-import { FolderOpen, RefreshCw } from "lucide-react";
+import { open as pickFolder, save as pickSaveFile } from "@tauri-apps/plugin-dialog";
+import { Download, FolderOpen, RefreshCw } from "lucide-react";
 import { useId, useState, type JSX } from "react";
 import { count } from "@/lib/counts";
-import { ipc, ipcError, type MirrorStatus, type PassReport } from "@/lib/ipc";
+import { ipc, ipcError, type BackupZip, type MirrorStatus, type PassReport } from "@/lib/ipc";
+import { isAndroid } from "@/lib/platform";
 import { ago } from "@/lib/relativeTime";
 import { cn } from "@/lib/utils";
 import { writeFailure } from "@/lib/writes";
+import { isWebTarget } from "@/pwa/target";
+import {
+  bytesFromBase64,
+  downloadFile,
+  fileSize,
+  suggestedArchiveName,
+  ZIP_MIME,
+} from "./backupArchive";
 import { BUTTON, SWITCH, switchTone } from "./controls";
 import { PanelAlert, SettingsSection } from "./panelChrome";
 
@@ -108,6 +117,40 @@ type Note = { tone: "problem" | "plain"; text: string } | null;
 type Rebuilt = { report: PassReport; at: number };
 
 /**
+ * Does this build get the archive rather than the folder?
+ *
+ * **A folder or a zip, and the answer is a fact about the platform rather than a setting.** The
+ * mirror writes ~350 files so that *other programs* can read them — a text editor, `grep`, a
+ * sync client — and neither of the two targets here has a folder that serves that. OPFS is
+ * invisible to every program but this one, and an Android app's private directory is the same in
+ * practice: `tauri-plugin-dialog`'s own manifest records Android as having no folder picker, so
+ * the root could not even be chosen. A folder nothing else can open would be the feature's name
+ * without the feature.
+ *
+ * **Two probes and they are not interchangeable.** `isWebTarget()` is a build-time constant, so
+ * the whole folder panel folds away in the web bundle; `isAndroid()` is a user-agent read,
+ * because the Android build *is* the Tauri build and nothing at compile time tells them apart.
+ * Desktop answers `false` to both, which is what keeps jsdom and Storybook on the folder shape
+ * without either of them having to say so.
+ */
+function archiveOnly(): boolean {
+  return isWebTarget() || isAndroid();
+}
+
+/**
+ * The backup, in whichever of its two shapes this platform can actually deliver.
+ *
+ * A dispatch rather than a branch inside one component, because the two halves read different
+ * backends: {@link FolderBackupPanel} polls `mirror_status` every five seconds and
+ * {@link ArchiveBackupPanel} must never call it — that command is not routed on the web target
+ * at all, and on Android it answers about a mirror whose thread never starts. A conditional
+ * `useQuery` is not a thing React allows, so the condition goes above the hooks.
+ */
+export function BackupPanel(): JSX.Element {
+  return archiveOnly() ? <ArchiveBackupPanel /> : <FolderBackupPanel />;
+}
+
+/**
  * The plain-text mirror: whether it runs, where it writes, and how the last pass went.
  *
  * **This panel reaches the backend itself, where its five neighbours take their state as a
@@ -127,8 +170,12 @@ type Rebuilt = { report: PassReport; at: number };
  * write ever waits on a mirror write, and no mirror failure is ever raised as a dialog. So the
  * sentence lives in this panel, in the destructive red its neighbours use for a refusal, and
  * the next pass tries again on its own.
+ *
+ * **Desktop only, and {@link archiveOnly} is where that is decided.** All four of the commands
+ * below — `mirror_status`, `mirror_set_enabled`, `mirror_set_root`, `mirror_rebuild` — are the
+ * *folder*, and the other two targets have no folder to describe.
  */
-export function BackupPanel(): JSX.Element {
+export function FolderBackupPanel(): JSX.Element {
   const id = useId();
   const client = useQueryClient();
   /** The picker itself could not be opened — a different failure from a setting the backend
@@ -381,4 +428,150 @@ function noteFor(
   }
   if (status === null && read.isError) return { tone: "problem", text: ipcError(read.error) };
   return null;
+}
+
+/**
+ * What one finished archive says — `142 files, 1.4 MB`, and what went missing if anything did.
+ *
+ * **`failed` is said out loud and it is the one number here that could not be left off.** The
+ * folder's rule is that a file which would not write is one file and the pass carries on; the
+ * archive keeps that rule and cannot keep its consequence. A reader looking at a folder sees the
+ * gap; a reader who has already mailed the zip to themselves does not, and will find out on the
+ * day they open it — which is the day this feature exists for.
+ */
+export function archiveSummary(zip: BackupZip): string {
+  const parts = [
+    `${count(zip.files)} ${zip.files === 1 ? "file" : "files"}`,
+    fileSize(zip.byteLength),
+  ];
+  if (zip.failed > 0) parts.push(`${count(zip.failed)} could not be read`);
+  return parts.join(", ");
+}
+
+/**
+ * The line the panel draws after a successful press, in the words of the door it went out of.
+ *
+ * **The two doors end differently and the sentence has to.** In a browser the file is named by
+ * {@link BackupZip.fileName}, because that is the name the download was given; on Android the
+ * reader typed the name themselves in the save dialog, so quoting Rust's suggestion back at them
+ * would name a file that may not exist. Saying "Saved" and the numbers is the whole of what this
+ * side truthfully knows there.
+ */
+export function madeLine(zip: BackupZip, android: boolean): string {
+  return android
+    ? `Saved — ${archiveSummary(zip)}.`
+    : `Downloaded ${zip.fileName} — ${archiveSummary(zip)}.`;
+}
+
+/**
+ * The backup as one archive, on the two platforms that cannot have the folder.
+ *
+ * **A snapshot, and the panel says so in those words.** The desktop mirror is continuously
+ * written — a couple of seconds after each change, for ever — and this is a file taken at the
+ * moment of a press. Calling both of them "backup" without saying which is which is how a reader
+ * ends up trusting a zip from March.
+ *
+ * **Two doors, one button, and the difference never reaches the reader.** In a browser the bytes
+ * come back as base64 and the page starts a download; on Android the reader names the
+ * destination first — which is a `content://` row `ACTION_CREATE_DOCUMENT` has already created,
+ * not a path — and Rust writes into it, so a megabyte of archive never crosses the webview at
+ * all. Both end with a file the reader keeps.
+ *
+ * **No poll and no status query.** `mirror_status` describes a thread that is not running here,
+ * and on the web target it is not even routed; the whole of what this panel knows is what the
+ * last press answered.
+ */
+export function ArchiveBackupPanel(): JSX.Element {
+  const android = isAndroid();
+  /** The last archive this window produced. `null` again after every press, so a second one
+   *  that fails cannot be read under the first one's success — `FolderBackupPanel`'s rule for
+   *  {@link Rebuilt}. */
+  const [made, setMade] = useState<BackupZip | null>(null);
+  /** A picker that would not open. Not a write, so it is cleared by every press rather than
+   *  ranked against them — which is what keeps it from outliving the news it is about. */
+  const [pickerFailure, setPickerFailure] = useState<string | null>(null);
+
+  const make = useMutation({
+    mutationFn: async (): Promise<BackupZip | null> => {
+      if (!android) {
+        const zip = await ipc.mirrorBackupZip();
+        // `base64` is `null` only when Rust wrote the file itself, which this door never asks
+        // it to — so an absent one is the backend answering the wrong shape, and handing `atob`
+        // a null would be a `TypeError` that reads as "the download silently did nothing".
+        if (zip.base64 === null) throw new Error("the backup came back without its contents");
+        downloadFile(bytesFromBase64(zip.base64), zip.fileName, ZIP_MIME);
+        return zip;
+      }
+      // Android. `save()` answers `null` on Cancel and writing at *that* is the bug the guard
+      // exists for — `ExportDialog`'s rule, one dialog over. Nothing is rendered either: the
+      // archive is built by the command below, after the reader has said where it goes, so a
+      // cancelled picker costs nothing at all.
+      const path = await pickSaveFile({ defaultPath: suggestedArchiveName() });
+      return path === null ? null : await ipc.mirrorBackupSave(path);
+    },
+    onSuccess: (zip) => setMade(zip),
+  });
+
+  // The picker first, then the write's own rule (`@/lib/writes`) — `FolderBackupPanel`'s
+  // precedence with one fewer write to rank.
+  const refusal = pickerFailure ?? writeFailure([make]);
+  const note = archiveNote(refusal, made, android);
+
+  return (
+    <SettingsSection id="backup" title="Backup">
+      <p className="text-sm text-dim">
+        Your decks, collection and wishlist, written out as plain text files in every format this
+        app can export — so that the day it will not start, the cards are still yours. The app
+        never reads these files back; the database stays the record and this is a copy of it.
+      </p>
+      <p className="text-sm text-dim">
+        Here it is one archive you ask for, rather than a folder kept up to date in the
+        background. {android ? "An app's own folder on Android" : "A browser's own storage"} is
+        not somewhere another program can open, so a folder kept there would be a backup nothing
+        else could read. The desktop app writes the folder.
+      </p>
+
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="min-w-0 text-sm text-dim">
+          {made === null
+            ? "It is built when you ask for it, from the cards as they are right now."
+            : "Ask again whenever you want a fresher copy."}
+        </p>
+        <button
+          type="button"
+          onClick={() => {
+            setPickerFailure(null);
+            setMade(null);
+            make.mutate();
+          }}
+          disabled={make.isPending}
+          aria-busy={make.isPending || undefined}
+          className={cn(BUTTON, "border-border hover:bg-bg disabled:hover:bg-transparent")}
+        >
+          <Download
+            aria-hidden="true"
+            className={cn("size-4", make.isPending && "animate-pulse")}
+          />
+          {android ? "Save backup…" : "Download backup"}
+        </button>
+      </div>
+
+      <PanelAlert tone={note?.tone ?? "plain"}>{note?.text ?? null}</PanelAlert>
+    </SettingsSection>
+  );
+}
+
+/**
+ * The one thing the archive panel has to say, picked from two candidates.
+ *
+ * {@link noteFor}'s shape with two of its four cases gone: there is no background thread to
+ * report a failure from and no polled read to fail, so a refusal and a finished archive are the
+ * whole list. **An archive that could not read every list is a problem rather than an outcome**,
+ * for the reason {@link BackupZip.failed} gives: the reader cannot see the gap in a file they
+ * have already put away.
+ */
+function archiveNote(refusal: string | null, made: BackupZip | null, android: boolean): Note {
+  if (refusal !== null) return { tone: "problem", text: refusal };
+  if (made === null) return null;
+  return { tone: made.failed > 0 ? "problem" : "plain", text: madeLine(made, android) };
 }

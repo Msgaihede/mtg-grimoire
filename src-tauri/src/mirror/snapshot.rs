@@ -212,11 +212,9 @@ fn stamp(conn: &Connection) -> Stamp {
         date: String::new(),
         when: zip::DateTime::default(),
     };
-    let Ok(text) = conn.query_row(
-        "SELECT strftime('%Y %m %d %H %M %S', 'now')",
-        [],
-        |row| row.get::<_, String>(0),
-    ) else {
+    let Ok(text) = conn.query_row("SELECT strftime('%Y %m %d %H %M %S', 'now')", [], |row| {
+        row.get::<_, String>(0)
+    }) else {
         return fallback;
     };
     let parts: Vec<&str> = text.split(' ').collect();
@@ -383,6 +381,76 @@ mod tests {
         crate::schema::memory_pair()
     }
 
+    /// A world with cards in it — a deck that keeps a theory list, two rows in the collection
+    /// and one wish.
+    ///
+    /// **Seeding `cards` is allowed here only because the connection is in memory and dies with
+    /// the test**, so no later measurement of the real corpus can be made a fiction by it. That
+    /// is `run.rs`'s own sentence, repeated because the rule it names is the repo's.
+    ///
+    /// It exists for one test — the byte comparison below. Fourteen empty files would prove the
+    /// plumbing and say nothing about a renderer, which is exactly the claim that needs proving.
+    fn seeded() -> Connection {
+        let conn = db();
+        for (id, oracle, name, num) in [
+            ("bolt-lea", "o1", "Lightning Bolt", "161"),
+            ("sol-lea", "o2", "Sol Ring", "263"),
+        ] {
+            conn.execute(
+                "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                    rarity,type_line,finishes,prices,raw)
+                 VALUES (?1,?2,?3,'lea',?4,'en','normal','common','Instant',
+                    '[\"nonfoil\",\"foil\"]','{\"usd\":\"1.00\"}','{}')",
+                rusqlite::params![id, oracle, name, num],
+            )
+            .unwrap();
+        }
+        let deck = crate::deck::create_deck(
+            &conn,
+            &crate::deck::DeckInput {
+                name: "Azula".to_owned(),
+                theory_enabled: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        for variant in ["live", "theory"] {
+            crate::deck::add_card(
+                &conn,
+                deck.id,
+                "bolt-lea",
+                None,
+                Some("Main"),
+                variant,
+                None,
+                4,
+            )
+            .unwrap();
+        }
+        for card in ["bolt-lea", "sol-lea"] {
+            crate::collection::add_entry(
+                &conn,
+                &crate::collection::EntryInput {
+                    card_id: card.to_owned(),
+                    finish: "nonfoil".to_owned(),
+                    quantity: 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
+        crate::wishlist::add_wish(
+            &conn,
+            &crate::wishlist::WishInput {
+                card_id: Some("sol-lea".to_owned()),
+                quantity: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        conn
+    }
+
     /// Read an archive back into (name, bytes) pairs, in the order it stores them.
     fn entries(bytes: &[u8]) -> Vec<(String, String)> {
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
@@ -430,6 +498,87 @@ mod tests {
         assert_eq!(got, want);
         assert_eq!(archive.files, want.len());
         assert_eq!(archive.failed, 0);
+    }
+
+    /// **The claim the module's header makes, checked against the folder rather than argued
+    /// from the call graph.** One renderer is a fact about today's code; what a reader needs is
+    /// that the file they download and the file the desktop writes are the same file. Every
+    /// entry in the archive is read back out of it and compared, byte for byte, with what
+    /// `run_pass` put on disk for the same database a moment earlier.
+    ///
+    /// `README.txt` is the one entry skipped and it is skipped because it is *meant* to differ:
+    /// the folder's copy explains a folder that rewrites itself and a `.mirror-manifest`,
+    /// neither of which is true of an archive. `mirror::readme`'s own two tests fence that pair.
+    ///
+    /// **The tempdir is the whole of what this test writes to**, which is `src-tauri/CLAUDE.md`'s
+    /// standing rule for every filesystem test in this module: the mirror's default root is
+    /// `data_dir/export`, so a pass that forgot to name a root of its own would write into the
+    /// developer's own backup.
+    #[test]
+    fn every_file_in_the_archive_is_byte_identical_to_the_one_the_mirror_writes() {
+        let conn = seeded();
+        let dir = tempfile::tempdir().unwrap();
+        crate::mirror::run::run_pass(
+            &conn,
+            dir.path(),
+            crate::mirror::run::Dirty::ALL,
+            &mut crate::mirror::run::DigestCache::default(),
+        )
+        .unwrap();
+
+        let archive = build(&conn).unwrap();
+        let mut compared = 0usize;
+        for (name, text) in entries(&archive.bytes) {
+            if name == README_NAME {
+                continue;
+            }
+            let on_disk = std::fs::read_to_string(dir.path().join(&name))
+                .unwrap_or_else(|e| panic!("the mirror wrote no {name}: {e}"));
+            assert_eq!(
+                text, on_disk,
+                "{name} differs between the folder and the zip"
+            );
+            compared += 1;
+        }
+        // A deck (7) and its theory list (7), the collection (7), the wishlist (7) and the
+        // cabinet group schema v25 gives that deck (7). The floor is deliberately below the
+        // real number: what would make this test vacuous is comparing *nothing*, and pinning an
+        // exact count would make every layout change a failure here rather than in `layout.rs`.
+        assert!(compared >= 21, "only {compared} files were compared");
+    }
+
+    /// **Every optional column is on, and each list is asked about *its own* surface.**
+    ///
+    /// This is a rule the byte comparison above structurally cannot see: both sides call one
+    /// [`render`], so a change to which fields it asks for moves the folder and the archive
+    /// together and the comparison stays green. Measured by mutation on 2026-08-31 — replacing
+    /// `file.surface` with a fixed `Surface::Deck` left **all 140** `mirror` tests passing, which
+    /// is the gap this closes.
+    ///
+    /// A CSV header is what makes it checkable at all: `csv_header` writes
+    /// `available_fields(Csv, surface)` out in words, where the other six formats render seven
+    /// ids and would move no byte. `Condition` is a column the collection has and a deck does
+    /// not; `Category` is the reverse. Together they pin the axis in both directions, which one
+    /// of them alone would not.
+    #[test]
+    fn each_list_is_rendered_with_its_own_surfaces_columns() {
+        let archive = build(&seeded()).unwrap();
+        let files = entries(&archive.bytes);
+        let header = |name: &str| {
+            files
+                .iter()
+                .find(|(n, _)| n == name)
+                .map(|(_, text)| text.lines().next().unwrap_or_default().to_owned())
+                .unwrap_or_else(|| panic!("no {name} in the archive"))
+        };
+
+        let collection = header("Collection/Collection.csv");
+        assert!(collection.contains("Condition"), "{collection}");
+        assert!(!collection.contains("Category"), "{collection}");
+
+        let deck = header("Decks/Azula/Azula.csv");
+        assert!(deck.contains("Category"), "{deck}");
+        assert!(!deck.contains("Condition"), "{deck}");
     }
 
     /// The pruner's authority is a file about a *folder*, and a zip prunes nothing. One

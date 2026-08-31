@@ -1,6 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
 import { BackupPanel } from "@/features/settings/BackupPanel";
-import { isAndroid } from "@/lib/platform";
 import { CachePanel } from "@/features/settings/CachePanel";
 import { CombosPanel } from "@/features/settings/CombosPanel";
 import { DangerZonePanel } from "@/features/settings/DangerZonePanel";
@@ -207,18 +206,21 @@ export function SettingsPage({ update }: { update: Update }) {
           other what can be swept out of it. Above it rather than below for the ordering rule:
           the mirror deletes nothing a reader owns, and Clear cache does.
 
-          **Desktop only, and the decision is the mirror's purpose rather than a limitation.**
-          The mirror's whole point is a folder a reader opens in a text editor, syncs with
-          Dropbox or greps; on Android that directory is reachable mainly through a file-manager
-          app and often not by other apps at all, so the feature would exist without delivering
-          what it is for. The picker it needs is not there either — `tauri-plugin-dialog`'s own
-          manifest records Android support as "partial — Does not support folder picker", so a
-          reader could not choose the root.
+          **On every platform since 2026-08-31, and the `!isAndroid()` that used to stand here is
+          the interesting part of the history.** The mirror's whole point is a folder a reader
+          opens in a text editor, syncs with Dropbox or greps; on Android that directory is
+          reachable mainly through a file-manager app and often not by other apps at all, and
+          `tauri-plugin-dialog`'s manifest records the platform as having no folder picker, so
+          the root could not even be chosen. All of that is still true — so the panel was hidden
+          outright, which took the *feature* away along with the folder.
 
-          Rust agrees from the other side: `lib.rs` installs neither the mirror's update hook nor
-          its thread on mobile, so `mirror_status` would answer about a mirror that cannot
-          run. */}
-      {!isAndroid() && <BackupPanel />}
+          It is back because the folder and the backup are not the same thing. `BackupPanel`
+          now dispatches on the platform itself: the folder where there is one, and everywhere
+          else a button that renders the same files and hands over one archive. The gate that
+          matters moved inside it, where a component can pick which backend it reads —
+          `mirror_status` is not routed on the web target at all, and on Android it answers
+          about a thread `lib.rs` never starts. */}
+      <BackupPanel />
 
       <CachePanel cache={cache} />
 

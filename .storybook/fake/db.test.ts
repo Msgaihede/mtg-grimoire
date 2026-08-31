@@ -5309,6 +5309,14 @@ describe("the busy fault", () => {
       // not to the database. Its two neighbours (`mirror_set_enabled`, `mirror_set_root`) take
       // `sync::with_write` and are in the loop below with everything else.
       "mirror_rebuild",
+      // The backup archive, both doors, unlocked for `mirror_rebuild`'s reason exactly:
+      // `mirror::snapshot::build_now` opens a **read-only connection of its own** and falls back
+      // to the shared read connection only if it cannot — it never reaches for the write one, so
+      // there is no `BUSY` for either to answer. They are in `writeHandlers` because they
+      // *produce* something (a download, or a file at a picked path), not because they write a
+      // row.
+      "mirror_backup_zip",
+      "mirror_backup_save",
       // The eleventh, and the first that touches **no connection of any kind**: pairing's
       // cancel clears `AppState.pairing`, a mutex of its own that has nothing to do with
       // the database, so there is no `BUSY` for it to answer. Its seven neighbours all take
@@ -5583,6 +5591,12 @@ describe("the busy fault", () => {
     // that is worth this loop's attention rather than in spite of it: everything *after* the door
     // in that command is best effort by design (spec §2.1), so `refuseIfBusy` is the one refusal
     // it has and a handler that forgot it would look identical from outside.
+    // The backup archive then added **two handlers and no refusals**, which is why this number
+    // did not move: `mirror_backup_zip` and `mirror_backup_save` both joined `unlocked` above,
+    // for `mirror_rebuild`'s reason. **That is the fifth entry here whose delta and whose handler
+    // count differ, and the first where the delta is zero** — worth saying out loud, because a
+    // reader who added two handlers and saw this line unchanged would reasonably wonder whether
+    // the loop had stopped seeing them.
     expect(names).toHaveLength(88);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
