@@ -1689,3 +1689,94 @@ async fn a_pairing_never_evicts_a_device_this_one_has_not_met() {
         "the publish the phone could not safely make was not recorded as still owed"
     );
 }
+
+/// A caught-up device stops acking, which is what keeps a frequent pull cheap: an ack costs a
+/// Durable Object request and, on the relay side, a compaction scan.
+#[tokio::test]
+async fn a_second_trip_that_moves_nothing_sends_no_ack() {
+    let server = MockServer::start_async().await;
+    keys_mock(&server, 0);
+    server.mock(|when, then| {
+        when.method(GET).path(format!("/g/{GROUP}/pull"));
+        then.status(200)
+            .json_body(serde_json::json!({ "envelopes": [], "cursor": 0 }));
+    });
+    let acked = server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{GROUP}/ack"));
+        then.status(204);
+    });
+
+    let a = paired("dev-a", 0);
+    set_state(&a, RELAY_URL, &server.base_url()).unwrap();
+    grant(&a);
+    run_once(&a).await.unwrap();
+    let after_first = acked.calls();
+    run_once(&a).await.unwrap();
+    assert_eq!(
+        acked.calls(),
+        after_first,
+        "nothing moved, so there is nothing to tell the relay"
+    );
+}
+
+/// **The mutation this whole task exists to kill.**
+///
+/// The relay hands back the head of the *whole* log — this device's own rows included — while
+/// `since` filters those rows out of `envelopes`. So a device that pushes and then pulls sees
+/// **zero envelopes and a strictly higher cursor**, which is the normal case for whichever
+/// device is doing the writing. A skip keyed on "no envelopes came back" makes that device
+/// never ack: its stored ack stays at its founding value, `compact`'s floor pins there, and
+/// nothing is ever compacted for the life of the group.
+#[tokio::test]
+async fn a_device_that_pushed_acks_even_though_no_envelopes_came_back() {
+    let server = MockServer::start_async().await;
+    keys_mock(&server, 0);
+    server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{GROUP}/push"));
+        then.status(200)
+            .json_body(serde_json::json!({ "cursor": 7 }));
+    });
+    server.mock(|when, then| {
+        when.method(GET).path(format!("/g/{GROUP}/pull"));
+        then.status(200)
+            .json_body(serde_json::json!({ "envelopes": [], "cursor": 7 }));
+    });
+    let acked = server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{GROUP}/ack"));
+        then.status(204);
+    });
+
+    let a = paired("dev-a", 0);
+    set_state(&a, RELAY_URL, &server.base_url()).unwrap();
+    grant(&a);
+    add_copy(&a, "c1", 1);
+    run_once(&a).await.unwrap();
+    acked.assert_calls(1);
+    assert_eq!(get_state(&a, LAST_ACKED).as_deref(), Some("7"));
+}
+
+/// The watermark is written only when the relay took it, so a refused ack is retried.
+#[tokio::test]
+async fn a_failed_ack_leaves_the_watermark_unset_so_the_next_trip_retries() {
+    let server = MockServer::start_async().await;
+    keys_mock(&server, 0);
+    server.mock(|when, then| {
+        when.method(GET).path(format!("/g/{GROUP}/pull"));
+        then.status(200)
+            .json_body(serde_json::json!({ "envelopes": [], "cursor": 4 }));
+    });
+    server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{GROUP}/ack"));
+        then.status(500);
+    });
+
+    let a = paired("dev-a", 0);
+    set_state(&a, RELAY_URL, &server.base_url()).unwrap();
+    grant(&a);
+    assert!(run_once(&a).await.is_err());
+    assert_eq!(
+        get_state(&a, LAST_ACKED),
+        None,
+        "an ack the relay refused is not a watermark"
+    );
+}

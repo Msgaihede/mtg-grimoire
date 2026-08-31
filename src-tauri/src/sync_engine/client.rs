@@ -48,6 +48,18 @@ pub const RELAY_URL: &str = "relay_url";
 /// How far this device has consumed the relay's log. The relay's `seq`, not a clock.
 pub const PULL_CURSOR: &str = "pull_cursor";
 
+/// The cursor this device last successfully handed to `/ack`.
+///
+/// **Separate from [`PULL_CURSOR`], and the separation is the whole point.** The relay answers
+/// a pull with the head of the *whole* log — including rows this device wrote, which `since`
+/// filters out of `envelopes` — so a device that pushes and then pulls gets an empty page and
+/// a higher cursor. Skipping the ack on "no envelopes" would mean the writing device never
+/// acks, its stored ack stays at its founding value, and `compact`'s floor pins there: nothing
+/// is ever compacted, for the life of the group, silently.
+///
+/// Written only after the relay took it, so a refused ack is retried on the next trip.
+pub const LAST_ACKED: &str = "last_acked";
+
 /// When the last complete round trip finished, in unix seconds.
 pub const LAST_SYNC_AT: &str = "last_sync_at";
 
@@ -966,6 +978,10 @@ pub async fn ack(conn: &Connection, base: &str, token: &str) -> Result<(), Strin
     let cursor: i64 = get_state(conn, PULL_CURSOR)
         .and_then(|v| v.parse().ok())
         .unwrap_or(0);
+    let acked: Option<i64> = get_state(conn, LAST_ACKED).and_then(|v| v.parse().ok());
+    if acked == Some(cursor) {
+        return Ok(());
+    }
     let url = format!("{base}/g/{}/ack", group.group_id);
     // Written by hand rather than through reqwest's `json` feature, which this crate does not
     // enable: `serde_json` is already here, and a feature that changes what every other request
@@ -994,6 +1010,7 @@ pub async fn ack(conn: &Connection, base: &str, token: &str) -> Result<(), Strin
         note(conn, "ack", Kind::Http, &message, Some(&url));
         return Err(message);
     }
+    set_state(conn, LAST_ACKED, &cursor.to_string()).map_err(|e| e.to_string())?;
     Ok(())
 }
 
