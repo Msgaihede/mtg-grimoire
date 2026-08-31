@@ -15,7 +15,7 @@ use serde_json::Value;
 
 /// Every command this build routes, in the order they were added.
 ///
-/// **This is still not the whole surface.** The app has 152 commands. The first four here are
+/// **This is still not the whole surface.** The app has 154 commands. The first four here are
 /// the browse, which is the read path spec 8 requires measured in wasm rather than guessed;
 /// the thirteen after them are the Decks destination's reads and the thirty-three after those
 /// are its writes - the whole deck cluster except `deck_set_cover_image`. The rest arrive with
@@ -155,6 +155,18 @@ pub const COMMANDS: &[&str] = &[
     "marketplace_feed_status",
     "import_resolve",
     "deck_import_commit",
+    // **Three of Settings' four clears.** `cache_clear` is the fourth and is not here: it
+    // sweeps a directory of image files, which on this target is Cache Storage — see the
+    // arms, and `reset::clear_cache`'s own gate.
+    "collection_clear",
+    "wishlist_clear",
+    "decks_clear",
+    // **The two halves of the updater that report rather than replace.** The other three —
+    // `update_check`, `update_download`, `update_apply` — and `update_open_release_page`
+    // stay desktop's; the arms below say why the first of those is *absent* here rather than
+    // merely unrouted.
+    "update_status",
+    "update_history",
     // The backup, and **only the archive half of it**. `mirror_status`, `mirror_set_enabled`,
     // `mirror_set_root` and `mirror_rebuild` are the folder, which a browser has nowhere to
     // put; `mirror_backup_save` writes at a path a file dialog answered, which a browser has
@@ -1636,6 +1648,72 @@ pub fn call(
             )
         }
 
+        // ── Settings' clears ─────────────────────────────────────────────────────────
+        //
+        // **Three of the four, and none of them takes an argument** — `src/lib/ipc.ts` calls
+        // each as a bare `invoke("…_clear")`, so there is no name here to get wrong.
+        //
+        // **`cache_clear` is deliberately absent and is not an oversight.** It is the only
+        // one of the four whose function does not compile for this target: `clear_cache`
+        // takes a `&crate::images::Cache` and sweeps a directory, and on web the byte cache
+        // is Cache Storage rather than a filesystem. That is a rewrite rather than a port —
+        // the same call `lib.rs` makes about `images` itself — and it is its own piece of
+        // work. Until it lands, the Local cache panel's button is the one control on the
+        // Settings page that still answers `unknown command` in a browser.
+        "collection_clear" => encode(
+            command,
+            // `with_write_owned`, matching the desktop wrapper: the facet index's `owned`
+            // bitset is built from `collection_entries`, so a wipe that skipped the rebuild
+            // would leave the sidebar offering an Owned facet over a collection that is gone.
+            crate::collection_source::with_write_owned(state, crate::reset::clear_collection)
+                .map_err(RouteError::Failed)?,
+        ),
+
+        "wishlist_clear" => encode(
+            command,
+            crate::sync::with_write(state, crate::reset::clear_wishlist)
+                .map_err(RouteError::Failed)?,
+        ),
+
+        // **`None` for the covers directory, and it is the load-bearing argument on this
+        // line.** `clear_decks` hands that path to `sweep_dir`, which deletes everything
+        // under it recursively; its own doc already defines `None` as "the directory could
+        // not be resolved, so the rows go and the pictures they pointed at are inert". A
+        // browser has no covers directory at all — `crate::paths` does not compile here —
+        // so `None` is not a fallback, it is the true answer, and there is no value this
+        // target could pass that would be safe to sweep.
+        "decks_clear" => encode(
+            command,
+            crate::sync::with_write(state, |c| crate::reset::clear_decks(c, None))
+                .map_err(RouteError::Failed)?,
+        ),
+
+        // ── The updater, reporting only ──────────────────────────────────────────────
+        //
+        // **`update_check` is absent from this table and cannot be added to it**, which is
+        // a different thing from the four `*_refresh` commands merely not being here yet.
+        // This function is synchronous — the Worker's `#[wasm_bindgen] call` is — so an
+        // `async fn` cannot be a `match` arm at all, whatever it fetches with. The two
+        // network operations this target does perform are `glue::ingest_cards` and
+        // `glue::ingest_combos`: bespoke `async` `#[wasm_bindgen]` entry points with their
+        // own `postMessage` kinds, which is what a web `update_check` would have to become.
+        // Nothing calls it in the meantime: `UpdatePanel` reads `installKind` below and
+        // offers a browser no Check button.
+        //
+        // `Web`, `false`, `false` — and `status_for` takes the read connection itself, like
+        // every other read in this table. Nothing here can be busy with a check it cannot
+        // run, and nothing can be staged where there is no file to stage.
+        "update_status" => encode(
+            command,
+            crate::update::status_for(state, crate::update::InstallKind::Web, false, false),
+        ),
+
+        // Two `app_meta` reads and no network, on every target — `update::history`'s own
+        // doc is explicit that it never fetches. **In a browser it always answers an empty
+        // list**, because only `update_check` writes that row and `app_meta` is not one of
+        // the synced tables. That is the same "never fetched" state the Tagger models, and
+        // it is why the panel draws no version history there.
+        "update_history" => encode(command, crate::update::history(state)),
         // ── The backup ──────────────────────────────────────────────────────────────
         //
         // **The whole of what this target has instead of a folder.** `mirror::snapshot::build`
@@ -2170,6 +2248,126 @@ mod tests {
         assert!(matches!(err, RouteError::Args { .. }), "got {err:?}");
     }
 
+    /// **The three clears answer their own counts through the route**, which is more than
+    /// `every_advertised_command_is_actually_routed` can say: that one only proves an arm
+    /// exists. Seeded, cleared, and the emptiness read back off the connection.
+    ///
+    /// **`decks_clear` is the one worth a test of its own and it does not get one here**,
+    /// because the thing to prove about it cannot be proved from this side: its `covers`
+    /// argument is hard-coded `None` in the arm, and `None` is the only value a browser
+    /// could pass. What a wrong value would do — `sweep_dir` recursively deleting whatever
+    /// directory it was handed — is `reset.rs`'s own concern and is fenced there. All this
+    /// asserts is that the arm runs and empties the table.
+    #[test]
+    fn the_three_clears_empty_their_tables_through_the_route() {
+        let s = state("web-route-clears");
+        {
+            let conn = crate::db::lock_blocking(&s.db);
+            conn.execute_batch(
+                "INSERT INTO collection_entries
+                    (card_id, set_code, collector_number, lang, finish, condition, quantity,
+                     created_at, updated_at)
+                 VALUES ('a', 'lea', '1', 'en', 'nonfoil', 'NM', 4, 0, 0);
+                 INSERT INTO wishlist_entries
+                    (oracle_id, name, quantity, created_at, updated_at)
+                 VALUES ('o1', 'Black Lotus', 2, 0, 0);",
+            )
+            .unwrap();
+        }
+
+        let cleared = call(&s, "collection_clear", &json!({})).unwrap();
+        // camelCase, because `CollectionCleared` is `rename_all = "camelCase"` and
+        // `src/lib/ipc.ts` reads this exact key.
+        assert_eq!(cleared["entries"], json!(1));
+        // `wishlist_clear` answers a bare count rather than a struct — see its Rust doc.
+        assert_eq!(call(&s, "wishlist_clear", &json!({})).unwrap(), json!(1));
+        // The decks table is empty in the fixture, so this proves the arm runs and refuses
+        // nothing rather than proving a count.
+        let decks = call(&s, "decks_clear", &json!({})).unwrap();
+        assert!(decks.get("decks").is_some(), "got {decks:?}");
+
+        let conn = crate::db::lock_blocking(&s.db);
+        for table in ["collection_entries", "wishlist_entries"] {
+            let left: i64 = conn
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(left, 0, "{table} still has rows after its clear");
+        }
+    }
+
+    /// **`cache_clear` is the fourth clear and must stay unroutable**, which is a different
+    /// statement from "nobody has got to it yet". `reset::clear_cache` takes a
+    /// `&crate::images::Cache` and sweeps a directory of files; on this target the byte
+    /// cache is Cache Storage, so the arm cannot exist until that is rewritten.
+    ///
+    /// Asserted rather than left implicit because the failure it guards is silent in the
+    /// other direction: an arm added here without the rewrite would compile only on the
+    /// desktop leg and take the wasm build red on a branch nobody ran `--target` on.
+    #[test]
+    fn cache_clear_is_not_routed_while_the_image_cache_is_a_rewrite() {
+        let s = state("web-route-cache-clear");
+        let err = call(&s, "cache_clear", &json!({})).unwrap_err();
+        assert_eq!(err, RouteError::Unknown("cache_clear".into()));
+        assert!(!COMMANDS.contains(&"cache_clear"));
+    }
+
+    /// **The answer `UpdatePanel` reads to decide it must not draw a Download button.**
+    ///
+    /// `installKind` is the whole point of routing this: the panel tests it, and where the
+    /// command did not answer at all the panel read the *absence* as "not managed" and drew
+    /// the controls. So the assertion is on the value and on its camelCase key, both of
+    /// which the TypeScript side reads by name.
+    #[test]
+    fn update_status_answers_the_web_install_kind_and_a_version() {
+        let s = state("web-route-update-status");
+        let out = call(&s, "update_status", &json!({})).unwrap();
+        assert_eq!(out["installKind"], json!("web"));
+        assert_eq!(
+            out["currentVersion"],
+            json!(crate::update::current_version())
+        );
+        // Nothing on this target can be mid-check or hold a staged build.
+        assert_eq!(out["busy"], json!(false));
+        assert_eq!(out["staged"], json!(false));
+        // Never checked, because nothing here can check — and `app_meta` does not sync, so
+        // no other device fills this in either.
+        assert_eq!(out["available"], json!(null));
+        assert_eq!(out["lastCheckAt"], json!(null));
+    }
+
+    /// **An empty list, and that is the answer rather than a failure.** `update::history`
+    /// reads one `app_meta` row that only `update_check` ever writes, and `update_check` is
+    /// absent on this target — so a browser's history is empty for ever, which is the same
+    /// "never fetched" state the Tagger models.
+    #[test]
+    fn update_history_answers_an_empty_list_where_nothing_can_check() {
+        let s = state("web-route-update-history");
+        assert_eq!(call(&s, "update_history", &json!({})).unwrap(), json!([]));
+    }
+
+    /// **`update_check` is absent from this table and cannot be added to it.** Not "not yet"
+    /// — [`call`] is synchronous because the Worker's `#[wasm_bindgen] call` is, so an
+    /// `async fn` cannot be an arm here whatever it fetches with.
+    ///
+    /// Its three companions are refused for the ordinary reason: they swap an `.exe`.
+    #[test]
+    fn the_updater_commands_that_act_are_refused_by_name() {
+        let s = state("web-route-update-absent");
+        for name in [
+            "update_check",
+            "update_download",
+            "update_apply",
+            "update_open_release_page",
+        ] {
+            assert_eq!(
+                call(&s, name, &json!({})).unwrap_err(),
+                RouteError::Unknown(name.into()),
+                "`{name}` must not be routed"
+            );
+            assert!(!COMMANDS.contains(&name));
+        }
+    }
+
     /// **The list and the table must not drift.** `COMMANDS` is what the frontend and the
     /// docs read; the `match` is what actually answers. A name in one and not the other is
     /// exactly the silent `undefined` this whole module exists in-tree to prevent.
@@ -2185,7 +2383,7 @@ mod tests {
         }
         assert_eq!(
             COMMANDS.len(),
-            115,
+            120,
             "update this number when a command is added"
         );
     }

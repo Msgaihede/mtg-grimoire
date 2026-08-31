@@ -46,9 +46,17 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::fs;
 use std::path::Path;
+
+// **Gated rather than deleted, because an unused import is a red build on the web target.**
+// CI runs `cargo clippy --lib --target wasm32-unknown-unknown -- -D warnings`, and every one
+// of these is reachable only from [`clear_cache`] or from the `#[tauri::command]` block at
+// the foot of this file — all of which carry the same gate.
+#[cfg(not(target_family = "wasm"))]
 use std::sync::atomic::Ordering;
+#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
+#[cfg(not(target_family = "wasm"))]
 use crate::sync::{with_write, AppState};
 
 /// What emptying the collection took with it.
@@ -406,6 +414,12 @@ pub fn clear_decks(conn: &Connection, covers: Option<&Path>) -> Result<DecksClea
 ///
 /// An image fetched *after* this returns writes its own file and its own row together and is
 /// consistent on both counts, which is why nothing here needs to stop the world.
+/// **The one thing in this file the web target does not get, and [`crate::images`] is the
+/// whole reason.** The `cache` parameter is that module's type; on web the byte cache is
+/// Cache Storage rather than a directory, which is a rewrite and not a port, and its own
+/// piece of work. Everything above this line is ordinary SQLite and compiles everywhere,
+/// which is why the other three clears are routed and this one is not.
+#[cfg(not(target_family = "wasm"))]
 pub fn clear_cache(
     conn: &Connection,
     images: &Path,
@@ -428,8 +442,19 @@ pub fn clear_cache(
 }
 
 /// Refused when a sync is in flight, in the reader's words.
+#[cfg(not(target_family = "wasm"))]
 const SYNCING: &str = "a card update is running — clear the cache once it has finished";
 
+// ── The command wrappers, and only they, are the desktop's ───────────────────────────────
+//
+// **The gate is on this block rather than on the module**, which is the shape `search.rs`
+// has always had and the one PR 10a moved eleven other modules into. Everything above is
+// `&Connection` in and a DTO out; what cannot cross is `tauri::State`, `tauri::AppHandle`
+// and [`crate::paths::covers_dir`]. Three of the four are reachable from a browser through
+// [`crate::web::route`] instead — and the fourth, `cache_clear`, is not: see [`clear_cache`]
+// above for why the image cache is a separate piece of work rather than a missing arm.
+
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_clear(
     state: tauri::State<'_, Arc<AppState>>,
@@ -446,6 +471,7 @@ pub async fn collection_clear(
     .map_err(|e| format!("the collection could not be cleared: {e}"))?
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn wishlist_clear(state: tauri::State<'_, Arc<AppState>>) -> Result<i64, String> {
     let state = state.inner().clone();
@@ -455,6 +481,7 @@ pub async fn wishlist_clear(state: tauri::State<'_, Arc<AppState>>) -> Result<i6
 }
 
 /// Empty every deck.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn decks_clear(
     state: tauri::State<'_, Arc<AppState>>,
@@ -486,6 +513,7 @@ pub async fn decks_clear(
 /// The price-feed and Oracle Tag downloads use the same directory and are *not* fenced: each is
 /// a single button the reader pressed, each re-downloads on the next press, and neither has a
 /// second phase that reads the file back after closing it.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn cache_clear(state: tauri::State<'_, Arc<AppState>>) -> Result<CacheCleared, String> {
     let state = state.inner().clone();

@@ -1,6 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
 import { ipc, ipcError, type ReleaseNote } from "@/lib/ipc";
-import { isWebTarget } from "@/pwa/target";
 
 /** Stable identity for "no history", so a render with no releases is not a new array. */
 const NONE: ReleaseNote[] = [];
@@ -22,16 +21,17 @@ export function useReleaseHistory(lastCheckAt: string | null) {
   const query = useQuery({
     queryKey: ["releaseHistory", lastCheckAt],
     queryFn: () => ipc.updateHistory(),
-    // **Never on the web target**, where `update_history` is one of the commands §6.3 keeps
-    // desktop-only: a PWA updates through its service worker, so there is no portable `.exe`
-    // whose releases this would list. Driven on the phone 2026-08-30, this was the *only*
-    // `unknown command` left in the app after PR 10 — printed on the Settings page, where the
-    // documented behaviour is that those commands are hidden rather than broken.
+    // **No target gate any more**, and its removal is the point rather than a tidy-up.
+    // `update_history` is routed by `web::route` since 2026-08-31 and answers on every
+    // target: two `app_meta` reads and no network, which is what its Rust doc has always
+    // said. In a browser it answers `[]` — only `update_check` ever writes that row, and
+    // `app_meta` is not one of the synced tables — which is the same "never fetched" state
+    // the Tagger models, and `UpdatePanel` draws no history section there anyway.
     //
-    // `enabled` rather than a caller-side `if`, because the hook is called unconditionally by
-    // `SettingsPage` and this is the same shape `useWebStorage` already has one line away:
-    // inert on the target it does not apply to, and a build-time constant deciding it.
-    enabled: !isWebTarget(),
+    // This hook read `enabled: !isWebTarget()` until then, added by PR #315 because the call
+    // was printing `unknown command` on the Settings page. A build-time constant standing in
+    // for an answer the backend could not give is exactly what that PR's own write-up named
+    // as the general lesson; the backend gives it now.
     // The list a reader is looking at stays on screen while the next one is read. Without
     // this a moving key is `isPending` again, so pressing Check now — or merely the first
     // status landing after the panel mounts — would replace the history with "Reading the
@@ -41,10 +41,15 @@ export function useReleaseHistory(lastCheckAt: string | null) {
 
   return {
     releases: query.data ?? NONE,
-    // **`fetchStatus`, not `isPending` alone.** A query that is `enabled: false` stays
-    // `pending` for ever in TanStack v5 — it has no data and never will — so the plain read
-    // would report "loading" permanently on the web target. `idle` is what tells the two
-    // apart: nothing is in flight and nothing is going to be.
+    // **`fetchStatus`, not `isPending` alone.** A query that is disabled stays `pending`
+    // for ever in TanStack v5 — it has no data and never will — so the plain read reports
+    // "loading" permanently for one. `idle` is what tells the two apart: nothing is in
+    // flight and nothing is going to be.
+    //
+    // **Kept after the `enabled` gate above was removed**, and deliberately: this is the
+    // correct reading of "is something in flight" whether or not anything is currently
+    // disabling the query, and the day one is again — a paused query, a suspended tab — the
+    // plain `isPending` would put "Reading the version history…" on screen for ever.
     loading: query.isPending && query.fetchStatus !== "idle",
     /** Why the history could not be read. A failed *check* is the update panel's own line. */
     error: query.error ? ipcError(query.error) : null,

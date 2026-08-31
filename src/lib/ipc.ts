@@ -3203,8 +3203,15 @@ export interface ReconciledEvent {
  * worse answer on a phone than no answer. `managed` means something else installs this app,
  * which is true, is typed, and makes this union exhaustive so `UpdatePanel` cannot forget the
  * case.
+ *
+ * `web` is the browser build, and it is `managed`'s sibling rather than a repeat of it: both
+ * mean "something else installs this and the app does not replace itself", and the reader is
+ * owed the name of the thing that does. A **service worker** is what replaces a PWA, and
+ * saying "Google Play" to somebody holding a laptop is the same wrong answer `managed` exists
+ * to stop `other` giving a phone. Answered by `web::route`, which is the only place in the
+ * crate that knows it is running in a browser.
  */
-export type InstallKind = "portable" | "nsis" | "managed" | "other";
+export type InstallKind = "portable" | "nsis" | "managed" | "other" | "web";
 
 /** One downloadable file on a GitHub release. Mirrors `update::Asset`. */
 export interface UpdateAsset {

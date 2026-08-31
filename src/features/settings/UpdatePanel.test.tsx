@@ -138,6 +138,57 @@ describe("UpdatePanel", () => {
   });
 
   /**
+   * A browser, where the **service worker** replaces this build.
+   *
+   * `managed`'s twin, and the fixture is deliberately the same one: `available` is set, so a
+   * panel that merely had nothing to show would pass. What must be absent is absent because
+   * of `installKind`.
+   *
+   * **This is the assertion PR #315 could not make**, and the reason it could not is the
+   * lesson worth keeping. Before `web::route` answered `update_status`, `installKind` was
+   * `undefined` in a browser — so `=== "managed"` said false, and this panel drew a Download
+   * button over a page that can download nothing. #315 hid the whole panel instead, because
+   * hiding was the only thing that did not depend on an answer. The panel decides for itself
+   * again now, off an answer that exists.
+   */
+  it("names the service worker on the web build, and offers nothing", () => {
+    render(panel(update({ status: status({ installKind: "web" }), action: "none" })));
+
+    expect(screen.getByText(/Updates arrive through your browser/)).toBeInTheDocument();
+    expect(screen.getByText(/nothing to check for here/)).toBeInTheDocument();
+    // Not Google Play. Naming the wrong updater is the failure this variant exists to avoid.
+    expect(screen.queryByText(/Google Play/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Check now$/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Download/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /View on GitHub/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/is available/)).not.toBeInTheDocument();
+    // **The About half is the whole reason the panel is back on the page in a browser.**
+    // #315 removed it saying a web About panel was worth having and was a different thing to
+    // build; this is it, and the version is the fact it exists to carry.
+    expect(screen.getByText(/MTG Grimoire/)).toBeInTheDocument();
+    expect(screen.getByText("0.2.0")).toBeInTheDocument();
+  });
+
+  /**
+   * **Nothing is offered until the backend has said which install this is**, which is the
+   * structural half of the same fix.
+   *
+   * `status` is `null` for the first frame on every target — and was `null` for ever on the
+   * web build, where the command did not answer at all. The old test here was `!managed`,
+   * which is `true` for `null`: a panel with no answer yet offered Check now, and on a
+   * browser it offered it permanently. An absent answer must read as "not yet", never as
+   * "not managed".
+   */
+  it("offers no controls before the backend has answered", () => {
+    render(panel(update({ status: null, action: "none" })));
+
+    expect(screen.queryByRole("button", { name: /^Check now$/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Download/ })).not.toBeInTheDocument();
+    // It says so rather than going blank, which is what the panel has always done here.
+    expect(screen.getByText(/Checking for updates…/)).toBeInTheDocument();
+  });
+
+  /**
    * An MSI install or a Linux build. The news is still delivered — a reader should know a
    * new version exists — but nothing here promises to install it, and the sentence says why
    * and what happens to their collection.
