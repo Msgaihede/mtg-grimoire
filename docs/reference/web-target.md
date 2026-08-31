@@ -846,23 +846,52 @@ backend.
 
 ## Where PR 10 got to: 115 of 156 routed, and what the other 41 are
 
-Counted 2026-08-30 by walking every `#[tauri::command]` in the crate — both attribute
-spellings, skipping doc-comment mentions — and diffing against `COMMANDS`. **The crate was 154
-that day, not the 152 measured on 2026-08-29**: the hosted-relay work added two. **It is 156
-since 2026-08-31**: the backup archive added `mirror_backup_zip`, which is routed, and
-`mirror_backup_save`, which is Android's and cannot be.
+**Do not hand-count this — run commands in the crate   157
+named in COMMANDS       120
+not routed              37
+
+  combos.rs                  combos_refresh
+  deck.rs                    deck_set_cover_image
+  desktop.rs                 sync_run update_apply update_check update_download update_open_release_page
+  export.rs                  export_write_file
+  images.rs                  prefetch_images prewarm_collection
+  import.rs                  import_read_file
+  marketplace_feed.rs        marketplace_feed_refresh
+  mirror/settings.rs         mirror_rebuild mirror_set_enabled mirror_set_root mirror_status
+  mirror/snapshot.rs         mirror_backup_save
+  reset.rs                   cache_clear
+  sync_engine/commands.rs    sync_now sync_patreon_begin sync_patreon_claim sync_relay_status sync_review_clear sync_review_list sync_supporter_status
+  sync_pair/pairing.rs       sync_device_rename sync_device_revoke sync_group_leave sync_pairing_accept sync_pairing_begin sync_pairing_cancel sync_pairing_complete sync_pairing_confirm sync_pairing_respond sync_pairing_status
+  tags/art.rs                art_tags_refresh
+  tags/oracle.rs             oracle_tags_refresh.** It walks every
+`#[tauri::command]` in the crate (both attribute spellings, skipping doc-comment mentions),
+diffs against `COMMANDS`, and prints exactly the grouping below. `--check <n>` exits non-zero
+when the routed count has moved, so a stale table can be caught by running one command instead
+of by noticing.
+
+**That script exists because this table has already rotted twice, in both directions.** It read
+**155** when the answer was 152 — a grep counted the doc comments that *mention* the attribute
+while explaining why a command is `(async)`, and missed the seven `#[tauri::command(async)]`
+spellings, and the two errors did not cancel. Then it read **156 / 36** for a day after
+`sync_group_leave` landed on another branch. **A prose-only edit routes to neither CI job**, so
+neither mistake made anything go red; both were found by re-deriving the number rather than by
+reading it.
+
+The crate has grown three times during this work and each is somebody else's commit rather than
+a miscount: 152 on 2026-08-29, 154 once the hosted-relay work landed, 156 with the backup
+archive's two, and **157** with `sync_group_leave`.
 
 | | |
 | --- | --- |
-| Commands in the crate | **156** |
+| Commands in the crate | **157** |
 | Routed | **120** |
-| Not routed | **36** |
+| Not routed | **37** |
 
-**The 36, and none of them is an oversight:**
+**The 37, and none of them is an oversight:**
 
 | Count | What | Why not |
 | --- | --- | --- |
-| **16** | `sync_pair/pairing` (9) and `sync_engine/commands` (7) | The pairing and membership surface. `lib.rs` states `pairing` "does not and never will" compile for wasm; the relay work is live and moving, so this is its own decision rather than a port |
+| **17** | `sync_pair/pairing` (10) and `sync_engine/commands` (7) | The pairing and membership surface. `lib.rs` states `pairing` "does not and never will" compile for wasm; the relay work is live and moving, so this is its own decision rather than a port |
 | **5** | `desktop.rs` | Seven commands, two of which were routed on 2026-08-31: `update_status` and `update_history` report rather than replace. What is left is the five §6.3 updater commands and `sync_run` — the web target runs its own ingest through `glue.rs` |
 | **2** | `cache_clear`, `deck_set_cover_image` | Three of `reset`'s four clears were routed on 2026-08-31 — they are pure SQLite and always were. `cache_clear` sweeps a directory of image files, which on this target is Cache Storage; the cover directory a browser has none of |
 | **4** | `mirror/settings.rs` | These four *are* the folder — where it is, whether it runs, when it last ran, rebuild it now — and a folder in OPFS cannot be read by the programs a mirror exists for |
