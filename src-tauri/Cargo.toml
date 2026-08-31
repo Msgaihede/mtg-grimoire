@@ -234,6 +234,13 @@ windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_System_Threading",
 ] }
+# The `ICoreWebView2::add_PermissionRequested` handler `camera.rs` installs, so the QR
+# scanner's camera prompt is answered instead of falling through to WebView2's own default
+# (Deny). Already in `Cargo.lock` transitively — `tauri` and `tauri-runtime-wry` both depend
+# on it for their own WebView2 interop — so this adds a direct edge rather than a new crate,
+# `tauri-plugin-fs`'s case in the Android block below. No features: the crate is a thin,
+# feature-free wrapper over the COM bindings and there is nothing narrower to ask for.
+webview2-com = "0.38"
 
 # Android only, and reached only from Rust. A file the reader picks on Android is a
 # `content://` URI, not a path: `tauri-plugin-dialog`'s DialogPlugin.kt fires

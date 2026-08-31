@@ -110,6 +110,15 @@ pub mod wishlist_folders;
 pub mod zoom;
 
 // ── Desktop and Android ──────────────────────────────────────────────────────────
+/// **The camera-permission handler for the in-app QR scanner.** `#[cfg(windows)]` inside:
+/// WebView2 needs `webview2-com` COM interop and every other target this module compiles
+/// for (Linux, macOS, Android) makes `camera::install` a no-op — Android's grant is the
+/// manifest permission instead, and no other desktop platform this crate ships for is a
+/// webview2 target. It is here rather than in the "Every target" block above for `images`'
+/// and `scryfall`'s reason: `desktop::run` is its only caller, and that module does not build
+/// for wasm.
+#[cfg(not(target_family = "wasm"))]
+pub mod camera;
 #[cfg(not(target_family = "wasm"))]
 pub mod export;
 #[cfg(not(target_family = "wasm"))]

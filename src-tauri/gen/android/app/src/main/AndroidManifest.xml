@@ -1,6 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <!--
+        The in-app QR scanner's camera. `required="false"` is load-bearing: without it the
+        Play Store (and `pm install`) would refuse this app on any device reporting no
+        camera, and the typed pairing code still works there — the scanner is one way in,
+        never the only one.
+    -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
@@ -40,6 +48,24 @@
                 <category android:name="android.intent.category.LAUNCHER" />
                 <!-- AndroidTV support -->
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+
+            <!--
+                The App Link a scanned pairing QR carries. `android:autoVerify="true"` is what
+                tells Android to open this app for the URL rather than a browser, once the
+                relay's `/.well-known/assetlinks.json` has verified this app's signing
+                certificate for the host below — a step outside this file entirely.
+                `android:launchMode="singleTask"` above is already what this wants: a scan
+                while the app is already open reuses that instance rather than starting a
+                second one.
+            -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https"
+                      android:host="mtg-grimoire-relay.denmark-east.workers.dev"
+                      android:path="/pair" />
             </intent-filter>
         </activity>
 
