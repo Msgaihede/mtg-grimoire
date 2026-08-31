@@ -1,3 +1,4 @@
+import { clearImageCache } from "@/pwa/imageCacheClear";
 import { feedRefreshFor } from "@/workers/protocol";
 import type { FromWorker, Opened, ToWorker } from "@/workers/protocol";
 import type { Core } from "./types";
@@ -95,6 +96,19 @@ export function createBrowserCore(spawn: () => Worker): BrowserCore {
 
   return {
     call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+      // **The second divert in this file, and the only one that does not reach the Worker at
+      // all.** `cache_clear` is the desktop's sweep of `data/images/`; on this target those
+      // bytes are the service worker's Cache Storage, so there is nothing for a `web::route`
+      // arm over a SQLite connection to delete and `COMMANDS` deliberately has none —
+      // `route.rs` has a test pinning its absence, because an arm added without this rewrite
+      // compiles on the desktop leg and takes the wasm build red.
+      //
+      // **Before the id is taken**, unlike the feed divert below: this answer never comes back
+      // as `ok`/`err`, so allocating one would leave an entry in `pending` that nothing can
+      // ever resolve, and calling `ensure()` would spawn the database Worker to ask it nothing.
+      // `src/pwa/imageCacheClear.ts` is what a browser with no service worker gets, and why.
+      if (command === "cache_clear") return clearImageCache() as Promise<T>;
+
       const id = nextId++;
       const answer = new Promise<T>((resolve, reject) => {
         pending.set(id, { resolve: resolve as (v: never) => void, reject });

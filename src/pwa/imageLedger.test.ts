@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   AVG_IMAGE_BYTES,
   DEFAULT_CAP_BYTES,
+  LEDGER_KEY,
   MAX_CAP_BYTES,
   admit,
+  clearImages,
   evictions,
   forget,
   measuredSize,
@@ -252,5 +254,119 @@ describe("ledgerWriter", () => {
     );
 
     expect(order).toEqual([1, 2, 3]);
+  });
+});
+
+
+/**
+ * A `Cache` with the two calls a clear makes on it, and a record of how it was called.
+ *
+ * `refuse` is a file the browser will not delete - `Cache.delete` answers `false` rather than
+ * throwing - which is the only way `failed` can be anything but zero.
+ */
+function fakeCache(urls: readonly string[], refuse: readonly string[] = []) {
+  const held = new Set(urls);
+  const options: unknown[] = [];
+  return {
+    held,
+    options,
+    keys: () => Promise.resolve([...held].map((url) => ({ url }))),
+    delete(url: string, opts: { ignoreVary: true }) {
+      options.push(opts);
+      if (refuse.includes(url)) return Promise.resolve(false);
+      held.delete(url);
+      return Promise.resolve(true);
+    },
+  };
+}
+
+const ART = "https://cards.scryfall.io/normal/front/a/b/abcd.jpg";
+const MORE = "https://cards.scryfall.io/normal/front/c/d/cdef.jpg";
+
+describe("clearing the image cache", () => {
+  it("deletes every picture and answers with what the ledger said they cost", async () => {
+    const cache = fakeCache([ART, MORE]);
+    let ledger = withCap(parseLedger(null), DEFAULT_CAP_BYTES);
+    ledger = admit(ledger, ART, KB, 1);
+    ledger = admit(ledger, MORE, KB, 2);
+
+    const cleared = await clearImages(cache, ledger);
+
+    expect(cleared.report).toEqual({ files: 2, bytes: 2 * KB, failed: 0 });
+    expect([...cache.held]).toEqual([]);
+    // The ledger has to end up describing what is left, which is nothing - and the cap is a
+    // setting rather than a holding, so it survives.
+    expect(cleared.ledger).toEqual({ used: {}, size: {}, bytes: 0, cap: DEFAULT_CAP_BYTES });
+  });
+
+  /**
+   * **The trap, and it is silent.** `cache.put(LEDGER_KEY, ...)` resolves that path against the
+   * page's origin, so `cache.keys()` hands back an absolute URL and a `===` against the
+   * constant is always false. The clear would still have worked - the entry is rewritten a
+   * moment later - but the bookkeeping would be counted as a picture, so an image cache holding
+   * nothing at all would report having freed one file.
+   */
+  it("leaves the ledger's own entry alone even though it comes back absolute", async () => {
+    const stored = `https://grimoire.example${LEDGER_KEY}`;
+    const cache = fakeCache([ART, stored]);
+
+    const cleared = await clearImages(cache, admit(parseLedger(null), ART, KB, 1));
+
+    expect(cleared.report.files).toBe(1);
+    expect([...cache.held]).toEqual([stored]);
+  });
+
+  it("counts a file the browser would not delete as failed rather than as freed", async () => {
+    const cache = fakeCache([ART, MORE], [MORE]);
+    let ledger = admit(parseLedger(null), ART, KB, 1);
+    ledger = admit(ledger, MORE, KB, 2);
+
+    const cleared = await clearImages(cache, ledger);
+
+    expect(cleared.report.files).toBe(1);
+    expect(cleared.report.failed).toBe(1);
+    // Still forgotten. The ledger is the worker's account of what it may evict, and an entry
+    // it cannot delete is one it will never delete - counting it for ever would leave the
+    // cache permanently over its cap.
+    expect(cleared.ledger.bytes).toBe(0);
+  });
+
+  /**
+   * `Cache.delete` runs the same matching algorithm as `Cache.match`, so a stored response
+   * carrying a `Vary` the incoming request disagrees about is not deleted and answers `false`.
+   * Every picture here would then be reported as a file that would not go, on a cache the
+   * worker had in fact just emptied.
+   */
+  it("ignores Vary on every delete, like every other lookup this app makes", async () => {
+    const cache = fakeCache([ART, MORE]);
+    await clearImages(cache, parseLedger(null));
+    expect(cache.options).toEqual([{ ignoreVary: true }, { ignoreVary: true }]);
+  });
+
+  /**
+   * The two counts can disagree and the disagreement is honest. A picture cached before the
+   * read-modify-write race was fixed is in Cache Storage with no ledger entry describing it,
+   * and only the ledger knows what an entry cost - an opaque response's `blob().size` is 0
+   * whatever arrived. So it is a file, and it is no bytes.
+   */
+  it("frees a picture the ledger never counted, as a file rather than as bytes", async () => {
+    const cache = fakeCache([ART, MORE]);
+
+    const cleared = await clearImages(cache, admit(parseLedger(null), ART, KB, 1));
+
+    expect(cleared.report).toEqual({ files: 2, bytes: KB, failed: 0 });
+    expect([...cache.held]).toEqual([]);
+  });
+
+  it("empties a ledger holding entries the cache no longer has", async () => {
+    let ledger = admit(parseLedger(null), ART, KB, 1);
+    ledger = admit(ledger, MORE, KB, 2);
+
+    const cleared = await clearImages(fakeCache([]), ledger);
+
+    expect(cleared.report.files).toBe(0);
+    expect(cleared.ledger.used).toEqual({});
+    expect(cleared.ledger.size).toEqual({});
+    expect(cleared.ledger.bytes).toBe(0);
   });
 });
