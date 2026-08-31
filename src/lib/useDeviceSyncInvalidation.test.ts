@@ -74,3 +74,20 @@ it("stops listening when it unmounts", () => {
   unmount();
   expect(unlisten).toHaveBeenCalled();
 });
+
+/**
+ * The guard the constant could not be: asserting `DEVICE_SYNC_INVALIDATED` against itself lets
+ * any key be deleted with the suite still green — the first test above spreads the constant
+ * into its own expectation, and "does not invalidate the corpus roots" only checks that
+ * `"sets"` and `["card"]` are *absent*, never that the real keys are *present*. One literal list
+ * makes the contract real; updating it is a decision, not a rename that rides along.
+ */
+it("invalidates exactly the five known roots", () => {
+  expect(DEVICE_SYNC_INVALIDATED).toEqual([
+    ["collection"],
+    ["wishlist"],
+    ["cards", "search"],
+    ["decks"],
+    ["sync"],
+  ]);
+});
