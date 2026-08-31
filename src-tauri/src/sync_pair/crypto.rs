@@ -24,6 +24,7 @@ const INFO_PAIR: &[u8] = b"mtg-grimoire/pair/v1";
 const INFO_SAS: &[u8] = b"mtg-grimoire/sas/v1";
 const INFO_RELAY_AUTH: &[u8] = b"mtg-grimoire/relay-auth/v1";
 const INFO_ROTATE: &[u8] = b"mtg-grimoire/rotate/v1";
+const INFO_RENDEZVOUS: &[u8] = b"mtg-grimoire/rendezvous/v1";
 
 /// XChaCha20-Poly1305's nonce: 192 bits.
 const NONCE: usize = 24;
@@ -235,6 +236,28 @@ pub fn unwrap_group_key(
     plaintext.as_slice().try_into().map_err(|_| CryptoError)
 }
 
+/// The address the two pairing devices meet at on the relay.
+///
+/// **One-way, and that is the whole of why this function exists rather than the token being used
+/// directly.** The token is the HKDF *salt* in [`pair_key`] — it is half of what binds the
+/// derivation to this attempt — so an address the relay could invert would be the relay holding
+/// that half. HKDF-SHA256 cannot be run backwards, so what the relay gets is 128 bits it can match
+/// two requests on and learn nothing else from.
+///
+/// **Hex and 16 bytes because the route regex pins exactly that** (`^/p/([0-9a-f]{32})/…`). A
+/// longer id would be refused by the relay; a shorter one would make two pairings collide.
+///
+/// **The token is the input keying material and not the salt**, which is the opposite of
+/// [`pair_key`]'s use of it and is deliberate: there is no second input here to bind, so the
+/// purpose string alone does the domain separation.
+pub fn rendezvous_id(token: &[u8; 16]) -> String {
+    let hk = Hkdf::<Sha256>::new(None, token);
+    let mut out = [0u8; 16];
+    hk.expand(INFO_RENDEZVOUS, &mut out)
+        .expect("16 bytes is far below HKDF-SHA256's output limit");
+    out.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// Seal `plaintext` under `key`, authenticating `aad`.
 ///
 /// The 24-byte nonce is drawn fresh and prefixed to the ciphertext, so a caller never has to
@@ -281,6 +304,43 @@ pub fn open(key: &[u8; 32], aad: &[u8], sealed: &[u8]) -> Result<Vec<u8>, Crypto
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn crypto_test_token() -> [u8; 16] {
+        [0xA5; 16]
+    }
+
+    #[test]
+    fn a_rendezvous_id_is_32_hex_characters_and_stable() {
+        let token = [7u8; 16];
+        let id = rendezvous_id(&token);
+        assert_eq!(id.len(), 32);
+        assert!(id
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
+        assert_eq!(
+            id,
+            rendezvous_id(&token),
+            "the same token must address the same rendezvous"
+        );
+    }
+
+    #[test]
+    fn a_rendezvous_id_does_not_reveal_the_token() {
+        // Not a proof of one-wayness — HKDF is that. This is the property a reader can check:
+        // the token's bytes do not appear in the address the relay is handed.
+        let token = crypto_test_token();
+        let hex: String = token.iter().map(|b| format!("{b:02x}")).collect();
+        assert_ne!(rendezvous_id(&token), hex);
+    }
+
+    #[test]
+    fn two_tokens_one_bit_apart_address_unrelated_rendezvous() {
+        let mut a = [0u8; 16];
+        let mut b = [0u8; 16];
+        b[15] = 1;
+        a[15] = 0;
+        assert_ne!(rendezvous_id(&a), rendezvous_id(&b));
+    }
 
     /// The auth is a function of the key, the id and the epoch, and no two of the three may be
     /// dropped from it.

@@ -1,8 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryKey } from "@tanstack/react-query";
-import { Copy, Heart, Link2, LogOut, RefreshCw, ShieldCheck, X } from "lucide-react";
-import { useState, type JSX } from "react";
-import { copyText } from "@/lib/clipboard";
+import { Heart, Link2, LogOut, RefreshCw, ShieldCheck, X } from "lucide-react";
+import { useEffect, useRef, useState, type JSX } from "react";
 import { count, plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import { openExternal } from "@/lib/externalLinks";
@@ -24,6 +23,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { BUTTON } from "./controls";
 import { PanelAlert, SettingsSection } from "./panelChrome";
 import { QrCode } from "./QrCode";
+import { QrScanner } from "./QrScanner";
 
 /**
  * This device's pairing state, under one key.
@@ -34,6 +34,14 @@ import { QrCode } from "./QrCode";
  * features cannot spell one prefix two ways.
  */
 export const PAIRING_KEY: QueryKey = ["sync", "pairing"];
+
+/**
+ * Where an in-flight pairing has got to — nested under {@link PAIRING_KEY}'s root rather than
+ * exported, because only this file's own poll below ever reads it. Kept apart from `PAIRING_KEY`
+ * itself rather than reusing it: that key is the roster read, and a poll ticking every 1.5 s
+ * must not mark the roster stale on every tick it changes nothing.
+ */
+const PAIRING_POLL_KEY: QueryKey = ["sync", "pairing", "poll"];
 
 /**
  * §7.6, in the reader's words.
@@ -76,51 +84,59 @@ export const LEAVE_WARNING =
   "your other devices will not hear that you have gone: they go on listing this one until " +
   "somebody removes it there.";
 
-/** A pairing in flight on this screen, and which half of it this device is playing. */
+/**
+ * What the panel says when a pairing attempt ran out of time.
+ *
+ * **The sentence is this file's and the fact is Rust's**, which is the boundary rather than a
+ * preference: `pairing::poll` answers a `"expired"` *stage*, and the words a reader reads about
+ * it are presentation. It used to be a `String` error thrown by that command — and the reader
+ * never saw it, because clearing the pending offer made the refusal one call long while the
+ * panel's query retries once, so the retry's `Ok(idle)` overwrote it. At ten minutes nothing on
+ * screen changed and the panel polled a rendezvous that no longer existed for ever.
+ *
+ * It names the way forward, because there is one and it is the same press either side started
+ * from: the flow returns to `"idle"`, where *Pair a device*, *Enter a code* and *Scan a code* all
+ * are.
+ */
+export const EXPIRED_NOTE =
+  "That pairing code timed out — codes are good for ten minutes. Start a new one, or read a " +
+  "fresh code from the other device.";
+
+/**
+ * A pairing in flight on this screen, and which half of it this device is playing.
+ *
+ * **The relay carries the accept and the sealed key now**, so there is no `response` and no
+ * `sealedKey` field left to hand-carry — the two blobs that used to live here are read off
+ * {@link ipc.syncPairingPoll} instead. What is still hand-carried is the invite: the code or QR
+ * that names *which* session to join, since that is the one thing neither device can already
+ * see.
+ */
 type Flow =
   | { kind: "idle" }
-  /** The reader typed a code in. Nothing has been sent yet. */
+  /** The reader chose to type a code from another device. Nothing has reached the backend yet. */
   | { kind: "reading" }
-  /** This device is offering. `sas` arrives with the other device's answer. */
-  | { kind: "offer"; offer: PairingOffer; sas: string | null; sealedKey: string | null }
+  /** The reader chose to scan a code with the camera instead. Same: nothing sent yet. */
+  | { kind: "scanning" }
   /**
-   * This device is joining. `sas` is known immediately — the joiner does the whole exchange in
-   * one step — and `compared` is the reader saying they have looked at it.
+   * This device is offering. `sas` starts `null` and is filled in by the poll once the other
+   * device has accepted — the offer's own answer used to carry it, but that answer no longer
+   * comes back by hand.
    */
-  | { kind: "join"; sas: string; response: string; compared: boolean };
+  | { kind: "offer"; offer: PairingOffer; sas: string | null }
+  /**
+   * This device is joining. `accept` already answers the six digits in one step, so there is
+   * nothing here for the poll to fill in — only the move to `"complete"` still matters to it.
+   */
+  | { kind: "join"; sas: string };
 
-/** A blob the reader carries by hand: shown whole, monospaced, and selectable. */
-function Blob({ label, value }: { label: string; value: string }): JSX.Element {
-  return (
-    <div className="space-y-1">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-[0.6875rem] text-dim">{label}</span>
-        <button
-          type="button"
-          onClick={() => void copyText(value)}
-          className={cn(BUTTON, "h-7 border-border px-2 text-xs hover:bg-bg")}
-        >
-          <Copy aria-hidden="true" className="size-3.5" />
-          Copy
-        </button>
-      </div>
-      <textarea
-        readOnly
-        value={value}
-        rows={3}
-        spellCheck={false}
-        aria-label={label}
-        className={cn(
-          "w-full resize-y rounded-md border border-border bg-surface px-2 py-1.5",
-          "font-mono text-xs leading-relaxed break-all",
-          "focus:border-accent focus:outline-none",
-        )}
-      />
-    </div>
-  );
-}
-
-/** A box the reader pastes a blob into, and the one press that reads it. */
+/**
+ * A box the reader pastes or types a blob into, and the one press that reads it.
+ *
+ * `aria-disabled` and a no-op-guarded `onClick`, never the `disabled` attribute —
+ * `src/CLAUDE.md`'s rule for a control that greys as the reader types, which this button always
+ * violated until now: a `disabled` submit button here left the tab order on every keystroke that
+ * emptied the box.
+ */
 function Paste({
   label,
   action,
@@ -133,6 +149,10 @@ function Paste({
   onSubmit: (text: string) => void;
 }): JSX.Element {
   const [text, setText] = useState("");
+  const empty = text.trim() === "";
+  const submit = () => {
+    if (!empty && !pending) onSubmit(text.trim());
+  };
   return (
     <div className="space-y-2">
       <label className="block space-y-1">
@@ -151,9 +171,14 @@ function Paste({
       </label>
       <button
         type="button"
-        onClick={() => onSubmit(text.trim())}
-        disabled={pending || text.trim() === ""}
-        className={cn(BUTTON, "border-border hover:bg-bg disabled:hover:bg-transparent")}
+        aria-disabled={pending || empty}
+        onClick={submit}
+        className={cn(
+          BUTTON,
+          "border-border hover:bg-bg",
+          (pending || empty) && "cursor-not-allowed opacity-50 active:scale-100",
+          FOCUS,
+        )}
       >
         {action}
       </button>
@@ -684,8 +709,13 @@ const RECLAIM_WARNING =
  * still sees nothing, because there `run_once` genuinely answers `null` and a control that can
  * only ever report "there was nothing to do" teaches a reader to distrust it.
  *
- * The press is the fallback rather than the mechanism: {@link SyncPanel}'s `complete` makes that
- * trip itself the moment a pairing finishes, so the ordinary reader never presses anything.
+ * **The press is still the fallback rather than the mechanism** — `SyncPanel`'s own completed-
+ * pairing effect fires `ipc.syncNow().catch(() => undefined)` the moment the poll notices
+ * `"complete"`, on both sides of a pairing, so the ordinary reader still never has to press
+ * anything here. What changed is where that trip is driven from: it used to hang off the
+ * `complete` mutation's own `.then()`, and now the relay carries the accept and the sealed key,
+ * so there is no such mutation left to hang it off — the poll's own effect is what drives it
+ * instead, and swallows its failure the same way the old code did.
  */
 function SupporterSection(): JSX.Element {
   const client = useQueryClient();
@@ -921,21 +951,28 @@ function SupporterSection(): JSX.Element {
 }
 
 /**
- * Pairing: what this device is, which group it is in, and the five presses that join another
- * one to it.
+ * Pairing: what this device is, which group it is in, and how another device joins it.
  *
- * **The six digits are the whole security argument and the panel is built around them**
- * (spec §7.5 step 3). Both readers are shown the same number in the same size and neither side
- * can move past it without saying so: the offering device's *Codes match* button carries
- * `aria-disabled` until the digits exist, and the joining device does not reveal the blob it has
- * to carry back until the reader has said the numbers agree. A panel that advanced on its own
- * would look completely normal and defend nothing.
+ * **The six digits are still the whole security argument.** Both readers are shown the same
+ * number in the same size and the offering device cannot move past it without saying so: its
+ * *Codes match* button carries `aria-disabled` until the digits exist, and its handler refuses
+ * the press until they do too. A panel that advanced on its own would look completely normal
+ * and defend nothing.
  *
- * **Nothing in the pairing half touches a network.** The two blobs are carried by hand — a QR a
- * phone's camera app reads, or 105 characters typed into the other window — which is what makes
- * the whole protocol testable before the relay exists. The relay landed without moving any of
- * it: the crypto, the digits, the roster and the rotation are all still the hand-carried
- * exchange's.
+ * **Only the invite is carried by hand now.** The relay carries the accept and the sealed group
+ * key — the two blobs a reader used to retype between the two screens, one of them 224
+ * characters and one of them the hard phone→PC direction — so this panel learns both by polling
+ * {@link ipc.syncPairingPoll} rather than by waiting on a paste. What is still hand-carried is
+ * the code or QR that starts the exchange, because that is the one thing neither device can
+ * already see: it names *which* pairing session to join. The QR now encodes a URL the joining
+ * device's camera app can open directly, not a bare number it would have to be typed in or
+ * googled.
+ *
+ * **Only the offering device gets a *Codes match* button, and that is correct rather than an
+ * oversight.** Under a man-in-the-middle the two screens show different numbers, so the
+ * comparison is inherently a two-screen act; the press that matters is the one gating release of
+ * the group key, and that is the offering device's press alone. The joining device's screen says
+ * so instead of drawing a second button that would do nothing.
  *
  * **{@link SupporterSection} is the second half**, under a rule of its own: the membership
  * that unlocks the relay, what is waiting, and the one press that makes a round trip now. It is a separate query and a
@@ -953,57 +990,95 @@ export function SyncPanel(): JSX.Element {
   /** The Leave dialog is open. A bare boolean where {@link removing} carries a device, because
    *  the device leaving is always this one — there is nothing to name. */
   const [leaving, setLeaving] = useState(false);
+  /**
+   * The one line a finished pairing leaves behind. Neither {@link Flow} nor a mutation's own
+   * state survives the return to `"idle"` that draws it, so it needs a home of its own — cleared
+   * the moment a *new* pairing starts, so a second pairing never opens under the first one's
+   * success line.
+   */
+  const [pairedNote, setPairedNote] = useState<string | null>(null);
+  /**
+   * The one line an attempt that ended *without* pairing leaves behind — {@link EXPIRED_NOTE}.
+   *
+   * Its own state rather than {@link pairedNote}'s, because the two are drawn in different tones
+   * and one must never be mistaken for the other: a reader who reads *Paired.* after a timeout
+   * would go looking for a device that is not in the group. It is cleared wherever a new attempt
+   * starts, so a second attempt never opens under the first one's obituary.
+   */
+  const [endedNote, setEndedNote] = useState<string | null>(null);
+  /**
+   * Guards the completed-pairing effect below so its two side effects — the sync trip and the
+   * cache invalidation — fire **exactly once** per pairing, not once per render while the poll
+   * goes on answering `"complete"` (it keeps answering that until `enabled` below actually turns
+   * it off). A ref rather than `useState`, `usePopupPlacement`'s reason exactly: a write in here
+   * must be readable from inside the effect without becoming a second `setState` for the lint
+   * rule to flag, and this value is never drawn. Reset wherever a *new* pairing starts.
+   */
+  const completedRef = useRef(false);
 
   const read = useQuery({ queryKey: PAIRING_KEY, queryFn: () => ipc.syncPairingStatus() });
   const status: PairingStatus | null = read.data ?? null;
 
   const refresh = () => void client.invalidateQueries({ queryKey: PAIRING_KEY });
 
+  /**
+   * Everything a *new* pairing attempt has to forget before it starts, so it can never read a
+   * previous attempt's answer. Called from both `begin`'s and `accept`'s `onMutate` — the two
+   * places an attempt actually starts, whichever side of it this device is on (`accept` covers
+   * the scan path too: `QrScanner`'s `onCode` and the typed-code `Paste` both call it).
+   *
+   * **`removeQueries` on `PAIRING_POLL_KEY` is the one that matters and the one the first pass
+   * of this fix was missing.** A *disabled* query keeps its last-fetched `data` sitting in the
+   * cache rather than clearing it — so a second pairing in one session re-enables the very same
+   * query key, and the render that follows reads the *previous* pairing's cached answer, because
+   * a synchronous cache read cannot wait on the fresh fetch's promise to resolve. Two render-time
+   * blocks above read that cache, and a stale read breaks both: the `"complete"` one would settle
+   * a just-opened offer screen straight back to `"idle"` before it ever painted, and the
+   * `"compare"` one could prefill a brand-new offer with an *old* six-digit code — right at the
+   * moment the reader is asked to trust that number against the other screen. `exact: true`
+   * scopes the removal to this one key rather than TanStack's default partial match — nothing
+   * else is nested under it today, but this is a cache the panel must never over-clear by
+   * accident, and `refresh()` above already owns invalidating `PAIRING_KEY` itself.
+   */
+  const startNewAttempt = () => {
+    setPairedNote(null);
+    setEndedNote(null);
+    completedRef.current = false;
+    client.removeQueries({ queryKey: PAIRING_POLL_KEY, exact: true });
+  };
+
   const begin = useMutation({
     mutationFn: () => ipc.syncPairingBegin(),
-    onSuccess: (offer) => setFlow({ kind: "offer", offer, sas: null, sealedKey: null }),
+    onMutate: startNewAttempt,
+    onSuccess: (offer) => setFlow({ kind: "offer", offer, sas: null }),
   });
   const accept = useMutation({
     mutationFn: (code: string) => ipc.syncPairingAccept(code),
-    onSuccess: (shake) =>
-      setFlow({ kind: "join", sas: shake.sas, response: shake.response, compared: false }),
+    onMutate: startNewAttempt,
+    onSuccess: (shake) => setFlow({ kind: "join", sas: shake.sas }),
+    /**
+     * **A refused `accept` from the camera has to leave the reader something to press.**
+     * `QrScanner` stops its tracks the moment it decodes, and its effect has `[]` deps, so a
+     * scan whose `accept` then fails — a 409 on a code somebody else answered, a bent code, an
+     * unreachable relay — leaves a frozen frame under *Point the camera at the code* with the
+     * error sentence below it and nothing that starts the camera again. The paste path has
+     * always left its box on screen for a second try; this gives the scan path the same box.
+     *
+     * **Remounting the scanner instead was the other candidate and is worse.** The camera would
+     * come straight back up pointed at the same QR code, decode it again within a frame or two,
+     * and call `accept` again — a request loop against the relay for exactly the failure
+     * (`ALREADY_USED`) that a retry can never fix. Stepping back to the typed box is the state
+     * a reader can act from, and *Scan a code* is one Cancel away.
+     */
+    onError: () => setFlow((f) => (f.kind === "scanning" ? { kind: "reading" } : f)),
   });
-  const respond = useMutation({
-    mutationFn: (response: string) => ipc.syncPairingRespond(response),
-    onSuccess: (shake) =>
-      setFlow((f) => (f.kind === "offer" ? { ...f, sas: shake.sas } : f)),
-  });
+  /**
+   * The reader says the digits matched. Answers nothing the reader carries any more — the relay
+   * is what moves the sealed key from here, and this device learns the pairing is done from the
+   * poll below rather than from this mutation's own result.
+   */
   const confirm = useMutation({
     mutationFn: () => ipc.syncPairingConfirm(),
-    onSuccess: (sealed) => {
-      setFlow((f) => (f.kind === "offer" ? { ...f, sealedKey: sealed.sealedKey } : f));
-      refresh();
-    },
-  });
-  const complete = useMutation({
-    mutationFn: async (sealedKey: string) => {
-      await ipc.syncPairingComplete(sealedKey);
-      // **One round trip, here, and it is what makes the membership arrive without a press.**
-      // Pairing carries no refresh secret any more (spec §2.2), so this device is entitled
-      // through its *group* — and it learns that only by asking `/token`'s group door, which
-      // only a sync does. Until it has, `supporter_status` reads `dead` with no date and the
-      // panel below draws *Connect Patreon* at a reader whose group is paid up: the reader's
-      // own bug, one step further along.
-      //
-      // **Its failure is swallowed on purpose.** The pairing succeeded; a relay that could not
-      // be reached does not make it un-succeed, and reporting it here would put a network
-      // sentence on a ceremony that completed. The backend has already written the reason to
-      // `error_log`, the panel keeps a *Sync now* button because this device is now paired, and
-      // the next trip picks it up.
-      await ipc.syncNow().catch(() => undefined);
-    },
-    onSuccess: () => {
-      setFlow({ kind: "idle" });
-      refresh();
-      // `SYNC_KEY` rather than `PAIRING_KEY`: the trip above moved the membership and the
-      // relay figures as well as the roster, and all three sit under this root.
-      void client.invalidateQueries({ queryKey: SYNC_KEY });
-    },
   });
   const cancel = useMutation({
     mutationFn: () => ipc.syncPairingCancel(),
@@ -1032,19 +1107,131 @@ export function SyncPanel(): JSX.Element {
       // runs `entitlement::clear` as well as `identity::leave_group` (spec §2.3), so the
       // supporter block and the relay figures are as stale as the roster the moment this
       // answers — `paired` goes false, *Sync now* leaves with it, and the block below has to
-      // stop saying *Supporting*. All three sit under this root, which is `complete`'s
-      // argument one press over.
+      // stop saying *Supporting*. All three sit under this root, which is the completed-pairing
+      // effect's argument below, one press over.
       void client.invalidateQueries({ queryKey: SYNC_KEY });
     },
   });
 
-  /** Whichever press last refused. One line, because only one thing is ever in flight here. */
+  /**
+   * Where an in-flight pairing has got to. **`staleTime: 0`**, against `query.ts`'s 30 s
+   * default — a poll answering from cache would sit on `"waiting"` after the other device had
+   * already moved on, for up to half a minute. Enabled only while there is a session on the
+   * backend to poll: `"reading"` and `"scanning"` have not reached it yet (nothing has been
+   * accepted), and `"idle"` has nothing running.
+   */
+  const polling = flow.kind === "offer" || flow.kind === "join";
+  const poll = useQuery({
+    queryKey: PAIRING_POLL_KEY,
+    queryFn: () => ipc.syncPairingPoll(),
+    enabled: polling,
+    refetchInterval: 1500,
+    staleTime: 0,
+  });
+
+  /**
+   * The offering device's digits, filled in during render rather than in an effect.
+   *
+   * **This is React's own "adjust state while rendering" recipe, not a `useEffect`** —
+   * `useDelayedFlag`'s shape and its reason: `flow.sas` is computable from `poll.data` the
+   * instant both are in scope, so writing it from an effect would be a synchronisation for
+   * something render can settle itself, and `react-hooks/set-state-in-effect` refuses the
+   * functional-updater form that would otherwise read `flow` back out of its own setter. The
+   * guard (`flow.sas === null`) is what keeps this from looping: the write below changes
+   * `flow.sas` to non-null on the very re-render it causes, so the condition is false the next
+   * time through.
+   */
+  if (flow.kind === "offer" && flow.sas === null && poll.data?.stage === "compare") {
+    const sas = poll.data.sas;
+    if (sas !== null) setFlow({ ...flow, sas });
+  }
+
+  /**
+   * The pairing's own end — also settled during render, for the same reason as the digits
+   * above: ending the flow and posting the success line are both React state and nothing
+   * external, so both belong here rather than in the effect below. **`polling` is the guard
+   * that stops this looping**: it reads `flow.kind`, which the write just changed to `"idle"`,
+   * so the condition is false on the render right after.
+   */
+  if (polling && poll.data?.stage === "complete") {
+    setFlow({ kind: "idle" });
+    setPairedNote("Paired. The other device is now part of this group.");
+  }
+
+  /**
+   * The pairing's other end: the attempt ran out of time. Settled during render for the two
+   * blocks above's reason — a flow and a sentence are both React state and nothing external.
+   *
+   * ⚠️ **`"expired"` and deliberately *not* `"idle"`, which was the other candidate.** `idle` is
+   * what the backend answers for anything that is not in flight — including the moment right
+   * after a **cancel**, whose own `onSettled` has not landed yet, and the poll that follows an
+   * expiry this block has already handled. Reading it as the timeout would put *That pairing code
+   * timed out* in front of a reader who had just pressed Cancel, which is a sentence about
+   * something that did not happen. So the reason is a stage of its own: `poll` answers it exactly
+   * once, on the call that crosses the ten minutes, and one answer is enough because a mounted
+   * enabled query renders every answer it gets — the old expiry was invisible because it was an
+   * *error* that the query's own retry then overwrote, not because a stage could be missed.
+   *
+   * `polling` is the loop guard, exactly as above: it reads `flow.kind`, which this write has
+   * just changed to `"idle"`.
+   */
+  if (polling && poll.data?.stage === "expired") {
+    setFlow({ kind: "idle" });
+    setEndedNote(EXPIRED_NOTE);
+  }
+
+  useEffect(() => {
+    // **The two things that genuinely have to be an effect**: `invalidateQueries` and
+    // `syncNow` are both writes outside this component (a cache, and a round trip to the
+    // relay), which render must never do. Nothing here calls a `useState` setter, so
+    // `react-hooks/set-state-in-effect` has nothing to flag — `completedRef` is a ref, not
+    // state, and it is what stops this firing twice: the poll goes on answering `"complete"`
+    // until `enabled` above actually turns it off, and this effect's own dependency
+    // (`poll.data`) can therefore run its body more than once for the same completed pairing.
+    if (poll.data?.stage !== "complete" || completedRef.current) return;
+    completedRef.current = true;
+    // `PAIRING_KEY` rather than `SYNC_KEY`: what this side of the panel promises is the
+    // roster, and that is what a finished pairing changed. The membership and the relay
+    // figures are `SupporterSection`'s own reads.
+    void client.invalidateQueries({ queryKey: PAIRING_KEY });
+    // **The trip a completed pairing still owes.** A device that has just joined holds the
+    // group key and none of the group's data; the offering device wants the joiner's own rows
+    // — so both sides fire this, not just the joiner. Swallowed rather than surfaced: the
+    // pairing genuinely succeeded, and a failed first sync must not turn that success into an
+    // error banner over a ceremony that completed. `error_log` already has the reason if there
+    // is one, and *Sync now* below is the retry — one press, not a failure to explain here.
+    void ipc.syncNow().catch(() => undefined);
+  }, [poll.data, client]);
+
+  /**
+   * Whichever press last refused — or, now, whichever *poll* did. One line, because only one
+   * thing is ever in flight here.
+   *
+   * **`poll.error` sits right after `begin`/`accept`, ahead of `confirm` and the roster
+   * mutations.** `begin` and `accept` are how an attempt can fail to *start*; `poll` is that same
+   * attempt failing *while it is running* — an unreachable relay, or a rendezvous answer that
+   * will not parse. That is a more fundamental failure than a stale `confirm` refusal from
+   * earlier in the same attempt, so it is asked first. It is **not** swallowed, unlike the
+   * `syncNow` rejection in the effect above: that one hides a harmless failure *after* a success,
+   * and this is the only signal the reader gets that the thing they are waiting for is never
+   * coming. `Cancel` stays rendered on both those screens regardless of this line, which is what
+   * stops the sentence stranding anyone: reading it still leaves a press that gets back to
+   * `idle`.
+   *
+   * ⚠️ **The ten-minute expiry is not one of these and used to be.** `pairing::poll` answered
+   * `Err(EXPIRED)` and cleared the pending offer in the same breath, so the refusal was exactly
+   * one call long — and this query inherits `query.ts`'s `retry: 1`, so TanStack re-ran it a
+   * second later, found nothing in flight and answered `Ok(idle)`. `poll.error` was never
+   * populated for the expiry case at all: at ten minutes nothing on screen changed and the panel
+   * polled a dead rendezvous for ever. It is a `"expired"` **stage** now, settled by the block
+   * above into {@link EXPIRED_NOTE}, because a stage survives a retry where the absence of an
+   * answer does not.
+   */
   const error =
     begin.error ??
     accept.error ??
-    respond.error ??
+    poll.error ??
     confirm.error ??
-    complete.error ??
     rename.error ??
     revoke.error ??
     leave.error ??
@@ -1074,7 +1261,9 @@ export function SyncPanel(): JSX.Element {
         Pairing joins two of your devices into one group so they can share a collection. There is
         no account and no password: one device shows a code, the other reads it, and both then
         show the same six digits for you to compare. Comparing them is what stops anything
-        sitting in between joining the group, so it is the one step that is never skipped.
+        sitting in between joining the group, so it is the one step that is never skipped. The
+        other device needs to be online too, now that pairing goes through the relay rather than
+        being carried between the two screens by hand.
       </p>
 
       {status === null ? (
@@ -1123,10 +1312,25 @@ export function SyncPanel(): JSX.Element {
               </button>
               <button
                 type="button"
-                onClick={() => setFlow({ kind: "reading" })}
+                onClick={() => {
+                  setPairedNote(null);
+                  setEndedNote(null);
+                  setFlow({ kind: "reading" });
+                }}
                 className={cn(BUTTON, "border-border hover:bg-bg")}
               >
                 Enter a code from another device
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setPairedNote(null);
+                  setEndedNote(null);
+                  setFlow({ kind: "scanning" });
+                }}
+                className={cn(BUTTON, "border-border hover:bg-bg")}
+              >
+                Scan a code
               </button>
               {/* **Drawn on a paired device and on no other**, which is `DeviceRow`'s missing
                   Remove one rung up and the same rule: `leave_group_now` refuses a device in no
@@ -1165,25 +1369,41 @@ export function SyncPanel(): JSX.Element {
             </div>
           )}
 
+          {/* `QrScanner` draws its own Cancel — the same button this file's `Cancel` is, one
+              component over — so nothing is added beside it here. `onCode` runs the same
+              `accept.mutate` the paste box above does: `Invite::decode` on the Rust side takes
+              both the bare code and the `https://…/pair#<code>` URL form, so no parsing happens
+              in this file for either path. */}
+          {flow.kind === "scanning" && (
+            <div className="space-y-3 rounded-md border border-border p-3">
+              <QrScanner
+                onCode={(code) => accept.mutate(code)}
+                onCancel={() => cancel.mutate()}
+              />
+            </div>
+          )}
+
           {flow.kind === "offer" && (
             <div className="space-y-3 rounded-md border border-border p-3">
-              <p className="text-sm">
-                Point the other device&rsquo;s camera at this, or type the code into it.
-              </p>
-              <div className="flex flex-wrap items-start gap-3">
-                <QrCode matrix={flow.offer.qr} label="Pairing code as a QR code" />
-                <p className="min-w-0 flex-1 font-mono text-xs leading-relaxed break-all">
-                  {flow.offer.code}
-                </p>
-              </div>
-
+              {/* **The QR and the typed code are `"waiting"`'s alone, and gone the moment
+                  `"compare"` starts.** Once the other device has accepted, the invite has done
+                  its one job — the pairing is now mid-handshake — and a code still sitting on
+                  screen suggests that step is somehow still live. It also invites a bystander to
+                  scan an offer already spoken for, which `ALREADY_USED` would refuse, but the
+                  screen's own job here is clarity rather than that refusal. */}
               {flow.sas === null ? (
-                <Paste
-                  label="What the other device answered"
-                  action="Read their answer"
-                  pending={respond.isPending}
-                  onSubmit={(text) => respond.mutate(text)}
-                />
+                <>
+                  <p className="text-sm">
+                    Point the other device&rsquo;s camera at this, or type the code into it.
+                  </p>
+                  <div className="flex flex-wrap items-start gap-3">
+                    <QrCode matrix={flow.offer.qr} label="Pairing code as a QR code" />
+                    <p className="min-w-0 flex-1 font-mono text-xs leading-relaxed break-all">
+                      {flow.offer.code}
+                    </p>
+                  </div>
+                  <p className="text-sm text-dim">Waiting for the other device&hellip;</p>
+                </>
               ) : (
                 <div className="space-y-2">
                   <p className="text-sm">
@@ -1194,57 +1414,46 @@ export function SyncPanel(): JSX.Element {
                 </div>
               )}
 
-              {flow.sealedKey === null ? (
-                <div className="flex flex-wrap items-center gap-2">
-                  {/*
-                   * ⚠️ **`aria-disabled` and a no-op handler, not `disabled`.** This is the
-                   * app's usual rule rather than `controls.ts`'s reversal, and here it is
-                   * load-bearing: the button has to stay reachable so the sentence beside it
-                   * can say *why* it is not ready. A confirm that went live the moment the
-                   * digits arrived — or worse, before — would be a panel with no
-                   * man-in-the-middle defence that looked completely normal.
-                   */}
-                  <button
-                    type="button"
-                    aria-disabled={flow.sas === null || confirm.isPending}
-                    onClick={() => {
-                      if (flow.sas !== null && !confirm.isPending) confirm.mutate();
-                    }}
-                    className={cn(
-                      BUTTON,
-                      "border-accent text-accent hover:bg-bg",
-                      flow.sas === null && "cursor-not-allowed opacity-50 active:scale-100",
-                      FOCUS,
-                    )}
-                  >
-                    <ShieldCheck aria-hidden="true" className="size-4" />
-                    Codes match
-                  </button>
-                  {flow.sas === null && (
-                    <span className="text-xs text-dim">
-                      Nothing to compare yet &mdash; read the other device&rsquo;s answer first.
-                    </span>
+              <div className="flex flex-wrap items-center gap-2">
+                {/*
+                 * ⚠️ **`aria-disabled` and a no-op handler, not `disabled`.** This is the
+                 * app's usual rule rather than `controls.ts`'s reversal, and here it is
+                 * load-bearing: the button has to stay reachable so the sentence beside it
+                 * can say *why* it is not ready. A confirm that went live the moment the
+                 * digits arrived — or worse, before — would be a panel with no
+                 * man-in-the-middle defence that looked completely normal.
+                 */}
+                <button
+                  type="button"
+                  aria-disabled={flow.sas === null || confirm.isPending}
+                  onClick={() => {
+                    if (flow.sas !== null && !confirm.isPending) confirm.mutate();
+                  }}
+                  className={cn(
+                    BUTTON,
+                    "border-accent text-accent hover:bg-bg",
+                    flow.sas === null && "cursor-not-allowed opacity-50 active:scale-100",
+                    FOCUS,
                   )}
-                  <Cancel onCancel={() => cancel.mutate()} />
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  <p className="text-sm">
-                    Last step: carry this back to the other device and paste it there.
-                  </p>
-                  <Blob label="The wrapped key for the other device" value={flow.sealedKey} />
-                  <button
-                    type="button"
-                    onClick={() => setFlow({ kind: "idle" })}
-                    className={cn(BUTTON, "border-border hover:bg-bg")}
-                  >
-                    Done
-                  </button>
-                </div>
-              )}
+                >
+                  <ShieldCheck aria-hidden="true" className="size-4" />
+                  Codes match
+                </button>
+                {flow.sas === null && (
+                  <span className="text-xs text-dim">
+                    Nothing to compare yet &mdash; still waiting for the other device.
+                  </span>
+                )}
+                <Cancel onCancel={() => cancel.mutate()} />
+              </div>
             </div>
           )}
 
+          {/* **The joining side draws no Codes match button, and that is deliberate rather than
+              missing.** Under a man-in-the-middle the two screens show different numbers, so the
+              comparison is inherently a two-screen act — and the press that actually gates
+              anything is the offering device's, since that is the press that releases the group
+              key. This screen's whole job is to tell the reader where that press is. */}
           {flow.kind === "join" && (
             <div className="space-y-3 rounded-md border border-border p-3">
               <p className="text-sm">
@@ -1252,40 +1461,21 @@ export function SyncPanel(): JSX.Element {
                 that screen.
               </p>
               <Digits sas={flow.sas} />
-
-              {/* The joining side's own gate. It changes no protocol — the answer below is
-                  already computed — but a reader who has not looked at the digits has not
-                  compared them, and this is the press that says they have. */}
-              {!flow.compared ? (
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setFlow({ ...flow, compared: true })}
-                    className={cn(BUTTON, "border-accent text-accent hover:bg-bg")}
-                  >
-                    <ShieldCheck aria-hidden="true" className="size-4" />
-                    Codes match
-                  </button>
-                  <Cancel onCancel={() => cancel.mutate()} />
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  <Blob label="Your answer, for the other device" value={flow.response} />
-                  <Paste
-                    label="The wrapped key the other device gave you"
-                    action="Finish pairing"
-                    pending={complete.isPending}
-                    onSubmit={(text) => complete.mutate(text)}
-                  />
-                  <Cancel onCancel={() => cancel.mutate()} />
-                </div>
-              )}
+              <p className="text-sm text-dim">
+                Compare these with the other device, then press Codes match there.
+              </p>
+              <Cancel onCancel={() => cancel.mutate()} />
             </div>
           )}
         </>
       )}
 
-      <PanelAlert tone="problem">{error ? ipcError(error) : null}</PanelAlert>
+      <PanelAlert tone="plain">{pairedNote}</PanelAlert>
+      {/* **One problem line, and a live refusal outranks the obituary.** `error` is whatever
+          just failed; `endedNote` is an attempt that quietly ran out of time. Both are the same
+          kind of thing to a reader — *the thing you were doing is not happening* — so they share
+          a box rather than stacking two red sentences, and the fresher one wins. */}
+      <PanelAlert tone="problem">{error ? ipcError(error) : endedNote}</PanelAlert>
 
       <SupporterSection />
 

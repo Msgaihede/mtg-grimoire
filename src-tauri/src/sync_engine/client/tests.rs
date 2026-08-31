@@ -1273,3 +1273,419 @@ async fn a_401_on_a_key_check_costs_the_grant_nothing() {
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert_eq!((rows[0].0.as_str(), rows[0].1.as_str()), ("keys", "http"));
 }
+
+// ---------------------------------------------------------------------------------------
+// The rendezvous, and the join retry
+//
+// **`post_rendezvous`/`get_rendezvous` need no group at all** — the rendezvous is how the two
+// halves of a QR pairing find each other *before* either device knows it is in one — so these
+// run against `crate::schema::memory_pair()` directly, the way
+// `no_group_and_no_grant_means_no_request_at_all` does above. `publish_join` is the opposite: it
+// calls `identity::plan_join`, which needs a real device keypair to seal a blob with, so those
+// three run against [`keyed_group`] rather than [`paired`] — that helper's `x'00'`/`x'01'` fixture
+// keys are not points X25519 will agree on.
+// ---------------------------------------------------------------------------------------
+
+const RV: &str = "0123456789abcdef0123456789abcdef";
+
+/// A rendezvous post carries the blob and nothing else, and a 204 is success.
+///
+/// **`Mock::calls()` is a count, not a request list** (httpmock 0.8 — see [`tap`]'s own doc), so
+/// the body is read back the way `every_pushed_batch_carries_a_horizon` reads one: through the
+/// wire-tapping matcher already in this file, not through the mock itself.
+#[tokio::test]
+async fn a_rendezvous_post_carries_the_blob_and_answers_nothing() {
+    let server = MockServer::start_async().await;
+    let sent = Sent::default();
+    let mock = server.mock(|when, then| {
+        when.method(POST)
+            .path(format!("/p/{RV}/join"))
+            .is_true(tap(&sent));
+        then.status(204);
+    });
+    let conn = crate::schema::memory_pair();
+    set_state(&conn, RELAY_URL, &server.base_url()).unwrap();
+
+    post_rendezvous(&conn, RV, "join", "ABCDE")
+        .await
+        .expect("a 204 is success");
+
+    mock.assert();
+    let seen = sent.lock().unwrap();
+    let body: serde_json::Value =
+        serde_json::from_str(&seen.first().expect("one call").body).expect("json");
+    assert_eq!(
+        body["blob"], "ABCDE",
+        "the blob is the only field the relay is sent"
+    );
+}
+
+/// **Not "the pairing failed"**: somebody else answered this code, which is a different fix —
+/// start a new offer on the device showing it, rather than retry here.
+#[tokio::test]
+async fn a_409_from_the_rendezvous_is_its_own_sentence() {
+    let server = MockServer::start_async().await;
+    server.mock(|when, then| {
+        when.method(POST).path(format!("/p/{RV}/offer"));
+        then.status(409);
+    });
+    let conn = crate::schema::memory_pair();
+    set_state(&conn, RELAY_URL, &server.base_url()).unwrap();
+
+    let error = post_rendezvous(&conn, RV, "offer", "XYZ")
+        .await
+        .expect_err("a 409 must not read as success");
+    assert_eq!(error, RENDEZVOUS_TAKEN);
+}
+
+/// **A 404 is `Ok(None)`, and never an error.** The panel polls this every 1.5 seconds while the
+/// other device is still being read to; a poll that treated "not yet" as a failure would put an
+/// error in front of the reader on every tick before the pairing ever had a chance to finish.
+#[tokio::test]
+async fn an_empty_rendezvous_is_none_and_never_an_error() {
+    let server = MockServer::start_async().await;
+    server.mock(|when, then| {
+        when.method(GET).path(format!("/p/{RV}/offer"));
+        then.status(404);
+    });
+    let conn = crate::schema::memory_pair();
+    set_state(&conn, RELAY_URL, &server.base_url()).unwrap();
+
+    let result = get_rendezvous(&conn, RV, "offer").await;
+    assert_eq!(result, Ok(None), "a 404 is not yet, not a failure");
+    assert!(
+        error_rows(&conn).is_empty(),
+        "a poll finding nothing must not log a failure"
+    );
+}
+
+/// A filled slot is read back as the blob it was posted with.
+#[tokio::test]
+async fn a_filled_rendezvous_answers_the_blob() {
+    let server = MockServer::start_async().await;
+    server.mock(|when, then| {
+        when.method(GET).path(format!("/p/{RV}/join"));
+        then.status(200)
+            .json_body(serde_json::json!({ "blob": "SEALED-BYTES" }));
+    });
+    let conn = crate::schema::memory_pair();
+    set_state(&conn, RELAY_URL, &server.base_url()).unwrap();
+
+    let result = get_rendezvous(&conn, RV, "join").await.unwrap();
+    assert_eq!(result.as_deref(), Some("SEALED-BYTES"));
+}
+
+/// `GET /g/{group}/keys` answering a manifest and an epoch this device is already on — what
+/// [`publish_join`]'s superset guard reads before it is allowed to publish anything.
+///
+/// **The epoch is deliberately the device's own**, so nothing that registers this becomes an
+/// epoch test by accident: the guard reads `devices` and nothing else off the page.
+fn manifest_answering<'a>(
+    server: &'a MockServer,
+    group: &str,
+    devices: &[&str],
+) -> httpmock::Mock<'a> {
+    let devices: Vec<String> = devices.iter().map(|d| (*d).to_owned()).collect();
+    server.mock(|when, then| {
+        when.method(GET).path(format!("/g/{group}/keys"));
+        then.status(200).json_body(serde_json::json!({
+            "epoch": 0,
+            "blob": serde_json::Value::Null,
+            "devices": devices,
+        }));
+    })
+}
+
+/// **A first pairing has no membership and cannot publish, and that must not fail the pairing.**
+/// `/rotate` refuses with a 401 exactly as a group with no entitlement row does; `publish_join`
+/// answers `Ok(())` anyway, marks the debt, and — the sharper assertion — leaves the group
+/// exactly as it was, so the reader can press again.
+///
+/// The manifest is registered so the superset guard is *passed* rather than tripped: this test
+/// is about what a refused `/rotate` costs, and a guard that stopped the call before it happened
+/// would make it a test of the wrong thing.
+#[tokio::test]
+async fn publish_join_marks_the_roster_dirty_when_the_relay_refuses() {
+    let server = MockServer::start_async().await;
+    let (conn, me, _remover, group) = keyed_group();
+    set_state(&conn, RELAY_URL, &server.base_url()).unwrap();
+    manifest_answering(&server, &group, &[&me.device_id, "dev-remover", "tablet"]);
+    server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{group}/rotate"));
+        then.status(401)
+            .json_body(serde_json::json!({ "error": "unauthorized" }));
+    });
+    let before = identity::group(&conn).unwrap().unwrap();
+
+    publish_join(&conn)
+        .await
+        .expect("a refused publish must not fail the join");
+
+    assert!(
+        identity::roster_is_dirty(&conn).unwrap(),
+        "the owed publish was never marked"
+    );
+    assert_eq!(
+        identity::group(&conn).unwrap().unwrap(),
+        before,
+        "a refused /rotate must leave the group exactly as it was"
+    );
+}
+
+/// **The severe one.** A publish that reached an accepting relay must commit the same epoch
+/// locally — without it this device sits at the epoch behind its own rotation, and its very next
+/// `check_keys` reads a higher epoch with no blob for itself, which is the removal notice: the
+/// device that pressed *Codes match* would dissolve its own group on its next sync.
+#[tokio::test]
+async fn publish_join_commits_the_epoch_it_published() {
+    let server = MockServer::start_async().await;
+    let (conn, me, _remover, group) = keyed_group();
+    set_state(&conn, RELAY_URL, &server.base_url()).unwrap();
+    manifest_answering(&server, &group, &[&me.device_id, "dev-remover", "tablet"]);
+    server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{group}/rotate"));
+        then.status(200)
+            .json_body(serde_json::json!({ "epoch": 1 }));
+    });
+    let before = identity::group(&conn).unwrap().unwrap();
+
+    publish_join(&conn)
+        .await
+        .expect("an accepted rotate must not fail the join");
+
+    let after = identity::group(&conn).unwrap().unwrap();
+    assert_eq!(
+        after.epoch,
+        before.epoch + 1,
+        "a publish with no local commit leaves this device behind its own rotation"
+    );
+}
+
+/// A join the relay accepted clears the debt a previous failed attempt had recorded.
+#[tokio::test]
+async fn publish_join_clears_the_mark_when_the_relay_accepts() {
+    let server = MockServer::start_async().await;
+    let (conn, me, _remover, group) = keyed_group();
+    set_state(&conn, RELAY_URL, &server.base_url()).unwrap();
+    identity::set_roster_dirty(&conn, true).unwrap();
+    manifest_answering(&server, &group, &[&me.device_id, "dev-remover", "tablet"]);
+    server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{group}/rotate"));
+        then.status(200)
+            .json_body(serde_json::json!({ "epoch": 1 }));
+    });
+
+    publish_join(&conn)
+        .await
+        .expect("an accepted rotate must not fail the join");
+
+    assert!(
+        !identity::roster_is_dirty(&conn).unwrap(),
+        "the mark was not cleared on an accepted publish"
+    );
+}
+
+/// **A group that has claimed and never rotated answers `devices: []`, and that must still
+/// publish.** The empty manifest is a subset of everything, so the superset guard passes — which
+/// is the whole of what keeps the common case (a first pairing, on a group whose membership has
+/// just been connected) working at all. A guard written as an *equality* rather than a superset
+/// test would stop every first join dead, with nothing on screen saying so.
+#[tokio::test]
+async fn publish_join_publishes_against_a_never_rotated_manifest() {
+    let server = MockServer::start_async().await;
+    let (conn, _me, _remover, group) = keyed_group();
+    set_state(&conn, RELAY_URL, &server.base_url()).unwrap();
+    manifest_answering(&server, &group, &[]);
+    let rotate = server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{group}/rotate"));
+        then.status(200)
+            .json_body(serde_json::json!({ "epoch": 1 }));
+    });
+
+    publish_join(&conn).await.expect("the join must publish");
+
+    assert_eq!(rotate.calls(), 1, "an empty manifest blocked a first join");
+    assert!(!identity::roster_is_dirty(&conn).unwrap());
+}
+
+/// **A device whose roster is missing somebody the relay knows about publishes nothing.**
+///
+/// The manifest's key set *is* the roster on every device that adopts it, so publishing one built
+/// from a partial view is not a failure to add — it is an eviction. `identity::adopt_epoch` prunes
+/// and never inserts (there is no public key in a manifest to insert with), so a device told about
+/// a join only by adopting an epoch has exactly this partial view, and pairing from it would take
+/// the peer it never heard of out of the group.
+///
+/// **What makes it red**: deleting the superset check. `/rotate` is then called with a manifest
+/// two names short.
+#[tokio::test]
+async fn publish_join_refuses_to_speak_for_a_group_it_cannot_see_all_of() {
+    let server = MockServer::start_async().await;
+    let (conn, me, _remover, group) = keyed_group();
+    set_state(&conn, RELAY_URL, &server.base_url()).unwrap();
+    // The relay knows a fourth device this one has never had a row for.
+    manifest_answering(
+        &server,
+        &group,
+        &[&me.device_id, "dev-remover", "tablet", "laptop"],
+    );
+    let rotate = server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{group}/rotate"));
+        then.status(200)
+            .json_body(serde_json::json!({ "epoch": 1 }));
+    });
+    let before = identity::group(&conn).unwrap().unwrap();
+
+    publish_join(&conn)
+        .await
+        .expect("declining to publish must not fail the join");
+
+    assert_eq!(
+        rotate.calls(),
+        0,
+        "a device with a partial roster published a manifest for the whole group"
+    );
+    assert!(
+        identity::roster_is_dirty(&conn).unwrap(),
+        "the publish that was declined was never marked as still owed"
+    );
+    assert_eq!(
+        identity::group(&conn).unwrap().unwrap(),
+        before,
+        "nothing local may move when nothing was published"
+    );
+}
+
+/// **The §5.1 three-device sequence, which is the regression test spec §7 named and nobody
+/// wrote.** Every other test above asserts what one device's *own* manifest contains; this one
+/// drives a second device reading it back, because the eviction only exists at that seam.
+///
+/// The sequence, all four devices in one group at epoch 2:
+///
+/// 1. A PC founded the group, paired a Phone, then paired a Tablet and published a manifest
+///    naming all three. The relay holds `{PC, Phone, Tablet}`.
+/// 2. The Phone adopted that epoch — and `identity::adopt_epoch` **prunes and never inserts**, so
+///    the Phone's own roster is still `{Phone, PC}`. It has never heard of the Tablet.
+/// 3. The Phone now pairs a Laptop. `plan_join` builds its manifest from the Phone's roster.
+///
+/// Without the superset guard the Phone publishes `{Phone, PC, Laptop}` at epoch 3, and the
+/// **Tablet**'s next `check_keys` reads a higher epoch with no blob for itself — which is the
+/// removal notice — and it leaves a group nobody removed it from, silently.
+///
+/// **The `/keys` answer the Tablet reads is built from whatever the Phone actually posted**, so
+/// this is a relay in miniature rather than a second hand-written assumption: with the guard,
+/// nothing was posted and the manifest is unchanged; without it, the Tablet is served exactly the
+/// epoch and key set the Phone published.
+///
+/// **What makes it red**: deleting the superset check in `publish_join`.
+#[tokio::test]
+async fn a_pairing_never_evicts_a_device_this_one_has_not_met() {
+    let server = MockServer::start_async().await;
+    let key = [3u8; 32];
+
+    // The PC and the Laptop exist only as roster rows here — nothing in this test drives them.
+    let pc = crypto::keypair();
+    let laptop = crypto::keypair();
+
+    let phone = crate::schema::memory_pair();
+    capture::install(&phone).unwrap();
+    let phone_me = identity::ensure(&phone).unwrap();
+    identity::join_group(&phone, GROUP, 2, &key, &phone_me).unwrap();
+    identity::add_device(&phone, "pc", &pc.public, "PC").unwrap();
+    set_state(&phone, RELAY_URL, &server.base_url()).unwrap();
+
+    let tablet = crate::schema::memory_pair();
+    capture::install(&tablet).unwrap();
+    let tablet_me = identity::ensure(&tablet).unwrap();
+    identity::join_group(&tablet, GROUP, 2, &key, &tablet_me).unwrap();
+    identity::add_device(&tablet, "pc", &pc.public, "PC").unwrap();
+    identity::add_device(
+        &tablet,
+        &phone_me.device_id,
+        &phone_me.keypair.public,
+        "Phone",
+    )
+    .unwrap();
+    set_state(&tablet, RELAY_URL, &server.base_url()).unwrap();
+
+    // What the relay holds before the Phone pairs anything: all three, and no Laptop.
+    let before: Vec<String> = vec![
+        "pc".to_owned(),
+        phone_me.device_id.clone(),
+        tablet_me.device_id.clone(),
+    ];
+    server.mock(|when, then| {
+        when.method(GET)
+            .path(format!("/g/{GROUP}/keys"))
+            .query_param("device", phone_me.device_id.clone());
+        then.status(200).json_body(serde_json::json!({
+            "epoch": 2,
+            "blob": serde_json::Value::Null,
+            "devices": before,
+        }));
+    });
+    let sent = Sent::default();
+    server.mock(|when, then| {
+        when.method(POST)
+            .path(format!("/g/{GROUP}/rotate"))
+            .is_true(tap(&sent));
+        then.status(200)
+            .json_body(serde_json::json!({ "epoch": 3 }));
+    });
+
+    // The Phone pairs a Laptop: `pairing::confirm` adds the row, then publishes.
+    identity::add_device(&phone, "laptop", &laptop.public, "Laptop").unwrap();
+    publish_join(&phone)
+        .await
+        .expect("a declined publish must not fail the join");
+
+    // The relay, as it now stands — whatever the Phone posted, or unchanged if it posted nothing.
+    let posted = sent
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|seen| seen.path.ends_with("/rotate"))
+        .map(|seen| serde_json::from_str::<serde_json::Value>(&seen.body).expect("json"));
+    let (epoch, devices, blob) = match posted {
+        Some(body) => {
+            let keys = body["keys"]
+                .as_object()
+                .expect("a rotation carries its rewrapped keys")
+                .clone();
+            (
+                body["epoch"].as_i64().expect("a rotation carries an epoch"),
+                keys.keys().cloned().collect::<Vec<String>>(),
+                keys.get(&tablet_me.device_id)
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null),
+            )
+        }
+        None => (2, before.clone(), serde_json::Value::Null),
+    };
+    server.mock(|when, then| {
+        when.method(GET)
+            .path(format!("/g/{GROUP}/keys"))
+            .query_param("device", tablet_me.device_id.clone());
+        then.status(200).json_body(serde_json::json!({
+            "epoch": epoch,
+            "blob": blob,
+            "devices": devices,
+        }));
+    });
+
+    let outcome = check_keys(&tablet).await.expect("the tablet's own sync");
+
+    assert_ne!(
+        outcome,
+        KeyOutcome::Removed,
+        "a pairing on another device evicted this one"
+    );
+    assert!(
+        identity::group(&tablet).unwrap().is_some(),
+        "the tablet left a group nobody removed it from"
+    );
+    assert!(
+        identity::roster_is_dirty(&phone).unwrap(),
+        "the publish the phone could not safely make was not recorded as still owed"
+    );
+}

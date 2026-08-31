@@ -720,9 +720,26 @@ pub fn plan_departure(conn: &Connection) -> Result<Rotation, String> {
     plan(conn, &me.device_id)
 }
 
-/// The body both entrances share. **It asks nothing about who `removing` is** — that is the one
-/// question its two callers answer differently, and the whole reason they are two functions.
+/// [`plan_rotation`] and [`plan_departure`]'s shared body, with the device each of them excludes
+/// named as `Some`. Unchanged by [`plan_join`]'s arrival — that entrance calls
+/// [`plan_excluding`] directly, with `None`.
 fn plan(conn: &Connection, removing: &str) -> Result<Rotation, String> {
+    plan_excluding(conn, Some(removing))
+}
+
+/// The body all three entrances share — a removal, a departure, and now a join. **It asks
+/// nothing about who `removing` is** beyond whether there is one; that question is the one thing
+/// its callers answer differently, and the whole reason there are three of them and one of this.
+///
+/// `removing: None` is [`plan_join`]'s shape and not a stand-in for an empty id: it skips **both**
+/// places the excluded device would otherwise matter. It skips [`NOT_ON_THE_ROSTER`] — there is
+/// no id to fail to find, and a join excludes nobody — and it skips the per-peer `continue` that
+/// drops the excluded device from the manifest, so every live peer is sealed a blob, the joiner
+/// among them because [`plan_join`]'s caller adds it to the roster first. The
+/// `revoked_at.is_some()` skip is **not** conditioned on `removing` and fires in every case, join
+/// included: a stamped row is a database an older build wrote to, and naming it in a fresh
+/// manifest would put a removed device back in the group on every peer that adopts this epoch.
+fn plan_excluding(conn: &Connection, removing: Option<&str>) -> Result<Rotation, String> {
     let Some(me) = read(conn).map_err(|e| e.to_string())? else {
         return Err(NOT_IN_A_GROUP.to_owned());
     };
@@ -730,8 +747,10 @@ fn plan(conn: &Connection, removing: &str) -> Result<Rotation, String> {
         return Err(NOT_IN_A_GROUP.to_owned());
     };
     let members = roster(conn).map_err(|e| e.to_string())?;
-    if !members.iter().any(|d| d.device_id == removing) {
-        return Err(NOT_ON_THE_ROSTER.to_owned());
+    if let Some(removing) = removing {
+        if !members.iter().any(|d| d.device_id == removing) {
+            return Err(NOT_ON_THE_ROSTER.to_owned());
+        }
     }
 
     let rotated = Group {
@@ -741,11 +760,12 @@ fn plan(conn: &Connection, removing: &str) -> Result<Rotation, String> {
     };
     let mut keys = Vec::with_capacity(members.len());
     for peer in &members {
-        // **The departing device, and any row an older build stamped, are both left off.** The
+        // **The excluded device, and any row an older build stamped, are both left off.** The
         // stamp stopped being written by `commit_rotation`, but a database that predates this
         // change can still hold one — and a manifest naming such a device would put it back in
-        // the group on every device that adopts this epoch.
-        if peer.device_id == removing || peer.revoked_at.is_some() {
+        // the group on every device that adopts this epoch. `removing == None` (a join) drops
+        // neither check but the first can never match, because there is no id to compare against.
+        if Some(peer.device_id.as_str()) == removing || peer.revoked_at.is_some() {
             continue;
         }
         let blob = crypto::wrap_group_key(
@@ -765,6 +785,85 @@ fn plan(conn: &Connection, removing: &str) -> Result<Rotation, String> {
         keys,
         auth,
     })
+}
+
+/// Work out the rotation a **join** needs, writing nothing.
+///
+/// The third entrance beside [`plan_rotation`] and [`plan_departure`], and it shares their body
+/// through [`plan_excluding`]. Where a removal's manifest is everyone *but* one device and a
+/// departure's is everyone but this one, a join's is **everyone, plus one who was not on the
+/// roster a moment ago** — which is why the caller adds the joining device before planning, and
+/// why this function takes no id of its own to exclude.
+///
+/// # Why a join rotates at all
+///
+/// **The manifest's key set is the roster** (`relay/schema.sql`'s `group_keys`), and it is the
+/// only thing that says who is in a group. A join that published nothing left the new device
+/// invisible to every peer that was not part of the pairing ceremony — and the *next* rotation by
+/// any of those peers was built from a roster with no such device in it, so the manifest omitted
+/// it and it read the omission as its own removal: a device paired by A was evicted by C's next
+/// removal, with nothing anywhere saying why. Publishing this rotation is what closes that hole;
+/// a sibling task is what actually posts it to `/g/{group}/rotate` and commits it on acceptance.
+///
+/// It costs an epoch, which the rotation machinery already absorbs: `sync_engine::baseline`
+/// clears `baselined_at` on a rotation precisely so the next sync carries every device's last
+/// words across the boundary — which is also, exactly, what a device that has just joined needs.
+///
+/// **It takes no argument, unlike its two siblings, and that is the shape rather than an
+/// omission.** A removal excludes one device and a departure excludes this one; a join excludes
+/// **nobody** — the joiner is already on the roster, because `pairing::confirm` calls
+/// [`add_device`] before it plans. There is no id to pass.
+pub fn plan_join(conn: &Connection) -> Result<Rotation, String> {
+    plan_excluding(conn, None)
+}
+
+/// What the [`ROSTER_DIRTY`] key is called — plain `sync_state`, in the shape
+/// `sync_engine::capture`'s own `APPLYING` guard already uses for a flag on that table: an
+/// `INSERT OR REPLACE` for "on" and a bare `DELETE` for "off", rather than a stored `'0'`.
+/// `sync_engine::client::get_state`/`set_state` are a generic pair for an arbitrary *string* —
+/// every call site there sets a real value (a cursor, a token, a URL) — and have no "clear"
+/// half of their own; every clear in that module (`entitlement::clear`) is the same bare
+/// `DELETE` written out, which is what this mirrors instead of introducing a fourth API for one
+/// boolean.
+pub const ROSTER_DIRTY: &str = "roster_dirty";
+
+/// Mark, or clear, that this device owes the group a roster publish.
+///
+/// **Set when a join's rotation could not be published and cleared only once `/rotate` accepts
+/// one.** A join plans a rotation naming the whole roster plus the joiner (see [`plan_join`]),
+/// but planning is not publishing — the relay can be unreachable at the exact moment two phones
+/// are standing next to each other comparing six digits. Without this mark that failure is
+/// silent: the pairing ceremony still succeeds locally, the joiner is on *this* device's roster,
+/// and nothing ever retries telling the others. A sibling task reads this flag to know a publish
+/// is still owed and clears it once one lands.
+pub fn set_roster_dirty(conn: &Connection, dirty: bool) -> Result<(), String> {
+    if dirty {
+        conn.execute(
+            "INSERT OR REPLACE INTO sync_state (key, value) VALUES (?1, '1')",
+            [ROSTER_DIRTY],
+        )
+    } else {
+        // A clean group carries no row at all rather than a `'0'` — `roster_is_dirty` treats
+        // "no row" and "row says clean" identically, so the delete is the plainer of two
+        // spellings for the same state and leaves nothing for a stale `'0'` to disagree with.
+        conn.execute("DELETE FROM sync_state WHERE key = ?1", [ROSTER_DIRTY])
+    }
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Whether this device owes the group a roster publish — `false` on a database that has never
+/// set the mark, which is every group before its first join and every group whose last join
+/// published cleanly.
+pub fn roster_is_dirty(conn: &Connection) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT value FROM sync_state WHERE key = ?1",
+        [ROSTER_DIRTY],
+        |r| r.get::<_, String>(0),
+    )
+    .optional()
+    .map_err(|e| e.to_string())
+    .map(|v| v.as_deref() == Some("1"))
 }
 
 /// Write the rotation the relay has already accepted. **Only on success**, and never before.
@@ -2195,5 +2294,164 @@ mod tests {
             "Markus desk",
             "the panel draws the name the group agreed on"
         );
+    }
+
+    // -------------------------------------------------------------------------------------
+    // Joining — the manifest a join publishes, and the mark that survives a group with no
+    // membership
+    // -------------------------------------------------------------------------------------
+
+    /// A group of two devices, ready for a third to join — the fixture every test below starts
+    /// from.
+    fn seeded_group_of_two() -> Connection {
+        let conn = db();
+        let me = ensure(&conn).unwrap();
+        create_group(&conn, &me).unwrap();
+        add_device(
+            &conn,
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            &[2u8; 32],
+            "Phone",
+        )
+        .unwrap();
+        conn
+    }
+
+    /// Every device id on the roster right now — what a join's manifest must still name, on top
+    /// of the joiner it adds.
+    fn existing_peer_ids(conn: &Connection) -> Vec<String> {
+        roster(conn)
+            .unwrap()
+            .into_iter()
+            .map(|d| d.device_id)
+            .collect()
+    }
+
+    /// **The reason this whole task exists.** `pairing::confirm` adds the joining device to the
+    /// roster before it plans, so a join that published only the initiator and the joiner would
+    /// still be silently dropping any *other* peer the initiator already had — the exact bug: a
+    /// third device, paired earlier by a device this one never met, reads the manifest, does not
+    /// find itself, and leaves a group nobody removed it from.
+    #[test]
+    fn a_join_rotation_names_the_joiner_and_everybody_already_there() {
+        let conn = seeded_group_of_two();
+        let joining = "cccccccccccccccccccccccccccccccc";
+        add_device(&conn, joining, &[3u8; 32], "Phone").expect("roster add");
+
+        let plan = plan_join(&conn).expect("a join must plan");
+        let named: Vec<&str> = plan.keys.iter().map(|(d, _)| d.as_str()).collect();
+
+        assert!(
+            named.contains(&joining),
+            "the joiner must be in the manifest it joins by"
+        );
+        // **The manifest key set IS the roster.** Anyone it omits leaves the group on their next
+        // sync, which is the bug this whole task exists to close.
+        for peer in existing_peer_ids(&conn) {
+            assert!(
+                named.contains(&peer.as_str()),
+                "{peer} was on the roster and must stay on it"
+            );
+        }
+    }
+
+    /// **The tombstone hazard [`plan_excluding`]'s own doc comment calls load-bearing, exercised
+    /// against a join rather than against `room_for`'s arithmetic.** `revoked_at` stopped being
+    /// written by `commit_rotation`, but a database an older build already wrote can still hold a
+    /// stamped row — and a fresh manifest naming it would put a removed device back in the group
+    /// on every peer that adopts this epoch. `the_device_cap_counts_live_rows_and_never_the_joiner`
+    /// stamps a row too, but only to prove `room_for`'s count excludes it; nothing before this
+    /// test proved the manifest itself does.
+    #[test]
+    fn a_join_rotation_excludes_a_row_an_older_build_stamped() {
+        let conn = seeded_group_of_two();
+        add_device(&conn, "ghost", &[9u8; 32], "Ghost").unwrap();
+        conn.execute(
+            "UPDATE sync_devices SET revoked_at = unixepoch() WHERE device_id = 'ghost'",
+            [],
+        )
+        .unwrap();
+        add_device(
+            &conn,
+            "cccccccccccccccccccccccccccccccc",
+            &[3u8; 32],
+            "Phone",
+        )
+        .unwrap();
+
+        let plan = plan_join(&conn).expect("a join must plan");
+        let named: Vec<&str> = plan.keys.iter().map(|(d, _)| d.as_str()).collect();
+
+        assert!(
+            !named.contains(&"ghost"),
+            "a stamped row must never be named by a fresh manifest: {named:?}"
+        );
+    }
+
+    /// A join is a rotation like its two siblings, and costs an epoch the same way — which is
+    /// what makes `sync_engine::baseline`'s epoch-boundary re-arm carry every peer's last words
+    /// across the join instead of stalling one at the old epoch.
+    #[test]
+    fn a_join_rotation_advances_the_epoch() {
+        let conn = seeded_group_of_two();
+        let before = group(&conn).unwrap().unwrap().epoch;
+        add_device(
+            &conn,
+            "cccccccccccccccccccccccccccccccc",
+            &[3u8; 32],
+            "Phone",
+        )
+        .unwrap();
+        assert_eq!(plan_join(&conn).unwrap().group.epoch, before + 1);
+    }
+
+    /// `plan_rotation`'s own contract, carried to its third sibling: a `/rotate` the relay
+    /// refuses must leave the group exactly as it was, so the reader — or in this case the
+    /// pairing ceremony itself — can press again.
+    ///
+    /// **Asserts `sync_devices`' row count as well as `group()`**, matching
+    /// `planning_a_rotation_changes_no_row` and `a_departure_names_everyone_but_this_device` —
+    /// its two siblings already hold both halves of "writes nothing" and this one held only the
+    /// group half. Without the count, a regression that inserted or deleted a `sync_devices` row
+    /// while planning would leave `group()` untouched and this test green while the very
+    /// contract its own name claims was broken.
+    #[test]
+    fn planning_a_join_writes_nothing() {
+        let conn = seeded_group_of_two();
+        let before = group(&conn).unwrap().unwrap();
+        add_device(
+            &conn,
+            "cccccccccccccccccccccccccccccccc",
+            &[3u8; 32],
+            "Phone",
+        )
+        .unwrap();
+        let devices_before_planning = count(&conn, "sync_devices");
+
+        let _ = plan_join(&conn).unwrap();
+
+        let after = group(&conn).unwrap().unwrap();
+        assert_eq!(before.epoch, after.epoch);
+        assert_eq!(before.group_key, after.group_key);
+        assert_eq!(
+            count(&conn, "sync_devices"),
+            devices_before_planning,
+            "planning a join inserted or deleted a sync_devices row"
+        );
+    }
+
+    /// The mark round-trips, and starts clear: a fresh group has published nothing and so owes
+    /// nobody a publish.
+    #[test]
+    fn the_roster_mark_round_trips() {
+        let conn = seeded_group_of_two();
+        assert!(
+            !roster_is_dirty(&conn).unwrap(),
+            "a fresh group owes nobody a publish"
+        );
+        set_roster_dirty(&conn, true).unwrap();
+        assert!(roster_is_dirty(&conn).unwrap());
+        set_roster_dirty(&conn, false).unwrap();
+        assert!(!roster_is_dirty(&conn).unwrap());
     }
 }

@@ -32,32 +32,110 @@ That split is not a compromise. **A pairing that never touches a network cannot 
 network**, so every test here is about the protocol rather than about the transport, and PR 7
 inherits a verified protocol instead of debugging both at once.
 
+⚠️ **"There is no network of any kind" stopped being true on 2026-08-31, and it is a cost stated in
+its own right rather than buried** — see
+[the two costs](#two-costs-stated-rather-than-buried). The one-sided pairing and QR change put a
+short-lived, unauthenticated **rendezvous** on the relay between the two devices, so **pairing now
+needs the relay reachable** even before either side holds a Patreon membership. What the paragraph
+above still gets right is the *test* argument: `crypto`, `invite` and `identity` are still pure and
+I/O-free, so the man-in-the-middle test is still a real three-party exchange in microseconds rather
+than a mock — only `pairing.rs` itself makes a network call now, and only from `accept` and
+`confirm`. [The rendezvous](#the-rendezvous-outside-the-gate-same-reasoning-a-different-namespace)
+is documented where the relay's other routes are.
+
 ---
 
 ## The protocol, step by step
 
+**Rewritten 2026-08-31 for one-sided pairing.** Until this branch B's response and A's sealed key
+were both retyped by hand — the second one phone→PC, the hard direction — through
+`sync_pairing_respond` and `sync_pairing_complete`. Both commands are gone from the IPC surface;
+`sync_pairing_poll` reads either blob back from the relay's rendezvous and runs their old bodies
+internally, so the crypto they perform is unchanged and only how it is invoked moved.
+
 | Press | Command | A (offering) holds | B (joining) holds |
 | --- | --- | --- | --- |
-| A: *Pair a device* | `sync_pairing_begin` | pending offer, the invite | — |
-| B: pastes the code | `sync_pairing_accept(code)` | — | pair key, **six digits**, a response blob |
-| A: pastes the response | `sync_pairing_respond(response)` | pair key, **six digits** | — |
-| **both compare the six digits** | — | | |
-| A: *Codes match* | `sync_pairing_confirm` | group created if needed; **sealed key** | — |
-| B: pastes the sealed key | `sync_pairing_complete(blob)` | — | joined |
+| A: *Pair a device* | `sync_pairing_begin` | pending offer, the invite, a rendezvous id (`rv`) | — |
+| B: scans or pastes the code | `sync_pairing_accept(code)` | — | pair key, **six digits**; **posts its answer to `/p/{rv}/join` immediately** |
+| A polls, reads B's answer | `sync_pairing_poll` | pair key, **six digits** | — |
+| **both compare the six digits — only A has a button** | — | | |
+| A: *Codes match* | `sync_pairing_confirm` | group created if needed; seals the key, **posts it to `/p/{rv}/offer`**, commits only once that succeeds | — |
+| B polls, reads A's sealed key | `sync_pairing_poll` | | joined |
+
+**Only A presses anything past *accept*.** B's screen shows its six digits and a *Cancel*; the
+comparison is still two-screen (a substituted key moves both halves of the transcript, so a
+man-in-the-middle still shows disagreeing codes), but the button that matters — the one gating the
+group key's release — is A's alone. B posting its answer before any human comparison leaks
+nothing: the sealed remainder opens only under the pair key, and anyone holding the invite could
+already run their own handshake, so what used to be withheld until the reader confirmed was
+withheld from a party that never needed it.
+
+**`sync_pairing_poll` answers a `stage`, and there are five of them:
+`idle | waiting | compare | complete | expired`.** ⚠️ **`expired` is a stage rather than an error,
+and that reversal is what makes the ten-minute window visible at all.** The first build refused
+with `Err("That pairing code has expired…")` *and* cleared the pending offer in the same call — so
+the refusal was exactly one call long, and the panel's poll query carries `query.ts`'s `retry: 1`:
+TanStack re-ran it about a second later, found nothing in flight and got `Ok(idle)` back. `poll.error`
+was never populated for the expiry case at all. At ten minutes **nothing on the screen changed** and
+the panel went on polling a rendezvous that no longer existed, with Cancel the only way out; the
+same silence hit the other side whenever one device pressed Cancel. `SyncPanel` handles `expired`
+by ending the flow and drawing `EXPIRED_NOTE`, and handles `idle` **not at all** — deliberately,
+because `idle` is also what the backend answers in the instant after a cancel, and reading it as
+the timeout would tell a reader who had just pressed Cancel that their code ran out.
 
 The four layers behind it, and the boundary between them is that only the last two touch SQLite:
 
-- **`sync_pair::crypto`** — X25519, HKDF-SHA256, XChaCha20-Poly1305 and the six digits. No
-  database, no I/O, no clock. Everything is a pure function of its arguments, which is why the
-  man-in-the-middle test is a real three-party exchange in a few microseconds rather than a mock.
-- **`sync_pair::invite`** — the 64-byte payload as a typed code and as a QR *module matrix*.
-- **`sync_pair::identity`** — the three tables user schema v28 created.
-- **`sync_pair::pairing`** — the state machine and the nine commands.
+- **`sync_pair::crypto`** — X25519, HKDF-SHA256, XChaCha20-Poly1305, the six digits, and (since
+  this branch) `rendezvous_id` — a one-way HKDF derivation of the address the two relay-borne blobs
+  meet at, taking the pairing's own one-time token as **input keying material with no salt** —
+  the opposite of `pair_key`'s use of that same token as the salt, and deliberate: the two
+  derivations have to stay unrelated, or the relay's address and the pairing key would share
+  structure. No database, no I/O, no clock. Everything is a pure function of its arguments, which
+  is why the man-in-the-middle test is a real three-party exchange in a few microseconds rather
+  than a mock.
+- **`sync_pair::invite`** — the 64-byte payload as a typed code and as a QR *module matrix* — since
+  this branch, drawn over [a URL rather than the bare
+  code](#the-qr-carries-a-url-and-the-code-rides-in-the-fragment).
+- **`sync_pair::identity`** — the three tables user schema v28 created, plus (since this branch)
+  `plan_join`, a third entrance beside `plan_rotation`/`plan_departure` that publishes the roster
+  to the group a device just joined — the fix for a device paired by one machine being silently
+  evicted by another's next rotation, which never knew to name it. ⚠️ **It is a fix for the hub
+  case and not for every case, and the difference is `adopt_epoch`**: that function prunes the
+  roster to the manifest and *never inserts*, because a manifest carries device ids and no public
+  keys, so a device that learned of a join only by adopting an epoch is holding a partial roster
+  and cannot seal a blob to the peer it never met. `client::publish_join` therefore reads `/keys`
+  and publishes **only when what it would publish is a superset of what the relay already holds**;
+  otherwise it marks `roster_dirty` and stays quiet, because publishing from a partial view would
+  *be* the eviction rather than the fix. Carrying public keys in the manifest is the change that
+  would close the rest, and it is a wire change on both sides that this branch does not make.
+- **`sync_pair::pairing`** — the state machine and the nine commands. Two of them do network I/O
+  now (`accept`, `confirm`), so they and `poll` run on the blocking pool with a runtime of their
+  own — `sync_device_revoke`'s shape, for its reason: the write connection is behind a `Mutex`, a
+  guard cannot cross an `await` on a multi-threaded runtime.
 
-### Both hand-carried blobs put one field in the clear, and that is not a leak
+### Two costs, stated rather than buried
 
-Each side has to know **which key to derive** before it can open anything, and the value it needs
-is the one the other side is identified by:
+**Pairing now needs the relay reachable.** Until 2026-08-31 two devices paired with no network and
+no membership and connected Patreon afterwards — `pairing::confirm`'s own comment calls that "what
+makes pairing possible in either order," and the order survives: a reader may still pair first and
+connect second. **The *offline* half does not survive.** Two devices with no signal — the reader's
+own example was a plane — can no longer complete a pairing at all, because `accept` and `confirm`
+each have to reach the rendezvous before either produces anything for the other side to read. This
+was chosen deliberately over keeping the old paste boxes as an offline fallback.
+
+**An old build and a new build cannot pair, and it is a louder failure than the sealed-blob skew
+already documented above.** That skew is bytes disagreeing under an otherwise-shared flow; this is
+the flow itself changing — an old build still shows a second and third paste box that a new build
+has nothing to fill, and a new build's rendezvous has no counterpart an old build ever polls.
+**Pair two devices on the same build** remains the rule it always was; what changed is which
+mismatch a reader hits first.
+
+### Both blobs put one field in the clear, and that is not a leak
+
+**Neither is hand-carried any more — see [the two costs](#two-costs-stated-rather-than-buried) for
+what that traded away — but the byte layout below is unchanged**, because the rendezvous only
+changed *how* a blob crosses, never what is in it. Each side has to know **which key to derive**
+before it can open anything, and the value it needs is the one the other side is identified by:
 
 - B's response is `<32-byte public key><sealed remainder>`. A cannot derive the pair key without
   B's key, and B's key is repeated *inside* the sealed bytes — `respond` compares the two, so a
@@ -118,6 +196,11 @@ cause is that one of the two devices has not been updated. There is nowhere in a
 to say so, and adding a version byte now would not help the build that already shipped without
 one. **Known limitation: pair two devices on the same build.**
 
+⚠️ **2026-08-31 added a second, louder way for two builds to fail to pair, and it is not this one**
+— the skew above is about *bytes* surviving an unchanged flow; the new one is the *flow* itself
+changing, so an old build's second and third paste boxes have nothing on a new build to answer
+them at all. See [the two costs](#two-costs-stated-rather-than-buried) above.
+
 **What has narrowed is which builds that bites.** Today's three-field layout is byte-identical to
 the one that shipped before `86a9b8e`, splitter included, so a build from before 2026-08-29 and a
 build from after 2026-08-30 pair with each other perfectly well. The unreadable window is the
@@ -165,6 +248,53 @@ makes `InviteError::Alphabet` reachable at all. A string with a `U` in it fails 
 position-weighted sum too, so with the checks the other way round somebody who pasted an email
 address was told their pairing code had a typo in it — a sentence pointing at the wrong fix.
 
+### The QR carries a URL, and the code rides in the fragment
+
+**Since 2026-08-31 the QR is not a picture of the 105 characters above — it is a URL, and the
+fragment is load-bearing rather than cosmetic.**
+`https://mtg-grimoire-relay.denmark-east.workers.dev/pair#<the 105 characters, no hyphens>`. A
+fragment is never sent to a server, so the relay still never learns the invite — the whole reason
+the code stayed 105 characters instead of shrinking to the ~16 the public key alone would need.
+Put the code in the path instead and the relay would hold A's public key and the one-time token,
+and the six digits would become the sole defence by the back door. It also sidesteps a web-target
+problem: the app shell answers any navigation once its service worker is installed, but a QR scan
+is by definition a first visit, and a path-shaped deep link would need a server rewrite that does
+not exist — the server only ever sees `/pair`.
+
+**Measured: 162 bytes, a version-9 QR at error-correction level M** (176-byte capacity; version 8
+holds 152 and does not fit) — 53×53 modules, 61 with the four-module quiet zone `QrCode.tsx` draws.
+The panel's `size-56` (224 px, 3.67 px/module) becomes `size-72` (288 px, 4.72 px/module) so the
+larger code stays legible; nothing else about the component changes, and its warning stands —
+`bg-white` and `fill="#000"` are literal, because a QR inverted by dark mode is a QR no camera
+reads.
+
+**`Invite::decode` strips the URL before it filters.** It keeps every ASCII alphanumeric character
+and folds `I`/`L`/`O`, so handed a URL unmodified it would fold the hostname into the payload and
+answer `InviteError::Length` about a code that is perfectly good. So: if the string contains `#`,
+everything after the *last* one is taken as the code; otherwise it is used as-is, which is today's
+behaviour for a pasted bare code exactly. A pasted URL and a pasted code both work, and the scanner
+hands `decode` whichever the QR held.
+
+**The relay serves `/pair` itself and never learns what it served.** The static page reads
+`location.hash` in the browser — the Worker never sees it — and offers two things: the code large
+enough to read across a desk, and a copy button. **That is the fallback for a reader who scanned
+with their phone's own camera app; the primary path is the app's own scanner, which reads the QR
+directly and never opens a URL at all.**
+
+⚠️ **This paragraph named a third thing — an `intent://` link into the Android app, "gated on
+`/.well-known/assetlinks.json`" — and both halves were wrong, so both are gone (2026-08-31).**
+`assetlinks.json` gates an `https` **App Link**; it has never gated a custom scheme, and the app
+declared no `mtggrimoire` scheme, so that button was dead on arrival. Worse, the App Link it was
+paired with was a *trap*: nothing in this app reads a launch intent, so the day a real signing
+fingerprint went up, Android would have started handing `https://…/pair#<code>` to the app instead
+of the browser — the app opening on its ordinary window with the code nowhere, and this page,
+which is the only thing that shows a camera-app scan to the reader, unreachable from a scan. The
+button, the `autoVerify` intent-filter and the `assetlinks.json` route are all removed;
+`relay/src/pair.ts` and `gen/android/app/src/main/AndroidManifest.xml` each carry the argument at
+their own site, and [the deploy runbook](hosted-relay-deploy.md) records that its step 9 was
+deleted rather than deferred. Deep-linking into the app is a coherent follow-up whose *first* step
+is the intent handling.
+
 ---
 
 ## What the six digits defend against, and what they do not
@@ -181,9 +311,16 @@ stops the same attack from the other side.
 
 **They do not defend against a reader who presses *Codes match* without looking.** Nothing can.
 What the panel does about it is the whole of what is available: the *Codes match* button carries
-`aria-disabled` until the digits exist **and its handler refuses the press**, both sides show the
-number at the same size in the same face, and the joining device does not reveal the blob it has
-to carry back until the reader has said the numbers agree.
+`aria-disabled` until the digits exist **and its handler refuses the press**, and both sides show
+the number at the same size in the same face. ⚠️ **This paragraph used to add that the joining
+device withholds its blob until the reader confirms — false since 2026-08-31, and on purpose.**
+`accept` posts B's answer to the relay's rendezvous the moment B derives it, before any human has
+compared anything; B has no *Codes match* press at all, only *Cancel*. That is not a weakening of
+this section's claim: the six digits still gate the one thing that matters, which is `confirm`
+sealing and posting the group key on **A**'s side, and B's early post leaks nothing on its own,
+since the sealed remainder only opens under the pair key — anyone holding the invite could already
+run their own handshake and produce the same answer, so nothing was ever being withheld from a
+party that needed it withheld.
 
 **Zero-padded, and that is not cosmetic.** `042913` and `42913` are the same number and not the
 same code, and a reader comparing two screens is comparing characters.
@@ -518,19 +655,81 @@ fifteen tables — and left alone it would have failed every upgrade from a pre-
 
 ---
 
-## The two things §7.5 asked for that are not here
+## The two things §7.5 asked for — both are here now
 
-**There is no scanner.** §7.5 says "Device B scans". Nothing in this repo can: the Tauri webview
-has no camera permission, `getUserMedia` is not reachable under the CSP in `tauri.conf.json`
-(`default-src 'self'`, no `media-src`), and there is no Android build until Phase 4. So this PR
-**displays** a QR code — which a phone's own camera app reads into a clipboard today — and
-**accepts a typed or pasted code**. The scanner is Phase 4's, in the PR that adds the camera.
+**This section used to read "there is no scanner" and "there is no relay [for pairing]." Both
+claims are false as of 2026-08-31**, closed by
+[the one-sided pairing and QR design](../superpowers/specs/2026-08-31-one-sided-pairing-and-qr-design.md).
+Here is what replaced each, and — for the scanner — the wrong reasoning this section carried and
+what chasing it cost.
 
-**There is no relay.** §7.5 step 4 — "A wraps the group key to B's public key and sends it
-through the relay" — names a hop PR 7 was expected to build. **It did not, and nothing since has
-either**: the pairing blob is still carried by hand today, for the reason the next section gives.
-PR 7 built the transport; 2026-08-30 built a *rotation's* wrap over the relay, which is a
-different hop.
+**The scanner exists, and it is a component rather than a native plugin.** One `<QrScanner
+onCode={…} />` opens the camera, draws frames to a `<canvas>`, and decodes with `jsQR` — desktop,
+Android and the later web build all get one implementation rather than three, because
+`BarcodeDetector` is `undefined` in WebView2 (measured below) and a platform decoder was never on
+the table. The raw string it reads goes through the same `Invite::decode` a pasted code always
+did: `decode` takes everything after the last `#` before it filters, so a URL and a bare code both
+work.
+
+⚠️ **The CSP sentence this section carried was wrong about the *mechanism*, not merely
+out of date, and it is worth recording exactly how.** It read: *"the Tauri webview has no camera
+permission, `getUserMedia` is not reachable under the CSP in `tauri.conf.json` (`default-src
+'self'`, no `media-src`)."* **CSP has no camera directive.** `media-src` governs a `<video src>`
+URL fetch; a camera stream is assigned through `srcObject`, which is not a fetch and was never in
+CSP's reach. Measured in the running window, 2026-08-31, debug, `npm run tauri dev`, driven over
+CDP:
+
+| probe | answer |
+| --- | --- |
+| `window.isSecureContext` | `true` |
+| `navigator.mediaDevices.getUserMedia` | `function` |
+| `document.featurePolicy.allowsFeature('camera')` | **`true`** |
+| `navigator.permissions.query({name:'camera'})` | **`granted`** |
+| `enumerateDevices()` | an `audioinput`, a **`videoinput`**, an `audiooutput` |
+| `getUserMedia({video:true})` | **`NotSupportedError: Not supported`** |
+| `getUserMedia({audio:true})` | **`NotSupportedError: Not supported`** |
+
+**Audio failing identically is what actually settled it.** Every camera-specific theory — a
+missing permission, a missing device, a policy block — predicts audio working while video refuses;
+audio refused too, with the permission reading granted and a device enumerated. What was left was
+neither CSP nor the camera.
+
+**The real cause: an unhandled WebView2 `PermissionRequested` event, surfaced under a name that
+points at the wrong bug.** Relaunched with `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` carrying
+`--use-fake-ui-for-media-stream` alone — which fakes only the *permission prompt*, not the device —
+the same call answered `ok` against a real `Lenovo 500 RGB Camera (17ef:482f)` at 640×480 @ 30 fps.
+So the capture stack was present and working throughout; what failed with no flag was the
+permission request going unhandled, which WebView2 reports as `NotSupportedError` rather than the
+`NotAllowedError` anybody debugging a permission refusal would expect. **That misleading name is
+why this cost a session before this measurement existed, and why it is written down at this
+length now.** The shipped fix is the scoped one — `PermissionRequested` handled through
+`webview2-com`, granting **`CAMERA` and refusing every other permission kind** — over the blunt
+alternative the flag above proves works, which grants camera *and* microphone to the whole webview
+forever. ⚠️ **"Scoped" is about the permission **kind**, not about time or about which request
+asked.** This sentence read *"granting only the request the app made and only while it was
+asking"* until 2026-08-31 and that was an overstatement of what `camera.rs` does: the handler is
+registered on the window's `ICoreWebView2` for the whole life of the webview, and it answers
+`CAMERA` with `ALLOW` unconditionally, without consulting the requesting origin or whether the
+scanner is on screen. What that costs is bounded by there being exactly one page in this webview
+and one thing in it that asks — nothing is granted to a page that never asks, and the reader's
+camera light is on only while `QrScanner` is mounted, because the *stream* is what turns it on and
+that component stops every track it opens on every exit path. Making the grant conditional on the
+scanner being mounted would need state shared between the page and this handler and buys nothing
+against the threat a single-page desktop app has. The pipeline
+was then confirmed end to end under the *shipped* CSP: `devCsp` and the production `csp` differ
+only in `connect-src` and `style-src`, neither declares `media-src`, so both fall back to
+`default-src 'self'` — and a real camera frame through `<video srcObject>` → `canvas.drawImage` →
+`getImageData` measured **640×480, 307 200 pixels, mean red 109, 307 200 non-zero**: a live image,
+not a black frame.
+
+**The relay carries the other two blobs now.** §7.5 step 4 — "A wraps the group key to B's public
+key and sends it through the relay" — is built, for *pairing* rather than only for a rotation:
+`sync_pairing_accept` posts B's answer to `/p/{rv}/join` and `sync_pairing_confirm` posts A's
+sealed key to `/p/{rv}/offer`, a short-lived, unauthenticated **rendezvous** that carries both
+without either device holding a token. [The protocol table](#the-protocol-step-by-step) above is
+the ceremony as it stands now, and
+[the route table](#the-relay-five-group-routes-three-of-them-behind-an-auth-gate) below has the
+two new routes and why they stand outside the gate.
 
 ## What PR 7 changed, and what it did not
 
@@ -539,14 +738,15 @@ What it added is the transport below, `errors::Source::Relay`, and the two Setti
 read the relay and the review queue. **The rotation did change on 2026-08-30** — it publishes to
 the relay now and commits only when the relay accepts it. See [§7.6](#76--unpairing-and-revocation).
 
-**One thing §7.5 step 4 asks for is still hand-carried, and the distinction is fine enough to be
-worth drawing.** A *pairing* wraps the group key to a device that is not in the group yet, and the
-reader still carries that sealed blob across by hand: the relay has no route for it and the six
-digits exist precisely to distrust the hop that would carry it. A *rotation* wraps the group key
-to devices that are already on the roster, and since 2026-08-30 the relay does carry that — which
-is a different wrap, to different recipients, authenticated by a public key both ends already
-hold. Building the first out of the second is not a small step; it is the whole man-in-the-middle
-argument.
+**The distinction this paragraph used to draw — a pairing's wrap stays hand-carried, only a
+rotation's crosses the relay — closed on 2026-08-31, and closing it is the whole of this branch.**
+A *pairing* wraps the group key to a device that is not in the group yet, so it can carry no token
+and the six digits exist precisely to distrust whatever hop would carry the wrap; the rendezvous
+above answers that by carrying the wrap over a route the token gate never sees, addressed by a
+one-way derivation of the pairing's own one-time token rather than by anything either device is
+already trusted to hold. A *rotation* wraps the group key to devices already on the roster, over
+`/rotate`, authenticated by a public key both ends already hold — a different wrap, to different
+recipients, through a different route, and it is still the one this paragraph originally described.
 
 ---
 
@@ -574,21 +774,28 @@ restore-from-backup is exactly the thing that gets reused.
 
 ## The workbench
 
-`.storybook/fake/db.ts` answers all nine commands, and **there is no cryptography in it**. The
-six digits are derived from the code with a plain hash and the QR is a picture of the right shape
-rather than a readable code — the workbench has no X25519 and no encoder. What it models
-faithfully is what a panel is drawn against: two blobs carried by hand, one number both readers
-compare, a store that keeps a removed device the status command does not answer with, and every
-refusal in the crate's own words.
+`.storybook/fake/db.ts` answers all nine commands, and **there is no cryptography in it**. The six
+digits are derived from the code with a plain hash and the QR is a picture of the right shape
+rather than a readable code — the workbench has no X25519, no HKDF, no relay and no QR encoder.
+**What it models faithfully is what a panel is drawn against, and this changed shape on
+2026-08-31**: one number both readers compare, a poll that finds the other side's turn on its
+*second* ask rather than its first — there being no second world here for a story to answer from
+any sooner — and a store that keeps a removed device the status command does not answer with.
+Every refusal these handlers raise is one the crate raises, in its own words. **This paragraph used
+to say the fake models "two blobs carried by hand"; since this branch there is nothing to carry —
+`sync_pairing_poll` is the one command a story drives twice to see both turns**, in place of the
+two panes a hand-carried ceremony needed.
 
 - **`paired` is a seed**, not a fault: being paired is where a reader arrives after two presses,
   and it is the only state the roster, a removed row the panel filters away and the key version
   are reachable from. The seed keeps its removed device precisely so the story asserting its
   absence on screen is asserting something that could fail.
-- **`pairingReadError` is a fault**, and it lands on `sync_pairing_respond` alone: every other
-  way that flow fails is a *shape* the handler raises itself, and what is left is the blob
-  failing to open — which in the crate is an AEAD refusing to authenticate, and nothing a person
-  types produces a well-formed blob that will not decrypt.
+- **`pairingReadError` is a fault**, and **since 2026-08-31 it lands on `sync_pairing_poll`, on the
+  offering device's read of the joining device's answer — not on `sync_pairing_respond`, which no
+  longer exists as a command**: the rendezvous moved that read inside `poll`, and the fault moved
+  with it. Every other way the flow fails is a *shape* the handler raises itself, and what is left
+  is the blob failing to open — which in the crate is an AEAD refusing to authenticate, and nothing
+  a person types produces a well-formed blob that will not decrypt.
 
 
 ## Driven in the shipped window, 2026-08-28
@@ -1038,6 +1245,33 @@ front of the DO because a request that reaches one costs a Durable Object reques
 honoured or refused, and nothing these two can be made to spend is on that line. The residual —
 a removed device spending `/keys` reads until its auth ages out of the eight-epoch window — is
 accepted for the same reason.
+
+### The rendezvous: outside the gate, same reasoning, a different namespace
+
+Added 2026-08-31, and not a `/g/{group}/…` route at all — `/p/{rv}/{slot}`, keyed on a pairing
+attempt rather than on a group, because the group a pairing produces may not exist yet.
+
+| | | | |
+| --- | --- | --- | --- |
+| `POST {relay}/p/{rv}/{slot}` | `{ blob }` | 204; **409** if that slot is already filled | none |
+| `GET {relay}/p/{rv}/{slot}` | | 200 with `{ blob }`; 404 if empty | none |
+
+`slot` is `join` (B's response, written by B, read by A) or `offer` (A's sealed key, written by A,
+read by B). **These stand outside the bearer gate for the identical reason `/rotate` and `/keys`
+do, one step earlier in a device's life**: B is not in the group yet and cannot derive a token by
+construction, so a rendezvous behind the gate would refuse exactly the caller it exists to serve.
+Both are D1 only and **never reach a Durable Object**, which is what makes standing outside
+affordable here too — nothing either route can be made to spend is on the metered line.
+
+**Unlike `/rotate` and `/keys`, nothing here authenticates at all**, so the exposure is bounded
+four ways instead: `rv` must be 32 lowercase hex characters — `crypto::rendezvous_id`'s own output,
+a one-way HKDF derivation of the pairing's one-time token that the relay could not invert even if
+it wanted the key the token salts — a blob is capped at 2048 characters (9× the 224-character
+sealed key, the largest blob ever measured), one `rv` holds at most two rows, and every row expires
+in ten minutes on the same cron that sweeps the rest of the schema. A `POST` to an already-filled
+slot answering 409 is what stops anyone who photographed the QR from overwriting B's answer after
+the fact — they can only get there first, which the reader sees immediately because the six digits
+on the two screens then disagree.
 
 **Two relays are described in this section and telling them apart is the first thing to do.** The
 **baseline relay** is push, pull and ack with no authentication at all — and it is deployed,
@@ -1759,7 +1993,11 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
 - **A failed `sync_pairing_complete` clears the pending state**, so a mangled sealed key costs the
   whole handshake and the *second* attempt reports "There is no pairing in progress" — which
   names the wrong cause. Marshal the 224-char blob through `JSON.stringify`, never through shell
-  quoting.
+  quoting. ⚠️ **`sync_pairing_complete` left the IPC surface on 2026-08-31** — `complete`'s body is
+  unchanged but now runs only inside `sync_pairing_poll`, reading the blob back from the relay
+  rather than from an argument, so this specific trap can no longer be reproduced by calling a
+  command directly. The lesson survives it: a malformed blob anywhere in this ceremony reports at
+  the *next* step rather than at the one that produced it.
 - **`cdp.mjs eval` right after launch can find the page mid-load**, where
   `window.__TAURI_INTERNALS__` is still `undefined`. That reads as the bridge being broken; it is
   a race, and `document.readyState` tells them apart.
