@@ -994,20 +994,39 @@ export function SyncPanel(): JSX.Element {
 
   const refresh = () => void client.invalidateQueries({ queryKey: PAIRING_KEY });
 
+  /**
+   * Everything a *new* pairing attempt has to forget before it starts, so it can never read a
+   * previous attempt's answer. Called from both `begin`'s and `accept`'s `onMutate` — the two
+   * places an attempt actually starts, whichever side of it this device is on (`accept` covers
+   * the scan path too: `QrScanner`'s `onCode` and the typed-code `Paste` both call it).
+   *
+   * **`removeQueries` on `PAIRING_POLL_KEY` is the one that matters and the one the first pass
+   * of this fix was missing.** A *disabled* query keeps its last-fetched `data` sitting in the
+   * cache rather than clearing it — so a second pairing in one session re-enables the very same
+   * query key, and the render that follows reads the *previous* pairing's cached answer, because
+   * a synchronous cache read cannot wait on the fresh fetch's promise to resolve. Two render-time
+   * blocks above read that cache, and a stale read breaks both: the `"complete"` one would settle
+   * a just-opened offer screen straight back to `"idle"` before it ever painted, and the
+   * `"compare"` one could prefill a brand-new offer with an *old* six-digit code — right at the
+   * moment the reader is asked to trust that number against the other screen. `exact: true`
+   * scopes the removal to this one key rather than TanStack's default partial match — nothing
+   * else is nested under it today, but this is a cache the panel must never over-clear by
+   * accident, and `refresh()` above already owns invalidating `PAIRING_KEY` itself.
+   */
+  const startNewAttempt = () => {
+    setPairedNote(null);
+    completedRef.current = false;
+    client.removeQueries({ queryKey: PAIRING_POLL_KEY, exact: true });
+  };
+
   const begin = useMutation({
     mutationFn: () => ipc.syncPairingBegin(),
-    onMutate: () => {
-      setPairedNote(null);
-      completedRef.current = false;
-    },
+    onMutate: startNewAttempt,
     onSuccess: (offer) => setFlow({ kind: "offer", offer, sas: null }),
   });
   const accept = useMutation({
     mutationFn: (code: string) => ipc.syncPairingAccept(code),
-    onMutate: () => {
-      setPairedNote(null);
-      completedRef.current = false;
-    },
+    onMutate: startNewAttempt,
     onSuccess: (shake) => setFlow({ kind: "join", sas: shake.sas }),
   });
   /**
