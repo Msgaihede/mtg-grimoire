@@ -1799,7 +1799,10 @@ mod tests {
         // connection, and nothing here looks at it.
         let mirror = std::sync::Arc::new(crate::mirror::watch::Mask::default());
         let fence = std::sync::Arc::new(crate::db::CrossFileFence::new());
-        crate::mirror::watch::install_hook(&conn, mirror.clone(), fence.clone());
+        // A throwaway notifier: nothing in this fixture starts `sync_engine::live`, so it
+        // only has to satisfy the hook's signature.
+        let writes = std::sync::Arc::new(tokio::sync::Notify::new());
+        crate::mirror::watch::install_hook(&conn, mirror.clone(), fence.clone(), writes);
         (
             Arc::new(AppState {
                 db: Mutex::new(conn),

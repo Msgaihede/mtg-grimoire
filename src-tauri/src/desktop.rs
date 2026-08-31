@@ -562,6 +562,14 @@ pub fn run() {
             let state = Arc::new(init_state(app).inspect_err(|e| eprintln!("{e}"))?);
             app.manage(state.clone());
 
+            // The write-side half of live sync's wake. One `Arc` for the whole process: the
+            // commit hook installed below calls `notify_one` on it, and
+            // `sync_engine::live::spawn`'s `select!` wakes on the same handle — see the
+            // warning on `live::spawn` for why it must be `notify_one` and never
+            // `notify_waiters`. Created here rather than on `AppState` because nothing else
+            // needs to reach it: the two call sites below are the whole of its life.
+            let writes = Arc::new(tokio::sync::Notify::new());
+
             // Warm the facet index: ~767 ms of full table scan on its own thread and its own
             // read-only connection, so the window comes up now and the first searches answer
             // out of `db_read` untouched. Here rather than inside `init_state` because that
@@ -601,7 +609,12 @@ pub fn run() {
                 // user/corpus split: the hook has to be able to tell the mirror which of the
                 // two databases a write landed in.
                 let conn = db::lock_blocking(&state.db);
-                mirror::watch::install_hook(&conn, state.mirror.clone(), state.fence.clone());
+                mirror::watch::install_hook(
+                    &conn,
+                    state.mirror.clone(),
+                    state.fence.clone(),
+                    writes.clone(),
+                );
                 drop(conn);
 
                 // Then the thread. Detached and never fatal, exactly like the facet warm-up
@@ -708,22 +721,67 @@ pub fn run() {
             // cannot act on — `Updater::new` has already answered `InstallKind::Managed`
             // there, so every asset is refused and every button is hidden.
             #[cfg(desktop)]
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = update::check(&state, &updater, false).await {
-                    eprintln!("update check failed: {e}");
-                }
-            });
+            {
+                let update_state = state.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = update::check(&update_state, &updater, false).await {
+                        eprintln!("update check failed: {e}");
+                    }
+                });
+            }
+
+            // The relay doorbell. Its own task for the same reason as the five above — five
+            // services, five schedules, and none of them may be the reason another stops
+            // running. It opens no socket at all until this installation is in a group, which
+            // is every installation that has connected nothing.
+            crate::sync_engine::live::spawn(app.handle().clone(), state.clone(), writes.clone());
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        // `build` + `run(callback)` rather than `run(context)`, for one event: `Exit`.
-        .run(|app, event| {
-            if let tauri::RunEvent::Exit = event {
-                checkpoint_on_exit(app);
+        // `build` + `run(callback)` rather than `run(context)`, for two events: `ExitRequested`
+        // (before the window goes, for a last push) and `Exit` (after, for the WAL checkpoint).
+        .run(|app, event| match event {
+            // **A last push, with a hard budget.** The same discipline `EXIT_CHECKPOINT_WAIT`
+            // already applies, and for the reason its doc gives: a window-less process still
+            // sitting on a lock is a process the user believes has quit.
+            //
+            // The budget can be this brutal because **nothing is ever lost**. `sync_ops` is
+            // durable and `pushed_at IS NULL` survives the process, so a missed shutdown push
+            // is a delay until the next launch, not a loss.
+            tauri::RunEvent::ExitRequested { api, .. } => {
+                if EXIT_PUSH_TRIED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                    return;
+                }
+                let Some(state) = app.try_state::<Arc<AppState>>() else {
+                    return;
+                };
+                if !crate::sync_engine::live::anything_pending(&state) {
+                    return;
+                }
+                api.prevent_exit();
+                let handle = app.clone();
+                let owned = (*state).clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = tokio::time::timeout(
+                        EXIT_PUSH_BUDGET,
+                        crate::sync_engine::live::push_now(owned),
+                    )
+                    .await;
+                    handle.exit(0);
+                });
             }
+            tauri::RunEvent::Exit => checkpoint_on_exit(app),
+            _ => {}
         });
 }
+
+/// How long the exit handler will wait for a last push. Two seconds, because the alternative
+/// is a window-less process on the taskbar and the cost of giving up is a delay, never data.
+const EXIT_PUSH_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// So a second `ExitRequested` — or `exit(0)` re-entering — cannot start a second push.
+static EXIT_PUSH_TRIED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// How long the exit handler will wait for the write connection.
 ///

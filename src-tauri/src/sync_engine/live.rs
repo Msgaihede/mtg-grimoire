@@ -553,3 +553,150 @@ async fn trip(app: &tauri::AppHandle, state: &Arc<AppState>, sched: &mut Schedul
         }
     }
 }
+
+// ---------------------------------------------------------------------------------------
+// The way out
+// ---------------------------------------------------------------------------------------
+
+/// Is there anything this device has written and not yet handed the relay?
+///
+/// The same question [`super::commands::sync_relay_status`]'s panel answers, on the same SQL —
+/// one `count(*)` over `sync_ops WHERE pushed_at IS NULL`, served by a partial index — but that
+/// one takes the write connection through [`crate::sync::with_write`], and this caller cannot
+/// afford its wait. This is `desktop.rs`'s `ExitRequested` gate, asked before a single window
+/// has closed and before the hard budget on the push itself even starts: a query that queued
+/// behind a contended write connection would spend part of that budget just deciding whether to
+/// try. So this reads `db_read` instead, with `Duration::ZERO` — one `try_lock` and no sleep,
+/// [`crate::db::lock_for`]'s own documented shape for a caller with a real answer for "could
+/// not". A connection this contended at the moment the window is closing has bigger problems
+/// than a missed push, and answering `false` costs nothing a normal exit does not already
+/// forgive: the op stays `pushed_at IS NULL` and the next launch's ordinary sync tries again.
+pub fn anything_pending(state: &Arc<AppState>) -> bool {
+    let Some(conn) = crate::db::lock_for(&state.db_read, std::time::Duration::ZERO) else {
+        return false;
+    };
+    conn.query_row(
+        "SELECT count(*) FROM sync_ops WHERE pushed_at IS NULL",
+        [],
+        |r| r.get::<_, i64>(0),
+    )
+    .map(|n| n > 0)
+    .unwrap_or(false)
+}
+
+/// One last round trip on the way out, best effort and with nobody left to tell if it fails.
+///
+/// **Not [`trip`]'s copy.** There is no [`Scheduler`] out here and no next loop iteration to
+/// hand an outcome to, so this skips the started/finished bookkeeping and — deliberately — the
+/// `error_log` write [`note`] would make. The caller already bounds this whole call with a hard
+/// timeout (`EXIT_PUSH_BUDGET` in `desktop.rs`), and losing that race is not a failure worth a
+/// durable row: the op this trip was trying to push is still `pushed_at IS NULL`, exactly the
+/// state [`anything_pending`] reads, and the very next launch's ordinary sync tries it again.
+///
+/// On the blocking pool for [`trip`]'s reason: the write connection's guard is not `Send` and
+/// cannot cross an `.await` on a multi-threaded runtime, so the whole round trip — the token
+/// fetch, the push, the pull, the ack — moves to a thread where a nested `block_on` is legal
+/// and the guard never has to be `Send`.
+pub async fn push_now(state: Arc<AppState>) {
+    let _ = tokio::task::spawn_blocking(move || {
+        let Ok(rt) = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        else {
+            return;
+        };
+        let _ = crate::sync::with_write(&state, |conn| rt.block_on(client::run_once(conn)));
+    })
+    .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    /// A real `AppState` on a real file. [`crate::sync::tests::file_state`]'s shape, kept here
+    /// because that one is private to its own module: [`anything_pending`] reads `db_read` and
+    /// [`push_now`] takes `db`, and an in-memory pair cannot stand in for either — two
+    /// `:memory:` connections are two different databases.
+    fn file_state(name: &str) -> Arc<AppState> {
+        let dir = std::env::temp_dir().join(format!("mtgtest-live-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::split::convert(&dir).unwrap();
+        let conn = crate::db::open_write(&dir).unwrap();
+        let read = crate::db::open_read(&dir).unwrap();
+        // Hooked up for the same reason every sibling fixture hooks it up: `sync::with_write`'s
+        // debug_assert reads the fence, and a throwaway `Notify` is all the new signature needs
+        // — nothing in these tests starts `spawn` or waits on it.
+        let mirror = Arc::new(crate::mirror::watch::Mask::default());
+        let fence = Arc::new(crate::db::CrossFileFence::new());
+        crate::mirror::watch::install_hook(
+            &conn,
+            mirror.clone(),
+            fence.clone(),
+            Arc::new(Notify::new()),
+        );
+        Arc::new(AppState {
+            db: Mutex::new(conn),
+            db_read: Mutex::new(read),
+            data_dir: dir.clone(),
+            syncing: AtomicBool::new(false),
+            // Never called: `push_now` with no group answers `Ok(None)` before it would be.
+            client: crate::scryfall::Client::new("http://127.0.0.1:1".into()),
+            images: crate::images::Cache::new(dir.join("images")),
+            index: std::sync::RwLock::default(),
+            mirror,
+            mirror_status: Mutex::new(crate::mirror::watch::LastPass::default()),
+            fence,
+            pairing: Mutex::new(None),
+        })
+    }
+
+    #[test]
+    fn nothing_is_pending_on_a_fresh_database() {
+        let state = file_state("nothing-pending");
+        assert!(!anything_pending(&state));
+    }
+
+    #[test]
+    fn an_unpushed_op_is_pending() {
+        let state = file_state("unpushed-op");
+        state
+            .db
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO sync_ops (tbl, uid, kind, hlc_ms, hlc_ctr, device_id)
+                 VALUES ('decks', 'u1', 'put', 0, 0, 'dev1')",
+                [],
+            )
+            .unwrap();
+        assert!(anything_pending(&state));
+    }
+
+    #[test]
+    fn a_pushed_op_is_not_pending() {
+        let state = file_state("pushed-op");
+        state
+            .db
+            .lock()
+            .unwrap()
+            .execute(
+                "INSERT INTO sync_ops (tbl, uid, kind, hlc_ms, hlc_ctr, device_id, pushed_at)
+                 VALUES ('decks', 'u1', 'put', 0, 0, 'dev1', 1)",
+                [],
+            )
+            .unwrap();
+        assert!(!anything_pending(&state));
+    }
+
+    /// No group and no entitlement is every existing installation, and `push_now` must finish
+    /// quietly rather than hang or panic — which is what lets `ExitRequested` await it inside a
+    /// bounded [`tokio::time::timeout`] with no special case for the common state.
+    #[tokio::test]
+    async fn push_now_is_a_quiet_no_op_with_no_group() {
+        let state = file_state("no-group");
+        push_now(state).await;
+    }
+}
