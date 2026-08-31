@@ -466,32 +466,39 @@ group.
 Per group — three devices, plus about four token refreshes a day, since a 24-hour token with a
 six-hour margin refreshes a little over once per *device* per day. **The device cap is what bounds
 the worst case at all**: five devices is the ceiling since 2026-08-30, so no group can be more
-than ~1.7× the row below, where before it was unbounded.
+than ~1.7× any row below, where before it was unbounded.
 
-| Cadence | Requests/day/group | Groups on **free** | 1 000 groups, **paid** |
-| --- | --- | --- | --- |
-| **Manual (what ships today)**, ~10 syncs/device | ~70 | **~1 400** | **~$5.20** |
-| 5-minute poll | ~580 | ~170 | ~$9.60 |
-| 60-second poll | ~2 900 | **~34** | ~$41 |
+**Re-derived 2026-08-31** (design spec §11) now that live sync pays for a socket rather than a
+poll: what a group spends now tracks what it *does*, not a cadence every device pays alike
+regardless of whether anybody is at the keyboard.
+
+| | DO requests/group/day | Groups on **free** |
+| --- | --- | --- |
+| Idle group — connected, nobody editing | ~25 | ~4 000 |
+| Busy group — 50 edits → ~20 debounced bursts, 3 devices | ~225 | ~440 |
+| Manual — the **Sync now** button, still there as a fallback | ~70 | ~1 400 |
 
 Storage never binds: 484 KB/group against 5 GB is ~10 000 groups. Duration never binds. D1 never
 binds — the hot path reads no storage at all.
 
-Three conclusions:
+Two conclusions:
 
-- **The poll cadence is the entire cost model.** Data volume is irrelevant; a 5× change in the
-  interval is a 5× change in the bill. Sync is manual today, so the scheduler is a separate
-  decision and the table above is what to take it with.
-- **Even the worst case is ~4¢ per patron per month.** Billing here is not really about recouping
-  cost — it is about not waking to an unbounded bill.
+- **The cost is edit-driven, not clock-driven.** A poll is paid whether or not anybody is using
+  the app; this is paid only when somebody edits, so it cannot run away on its own — a busy group
+  costs about 3× an idle one paying for nothing, and that multiplier tracks how much editing
+  actually happens rather than a timer that ticks regardless of it.
 - **The free plan's 100 000/day is a cliff, not a slope.** Past it every reader starts erroring
   simultaneously, so without warning the first signal is complaints.
 
 **Decided 2026-08-29: stay on the free plan, and add a Cloudflare notification at ~70% of the
-daily request cap.** At the cadence that actually ships, ~1 400 groups fit inside the free tier, so
-paying now would buy headroom against a number no reader is near. What the alarm buys is the thing
-the free tier otherwise lacks — warning instead of complaints — and it costs nothing. Going paid
-stays a one-switch change if the alarm ever fires.
+daily request cap — and that decision stands.** Even the busiest cadence this design pays for, a
+group with somebody editing constantly, still leaves about 440 groups fitting inside the free
+tier, and a merely-connected idle group is closer to 4 000; paying now would buy headroom against
+numbers no reader is near. What the alarm buys is the thing the free tier otherwise lacks —
+warning instead of complaints — and it costs nothing. **The notification matters more now than it
+did**, because what a group spends is reader-driven — how much its devices edit — rather than a
+fixed cadence every device paid alike. Going paid stays a one-switch change if the alarm ever
+fires.
 
 **KV is ruled out of the hot path**: 1 000 writes/day on the free plan. **No R2.** One
 SQLite-backed Durable Object per pairing group, one D1 table beside it, and nothing else.
