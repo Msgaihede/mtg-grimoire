@@ -169,7 +169,7 @@ phone, saved, or opened. What is tested is that the archive's bytes match the de
 ## 4. The `content://` seam
 
 **A file the reader picks on Android is not a path.** `tauri-plugin-dialog`'s
-`DialogPlugin.kt` fires `ACTION_OPEN_DOCUMENT`/`ACTION_CREATE_DOCUMENT` and returns
+`DialogPlugin.kt` fires `ACTION_GET_CONTENT`/`ACTION_CREATE_DOCUMENT` and returns
 `uri.toString()` — a row in a ContentProvider. `std::fs::read` of one answers `No such file or
 directory`, which reads exactly like the reader picked a file that vanished. All three of
 `import_read_file`, `export_write_file` and `deck_set_cover_image` did that.
@@ -178,6 +178,54 @@ directory`, which reads exactly like the reader picked a file that vanished. All
 `tauri_plugin_fs::Fs::open` takes a `FilePath::Url`, asks the Kotlin side for a descriptor
 through the ContentResolver, and builds a **`std::fs::File`** from the raw fd — so everything
 downstream is unchanged.
+
+### 4.1 `ACTION_GET_CONTENT`, and why the picker greys out `.dec` and `.dek`
+
+**This page said `ACTION_OPEN_DOCUMENT` until 2026-08-31, and it was wrong.** Read off
+`tauri-plugin-dialog-2.7.2/android/src/main/java/DialogPlugin.kt:62`, which is disarming
+about it:
+
+```kotlin
+// TODO: ACTION_OPEN_DOCUMENT ??
+val intent = Intent(Intent.ACTION_GET_CONTENT)
+```
+
+The correction matters because the two intents take a file filter differently, and this app
+passes one. `showFilePicker` runs the requested extensions through `parseFiltersOption`
+(`:128`), which converts each to a MIME type and **silently drops the ones Android cannot
+name**:
+
+```kotlin
+MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)?.let { ... }
+```
+
+`DECKLIST_EXTENSIONS` (`src/features/transfer/files.ts:59`) is
+`["txt", "dec", "dek", "csv"]`. `MimeTypeMap` knows `txt` and `csv`; it knows neither of the
+two spellings a decklist is actually written in.
+
+**A partial filter is worse than no filter, and that is the whole bug.** The intent branches
+on `parsedTypes.isNotEmpty()` (`:73`):
+
+| What `parseFiltersOption` returns | What the picker does |
+| --- | --- |
+| Nothing at all | falls through to `intent.type = "*/*"` — **every file selectable** |
+| A non-empty subset | `EXTRA_MIME_TYPES` = that subset — **everything else greyed out** |
+
+So the four-extension list lands in the second row: `text/plain` and
+`text/comma-separated-values` survive, and a `.dec` or `.dek` on the phone is visible but
+**unselectable**. Had `MimeTypeMap` failed on all four, the picker would have worked.
+
+**Derived from the plugin's source, not driven on the device.** Nothing in §7's figures covers
+it: no `.dec` file has been put on the phone and offered to this picker. The mechanism is read
+off the Kotlin above and is stated here so the next reader starts from it rather than from the
+`std::fs` seam, which is a different problem and already solved — but the greying itself is
+**unconfirmed**, and confirming it is one file on the phone and one tap.
+
+The fix is not to extend `MimeTypeMap`, which is the platform's and not ours. `parseFiltersOption`
+passes any extension **containing a `/`** through verbatim (`:132`), so a bare `text/*` reaches
+`EXTRA_MIME_TYPES` intact — but the same list feeds the desktop dialog, where `text/*` would
+read as a literal extension. It is a per-target filter list, which is `files.ts`'s existing
+`picked.kind` seam, rather than one more string in the shared constant.
 
 Three things the implementation had to get right that a sketch would not:
 
