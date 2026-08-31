@@ -9,7 +9,10 @@ vi.mock("@tauri-apps/api/event", () => ({ listen }));
 // compares the hand-written mirror below with the crate it mirrors. `viewports.test.ts`
 // reads `tauri.conf.json` the same way, for the same reason — Rust owns the fact and
 // TypeScript only quotes it, so the quote is what can rot.
+import collectionRs from "../../src-tauri/src/collection.rs?raw";
+import deckRs from "../../src-tauri/src/deck.rs?raw";
 import searchRs from "../../src-tauri/src/search.rs?raw";
+import wishlistRs from "../../src-tauri/src/wishlist.rs?raw";
 import ipcSource from "./ipc.ts?raw";
 import {
   AUTO_BRACKET,
@@ -1939,7 +1942,7 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
   /** Field names of a `pub struct` in a Rust source file, in declaration order. */
   const rustFields = (src: string, name: string): string[] => {
     const start = src.indexOf(`pub struct ${name} {`);
-    expect(start, `\`pub struct ${name}\` is not in search.rs`).toBeGreaterThan(-1);
+    expect(start, `\`pub struct ${name}\` is not in the Rust source given`).toBeGreaterThan(-1);
     const body = src.slice(start).split("\n").slice(1);
     const end = body.indexOf("}");
     expect(end, `\`${name}\` has no closing brace`).toBeGreaterThan(0);
@@ -1987,4 +1990,44 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     expect(rustFields(searchRs, "CardSummary")).toContain("image_uris");
     expect(tsFields(ipcSource, "CardSummary")).toContain("imageUris");
   });
+
+  /**
+   * **The other three card walls, pinned the same way and for a failure that has already
+   * shipped.** `CardSummary` was the only DTO carrying `image_uris` until 2026-08-31, on the
+   * belief that `search_cards` was the one card-bearing command a browser could call. It is
+   * not — `collection_list`, `wishlist_list` and `deck_get` are all in `web/route.rs`'s
+   * `COMMANDS` — so those three walls drew named, artless frames on the web build while the
+   * search wall beside them drew pictures.
+   *
+   * Nothing in jsdom can notice a missing picture, and nothing in the build type-checks this
+   * mirror against the crate, so the field name on both sides is the whole of the fence.
+   */
+  // Annotated rather than inferred: without the tuple type TypeScript widens each row to
+  // `string[]` and the three arguments below lose their names.
+  const mirrors: [tsName: string, rustSource: string, rustName: string][] = [
+    ["CollectionRow", collectionRs, "CollectionRow"],
+    ["WishRow", wishlistRs, "WishRow"],
+    // The one pair whose two names differ: the crate calls a deck's line `DeckCardRow` and
+    // this file calls it `DeckCard`, so the mapping is spelled out rather than assumed.
+    ["DeckCard", deckRs, "DeckCardRow"],
+  ];
+
+  it.each(mirrors)(
+    "the %s mirror agrees with the Rust struct field for field",
+    (tsName, rustSource, rustName) => {
+    const rust = rustFields(rustSource, rustName).map(camel);
+    const ts = tsFields(ipcSource, tsName);
+
+    // Not `toEqual` on the raw arrays: the parsers are the thing under suspicion, so a pass
+    // has to mean "both found fields", never "both found nothing".
+    expect(rust.length).toBeGreaterThan(10);
+    expect(ts.length).toBeGreaterThan(10);
+    expect([...ts].sort()).toEqual([...rust].sort());
+
+    // Named on its own as well as counted, because this is the field the whole widening was
+    // for and its absence is silent on both sides.
+    expect(rust).toContain("imageUris");
+    expect(ts).toContain("imageUris");
+    },
+  );
 });

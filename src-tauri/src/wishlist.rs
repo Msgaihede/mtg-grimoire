@@ -22,6 +22,7 @@ use crate::schema::{FINISHES, WISHLIST_GRAIN};
 use crate::sync::{with_write, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 #[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
@@ -199,6 +200,23 @@ pub struct WishRow {
     /// `0` on an orphan with no oracle id, and that is a fence rather than a coincidence —
     /// see the subquery's own comment in [`list_wishes`].
     pub elsewhere: i64,
+    /// The front face's picture on `cards.scryfall.io`, by variant — **the only art a browser
+    /// can reach**, and `None` when there is none worth fetching.
+    ///
+    /// **Of the printing this wish is *drawn as*, which is [`Self::art_card_id`]'s printing and
+    /// not [`Self::card_id`]'s.** The same `LEFT JOIN` answers all three, which is the point: a
+    /// pinned wish shows its own printing, an unpinned one the cheapest printing of its oracle
+    /// card, and the picture, the id and [`Self::unit_price`] can never come from three rules.
+    ///
+    /// [`crate::search::CardSummary::image_uris`] carries the rest of the argument — one
+    /// variant, face 0, the face-first precedence and the `soon.jpg` fence, all of them
+    /// [`crate::image_uri::front_face_map`]'s. `wishlist_list` is routed on web and
+    /// `mtgimg://` is not reachable there, so without this the wishlist wall is named, artless
+    /// frames in a browser. Ignored on the desktop, where the local cache wins.
+    ///
+    /// `None` on a genuine orphan — no pinned printing, no oracle match — which is exactly
+    /// where [`Self::type_line`] and [`Self::legalities`] beside it are `None` too.
+    pub image_uris: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -911,6 +929,10 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
         "w.name ASC",
         "w.id ASC",
     );
+    // The picture, off the very printing this read already joined — the one `art_card_id`
+    // names — so the art and the id under it are one answer rather than two. `c` is the alias
+    // `from` above gave that printing.
+    let image_uris = crate::image_uri::front_face_selects("c").join(", ");
     let sql = format!(
         "SELECT w.id, w.oracle_id, w.card_id, w.name, w.set_code, w.collector_number, w.lang,
                 c.rarity, c.mana_cost, w.quantity, w.preferred_finish,
@@ -938,11 +960,20 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
                 (SELECT count(*) FROM wishlist_entries o
                   WHERE o.id <> w.id AND o.oracle_id IS NOT NULL
                     AND o.oracle_id = w.oracle_id) AS elsewhere,
-                w.folder_id
+                w.folder_id,
+                -- 21 and 22, on the end like every appended column above. An any-printing wish
+                -- is drawn as whichever printing the join chose for it, which is the printing
+                -- `c.id` and the price beside it are already about.
+                {image_uris}
          FROM {from} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?"
     );
     params.push(Box::new(limit));
     params.push(Box::new(q.offset));
+
+    // Where the image pair begins — the count of every column before it, which is what makes
+    // it last. Written down rather than spelled inside the closure, for the reason the four
+    // appended `r.get(N)`s above carry: this mapping is positional.
+    const IMAGE_COL: usize = 21;
 
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
@@ -971,6 +1002,11 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
                     legalities: r.get(18)?,
                     elsewhere: r.get(19)?,
                     folder_id: r.get(20)?,
+                    // 21 and 22 — the pair `front_face_selects` added, folded back up by the
+                    // module that added them, precedence and `soon.jpg` fence included.
+                    image_uris: crate::image_uri::front_face_map(|i| {
+                        r.get::<_, Option<String>>(IMAGE_COL + i)
+                    })?,
                 })
             },
         )
@@ -2025,6 +2061,88 @@ mod tests {
         assert_eq!(stored, "bolt-lea");
     }
 
+    /// **A wish carries the picture of the printing it is drawn as — pinned or not.**
+    ///
+    /// The join that answers `art_card_id` is the join that answers this, and the second
+    /// assertion is what proves it rather than merely proving a URL arrived: an any-printing
+    /// wish is drawn as the printing a reader acting on it would actually buy, and a picture
+    /// taken from a different rule would show a piece of cardboard the wish is not for.
+    ///
+    /// On web there is no `mtgimg://` to fall back to, so this is the wishlist wall's only art.
+    #[test]
+    fn a_wish_carries_the_image_url_of_the_printing_it_is_drawn_as() {
+        let conn = seeded();
+        // Each printing gets its *own* versioned URL, so the assertions below can say which
+        // printing the row was drawn as rather than only that it has a picture at all — and a
+        // **face** picture as well as a top-level one, which is the only shape that catches the
+        // pair being read a column early: with top-level pictures alone, a shifted read lands
+        // the top-level URL in the `face` slot and answers correctly anyway.
+        conn.execute(
+            "UPDATE cards SET
+                 image_uris = json_object(
+                     'display','https://cards.scryfall.io/display/top/' || id || '.webp?17'),
+                 face_image_uris = json_array(json_object(
+                     'display','https://cards.scryfall.io/display/face/' || id || '.webp?17'))",
+            [],
+        )
+        .unwrap();
+        add_wish(
+            &conn,
+            &WishInput {
+                card_id: Some("bolt-lea".to_owned()),
+                quantity: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        add_any_printing_wish(&conn, "o1", None);
+
+        let rows = list_wishes(&conn, &WishlistQuery::default()).unwrap().items;
+        let pinned = rows
+            .iter()
+            .find(|r| r.card_id.as_deref() == Some("bolt-lea"))
+            .expect("the pinned wish");
+        let any = rows
+            .iter()
+            .find(|r| r.card_id.is_none())
+            .expect("the any-printing wish");
+
+        // `face/`, not `top/`: the face wins over the top-level blob, and a pair read a column
+        // early answers the top-level URL — which is the whole reason both columns are seeded.
+        assert_eq!(
+            pinned.image_uris.as_ref().unwrap()[crate::image_uri::LIST_VARIANT],
+            "https://cards.scryfall.io/display/face/bolt-lea.webp?17",
+            "a pinned wish is drawn as its own printing"
+        );
+        // Not merely "has a picture": the art has to be of the printing the join chose, which
+        // is the one `art_card_id` names. A picture taken from a second join passes the
+        // assertion above and fails this one.
+        assert_eq!(
+            any.image_uris.as_ref().unwrap()[crate::image_uri::LIST_VARIANT],
+            format!(
+                "https://cards.scryfall.io/display/face/{}.webp?17",
+                any.art_card_id
+                    .as_deref()
+                    .expect("an any-printing wish is drawn as some printing")
+            ),
+        );
+
+        // And the fence, on the shape that would otherwise make a URL out of no picture. Both
+        // columns, because either one alone would leave the other answering.
+        conn.execute(
+            "UPDATE cards SET
+                 image_uris = json_object('display','https://errors.scryfall.com/soon.jpg'),
+                 face_image_uris = NULL",
+            [],
+        )
+        .unwrap();
+        let rows = list_wishes(&conn, &WishlistQuery::default()).unwrap().items;
+        assert!(
+            rows.iter().all(|r| r.image_uris.is_none()),
+            "an error page is a gap, not a picture"
+        );
+    }
+
     #[test]
     fn wish_row_json_uses_the_camel_case_names_the_frontend_expects() {
         let value = serde_json::to_value(WishRow {
@@ -2049,6 +2167,10 @@ mod tests {
             legalities: Some(r#"{"timeless":"legal"}"#.into()),
             folder_id: Some(7),
             elsewhere: 1,
+            image_uris: Some(BTreeMap::from([(
+                crate::image_uri::LIST_VARIANT.to_owned(),
+                "https://cards.scryfall.io/display/front/0/0/x.webp?17".to_owned(),
+            )])),
         })
         .unwrap();
         assert_eq!(
@@ -2061,7 +2183,10 @@ mod tests {
                 "unitPrice": 40.0, "ownedQuantity": 2, "notes": null,
                 "needsReview": null, "updatedAt": 1800000000,
                 "legalities": "{\"timeless\":\"legal\"}",
-                "folderId": 7, "elsewhere": 1
+                "folderId": 7, "elsewhere": 1,
+                "imageUris": {
+                    "display": "https://cards.scryfall.io/display/front/0/0/x.webp?17"
+                }
             })
         );
     }

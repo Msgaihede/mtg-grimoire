@@ -44,6 +44,9 @@ function toTile(wish: WishRow): WishTile {
     setCode: wish.setCode ?? "",
     collectorNumber: wish.collectorNumber ?? "",
     rarity: wish.rarity,
+    // The picture of the printing this wish is *drawn as* — the same join `artCardId` above
+    // came from, so the art and the id under it are one answer. Ignored on the desktop.
+    imageUris: wish.imageUris,
     wish,
   };
 }

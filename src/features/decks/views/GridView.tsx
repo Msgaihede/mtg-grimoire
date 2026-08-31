@@ -388,6 +388,11 @@ function GridCard({
             name={card.name}
             // The whole card, the same `grid` variant the stack draws.
             variant={DECK_CARD_VARIANT}
+            // The picture a browser can reach, where the row carries one. `DECK_CARD_VARIANT`
+            // and not a size of this view's own: the URL and the protocol URL beside it have to
+            // name one size, and `CardArt` is handed both and picks — see `cardArtSrc`, which
+            // is the one place that platform branch is written.
+            imageUrl={card.imageUris?.[DECK_CARD_VARIANT]}
             finish={playedFinish(card.finish, card.finishes)}
             // In the same chip, whose glyph and word it replaces — so a Surge Foil in a deck
             // says so here exactly as it does on the search wall docked beside this view.

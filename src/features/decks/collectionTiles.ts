@@ -206,6 +206,12 @@ export function foldCopies(
       setCode: first.setCode ?? "",
       collectorNumber: first.collectorNumber ?? "",
       rarity: first.rarity ?? null,
+      // The picture a browser can reach — **the fifth wall, and the one easiest to miss**: the
+      // deck editor's docked Collection tab folds `CollectionRow`s of its own rather than going
+      // through `CollectionPage`, so wiring that page leaves this one artless. Off the group's
+      // first row like every other card fact here, and for the same reason: every row behind a
+      // tile names the same printing. Ignored on the desktop, where `cardArtSrc` takes the cache.
+      imageUris: first.imageUris,
       copies: entries.reduce((n, e) => n + held(e.row), 0),
       typeLine: first.typeLine ?? null,
       oracleId: first.oracleId ?? null,
