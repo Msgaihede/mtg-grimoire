@@ -292,12 +292,30 @@ export function Ribbon({
               line two elements over is the one live region here, and a reader does not need to
               be told a working socket exists. The word is in a hover only, through
               `useTooltip()` and never a native `title`, and the accessible name carries the
-              state on its own (`aria-label`) so a screen reader still gets it without one. */}
+              state on its own (`aria-label`) so a screen reader still gets it without one.
+
+              **`aria-live="polite"` all the same, and it does not conflict with the rule above.**
+              `role="status"` implies `aria-live="polite"`, but the implication does not run
+              backwards — this element still carries no `role`, so it is still invisible to
+              `getByRole("status")`, and a sighted reader still gets the live→offline flip for
+              free (the icon turning red in peripheral vision). Without this a screen-reader
+              user got nothing from that transition unless they happened to be tabbed to the
+              marker at the moment it happened, for the one event this whole feature exists to
+              surface.
+
+              **Floored for a finger exactly like its two siblings**, and for their reason:
+              `TOUCH_FLOOR`'s own comment measured `Refresh data` and the update button at 38px
+              icon-only, under `--target-min`'s 44px. This marker is icon-only *unconditionally*
+              — there is no wide-row label to lose — so without the floor it would ship at
+              roughly 28px (`p-1.5` around a `size-4` glyph) on the one layout `AppShell` nulls
+              it for the least: Android, once a phone install pairs. */}
           {deviceSync !== null && deviceSync !== "off" && (
             <button
               type="button"
               onClick={onOpenSync}
               aria-label={"Sync " + deviceSync}
+              aria-live="polite"
+              style={narrow ? TOUCH_FLOOR : undefined}
               {...tip(DEVICE_SYNC_TOOLTIP[deviceSync])}
               className={cn(
                 "inline-flex shrink-0 items-center justify-center rounded-md p-1.5",
