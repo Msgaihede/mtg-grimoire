@@ -34,15 +34,19 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
-use super::layout::{plan_files, Plan, PlannedFile, Shape, Source};
+use super::layout::{plan_files, Plan, Shape, Source};
 use super::paths::is_ours;
+use super::snapshot::render;
 use crate::sorting::Marketplace;
-use crate::transfer::fields::available_fields;
-use crate::transfer::write::format_export;
 use crate::transfer::{Card, Surface};
 
-/// The one file in the root that is not an export.
-pub const README_NAME: &str = "README.txt";
+/// **Re-exported from [`super::readme`], which is where they moved on 2026-08-31.**
+///
+/// They are the folder's fixed name and the folder's own words, and this module is the only
+/// thing that ever writes either — but the zip snapshot puts a README at the top of the archive
+/// too, and this module does not compile for the browser. Every spelling in the crate still
+/// resolves through here.
+pub use super::readme::{README, README_NAME};
 
 /// The record of what the last pass intended to exist: one root-relative path per line, `/`
 /// separators, LF endings, sorted.
@@ -50,62 +54,6 @@ pub const README_NAME: &str = "README.txt";
 /// **It is the pruner's only authority.** It lists every file of the current plan and
 /// [`README_NAME`]; it does not list itself, so nothing can ever plan it away.
 pub const MANIFEST_NAME: &str = ".mirror-manifest";
-
-/// What the folder says about itself.
-///
-/// Spec §3.1 and §3.2 fix what has to be in here: what the folder is, that it is generated and
-/// rewritten, that edits are overwritten, that the app never reads it back, the two omissions
-/// §3.1 names — neither of which is a field the mirror could have switched on — and that
-/// deleting the whole root is safe. [`MANIFEST_NAME`] is explained for the same reason: it is a
-/// file the reader did not make and will wonder about, and what deleting it costs is exactly
-/// one pass's worth of leftovers rather than anything they cannot get back.
-pub const README: &str = "\
-MTG Grimoire - plain-text backup
-================================
-
-This folder holds your decks, your collection and your wishlist as plain text
-files. You can open them in Notepad, print them, mail them to yourself, or read
-them into any other program. It exists for the day this app will not start: the
-cards are still yours, in every format the app can write, in a folder you chose.
-
-It is generated. MTG Grimoire rewrites it whenever something changes, and it
-only touches the files whose contents actually differ. Anything you type into a
-file in here - including this README - is overwritten by the next pass.
-
-This folder is never read back. The database is the only source of truth and the
-backup is a one-way copy, so editing a file in here changes nothing in the app.
-
-Every deck, folder and list is written in all seven formats:
-
-    <name>.txt              plain text
-    <name>.mtgo.txt         MTGO
-    <name>.arena.txt        MTG Arena
-    <name>.moxfield.txt     Moxfield
-    <name>.archidekt.txt    Archidekt
-    <name>.tcgplayer.txt    TCGplayer
-    <name>.csv              spreadsheet - every field the list has
-
-Every optional column is switched on. Two things these files still cannot say,
-because the formats themselves have no room for them:
-
-  * MTGO and Arena have no maybeboard. *.mtgo.txt and *.arena.txt leave out any
-    pile you have switched off. Those cards are not lost - they are in the other
-    five files, and every one of them is in the .csv.
-
-  * *.arena.txt lists every card. For a paper collection that makes it a
-    complete record and NOT a valid Arena import, because Arena rejects cards it
-    does not have. If you want a list Arena will accept, use Export in the app,
-    where that filter is a checkbox.
-
-About .mirror-manifest: it is a plain list of the files this backup last wrote,
-and it is how the app knows which of its own files to tidy up after you rename
-or delete a deck. It never names anything of yours. Deleting it is safe; the
-only cost is that the files the app was about to tidy up stay behind for good,
-because after that it no longer knows they were its.
-
-Deleting this whole folder is safe too. Nothing in the app depends on it, and
-the next pass builds it again from the database.
-";
 
 /// What one pass did. Every field is a number the Settings panel and the tests both read.
 ///
@@ -325,35 +273,6 @@ pub fn run_pass(
         &mut report,
     );
     Ok(report)
-}
-
-/// One planned file's bytes, reading its list only when it is not the one already in hand.
-///
-/// Every optional field is on, which is exactly what `available_fields` already answers — the
-/// mirror is a backup, so the question "what *can* this file say" and "what should it say" have
-/// the same answer here and nowhere else in the app.
-fn render(
-    conn: &Connection,
-    file: &PlannedFile,
-    marketplace: Marketplace,
-    memo: &mut Option<(Source, Vec<Card>)>,
-) -> Result<String, String> {
-    let stale = match memo {
-        Some((source, _)) => source != &file.source,
-        None => true,
-    };
-    if stale {
-        // On failure the memo keeps the *previous* source, so the next file of this list finds
-        // it stale and tries again rather than being handed the wrong deck's cards.
-        let cards = super::read::cards_for(conn, &file.source, marketplace)?;
-        *memo = Some((file.source.clone(), cards));
-    }
-    let cards = memo.as_ref().map_or(&[][..], |(_, c)| c.as_slice());
-    Ok(format_export(
-        cards,
-        file.format,
-        &available_fields(file.format, file.surface),
-    ))
 }
 
 /// A change detector over the bytes, and deliberately not a security boundary.
