@@ -351,7 +351,10 @@ const DEFAULT_PEER_NAME: &str = "Paired device";
 ///
 /// The cost, stated plainly: a freshly paired device draws *Supporting since …* after its first
 /// relay call rather than the instant the digits match.
-pub async fn confirm(conn: &Connection, pending: &mut Option<Pending>) -> Result<SealedKey, String> {
+pub async fn confirm(
+    conn: &Connection,
+    pending: &mut Option<Pending>,
+) -> Result<SealedKey, String> {
     let me = identity::ensure(conn).map_err(err)?;
     let p = pending.as_ref().ok_or(NOTHING_IN_FLIGHT)?;
     if p.spent {
@@ -576,7 +579,11 @@ pub async fn poll(
 /// The six digits, as the initiator would compute them — `None` while the joiner's key has not
 /// arrived yet, which [`poll_initiator`] reads as "keep waiting" rather than as an error.
 fn initiator_sas(me: &identity::Identity, p: &Pending) -> Option<String> {
-    Some(crypto::sas(&p.pair_key?, &me.keypair.public, &p.peer_public?))
+    Some(crypto::sas(
+        &p.pair_key?,
+        &me.keypair.public,
+        &p.peer_public?,
+    ))
 }
 
 /// The six digits, as the joiner would compute them.
@@ -587,7 +594,8 @@ fn initiator_sas(me: &identity::Identity, p: &Pending) -> Option<String> {
 /// starts with neither and waits for [`respond`] to fill them in.
 fn joiner_sas(me: &identity::Identity, p: &Pending) -> String {
     crypto::sas(
-        &p.pair_key.expect("a joiner's pending always carries a pair key"),
+        &p.pair_key
+            .expect("a joiner's pending always carries a pair key"),
         &p.peer_public
             .expect("a joiner's pending always carries the initiator's key"),
         &me.keypair.public,
@@ -851,7 +859,9 @@ pub async fn sync_pairing_poll(
             .build()
             .map_err(|e| e.to_string())?;
         let mut pending = sync::lock_plain(&state.pairing);
-        sync::with_write(&state, |conn| runtime.block_on(poll(conn, &mut pending, now)))
+        sync::with_write(&state, |conn| {
+            runtime.block_on(poll(conn, &mut pending, now))
+        })
     })
     .await
     .map_err(|e| format!("could not check the pairing's progress: {e}"))?
@@ -1072,8 +1082,14 @@ mod tests {
     fn rv_slot(path: &str) -> (String, String) {
         let mut parts = path.trim_start_matches('/').split('/');
         parts.next(); // "p"
-        let rv = parts.next().expect("the route regex pinned this shape").to_owned();
-        let slot = parts.next().expect("the route regex pinned this shape").to_owned();
+        let rv = parts
+            .next()
+            .expect("the route regex pinned this shape")
+            .to_owned();
+        let slot = parts
+            .next()
+            .expect("the route regex pinned this shape")
+            .to_owned();
         (rv, slot)
     }
 
@@ -1084,7 +1100,8 @@ mod tests {
 
             let read_store = store.clone();
             server.mock(|when, then| {
-                when.method(GET).path_matches(r"^/p/[0-9a-f]{32}/(offer|join)$");
+                when.method(GET)
+                    .path_matches(r"^/p/[0-9a-f]{32}/(offer|join)$");
                 then.respond_with(move |req: &HttpMockRequest| {
                     let (rv, slot) = rv_slot(req.uri().path());
                     match read_store.lock().unwrap().get(&(rv, slot)) {
@@ -1100,7 +1117,8 @@ mod tests {
 
             let write_store = store.clone();
             server.mock(|when, then| {
-                when.method(POST).path_matches(r"^/p/[0-9a-f]{32}/(offer|join)$");
+                when.method(POST)
+                    .path_matches(r"^/p/[0-9a-f]{32}/(offer|join)$");
                 then.respond_with(move |req: &HttpMockRequest| {
                     let (rv, slot) = rv_slot(req.uri().path());
                     let body: serde_json::Value =
@@ -1162,7 +1180,9 @@ mod tests {
         assert_eq!(offer.qr.modules, expected.modules);
         assert_ne!(
             offer.qr.modules,
-            crate::sync_pair::invite::qr_matrix(&offer.code).unwrap().modules,
+            crate::sync_pair::invite::qr_matrix(&offer.code)
+                .unwrap()
+                .modules,
             "the QR must draw the relay's URL, not a picture of the bare code"
         );
     }
@@ -1221,7 +1241,10 @@ mod tests {
         let blob = crate::sync_pair::invite::blob_decode(&sealed.sealed_key).unwrap();
         let split = blob.iter().position(|byte| *byte == 0).unwrap();
         let device_id = String::from_utf8_lossy(&blob[..split]).into_owned();
-        assert_eq!(device_id, me_a.device_id, "the clear prefix is A's own device id");
+        assert_eq!(
+            device_id, me_a.device_id,
+            "the clear prefix is A's own device id"
+        );
 
         let plain = crypto::open(&pair_key, device_id.as_bytes(), &blob[split + 1..]).unwrap();
         let mut parts = plain.splitn(3, |byte| *byte == 0);
@@ -1232,8 +1255,15 @@ mod tests {
         let got_key = parts.next().unwrap();
 
         assert_eq!(got_group_id, group.group_id);
-        assert_eq!(got_epoch, group.epoch, "the epoch sealed must be the current one");
-        assert_eq!(got_key, group.group_key.as_slice(), "the key is the LAST field");
+        assert_eq!(
+            got_epoch, group.epoch,
+            "the epoch sealed must be the current one"
+        );
+        assert_eq!(
+            got_key,
+            group.group_key.as_slice(),
+            "the key is the LAST field"
+        );
     }
 
     /// A failed post at step 2 must leave nothing committed — the whole reason step 2 runs

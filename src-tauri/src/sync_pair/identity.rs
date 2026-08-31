@@ -2307,7 +2307,13 @@ mod tests {
         let conn = db();
         let me = ensure(&conn).unwrap();
         create_group(&conn, &me).unwrap();
-        add_device(&conn, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", &[2u8; 32], "Phone").unwrap();
+        add_device(
+            &conn,
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            &[2u8; 32],
+            "Phone",
+        )
+        .unwrap();
         conn
     }
 
@@ -2365,7 +2371,13 @@ mod tests {
             [],
         )
         .unwrap();
-        add_device(&conn, "cccccccccccccccccccccccccccccccc", &[3u8; 32], "Phone").unwrap();
+        add_device(
+            &conn,
+            "cccccccccccccccccccccccccccccccc",
+            &[3u8; 32],
+            "Phone",
+        )
+        .unwrap();
 
         let plan = plan_join(&conn).expect("a join must plan");
         let named: Vec<&str> = plan.keys.iter().map(|(d, _)| d.as_str()).collect();
@@ -2383,7 +2395,13 @@ mod tests {
     fn a_join_rotation_advances_the_epoch() {
         let conn = seeded_group_of_two();
         let before = group(&conn).unwrap().unwrap().epoch;
-        add_device(&conn, "cccccccccccccccccccccccccccccccc", &[3u8; 32], "Phone").unwrap();
+        add_device(
+            &conn,
+            "cccccccccccccccccccccccccccccccc",
+            &[3u8; 32],
+            "Phone",
+        )
+        .unwrap();
         assert_eq!(plan_join(&conn).unwrap().group.epoch, before + 1);
     }
 
@@ -2401,7 +2419,13 @@ mod tests {
     fn planning_a_join_writes_nothing() {
         let conn = seeded_group_of_two();
         let before = group(&conn).unwrap().unwrap();
-        add_device(&conn, "cccccccccccccccccccccccccccccccc", &[3u8; 32], "Phone").unwrap();
+        add_device(
+            &conn,
+            "cccccccccccccccccccccccccccccccc",
+            &[3u8; 32],
+            "Phone",
+        )
+        .unwrap();
         let devices_before_planning = count(&conn, "sync_devices");
 
         let _ = plan_join(&conn).unwrap();
