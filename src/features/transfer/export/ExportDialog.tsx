@@ -19,12 +19,20 @@
  * and this file must not become a fourth. The body lives in {@link Body}, one floor down, so a
  * closed dialog — `open={false}` — mounts nothing: no format state, no memoized preview text.
  *
- * **The file picker's own half is unverifiable**, for the reason `deck_set_cover_image`'s is
+ * **Where the text ends up is `../files`'s question and no longer this file's.** `saveExport`
+ * either opens the OS save dialog and hands the path to `export_write_file`, or — on the web
+ * target, where there is no path to hand anybody — turns the text into a `Blob` behind an
+ * `<a download>`. This file passes one file name and catches one refusal, and the branch folds
+ * away at build time.
+ *
+ * **The _native_ picker's own half is unverifiable**, for the reason `deck_set_cover_image`'s is
  * (`src/features/transfer/CLAUDE.md`'s Import section says the same of the open dialog):
  * `dialog:allow-save` opens a native window CDP cannot reach, and nothing in a test or a browser
  * can drive it either. So this file's tests cover **path → write**, not **click → path** — `save`
  * from `@tauri-apps/plugin-dialog` is mocked to answer a path directly, the same way
- * `DeckCoverPicker`'s and `ImportDialog`'s tests stub `open`.
+ * `DeckCoverPicker`'s and `ImportDialog`'s tests stub `open`. **The browser's save is the
+ * exception**, because it has no native window in it: the web test below goes press →
+ * `<a download>` with nothing stubbed but the target flag and the anchor's own `click`.
  *
  * **The preview is a disclosure and opens shut** (2026-08-18). A decklist is the tallest thing
  * this dialog draws and the least of what a reader came for — the two presses that do the work
@@ -39,9 +47,11 @@
  * **A cancelled save answers `null`, and that is the one bug worth naming in prose.** `save()`
  * resolves `null` on Cancel, and writing *that* string to disk — `ipc.exportWriteFile(path,
  * text)` called with `path` still `null` — is exactly the trap `deck_set_cover_image`'s callers
- * already avoid; the guard below is the whole of what stops it here. And a refused write is
- * reported rather than closing the dialog on it: the reader's text is still on screen and still
- * copyable, so the failure costs them nothing they cannot immediately retry.
+ * already avoid. The guard is `saveExport`'s now rather than this file's, which is the right
+ * place for it: it sits beside the `save()` whose answer it is about, so no second caller of that
+ * dialog can forget it. And a refused write is still reported rather than closing the dialog on
+ * it: the reader's text is still on screen and still copyable, so the failure costs them nothing
+ * they cannot immediately retry.
  *
  * **What a format leaves out is said on screen before Copy is pressed, and it is deliberately not
  * a `role="alert"`.** Arena and MTGO have no maybeboard, so `formatExport` writes only the piles
@@ -75,16 +85,16 @@
  * Moxfield habit onto it.
  */
 import { useCallback, useId, useMemo, useState, type JSX } from "react";
-import { save } from "@tauri-apps/plugin-dialog";
 import { ChevronRight } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { copyText } from "@/lib/clipboard";
 import { FOCUS } from "@/lib/focus";
-import { ipc, ipcError } from "@/lib/ipc";
+import { ipcError } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { Dialog } from "@/components/Dialog";
+import { saveExport } from "../files";
 import {
   ALWAYS,
   availableFields,
@@ -323,13 +333,13 @@ function Body({
     setError(null);
     setSaving(true);
     try {
-      // `save()` answers `null` on Cancel, and writing that string to disk is the bug this
-      // guard exists to prevent — nothing is written when the reader backs out of the picker.
-      const path = await save({
-        defaultPath: `${suggestedFileName}.${EXPORT_FORMAT_EXTENSION[format]}`,
-      });
-      if (path === null) return;
-      await ipc.exportWriteFile(path, text);
+      // **Which mechanism this is depends on the build, and this file does not know which.**
+      // `../files` is the seam: on desktop and Android `dialog:allow-save` answers a *path*
+      // and `export_write_file` writes at it in Rust — including the `null` a cancelled save
+      // dialog answers, which is the bug that guard exists to prevent — while on the web
+      // target there is no path and the text goes out as a `Blob` behind an `<a download>`.
+      // The file name is the same either way, which is what keeps the two honest.
+      await saveExport(`${suggestedFileName}.${EXPORT_FORMAT_EXTENSION[format]}`, text);
     } catch (e) {
       // Reported, not fatal to the dialog: the reader's text is still on screen and still
       // copyable, so a refused write must not throw either away.
