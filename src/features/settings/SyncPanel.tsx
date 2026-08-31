@@ -8,6 +8,7 @@ import { openExternal } from "@/lib/externalLinks";
 import {
   ipc,
   ipcError,
+  type LiveState,
   type PairedDevice,
   type PairingOffer,
   type PairingStatus,
@@ -15,8 +16,9 @@ import {
   type RelayStatus,
   type SupporterStatus,
 } from "@/lib/ipc";
-import { RELAY_KEY, SYNC_KEY } from "@/lib/query";
+import { PAIRING_KEY, RELAY_KEY, SYNC_KEY } from "@/lib/query";
 import { ago } from "@/lib/relativeTime";
+import { useDeviceSyncLive } from "@/lib/useDeviceSyncLive";
 import { nowSeconds } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -24,16 +26,6 @@ import { BUTTON } from "./controls";
 import { PanelAlert, SettingsSection } from "./panelChrome";
 import { QrCode } from "./QrCode";
 import { QrScanner } from "./QrScanner";
-
-/**
- * This device's pairing state, under one key.
- *
- * Declared here rather than in `@/lib/query`, which is `BackupPanel`'s `MIRROR_KEY` and its
- * reason: nothing else in the window reads it. The moment a second surface does — PR 7's sync
- * indicator will — the literal moves to `@/lib/query` for `COMBOS_KEY`'s reason, so that two
- * features cannot spell one prefix two ways.
- */
-export const PAIRING_KEY: QueryKey = ["sync", "pairing"];
 
 /**
  * Where an in-flight pairing has got to — nested under {@link PAIRING_KEY}'s root rather than
@@ -414,6 +406,37 @@ export function relayNote(
 }
 
 /**
+ * One sentence about the socket, or none — a third sentence function beside {@link relayNote}
+ * and {@link supporterNote}, not an eighth {@link RelayState} arm.
+ *
+ * **A connection state is not mutually exclusive with `relayState`'s seven rungs.** "The socket
+ * is live" and "last synced three minutes ago" are both true at once — a device can be `synced`
+ * from its last round trip and have the socket drop a second later, with nothing about that in
+ * `RelayStatus`. So this reads {@link LiveState} on its own, the way `supporterNote` already
+ * reads {@link SupporterState} on its own beside `relayState`.
+ *
+ * Same rule as its two neighbours: **one sentence per state, never one sentence with a status
+ * interpolated into it.** Only the failing state says anything — a working socket is not news —
+ * and the state this exists for is the one automatic sync introduces: a device that looks synced
+ * while its socket has quietly been down for hours. `off` and `connecting` say nothing for
+ * `relayNote`'s `off`/`syncing` reason: sync being off has its own sentence already, and a
+ * connection attempt in progress is not a failure to report on.
+ */
+export function liveNote(state: LiveState): string | null {
+  switch (state) {
+    case "offline":
+      return (
+        "Not connected to the relay. Changes are still being kept and go across as soon as " +
+        "it comes back."
+      );
+    case "off":
+    case "connecting":
+    case "live":
+      return null;
+  }
+}
+
+/**
  * What one press of Sync now did, in the reader's terms.
  *
  * **`null` is not a failure and must never read as one.** It is what the backend answers when
@@ -716,8 +739,13 @@ const RECLAIM_WARNING =
  * `complete` mutation's own `.then()`, and now the relay carries the accept and the sealed key,
  * so there is no such mutation left to hang it off — the poll's own effect is what drives it
  * instead, and swallows its failure the same way the old code did.
+ *
+ * **`live` is a prop rather than a second `useDeviceSyncLive()` call here**, so that this
+ * component and `SyncPanel` around it agree about the socket's state on the same render — the
+ * hook's own guard against a stale seed overwriting a real transition is per-call, not
+ * per-process, so two independent subscriptions could momentarily disagree.
  */
-function SupporterSection(): JSX.Element {
+function SupporterSection({ live }: { live: LiveState }): JSX.Element {
   const client = useQueryClient();
   /** The code the reader is pasting back from the relay's landing page. Cleared by a claim that
    *  worked, and deliberately not by one that was refused — a refused code may be retypable. */
@@ -775,6 +803,7 @@ function SupporterSection(): JSX.Element {
   // repainted on a timer to keep a relative date current would be motion without information,
   // and `react-hooks/purity` refuses a bare `Date.now()` in a render body.
   const note = relayNote(state, status, nowSeconds());
+  const liveText = liveNote(live);
   /** Connected enough for the relay to answer: `grace` counts, which is §7.2's whole point. */
   const on = membership === "active" || membership === "grace";
   /**
@@ -906,6 +935,12 @@ function SupporterSection(): JSX.Element {
         </p>
       )}
 
+      {/* **`liveText !== null` on top of `on`, not `on` alone.** `liveNote` says nothing for
+          three of its four states, and this panel's other `on`-gated line above always has a
+          sentence to draw — so gating on `on` alone would open an empty paragraph, spending the
+          `space-y-3` gap either side of it, on every visit where the socket is doing its job. */}
+      {on && liveText !== null && <p className="text-sm text-dim">{liveText}</p>}
+
       <div className="flex flex-wrap items-center justify-between gap-3">
         {/* `min-w-0` so the sentence gives way rather than the button: a flex item cannot shrink
             below its own min-content unless it is told it may. */}
@@ -982,9 +1017,19 @@ function SupporterSection(): JSX.Element {
  * **This panel reaches the backend itself**, where four of its neighbours take their state as a
  * prop — `BackupPanel`'s argument exactly: nothing else in the window reads `sync_pairing_status`,
  * so `SettingsPage` would be holding a hook only to hand its answer straight back down.
+ *
+ * **This is also the second call to `useDeviceSyncLive()` in the app, and that is fine** —
+ * `AppShell`'s own is the app-lifetime one the hook's doc warns about, and this one is
+ * panel-scoped: it unmounts, and takes its `sync:live` listener with it, the moment the reader
+ * leaves Settings. {@link liveNote} needs the same {@link LiveState} the ribbon's marker draws,
+ * and prop-drilling it down through `SettingsPage` was rejected: that page reaches nothing else
+ * in this window and would only be holding a hook to hand its answer straight back down, which
+ * is worse than a bounded second subscription — one listener for as long as this page is open,
+ * never for the life of the process.
  */
 export function SyncPanel(): JSX.Element {
   const client = useQueryClient();
+  const live = useDeviceSyncLive();
   const [flow, setFlow] = useState<Flow>({ kind: "idle" });
   const [removing, setRemoving] = useState<PairedDevice | null>(null);
   /** The Leave dialog is open. A bare boolean where {@link removing} carries a device, because
@@ -1477,7 +1522,7 @@ export function SyncPanel(): JSX.Element {
           a box rather than stacking two red sentences, and the fresher one wins. */}
       <PanelAlert tone="problem">{error ? ipcError(error) : endedNote}</PanelAlert>
 
-      <SupporterSection />
+      <SupporterSection live={live} />
 
       <ConfirmDialog
         open={removing !== null}

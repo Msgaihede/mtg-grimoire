@@ -82,11 +82,26 @@ export const combosForCardsKey = (sortedCardIds: readonly string[]): QueryKey =>
  * combo feed's near-miss with the names swapped, and `COMBOS_KEY`'s paragraph above is the
  * whole argument.
  *
- * `["sync", …]` is already `SyncPanel`'s `PAIRING_KEY` prefix, so the bare root invalidates
- * the pairing, the relay and the review queue at once — which is exactly what a completed
- * round trip has changed.
+ * `["sync", …]` is already `PAIRING_KEY`'s prefix, declared just below, so the bare root
+ * invalidates the pairing, the relay and the review queue at once — which is exactly what a
+ * completed round trip has changed.
  */
 export const SYNC_KEY: QueryKey = ["sync"];
+
+/**
+ * This device's pairing state, under one key — `ipc.syncPairingStatus`.
+ *
+ * **Moved here from `SyncPanel.tsx:36`, which had declared it locally under `BackupPanel`'s
+ * `MIRROR_KEY` reason (nothing else in the window read it) and pre-committed to this exact move
+ * "the moment a second surface" did, naming the ribbon's sync indicator as that surface.** The
+ * indicator that shipped reads `useDeviceSyncLive`'s `LiveState` off a Tauri event rather than
+ * off this query, so what actually closes the promise is `SyncPanel` gaining a second concern —
+ * calling that hook itself (Task 12) — while `SYNC_KEY` above had already been treating this
+ * key's root as `PAIRING_KEY`'s prefix from a file that could not itself hold the constant it
+ * was describing. `COMBOS_KEY`'s reason at the top of this file is the same one either way: two
+ * features must not spell one prefix two ways.
+ */
+export const PAIRING_KEY: QueryKey = ["sync", "pairing"];
 
 /** The relay address, what is waiting, and the last round trip — `ipc.syncRelayStatus`. */
 export const RELAY_KEY: QueryKey = ["sync", "relay"];

@@ -9,6 +9,7 @@ import type {
   RelayStatus,
   SupporterStatus,
 } from "@/lib/ipc";
+import { PAIRING_KEY } from "@/lib/query";
 
 const syncPairingStatus = vi.hoisted(() => vi.fn());
 const syncPairingBegin = vi.hoisted(() => vi.fn());
@@ -24,6 +25,13 @@ const syncPatreonBegin = vi.hoisted(() => vi.fn());
 const syncPatreonClaim = vi.hoisted(() => vi.fn());
 const syncSupporterStatus = vi.hoisted(() => vi.fn());
 const syncNow = vi.hoisted(() => vi.fn());
+/**
+ * `SyncPanel` now calls `useDeviceSyncLive()` itself (Task 12), so both of that hook's own IPC
+ * calls need a stub here too, or every render in this file throws on `ipc.onSyncLive is not a
+ * function` the moment the hook's effect runs — `AppShell.test.tsx`'s pair, for the same reason.
+ */
+const onSyncLive = vi.hoisted(() => vi.fn());
+const syncLiveState = vi.hoisted(() => vi.fn());
 /**
  * **No `syncPairingRespond` and no `syncPairingComplete` — the relay carries the accept and the
  * sealed key now**, so there is nothing left for either to do. `syncPairingConfirm` survives:
@@ -49,6 +57,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     syncPatreonClaim,
     syncSupporterStatus,
     syncNow,
+    onSyncLive,
+    syncLiveState,
   },
 }));
 
@@ -57,9 +67,9 @@ vi.mock("@/lib/clipboard", () => ({ copyText: vi.fn().mockResolvedValue(undefine
 
 import {
   LEAVE_WARNING,
-  PAIRING_KEY,
   REMOVAL_WARNING,
   SyncPanel,
+  liveNote,
   outcomeText,
   relayNote,
   relayState,
@@ -264,6 +274,11 @@ beforeEach(() => {
   syncPatreonClaim.mockReset().mockResolvedValue(SUPPORTING);
   syncSupporterStatus.mockReset().mockResolvedValue(NOT_CONNECTED);
   syncNow.mockReset().mockResolvedValue(null);
+  onSyncLive.mockReset().mockReturnValue(() => {});
+  // "off" — the resting state every installation that has paired nothing is in, and the one
+  // `liveNote` says nothing about: a test that wants `"offline"` drives it with `onSyncLive`'s
+  // captured callback instead of restating the seed.
+  syncLiveState.mockReset().mockResolvedValue("off");
 });
 
 describe("SyncPanel", () => {
@@ -794,6 +809,35 @@ describe("the relay half", () => {
   });
 
   /**
+   * `liveNote` wired all the way through: `SyncPanel` now calls `useDeviceSyncLive()` itself
+   * and hands the answer to `SupporterSection` as a prop, so this is the one test in the file
+   * that exercises that wiring rather than the pure function alone.
+   */
+  it("says the socket is not connected when the relay's own line is silent about it", async () => {
+    syncRelayStatus.mockResolvedValue(RELAY_ON);
+    syncSupporterStatus.mockResolvedValue(SUPPORTING);
+    syncLiveState.mockResolvedValue("offline");
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    expect(await screen.findByText(/not connected to the relay/i)).toBeInTheDocument();
+    // The changes are not gone — this is the one sentence in the file that has to say so, since
+    // `relayState`'s own ladder has nothing to say about a socket that dropped after a success.
+    expect(screen.getByText(/still being kept/i)).toBeInTheDocument();
+  });
+
+  it("says nothing extra about the socket while it is doing its job", async () => {
+    syncRelayStatus.mockResolvedValue(RELAY_ON);
+    syncSupporterStatus.mockResolvedValue(SUPPORTING);
+    syncLiveState.mockResolvedValue("live");
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    // The waiting line is the anchor: it proves the relay half has finished reading before the
+    // absence below is asserted, rather than the socket note simply not having painted yet.
+    await screen.findByText(/4 changes waiting to go/i);
+    expect(screen.queryByText(/not connected to the relay/i)).not.toBeInTheDocument();
+  });
+
+  /**
    * **The Errors panel further down this page is the record, and one failure drawn twice in two
    * registers under two headings is the thing this asserts against.** `errors::record` still
    * writes every relay failure; nothing on the sync half reads it back.
@@ -1248,6 +1292,32 @@ describe("relayState", () => {
     // the test this describe used to hold about the relay's stored error — that field is gone
     // and `relayState` never took it, so the claim was no longer reachable through the UI.
     expect(relayNote("synced", RELAY_ON, 1_700_000_060)).toBe("Last synced 1 minute ago.");
+  });
+});
+
+/**
+ * `liveNote`'s own truth table, `relayState`/`relayNote`'s shape one function over: every state
+ * asserted directly, with no render behind it. The state that says something is the one
+ * automatic sync introduces — a device that looks synced while its socket is quietly down — and
+ * the other three are asserted null for the same reason `relayNote`'s `unknown`/`syncing` are:
+ * a working connection is not news, so a second sentence there would be the panel talking over
+ * itself.
+ */
+describe("liveNote", () => {
+  it("says nothing when the socket is doing its job", () => {
+    expect(liveNote("live")).toBeNull();
+  });
+  it("names the offline state, because a stale device otherwise looks synced", () => {
+    expect(liveNote("offline")).toMatch(/not connected/i);
+  });
+  it("says nothing when sync is off", () => {
+    expect(liveNote("off")).toBeNull();
+  });
+  it("says nothing while a connection attempt is in progress", () => {
+    // Not one of the brief's three, and worth pinning anyway: `connecting` is a state in
+    // flight, `relayNote`'s `syncing` shape, and a sentence over it would be reporting a trip
+    // that has not finished yet as though it had already failed.
+    expect(liveNote("connecting")).toBeNull();
   });
 });
 

@@ -28,8 +28,18 @@ import { ipc, type LiveState } from "@/lib/ipc";
  * its answer if no event has arrived first — a real transition always outranks a value read
  * before it.
  *
- * **Call this once.** `AppShell` does. Every extra call is another `sync:live` `listen`
- * registration for the life of the app.
+ * **Call this once per *app-lifetime* mount, and be careful what "once" means.** `AppShell`
+ * calls it, `AppShell` never unmounts, and an extra call at that scope is another `sync:live`
+ * `listen` registration for the life of the process — a leak, since nothing ever tears it down.
+ *
+ * **A *panel-scoped* call is a different shape and is fine — `SyncPanel` also calls this
+ * (2026-08-31), so its Settings sentence can read the same state the ribbon's marker draws.**
+ * The rule above is about a call that outlives the page it is made from, not about the hook
+ * being invoked more than once in the app's lifetime: `SyncPanel`'s subscription unmounts, and
+ * takes its listener with it, the moment the reader leaves Settings — so it costs one listener
+ * for as long as that page is open and nothing more. Do not "fix" a second call like that one by
+ * deleting it; if you need this hook's state in a third place, ask whether *that* caller is
+ * bounded the same way before assuming it must thread through an existing one instead.
  */
 export function useDeviceSyncLive(): LiveState {
   const [state, setState] = useState<LiveState>("off");
