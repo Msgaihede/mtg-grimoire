@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryKey } from "@tanstack/react-query";
 import { Heart, Link2, LogOut, RefreshCw, ShieldCheck, X } from "lucide-react";
-import { useEffect, useState, type JSX } from "react";
+import { useEffect, useRef, useState, type JSX } from "react";
 import { count, plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import { openExternal } from "@/lib/externalLinks";
@@ -691,11 +691,13 @@ const RECLAIM_WARNING =
  * still sees nothing, because there `run_once` genuinely answers `null` and a control that can
  * only ever report "there was nothing to do" teaches a reader to distrust it.
  *
- * **Nothing in `SyncPanel`'s own pairing flow calls `sync_now` for the reader any more** — the
- * relay carries the accept and the sealed key now, and finishing a pairing there is the poll
- * noticing `"complete"`, not a mutation this file drives to a round trip of its own. So this
- * press is still what a freshly paired device needs for its own entitlement to arrive, not a
- * fallback for a case that no longer reaches here.
+ * **The press is still the fallback rather than the mechanism** — `SyncPanel`'s own completed-
+ * pairing effect fires `ipc.syncNow().catch(() => undefined)` the moment the poll notices
+ * `"complete"`, on both sides of a pairing, so the ordinary reader still never has to press
+ * anything here. What changed is where that trip is driven from: it used to hang off the
+ * `complete` mutation's own `.then()`, and now the relay carries the accept and the sealed key,
+ * so there is no such mutation left to hang it off — the poll's own effect is what drives it
+ * instead, and swallows its failure the same way the old code did.
  */
 function SupporterSection(): JSX.Element {
   const client = useQueryClient();
@@ -977,6 +979,15 @@ export function SyncPanel(): JSX.Element {
    * success line.
    */
   const [pairedNote, setPairedNote] = useState<string | null>(null);
+  /**
+   * Guards the completed-pairing effect below so its two side effects — the sync trip and the
+   * cache invalidation — fire **exactly once** per pairing, not once per render while the poll
+   * goes on answering `"complete"` (it keeps answering that until `enabled` below actually turns
+   * it off). A ref rather than `useState`, `usePopupPlacement`'s reason exactly: a write in here
+   * must be readable from inside the effect without becoming a second `setState` for the lint
+   * rule to flag, and this value is never drawn. Reset wherever a *new* pairing starts.
+   */
+  const completedRef = useRef(false);
 
   const read = useQuery({ queryKey: PAIRING_KEY, queryFn: () => ipc.syncPairingStatus() });
   const status: PairingStatus | null = read.data ?? null;
@@ -985,12 +996,18 @@ export function SyncPanel(): JSX.Element {
 
   const begin = useMutation({
     mutationFn: () => ipc.syncPairingBegin(),
-    onMutate: () => setPairedNote(null),
+    onMutate: () => {
+      setPairedNote(null);
+      completedRef.current = false;
+    },
     onSuccess: (offer) => setFlow({ kind: "offer", offer, sas: null }),
   });
   const accept = useMutation({
     mutationFn: (code: string) => ipc.syncPairingAccept(code),
-    onMutate: () => setPairedNote(null),
+    onMutate: () => {
+      setPairedNote(null);
+      completedRef.current = false;
+    },
     onSuccess: (shake) => setFlow({ kind: "join", sas: shake.sas }),
   });
   /**
@@ -1080,16 +1097,26 @@ export function SyncPanel(): JSX.Element {
   }
 
   useEffect(() => {
-    // **The one thing that genuinely has to be an effect**: `invalidateQueries` is a write to
-    // a cache outside this component, which render must never do. Nothing here calls a state
-    // setter — both of this transition's state changes are settled above, during render —
-    // so `react-hooks/set-state-in-effect` has nothing left to flag.
-    if (poll.data?.stage !== "complete") return;
+    // **The two things that genuinely have to be an effect**: `invalidateQueries` and
+    // `syncNow` are both writes outside this component (a cache, and a round trip to the
+    // relay), which render must never do. Nothing here calls a `useState` setter, so
+    // `react-hooks/set-state-in-effect` has nothing to flag — `completedRef` is a ref, not
+    // state, and it is what stops this firing twice: the poll goes on answering `"complete"`
+    // until `enabled` above actually turns it off, and this effect's own dependency
+    // (`poll.data`) can therefore run its body more than once for the same completed pairing.
+    if (poll.data?.stage !== "complete" || completedRef.current) return;
+    completedRef.current = true;
     // `PAIRING_KEY` rather than `SYNC_KEY`: what this side of the panel promises is the
     // roster, and that is what a finished pairing changed. The membership and the relay
-    // figures are `SupporterSection`'s own reads, and its usual round trip is what catches
-    // them up.
+    // figures are `SupporterSection`'s own reads.
     void client.invalidateQueries({ queryKey: PAIRING_KEY });
+    // **The trip a completed pairing still owes.** A device that has just joined holds the
+    // group key and none of the group's data; the offering device wants the joiner's own rows
+    // — so both sides fire this, not just the joiner. Swallowed rather than surfaced: the
+    // pairing genuinely succeeded, and a failed first sync must not turn that success into an
+    // error banner over a ceremony that completed. `error_log` already has the reason if there
+    // is one, and *Sync now* below is the retry — one press, not a failure to explain here.
+    void ipc.syncNow().catch(() => undefined);
   }, [poll.data, client]);
 
   /** Whichever press last refused. One line, because only one thing is ever in flight here. */
@@ -1248,18 +1275,25 @@ export function SyncPanel(): JSX.Element {
 
           {flow.kind === "offer" && (
             <div className="space-y-3 rounded-md border border-border p-3">
-              <p className="text-sm">
-                Point the other device&rsquo;s camera at this, or type the code into it.
-              </p>
-              <div className="flex flex-wrap items-start gap-3">
-                <QrCode matrix={flow.offer.qr} label="Pairing code as a QR code" />
-                <p className="min-w-0 flex-1 font-mono text-xs leading-relaxed break-all">
-                  {flow.offer.code}
-                </p>
-              </div>
-
+              {/* **The QR and the typed code are `"waiting"`'s alone, and gone the moment
+                  `"compare"` starts.** Once the other device has accepted, the invite has done
+                  its one job — the pairing is now mid-handshake — and a code still sitting on
+                  screen suggests that step is somehow still live. It also invites a bystander to
+                  scan an offer already spoken for, which `ALREADY_USED` would refuse, but the
+                  screen's own job here is clarity rather than that refusal. */}
               {flow.sas === null ? (
-                <p className="text-sm text-dim">Waiting for the other device&hellip;</p>
+                <>
+                  <p className="text-sm">
+                    Point the other device&rsquo;s camera at this, or type the code into it.
+                  </p>
+                  <div className="flex flex-wrap items-start gap-3">
+                    <QrCode matrix={flow.offer.qr} label="Pairing code as a QR code" />
+                    <p className="min-w-0 flex-1 font-mono text-xs leading-relaxed break-all">
+                      {flow.offer.code}
+                    </p>
+                  </div>
+                  <p className="text-sm text-dim">Waiting for the other device&hellip;</p>
+                </>
               ) : (
                 <div className="space-y-2">
                   <p className="text-sm">
