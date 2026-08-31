@@ -591,6 +591,18 @@ export interface CardDetail {
   promoTypes: string | null;
   imageStatus: string | null;
   faces: CardFace[];
+  /**
+   * Where this printing's picture is, per variant — **the web target's only way to draw one.**
+   *
+   * `mtgimg://` is registered natively with the webview and wasm cannot register a URL scheme
+   * with a browser, so a card pane in a browser can reach no picture the row did not hand it.
+   * {@link cardArtSrc} is the whole of that branch and ignores this on desktop, where the local
+   * cache already holds the right bytes at the right size.
+   *
+   * A printing carrying neither picture column answers `null` — the frame's "no art" state,
+   * and **never a URL to build one from**.
+   */
+  imageUris?: Partial<Record<ImageVariant, string>> | null;
 }
 
 /** One row of the "all printings" list. */
@@ -628,6 +640,18 @@ export interface Printing {
   frameEffects: string | null;
   borderColor: string | null;
   layout: string;
+  /**
+   * Where this printing's picture is, per variant — **the web target's only way to draw one.**
+   *
+   * `mtgimg://` is registered natively with the webview and wasm cannot register a URL scheme
+   * with a browser, so a card pane in a browser can reach no picture the row did not hand it.
+   * {@link cardArtSrc} is the whole of that branch and ignores this on desktop, where the local
+   * cache already holds the right bytes at the right size.
+   *
+   * A printing carrying neither picture column answers `null` — the frame's "no art" state,
+   * and **never a URL to build one from**.
+   */
+  imageUris?: Partial<Record<ImageVariant, string>> | null;
 }
 
 /**
