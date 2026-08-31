@@ -397,11 +397,22 @@ v31 and is corrected as part of this work.
 
 **The rule: `commit_hook` wakes, the outbox decides.**
 
-- `commit_hook` (already installed for the mirror at `mirror/watch.rs:234`) fires **once per
-  transaction**, is indifferent to `WITHOUT ROWID`, and does not fire for a read-only
-  transaction.
+- `commit_hook` fires **once per transaction**, is indifferent to `WITHOUT ROWID`, and does not
+  fire for a read-only transaction.
 - The debounced task then asks the free, indexed question:
   `SELECT count(*) FROM sync_ops WHERE pushed_at IS NULL`.
+
+⚠️ **The notify must ride inside the existing hook, not install a second one.** SQLite allows
+exactly **one commit hook per connection** — the same rule `watch.rs` states for the update hook
+and the reason `CrossFileFence` rides inside the mirror's closure rather than registering its
+own. `mirror/watch.rs:236` already calls `conn.commit_hook(...)` for the fence. A second
+`commit_hook` would **replace** it, silently disabling the "a transaction wrote to both the user
+database and the card database" diagnostic with nothing red anywhere. `install_hook` grows a
+third parameter and one more line inside the closure it already owns.
+
+**The closure must stay non-blocking and must never answer `true`** — the existing comment says
+why: a commit hook that returns `true` aborts the commit, turning a diagnostic into data loss. The
+notify is one `Notify::notify_one()`, which does not block and cannot fail.
 
 This is correct by construction rather than by coincidence. A 50 000-row import is **one**
 transaction holding the write lock ~1.4 s (`collection.rs:708-754`; measured in
