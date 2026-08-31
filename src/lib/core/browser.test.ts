@@ -2,6 +2,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createBrowserCore } from "@/lib/core/browser";
 
 /**
+ * The one divert that does not reach the Worker. Mocked here rather than driven through a fake
+ * `navigator.serviceWorker`, because what this file is about is the *routing*: that the command
+ * never becomes a `postMessage` to the database Worker, and that its answer is the one the
+ * panel gets. What the helper does with a browser that has no service worker is
+ * `imageCacheClear.test.ts`'s.
+ */
+const clearImageCache = vi.hoisted(() => vi.fn());
+vi.mock("@/pwa/imageCacheClear", () => ({ clearImageCache }));
+
+/**
  * A Worker that never runs anything. `posted` is what the core sent; `reply` is how a test
  * plays the Worker's part, which is the only way to control the ordering this suite is
  * about.
@@ -41,6 +51,7 @@ const core = () => {
 
 beforeEach(() => {
   spawned = 0;
+  clearImageCache.mockReset().mockResolvedValue({ files: 63, bytes: 4_095_000, rows: 0, failed: 0 });
 });
 
 describe("the browser core", () => {
@@ -223,6 +234,40 @@ describe("the browser core", () => {
       payload: { phase: "downloading", done: 1, total: 2 },
     });
     expect(seen).toHaveBeenCalledWith({ phase: "downloading", done: 1, total: 2 });
+  });
+
+  /**
+   * **`cache_clear` is answered by the service worker, so it must not reach this Worker.**
+   * The desktop command sweeps `data/images/`; on this target those bytes are Cache Storage's,
+   * which no `web::route` arm over a SQLite connection can see. `COMMANDS` deliberately has no
+   * arm for it, so a call that got as far as the Worker would come back `unknown command`.
+   */
+  it("answers the cache clear from the service worker without reaching the Worker", async () => {
+    const c = core();
+
+    const answer = c.call("cache_clear");
+
+    await expect(answer).resolves.toEqual({ files: 63, bytes: 4_095_000, rows: 0, failed: 0 });
+    expect(clearImageCache).toHaveBeenCalledTimes(1);
+    expect(worker.posted).toEqual([]);
+    // The divert runs before `ensure()`, so pressing Clear on a page that has not yet asked
+    // the database anything does not spawn a Worker to ask it nothing.
+    expect(spawned).toBe(0);
+  });
+
+  /**
+   * The ids are the whole of how an answer finds its caller, and a diverted command takes none.
+   * Taking one would leave an entry in `pending` that nothing can ever resolve, and it would
+   * renumber every later call - so the next real command must still be id 1.
+   */
+  it("takes no id for the diverted clear", async () => {
+    const c = core();
+    await c.call("cache_clear");
+
+    const answer = c.call("list_sets");
+    expect(worker.posted).toStrictEqual([{ kind: "call", id: 1, command: "list_sets" }]);
+    worker.reply({ kind: "ok", id: 1, result: [] });
+    await expect(answer).resolves.toEqual([]);
   });
 
   it("reuses one Worker across every call and subscription", async () => {

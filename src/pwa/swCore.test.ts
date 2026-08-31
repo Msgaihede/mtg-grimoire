@@ -112,11 +112,48 @@ describe("what the worker must never contain", () => {
    * stopped the navigation came from Cache Storage and every subresource failed after ~2.3 s,
    * leaving `#root` at `childElementCount: 0`. Nothing in this suite could see it, which is why
    * the guard is a source sweep and not a unit test.
+   *
+   * **The eviction's delete joined this sweep on 2026-08-31 as insurance, not as a fix — it has
+   * never been broken.** `Cache.delete` runs the same matching algorithm, so the same
+   * disagreement would refuse to evict a file the ledger had already forgotten. It needs a
+   * `Vary`, and there is not one: probed live that day, a card image from `cards.scryfall.io`
+   * answers 200 with **no `vary` header at all**, plain, with an `Origin:` and with a
+   * webp-negotiating `Accept:`. What the option buys is that the read and the evict cannot
+   * drift apart if that ever changes — `image()` would go on matching while eviction quietly
+   * stopped, and a cache growing past its cap names nothing that would lead anyone here.
    */
-  it("never looks in a cache without ignoring Vary", () => {
+  it("never queries a cache without ignoring Vary, the eviction included", () => {
     const lookups = SW_SOURCE.match(/(?:caches|cache)\.match\([^)]*\)/g) ?? [];
+    const deletes = SW_SOURCE.match(/cache\.delete\([^)]*\)/g) ?? [];
     expect(lookups.length).toBeGreaterThan(0);
-    for (const lookup of lookups) expect(lookup).toContain("ignoreVary: true");
+    expect(deletes.length).toBeGreaterThan(0);
+    for (const query of [...lookups, ...deletes]) expect(query).toContain("ignoreVary: true");
+  });
+
+  /**
+   * **The exclusion the sweep above rests on, asserted rather than assumed.**
+   *
+   * There are two kinds of delete in this file and only one of them takes query options.
+   * `caches.delete(name)` in `activate` drops a whole stale shell cache and has no `Vary` to
+   * ignore; the eviction's is a delete of one entry *inside* a cache and does. The sweep tells
+   * them apart on the `s`: `caches.delete(` simply does not contain the substring
+   * `cache.delete(`, because the character after `cache` is an `s` rather than a dot.
+   *
+   * That is a fact about a regular expression, which is exactly the kind of reasoning that is
+   * right until it is not — so this counts every delete in the file and demands the two
+   * families account for all of them. A third spelling nobody classified (`imageCache` with a
+   * delete on it, say) fails here rather than slipping past the sweep as an unchecked query.
+   */
+  it("classifies every delete in the file as one kind or the other", () => {
+    const everyDelete = SW_SOURCE.match(/\.delete\(/g) ?? [];
+    const wholeCaches = SW_SOURCE.match(/caches\.delete\(/g) ?? [];
+    const oneEntry = SW_SOURCE.match(/cache\.delete\(/g) ?? [];
+
+    // Non-empty in both directions, or the partition below is satisfied by arithmetic on
+    // nothing and the exclusion is never exercised.
+    expect(wholeCaches.length).toBeGreaterThan(0);
+    expect(oneEntry.length).toBeGreaterThan(0);
+    expect(wholeCaches.length + oneEntry.length).toBe(everyDelete.length);
   });
 
   /**
@@ -150,6 +187,36 @@ describe("what the worker must never contain", () => {
    * `ignoreVary`. `readLedger` is deliberately not counted: `ledgerFor` has to call it, and a
    * lone read races nothing.
    */
+  /**
+   * **The clear is the one operation that can leave the two halves disagreeing, and going
+   * around the queue is how.** `clearImages` deletes files and hands back the ledger that
+   * describes what is left; it is the caller that writes it. A call made outside
+   * `mutateLedger` would empty Cache Storage and leave the stored ledger certain it was still
+   * holding 256 MB of pictures - after which `evictions` deletes from an empty cache on every
+   * single request, for the life of the worker. That is `forget`'s failure reached from the
+   * other end, and the sweep in the previous test cannot see it: nothing has to be *written*
+   * for it to happen.
+   *
+   * The reply is swept for the same reason `ledgerWriter` is not memoised - a silent failure
+   * with no witness. `sw.ts` is unreachable from vitest (jsdom implements no `caches` and no
+   * registration), so the page's own timeout is all that stands between a handler that forgets
+   * to answer and a Clear button that spins for ever.
+   */
+  it("clears the image cache through the writer, and answers the caller", () => {
+    const calls = SW_SOURCE.match(/clearImages\(/g) ?? [];
+    expect(calls).toHaveLength(1);
+
+    const verbAt = SW_SOURCE.indexOf('"CLEAR_IMAGE_CACHE"');
+    const nextVerbAt = SW_SOURCE.indexOf('"VERSION"');
+    expect(verbAt).toBeGreaterThan(-1);
+    expect(nextVerbAt).toBeGreaterThan(verbAt);
+
+    const handler = SW_SOURCE.slice(verbAt, nextVerbAt);
+    expect(handler).toContain("clearImages(");
+    expect(handler).toContain("mutateLedger(");
+    expect(handler).toContain("event.ports[0]?.postMessage");
+  });
+
   it("never writes the ledger outside the serialising writer", () => {
     // The definition, plus the single call inside `ledgerFor`'s writer argument. Anything more
     // is a caller that has gone around the queue.

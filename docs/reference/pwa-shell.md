@@ -81,6 +81,58 @@ strips it — the id is a fact about the *output*, which is the property that wa
 
 ---
 
+## The four message verbs
+
+Everything the page asks the worker to *do* goes through one `message` handler, as a chain of
+`if`s on `data.type` with **no `else`** — which is the property to hold on to: a worker that
+does not know a verb answers nothing at all, and a caller waiting for an answer waits for ever.
+That state is reachable by design, because a reader who never presses the update bar keeps the
+build they started the session with.
+
+| Verb | Sent by | Does | Answers |
+| --- | --- | --- | --- |
+| `SKIP_WAITING` | `useServiceWorker`'s `applyUpdate` | `skipWaiting()`, the file's only call to it | nothing — the reload comes from `controllerchange` |
+| `SET_IMAGE_CAP` | `WebStoragePanel`'s cap picker | `withCap` then an eviction pass, so lowering the cap frees space at once | nothing |
+| `CLEAR_IMAGE_CACHE` | `imageCacheClear.ts`, behind Settings → Local cache → Clear | empties `grimoire-images` and resets the ledger in one mutation | `{ files, bytes, failed }` on `event.ports[0]` |
+| `VERSION` | a live pass | reads `__BUILD_ID__` | `{ buildId }` on `event.ports[0]` |
+
+**The two that answer, answer on the caller's own port.** A `postMessage` back through
+`clients` would reach every open tab, and a page listening for that would resolve on an answer
+to somebody else's press. The port is opened per question and closed on the reply.
+
+**`CLEAR_IMAGE_CACHE` is the desktop's `cache_clear`, and it is not a routed command.**
+`web::route::COMMANDS` is synchronous and takes the database connection; the picture bytes are
+in Cache Storage, which nothing holding a connection can see. So `src/lib/core/browser.ts`
+diverts the command name here — the shape PR 11 used for the four `*_refresh` — and
+`CachePanel` cannot tell which target it is drawn on. Two consequences worth stating: the
+`rows` it reports is a truthful literal **0**, because `images.rs` is gated out of the wasm
+crate and no browser has ever written an `image_cache` row; and a browser with **no** service
+worker (`web:dev`, a private window) gets a truthful *"There was nothing cached to clear"*
+rather than an error, because the worker is the only thing that has ever written to that cache.
+The whole record is in [web-target.md](web-target.md).
+
+**Every Cache Storage query in the worker ignores `Vary`, deletes included since 2026-08-31 —
+and that last part is insurance rather than a repair.** The eviction pass deleted by bare URL,
+and `Cache.delete` runs the same matching algorithm as `Cache.match`, so a stored response whose
+`Vary` disagreed would refuse to go while the ledger forgot it anyway. That needs a `Vary` and
+there is not one: probed live that day, a card image from `cards.scryfall.io` answers **200,
+83 658 B, `image/jpeg`, and no `vary` header at all** — plain, with an `Origin:`, and with a
+webp-negotiating `Accept:`; its `access-control-allow-origin` is a static `*`, which is why
+there is no `Vary: Origin` to begin with. Card art is a plain `<img>`, so what is stored is a
+`no-cors` request carrying no `Origin` either. **Nothing here was ever broken**, and the option
+is passed for two other reasons: the read and the evict must not be able to drift apart
+silently — `image()` reads with it, and a cache growing past its cap would name nothing that
+led back to an eviction that had quietly stopped — and, the ledger being keyed by URL, ignoring
+`Vary` deletes every variant of that URL, which is what a URL-keyed cap sweep wants. The blank
+offline shell above is why this file's rule is absolute rather than case-by-case.
+
+**The clear goes through `ledgerWriter` like every other ledger update**, and the reason is
+sharper here than for the cap: a clear that raced an admit and wrote back the ledger it read
+first would leave the worker counting a picture it had just deleted, for the life of the
+worker — after which the eviction pass deletes from an empty cache on every request. The
+ledger's own entry is *skipped* rather than deleted, so there is never a window with pictures
+in the cache and no ledger describing them.
+
 ## `ignoreVary` is load-bearing, and only a browser could have found it
 
 **Without it the offline shell is a blank page**, and everything else looks fine.
