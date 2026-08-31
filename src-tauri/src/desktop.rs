@@ -520,17 +520,20 @@ pub fn run() {
             sync_pair::pairing::sync_device_revoke,
             sync_pair::pairing::sync_group_leave,
             // The relay, the membership and the review queue (spec §6.1, §7.2–§7.4, §7.7 and
-            // §10). Seven: the panel's two reads, the Connect press, the claim code the reader
-            // pastes back, one round trip now, the rows carrying a sentence, and clearing one
-            // of them. **`sync_relay_set_url` is gone** — the relay is one hosted service, so
-            // its address is compiled in and stopped being a setting.
+            // §10). The panel's two reads, the Connect press, the claim code the reader pastes
+            // back, one round trip now, the rows carrying a sentence, clearing one of them, the
+            // live socket's state and Android's foreground gate on it.
+            // **`sync_relay_set_url` is gone** — the relay is one hosted service, so its address
+            // is compiled in and stopped being a setting.
             sync_engine::commands::sync_relay_status,
             sync_engine::commands::sync_supporter_status,
             sync_engine::commands::sync_patreon_begin,
             sync_engine::commands::sync_patreon_claim,
             sync_engine::commands::sync_now,
             sync_engine::commands::sync_review_list,
-            sync_engine::commands::sync_review_clear
+            sync_engine::commands::sync_review_clear,
+            sync_engine::commands::sync_live_foreground,
+            sync_engine::commands::sync_live_state
         ])
         .setup(|app| {
             // First, and before anything that can fail: the window is created **hidden**

@@ -15,10 +15,12 @@
 use crate::sync::{self, AppState};
 use crate::sync_engine::client::{self, RelayOutcome};
 use crate::sync_engine::entitlement;
+use crate::sync_engine::live::{self, LiveState};
 use crate::sync_pair::{crypto, identity};
 use rusqlite::Connection;
 use serde::Serialize;
 use std::sync::Arc;
+use tauri::Emitter;
 
 /// The tables that can hold a sentence for the reader, and what to call a row of each.
 ///
@@ -393,13 +395,22 @@ pub async fn sync_patreon_claim(
 /// connection is behind a `Mutex`, so a guard on it cannot cross an `await` on a multi-threaded
 /// runtime; `spawn_blocking` moves the whole trip to a thread where a `block_on` is legal and
 /// the guard never has to be `Send`.
+///
+/// **Emits `sync:applied`, on the same condition [`live::trip`] uses**, so a manual press
+/// reports through the one event Task 10's listener invalidates on — the automatic path is not
+/// the only source of that event any more. `app` is taken by value into this function and used
+/// only after the blocking call has returned; it is never captured *into* the `spawn_blocking`
+/// closure, which is `state`'s shape here and not `app`'s — `AppHandle` has no business on the
+/// thread doing the write, and reaching for it from inside that closure would be the mistake to
+/// watch for in a diff, not the shape this one takes.
 #[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn sync_now(
+    app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<Option<RelayOutcome>, String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -407,7 +418,44 @@ pub async fn sync_now(
         sync::with_write(&state, |conn| runtime.block_on(client::run_once(conn)))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+
+    if let Some(o) = outcome {
+        if o.pulled > 0 || o.pushed > 0 {
+            let _ = app.emit("sync:applied", o);
+        }
+    }
+    Ok(outcome)
+}
+
+/// Android tells the socket when the app is in front.
+///
+/// **Desktop never calls this.** An idle hibernated socket costs nothing, so there is no reason
+/// to drop one when the window is minimised. Android does, because Doze severs a background
+/// socket anyway and a phone that *looks* connected while being hours stale is worse than one
+/// that knows it is offline.
+#[cfg(not(target_family = "wasm"))]
+#[tauri::command]
+pub fn sync_live_foreground(on: bool) {
+    if on {
+        live::resume();
+    } else {
+        live::pause();
+    }
+}
+
+/// The relay socket's state right now.
+///
+/// **A read beside the event, because `sync:live` only fires on a transition.** The manager
+/// deduplicates — otherwise `Off` would go out every five seconds for the life of every
+/// installation that has paired nothing, which is all of them today — so a listener that mounts
+/// after the last transition would never hear anything. Tauri also drops events emitted before
+/// the webview registered its listener, which makes that the common case at launch rather than a
+/// rare one: a page that only ever subscribed would sit on its default state indefinitely.
+#[cfg(not(target_family = "wasm"))]
+#[tauri::command]
+pub fn sync_live_state() -> LiveState {
+    live::current()
 }
 
 /// Every row carrying a sentence, from all six tables that can hold one.
