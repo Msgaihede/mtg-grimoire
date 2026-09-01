@@ -140,6 +140,15 @@ on — do not work from this page alone.
 | [`.storybook/CLAUDE.md`](.storybook/CLAUDE.md) | Stories, the fake, seeds and faults |
 | [`.github/CLAUDE.md`](.github/CLAUDE.md) | Workflows, the `changes` router, release-please |
 
+**Two rules load by file *extension* rather than by directory, and sit in `.claude/rules/`.**
+They cover the language servers, which are active for every `.rs` and `.ts`/`.tsx` file with no
+setup — [`rust-lsp.md`](.claude/rules/rust-lsp.md) and
+[`typescript-lsp.md`](.claude/rules/typescript-lsp.md). Read them for when to prefer the `LSP`
+tool over grep, and for the traps each server has: **TypeScript's `findReferences` silently
+under-reports until a file is loaded** — one measured call said a live symbol had a single
+reference — and rust-analyzer's cold start reports "not on a symbol" when it means "not indexed
+yet". Both are answers that look right and are not.
+
 ## Project skills (`.claude/skills/`)
 
 These skills carry the worktree and shipping workflow and are the authority on it — this

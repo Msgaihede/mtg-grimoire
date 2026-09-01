@@ -47,5 +47,12 @@
         ]
       }
     ]
+  },
+  "enabledPlugins": {
+    "rust-analyzer-lsp@claude-plugins-official": true,
+    "typescript-lsp@claude-plugins-official": true
+  },
+  "env": {
+    "ENABLE_LSP_TOOL": "1"
   }
 }
