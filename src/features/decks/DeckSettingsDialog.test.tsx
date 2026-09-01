@@ -705,6 +705,37 @@ describe("DeckSettingsDialog", () => {
     expect(screen.queryByRole("button", { name: /Clear theory list/ })).toBeNull();
   });
 
+  /**
+   * **The switch that takes the plan away is a few rows up this same dialog**, so the deck can
+   * stop having a theory list while its clear confirmation is standing — and the two halves of
+   * one control disagreed: the trigger was gated on `theoryEnabled` and the open question was
+   * not, so the reader was left being asked to clear a list nothing else on the screen admitted
+   * to.
+   *
+   * The deck is re-read rather than the switch being pressed, because it is the **row** the
+   * question is reconciled against — a plan taken away on another device and arriving in a
+   * refetch has to close it just the same, and driving the switch would prove only the local
+   * path. `asking` is derived at render for this, never reconciled in an effect.
+   */
+  it("withdraws the theory question when the deck stops keeping a plan", async () => {
+    deckGet.mockResolvedValue(withPlan());
+    open();
+    await loaded();
+
+    await userEvent.click(screen.getByRole("button", { name: /Clear theory list/ }));
+    expect(screen.getByRole("group", { name: "Clear the theory list" })).toBeInTheDocument();
+
+    // The plan goes; the rows it held do not, which is what the switch's own copy promises.
+    deckGet.mockResolvedValue({ ...withPlan(), deck: { ...withPlan().deck, theoryEnabled: false } });
+    await userEvent.click(screen.getByRole("switch", { name: /Theory deck/ }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("group", { name: "Clear the theory list" })).toBeNull(),
+    );
+    // And the reader is back to the one list the deck now has, not to an empty section.
+    expect(screen.getByRole("button", { name: /Clear live list/ })).toBeInTheDocument();
+  });
+
   /** One question at a time, and it is about the list whose button was pressed — the group's
    *  own name is what says which, since both questions are drawn in the same place. */
   it("opens the question for the list the press was about", async () => {

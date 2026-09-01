@@ -206,6 +206,27 @@ function Settings({ deckId }: { deckId: number }) {
    *  answers. */
   const bannerFailure = writeFailure([deck.update, setFolder, deck.clearDeck]);
 
+  /**
+   * The question actually on screen, which is not always the one that was opened.
+   *
+   * **The theory switch is a few rows up this same dialog**, so a reader can take the deck's
+   * plan away with its own clear confirmation standing — and `Clear the theory list?` over a
+   * deck that has just reported it keeps no plan is a question about a list nothing else on the
+   * screen admits to. The trigger below is gated on `theoryEnabled` and the open question was
+   * not, which is the two halves of one control disagreeing about whether the list is there.
+   *
+   * **Derived rather than reconciled in an effect.** It is a render-time consequence of two
+   * pieces of state that are both already here, and a `setConfirming(null)` from an effect is
+   * exactly the reflexive derived-state sync `no-setstate-in-an-effect` exists to refuse.
+   *
+   * **`confirming` is deliberately left alone**, so switching the plan back on puts the reader's
+   * own unanswered question back rather than making them find the button again. The switch's own
+   * copy promises that turning it off "keeps every row", so the cards this question is about are
+   * still there — it is the *list* that has gone, not its contents.
+   */
+  const asking: DeckVariant | null =
+    confirming === "theory" && row?.theoryEnabled !== true ? null : confirming;
+
   // `mutate` rather than the mutation object, which is what the memos below can depend on:
   // `useMutation` answers a fresh object every render and a stable `mutate`.
   const update = deck.update.mutate;
@@ -386,7 +407,7 @@ function Settings({ deckId }: { deckId: number }) {
               Every card leaves the list. The piles it was filed in stay where they are.
             </p>
 
-            {confirming === null ? (
+            {asking === null ? (
               <div className="mt-2.5 flex flex-wrap items-center gap-4">
                 {/* The reason travels in the *name*, because a greyed control whose name is
                     the bare label reads to a screen reader — and to a test — as a control
@@ -422,19 +443,19 @@ function Settings({ deckId }: { deckId: number }) {
                  clear leaves the question up with the banner below explaining why, which is
                  what `ClearDeck` taking `pending` rather than closing itself is for. */
               <ClearDeck
-                variant={confirming}
-                cardCount={confirming === "theory" ? theoryCount : liveCount}
+                variant={asking}
+                cardCount={asking === "theory" ? theoryCount : liveCount}
                 // The list that is *not* being emptied, which is the reassurance the sentence
                 // is there to give — so it is the other one of the same pair, never a repeat
                 // of the subject.
-                otherCount={confirming === "theory" ? liveCount : theoryCount}
+                otherCount={asking === "theory" ? liveCount : theoryCount}
                 pending={deck.clearDeck.isPending}
                 onCancel={() => {
-                  owedFocus.current = confirming;
+                  owedFocus.current = asking;
                   setConfirming(null);
                 }}
                 onCleared={() =>
-                  deck.clearDeck.mutate(confirming, { onSuccess: () => setConfirming(null) })
+                  deck.clearDeck.mutate(asking, { onSuccess: () => setConfirming(null) })
                 }
               />
             )}
