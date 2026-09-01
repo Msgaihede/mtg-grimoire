@@ -27,7 +27,7 @@ import { CreateDeckDialog } from "./CreateDeckDialog";
 import { DeckTile } from "./DeckTile";
 import { type DeckMenuDeps } from "./deckMenu";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
-import { decksUnder, FolderCard } from "./FolderCard";
+import { decksUnder, FolderCard, ParentDeckFolderCard } from "./FolderCard";
 import { buildFolderMenu, type FolderMenuDeps } from "./folderMenu";
 import {
   buildFolderTree,
@@ -36,6 +36,7 @@ import {
   FOLDER_ROW_ATTR,
   FolderTree,
   MoveToFolder,
+  ROOT_LABEL,
   useDeckDragging,
   type DeckDrag,
   type FolderNaming,
@@ -678,6 +679,28 @@ export function DecksPage() {
   }, [nodes]);
 
   /**
+   * The level **above** the folder that is open, and what to call it — `null` and {@link
+   * ROOT_LABEL} when the open folder sits at the top level, and the whole thing is absent when
+   * nothing is open, because the root has nowhere above it.
+   *
+   * **Read out of {@link levels}, never off `openNode.folder.parentId`.** The two differ in
+   * exactly the case that map was built for: `buildFolderTree` draws a folder whose parent is
+   * missing — and one caught in a corrupt cycle — at the **root**, so a stored `parentId` can
+   * name a level that is nowhere on screen. The tile is a gesture made against what the reader
+   * can see, so it climbs to the level the folder is *drawn* in, which is where the sidebar's
+   * tree would take them too.
+   */
+  const up = useMemo(() => {
+    if (openNode === null) return null;
+    const id = levels.parent.get(openNode.folder.id) ?? null;
+    const label =
+      id === null
+        ? ROOT_LABEL
+        : (flattenFolders(nodes).find((n) => n.folder.id === id)?.folder.name ?? ROOT_LABEL);
+    return { id, label };
+  }, [openNode, levels, nodes]);
+
+  /**
    * What a folder drop **means**: the level it lands in, and that level's ids in their new order —
    * or `null` for a drop that may not happen or would change nothing.
    *
@@ -879,7 +902,7 @@ export function DecksPage() {
   // off the wall without anything on this screen asking it to. The rule lives on the mutation
   // definitions, which is the one place it can be kept.
 
-  const heading = openNode === null ? "All decks" : openNode.folder.name;
+  const heading = openNode === null ? ROOT_LABEL : openNode.folder.name;
   const counts = [
     childFolders.length > 0 ? plural(childFolders.length, "folder") : null,
     plural(here.length, "deck"),
@@ -1139,6 +1162,24 @@ export function DecksPage() {
             // `aria-label`) — but left a list rather than made a group, because these tiles are
             // countable and a list says how many there are on the way in.
             <ul aria-label="Your decks" className={GRID} style={wallStyle(zoom)}>
+              {/* **First on the wall, and only inside a folder.** The way *out* is the first thing
+                  a reader looks for on a wall they have walked into, and it is what issue #283
+                  asked for: a folder card only ever takes a deck deeper. The gallery has had a way
+                  back since folders shipped — every row of the sidebar's tree is a deck target,
+                  including "All decks" — but it is a 32px row on the far side of the window from
+                  the tile being dragged, and a reader working on the wall should not have to cross
+                  the page to undo a drop they made on it. The tree stays exactly as it was. */}
+              {up !== null && (
+                <ParentDeckFolderCard
+                  label={up.label}
+                  drag={drag}
+                  onOpen={() => setSelectedFolderId(up.id)}
+                  canDrop={(d) => canFile(d, up.id)}
+                  onDropDeck={(d) => fileDeck(d, up.id)}
+                  canDropFolder={(d) => canDropFolder(d, up.id, "inside")}
+                  onDropFolder={(d) => dropFolder(d, up.id, "inside")}
+                />
+              )}
               {childFolders.map((node) => (
                 <FolderCard
                   key={node.folder.id}
