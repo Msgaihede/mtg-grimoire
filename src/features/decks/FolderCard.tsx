@@ -9,6 +9,7 @@
 import { useRef } from "react";
 import { CardImage } from "@/components/CardImage";
 import { FolderDropLine } from "@/components/FolderDropLine";
+import { ParentFolderCard } from "@/components/ParentFolderCard";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { cardScaleVars } from "@/lib/cardZoom";
 import { plural } from "@/lib/counts";
@@ -277,6 +278,70 @@ export function FolderCard({
         <FolderDropLine edge={edge} axis="horizontal" />
       </div>
     </li>
+  );
+}
+
+/**
+ * The gallery's **up one level** tile — the level above the folder that is open, drawn as a drawer
+ * among the drawers so a deck can be dragged back out of a folder without leaving the wall.
+ * Issue #283.
+ *
+ * `ParentFolderCard` is the whole of what it looks like; what is here is the pair of drop targets.
+ * Both register on the **same `<li>`**, where a folder card needs two boxes: this tile has one
+ * landing, so there is no geometry for `folderEdge` to divide, and `readDeckDrag` and
+ * `readFolderDrag` are disjoint, so `accepts()` keeps the two apart.
+ *
+ * **The ring is raised from the page's `drag`, not from the target** — `useDeckDropTarget` returns
+ * only `over` for the reason `deckDrag.ts` gives: every folder-shaped target answers the same
+ * yes/no about a deck, so the gallery asks once and hands the answer down. That is why this takes
+ * a `drag` where the wishlist's and the collection's tiles do not; the folder half still arms
+ * itself, because two folders never answer the same about the folder in the air.
+ *
+ * **No strip of art, where a folder card carries three crops.** The strip is what a folder is
+ * recognised by, and this tile is not a folder to recognise — it is the way out. Drawing the
+ * parent's members in it would make the wall's most-recently-touched art appear twice, once as a
+ * destination and once as a place.
+ */
+export function ParentDeckFolderCard({
+  label,
+  drag,
+  onOpen,
+  canDrop,
+  onDropDeck,
+  canDropFolder,
+  onDropFolder,
+}: {
+  /** The parent folder's name, or `All decks` at the root — the sidebar tree's own word for the
+   *  same row, so the wall and the tree cannot name one destination two ways. */
+  label: string;
+  drag: DeckDrag | null;
+  onOpen: () => void;
+  canDrop: (drag: DeckDrag) => boolean;
+  onDropDeck: (drag: DeckDrag) => void;
+  /** The other drag: a **folder** moved up out of the level on screen, landing last in the level
+   *  above — `folderLanding`'s `inside` answer, asked of the destination rather than of a card. */
+  canDropFolder: (drag: FolderDrag) => boolean;
+  onDropFolder: (drag: FolderDrag) => void;
+}) {
+  const ref = useRef<HTMLLIElement>(null);
+  const over = useDeckDropTarget({ ref, canDrop, onDrop: onDropDeck });
+  const { armed, edge } = useFolderDropTarget({
+    ref,
+    scope: "deck",
+    axis: "horizontal",
+    canDrop: (folder) => canDropFolder(folder),
+    onDrop: (folder) => onDropFolder(folder),
+  });
+  const eligible = drag !== null && canDrop(drag);
+
+  return (
+    <ParentFolderCard
+      cardRef={ref}
+      label={label}
+      armed={eligible || armed}
+      over={over || edge !== null}
+      onOpen={onOpen}
+    />
   );
 }
 
