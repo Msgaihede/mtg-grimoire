@@ -257,7 +257,28 @@ fn main() {
                 let mut body = Vec::new();
                 let read = request.as_reader().read_to_end(&mut body);
                 let value = match read {
-                    Ok(_) => handle_frame(&body, &FrameOptions::from_query(&url)),
+                    // **Every frame is handled inside `catch_unwind`, and that is not
+                    // defensive padding.** The options come from a query string driven by
+                    // live sliders, and the image-processing crates below assert on
+                    // arguments they consider impossible — `edges::canny` panics outright
+                    // when the low threshold exceeds the high one. Without this, a single
+                    // bad frame took down the worker thread that handled it, and dragging
+                    // one slider killed all of them and exited the server. A dev tool that
+                    // dies while you are adjusting it is worse than one that reports the
+                    // failure and carries on.
+                    Ok(_) => {
+                        let opts = FrameOptions::from_query(&url);
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            handle_frame(&body, &opts)
+                        }))
+                        .unwrap_or_else(|_| {
+                            serde_json::json!({
+                                "ok": false,
+                                "error": "the detector panicked on this frame — see the \
+                                          server log for the assertion",
+                            })
+                        })
+                    }
                     Err(e) => serde_json::json!({ "ok": false, "error": format!("read: {e}") }),
                 };
                 Response::from_string(value.to_string()).with_header(json_header())

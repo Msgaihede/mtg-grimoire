@@ -38,7 +38,9 @@
   }
   .dot { width:8px; height:8px; border-radius:50%; background:var(--miss); flex:none; }
   .dot.hit { background:var(--hit); } .dot.doubt { background:var(--doubt); }
-  .hud .fps { color:var(--ink-3); }
+  /* Reserved widths, so the pill does not resize as the verdict and rate change. */
+  .hud #verdict { min-width:12ch; }
+  .hud .fps { color:var(--ink-3); min-width:6ch; text-align:right; }
 
   aside { display:flex; flex-direction:column; gap:12px; min-width:0; }
   .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px 14px; }
@@ -50,13 +52,20 @@
   /* Stage timings as a stacked bar: the point is which stage owns the frame budget. */
   .bar { display:flex; height:9px; border-radius:5px; overflow:hidden; background:var(--sunk); margin-bottom:9px; }
   .bar i { display:block; height:100%; }
-  .legend { display:grid; grid-template-columns:1fr auto; gap:2px 10px; font-family:var(--mono); font-size:11.5px; }
+  /* **Every varying value column is a fixed width, never `auto`.**
+     This panel is read while a card is being moved in front of a camera, so it updates
+     several times a second — and an `auto` column is re-measured on every one of those
+     updates. "1.4 ms" becoming "104.2 ms", or an em dash becoming "0.686", silently resized
+     the column and shifted the whole panel, which made the controls below it hard to hit.
+     The widths below are sized to the longest value each row can hold. */
+  .legend { display:grid; grid-template-columns:1fr 9ch; gap:2px 10px; font-family:var(--mono); font-size:11.5px; }
   .legend .k { color:var(--ink-2); display:flex; align-items:center; gap:6px; }
   .legend .k::before { content:""; width:8px; height:8px; border-radius:2px; background:var(--sw); flex:none; }
   .legend .v { text-align:right; font-variant-numeric:tabular-nums; }
   .total { border-top:1px solid var(--line); margin-top:8px; padding-top:8px; font-weight:600; }
 
-  dl.metrics { display:grid; grid-template-columns:1fr auto; gap:3px 10px; margin:0; font-family:var(--mono); font-size:12px; }
+  /* 13ch holds the widest value any row carries — the 12-character dhash prefix. */
+  dl.metrics { display:grid; grid-template-columns:1fr 13ch; gap:3px 10px; margin:0; font-family:var(--mono); font-size:12px; }
   dl.metrics dt { color:var(--ink-3); }
   dl.metrics dd { margin:0; text-align:right; font-variant-numeric:tabular-nums; }
   dl.metrics dd.warn { color:var(--doubt); }
@@ -72,15 +81,40 @@
   .seg button[aria-pressed=true] { background:var(--accent); color:#07222b; font-weight:600; }
   .seg button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 
-  .rect { display:flex; gap:10px; align-items:flex-start; }
-  .rect img { width:120px; border-radius:7px; background:#000; border:1px solid var(--line); }
+  /* The card slot is always present at the size a rectified card will occupy — 120 px wide
+     at the 63:88 ratio. Swapping an image for a line of text, which is what this did at
+     first, changes the card's height by ~130 px every time a card enters or leaves frame. */
+  .rect { display:flex; gap:12px; align-items:flex-start; }
+  .rect .slot {
+    width:120px; height:168px; flex:none; border-radius:7px; background:#000;
+    border:1px solid var(--line); display:grid; place-items:center; overflow:hidden;
+  }
+  /* Both children share one grid cell. Without `grid-area`, a grid puts them in two implicit
+     rows and the slot grows by the height of whichever one is not showing. */
+  .rect .slot > * { grid-area:1 / 1; }
+  .rect .slot img { width:100%; height:100%; object-fit:contain; display:block; }
+  .rect .slot img[hidden] { display:none; }
+  .rect .slot span { font-size:11px; color:var(--ink-3); text-align:center; padding:0 10px; }
+  .rect .slot span[hidden] { display:none; }
+
   .stages { display:grid; grid-template-columns:repeat(3,1fr); gap:7px; }
   .stages figure { margin:0; }
-  .stages img { width:100%; border-radius:6px; background:#000; border:1px solid var(--line); }
+  /* A fixed box with `contain`, so a portrait mask and a landscape one occupy the same
+     space and the panel does not jump as each stage image arrives. */
+  .stages img {
+    width:100%; height:92px; object-fit:contain; border-radius:6px;
+    background:#000; border:1px solid var(--line); display:block;
+  }
   .stages figcaption { font-family:var(--mono); font-size:10px; color:var(--ink-3); margin-top:4px; }
   .muted { color:var(--ink-3); font-size:12px; margin:0; }
   code { font-family:var(--mono); background:var(--sunk); padding:1px 5px; border-radius:4px; font-size:11.5px; }
-  .err { color:var(--miss); font-family:var(--mono); font-size:11.5px; word-break:break-word; }
+  /* Always in the layout, empty when there is nothing wrong. Two lines is the longest
+     message the detector produces ("no quadrilateral in this frame looks like a card
+     (examined N contours)"), so reserving two lines means the card never changes height. */
+  .err {
+    color:var(--miss); font-family:var(--mono); font-size:11.5px; word-break:break-word;
+    min-height:3.4em; margin:9px 0 0;
+  }
 </style>
 </head>
 <body>
@@ -102,7 +136,7 @@
         <dt>geometry</dt><dd id="m-via">—</dd>
         <dt>dhash</dt><dd id="m-hash">—</dd>
       </dl>
-      <p class="err" id="err" hidden></p>
+      <p class="err" id="err"></p>
     </div>
 
     <div class="card">
@@ -114,8 +148,12 @@
     <div class="card">
       <h2>Rectified</h2>
       <div class="rect">
-        <img id="rect" alt="rectified card" hidden>
-        <p class="muted" id="rect-empty">No card in the frame yet.</p>
+        <div class="slot">
+          <img id="rect" alt="rectified card" hidden>
+          <span id="rect-empty">No card<br>in frame</span>
+        </div>
+        <p class="muted">What the homography produced. If this is upside-down or stretched,
+        the quad is wrong even when the overlay looks right.</p>
       </div>
     </div>
 
@@ -205,7 +243,6 @@ async function start() {
     // getUserMedia on a non-secure origin never resolves or rejects with anything useful,
     // so name the actual cause rather than echoing the exception.
     $('verdict').textContent = 'no camera';
-    $('err').hidden = false;
     $('err').textContent = window.isSecureContext
       ? String(e)
       : 'This page is not a secure context, so the browser refuses the camera. Reach it on localhost — from a phone, adb reverse tcp:7777 tcp:7777.';
@@ -233,7 +270,7 @@ async function pump() {
       latest = j;
       render(j);
     } catch (e) {
-      $('err').hidden = false; $('err').textContent = String(e);
+      $('err').textContent = String(e);
     } finally {
       inFlight = false;
     }
@@ -251,8 +288,9 @@ function render(j) {
   $('dot').className = 'dot ' + state;
   $('verdict').textContent = !j.ok ? 'no card' : aspectOk ? 'card located' : 'suspect shape';
 
-  $('err').hidden = j.ok;
-  if (!j.ok) $('err').textContent = j.error ?? '';
+  // Emptied rather than hidden: the element keeps its reserved two lines either way, so a
+  // card entering or leaving frame never changes this card's height.
+  $('err').textContent = j.ok ? '' : (j.error ?? '');
 
   const set = (id, v, warn) => { const el = $(id); el.textContent = v; el.classList.toggle('warn', !!warn); };
   if (j.ok) {
@@ -262,12 +300,14 @@ function render(j) {
     set('m-method', j.method);
     set('m-via', j.score.via);
     set('m-hash', j.hash.slice(0, 12));
-    $('rect').src = j.rectified ?? ''; $('rect').hidden = !j.rectified;
-    $('rect-empty').hidden = !!j.rectified;
   } else {
     for (const id of ['m-aspect', 'm-area', 'm-angle', 'm-method', 'm-via', 'm-hash']) set(id, '—');
-    $('rect').hidden = true; $('rect-empty').hidden = false;
   }
+  // The slot is fixed-size and always in the layout; only its contents swap.
+  const rect = j.ok ? j.rectified : null;
+  if (rect) $('rect').src = rect;
+  $('rect').hidden = !rect;
+  $('rect-empty').hidden = !!rect;
 
   if (j.stages) {
     for (const [k, id] of [['binary', 's-binary'], ['contours', 's-contours'], ['quad', 's-quad']])

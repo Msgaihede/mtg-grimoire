@@ -348,9 +348,17 @@ pub fn detect(
             //
             // Pooling rather than choosing: both masks contribute candidates and
             // [`score_quad`] ranks them together, so the low rung can only add answers.
+            // **Ordered and non-negative before they reach `canny`, which asserts rather
+            // than errors.** `imageproc::edges::canny` panics outright on
+            // `high_threshold < low_threshold`, and these two numbers arrive from a caller —
+            // in the live view, from two independent sliders that can trivially cross. A
+            // panic there took down every worker thread in the debug server the first time
+            // the low slider was dragged past the high one. Swapping them is the sane
+            // reading of a crossed pair, and it means no caller can panic this module by
+            // passing a merely silly value.
             let rungs = [
-                (opts.canny_low, opts.canny_high),
-                (opts.canny_low * 0.375, opts.canny_high * 0.45),
+                canny_pair(opts.canny_low, opts.canny_high),
+                canny_pair(opts.canny_low * 0.375, opts.canny_high * 0.45),
             ];
             rungs
                 .iter()
@@ -615,6 +623,31 @@ fn order_corners(pts: &[(f32, f32)]) -> Option<Quad> {
     best.map(|(_, q)| q)
 }
 
+/// Force a Canny threshold pair into the range `imageproc` can actually survive.
+///
+/// **Two separate defects upstream, both reachable from a slider.**
+///
+/// `edges::canny` *asserts* `high_threshold >= low_threshold` and panics outright otherwise.
+/// The live view drives these from two independent sliders, so crossing them is one drag
+/// away — and it killed every worker thread in the debug server the first time it happened.
+/// Swapping is the sane reading of a crossed pair.
+///
+/// The low threshold is then floored at 1. `imageproc-0.27.0/src/edges.rs:135` walks the
+/// hysteresis neighbours with `nx - 1` on a `u32`, and the seed loop starts at 1 but the walk
+/// itself can push a neighbour at `x == 0`; popping that underflows. A low threshold of 0
+/// makes *every* pixel an edge, so the flood reaches the border every time and the underflow
+/// is certain rather than unlucky. Flooring at 1 costs nothing real — a Canny low threshold
+/// of zero means "every pixel is an edge", which is not a setting anyone wants — and it
+/// removes the only way to hit that path reliably.
+///
+/// It does not make the upstream bug unreachable on a pathological image, which is why the
+/// debug server also wraps each frame in `catch_unwind`.
+fn canny_pair(low: f32, high: f32) -> (f32, f32) {
+    let lo = low.min(high).max(1.0);
+    let hi = low.max(high).max(lo + 1.0);
+    (lo, hi)
+}
+
 /// Does this contour run into the edge of the frame?
 ///
 /// Checked on the contour rather than on the finished quad, because it is cheaper and
@@ -836,6 +869,34 @@ mod tests {
         assert!((q.area() - f.area()).abs() < 1e-3);
         assert!((q.aspect() - f.aspect()).abs() < 1e-3);
         assert_eq!(f.flipped().corners, q.corners, "flipping twice is identity");
+    }
+
+    #[test]
+    fn crossed_canny_thresholds_do_not_panic() {
+        // Found by driving the live view: two independent sliders can put the low threshold
+        // above the high one, and `imageproc::edges::canny` asserts rather than erroring —
+        // which killed every worker thread in the debug server at once.
+        // Both rungs are checked, since the low rung scales the pair by 0.375 and could
+        // reach zero from a legitimate-looking input.
+        for (lo, hi) in [(1.0, 3.0), (120.0, 20.0), (0.0, 0.0), (-5.0, 10.0), (300.0, 1.0)] {
+            let (a, b) = canny_pair(lo, hi);
+            assert!(a >= 1.0 && b > a, "canny_pair({lo}, {hi}) gave ({a}, {b})");
+            let (a, b) = canny_pair(lo * 0.375, hi * 0.45);
+            assert!(a >= 1.0 && b > a, "the low rung of ({lo}, {hi}) gave ({a}, {b})");
+        }
+
+        let frame = synth(600, 800, 260.0, 0.0);
+        for (lo, hi) in [(120.0, 20.0), (0.0, 0.0), (-5.0, 10.0), (300.0, 1.0)] {
+            let opts = DetectOptions {
+                method: EdgeMethod::Canny,
+                canny_low: lo,
+                canny_high: hi,
+                ..Default::default()
+            };
+            // The assertion is that this returns at all.
+            let (_result, trace) = detect(&frame, &opts);
+            assert!(trace.is_some(), "canny({lo}, {hi}) produced no trace");
+        }
     }
 
     #[test]
