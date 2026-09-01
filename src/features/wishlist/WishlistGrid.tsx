@@ -1,4 +1,5 @@
 import { useMemo, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { QuantityStepper } from "@/components/QuantityStepper";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { dragData } from "@/features/decks/dnd";
@@ -274,6 +275,12 @@ export function WishlistGrid({
    *  every tile and the breadcrumb above already says it. */
   flattened: boolean;
   onNeedNextPage: () => void;
+  /**
+   * How many copies this wish is for — reached from **two** controls on one tile since issue
+   * #284: the stepper in the action strip, and the panel behind the pencil beside it. One prop
+   * for both, so a tile cannot grow two answers to one question; and `0` is a number either of
+   * them can send, which the backend reads as a removal — see the stepper's `min` at its site.
+   */
   onSetQuantity: (row: WishRow, quantity: number) => void;
   onRemove: (row: WishRow) => void;
   /** The three writes the panel behind a tile's pencil reaches, passed straight through. They
@@ -430,27 +437,123 @@ export function WishlistGrid({
           </span>
         );
       }}
-      // Keyed by the wish, because the wall keys its tiles by *slot*: removing a wish re-binds
-      // this slot to the next one, and an open panel carried across that would be pointed at a
-      // card the reader never opened it on.
+      // **How many copies, changed on the tile — and the pencil beside it** (issue #284).
+      //
+      // The wall drew the pencil alone until now, so changing a 3 into a 4 cost a press to open
+      // a panel, a press on `+` and a press to close it, while the table did it in one. That is
+      // the one difference between two drawings of one list this file's own rule forbids: a
+      // reader who has learned the table has learned the wall, and "the quantity is maintained
+      // here" is the first thing a shopping list teaches. The panel keeps every write it had —
+      // it is still the only route to the printing and the folder, and the only route of any
+      // kind on an any-printing wish — and loses nothing by the number moving out in front of it.
+      //
+      // **It fits, and the arithmetic is exact rather than approximate.** At `size="xs"` the
+      // stepper is two 20px buttons either side of a 32px field with its own 4px gutter between
+      // each, 80px at 100% zoom, and everything drawn on a card is reduced by `CONTROL_SHRINK`
+      // (85%) — so it rests at **~68px**. `AnchoredPopup`'s trigger is 24px under the same
+      // shrink, **~20.4px**. With the gutter that is **~92px** against the **162px** a 170px
+      // tile leaves once the strip's own 8px of padding is off, and ~92 against **133px** at
+      // `PHONE_TILE_WIDTH`'s 141 — 57% and 69% of the room. Both hold at **every** stop of the
+      // zoom ladder rather than only at rest: the tile's width, the strip's `--mark-scale`
+      // padding and the row's `--control-scale` controls are each linear in the same zoom, so
+      // the two percentages are constants and not readings taken at 1×.
       action={(tile) => (
-        <EditWishButton
-          key={tile.wish.id}
-          row={tile.wish}
-          folders={folders}
-          nodes={nodes}
-          onSetQuantity={onSetQuantity}
-          onRemove={onRemove}
-          onSetFolder={onSetFolder}
-          onChangePrinting={onChangePrinting}
-          onAnyPrinting={onAnyPrinting}
-          // The search wall's recipe verbatim: invisible until the tile is hovered or holds the
-          // caret — a wall of art is not a wall of pencils — and always in the tab order,
-          // because "visible on hover" is not a state a keyboard has. `static` is what makes the
-          // panel hang off the caption instead of off this 20px control, which is why the
-          // caption is the `relative` box.
-          className={cn(REVEAL_ON_HOVER, "static")}
-        />
+        // **One element around the pair, and the two things it carries are what make it one.**
+        //
+        // `data-no-drag` needs a host. A wish tile is a drag source ({@link tileDrag}), the
+        // sensor asks `closest(NOT_A_DRAG)` at the press (`dnd.ts`), and `NOT_A_DRAG` excludes
+        // the stepper's `<input>` by tag but not its two `<button>`s — so unmarked, a press on
+        // `−` plus five pixels of travel is a drag of the whole wish instead of a decrement.
+        // `QuantityStepper` takes no `className` and no loose props, so the mark cannot go on
+        // the control; `closest` means one on the wrapper covers both buttons. `AnchoredPopup`
+        // marks itself for the same reason, which is `dnd.ts`'s rule read the other way round —
+        // anything that owns its own press says so. `DeckCardControls` is the same wrapper
+        // around the same stepper for the same sentence (`features/decks/cardControl.tsx`).
+        //
+        // And the gutter needs a box: `CardGrid`'s strip is a `flex justify-end` with no `gap`
+        // of its own, so two children handed to it directly would touch.
+        //
+        // **What is _not_ a reason: pointer events.** A React fragment renders no node, so its
+        // children would be the strip's own direct children and the strip's
+        // `[&>*]:pointer-events-auto` would reach both of them exactly as it reaches this
+        // wrapper. Worth writing down because the strip's `pointer-events-none` is there for a
+        // real and nearby failure — it is what stops the bottom ~28px of every card swallowing
+        // the press that opens it — and it is easy to reach for as the argument here, where it
+        // is not one.
+        //
+        // **Static, and that is load-bearing.** The strip is the positioned box the 256px panel
+        // hangs off, which is why the pencil is passed `static` below; a wrapper with a position
+        // of its own would silently become that containing block instead, and a panel anchored
+        // to a 92px box at the right end of a 170px tile opens off the left of the scroller —
+        // where left overflow, unlike right, cannot be scrolled back into view. Nothing here
+        // sets `position`, and nothing here may.
+        <span
+          data-no-drag=""
+          // The same 4px gutter the stepper uses between its own three controls, on the same
+          // variable — so the row reads as one control rather than as two things that happen to
+          // be adjacent, at every stop of the ladder. `--mark-scale` would have been the strip's
+          // padding's variable and is the wrong one: this is a gap between *controls*, and a
+          // control on a card is drawn at `CONTROL_SHRINK`.
+          className="flex items-center gap-[calc(0.25rem*var(--control-scale,1))]"
+        >
+          <QuantityStepper
+            // The 20px box, and the one that follows the reader's zoom — `xs` and `card` are the
+            // two sizes drawn on a card face. `card` is the deck stack's column standing in a
+            // 210px card's margin; this strip has 170px of tile and a pencil to sit beside.
+            size="xs"
+            // Drawn over an illustration, inside a frame that clips its own corners — the deck
+            // tile's two answers, for the deck tile's two reasons: a 1px outline with nothing
+            // behind it disappears over art of any brightness, and an outset focus ring on a
+            // clipped box loses the half that lands outside.
+            tone="art"
+            focus="inset"
+            value={tile.wish.quantity}
+            // **Zero is the floor and zero removes the wish** — a real press, and the wall's
+            // and the table's answer alike since issue #284.
+            //
+            // `wishlist.rs`'s `set_wish_quantity` has always returned `remove_wish` at zero,
+            // because `wishlist_entries.quantity` carries `CHECK (quantity > 0)`: a wish for
+            // none of something is not a wish, which is where this list differs from the
+            // collection's, where a zeroed row keeps its condition and its purchase story. The
+            // floor of `1` this had until now was a UI-only guard on the argument that a
+            // stepper which deleted the row when held down is a one-way door. What overruled it
+            // is that the collection's wall reaches zero and deletes there, so the same gesture
+            // on two walls of one app meant two different things — and the guard was buying a
+            // reader who had over-counted a copy an extra press rather than an undo, which is
+            // not what the argument promised.
+            //
+            // **Removal keeps its named route**: `Remove from wishlist` in the pencil's panel is
+            // the explicit press, it says the word, and it is the one a keyboard finds by
+            // reading rather than by holding a button down.
+            min={0}
+            // The wish, not the card: two wishes for one card differ only by printing and
+            // finish, so `wishLabel` is what stops a wall of forty being forty controls a screen
+            // reader or a voice driver cannot tell apart. The same name the table's stepper and
+            // the panel's carry, because it names the same wish.
+            label={`Copies wanted of ${wishLabel(tile.wish)}`}
+            onChange={(next) => onSetQuantity(tile.wish, next)}
+          />
+          <EditWishButton
+            // Keyed by the wish, because the wall keys its tiles by *slot*: removing a wish
+            // re-binds this slot to the next one, and an open panel carried across that would be
+            // pointed at a card the reader never opened it on.
+            key={tile.wish.id}
+            row={tile.wish}
+            folders={folders}
+            nodes={nodes}
+            onSetQuantity={onSetQuantity}
+            onRemove={onRemove}
+            onSetFolder={onSetFolder}
+            onChangePrinting={onChangePrinting}
+            onAnyPrinting={onAnyPrinting}
+            // The search wall's recipe verbatim: invisible until the tile is hovered or holds
+            // the caret — a wall of art is not a wall of pencils — and always in the tab order,
+            // because "visible on hover" is not a state a keyboard has. `static` is what makes
+            // the panel hang off `CardGrid`'s strip instead of off this 20px control, and the
+            // wrapper above stays out of that chain for the same reason.
+            className={cn(REVEAL_ON_HOVER, "static")}
+          />
+        </span>
       )}
       cardMenu={rowMenu && ((tile) => rowMenu(tile.wish))}
       cardMenuKey={rowMenuKey && ((tile) => rowMenuKey(tile.wish))}

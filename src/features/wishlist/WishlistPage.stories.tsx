@@ -90,13 +90,18 @@ const meta = {
           "the **foil** Ragavan 0 of 1 with a nonfoil in the binder, Rhystic Study 0 of 1, and " +
           "the any-printing Sol Ring **2 of 1** — fulfilled twice over, because a wish naming no " +
           "printing is filled by every printing of the card.\n\n" +
-          "**Zero deletes here, and the collection's zero does not.** `wishlist_set_quantity(0)` " +
-          "removes the row (the fake's handler mirrors the table's `CHECK (quantity > 0)`) " +
-          "because a wish for none of something is not a wish. **But the stepper cannot reach " +
-          "zero**: it is `min={1}`, because a stepper that deleted a row when held down would " +
-          "be a one-way door with no undo. Removal is its own control, and " +
-          "{@link Removed} is the story of it — there is no story of a wish stepped to zero, " +
-          "because the UI does not offer one.\n\n" +
+          "**Zero deletes here, and every stepper on the page can now reach it.** " +
+          "`wishlist_set_quantity(0)` removes the row — the fake's handler mirrors " +
+          "`wishlist_entries`' own `CHECK (quantity > 0)` — because a wish for none of " +
+          "something is not a wish. The floor was `min={1}` until issue #284, on the argument " +
+          "that a stepper deleting a row when held down is a one-way door with no undo; what " +
+          "overruled it is that a collection entry has deleted at zero since schema v24 and its " +
+          "steppers have always been `min={0}`, so one gesture meant two different things on " +
+          "two lists a press apart. All three places a wish's number is drawn — the tile's " +
+          "stepper ({@link CopiesFromATile}), the table's cell and the pencil's panel " +
+          "({@link EditingFromATile}) — floor at zero together. **Removal keeps its own named " +
+          "control**, which is the route that says the word rather than the one a held button " +
+          "arrives at: {@link Removed} is the story of it.\n\n" +
           "**There is no `Large` story, and that is a fact about the seeds rather than about " +
           'this page.** `seed: "large"` builds 5 243 cards and 600 collection entries and ' +
           "**no wishes at all** — `largeSeed` says so in as many words, and " +
@@ -324,18 +329,22 @@ export const Flattened: Story = {
 };
 
 /**
- * The two writes a wish needs, from a tile.
+ * Everything else a wish can be edited into, from a tile.
  *
- * The table edits in place because a shopping list is where the number of copies is
- * *maintained*. A 170px caption has room for one 24px control and nothing else, so on the wall
- * both moved into a panel behind it — the same anchored popup the search wall's quick-add hangs
- * off, opening from the tile's left edge so the first column's panel is not clipped by a
- * scroller that cannot be scrolled left.
+ * The panel is the tile's answer to a 170px caption: which printing, which folder, and the named
+ * removal, in the same anchored popup the search wall's quick-add hangs off — opening from the
+ * tile's left edge so the first column's panel is not clipped by a scroller that cannot be
+ * scrolled left. **It is the only route to two of those writes**, and on an any-printing wish it
+ * is the only route to any of them, which is why the pencil is drawn on every tile.
  *
- * The stepper here is the table's stepper, `min={1}` included: zero deletes a wish, and a
- * control that deleted a row when held down would be a one-way door with no undo. Removal is the
- * press below it, and it is offered on every wish — crossing a line off a shopping list is what
- * a shopping list is for.
+ * **The number is no longer among them alone.** It is still here, and it is now also on the tile
+ * in front of the pencil ({@link CopiesFromATile}) — the same control, the same accessible name
+ * and the same floor, because a wish's copy count is one write however the reader reaches it.
+ *
+ * The stepper here is the table's stepper, `min={0}` included: zero deletes a wish, and since
+ * issue #284 that is a press the reader may make rather than a floor the UI holds them above.
+ * Removal is still the press at the foot of the panel, offered on every wish — crossing a line
+ * off a shopping list is what a shopping list is for, and it is the route that says so in words.
  */
 export const EditingFromATile: Story = {
   play: async ({ canvasElement }) => {
@@ -351,6 +360,56 @@ export const EditingFromATile: Story = {
     await expect(
       within(panel).getByRole("button", { name: /Remove Counterspell .* from your wishlist/ }),
     ).toBeInTheDocument();
+  },
+};
+
+/**
+ * **How many copies, changed on the tile** — issue #284, and the half of the wall that was
+ * missing.
+ *
+ * The table has always edited the number in place, because a shopping list is where the number
+ * of copies is *maintained*. The wall drew the pencil and nothing else, so the same change cost
+ * three presses on one drawing of the list and one on the other. The stepper is `size="xs"` over
+ * the art beside the pencil, `tone="art"` for the backing that keeps a 1px outline legible over
+ * an illustration, and `focus="inset"` because the frame it stands in clips its own corners.
+ *
+ * Counterspell is the subject because it is the seeded root wish with a number to move in both
+ * directions — 4 wanted against 2 owned. Rhystic Study is the other half of the story at 1,
+ * which is where the floor is worth looking at: since issue #284 its `Decrease` is **live**
+ * rather than greyed, and the press it would take is the removal
+ * (`wishlist_set_quantity(0)` → `remove_wish`). This play stops short of making it — a wish
+ * leaving the list is {@link Removed}, which drives the control that says the word.
+ *
+ * Both controls live in `CardGrid`'s action strip, which is revealed on hover and on
+ * focus-within and is **never removed from the tab order**: "visible on hover" is not a state a
+ * keyboard has, which is also why `userEvent` reaches them here with no hover of its own.
+ */
+export const CopiesFromATile: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const counterspell = "Copies wanted of Counterspell (MH2 267)";
+
+    await expect(await canvas.findByRole("spinbutton", { name: counterspell })).toHaveValue(4);
+
+    await userEvent.click(canvas.getByRole("button", { name: `Increase ${counterspell}` }));
+
+    // Optimistic on the row's own number and then confirmed by the answer — `patchWish` twice,
+    // which is what lets a reader hold `+` without the box computing from a stale value.
+    await waitFor(async () => {
+      await expect(canvas.getByRole("spinbutton", { name: counterspell })).toHaveValue(5);
+    });
+
+    // The pencil is still beside it, so the printing, the folder and the named removal are all
+    // still one press from the tile: the stepper is an addition rather than a rearrangement.
+    await expect(
+      canvas.getByRole("button", { name: /^Edit Counterspell .* on your wishlist/ }),
+    ).toBeInTheDocument();
+
+    // The floor, on the wish already sitting on it. Enabled is the whole assertion — what the
+    // press would do belongs to {@link Removed}.
+    await expect(
+      canvas.getByRole("button", { name: "Decrease Copies wanted of Rhystic Study (PCY 45)" }),
+    ).toBeEnabled();
   },
 };
 
@@ -530,9 +589,12 @@ export const NeedsReview: Story = {
  * The alert is a `role="alert"` of its own rather than a line folded into the status above it:
  * that one describes the list, and this one describes something the reader just did to it.
  *
- * Counterspell rather than one of the four wishes at quantity 1, because the stepper is `min={1}`
- * and its Decrease button is disabled at the floor — a refusal story has to press a control that
- * would otherwise have worked.
+ * **Counterspell rather than one of the four wishes at quantity 1, and the reason moved with the
+ * floor.** It used to be that `min={1}` left Decrease disabled on those rows, so a press on one
+ * would have proved nothing about a refusal. Since issue #284 the floor is `0` and that press
+ * lands — but it lands as a *removal*, which is a different write, and a row that is on its way
+ * out has no number for the rollback to put back. This story is about a **quantity change**
+ * being refused, so it needs a wish with a number to return to: 4.
  *
  * The stepper is optimistic on the row's own number, so this also exercises the rollback:
  * `onError` restores the snapshot `onMutate` took, and the box goes back to 4.

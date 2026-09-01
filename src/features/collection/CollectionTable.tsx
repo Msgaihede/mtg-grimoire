@@ -86,6 +86,8 @@ function columnsFor(
   onRemove: (row: CollectionRow) => void,
   marketplace: Marketplace,
   tip: TooltipBinder,
+  /** {@link CollectionTable}'s prop of the same name, threaded down to the one cell it fences. */
+  quantityBlocked?: (row: CollectionRow) => string | null,
 ): TableColumn<CollectionRow>[] {
   const asOf = pricesAsOf(marketplace);
   const currency = marketplace.currency;
@@ -219,16 +221,58 @@ function columnsFor(
       // *maintained*, and making the reader open an editor to change a 3 to a 4 is the
       // difference between a tool and a form. `interactive` is what keeps a press here from
       // also opening the card, and what marks the cell as not part of the row's drag.
+      //
+      // **It stays `true` on a blocked row, where there is no stepper to protect**, for two
+      // reasons. The flag is a property of the *column* — one shape for every row in it, read
+      // once per cell by `VirtualTable` — so answering it per row would make "does a click here
+      // open the card?" depend on which drawer the row happens to sit in, which is a worse
+      // surprise than a cell that is not a grab handle. And the cell still holds something a
+      // pointer is meant to rest on: the number is a tooltip anchor, and a press that reached
+      // the row would open the card out from under the sentence the reader hovered to read.
       interactive: true,
-      cell: (row) => (
-        <QuantityStepper
-          size="sm"
-          value={row.quantity}
-          min={0}
-          label={`Quantity of ${row.name ?? row.cardId} (${copyLabel(row)})`}
-          onChange={(next) => onSetQuantity(row, next)}
-        />
-      ),
+      cell: (row) => {
+        const blocked = quantityBlocked?.(row) ?? null;
+        if (blocked !== null) {
+          /* **A number, not a `disabled` stepper.** A greyed control says "not now" and invites
+            the reader to look for the state that would enable it; a plain figure says "this is
+            what you hold, and it is not edited here" — which is the truth, because the way to
+            change it is somewhere else entirely (cut the card from the deck, or file the copy
+            back out of `Recently removed`). It is drawn in this table's own data styling for the
+            same reason the Value column is: a quantity is data. `text-dim` is the rank — the
+            column has stopped being the place anything happens on this row.
+
+            **The reason reaches assistive tech as text, which is the `Finish · condition` cell's
+            answer rather than the Value header's.** That header can put its sentence in the
+            column's accessible *name* because it is true of every row in the column; this one is
+            about *this* row, and a column-level name would repeat it on the four hundred rows
+            that are not blocked. That leaves the tooltip's `aria-describedby`, which cannot
+            reach a keyboard reader here: it is wired only while the panel is open, and the panel
+            opens on pointer-enter or on the anchor taking focus — a `<span>` takes no focus, and
+            the row's tab stop is the row. So the sentence rides as `sr-only` text beside the
+            figure, and the hover panel is bound with `describes: false` so it does not also
+            describe a sentence the accessibility tree already holds. */
+          return (
+            <>
+              <span
+                className="font-mono tabular-nums text-dim"
+                {...tip(blocked, { describes: false })}
+              >
+                {row.quantity}
+              </span>
+              <span className="sr-only"> {blocked}</span>
+            </>
+          );
+        }
+        return (
+          <QuantityStepper
+            size="sm"
+            value={row.quantity}
+            min={0}
+            label={`Quantity of ${row.name ?? row.cardId} (${copyLabel(row)})`}
+            onChange={(next) => onSetQuantity(row, next)}
+          />
+        );
+      },
     },
     {
       key: "value",
@@ -441,6 +485,7 @@ export function CollectionTable({
   onNeedNextPage,
   onSetQuantity,
   onRemove,
+  quantityBlocked,
   rowMenu,
   rowMenuKey,
   marketplace,
@@ -457,6 +502,34 @@ export function CollectionTable({
   onNeedNextPage: () => void;
   onSetQuantity: (row: CollectionRow, quantity: number) => void;
   onRemove: (row: CollectionRow) => void;
+  /**
+   * Why this row's copies cannot be stepped here, or `null` for a row that can.
+   *
+   * **The quantity control belongs to a normal folder and to nothing else** (issue #284). Since
+   * schema v25 a deck owns whatever its own group holds, so stepping a row filed there changes
+   * what the deck physically holds with `deck_cards` never touched — and where the *move* is
+   * fenced in the backend (`collection_folders::set_entry_folder` answers `ENTRY_IN_A_DECK`),
+   * `collection::set_quantity` has no folder fence at all. This predicate is therefore the whole
+   * of the guard rather than a second opinion about one, and **the wall takes the same one from
+   * the same page**: two drawings of one list that disagree about what can be edited are worse
+   * than either fence alone.
+   *
+   * **A sentence rather than a boolean, because a row that refuses has to say what to do
+   * instead.** The words are the caller's — this table prints them and decides nothing about
+   * them — and the page passes two shapes. For a deck's group:
+   * `` `In ${row.folderName ?? "a deck"}. Cut the card from the deck to change how many you hold.` ``
+   * And for the removals drawer:
+   * `In Recently removed. Move it back to your collection to change how many you hold.`
+   * Both are deliberately the grammar of `PickCopies`' own `blockedReason`
+   * (`CollectionPage.tsx`) — one voice across this feature for "you cannot do this here, and
+   * here is what to do instead".
+   *
+   * Optional, and optional in `rowMenu`/`rowMenuKey`'s way rather than defaulted to a predicate
+   * of its own: absent, every row draws the stepper it drew before the folders existed, which is
+   * what every story and every read-only mount of this table wants and what keeps a caller that
+   * has no cabinet to reason about from having to say so.
+   */
+  quantityBlocked?: (row: CollectionRow) => string | null;
   /**
    * What a row offers on a right-click — a ready-made `onContextMenu` handler, one per row.
    *
@@ -485,7 +558,7 @@ export function CollectionTable({
   return (
     <VirtualTable
       rows={rows}
-      columns={columnsFor(onSetQuantity, onRemove, marketplace, tip)}
+      columns={columnsFor(onSetQuantity, onRemove, marketplace, tip, quantityBlocked)}
       label="Your collection"
       // A collection total is counted in full, so there is no unknown-count case here.
       total={total}

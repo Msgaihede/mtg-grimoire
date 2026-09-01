@@ -405,6 +405,15 @@ export function WishlistPage() {
     // Optimistic on the row's own number and nothing else. Without it, holding `+` sends the
     // same number three times — the box is controlled by the cache, so a second press before
     // the first answer would be computed from a stale value.
+    //
+    // **It writes a `0` into the row for one round trip now that the stepper's floor is zero
+    // (issue #284), and that is accepted rather than special-cased** — the collection's twin
+    // accepts the same one. Guessing the *removal* here instead is the guess this page is not
+    // entitled to make: a refusal would then have to put a row back at a sort position and on a
+    // page only the backend knows, which is the argument {@link setFolder} makes at length about
+    // its own write. What a reader sees in the meantime is the number they pressed to, on a row
+    // that leaves a few milliseconds later — a stepper that reported a different number from the
+    // one under their finger would be worse than a row that lingers.
     onMutate: ({ row, quantity }) => {
       const saved = snapshot();
       patchWish(row.id, (r) => ({ ...r, quantity }));
@@ -416,9 +425,32 @@ export function WishlistPage() {
     },
     onSuccess: (change) => {
       // The answer, not the guess: the backend clamps and canonicalises, and this is the
-      // number it actually stored. Then the re-read, for what the new number is counted into —
-      // the folder subtotal a copy count multiplies straight through.
-      patchWish(change.id, (r) => ({ ...r, quantity: change.quantity }));
+      // number it actually stored — **or says the row is not there any more**. Then the
+      // re-read, for what the new number is counted into — the folder subtotal a copy count
+      // multiplies straight through.
+      //
+      // `removed` is not decoration. `set_wish_quantity(id, 0)` returns `remove_wish(conn, id)`
+      // — `wishlist_entries.quantity` carries `CHECK (quantity > 0)`, so it always has — and
+      // since issue #284 the stepper is `min={0}`, which puts that delete one press away on a
+      // single-copy wish.
+      //
+      // **What reading the answer as "quantity 0" costs here is a round trip, not a permanent
+      // ghost**, and the distinction is worth getting right because the collection's twin
+      // handler has the harsher version of it. {@link settleWhole} invalidates `["wishlist"]`
+      // *whole* and this list's own key is `["wishlist", "list", …]` (`useWishlist.ts`), so the
+      // refetch does take the row — eventually. Until it lands the wish sits in the list wanting
+      // none of something, and the `+` beside it answers GONE. That is exactly what
+      // `remove.onSuccess` below refuses to let a crossed-off wish do: "the row goes at once —
+      // a crossed-off wish must not sit there for the length of a round trip". A
+      // removal and a stepper taken to zero are **one write with two gestures**, so the two
+      // handlers are the same two lines; anything else is one gesture behaving differently from
+      // the other for a reason no reader could name.
+      //
+      // `CollectionPage`'s handler is these same two lines and its comment carries the live
+      // sighting — but not its reason: `settle()` there re-reads the summaries and pointedly
+      // **not** the list, so the same misreading leaves a row that outlives every round trip.
+      // Do not port that sentence back here.
+      patchWish(change.id, change.removed ? null : (r) => ({ ...r, quantity: change.quantity }));
       settleWhole();
     },
   });

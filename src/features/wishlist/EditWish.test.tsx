@@ -330,6 +330,40 @@ describe("EditWishButton", () => {
     expect(onRemove).toHaveBeenCalledWith(ANY);
   });
 
+  /**
+   * **The floor is zero, and it was one until issue #284.**
+   *
+   * The old rule greyed `−` on a single-copy wish, on the argument that zero deletes here and a
+   * held-down stepper would be a one-way door. Zero deletes in the collection too — since schema
+   * v24 — and `CollectionTable`'s stepper has floored at zero the whole time, so what the greying
+   * bought was the wishlist refusing an edit the list beside it allows. Both of this list's views
+   * reach this one panel, so a floor left here would have been the wall and the table disagreeing
+   * about a number through a control they share.
+   *
+   * What this component owes is the *press*: it reports `0` and stops there, because turning that
+   * into a `wishlistSetQuantity(id, 0)` and dropping the row on the answer is `WishlistPage`'s
+   * half and is driven in its own suite. Put `min` back to 1 and the button is `disabled`, which
+   * is what the first assertion is for — `userEvent` will not click a disabled button, so without
+   * it the case would fail on the call count and read as the handler being unwired.
+   */
+  it("steps a single-copy wish down to zero, which is how the panel removes one", async () => {
+    const ONE: WishRow = { ...BOLT, quantity: 1 };
+    const { user, onSetQuantity } = setup(ONE);
+    const panel = await open(user, ONE);
+
+    const decrease = within(panel).getByRole("button", { name: /^Decrease Copies wanted/ });
+    expect(decrease).not.toBeDisabled();
+    await user.click(decrease);
+
+    expect(onSetQuantity).toHaveBeenCalledWith(ONE, 0);
+    // And the named press is still there beside it: the overlap is the arrangement, not a
+    // duplicate — one press from any quantity, and the one a keyboard reader finds without
+    // holding a button down.
+    expect(
+      within(panel).getByRole("button", { name: /^Remove Lightning Bolt/ }),
+    ).toBeInTheDocument();
+  });
+
   /** The pane is the panel's state and dies with it: reopening starts on the main pane, never in
    *  the destination list the reader left up last time. */
   it("reopens on the main pane", async () => {
