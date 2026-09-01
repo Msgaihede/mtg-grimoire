@@ -769,6 +769,85 @@ The wishlist has been the opposite since it shipped, by table CHECK (`quantity >
 none of something is not a wish. The two tables now agree, where they used to be a deliberate
 asymmetry.
 
+**The two _controls_ agree as of 2026-09-01 as well**, which they did not on the day the tables
+did. The wishlist's steppers floored at `1` and removal was a separate press, on the argument that
+a held Decrease would be a one-way door with no undo; the collection's floored at `0` and zero was
+the only removal its table offered. That asymmetry is gone with [issue #284](https://github.com/Msgaihede/mtg-grimoire/issues/284)
+— every stepper over either list now floors at `0`, and zero deletes on both. What the wishlist
+keeps that the collection never had is the named route beside it: `Remove from wishlist` is still a
+button in the wish's own panel, because a destructive act a keyboard reader can find without
+holding a button down is worth the second control. [wishlist-folders.md](wishlist-folders.md)
+carries that half.
+
+## The copies control belongs to a normal folder, in both views
+
+**2026-09-01, [issue #284](https://github.com/Msgaihede/mtg-grimoire/issues/284).** The collection's
+**wall** grew a stepper, which it had never had — the table was the only place a copy count could be
+changed since the page shipped, and a reader in the view that opens by default had to switch views
+to fix a miscount. What came with it is a fence neither view had: **a stepper is drawn only where
+every copy behind it is at the root or in a folder the reader made.** A deck's group and `Recently
+removed` draw the number as plain text and say why.
+
+**The fence is the app's and not the crate's, and that asymmetry is deliberate.**
+`collection::set_quantity` takes an entry id and asks nothing about where the row is filed; it will
+step a row in a deck's group as readily as one at the root, and the section above is why that
+remains correct at the command layer — a deck's count is a `sum()` over its own group at read time,
+so the number is never *wrong*, only surprising. What the fence buys is that the surprise is not one
+press away. Stepping a copy out of a deck's group from the collection page is the reader changing
+what a deck holds from a screen that does not mention the deck, and
+`collection_folders::set_entry_folder` already refuses the *move* for exactly that reason
+(`ENTRY_IN_A_DECK`). This is that boundary drawn one write over. Putting it in the command instead
+was considered and rejected: `set_quantity` is what the importer's `set` mode, the reconciler's fold
+and `take_copies`' split all go through, and every one of them has a legitimate reason to write a
+number onto a row in a group.
+
+**The predicate is positive, never a blocklist.** `folderId === null || userFolderIds.has(folderId)`
+rather than "not a deck group and not `Recently removed`" — so a fourth `collection_folders.kind`
+added later defaults to *fenced* rather than to editable. It is the shape the page's
+`canMakeFolder` already had for the `New folder` card, and the two now read as one rule about what
+a folder the reader made is allowed to do.
+
+**On the wall it is every copy behind the art, not any.** A tile is a printing in one finish, and
+folder is one of the terms that merges into it — so while Flatten is on, which is the default, one
+tile can carry copies from a binder and from a deck's group at once. The stepper's number is the
+tile's *sum*, so a tile that mixed them would move a total that is partly untouchable. `canFile`
+asks the same question of the same rows and answers `any`, which is not an inconsistency: a drag
+moves copies the reader has picked out of a list, and this moves a number they have not.
+
+**No page-level branch was needed for "standing inside a deck group", and that is worth knowing
+rather than rediscovering.** Not flattened, the query is scoped to `folderId`, so every row on the
+wall is in that folder and the per-tile rule fences every tile of its own accord. The per-tile rule
+is the one that does all the work, because Flatten starts `true`.
+
+**In the table the fence is a prop rather than a lookup**, `quantityBlocked?: (row) => string | null`
+— the *sentence*, not a boolean, because a control that vanishes without saying why is worse than
+one that refuses in words. The page supplies it from the same predicate the wall uses, one helper
+feeding both, so the two drawings of one list cannot drift into two answers about what may be
+edited. It is optional, so a story or a read-only mount draws what it always drew. The sentences are
+the grammar of `blockedReason`, which is what `PickCopies` greys a row with — one voice for "not
+here, and here is what to do instead":
+
+| Where the row is | What the table says |
+| --- | --- |
+| a deck's group | `In <deck>. Cut the card from the deck to change how many you hold.` |
+| `Recently removed` | `In Recently removed. Move it back to your collection to change how many you hold.` |
+| anything else fenced | `In <folder>. Move it into one of your own folders to change how many you hold.` |
+
+**The third arm names no mechanism, and that is the fence's positive spelling showing through.**
+It is reached only by a fourth `kind` — and a fourth kind wearing the deck sentence would tell the
+reader to cut a card from a deck that does not exist. It is also, for the length of one query, what
+a row in the reader's own binder gets: `useCollectionFolderList` starts empty, and "empty" is a
+cabinet nobody has filed as well as one that has not loaded, so until the census answers every
+*filed* row is outside the predicate. That was chosen over the other direction deliberately — a
+briefly wrong sentence corrects itself, and a stepper standing live over a deck's copies for the
+same window writes a number that does not. The root needs no census, which is most of a wall.
+
+The blocked number carries that sentence as `sr-only` text beside it rather than only as the
+tooltip's `aria-describedby`: the panel opens on pointer-enter or on the **anchor** taking focus, a
+`<span>` takes no focus, and the row's tab stop is the row — so the tooltip alone would have been
+pointer-only. `describes: false` then keeps an open panel from describing a sentence the
+accessibility tree already holds, which is the `<abbr>` cell's argument one column over.
+
 ## `folder_summary` answers direct counts, and no row at all for an empty folder
 
 `collection_folder_summary(marketplace)` returns `{ folderId, cards, value }` per folder, and three

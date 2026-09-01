@@ -7,7 +7,7 @@ vi.mock("@/pwa/target", () => ({ isWebTarget: vi.fn(() => false) }));
 import { DND_SOURCE_ATTR } from "@/lib/dndTarget";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { readDragData } from "@/features/decks/dnd";
+import { NOT_A_DRAG, readDragData } from "@/features/decks/dnd";
 import { DEFAULT_SECTION_ZOOMS } from "@/lib/cardZoom";
 import type { FolderNode } from "@/lib/folderTree";
 import type { WishlistFolder, WishRow } from "@/lib/ipc";
@@ -99,7 +99,13 @@ const folderNameOf = (folderId: number | null) =>
 
 const noop = () => {};
 
-function wall(rows: WishRow[], over: { flattened?: boolean } = {}) {
+/** What either view may be handed instead of a `noop` — the two writes a case below drives. */
+interface Overrides {
+  flattened?: boolean;
+  onSetQuantity?: (row: WishRow, quantity: number) => void;
+}
+
+function wall(rows: WishRow[], over: Overrides = {}) {
   return render(
     <WishlistGrid
       rows={rows}
@@ -109,7 +115,7 @@ function wall(rows: WishRow[], over: { flattened?: boolean } = {}) {
       folderNameOf={folderNameOf}
       flattened={over.flattened ?? false}
       onNeedNextPage={noop}
-      onSetQuantity={noop}
+      onSetQuantity={over.onSetQuantity ?? noop}
       onRemove={noop}
       onSetFolder={noop}
       onChangePrinting={noop}
@@ -119,7 +125,7 @@ function wall(rows: WishRow[], over: { flattened?: boolean } = {}) {
   );
 }
 
-function list(rows: WishRow[], over: { flattened?: boolean } = {}) {
+function list(rows: WishRow[], over: Overrides = {}) {
   return render(
     <WishlistTable
       rows={rows}
@@ -132,7 +138,7 @@ function list(rows: WishRow[], over: { flattened?: boolean } = {}) {
       folderNameOf={folderNameOf}
       flattened={over.flattened ?? false}
       onNeedNextPage={noop}
-      onSetQuantity={noop}
+      onSetQuantity={over.onSetQuantity ?? noop}
       onRemove={noop}
       onSetFolder={noop}
       onChangePrinting={noop}
@@ -151,6 +157,26 @@ function list(rows: WishRow[], over: { flattened?: boolean } = {}) {
  */
 const chinOf = (printing: string): HTMLElement =>
   screen.getByText(printing).closest("span.border-x") as HTMLElement;
+
+/**
+ * The nearest ancestor (or the element itself) that would be an absolutely positioned
+ * descendant's containing block — read off the class list, because **jsdom loads no stylesheet
+ * and computes no layout**, so `getComputedStyle().position` answers `"static"` for every
+ * element on screen whatever Tailwind would have painted.
+ *
+ * The four are the position utilities that establish one; `static` deliberately is not, and that
+ * is the whole point of the class the wall passes its pencil. `classList.contains` and never a
+ * substring of `className`: `relative` is a substring of nothing here today, but `sticky` sits
+ * inside `hover:sticky` and the family of mistakes is the one that reads a `hover:` variant as
+ * an applied class.
+ */
+const POSITIONING = ["relative", "absolute", "fixed", "sticky"];
+const nearestPositioned = (from: HTMLElement): HTMLElement | null => {
+  for (let el: HTMLElement | null = from; el !== null; el = el.parentElement) {
+    if (POSITIONING.some((token) => el!.classList.contains(token))) return el;
+  }
+  return null;
+};
 
 /**
  * What one drag actually put in the library's store.
@@ -371,6 +397,216 @@ describe("the list's own editor", () => {
   it("leaves the printing itself as text", () => {
     const { container } = list([BOLT]);
     expect(within(container).getByText("LEA · 161 · Foil").tagName).toBe("SPAN");
+  });
+});
+
+/**
+ * **How many copies, from either drawing of the list** — issue #284, and this file's own rule
+ * arriving at the one write that did not follow it.
+ *
+ * The table has always edited the number in place, because a shopping list is where the number
+ * of copies is *maintained*. The wall had the pencil and nothing else, so the same change cost
+ * three presses there and one here — which is exactly the difference between two drawings of one
+ * list that the header of this file says must not exist. So every claim below is asserted on the
+ * wall **and** on the table, except the three that are about the tile's own arrangement (the
+ * strip is `CardGrid`'s and a table row has no such thing).
+ *
+ * **The floor is `0` on both, and `0` is a real press.** `wishlist.rs`'s `set_wish_quantity` has
+ * always returned `remove_wish(conn, id)` at zero, because `wishlist_entries.quantity` carries
+ * `CHECK (quantity > 0)` — a wish for none of something is not a wish. What changed is the UI
+ * guard in front of it: `min={1}` used to argue that a stepper deleting a row when held down is
+ * a one-way door, and the collection's wall reaching zero and deleting there is what overruled
+ * it. **The deletion itself is deliberately not asserted here** — it is the backend's, and this
+ * file renders two components over rows rather than a page over a database. What is asserted is
+ * the *argument*: that the press happens and that the number asked for is zero.
+ */
+describe("the wall's own quantity stepper", () => {
+  /** The name every stepper for this wish carries, in both views and in the pencil's panel: a
+   *  wish is named by its printing and finish, because two wishes for one card differ by nothing
+   *  else. Written out rather than built from `wishLabel`, so a case here cannot pass by
+   *  agreeing with the implementation about a name that is wrong. */
+  const LABEL = "Copies wanted of Lightning Bolt (LEA 161, Foil)";
+
+  it("is drawn on a tile and in a row alike, named for the wish", () => {
+    const { unmount } = wall([BOLT]);
+    expect(screen.getByRole("spinbutton", { name: LABEL })).toHaveValue(4);
+    unmount();
+
+    list([BOLT]);
+    expect(screen.getByRole("spinbutton", { name: LABEL })).toHaveValue(4);
+  });
+
+  /**
+   * **Two wishes for one card, and two controls a reader can tell apart** — the case the name is
+   * `wishLabel` for, and the only one that can fail when it is not.
+   *
+   * A foil Bolt and a nonfoil Bolt are two wishes for one piece of cardboard: same name, same
+   * set, same number, different finish, and `WISH_PREFERRED_FINISH` in `wishlist.rs` is the rule
+   * that they must not be collapsed. A stepper named `Copies wanted of Lightning Bolt` would be
+   * two identical controls on one wall as far as a screen reader or a voice driver is concerned
+   * — and the failure is *silent* on a wall with one Bolt on it, which is every other case in
+   * this block. `getByRole` is the assertion as much as the values are: it throws on two matches,
+   * so a name built from the card alone cannot reach the first line.
+   *
+   * The press at the end is the other half. Two rows that differ by nothing the eye can see in a
+   * 20px box have to reach two different wishes, or the name is unique and the wiring is not.
+   */
+  it("names two wishes for one card apart, and each reaches its own wish", async () => {
+    const nonfoil: WishRow = { ...BOLT, id: 9, preferredFinish: "nonfoil", quantity: 2 };
+    const other = "Copies wanted of Lightning Bolt (LEA 161, Nonfoil)";
+    const onSetQuantity = vi.fn();
+    wall([BOLT, nonfoil], { onSetQuantity });
+
+    expect(screen.getByRole("spinbutton", { name: LABEL })).toHaveValue(4);
+    expect(screen.getByRole("spinbutton", { name: other })).toHaveValue(2);
+
+    await userEvent.click(screen.getByRole("button", { name: `Increase ${other}` }));
+
+    expect(onSetQuantity).toHaveBeenCalledWith(nonfoil, 3);
+  });
+
+  /**
+   * The write, with the wish it is about rather than an id: the page's mutation is keyed on the
+   * row, and a control that handed over only a number would be a control the page has to look
+   * the row back up for.
+   */
+  it("asks for the new number, carrying the wish, from either view", async () => {
+    const fromWall = vi.fn();
+    const { unmount } = wall([BOLT], { onSetQuantity: fromWall });
+
+    await userEvent.click(screen.getByRole("button", { name: `Increase ${LABEL}` }));
+    expect(fromWall).toHaveBeenCalledWith(BOLT, 5);
+    unmount();
+
+    const fromList = vi.fn();
+    list([BOLT], { onSetQuantity: fromList });
+    await userEvent.click(screen.getByRole("button", { name: `Increase ${LABEL}` }));
+    expect(fromList).toHaveBeenCalledWith(BOLT, 5);
+  });
+
+  /**
+   * **The floor is reachable, and reaching it is the removal.** A wish for one copy stepped down
+   * asks for zero — the press is not swallowed by a disabled button, which is what `min={1}`
+   * made it on exactly the rows a reader is most likely to be crossing off.
+   *
+   * The argument is asserted and not the deletion: what happens to the row is
+   * `set_wish_quantity`'s, and nothing in this file has a database behind it.
+   */
+  it("asks for zero from a wish of one copy, in both views", async () => {
+    const single: WishRow = { ...BOLT, quantity: 1 };
+
+    const fromWall = vi.fn();
+    const { unmount } = wall([single], { onSetQuantity: fromWall });
+    await userEvent.click(screen.getByRole("button", { name: `Decrease ${LABEL}` }));
+    expect(fromWall).toHaveBeenCalledWith(single, 0);
+    unmount();
+
+    const fromList = vi.fn();
+    list([single], { onSetQuantity: fromList });
+    await userEvent.click(screen.getByRole("button", { name: `Decrease ${LABEL}` }));
+    expect(fromList).toHaveBeenCalledWith(single, 0);
+  });
+
+  /**
+   * **A press on `−` is not a press on the card.** The strip lies over the picture's foot, and
+   * the tile's art button is what opens the pane — so the claim is that the two presses landing
+   * a few pixels apart do two different things.
+   *
+   * The art is clicked first, deliberately: without it the case would pass on a wall that could
+   * not open a card at all, which is the shape of an assertion that cannot fail. `selectedCardId`
+   * is the real thing rather than a proxy — `WishlistGrid` hands `CardGrid` the store's own
+   * setter as `onSelect`, so there is no injected callback between the press and the pane.
+   */
+  it("changes the number without opening the card", async () => {
+    const onSetQuantity = vi.fn();
+    wall([BOLT], { onSetQuantity });
+
+    await userEvent.click(screen.getByRole("button", { name: "Lightning Bolt" }));
+    expect(useAppStore.getState().selectedCardId).toBe("c1");
+    useAppStore.setState({ selectedCardId: null });
+
+    await userEvent.click(screen.getByRole("button", { name: `Decrease ${LABEL}` }));
+
+    expect(onSetQuantity).toHaveBeenCalledWith(BOLT, 3);
+    expect(useAppStore.getState().selectedCardId).toBeNull();
+  });
+
+  /**
+   * The pencil is still there and still opens the panel. It lost the strip to itself and nothing
+   * else: the two writes only it reaches — the printing and the folder — and the named removal
+   * are all still one press from the tile, which is what makes the number moving out in front of
+   * it an addition rather than a rearrangement.
+   */
+  it("stands beside the pencil, which still opens the wish's panel", async () => {
+    wall([BOLT]);
+
+    const pencil = screen.getByRole("button", {
+      name: "Edit Lightning Bolt (LEA 161, Foil) on your wishlist",
+    });
+    await userEvent.click(pencil);
+
+    const panel = await screen.findByRole("dialog", { name: "Edit Lightning Bolt" });
+    expect(
+      within(panel).getByRole("button", { name: /Remove Lightning Bolt .* from your wishlist/ }),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * **The mark that stops a decrement being a drag, and the only way it is defended.**
+   *
+   * A wish tile is a drag source, and the sensor asks `closest(NOT_A_DRAG)` at the press: the
+   * stepper's `<input>` is excluded by tag, its two `<button>`s are not. Without the wrapper's
+   * mark, a press on `−` that travelled five pixels would carry the wish off into a deck instead
+   * of decrementing it. **jsdom cannot see a drag start from a real pointer press on a button**,
+   * so nothing else in this suite can go red for it — the selector the sensor itself uses is
+   * asked the same question here, rather than the attribute being spelled out a second time.
+   *
+   * One mark for both buttons rather than one each, which is what `closest` buys and what
+   * `DeckCardControls` already does around the same control.
+   */
+  it("marks the whole pair as not a drag", () => {
+    wall([BOLT]);
+
+    const decrease = screen.getByRole("button", { name: `Decrease ${LABEL}` });
+    const increase = screen.getByRole("button", { name: `Increase ${LABEL}` });
+    const guard = decrease.closest(NOT_A_DRAG);
+
+    expect(guard).not.toBeNull();
+    expect(increase.closest(NOT_A_DRAG)).toBe(guard);
+    // And it is the pair's wrapper rather than something around the stepper alone: the pencil
+    // marks itself (`AnchoredPopup`), so a wrapper that covered only the stepper would still
+    // leave this true — what it would not leave true is the pencil being inside it.
+    expect(
+      guard!.contains(
+        screen.getByRole("button", { name: /^Edit Lightning Bolt/ }),
+      ),
+    ).toBe(true);
+  });
+
+  /**
+   * **The wrapper is `position: static`, and the pencil is too — so `CardGrid`'s strip is still
+   * what the 256px panel hangs off.**
+   *
+   * `AnchoredPopup` is `relative` by default and `WishlistGrid` passes it `static` precisely so
+   * that it is not the containing block: a panel anchored to a 20px control at the right end of
+   * a 170px tile opens off the left of the scroller, and left overflow — unlike right — cannot
+   * be scrolled back into view. Putting a second box in that chain is the silent way to undo it,
+   * because a `relative` wrapper looks like nothing at all in the markup.
+   *
+   * **Read off the class list, since jsdom loads no stylesheet** — see {@link nearestPositioned}.
+   * This is one assertion over two mutations: a positioned wrapper stops the walk at the
+   * wrapper, and a pencil that lost its `static` stops it at the popup's own root.
+   */
+  it("leaves the strip as the box the pencil's panel is anchored to", () => {
+    wall([BOLT]);
+
+    const popupRoot = screen.getByRole("button", { name: /^Edit Lightning Bolt/ }).parentElement!;
+    // `CardGrid`'s action strip — the only `pointer-events-none` box between a tile's controls
+    // and the tile itself, and the box that comment calls the anchor.
+    const strip = popupRoot.closest(".pointer-events-none");
+
+    expect(strip).not.toBeNull();
+    expect(nearestPositioned(popupRoot)).toBe(strip);
   });
 });
 
