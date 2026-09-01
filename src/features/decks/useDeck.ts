@@ -371,10 +371,31 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    * same command and both invalidate the same `["decks"]` root, so the gallery's tile and
    * this header can never disagree about a name; what this one buys is an editor that does
    * not have to mount the gallery's list query to rename the deck it is showing.
+   *
+   * **A patch that moves the theory switch drops the deck's *unwatched* lists as well, and that
+   * is not tidying.** Every field of the deck row is cached once per variant — see the key — so
+   * `theory_enabled` has one value in the database and up to two in this cache, and an
+   * invalidation only refetches what somebody is looking at. The other list keeps its old row
+   * until something mounts it, and then serves it **stale before the refetch lands**: a reader
+   * who switches the plan back on and presses `Theory` in the same second reads a row that still
+   * says the deck keeps no plan, so `DeckEditor`'s clamp takes them straight back to `Actual` and
+   * the press appears to do nothing. Dropping the entry makes that beat a *read* rather than a
+   * wrong answer — `isPending`, no row, and neither the restore nor the clamp acts on one.
+   *
+   * `type: "inactive"` is the whole of the care needed: the list on screen has an observer, so it
+   * is left alone and refreshed by the invalidation below in the ordinary way, and no surface
+   * flashes its loading state for a switch it was not showing. This is the *write* end of the
+   * same fact `DeckEditor`'s restore marker guards at the read end — that one has to hold anyway,
+   * since a sync from another device can cross the two rows with no press here at all.
    */
   const update = useMutation({
     mutationFn: (patch: DeckPatch) => ipc.deckUpdate(opened(id), patch),
-    onSuccess: invalidate,
+    onSuccess: (_deck, patch) => {
+      if (patch.theoryEnabled !== undefined) {
+        queryClient.removeQueries({ queryKey: ["decks", "detail", id], type: "inactive" });
+      }
+      invalidate();
+    },
   });
 
   /**
