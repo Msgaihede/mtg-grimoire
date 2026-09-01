@@ -242,12 +242,36 @@ function EditWishPanel({
         <QuantityStepper
           value={row.quantity}
           onChange={(next) => onSetQuantity(row, next)}
-          // `min={1}`, which is where a wish differs from a collection entry: there,
-          // `set_quantity(0)` keeps the row with its condition and its purchase story; here it
-          // *deletes* it, because a wish for none of something is not a wish. A stepper that
-          // deleted the row when held down would be a one-way door with no undo, so removal is
-          // the separate press below.
-          min={1}
+          // **`min={0}`, and zero removes the wish — the reverse of what this comment argued
+          // until issue #284, and reversed deliberately.** The old rule floored at one and
+          // called it the place a wish differs from a collection entry: there `set_quantity(0)`
+          // was said to keep the row, here it deletes, so a held-down `−` was a one-way door.
+          // That difference no longer exists to protect — `collection::set_quantity(0)` has
+          // deleted the entry since schema v24 and the collection's own stepper is `min={0}` —
+          // and a panel that is reached from both the wishlist's wall and its table must not
+          // stop at a number those two views can step past. One floor, on every surface that
+          // edits a wish.
+          //
+          // The backend has agreed the whole time: `set_wish_quantity` returns
+          // `remove_wish(conn, id)` at zero, because `wishlist_entries.quantity` carries
+          // `CHECK (quantity > 0)` (`src-tauri/src/wishlist.rs`). What moved is the front of
+          // the control, not what it is allowed to ask for. Do not restore the floor of one on
+          // the strength of the sentence that used to be here: a comment left standing after
+          // the behaviour it describes was reversed stays green forever and encodes a state
+          // this app cannot be in.
+          //
+          // **`Remove from wishlist` at the foot of this panel stays, and the overlap with a
+          // stepper that can now reach zero is the point rather than a duplicate.** The named
+          // press is the discoverable route — it says what it does, it is the one a keyboard
+          // reader finds without holding a button down, and it is one press from any quantity
+          // rather than four from a wish for four copies. The collection's table is the
+          // precedent for the pair, not this panel inventing a shape: a stepper that deletes at
+          // zero beside a `Trash2` control that also removes the row. (The collection fences
+          // its trash on `quantity === 0` and tells the reader about the stepper in a line under
+          // the table; a wishlist offers its removal on every row instead, because crossing a
+          // line off a shopping list is what a shopping list is *for* — `WishlistTable`'s
+          // Actions column carries that half of the argument.)
+          min={0}
           size="sm"
           label={`Copies wanted of ${wishLabel(row)}`}
         />

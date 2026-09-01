@@ -314,6 +314,98 @@ export const CardMode: Story = {
 };
 
 /**
+ * **The wall maintains quantities too, since issue #284** — a `QuantityStepper` in the strip over
+ * the foot of the art, the same slot the search wall's quick-add and the wishlist's pencil ride
+ * in, and the same place the deck editor puts a card's stepper. Until it landed, this view could
+ * only edit copies in its *table*: the wall was the layout a reader looked at and the table was
+ * the one they worked in.
+ *
+ * It costs the wall no height — the strip is `absolute inset-x-0 bottom-0`, so `tileHeight` is
+ * unchanged — and it is revealed on hover **and on focus-within**, never removed from the tab
+ * order, because "visible on hover" is not a state a keyboard has.
+ *
+ * **The number it shows is the tile's sum, which is the same figure `OwnedBadge` draws in the
+ * corner** — two numbers six pixels apart disagreeing about one piece of art is not a state this
+ * wall may show. A press is therefore a *delta* applied to one addressed row rather than the
+ * control's own next value, and the floor is the copies that row cannot reach. On the ordinary
+ * single-entry tile — which is every tile in this seed, since no two of its entries share a
+ * printing *and* a finish — the two collapse into each other and a press is simply the number.
+ *
+ * Black Lotus is chosen for two reasons. It is filed in `Trade binder`, so the tile is one the
+ * fence has to *allow* rather than one it never had to think about — a stepper here can only be
+ * drawn once `collection_folder_list` has answered, since a folder the census has not confirmed
+ * is fenced. And it is early in `COLLECTION_DEFAULT_ORDER`: flattened this wall is twelve tiles
+ * and `stories.test.tsx`'s layout stub gives the virtualiser about two rows of them, so a card
+ * named late is simply not in the DOM — which reads exactly like the control being missing.
+ */
+export const SteppingFromTheWall: Story = {
+  args: { view: "grid", flatten: true },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // **`Copies of <card>`, not the table's `Quantity of <card> (Nonfoil, NM)`.** A row names an
+    // entry, condition and all; a tile names the object the art is a picture of. The finish rides
+    // the name only where the tile wears the mark, and a plain copy draws no chip — so this one is
+    // bare, which is the wall's own nonfoil rule stated in words.
+    const label = "Copies of Black Lotus";
+    const box = await canvas.findByRole("spinbutton", { name: label });
+    await expect(box).toHaveValue(1);
+
+    await userEvent.click(canvas.getByRole("button", { name: `Increase ${label}` }));
+
+    await waitFor(async () => {
+      await expect(canvas.getByRole("spinbutton", { name: label })).toHaveValue(2);
+    });
+    // No refusal: this is a successful write, not a tolerated failure.
+    await expect(canvas.queryByRole("alert")).toBeNull();
+  },
+};
+
+/**
+ * **The copies a deck physically holds, and the one tile on this wall with no stepper on it.**
+ *
+ * Since schema v25 a deck owns whatever its own `kind: "deck"` group holds, so the foil
+ * Counterspell here is not spare cardboard filed under a label — it is *in* `Mono-Red Aggro`.
+ * Stepping it would change how many copies that deck holds with `deck_cards` never touched, and
+ * the deck would go on listing a card whose copies had walked off. The *drag* out of a group is
+ * fenced in the backend (`collection_folders::set_entry_folder` answers `ENTRY_IN_A_DECK`);
+ * `collection::set_quantity` has no folder fence at all, so the page's own predicate is the whole
+ * of the guard on this gesture.
+ *
+ * **The rule is written positively — the root, or a folder the reader made — and never as a
+ * blocklist of the two kinds the app owns.** A fourth `collection_folders.kind` added later is
+ * fenced by default under that spelling and permitted by default under the other, and a control
+ * that quietly turns itself on for a kind nobody has thought about is the failure worth
+ * preventing. `Recently removed` is covered by the same clause without being named in it.
+ *
+ * **And it is *every* copy behind the art, not any of them.** Flattened, one printing in one
+ * finish can stand for a copy in a binder and a copy in a deck's group at once — the control shows
+ * the sum, so a stepper there would move a total that is partly the deck's. The drag takes the
+ * opposite rule on purpose, because a drag ends in a question (`PickCopies`) and a stepper does
+ * not.
+ *
+ * Black Lotus is the sentinel rather than scenery: the fence fails **closed** while the census is
+ * loading, so a bare "no stepper" claim would pass over a page that had simply not answered yet.
+ * A stepper on a tile in `Trade binder` can only exist once it has.
+ */
+export const DeckCopiesAreNotStepped: Story = {
+  args: { view: "grid", flatten: true },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // The census has answered, so a filed tile is allowed one.
+    await expect(
+      await canvas.findByRole("spinbutton", { name: "Copies of Black Lotus" }),
+    ).toBeInTheDocument();
+
+    // The tile is a tile — art, badge, menu, drag — and only the control is missing. Named with
+    // the finish because this copy is foil and the art wears the chip that says so.
+    await expect(canvas.getByRole("button", { name: "Counterspell" })).toBeInTheDocument();
+    await expect(
+      canvas.queryByRole("spinbutton", { name: "Copies of Counterspell (Foil)" }),
+    ).toBeNull();
+  },
+};
+
+/**
  * A collection nobody has put anything in yet.
  *
  * "Nothing here yet. Add cards from search, or import a collection file." — a statement about the

@@ -385,6 +385,57 @@ put a "could not price" note on a folder with nothing left to buy. A `null` pric
 never a reason to reach for another marketplace's, so `cost` and `unpriced` are always the same
 marketplace's and never travel across a switch.
 
+## The copies control, and the floor that stopped being 1
+
+**2026-09-01, [issue #284](https://github.com/Msgaihede/mtg-grimoire/issues/284), and it reverses a
+rule this app argued for in three separate places.** The wishlist's **wall** had no copies control
+at all: the table edited a wish in place, and on a tile the number could only be reached by opening
+the pencil's panel. A wall that is the view opening by default and cannot do what its own list view
+does is the gap the issue named, so the wall now carries a `QuantityStepper` beside the pencil, in
+`CardGrid`'s action strip over the art — the strip is absolutely positioned, so the wall's
+`tileHeight` is unchanged by it.
+
+**And every one of the three floors moved from `1` to `0`.** The rule they held said, in as many
+words, that "a wish for none of something is not a wish" and that "a stepper that deleted the row
+when held down would be a one-way door with no undo, so removal is the separate press below". That
+is no longer the rule. What replaced it is consistency across the two walls a reader reads one after
+the other: the collection's tile stepper floors at `0` and zero deletes there, and a wishlist tile
+that refused the same press would be one wall of art behaving unlike the other for a reason visible
+only in this file.
+
+The backend never disagreed. `wishlist::set_wish_quantity` has returned `remove_wish(conn, id)` at
+zero since it shipped, because `wishlist_entries.quantity` carries `CHECK (quantity > 0)` — the
+floor of `1` was always a guard drawn on the glass, never on the table.
+
+**Two things had to move with it, and the second was a live bug the floor was hiding.**
+
+- **`Remove from wishlist` stays** in the pencil's panel. It is now reachable two ways, which is the
+  arrangement the collection's table has had all along (a stepper that deletes at zero, plus a
+  control that says so) — and the named press is the one a keyboard reader finds without holding a
+  button down.
+- **`setQuantity`'s success handler ignored `EntryChange.removed`.** It patched `change.quantity`
+  and nothing else, which at a floor of `1` was unreachable and at `0` is one press away: a wish
+  stepped to zero stayed on screen at `0` for the length of the round trip, and the `+` a reader
+  pressed on it in that window answered `GONE`. It is the same defect the page's own `remove`
+  handler was written against — *"the row goes at once, a crossed-off wish must not sit there for
+  the length of a round trip"* — reached by the other gesture. The fix is that handler's two lines:
+  `patchWish(change.id, change.removed ? null : …)`. A removal and a stepper taken to zero are one
+  write with two gestures, so the two are now spelled the same way.
+
+  **The collection's version of this bug is worse and the difference is worth not confusing**, since
+  its comment is the one that was ported: `CollectionPage`'s `settle()` invalidates
+  `["collection","summary"]` and `["collection","folderSummary"]` and pointedly *not* `["collection"]`,
+  so its ghost persisted until something else re-read the list. `settleWhole()` invalidates
+  `["wishlist"]` whole, and this list's key is `["wishlist","list", …]` — broad on purpose, so a
+  collection write two views away refreshes an `ownedQuantity` computed from `collection_entries`
+  (`useWishlist.ts:221`). So the wishlist's ghost clears itself. It is a flicker rather than a
+  standing lie, and it is still not what a delete should look like.
+
+The collection's half of this — including the fence that keeps a stepper out of a deck's group and
+`Recently removed`, which the wishlist has no equivalent of because none of its folders belong to
+the app — is in
+[collection-folders.md](collection-folders.md#the-copies-control-belongs-to-a-normal-folder-in-both-views).
+
 ## The wipe
 
 `reset::clear_wishlist` empties `wishlist_entries` **and then** `wishlist_folders`, and needs the
