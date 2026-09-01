@@ -90,8 +90,10 @@ const meta = {
           "it is. The floor is the bottom of a range — which is what every bracket restriction " +
           "already was (“not allowed below bracket N”) — and it is what makes a **mismatch** " +
           "statable at all: a deck set below its own floor gets both numbers and a sentence. " +
-          "The floor is never 5, because brackets 4 and 5 have identical deck restrictions and " +
-          "what separates them is an intent no card list can show.\n\n" +
+          "The floor spans 2 to 4: never 5, because brackets 4 and 5 have identical deck " +
+          "restrictions and what separates them is an intent no card list can show — and, since " +
+          "2026-09-01, never 1, because bracket 1 Exhibition asks that a deck prioritise a theme " +
+          "over power, which is the same kind of claim at the other end of the scale.\n\n" +
           "Every deck below is built from real printings in `.storybook/fake/cards` and read by " +
           "the real `validation/bracket.ts` over the fake's real `combo_cards` table. Not one " +
           "number here is written by hand.",
@@ -164,8 +166,13 @@ export const ThreeGameChangers: Story = {
  * The bottom of the scale, and the state most decks are in.
  *
  * The one card fact that decides the number is a column a sync fills, so a deck the estimate can
- * see nothing in reads as a floor of 1 rather than as nothing at all — and there is no disclosure,
+ * see nothing in reads as a floor rather than as nothing at all — and there is no disclosure,
  * because an empty "What this read" is a control promising an answer it has not got.
+ *
+ * **That floor is `~2` and not `~1` since 2026-09-01.** Bracket 1 Exhibition is described by what
+ * its builder is *for* — "prioritize a goal, theme, or idea over power" — which is exactly the
+ * kind of claim no card list can make, so it is a number only the picker below can produce. 2
+ * Core is the lowest rung whose description is about the cards: "unoptimized and straightforward".
  */
 export const NothingToSee: Story = {
   args: { cards: commanderDeck() },
@@ -173,7 +180,7 @@ export const NothingToSee: Story = {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("dialog", { name: "Bracket estimate" });
 
-    await expect(panel).toHaveTextContent("Bracket ~1 · 0 game changers");
+    await expect(panel).toHaveTextContent("Bracket ~2 · 0 game changers");
     await expect(within(panel).queryByRole("button", { name: "What this read" })).toBeNull();
   },
 };
