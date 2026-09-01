@@ -329,6 +329,16 @@ const folderSlot = (name: string): HTMLElement =>
   folderCard(name).firstElementChild as HTMLElement;
 
 /**
+ * The **up one level** tile, by the level it leads to.
+ *
+ * One box rather than two, where a folder card has a `<li>` and a slot inside it: this tile has a
+ * single landing — every part of it means "up there" — so both drop targets register on the `<li>`
+ * and there is nothing for a second box to be measured for. `ParentFolderCard` carries the rest.
+ */
+const upTile = (label: string): HTMLElement =>
+  screen.getByRole("button", { name: `Up one level to ${label}` }).closest("li")!;
+
+/**
  * A wish carried out of the list and onto one of the two places it can be filed — a folder card,
  * or a segment of the breadcrumb.
  *
@@ -2288,6 +2298,59 @@ describe("the folders", () => {
   });
 
   /**
+   * **The way back out at the size of the things it stands among** — issue #283, which was about
+   * exactly this: the breadcrumb above could always take a wish, and a segment is one word of
+   * `text-sm` in a bar the pointer has already left.
+   *
+   * The tile names its **destination**, because that is what a reader has to read before letting
+   * go, and it is drawn only where there is somewhere to go: at the root there is not.
+   *
+   * **Two levels deep on purpose.** A tile that always went to the root would pass a one-level
+   * test and strand anyone who had drilled twice — the same failure the trail-derived parent
+   * exists to prevent, and the reason it is read off the trail rather than off `parentId`.
+   */
+  it("names the level above, and draws nothing at the root", async () => {
+    wrap(<WishlistPage />);
+    await screen.findByRole("button", { name: /^Ordered folder/ });
+    expect(screen.queryByRole("button", { name: /^Up one level/ })).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: /^Ordered folder/ }));
+    expect(
+      await screen.findByRole("button", { name: "Up one level to Wishlist" }),
+    ).toBeInTheDocument();
+
+    await userEvent.click(await screen.findByRole("button", { name: /^Backordered folder/ }));
+    expect(
+      await screen.findByRole("button", { name: "Up one level to Ordered" }),
+    ).toBeInTheDocument();
+  });
+
+  /** Pressed, it is the breadcrumb's parent segment — one level, not the root. */
+  it("walks up one level when the tile is pressed", async () => {
+    wrap(<WishlistPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /^Ordered folder/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /^Backordered folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(2));
+
+    await userEvent.click(await screen.findByRole("button", { name: "Up one level to Ordered" }));
+
+    await waitFor(() => expect(lastQuery().folderId).toBe(1));
+    expect(within(crumbs()).getByText("Ordered")).toHaveAttribute("aria-current", "page");
+  });
+
+  /** And the drop the tile exists for: a wish carried out of the drawer it is in, onto the
+   *  drawer-sized target that says where it is going. */
+  it("un-files a wish dropped on the up tile", async () => {
+    const { container } = wrap(<WishlistPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /^Ordered folder/ }));
+    await screen.findByText("Rhystic Study");
+
+    await wishOnto(cardSources(container)[0], upTile("Wishlist"));
+
+    expect(wishlistSetFolder).toHaveBeenCalledWith(12, null);
+  });
+
+  /**
    * An empty folder is not an empty wishlist, and telling the reader how to put a card on a list
    * they already have is answering a question they did not ask.
    */
@@ -2607,5 +2670,49 @@ describe("rearranging the wishlist's cabinet", () => {
 
     expect(wishlistSetFolder).toHaveBeenCalledWith(7, 1);
     expect(wishlistFolderReorder).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The other half of issue #283, and the half a folder card cannot do either.** A drawer could
+   * be pushed deeper by a drag from the day the wall learnt to reorder, and the only route back up
+   * was `Move to folder…` on its own `⋯`.
+   *
+   * `inside` is what the tile means, so the arriving drawer goes **last** in the level above —
+   * `Ordered` and `Someday` in the order the tree already draws them, then `Backordered`. There is
+   * no second position in the gesture for the reader to have meant: the tile is one landing wide,
+   * which is exactly the objection that keeps a breadcrumb segment from taking a folder at all.
+   */
+  it("moves a drawer up a level when it is dropped on the up tile", async () => {
+    wrap(<WishlistPage />);
+    await wall();
+    await userEvent.click(screen.getByRole("button", { name: /^Ordered folder/ }));
+    await screen.findByRole("button", { name: /^Backordered folder/ });
+    upTile("Wishlist").getBoundingClientRect = () => CARD_BOX;
+
+    const held = await holdCard("Backordered");
+    await held.over(upTile("Wishlist"), AT_MIDDLE);
+    await held.drop();
+
+    await waitFor(() => expect(wishlistFolderReorder).toHaveBeenCalledWith(null, [1, 3, 2]));
+  });
+
+  /**
+   * **Every part of the tile is the same landing**, which is what makes it a target a reader can
+   * aim at while holding something: a folder card refuses its middle to a drawer that is already
+   * inside it and offers its edges instead, and this tile has no edges to offer. A drop a tenth of
+   * the way in writes exactly what a drop in the middle writes.
+   */
+  it("takes a drawer anywhere on the up tile, not only in its middle", async () => {
+    wrap(<WishlistPage />);
+    await wall();
+    await userEvent.click(screen.getByRole("button", { name: /^Ordered folder/ }));
+    await screen.findByRole("button", { name: /^Backordered folder/ });
+    upTile("Wishlist").getBoundingClientRect = () => CARD_BOX;
+
+    const held = await holdCard("Backordered");
+    await held.over(upTile("Wishlist"), AT_END);
+    await held.drop();
+
+    await waitFor(() => expect(wishlistFolderReorder).toHaveBeenCalledWith(null, [1, 3, 2]));
   });
 });

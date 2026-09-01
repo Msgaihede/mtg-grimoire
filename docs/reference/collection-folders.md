@@ -895,6 +895,39 @@ doc lists as something only three statements in the crate do. It is now a fourth
 `collection::from_sql`'s reason: it reads the entries as its rows rather than asking a question
 about them.
 
+## The way back up is a tile on the wall, and inside `Recently removed` it is the target that was missing
+
+Issue #283 was reported against the wishlist and the cabinet here has exactly the same shape, so
+the tile is one component drawn by all three walls —
+`src/components/ParentFolderCard.tsx`, wrapped here by `CollectionParentFolderCard`, which holds
+the copy target and the folder target. The whole argument is in
+[wishlist-folders.md](wishlist-folders.md); what is worth writing down here is the two things this
+cabinet has that the wishlist's does not.
+
+**Inside `Recently removed` the tile is a destination the wall could not draw.** That level
+substitutes the reader's own top level for its own children — the substitution #209 asked for, so a
+reader standing in a pile of copies that just left a deck has their binders under the pointer
+rather than only a row menu. Every one of those tiles files a copy *into* a binder; the one
+destination missing was the **root**, which is where a copy that belongs in no binder goes, and it
+was reachable only from the breadcrumb. The tile names it `Collection` — `ROOT_LABEL`, the
+breadcrumb's own word — and files there.
+
+**And it is the one page where the "already there" refusal is reachable.** In that same level every
+folder card on the wall is a **root** folder, so its parent is already the destination the tile
+names; without the clause each of them would raise a ring that shuffled it to the end of the level
+it is in. `upPlacement` asks it, along with the three refusals `folderPlacement` already makes —
+both ends a folder the reader made, no move into itself or into what it holds, and
+`reorderedLevel`'s own no-op.
+
+**Where it is not drawn: inside a deck group.** The wall's gate is unchanged
+(`cabinet && (wall.length > 0 || canMakeFolder)`), and a deck group answers no to both — nothing
+nests under it and `create_folder` refuses it as a parent — so no wall is drawn there and no tile
+with it. That is the right answer rather than an omission: a copy may not be dragged **out** of a
+deck group at all (`canMoveCopy`'s third clause, since the deck would go on listing a card whose
+copies had walked off), so a lone tile in an otherwise empty band would be a ring that refuses
+every card in the group — the invitation to a gesture that does nothing that `wall` declines to
+make one paragraph up. The breadcrumb is still the way out of one, as it always was.
+
 ## The refusals are sentences, not constraint failures
 
 `deck::set_folder`'s reasoning, twice over: **a constraint failure names the table and not the
@@ -1469,6 +1502,7 @@ React never sees** — go through
 | `src/features/decks/collectionTiles.ts` | `foldCopies` — the *other* fold of the same rows, split the same way and keyed through the same `tileKeyOf` |
 | `src/features/search/CardGrid.tsx` | `GridCard.key` and `tileKey` — a tile's identity where it differs from its card's |
 | `src/features/collection/CollectionFolderCard.tsx` | The tile, `folderFace`, and its stories beside it |
+| `src/components/ParentFolderCard.tsx` | The up-one-level tile all three cabinets draw, and its stories |
 | `src/features/collection/PinnedFolders.tsx` | The app's own folders — pinned, flat and locked — `DECK_KIND`, `REMOVED_KIND`, and neither one a drop target |
 | `src/features/card/cardMenu.tsx` | `buildCollectionTargetItems` — `Add to → Collection`, and `Move to → folder` |
 | `src/features/transfer/import/destinations/collection.ts` | `grainKey` — the importer's fold, now every grain term it can vary |

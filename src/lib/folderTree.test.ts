@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { buildFolderTree, flattenFolders, folderDescendants, type FolderLike } from "./folderTree";
+import {
+  buildFolderTree,
+  flattenFolders,
+  folderDescendants,
+  folderLevel,
+  type FolderLike,
+} from "./folderTree";
 
 const folder = (id: number, parentId: number | null, name: string, sortOrder = 0): FolderLike => ({
   id,
@@ -136,5 +142,46 @@ describe("folderDescendants", () => {
 
   it("terminates on a cycle", () => {
     expect([...folderDescendants([folder(1, 2, "A"), folder(2, 1, "B")], 1)]).toEqual([2]);
+  });
+});
+
+describe("folderLevel", () => {
+  /** `Commander` holds `Legends`, which holds `Partners`; `Modern` is a second root. */
+  const tree = () =>
+    buildFolderTree(
+      [
+        folder(1, null, "Commander"),
+        folder(2, 1, "Legends"),
+        folder(3, 2, "Partners"),
+        folder(4, null, "Modern", 1),
+      ],
+      [],
+    );
+
+  it("answers the root level for null, in the order the tree draws it", () => {
+    expect(folderLevel(tree(), null).map((n) => n.folder.name)).toEqual(["Commander", "Modern"]);
+  });
+
+  it("answers a level nested two deep", () => {
+    expect(folderLevel(tree(), 1).map((n) => n.folder.name)).toEqual(["Legends"]);
+    expect(folderLevel(tree(), 2).map((n) => n.folder.name)).toEqual(["Partners"]);
+  });
+
+  /** The two empties are deliberately one answer: both mean "there are no cards to draw here". */
+  it("answers empty for a leaf and for an id the tree does not carry", () => {
+    expect(folderLevel(tree(), 3)).toEqual([]);
+    expect(folderLevel(tree(), 99)).toEqual([]);
+  });
+
+  /**
+   * **The level a folder is _drawn_ in, not the one its row names.** `buildFolderTree` resolves a
+   * folder whose parent is missing to the root, so a `.filter(f => f.parentId === null)` over the
+   * flat rows would leave the orphan out of the root level it is standing in — which is the level
+   * a reorder has to be written against.
+   */
+  it("puts an orphan in the root level, where the tree drew it", () => {
+    const tree = buildFolderTree([folder(1, null, "Commander"), folder(5, 99, "Odds")], []);
+
+    expect(folderLevel(tree, null).map((n) => n.folder.name)).toEqual(["Commander", "Odds"]);
   });
 });

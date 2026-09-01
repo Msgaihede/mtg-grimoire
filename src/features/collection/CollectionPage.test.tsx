@@ -423,6 +423,25 @@ const folderSlot = (name: string): HTMLElement =>
   folderCard(name).firstElementChild as HTMLElement;
 
 /**
+ * The **up one level** tile, by the level it leads to.
+ *
+ * One box rather than three, where a drawer needs its `<li>`, the wrapper inside it and its face:
+ * this tile has a single landing — every part of it means "up there" — so both drop targets
+ * register on the `<li>` and there is nothing for a second box to be measured for.
+ * `ParentFolderCard` carries the rest.
+ */
+const upTile = (label: string): HTMLElement =>
+  screen.getByRole("button", { name: `Up one level to ${label}` }).closest("li")!;
+/** Give it somewhere to be — one rect, on the one element both targets are registered on. */
+const standUp = (label: string): HTMLElement => {
+  const tile = upTile(label);
+  for (const element of [tile, tile.querySelector("button")!]) {
+    element.getBoundingClientRect = () => CARD_BOX;
+  }
+  return tile;
+};
+
+/**
  * Two boxes and three landings, because dnd-kit hit-tests by **coordinate** and jsdom measures
  * every rectangle as zero.
  *
@@ -2727,6 +2746,97 @@ describe("the collection's folders", () => {
   });
 
   /**
+   * **The way back out at the size of the things it stands among** — issue #283. The breadcrumb
+   * above could always take a copy, and a segment is one word of `text-sm` in a bar the pointer
+   * has already left; a folder card only ever takes a copy deeper.
+   *
+   * The tile names its **destination**, because that is what a reader has to read before letting
+   * go, and it is drawn only where there is somewhere to go: at the root there is not.
+   *
+   * **Two levels deep on purpose.** A tile that always went to the root would pass a one-level
+   * test and strand anyone who had drilled twice — which is why the destination is read off the
+   * trail rather than off the open folder's own `parentId`.
+   */
+  it("names the level above, and draws nothing at the root", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, FOILS]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await screen.findByRole("button", { name: /^Trade binder folder/ });
+    expect(screen.queryByRole("button", { name: /^Up one level/ })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /^Trade binder folder/ }));
+    expect(
+      await screen.findByRole("button", { name: "Up one level to Collection" }),
+    ).toBeInTheDocument();
+
+    await user.click(await screen.findByRole("button", { name: /^Foils folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(9));
+    expect(
+      await screen.findByRole("button", { name: "Up one level to Trade binder" }),
+    ).toBeInTheDocument();
+  });
+
+  /** Pressed, it is the breadcrumb's parent segment — one level, not the root. */
+  it("walks up one level when the tile is pressed", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, FOILS]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await user.click(await screen.findByRole("button", { name: /^Trade binder folder/ }));
+    await user.click(await screen.findByRole("button", { name: /^Foils folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(9));
+
+    await user.click(screen.getByRole("button", { name: "Up one level to Trade binder" }));
+
+    await waitFor(() => expect(lastQuery().folderId).toBe(3));
+  });
+
+  /** And the drop the tile exists for: a copy carried out of the drawer it is in, onto the
+   *  drawer-sized target that says where it is going. */
+  it("files a copy up a level when it is dropped on the tile", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, FOILS]);
+    collectionList.mockResolvedValue(page([{ ...BOLT, folderId: 9, folderName: "Foils" }]));
+    const user = userEvent.setup();
+    const { container } = wrap(<CollectionPage />);
+    await user.click(await screen.findByRole("button", { name: /^Trade binder folder/ }));
+    await user.click(await screen.findByRole("button", { name: /^Foils folder/ }));
+    await screen.findByText("Lightning Bolt");
+
+    const tile = standUp("Trade binder");
+    const row = cardSources(container)[0];
+    const held = await holdCopy(row, { pressOn: screen.getByText("Lightning Bolt") });
+    await held.over(tile);
+    await held.drop();
+
+    await waitFor(() => expect(collectionSetFolder).toHaveBeenCalledWith(7, 3));
+  });
+
+  /**
+   * **Inside `Recently removed` the tile is the one target the wall could not draw.** That level
+   * substitutes the reader's own top level for its own children (#209), so every drawer on screen
+   * is a place to file a copy *into* — and the root itself, which is where a copy that belongs in
+   * no binder goes, was reachable only from the breadcrumb.
+   */
+  it("files a copy out of Recently removed and back to the root", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, DECK_GROUP, REMOVED]);
+    collectionList.mockResolvedValue(
+      page([{ ...BOLT, folderId: 21, folderName: "Recently removed" }]),
+    );
+    const user = userEvent.setup();
+    const { container } = wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+    await user.click(await screen.findByRole("button", { name: /^Recently removed folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(21));
+
+    const tile = standUp("Collection");
+    const row = cardSources(container)[0];
+    const held = await holdCopy(row, { pressOn: screen.getByText("Lightning Bolt") });
+    await held.over(tile);
+    await held.drop();
+
+    await waitFor(() => expect(collectionSetFolder).toHaveBeenCalledWith(7, null));
+  });
+
+  /**
    * **Filing a copy is a re-read, never an optimistic patch.**
    *
    * The wishlist shipped the optimistic version and it was wrong three ways at once: the row left
@@ -3967,6 +4077,56 @@ describe("rearranging the collection's cabinet", () => {
     await held.drop();
 
     await waitFor(() => expect(collectionSetFolder).toHaveBeenCalledWith(7, 3));
+    expect(collectionFolderReorder).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The other half of issue #283, and the half a folder card cannot do either.** A drawer could
+   * be pushed deeper by a drag from the day this wall learnt to reorder, and the only route back
+   * up was `Move to folder…` on its own `⋯`.
+   *
+   * `inside` is what the tile means, so the arriving drawer goes **last** in the level above —
+   * `Trade binder` and `Sealed` in the order the tree already draws them, then `Foils`. There is
+   * no second position in the gesture for the reader to have meant: the tile is one landing wide,
+   * which is exactly the objection that keeps a breadcrumb segment from taking a folder at all.
+   */
+  it("moves a drawer up a level when it is dropped on the up tile", async () => {
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await wall();
+    await user.click(screen.getByRole("button", { name: /^Trade binder folder/ }));
+    await screen.findByRole("button", { name: /^Foils folder/ });
+    standUp("Collection");
+
+    const held = await holdCard("Foils");
+    await held.over(upTile("Collection"), AT_MIDDLE);
+    await held.drop();
+
+    await waitFor(() => expect(collectionFolderReorder).toHaveBeenCalledWith(null, [3, 4, 9]));
+  });
+
+  /**
+   * **A drawer already in the level above draws no ring and writes nothing**, which is the one
+   * refusal this page can actually reach: inside `Recently removed` the wall is the reader's own
+   * *top level* rather than that folder's children (#209), so every card on it is already at the
+   * destination the tile names. Without the clause each of them would offer a mark that shuffled
+   * it to the end of the level it is in — a write to arrive at a different list from the one the
+   * reader was shown.
+   */
+  it("refuses a drawer that is already in the level above", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, SEALED, REMOVED]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await wall();
+    await user.click(screen.getByRole("button", { name: /^Recently removed folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(21));
+    standUp("Collection");
+
+    const held = await holdCard("Trade binder");
+    expect(upTile("Collection").classList.contains("ring-2")).toBe(false);
+    await held.over(upTile("Collection"), AT_MIDDLE);
+    await held.drop();
+
     expect(collectionFolderReorder).not.toHaveBeenCalled();
   });
 });

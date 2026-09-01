@@ -36,7 +36,12 @@ import type { FolderDrag, FolderEdge } from "@/lib/folderDrag";
 import { reorderedLevel } from "@/lib/folderOrder";
 import { FINISHES, FINISH_LABEL, finishLabel, isFinish, type Finish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
-import { buildFolderTree, folderDescendants, type FolderNode } from "@/lib/folderTree";
+import {
+  buildFolderTree,
+  folderDescendants,
+  folderLevel,
+  type FolderNode,
+} from "@/lib/folderTree";
 import {
   ipc,
   ipcError,
@@ -53,7 +58,11 @@ import { useNarrowWindow } from "@/lib/useNarrowWindow";
 import { cn } from "@/lib/utils";
 import { writeFailure } from "@/lib/writes";
 import { CollectionBreadcrumb } from "./CollectionBreadcrumb";
-import { CollectionFolderCard, type CollectionFolderTotals } from "./CollectionFolderCard";
+import {
+  CollectionFolderCard,
+  CollectionParentFolderCard,
+  type CollectionFolderTotals,
+} from "./CollectionFolderCard";
 import { CollectionSummaryHeader } from "./CollectionSummary";
 import { CollectionTable } from "./CollectionTable";
 import {
@@ -76,6 +85,18 @@ import { useCollectionFolders, useSetCollectionFolder } from "./useCollectionFol
  * to show a reader filing a copy they own.
  */
 const ROOT_LABEL = "Collection";
+
+/**
+ * The root as `reorderedLevel` has to address it — an id no folder has, because
+ * `collection_folders.id` is an `INTEGER PRIMARY KEY` and therefore always positive.
+ *
+ * Only the **up** tile needs it, and only to satisfy an argument it does not use: an `inside`
+ * landing reads `target` for one thing, the "dropped on itself" refusal, and a folder can never
+ * be dropped on the root. The alternative is widening `reorderedLevel`'s `target` to
+ * `number | null`, which would put a case in the shared arithmetic that only one caller has.
+ * `DecksPage` and `WishlistPage` spell the same constant for the same reason.
+ */
+const ROOT_TARGET = 0;
 
 /**
  * The one dismissible layer this page can have open — the union, and never four flags.
@@ -1129,20 +1150,22 @@ export function CollectionPage() {
    * another surface deleted surfaces here at the root instead of disappearing with the parent that
    * is gone — `buildFolderTree`'s rule, and the reason this is not a one-line `filter`.
    */
-  const childFolders = useMemo(() => {
-    if (folderId === null) return nodes;
-    const find = (
-      list: readonly FolderNode<CollectionFolder>[],
-    ): FolderNode<CollectionFolder> | null => {
-      for (const node of list) {
-        if (node.folder.id === folderId) return node;
-        const inside = find(node.children);
-        if (inside !== null) return inside;
-      }
-      return null;
-    };
-    return find(nodes)?.children ?? [];
-  }, [nodes, folderId]);
+  const childFolders = useMemo(() => folderLevel(nodes, folderId), [nodes, folderId]);
+
+  /**
+   * The level **above** the one on screen — `null` at the root, and `null` again inside a deck
+   * group or `Recently removed`, which are pinned at the top level and hold nothing but cards.
+   *
+   * Read off the {@link trail} rather than off the open folder's own `parentId`, and the two are
+   * not always the same word: `trailOf` walks up through `parentId` and stops at a folder this
+   * list does not carry, so a binder whose parent another surface deleted has a one-segment trail
+   * and climbs to the root — which is exactly where `buildFolderTree` has drawn it. The tile and
+   * the trail therefore lead to the same place by construction rather than by agreement.
+   */
+  const upFolderId = useMemo(
+    () => (folderId === null ? null : (trail[trail.length - 2]?.id ?? null)),
+    [folderId, trail],
+  );
 
   /**
    * What to call a folder, for the two sentences the layers below build out of one.
@@ -1864,6 +1887,74 @@ export function CollectionPage() {
   );
 
   /**
+   * The **up** tile's folder drop: a binder moved out of the level on screen and into the one
+   * above it, last in that level.
+   *
+   * **Not a special case of {@link folderPlacement}, because that one is asked about a card on the
+   * wall and this destination has no card.** The level above is the one the reader walked out of;
+   * nothing on screen belongs to it, so there is no target row, no `before`/`after`, and no order
+   * to point into — which is precisely the objection {@link canPlaceFolder} raises against letting
+   * a breadcrumb segment take a folder. **What answers it here is that the tile says "last"
+   * without having to draw it**: `inside` is the landing a reader already gets by dropping a
+   * folder on another folder's middle, it already means "which drawer, and nothing about where in
+   * it", and `reorderedLevel` already appends. The tile is one landing wide, so there is no second
+   * position for the reader to have meant.
+   *
+   * The four refusals are {@link folderPlacement}'s own, asked of a destination rather than of a
+   * card. **Both ends must be a folder the reader made** — this cabinet's alone, because
+   * `collection_folders::reorder_folders` calls `user_folder` on the destination and on every id
+   * it is handed. The destination is never anything else in practice (nothing nests inside a deck
+   * group or `Recently removed`, so a trail's second-from-last segment is a user folder or the
+   * root), which makes this the fence rather than the affordance — exactly as it is one function
+   * up. **Already there**, **into itself or into what it holds**, and `reorderedLevel`'s own
+   * `null` complete the set; the middle one is unreachable while the wall draws one level, and is
+   * kept because `parent_id` cascades onto itself and a cycle is a graph SQLite would walk
+   * forever.
+   *
+   * **Inside `Recently removed` the "already there" clause is the whole of the answer**, and that
+   * is the one place it does real work: the wall there is not that level's children but the
+   * reader's own top level ({@link wall}), so every folder card on it is *already* at the
+   * destination this tile names, and each of them draws no ring rather than one that would shuffle
+   * it to the end of the level it is in.
+   */
+  const upPlacement = useCallback(
+    (drag: FolderDrag): { parentId: number | null; ids: number[] } | null => {
+      if (folderId === null) return null;
+      if (!userFolderIds.has(drag.folderId)) return null;
+      if (upFolderId !== null && !userFolderIds.has(upFolderId)) return null;
+      if (drag.parentId === upFolderId) return null;
+      if (
+        upFolderId !== null &&
+        (upFolderId === drag.folderId ||
+          folderDescendants(userFolders, drag.folderId).has(upFolderId))
+      ) {
+        return null;
+      }
+      const ids = reorderedLevel({
+        // The destination level as the tree draws it, which is what makes the arriving folder
+        // *last* rather than last among whatever the flat rows happen to name.
+        siblings: folderLevel(nodes, upFolderId).map((one) => one.folder.id),
+        dragged: drag.folderId,
+        target: upFolderId ?? ROOT_TARGET,
+        edge: "inside",
+      });
+      return ids === null ? null : { parentId: upFolderId, ids: [...ids] };
+    },
+    [folderId, upFolderId, nodes, userFolderIds, userFolders],
+  );
+  const canMoveFolderUp = useCallback(
+    (drag: FolderDrag) => upPlacement(drag) !== null,
+    [upPlacement],
+  );
+  const moveFolderUp = useCallback(
+    (drag: FolderDrag) => {
+      const plan = upPlacement(drag);
+      if (plan !== null) folders.reorder.mutate(plan);
+    },
+    [upPlacement, folders.reorder],
+  );
+
+  /**
    * **Whether the cabinet is drawn at all — and it is drawn over an empty one on purpose.**
    *
    * Deliberately *not* {@link filed}, and deliberately not `wall.length > 0`, which is what gated
@@ -2197,6 +2288,34 @@ export function CollectionPage() {
                   It is handed {@link openNewFolder} directly rather than through an arrow: the
                   panel this raises has to give the caret back to the control it was raised from,
                   and `NewFolderCard` hands over its own button for exactly that. */}
+              {/* **Before the tile that makes a folder, and only inside one.** The way *out* is
+                  the first thing a reader looks for on a wall they have walked into, and the wall
+                  is read leading edge first — so at the root, where there is nowhere to go up to,
+                  nothing moves and `New folder` is still the first tile.
+
+                  It is what issue #283 asked for: a folder card only ever takes a copy deeper, and
+                  the only target that took one back out was a breadcrumb segment — one word of
+                  `text-sm`, a target a fifth the height of the drawers beside it, in a bar the
+                  pointer has already left. The trail stays exactly as it was; this is the same
+                  destination at the size of the things it stands among.
+
+                  **It rides the wall's own gate rather than adding a clause to it**, which is what
+                  keeps it out of a deck group: there the wall is not drawn at all, because that
+                  level has no children of its own and refuses a new folder — and a lone tile in an
+                  otherwise empty band, whose ring refuses every card in the group
+                  ({@link canFile}), is the invitation to a gesture that does nothing that
+                  {@link wall} declines to make one paragraph up. The breadcrumb is still the way
+                  out of one, as it always was. */}
+              {folderId !== null && (
+                <CollectionParentFolderCard
+                  label={folderNameOf(upFolderId) ?? ROOT_LABEL}
+                  onOpen={() => collection.openFolder(upFolderId)}
+                  canDrop={(drop) => canFile(drop, upFolderId)}
+                  onDropCard={(drop) => fileCard(drop, upFolderId)}
+                  canDropFolder={canMoveFolderUp}
+                  onDropFolder={moveFolderUp}
+                />
+              )}
               {canMakeFolder && <NewFolderCard onClick={openNewFolder} />}
               {wall.map((node) => (
                 <CollectionFolderCard

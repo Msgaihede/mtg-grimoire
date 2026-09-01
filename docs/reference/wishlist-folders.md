@@ -251,6 +251,52 @@ gets back *out*: without them a drag could only ever push wishes deeper. Both wr
 and the panel stays complete on its own, because a drag-only affordance is half a feature and it is
 the half a keyboard cannot use.
 
+## The way back up is a tile on the wall, not only a word in the trail
+
+Issue #283 is one sentence — *"there is no easy way to remove them from that folder and move them
+back to the main wishlist"* — and the interesting part is that the gesture already worked. A
+breadcrumb segment has taken a wish drop since the cabinet shipped, and the paragraph above says
+why: without it a drag could only ever push wishes deeper. What it did not have was **size**. A
+segment is one word of `text-sm` in a `nav` above the wall — a target roughly 20px tall, sitting in
+a bar the pointer left on its way down to the list — while every place a wish can be pushed *into*
+is a 62px tile in the row directly above the wishes. So the way in was drawer-sized and the way out
+was a link, and readers did what the issue describes: they gave up on the drag and reached for the
+row menu's `Move to folder…`.
+
+**The fix is a folder card for the level above**, first in the wall, drawn only when the reader is
+inside a folder. It is `src/components/ParentFolderCard.tsx`, shared by all three cabinets, with a
+thin per-page wrapper beside each page's own folder card (`WishParentFolderCard` here) holding the
+two drop targets. Four decisions:
+
+- **The name is the destination.** The tile prints the parent folder's name — or `Wishlist` at the
+  root, which is `ROOT_LABEL`, the same word the breadcrumb's own first segment uses — with
+  `Up one level` on the second line, where a folder card prints `6 wishes · $312.00`. A reader
+  mid-drag has to read *where this goes* before they let go, and "Up one level" alone does not say
+  it. The accessible name is built from both (`Up one level to Ordered`) rather than replacing
+  either.
+- **The destination is read off the trail, never off the open folder's `parentId`.** `trailOf`
+  stops at a folder this list does not carry, so a drawer whose parent another surface deleted has
+  a one-segment trail and climbs to the root — which is exactly where `buildFolderTree` has drawn
+  it. The tile and the trail therefore agree by construction rather than by two rules that happen
+  to say the same thing today.
+- **It takes a folder as well as a wish**, which is the half the breadcrumb refuses and still
+  refuses. That refusal's reasoning is unchanged and is quoted in `canPlaceFolder`:
+  `wishlist_folder_reorder` takes a destination **and that level's whole order**, and a segment is
+  one word with no order to point into, so the only thing a drop on it could say is "last, in a
+  level that is not on screen". What answers it here is that the tile is **one landing wide**:
+  every part of it means *up there*, which is the `inside` landing a reader already gets from the
+  middle of a folder card — "which drawer, and nothing about where in it" — and `reorderedLevel`
+  already appends. So the arriving drawer goes last in the level above, and there is no second
+  position in the gesture for the reader to have meant.
+- **A drawer already in the level above draws no ring.** Not reachable on this page — the wall
+  draws one level, so every card on it is a child of the folder the reader is standing in — but it
+  is `folderPlacement`'s own "already there" clause, kept local for the reason all four of its
+  refusals are: the collection's cabinet *does* reach it, inside `Recently removed`.
+
+**The trail is untouched.** It still takes a wish drop on every segment, still says where the
+reader is standing, and is still the only way out of a level whose wall is not drawn. What changed
+is that the ordinary case has a target the size of the things around it.
+
 ## What a wish costs, and which printing it is drawn as
 
 Two changes, both 2026-08-26, both in `src-tauri/src/wishlist.rs`, and the second one dragged
@@ -508,4 +554,5 @@ dx 0.0 / dy 0.0 from its trigger on keyboard activation, which is what `menuClic
 | `src/lib/folderTree.ts` | `buildFolderTree` and friends, shared with the deck gallery |
 | `src/features/wishlist/wishDrag.ts` | The payload, the tile that offers it, the target that takes it |
 | `src/features/wishlist/WishFolderCard.tsx` | The tile, and its stories beside it |
+| `src/components/ParentFolderCard.tsx` | The up-one-level tile all three cabinets draw, and its stories |
 | `src/features/card/cardMenu.tsx` | `buildWishlistTargetItems` — `Add to → Wishlist` |
