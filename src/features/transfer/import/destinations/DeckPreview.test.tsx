@@ -18,6 +18,7 @@ import type {
   DeckCard,
   DeckDetail,
   DeckRow,
+  DeckVariant,
   ImportCommitOutcome,
   ImportMatch,
   ImportOutcome,
@@ -141,6 +142,64 @@ const DECK: DeckRow = {
 };
 
 const DETAIL: DeckDetail = { deck: DECK, cards: [] as DeckCard[], categories: [], tags: [] };
+
+/**
+ * One row of the deck being imported into, filled in rather than cast — `ImportDialog.test.tsx`'s
+ * builder, trimmed to the one field this file's own cases vary.
+ *
+ * It is here because {@link DeckPreview} **derives** what a `replace` would clear from the
+ * `deck_get` it is already making, so a deck holding cards is staged by answering that read
+ * rather than by handing the component a number.
+ */
+function deckCard(over: Partial<DeckCard> & { quantity: number }): DeckCard {
+  return {
+    promoTypes: null,
+    id: 1,
+    cardId: "sol-ring",
+    categoryId: 9,
+    categoryName: "Main deck",
+    categoryKind: "main",
+    categoryActive: true,
+    finish: null,
+    variant: "live",
+    tagId: null,
+    tagName: null,
+    tagColor: null,
+    name: "Sol Ring",
+    setCode: "lea",
+    setName: "Limited Edition Alpha",
+    collectorNumber: "1",
+    lang: "en",
+    needsReview: null,
+    oracleId: "o1",
+    manaCost: null,
+    cmc: null,
+    typeLine: "Artifact",
+    oracleText: null,
+    colors: null,
+    colorIdentity: null,
+    legalities: null,
+    power: null,
+    toughness: null,
+    layout: null,
+    rarity: null,
+    faces: null,
+    gameChanger: null,
+    finishes: null,
+    everUncommon: false,
+    unitPrice: null,
+    ownedQuantity: 0,
+    ...over,
+  };
+}
+
+/** Forty-two copies over **two** rows — the number the Replace radio quotes, and the fence the
+ *  sentence under it is drawn behind. Copies rather than rows, so a `length` where a sum belongs
+ *  reads 2 and the label goes red. */
+const HOLDING: DeckDetail = {
+  ...DETAIL,
+  cards: [deckCard({ quantity: 40 }), deckCard({ id: 2, cardId: "bolt", quantity: 2 })],
+};
 
 const OUTCOME: ImportOutcome = { added: 3, removed: 0, categoriesCreated: 1, tagsCreated: 0 };
 const OWNED: ImportCommitOutcome = { added: 2, updated: 0, removed: 0 };
@@ -444,5 +503,89 @@ describe("Archidekt tags", () => {
 
     await waitFor(() => expect(onDone).toHaveBeenCalled());
     expect(onDone.mock.calls[0][0]).toBe("3 cards imported, 2 new tags.");
+  });
+});
+
+/**
+ * Where the cardboard ends up when a `replace` empties the live list — issue #336.
+ *
+ * A replace deletes every `deck_cards` row of the variant, and since #336's Rust half the copies
+ * behind those rows are released into `Recently removed` rather than left stranded in the deck's
+ * own group. That is the same movement `Clear live list…` makes, so this step says the same
+ * sentence `ClearDeck` and `ClearCategory` say — one wording across every bulk live removal in
+ * the app, because a reader meeting the fourth one has read the first three.
+ *
+ * **Three fences, and each of them is a promise the app could not keep.** A `merge` removes
+ * nothing; a plan holds no copies at all; an empty list has none to give back. Drawn in any of
+ * those, the sentence names a folder nothing will arrive in — which is exactly the failure
+ * `ClearDeck`'s own ternary exists to avoid.
+ */
+describe("where a live replace puts the copies", () => {
+  /** Verbatim, and asserted as a whole string rather than a fragment: it is the same sentence
+   *  three other confirmations draw, and a fragment would pass against a reworded one. */
+  const PROMISE = "Any copies you own go back to Recently removed.";
+
+  function preview(variant: DeckVariant) {
+    return mount(
+      <DeckPreview
+        list={LIST}
+        resolved={RESOLVED}
+        tags={[]}
+        onDone={onDone}
+        onBack={onBack}
+        deckId={4}
+        variant={variant}
+      />,
+    );
+  }
+
+  /** The press that moves them, saying so before it is made. Without this the one import that
+   *  files a reader's cardboard somewhere else is the one press in the app that says nothing
+   *  about it. */
+  it("says where the copies go once Replace is chosen on the live list", async () => {
+    deckGet.mockResolvedValue(HOLDING);
+    preview("live");
+
+    await userEvent.click(
+      await screen.findByLabelText("Replace — removes the 42 cards in Actual first"),
+    );
+    expect(screen.getByText(PROMISE)).toBeInTheDocument();
+  });
+
+  /** Merge adds and clears nothing, so there is nothing to release — a promise here would be a
+   *  reader told their copies had moved by the one mode that never moves any. */
+  it("says nothing under Merge", async () => {
+    deckGet.mockResolvedValue(HOLDING);
+    preview("live");
+
+    expect(await screen.findByLabelText(/^Merge/)).toBeChecked();
+    expect(screen.queryByText(PROMISE)).toBeNull();
+  });
+
+  /**
+   * A theory list is a plan and holds no copies — the clause `ClearDeck` spells out in words
+   * rather than leaving to be discovered. A sentence stuck on the replace mode alone would
+   * promise `Recently removed` a delivery from a list that has never held any cardboard.
+   */
+  it("says nothing when the replace is aimed at the plan", async () => {
+    deckGet.mockResolvedValue(HOLDING);
+    preview("theory");
+
+    await userEvent.click(
+      await screen.findByLabelText("Replace — removes the 42 cards in Theory first"),
+    );
+    expect(screen.queryByText(PROMISE)).toBeNull();
+  });
+
+  /** Nothing in the list is nothing to give back, and the radio in that state already says as
+   *  much — so a sentence under it would be the second half of a promise whose first half reads
+   *  "there is nothing to remove". */
+  it("says nothing when the live list is already empty", async () => {
+    preview("live");
+
+    await userEvent.click(
+      await screen.findByLabelText("Replace — there is nothing in Actual to remove"),
+    );
+    expect(screen.queryByText(PROMISE)).toBeNull();
   });
 });

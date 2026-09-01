@@ -5236,6 +5236,114 @@ describe("the decklist import", () => {
     expect(db.deckAudit.map((a) => a.delta)).toEqual([-4, 1]);
   });
 
+  /** Copies in one folder. `deck_clear` declares this too; an import is not a clear and this
+   *  describe is not inside that one. */
+  const copiesIn = (db: FakeDb, folderId: number | null) =>
+    db.collectionEntries
+      .filter((e) => e.folderId === folderId)
+      .reduce((n, e) => n + e.quantity, 0);
+
+  /**
+   * A deck whose group holds exactly the copies its live list claims — a reader who filed their
+   * cards into the deck, and the only state a stranding is visible from. Two printings over two
+   * piles, seven copies in the plan beside them, and a second deck holding three of its own, so
+   * every assertion below has a list and a folder outside its own scope to be wrong about.
+   */
+  const filed = () =>
+    makeDeckDb({
+      decks: [deck({ id: 1, name: "Deck A" }), deck({ id: 2, name: "Deck B" })],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT_A.id, quantity: 4, folderId: groupId(1) }),
+        entry({ id: 2, cardId: SOL_NEW.id, quantity: 2, folderId: groupId(1) }),
+        entry({ id: 3, cardId: BOLT_A.id, quantity: 3, folderId: groupId(2) }),
+      ],
+      deckCards: [
+        deckCard({ id: 1, cardId: BOLT_A.id, categoryKind: "main", quantity: 4 }),
+        deckCard({ id: 2, cardId: SOL_NEW.id, categoryKind: "side", quantity: 2 }),
+        deckCard({ id: 3, cardId: BOLT_A.id, variant: "theory", quantity: 7 }),
+        deckCard({ id: 4, deckId: 2, cardId: BOLT_A.id, categoryKind: "main", quantity: 3 }),
+      ],
+    });
+
+  /**
+   * A `deck_cards` row is an intention and a row in the deck's group is cardboard the reader
+   * physically owns — so importing over a list does not stop them owning it. Left where they
+   * were, the copies stay filed under a deck that has stopped naming them: invisible on the
+   * Collection page and unavailable to every other deck, which is exactly the stranding
+   * `deck_clear` releases behind its identical delete.
+   *
+   * The imported line names a **different printing of the same card**, which is the arm that
+   * hides it: {@link attributeOwned} matches on the oracle id, so a group nobody released hands
+   * the freshly imported row a copy the reader never filed and the deck reads as owning one.
+   */
+  it("files a replaced live list's copies into Recently removed", () => {
+    const db = filed();
+    expect(copiesIn(db, groupId(1))).toBe(6);
+
+    writeHandlers(db).deck_import_commit({
+      deckId: 1,
+      variant: "live",
+      mode: "replace",
+      items: [{ cardId: BOLT_B.id, quantity: 1, categoryName: "Main deck" }],
+    });
+
+    expect(copiesIn(db, groupId(1))).toBe(0);
+    expect(copiesIn(db, REMOVED_FOLDER)).toBe(6);
+    // The other deck's group is no part of this import's business.
+    expect(copiesIn(db, groupId(2))).toBe(3);
+    // What the reader is then looking at: a fresh list owning nothing until they file the
+    // copies again, which is where `Clear live list…` leaves them too.
+    expect(liveDeck(db)!.cards.map((c) => c.ownedQuantity)).toEqual([0]);
+  });
+
+  /**
+   * A plan holds no cards, so nothing in any folder backs a theory row and there is nothing to
+   * give back — `releasePileCopies` decides that per row rather than the handler testing the
+   * argument it was called with. The group keeps its six even though seven copies just left the
+   * plan, and the holding area is never written to: the two assertions a release fenced on the
+   * wrong thing fails.
+   */
+  it("moves nothing when the list being replaced is the plan", () => {
+    const db = filed();
+
+    const out = writeHandlers(db).deck_import_commit({
+      deckId: 1,
+      variant: "theory",
+      mode: "replace",
+      items: [{ cardId: BOLT_B.id, quantity: 1, categoryName: "Main deck" }],
+    });
+
+    expect(out.removed).toBe(7);
+    expect(copiesIn(db, groupId(1))).toBe(6);
+    expect(copiesIn(db, REMOVED_FOLDER)).toBe(0);
+    // The live list is still standing and still owns what it always did, which is what makes
+    // the two counts above about custody rather than about an import that did nothing.
+    expect(db.deckCards.filter((dc) => dc.variant === "live")).toHaveLength(3);
+    expect(liveDeck(db)!.cards.map((c) => c.ownedQuantity)).toEqual([4, 2]);
+  });
+
+  /**
+   * A merge takes nothing out of the list, so there is nothing to release — the release belongs
+   * to the clear the `replace` arm performs and not to the import. A handler that gave the
+   * copies back on every commit would empty the group of a deck the reader had just topped up.
+   */
+  it("moves nothing on a merge, which takes nothing out", () => {
+    const db = filed();
+
+    writeHandlers(db).deck_import_commit({
+      deckId: 1,
+      variant: "live",
+      mode: "merge",
+      items: [{ cardId: BOLT_A.id, quantity: 2, categoryName: "Main deck" }],
+    });
+
+    expect(copiesIn(db, groupId(1))).toBe(6);
+    expect(copiesIn(db, REMOVED_FOLDER)).toBe(0);
+    // Folded onto the row that was already there, so the deck now claims six copies of a card
+    // whose four in the group never moved — a merge writes a list without moving cardboard.
+    expect(db.deckCards.find((dc) => dc.id === 1)!.quantity).toBe(6);
+  });
+
   /**
    * Archidekt's `^Keeper,#4aab08^` through the fake, which is what the import dialog's stories
    * run against — so the three rules `import::tag_for_name` holds have to hold here too, or a

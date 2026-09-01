@@ -247,13 +247,35 @@ Pathway` is one card and there are seven such names in the reference list alone,
   satisfies a `Pick` of itself, so the widening changed no call site.
 - **An import is not an add path and must never become one.** Routing a list through
   `useDeck.addCard` would be **one transaction per line**; `deck_import_commit` is one for the
-  whole file. Both write `deck_cards` and nothing else: since schema v25 the copies that back a
-  deck's rows are the `collection_entries` filed in that deck's group, and only
-  `collection_to_deck` / `deck_to_collection` move a row across that boundary. So an import
-  fills the list and leaves the reader to file the cardboard. `useImport`'s fourth mutation, `importIntoNewDeck`, is
+  whole file. Both write `deck_cards`, and an import that *adds* writes nothing else: since schema
+  v25 the copies that back a deck's rows are the `collection_entries` filed in that deck's group,
+  so a merge fills the list and leaves the reader to file the cardboard. **The one exception is
+  `replace` on a `live` list, and it is a Rust-side fact rather than a second write from here**
+  (2026-09-01, issue #336): that mode deletes the variant's `deck_cards` rows, and
+  `deck::release_live_copies` inside the same commit files the copies behind them into
+  `Recently removed` — the same act `Clear live list…` performs. One press, still one
+  transaction, still one command; what changed is that the press is a **collection** write too,
+  which is why the dialog says so. `useImport`'s fourth mutation, `importIntoNewDeck`, is
   `deck_create` then that commit with a **hand-rolled rollback** — two commands are two
   transactions, and a refused import must not leave half a deck in the gallery. The commit's
   refusal is what the caller hears, never the clean-up delete's.
+- **The Replace radio says what the mode takes out; a note under the radios says where the
+  cardboard goes.** `DeckPreview.tsx`'s `Mode` fieldset draws
+  `Any copies you own go back to Recently removed.` beneath the pair — the sentence `ClearDeck`,
+  `ClearCategory` and `CategoriesDialog` already make behind the same act, word for word, because
+  since #336 this press *is* that act. **It is under the radios rather than in the Replace
+  label**, and the two reasons agree: a radio's accessible name is what the control *does*, so a
+  second sentence on it makes the control announce a paragraph and turns every query for it into a
+  prefix match (the tests match `Replace — removes the N cards in <list> first` as a literal); and
+  where the copies go is a consequence of the mode being *chosen* rather than a description of the
+  option, so it belongs after the choice. It stays inside the `fieldset`, because it is still part
+  of what `What this does to <list>` answers.
+- **That note is drawn behind three conditions and none of them can be dropped** — `replace`,
+  `live`, and a list that holds something. A merge removes nothing, so nothing is released; a
+  theory list is a plan and has never held a copy; and an empty list has none to give back, which
+  the radio beside it already says. It is `ClearDeck`'s ternary and its `> 0` fence read together:
+  a sentence naming a folder nothing will ever arrive in is the exact failure both of those exist
+  to avoid, and the reader who goes looking in `Recently removed` finds the app lied to them.
 - **The _native_ file picker's own half is unverified**, for the reason `deck_set_cover_image`'s
   is: `dialog:allow-open` opens a native window CDP cannot reach. Path → text → preview is
   tested; click → path is not. **The browser's is the exception and is driven end to end** —

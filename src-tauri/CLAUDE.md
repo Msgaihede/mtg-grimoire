@@ -431,31 +431,49 @@ shared_cell` walks both into two databases and compares them column by column.
   It refuses both where `deck::add_card` lets the id win, because there a drag carries both and
   here nothing does;
   `deck_to_collection` cuts a deck card and files whatever the group held into `Recently removed`.
-  **Three writes in `deck.rs`/`deck_meta.rs` do the second of those in bulk and are not a third
-  route**: `deck_meta::delete_category`'s cascade arm, `deck::clear_category` and — since
-  2026-09-01 — `deck::clear_variant`, which is the same DELETE with `category_id` dropped from the
-  `WHERE`. Each takes a whole set of `deck_cards` rows out at once, so the copies behind their
-  `live` rows have to be released the same way — all three go through
-  `deck::release_group_copies`, and **so does `deck_to_collection`
-  itself**: that walk is the crate's one copy, and the cut is it plus the `deck_cards` write, the
-  history row and the `MoveOutcome`. Four rules it holds (absent group means "holds
-  nothing", oldest row first, clamped at what the group holds, `Recently removed` resolved only
-  when there is something to file), and a fifth that was a bug while it existed twice: **it
+  **Four writes across `deck.rs`, `deck_meta.rs` and `import.rs` do the second of those in bulk and
+  are not a third route**: `deck_meta::delete_category`'s cascade arm, `deck::clear_category`,
+  `deck::clear_variant` — the same DELETE with `category_id` dropped from the `WHERE`, since
+  2026-09-01 — and `import::commit_import`'s `replace` arm, which runs that wider DELETE before it
+  writes the list it was handed. Each takes a whole set of `deck_cards` rows out at once, so the
+  copies behind their `live` rows have to be released the same way — **all four go through
+  `deck::release_live_copies`** (2026-09-01, issue #336), which is `release_group_copies`'s bulk
+  half and nothing more: it reads the doomed rows `ORDER BY id`, oldest first, **before** the
+  caller's DELETE and inside the caller's transaction, then calls `release_group_copies` once per
+  row. **`category_id: Option<i64>` is the whole of the difference between the four callers** —
+  `Some(id)` is one pile, `None` the whole variant — and **the `variant == LIVE` fence lives in
+  the helper rather than at the call sites**, which is the point of writing it at all: a plan
+  holds no cards (`collection_alloc::THEORY_HOLDS_NOTHING`), and a rule spelled out at every call
+  site is a rule the next call site can leave out — which is what the fourth one did, release and
+  fence together.
+  The walk itself is still `deck::release_group_copies`, and **`deck_to_collection` calls it
+  directly** for its one row: that walk is the crate's one copy, and the cut is it plus the
+  `deck_cards` write, the history row and the `MoveOutcome`. Four rules `release_group_copies`
+  holds (absent group means "holds nothing", oldest row first, clamped at what the group holds,
+  `Recently removed` resolved only when there is something to file), and a fifth that was a bug
+  while it existed twice: **it
   matches on the oracle card, exact printing and finish first and any other printing of the same
   `cards.oracle_id` after**. `swap_printing` and `set_card_finish` rewrite a deck row's identity
   and touch no collection table, and the v25 conversion files printings the deck does not list,
   so an exact-only match strands copies under a deck that no longer lists them. It is
   `owned_by_oracle`'s "a Bolt is a Bolt" read from the other end. `delete_category`'s **move** arm
   releases nothing: those cards are still in this deck, one pile over. `deck::delete_deck` is the
-  fourth such site and files the whole group.
-  **`import::commit_import`'s `replace` arm is the one bulk removal that does *not* release, and
-  that is a bug rather than an exception** — issue #336, open as of 2026-09-01. It runs
+  fifth such site and files the whole group.
+  **`import::commit_import`'s `replace` arm was the one bulk removal that did *not* release, and
+  that was a bug rather than an exception** — issue #336, closed 2026-09-01. It ran
   `clear_variant`'s exact `DELETE FROM deck_cards WHERE deck_id = ?1 AND variant = ?2` with no
-  release beside it, so importing over a live list leaves every copy the reader owns filed under a
+  release beside it, so importing over a live list left every copy the reader owns filed under a
   deck that has no row for it — invisible on the Collection page, and unavailable to every other
-  deck. It is filed rather than fixed here because the fix is one helper the three sites that
-  already spell that read-and-release loop out should share — do not close it by writing the loop
-  a fourth time.
+  deck. **The same delete over the same rows left a reader's copies in two different places
+  depending on which press made it**, and that is the failure worth keeping written down now that
+  the helper makes it unreachable: `Clear live list…` put the cardboard back on the reader's desk
+  in `Recently removed`, while an import over that same list stranded it. It was closed the way it
+  was filed — the three sites that already spelled the read-and-release loop out inline call
+  `release_live_copies` now, and the import's arm calls it between its `cleared` count and its
+  DELETE, rather than a fourth copy of the loop. **What the fix costs the reader is that a
+  replace-import on a live list leaves the freshly imported rows owning nothing** until the copies
+  are filed back, exactly where `Clear live list…` leaves them — the price of the copies being
+  findable at all, and the same trade every other bulk live removal here makes.
   Six rules hold it together, each with a test:
   - **A deck group is not a drop target**, because a card reaches one only through
     `collection_to_deck`. A bare drag would go through `collection_set_folder`, which knows

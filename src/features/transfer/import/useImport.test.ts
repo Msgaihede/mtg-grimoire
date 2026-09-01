@@ -142,14 +142,16 @@ const staleRoots = (c: QueryClient): string[] =>
     .sort();
 
 /**
- * A deck import is a **deck** write, and the roots it fires say so.
+ * A deck import that clears nothing is a **deck** write, and the roots it fires say so.
  *
- * `deck_import_commit` writes `deck_cards` and nothing else, so every `ownedQuantity` in *this*
- * deck re-attributes — the group's copies are handed out across a list that just changed — and
- * nothing about what the reader *owns* has moved. Since schema v25 the copies enter a deck only
- * through `collection_to_deck`, so the collection, the wishlist and the search wall cannot have
- * changed, and firing their roots here would be three refetches per import that can only ever
- * answer what is already on screen.
+ * `deck_import_commit` adds `deck_cards` rows and nothing else, so every `ownedQuantity` in
+ * *this* deck re-attributes — the group's copies are handed out across a list that just
+ * changed — and nothing about what the reader *owns* has moved. Since schema v25 the copies
+ * enter a deck only through `collection_to_deck`, so the collection, the wishlist and the search
+ * wall cannot have changed, and firing their roots here would be three refetches per import that
+ * can only ever answer what is already on screen.
+ *
+ * **The one press that broke that is a live `replace`, and it has a describe of its own below.**
  */
 describe("the roots an import commit fires", () => {
   it("marks only the decks stale after a commit", async () => {
@@ -181,6 +183,75 @@ describe("the roots an import commit fires", () => {
     });
 
     await waitFor(() => expect(staleRoots(client)).toEqual(["decks"]));
+  });
+});
+
+/**
+ * The one press whose deck write is also a **collection** write — issue #336.
+ *
+ * A `replace` on the `live` variant deletes every `deck_cards` row of that list, and
+ * `release_live_copies` files the copies behind them into `Recently removed`. So rows really do
+ * leave the deck's group: the Collection page's placement, the search wall's owned badges and the
+ * wishlist's owned progress all answer a question this press changed, and `query.ts` caches 30 s —
+ * which makes a missing root a wrong screen for half a minute rather than a slow one.
+ *
+ * **The two neighbours are the whole of what a wrong condition costs**, so both are asserted
+ * beside it: `merge` clears nothing at all, and a `replace` on the plan clears rows that were
+ * never backed by cardboard.
+ */
+describe("the roots a live replace fires", () => {
+  it("marks the collection, the wishlist, the search wall and the decks stale", async () => {
+    seedOwned(client);
+    const { result } = renderHook(() => useImport(), { wrapper });
+
+    await result.current.commit.mutateAsync({
+      deckId: 4,
+      variant: "live",
+      mode: "replace",
+      items: ITEMS,
+    });
+
+    await waitFor(() =>
+      expect(staleRoots(client)).toEqual(["cards", "collection", "decks", "wishlist"]),
+    );
+  });
+
+  /** A plan holds no copies, so a replace there releases none — the same fence the preview's own
+   *  sentence is drawn behind, and the reason this is not "any replace". */
+  it("marks only the decks stale when the replace is aimed at the plan", async () => {
+    seedOwned(client);
+    const { result } = renderHook(() => useImport(), { wrapper });
+
+    await result.current.commit.mutateAsync({
+      deckId: 4,
+      variant: "theory",
+      mode: "replace",
+      items: ITEMS,
+    });
+
+    await waitFor(() => expect(staleRoots(client)).toEqual(["decks"]));
+  });
+
+  /** And on the way out of a refusal, for the reason every other arm here does it: the deck half
+   *  can have landed under a collection half that did not, and a refused write can still be a
+   *  database another surface has changed. */
+  it("marks the same four stale when a live replace is refused", async () => {
+    deckImportCommit.mockRejectedValue("That deck is gone.");
+    seedOwned(client);
+    const { result } = renderHook(() => useImport(), { wrapper });
+
+    await expect(
+      result.current.commit.mutateAsync({
+        deckId: 4,
+        variant: "live",
+        mode: "replace",
+        items: ITEMS,
+      }),
+    ).rejects.toBe("That deck is gone.");
+
+    await waitFor(() =>
+      expect(staleRoots(client)).toEqual(["cards", "collection", "decks", "wishlist"]),
+    );
   });
 });
 

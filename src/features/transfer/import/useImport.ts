@@ -222,32 +222,57 @@ async function tagsFor(rows: readonly ImportResolveRow[]): Promise<PrintingTags[
  * a deck that is gone. The root is a prefix of `["decks", "list"]` and of every
  * `["decks", "detail", id, variant]`, so one key covers the gallery and the editor both.
  *
- * **And it is only that root _while the box is unticked_**, because a deck write is not a
- * collection write: an unticked import writes `deck_cards` and nothing else, and the copies that
- * back those rows are filed into the deck's group by `collection_to_deck` — a separate gesture
- * the reader makes on purpose. So `CollectionRow`'s counts and `CardSummary`'s owned count
- * cannot have moved, and firing the collection, wishlist and search roots there would be three
- * refetches per import that can only ever answer what is already on screen. **No other deck
- * moves either**: a group is one deck's, so an import can no longer take copies off a deck the
- * reader is not looking at.
+ * **And it is only that root for an import that _adds_**, because such a deck write is not a
+ * collection write: a merge writes `deck_cards` and nothing else, and the copies that back those
+ * rows are filed into the deck's group by `collection_to_deck` — a separate gesture the reader
+ * makes on purpose. So `CollectionRow`'s counts and `CardSummary`'s owned count cannot have
+ * moved, and firing the collection, wishlist and search roots there would be three refetches per
+ * import that can only ever answer what is already on screen. **No other deck moves either**: a
+ * group is one deck's, so an import can no longer take copies off a deck the reader is not
+ * looking at. A `replace` on a **theory** list is the same statement one variant over — a plan
+ * has never held a copy, so clearing it releases none.
  *
- * **A press carrying {@link OwnedCopies} fires {@link OWNED_WRITE_KEYS} instead** — the union —
- * and it is decided off the mutation's own `variables` rather than off a flag on the hook,
- * because the two presses are the same mutation and only the press knows which it was.
+ * **A `replace` on the `live` variant is the press that argument does not cover, and it used to
+ * be filed under it** (issue #336). That press deletes every `deck_cards` row of the list, and
+ * `release_live_copies` — the Rust half of #336 — files the copies behind them into
+ * `Recently removed` rather than stranding them in the deck's own group. So rows really do move
+ * across the collection boundary without the box being ticked: the Collection page's placement,
+ * the search wall's owned badges and the wishlist's owned progress each answer a question this
+ * press has just changed the answer to, and `src/lib/query.ts` caches 30 s — which makes a
+ * missing root a **wrong** screen for half a minute rather than a slow one. **No count fence**:
+ * whether the live list held anything is not something this hook knows without another read, and
+ * a refetch that answers what is already on screen is far cheaper than a stale collection.
+ *
+ * **A press carrying {@link OwnedCopies} fires {@link OWNED_WRITE_KEYS}, and so does that one** —
+ * the same union rather than a set of its own, because they are the same claim about which roots
+ * a `collection_entries` write moves. Both are decided off the mutation's own `variables` rather
+ * than off a flag on the hook, because every press is the same mutation and only the press knows
+ * which it was.
+ *
+ * **`importIntoNewDeck` is deliberately not widened.** It commits `"merge"` into a deck that did
+ * not exist a statement ago, so there is nothing in it to clear and nothing to release — and it
+ * pins that pair in its own body rather than taking it from a caller.
  *
  * `resolve` and `readFile` take no key at all: neither writes anything.
  */
 export function useImport() {
   const queryClient = useQueryClient();
-  /** The union when the press asked for copies, `["decks"]` when it did not — see the hook's
-   *  doc. Fired on refusal as well as on success, on both arms and for the reason the deck root
-   *  already was: a refused write can still be a database another surface has changed, and the
-   *  deck half can have landed under a collection half that did not. */
-  const invalidate = (collectionItems: OwnedCopies | undefined) => {
-    const keys =
-      collectionItems === undefined || collectionItems.length === 0
-        ? [["decks"] as QueryKey]
-        : OWNED_WRITE_KEYS;
+  /** The union when the press asked for copies **or** released some, `["decks"]` when it did
+   *  neither — see the hook's doc. Fired on refusal as well as on success, on both arms and for
+   *  the reason the deck root already was: a refused write can still be a database another
+   *  surface has changed, and the deck half can have landed under a collection half that did
+   *  not. */
+  const invalidate = (
+    collectionItems: OwnedCopies | undefined,
+    /** What the press would have cleared. Omitted by `importIntoNewDeck` **on purpose** rather
+     *  than by accident: it pins `"merge"` into a deck one statement old, so there is nothing
+     *  for it to release and no reading of its variables that could say otherwise. */
+    clearing?: { mode: ImportMode; variant: DeckVariant },
+  ) => {
+    const wroteCopies = collectionItems !== undefined && collectionItems.length > 0;
+    // Issue #336: this pair *is* a `collection_entries` write, whatever the box said.
+    const releasedCopies = clearing?.mode === "replace" && clearing.variant === "live";
+    const keys = wroteCopies || releasedCopies ? OWNED_WRITE_KEYS : [["decks"] as QueryKey];
     for (const queryKey of keys) void queryClient.invalidateQueries({ queryKey });
   };
 
@@ -300,8 +325,10 @@ export function useImport() {
       const outcome = await ipc.deckImportCommit(deckId, variant, mode, items);
       return { outcome, ...(await ownCopies(collectionItems, deckId)) };
     },
-    onSuccess: (_result, variables) => invalidate(variables.collectionItems),
-    onError: (_refusal, variables) => invalidate(variables.collectionItems),
+    // The whole variables object as the second argument, because this is the one arm whose
+    // `mode`/`variant` pair can itself be a collection write — see {@link invalidate}.
+    onSuccess: (_result, variables) => invalidate(variables.collectionItems, variables),
+    onError: (_refusal, variables) => invalidate(variables.collectionItems, variables),
   });
 
   /**
