@@ -304,6 +304,24 @@ const DECK_HEIGHT_FLOOR = "min-h-96";
 /** Stable identity for "no tag filter", so the memo below does not re-run on every render. */
 const NO_TAGS: readonly number[] = [];
 
+/**
+ * Which deck the editor has restored the remembered controls for, and under which readings of
+ * the theory switch — the marker the restore is honoured against. See it for what each half is
+ * holding off, and {@link NEVER} for the deck it has not reached yet.
+ *
+ * `switches` holds at most the two values a `boolean` has, which is the whole point of it being
+ * a list: a restore that may run once per *reading* can run twice per deck and then not again,
+ * however far the two cached copies of the deck row drift apart.
+ */
+interface Restored {
+  deckId: number;
+  switches: readonly boolean[];
+}
+
+/** A deck this editor has not restored anything for yet — the other deck's readings are not
+ *  this deck's, so switching decks reads this rather than {@link Restored.switches}. */
+const NEVER: readonly boolean[] = [];
+
 /** The same trick for the closed export dialog, which is mounted at every render and asked for
  *  a card list whether or not it is drawing one. */
 const NO_EXPORT_CARDS: readonly TransferCard[] = [];
@@ -966,9 +984,16 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const { landed, markLanded } = useRecentAdds();
 
   /**
-   * The deck-and-switch this editor has already put the remembered controls on screen for, so
-   * the restore below runs once per *question* rather than once per answer — see it for why
-   * that difference is the whole of a crash this file used to have.
+   * The deck this editor has already put the remembered controls on screen for, and **which
+   * readings of the theory switch it has done it under** — so the restore below runs once per
+   * *question* rather than once per answer. See it for why both halves are load-bearing: this
+   * file has crashed the window twice over that difference.
+   *
+   * A **list** of readings rather than the latest one, and that is the fix rather than a detail
+   * of it. There are only two readings a deck can have, so honouring each at most once bounds
+   * the restore at two runs per deck **by construction** — which is the property the marker
+   * needs and the one a "has it changed?" comparison cannot have, because the value it compares
+   * is one the restore itself can move. The restore below says the rest.
    *
    * State rather than a ref, and not a stylistic choice: this is React's own "adjusting state
    * when a prop changes" pattern, where the previous value is held in state precisely so the
@@ -977,7 +1002,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * here — a ref written in a render React then discards would leave the editor believing it
    * had honoured a deck it never drew.
    */
-  const [honouredView, setHonouredView] = useState<string | null>(null);
+  const [restored, setRestored] = useState<Restored | null>(null);
 
   const editorRef = useRef<HTMLElement>(null);
   /** The row the deck and the panel share, and the only width either of them can be judged
@@ -1483,9 +1508,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // prop, and the pattern this file already uses twice (the `targetCategoryId` clamp above and
   // the `variant` clamp below).
   //
-  // **Honoured once per deck and switch — never once per stored value, which is what this used
-  // to do and what crashed the app** (fixed 2026-08-16). `honouredView` was
-  // `${deckId}:${row.lastVariant}:${row.lastGroupBy}:${row.lastSortBy}`, so the marker held a
+  // **Honoured at most once per deck and reading of the switch — never once per stored value,
+  // which is what this used to do and what crashed the app** (fixed 2026-08-16). `honouredView`
+  // was `${deckId}:${row.lastVariant}:${row.lastGroupBy}:${row.lastSortBy}`, so the marker held a
   // value the restore's own `setVariant` could change: the variant decides which query's row
   // `row` is, each list caches its **own snapshot of the one deck row**, and two snapshots that
   // name each other's tab are a restore that moves the variant, which moves the snapshot, which
@@ -1499,14 +1524,35 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // **two** round trips — a press committing between them leaves one row on each side. That is a
   // fact about the cache; what this line owes is a marker the restore cannot move.
   //
-  // So the key is the two things that are genuinely a *new question about where the reader
+  // So the marker is the two things that are genuinely a *new question about where the reader
   // should be*, and neither of them is state this block writes: **the deck** being opened, and
   // **the switch** being turned on, which leaves `lastVariant` at `"theory"` because that write
   // moves the cards there. Everything else is the reader's own press, which set the state and
   // wrote the column in the same act — there is nothing to restore them to but where they are.
-  const remembered = row === null ? null : `${deckId}:${theoryEnabled}`;
-  if (row !== null && honouredView !== remembered) {
-    setHonouredView(remembered);
+  //
+  // **`theoryEnabled` is off the same moving snapshot, and keying on it as a *value* brought the
+  // crash straight back** — reported from the shipped app as "disabling the theory deck crashes
+  // the entire frontend", and fixed here rather than at the switch. `deck_update` invalidates
+  // `["decks"]`, so both lists re-read; until the second answer lands the query the reader is
+  // **not** looking at goes on serving the row it already had, and that row still says the deck
+  // keeps a plan. Off, on the plan's row, said "land on Actual"; on, on the deck's row, said
+  // "land on `lastVariant`" — and `lastVariant` is `"theory"` on precisely the decks the report
+  // is about, because a plan with cards in it is a plan its reader has been looking at. Each
+  // answer moved the variant, the variant moved the row, and the row asked for the move back.
+  // A deck whose plan is empty has `lastVariant: "live"`, so both readings ask for Actual and
+  // nothing oscillates: that is the whole of why an empty plan looked fine.
+  //
+  // So the marker is not "the last deck-and-switch seen" but **"every reading of the switch this
+  // deck has already been restored under"**, which is the same rule said in the one way that
+  // cannot cycle. A switch has two readings, so a deck is restored at most twice however hard
+  // the two cached rows disagree, and the clamp below is what settles where it lands. Nothing is
+  // given up for it: a switch turned on for the *first* time is a reading this deck has not seen,
+  // so the reader still follows their cards onto the plan, and a second time could not move any
+  // — `deck.rs` pours the live list into an **empty** theory list only, and a plan that is
+  // switched off is a plan no control in this window can empty.
+  const honoured = restored !== null && restored.deckId === deckId ? restored.switches : NEVER;
+  if (row !== null && !honoured.includes(theoryEnabled)) {
+    setRestored({ deckId, switches: [...honoured, theoryEnabled] });
     // Narrowed rather than cast: a word a future build stops offering must land the editor on
     // the default, not in a mode its own select cannot draw.
     const storedGroupBy = asGroupBy(row.lastGroupBy);
@@ -2740,9 +2786,19 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     queryFn: () => ipc.deckTheorySlots(deckId),
     enabled: theoryEnabled && variant === "live",
   });
+  // **`theoryEnabled` as well as the tab, for the reason the note above gives about `enabled`.**
+  // A disabled `useQuery` still serves what sits in the cache under its key, and this key is the
+  // deck's — so a reader who had the marks on screen and then switched the plan off in Deck
+  // settings kept every one of them: a mark about a list the deck no longer admits to having,
+  // beside a tab strip and a `Compare` that had both correctly gone. Same fix as the tab's, on
+  // the same line, because it is the same mistake one axis over — the gate belongs where the
+  // question is asked.
   const theoryMatches = useMemo(
-    () => (variant === "live" ? theoryMatchPlan(planned.data, deck.cards) : undefined),
-    [planned.data, variant, deck.cards],
+    () =>
+      theoryEnabled && variant === "live"
+        ? theoryMatchPlan(planned.data, deck.cards)
+        : undefined,
+    [planned.data, theoryEnabled, variant, deck.cards],
   );
 
   /**
