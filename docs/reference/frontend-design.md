@@ -3446,6 +3446,83 @@ one the plan expected.
   "nothing today". The first surface that narrows its press guard would acquire a keyboard drag it
   did not ask for, on whatever element it registered.
 
+#### A per-source `sensors` list did not merely replace the manager's — it erased it (issue #331)
+
+**The first bullet above was true and stopped one step short of the defect it was describing**, and
+that step took every drag in the app with it. Reported 2026-09-01 as "drag-and-drop is broken when
+dragging on a deck image", then as "images in general, not just deck images"; driven the same day
+in a `tauri dev` window at 1920×1080.
+
+`Draggable`'s registration effect resolves a source's sensors as
+`this.sensors?.map(descriptor) ?? [...manager.sensors]`, and **the two halves are not
+symmetrical**. The manager's list arrives as *instances*, so the effect calls
+`bind(source, undefined)` and `bind(source, options = this.options)`'s default parameter hands the
+source whatever that instance was configured with. A per-source list arrives as *descriptors*, and
+for one of those the effect calls `manager.registry.register(entry.plugin)` — **the constructor
+alone, the entry's own options dropped**. `PluginRegistry.register` then reads an omitted `options`
+as an instruction to write them:
+
+```js
+const existingInstance = this.instances.get(plugin);
+if (existingInstance) {
+  if (existingInstance.options !== options) existingInstance.options = options;   // ← undefined
+  return existingInstance;
+}
+```
+
+So the first source in the window to declare a `sensors` list sets the manager's one
+`PointerSensor` instance's `options` to `undefined` and nothing ever writes them back. Every source
+that registers **afterwards** binds with `options = this.options` — now nothing — and falls back to
+`PointerSensor.defaults.preventActivation`, which is the rule `dndManager.ts` exists to replace:
+
+```js
+const interactiveElement = getInteractiveElement(target);   // input, select, textarea, button, a[href], [contenteditable]
+if (interactiveElement === source.element) return false;
+return Boolean(interactiveElement);
+```
+
+**In this app a card's art is a `<button>` and the drag source is the tile around it**, so
+`interactiveElement !== source.element` and the press was refused. What the reader saw is a tile
+that could still be dragged by its caption and its padding and **not by its picture** — on the
+search wall, the collection, the wishlist and the deck gallery at once, until a reload.
+
+**The trigger is the category grip and nothing else.** `useCategoryDragSource` is the one source
+here that has to carry a list of its own (a declared handle switches dnd-kit's activation
+constraints off, so the 5px distance is put back by hand), so **opening a deck editor once** was
+the whole reproduction. Measured with `registry.sensors.register` wrapped in the running window:
+zero calls on the Search page, zero on the deck gallery, and **nine on opening a deck**, every one
+of them with `options === undefined`. The sensor's `options` read `["preventActivation"]` before
+and `undefined` after.
+
+**Four things about the failure are worth keeping, because each one is why it shipped.**
+
+- **Nothing throws and nothing logs.** A `window.onerror`/`unhandledrejection`/`console.error`
+  capture over the whole gesture came back empty. `handlePointerDown` returns early and the press
+  is simply not a drag.
+- **The manager looks healthy from every angle a reader would check.**
+  `dragOperation.status.idle` is `true`, the registry holds the right 24 draggables and 6
+  droppables, the one sensor's `disabled` is `false`, and `handlePointerDown` is reached with
+  every guard passing (`isPrimary`, `button === 0`, not captured, source not disabled). The tell is
+  two hops in: `handlePointerMove` is **never called**, because `preventActivation` returns before
+  the sensor binds its document listeners — 15 `pointermove` events reach `document` in both
+  phases and the sensor sees none of them.
+- **The deck editor's own card drags went on working**, which is what made it look like an image
+  bug rather than a global one: a deck card's draggable element **is** the button, so
+  `interactiveElement === source.element` and the library's default excuses it. Only the surfaces
+  whose source is a wrapper *around* a button broke.
+- **jsdom reproduces it exactly**, once the two sources are registered in the shipped order — which
+  is what `dndManager.test.ts`'s "keeps its own press rule when a source registers sensors of its
+  own" does. Nothing in the suite could see it before, because no test registered a
+  handle-bearing source and a tile-shaped one against the same singleton manager.
+
+**The fix is a fence at `dndManager.registry.sensors.register`**: an omitted `options` keeps what
+the instance has instead of clearing it, which is what the library's own doc comment on that method
+already says it does ("its options will be updated"). A caller that passes options still replaces
+them, and the per-source list goes on binding with its own, because the effect passes those to
+`bind` directly and never through the registry. It is patched there rather than at the call site
+because the call site is using the documented API correctly — and a rule saying "never declare
+sensors" would be a landmine with no fence.
+
 #### What a screen reader is told: nothing
 
 There is no live region, no instructions element and no `aria-*` on a drag source at rest. The app

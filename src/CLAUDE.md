@@ -42,6 +42,14 @@ Every one of these has its measurement and its story in
   gallery's cover and the card pane's printing rows — so a deck tile dragged by its name and not
   by its picture, which is what a reader reports as "drag and drop is broken". It is written
   before the spread, so a frame that really is the drag source can still say so.
+  **The same sentence has had a second, unrelated cause since the library changed, so check the
+  other one before touching this attribute** (issue #331): dnd-kit's `Draggable` re-registers a
+  per-source sensor **without its options**, and `PluginRegistry.register` reads that as an
+  instruction to *clear* the shared instance's — so one source declaring `sensors` of its own
+  erased `dndManager`'s app-wide `preventActivation`, every later source fell back to the
+  library's, and that one refuses any press landing inside a button. A card's art **is** a button,
+  so the symptom was identical and the attribute was innocent. `dndManager.ts` carries the fence
+  and [frontend-design.md](../docs/reference/frontend-design.md) the whole reading.
 - **A card frame is `components/CardArt`** — the 5:7 box, `CardImage`, `useImageRetry`, the
   no-art fallback and the foil marking, in one place. **Every wall of card faces draws it**: the
   search's, the collection's, the deck editor's docked search column and — since 2026-08-16 —

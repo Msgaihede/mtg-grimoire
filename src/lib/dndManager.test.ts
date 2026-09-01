@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
+import { PointerActivationConstraints, PointerSensor } from "@dnd-kit/dom";
 import css from "@/index.css?raw";
 import { folderDraggable } from "@/lib/folderDrag";
 import { dndManager, DRAGGING_ATTRIBUTE } from "@/lib/dndManager";
+import { dndDraggable } from "@/lib/dndTarget";
 import { boxed, startPointerDrag } from "@/test-drag";
 /**
  * The manifest as text, read through Vite rather than through `node:fs` — this project has
@@ -359,6 +361,65 @@ describe("the manager's sensors", () => {
     document.body.removeEventListener("keydown", listener);
     stop();
     element.remove();
+  });
+
+  /**
+   * **Issue #331 — "drag and drop is broken when dragging on an image", and it was the whole app.**
+   *
+   * `Draggable`'s effect resolves a source's sensors as
+   * `this.sensors?.map(descriptor) ?? [...manager.sensors]`, and for a **descriptor** it calls
+   * `manager.registry.register(entry.plugin)` — the plugin alone, with the entry's options
+   * dropped. `PluginRegistry.register` reads an omitted `options` as an instruction to *write*
+   * them: `if (existing.options !== options) existing.options = options`. So the first source in
+   * the window that declares a `sensors` list of its own sets this manager's one `PointerSensor`
+   * instance's options to `undefined`, permanently — and every source that registers afterwards
+   * binds with `options = this.options`, which is now nothing, and falls back to the library's
+   * own `preventActivation`. That default refuses any press whose target sits inside an
+   * interactive element, and in this app **a card's art is a button**: a tile could still be
+   * dragged by its caption and not by its picture, on every card surface at once, until a reload.
+   *
+   * The one source that declares its own sensors is the category grip
+   * (`features/decks/categoryDrag.ts`), so opening a deck editor once was enough to break the
+   * search wall, the collection, the wishlist and the deck gallery behind it.
+   *
+   * This is the gesture rather than the shape of `options`: press a tile **on its art** after a
+   * handle-bearing source has registered, and the drag has to start.
+   */
+  it("keeps its own press rule when a source registers sensors of its own", async () => {
+    // The category grip: a handle-bearing source, which is the only kind in this app that has to
+    // carry a `sensors` list — a declared handle switches dnd-kit's activation constraints off,
+    // so the 5px distance has to be put back by hand.
+    const heading = boxed(document.createElement("div"), 100);
+    const grip = boxed(document.createElement("button"), 100);
+    heading.append(grip);
+    document.body.append(heading);
+    const stopGrip = dndDraggable({
+      element: heading,
+      handle: grip,
+      data: () => ({ categoryId: 1 }),
+      sensors: [
+        PointerSensor.configure({
+          activationConstraints: [new PointerActivationConstraints.Distance({ value: 5 })],
+        }),
+      ],
+    });
+
+    // A card tile, registered after it — the search wall a reader comes back to. The source is
+    // the tile and the art inside it is a `<button>`, which is this app's shape everywhere.
+    const tile = boxed(document.createElement("div"), 0);
+    const art = boxed(document.createElement("button"), 0);
+    tile.append(art);
+    document.body.append(tile);
+    const stopTile = dndDraggable({ element: tile, data: () => ({ cardId: "sol-ring" }) });
+
+    const held = await startPointerDrag(tile, { pressOn: art });
+    expect(held.started).toBe(true);
+
+    await held.cancel();
+    stopTile();
+    stopGrip();
+    tile.remove();
+    heading.remove();
   });
 });
 
