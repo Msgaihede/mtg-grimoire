@@ -1,0 +1,75 @@
+[package]
+name = "card-scanner"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "Identify a physical Magic card from a camera frame, locally."
+publish = false
+
+# Deliberately NOT a member of a cargo workspace. `src-tauri/Cargo.toml` is a standalone
+# package today and converting it to a workspace root moves `target/`, which is the last
+# thing worth disturbing for a layout preference. When integration lands, `src-tauri` takes
+# this crate as a plain `path` dependency — that works fine across two standalone packages.
+
+[lib]
+name = "card_scanner"
+path = "src/lib.rs"
+
+[features]
+default = []
+# The developer tools. Neither ever enters the app's dependency graph.
+cli = ["dep:clap", "dep:tiny_http"]
+builder = ["dep:clap", "dep:rusqlite", "dep:ureq", "dep:rayon"]
+
+[dependencies]
+# `webp` is not optional here: every reference image the builder hashes comes from
+# cards.scryfall.io, which serves WebP exclusively since Scryfall retired the JPG/PNG
+# family. `jpeg`/`png` are what a sample scan or a camera frame arrives as.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
+# Canny, Otsu, contours, and — the one that matters — `Projection::from_control_points`,
+# which is the entire rectification homography in a single call.
+imageproc = { version = "0.27", default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+clap = { version = "4", features = ["derive"], optional = true }
+# 0.12.0, last published 2022-10-06. Stale, and taken anyway: it is pure Rust, it gets
+# HTTP/1.1 keep-alive and Content-Length right — which is what a 30 fps stream of POSTed
+# frames actually needs — and it is reachable only under `--features cli`, so a stale
+# dev-tool dependency can never reach a shipped binary. Hand-rolling this over TcpListener
+# was the alternative and it is more trap than it looks.
+tiny_http = { version = "0.12", optional = true }
+
+# Builder only, and desktop only. `ureq` rather than `reqwest`: blocking calls with a thread
+# pool is the whole concurrency model a batch fetcher needs, and it keeps tokio out of this
+# crate entirely.
+rusqlite = { version = "0.40", features = ["bundled"], optional = true }
+ureq = { version = "3", optional = true }
+rayon = { version = "1", optional = true }
+
+[[bin]]
+name = "scan"
+path = "src/bin/scan.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "serve"
+path = "src/bin/serve.rs"
+required-features = ["cli"]
+
+[[bin]]
+name = "build-hashes"
+path = "src/bin/build_hashes.rs"
+required-features = ["builder"]
+
+[profile.release]
+opt-level = 3
+
+# Detection on a debug build is unusably slow — a Canny pass over a 12 MP photo is seconds
+# rather than milliseconds. These two make `cargo test` and `cargo run` bearable without
+# giving up debug symbols in our own code.
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.imageproc]
+opt-level = 3
