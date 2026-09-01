@@ -30,6 +30,29 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.19.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.18.0...v0.19.0) (2026-09-01)
+
+
+### Features
+
+* add an "up one level" tile to all three folder walls ([9553fe1](https://github.com/Msgaihede/mtg-grimoire/commit/9553fe1625e41a289e9e6af62329555e0e8188db))
+* add an "up one level" tile to all three folder walls ([86f4805](https://github.com/Msgaihede/mtg-grimoire/commit/86f4805db7c508bb31661b2b80d6dec62d57f5b4)), closes [#283](https://github.com/Msgaihede/mtg-grimoire/issues/283)
+* add quantity steppers to the collection and wishlist card views ([fce592e](https://github.com/Msgaihede/mtg-grimoire/commit/fce592e5939054a6c496b07cb1ef1aa31e58cfa1))
+* add quantity steppers to the collection and wishlist card views ([a137ced](https://github.com/Msgaihede/mtg-grimoire/commit/a137cedc716dcce15423328d5c8a0aee2790ad22)), closes [#284](https://github.com/Msgaihede/mtg-grimoire/issues/284)
+* **decks:** clear a whole live or theory list from Deck settings ([20b744d](https://github.com/Msgaihede/mtg-grimoire/commit/20b744d1b36f60e1a881ecf1e887a18839ad8088))
+* **decks:** clear a whole live or theory list from Deck settings ([55520cd](https://github.com/Msgaihede/mtg-grimoire/commit/55520cd9854b4a1518024b51cf1159cdf9f0d844)), closes [#281](https://github.com/Msgaihede/mtg-grimoire/issues/281)
+* **decks:** new decks default to the folder the reader is standing in ([e245df9](https://github.com/Msgaihede/mtg-grimoire/commit/e245df93ae227a9a0626ae4f8867b8a2090179af))
+* **decks:** new decks default to the folder the reader is standing in ([aa40942](https://github.com/Msgaihede/mtg-grimoire/commit/aa40942b9e47f30e46261a9e9a78ee8817bd69b8)), closes [#332](https://github.com/Msgaihede/mtg-grimoire/issues/332)
+
+
+### Bug Fixes
+
+* **collection:** name the printing in a wall stepper, not just the card ([4aefbc1](https://github.com/Msgaihede/mtg-grimoire/commit/4aefbc13182909cbb1f1c040ca12e831334f9bd8))
+* **decks:** switching the theory list off no longer blanks the window ([d14af80](https://github.com/Msgaihede/mtg-grimoire/commit/d14af80b1805188ff8722e2d3bb16a8bb231b199))
+* **decks:** withdraw the theory clear question when the plan goes ([5c5d800](https://github.com/Msgaihede/mtg-grimoire/commit/5c5d800ae9d4c96d732f5205cafbd71a8c3b99cd))
+* **dnd:** a source with its own sensors no longer erases the manager's ([0ed74b4](https://github.com/Msgaihede/mtg-grimoire/commit/0ed74b47c5643f43f0c20c530cc550717ee91550))
+* **dnd:** a source with its own sensors no longer erases the manager's ([78b1ded](https://github.com/Msgaihede/mtg-grimoire/commit/78b1ded3ca3ac4ec9ad0c1f6f47d1c1880bab991)), closes [#331](https://github.com/Msgaihede/mtg-grimoire/issues/331)
+
 ## [0.18.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.17.0...v0.18.0) (2026-09-01)
 
 
