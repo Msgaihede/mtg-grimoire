@@ -1027,9 +1027,12 @@ fn removed_group(conn: &Connection) -> Result<Option<i64>, String> {
 
 /// What [`release_group_copies`] did.
 ///
-/// Two facts and not one, because its two callers want different halves.
-/// [`crate::deck_meta::delete_category`] and [`clear_category`] are counting copies for a
-/// sentence and read `moved`; [`crate::collection_alloc::deck_to_collection`] answers a
+/// Two facts and not one, because its two callers want different halves — and only one of them
+/// wants either. [`release_live_copies`], which every bulk press goes through, is emptying a
+/// scope rather than reporting on one and discards the whole struct: what those presses tell the
+/// reader is the count of `deck_cards` they took, never the copies that moved, and the two
+/// differ wherever the group holds fewer than the list claims.
+/// [`crate::collection_alloc::deck_to_collection`] is the caller that reads it, and answers a
 /// [`crate::collection_alloc::MoveOutcome`] whose `entry_id` is where the copies **landed**, so
 /// the reader can be sent to look at them.
 ///
@@ -1049,18 +1052,22 @@ pub(crate) struct Released {
 /// **This is the crate's one copy of that walk, and there were two.**
 /// [`crate::collection_alloc::deck_to_collection`] spelled the same backing query and the same
 /// greedy loop inline for the single-card cut, and this one was written for the presses that
-/// take a whole pile out at once — `deck_meta::delete_category`'s cascade and
-/// [`clear_category`], where the `deck_cards` rows are going by a route of their own and only
-/// the copies are left to place. Two implementations of one rule disagree the first time either
-/// changes, and this rule decides where a reader's cards are: the cut now calls this and adds
-/// the deck-card write and the history row, which is the whole of what it ever had extra.
+/// take a whole pile out at once — where the `deck_cards` rows are going by a route of their own
+/// and only the copies are left to place. Two implementations of one rule disagree the first
+/// time either changes, and this rule decides where a reader's cards are: the cut now calls this
+/// and adds the deck-card write and the history row, which is the whole of what it ever had
+/// extra. **The bulk presses reach it through [`release_live_copies`]**, which is the same
+/// argument one level up — the *loop* over the rows had grown three copies of its own.
 /// Called inside the caller's transaction, like [`crate::deck_audit::record`] and for its
 /// reason: a rolled-back clear must not have moved a card.
 ///
 /// **The live list only, and the caller is what enforces it.** A theory row is a plan and a plan
 /// holds no cards ([`crate::collection_alloc::THEORY_HOLDS_NOTHING`]), so nothing in any folder
-/// backs one; this function is never handed one and does not test for it, because the call sites
-/// already know which list they are emptying.
+/// backs one; this function is never handed one and does not test for it. There are two callers
+/// to enforce it and each already knows which list it is holding:
+/// [`crate::collection_alloc::deck_to_collection`] refuses a theory row outright, and
+/// [`release_live_copies`] — the bulk form, and now the only route the presses that empty a
+/// whole pile or a whole list take — returns before it reads anything.
 ///
 /// # It matches on the **oracle card**, not on the printing, and that is the fix for a stranding
 ///
@@ -1164,6 +1171,105 @@ pub(crate) fn release_group_copies(
         moved += take;
     }
     Ok(Released { moved, landed })
+}
+
+/// Give back every copy this deck's group holds behind a whole set of `live` rows — one pile of
+/// it, or the whole list.
+///
+/// **This is the bulk half of [`release_group_copies`], and it was written three times before it
+/// was written once.** [`clear_category`] empties one pile, [`clear_variant`] empties a list,
+/// [`crate::deck_meta::delete_category`]'s cascade arm takes a pile away with its category, and
+/// each of them spelled out the same six lines: read `card_id`, `finish` and `quantity` from the
+/// rows about to go, then call [`release_group_copies`] once per row. The fourth site is
+/// [`crate::import::commit_import`]'s `replace` branch, and it is the one that *forgot* —
+/// [issue #336](https://github.com/Msgaihede/mtg-grimoire/issues/336): the identical DELETE with
+/// no release beside it, so importing over a live list left every copy the reader owns filed
+/// under a deck with no row for it. A rule written down four times is a rule three of the copies
+/// will not have, so the loop lives here now and the fourth site calls it like the other three.
+///
+/// **The `live` fence moved in here with it.** Every call site used to ask `variant == LIVE`
+/// itself, which is a question each of them could get right and a fifth could forget; asking it
+/// once, at the one place that would do the moving, is what makes forgetting it impossible. A
+/// plan holds no cards ([`crate::collection_alloc::THEORY_HOLDS_NOTHING`]), so nothing in any
+/// folder backs a `theory` row — which is why `theory` is **a loop that never runs** rather than
+/// a refusal. The refusal is right one card at a time, where a caller asked for a move and must
+/// be told it cannot have one; here nothing was asked for, and there is simply nothing to give
+/// back.
+///
+/// **`category_id` of `None` is the whole variant and `Some(id)` is one pile**, and that single
+/// argument is the entire difference between the pile clear and the list clear. It is why one
+/// helper covers both: the scope is the caller's business and the release is not.
+///
+/// **Read before the caller's DELETE and inside the caller's transaction**, which is
+/// [`crate::deck_audit::record`]'s contract and holds for its reason twice over. Before, because
+/// the `deck_cards` rows *are* the statement of which printings and how many — a release run
+/// against an already-emptied pile reads nothing and moves nothing, and fails silently while
+/// doing it. Inside, because a clear that fails half way must have moved no card: the list and
+/// the custody go together or neither goes.
+///
+/// **`ORDER BY id`, oldest row first**, so a printing filed in two categories of one list gives
+/// its copies back in a defined order — [`release_group_copies`] clamps each row's claim at what
+/// the group actually holds, so which row is served first decides which one comes up short when
+/// the group holds fewer copies than the list claims.
+///
+/// **`delete_category`'s call carries a `deck_id` its own query did not**, and that is a
+/// redundancy rather than a narrowing: it reads the category out of `deck_categories` two dozen
+/// lines above precisely to learn which deck it belongs to, so the extra predicate can only ever
+/// be true for the rows the `category_id` alone already selected.
+///
+/// # A release writes `collection_entries` and its callers still take plain `with_write`
+///
+/// Every command wrapper in this crate carries a line saying which write lock it took and why,
+/// and the ones that reach this function used to say "a deck write moves nothing the reader
+/// owns" — a sentence that reads false the moment you know this function exists. The *lock* they
+/// chose is still right; only the sentence was wrong, and this is the argument, written once
+/// here rather than five times over there.
+///
+/// [`crate::collection_source::with_write_owned`] is [`crate::sync::with_write`] plus
+/// [`crate::index::lifecycle::invalidate_owned`], and the **only** thing that rebuild answers is
+/// the facet index's `owned` dimension. That dimension is
+/// [`crate::collection_source::owned_rowids`] —
+/// `SELECT DISTINCT c.rowid FROM collection_entries e JOIN cards c ON c.id = e.card_id` — which
+/// names no folder anywhere and cannot: it is the set of *cards* the reader owns a copy of,
+/// somewhere. A release re-files rows **between folders**, and where the destination already
+/// holds the grain it folds two rows into one; but a fold always leaves a row naming that
+/// `card_id` in the destination, so the set that query answers is the set it answered before.
+/// Nothing enters or leaves ownership, and an `owned` rebuild would read the whole collection to
+/// arrive at the answer it already had.
+///
+/// `collection_folders::collection_folder_delete` reaches this same conclusion from a
+/// different write, in the same words, and is the precedent rather than a coincidence: a command
+/// that moves rows between folders and folds some of them away, taking plain `with_write`, is a
+/// pattern this crate already has. [`crate::collection_alloc::collection_to_deck`] and
+/// [`crate::collection_alloc::deck_to_collection`] remain the pair the wrappers point at as
+/// taking `with_write_owned` — their own doc says why — and nothing here changes that.
+pub(crate) fn release_live_copies(
+    tx: &Connection,
+    deck_id: i64,
+    variant: &str,
+    category_id: Option<i64>,
+) -> Result<(), String> {
+    if variant != LIVE {
+        return Ok(());
+    }
+    let held: Vec<(String, Option<String>, i64)> = tx
+        .prepare(
+            "SELECT card_id, finish, quantity FROM deck_cards
+              WHERE deck_id = ?1 AND variant = ?2
+                AND (?3 IS NULL OR category_id = ?3)
+              ORDER BY id",
+        )
+        .and_then(|mut s| {
+            s.query_map(params![deck_id, variant, category_id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })?
+            .collect()
+        })
+        .map_err(|e| e.to_string())?;
+    for (card_id, finish, quantity) in held {
+        release_group_copies(tx, deck_id, &card_id, finish.as_deref(), quantity)?;
+    }
+    Ok(())
 }
 
 /// Give a deck the group that holds its copies, named after it.
@@ -2617,7 +2723,7 @@ pub fn set_card_quantity(
 /// A `deck_cards` row is an intention; a row in the deck's **group** is a card the reader
 /// physically owns, and clearing a pile does not stop them owning it. So every copy the group
 /// holds for a `live` row of this pile is filed into `Recently removed` first, through
-/// [`release_group_copies`] — the same act [`crate::collection_alloc::deck_to_collection`]
+/// [`release_live_copies`] — the same act [`crate::collection_alloc::deck_to_collection`]
 /// performs one card at a time, in bulk. Left undone, the copies would stay filed under a deck
 /// that has never heard of them: invisible, and unavailable to every other deck for ever.
 ///
@@ -2666,27 +2772,10 @@ pub fn clear_category(
     // rebuild the rows; this is the only record of what was in the pile.
     let cells = vec![crate::deck_undo::Cell::pile(variant, category_id)];
     let before = crate::deck_undo::read_cells(&tx, deck_id, &cells)?;
-    // Before the DELETE, because the rows are what say which printings and how many — and in
-    // this transaction, so a clear that fails half way has moved nothing. `theory` skips it
-    // for the reason on this function: a plan holds no cards.
-    if variant == LIVE {
-        let held: Vec<(String, Option<String>, i64)> = tx
-            .prepare(
-                "SELECT card_id, finish, quantity FROM deck_cards
-                  WHERE deck_id = ?1 AND category_id = ?2 AND variant = ?3
-                  ORDER BY id",
-            )
-            .and_then(|mut s| {
-                s.query_map(params![deck_id, category_id, variant], |r| {
-                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-                })?
-                .collect()
-            })
-            .map_err(|e| e.to_string())?;
-        for (card_id, finish, quantity) in held {
-            release_group_copies(&tx, deck_id, &card_id, finish.as_deref(), quantity)?;
-        }
-    }
+    // **This pile and no other**, which is the whole of what this site adds: `Some(category_id)`
+    // is the scope the DELETE below takes, and `release_live_copies` owns everything else about
+    // the release — the `live` fence included, so `theory` is a loop that never runs here.
+    release_live_copies(&tx, deck_id, variant, Some(category_id))?;
     tx.execute(
         "DELETE FROM deck_cards WHERE deck_id = ?1 AND category_id = ?2 AND variant = ?3",
         params![deck_id, category_id, variant],
@@ -2742,7 +2831,7 @@ pub fn clear_category(
 /// **The live release is what keeps a cleared deck's cards findable.** A `deck_cards` row is an
 /// intention; a row in the deck's **group** is a card the reader physically owns, and emptying
 /// the list does not stop them owning it. So every copy the group holds behind a `live` row is
-/// filed into `Recently removed` first, through [`release_group_copies`] — the same act
+/// filed into `Recently removed` first, through [`release_live_copies`] — the same act
 /// [`crate::collection_alloc::deck_to_collection`] performs one card at a time. Left undone,
 /// clearing a deck would leave *every* copy of it filed under a deck that has never heard of
 /// them: invisible on the Collection page, unavailable to every other deck, and with nothing
@@ -2805,26 +2894,10 @@ pub fn clear_variant(conn: &Connection, deck_id: i64, variant: &str) -> Result<i
         .map(|category_id| crate::deck_undo::Cell::pile(variant, category_id))
         .collect();
     let before = crate::deck_undo::read_cells(&tx, deck_id, &cells)?;
-    // Before the DELETE, because the rows are what say which printings and how many — and in
-    // this transaction, so a clear that fails half way has moved nothing.
-    if variant == LIVE {
-        let held: Vec<(String, Option<String>, i64)> = tx
-            .prepare(
-                "SELECT card_id, finish, quantity FROM deck_cards
-                  WHERE deck_id = ?1 AND variant = ?2
-                  ORDER BY id",
-            )
-            .and_then(|mut s| {
-                s.query_map(params![deck_id, variant], |r| {
-                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-                })?
-                .collect()
-            })
-            .map_err(|e| e.to_string())?;
-        for (card_id, finish, quantity) in held {
-            release_group_copies(&tx, deck_id, &card_id, finish.as_deref(), quantity)?;
-        }
-    }
+    // **The whole list**, which `None` says — [`clear_category`]'s call with the one argument
+    // that differs between the two scopes, exactly as the DELETE below is its DELETE with
+    // `category_id` dropped from the `WHERE`.
+    release_live_copies(&tx, deck_id, variant, None)?;
     tx.execute(
         "DELETE FROM deck_cards WHERE deck_id = ?1 AND variant = ?2",
         params![deck_id, variant],
@@ -4128,7 +4201,10 @@ pub async fn deck_update(
 pub async fn deck_delete(state: tauri::State<'_, Arc<AppState>>, id: i64) -> Result<(), String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        // Plain `with_write`: a deck write moves nothing the reader owns. PR 3's
+        // **Plain `with_write` even though this files the deck's whole group into
+        // `Recently removed`** — [`deck_clear`]'s note, and [`release_live_copies`] carries the
+        // argument: every row keeps its `card_id` and only its folder changes, and the facet
+        // index's `owned` dimension names no folder.
         // `collection_to_deck`/`deck_to_collection` DO move ownership and must use
         // `collection_source::with_write_owned` instead.
         with_write(&state, |c| delete_deck(c, id))
@@ -4399,7 +4475,11 @@ pub async fn deck_category_clear(
 ) -> Result<i64, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        // Plain `with_write`: a deck write moves nothing the reader owns. PR 3's
+        // **Plain `with_write` even though a `live` clear writes `collection_entries`.** The
+        // release moves rows *between folders* and folds some of them away, and
+        // `with_write_owned`'s whole extra step is the facet index's folder-blind `owned`
+        // dimension — so no card enters or leaves the reader's ownership here. The argument in
+        // full is on [`release_live_copies`].
         // `collection_to_deck`/`deck_to_collection` DO move ownership and must use
         // `collection_source::with_write_owned` instead.
         with_write(&state, |c| {
@@ -4421,7 +4501,10 @@ pub async fn deck_clear(
 ) -> Result<i64, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        // Plain `with_write`: a deck write moves nothing the reader owns. PR 3's
+        // **Plain `with_write` even though a `live` clear writes `collection_entries`** —
+        // [`deck_category_clear`]'s note at this scope, and [`release_live_copies`] carries the
+        // argument: the release re-files rows between folders, and the facet index's `owned`
+        // dimension names no folder.
         // `collection_to_deck`/`deck_to_collection` DO move ownership and must use
         // `collection_source::with_write_owned` instead.
         with_write(&state, |c| clear_variant(c, deck_id, &variant))

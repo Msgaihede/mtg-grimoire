@@ -621,21 +621,27 @@ rather than a single-folder read, because the DDL permits a folder nested under 
 `create_folder` and `move_folder` both refuse to make one — the day a command permits it, the
 alternative is not a wrong number but a sub-tree's worth of cards scattered to the root.
 
-### Deleting or clearing a category sends its cards there too
+### Deleting a category, emptying a list, or importing over one sends its cards there too
 
-**The same act in bulk.** `deck_meta::delete_category` (in its cascade arm) and
-`deck::clear_category` each take a pile of `deck_cards` rows out at once, and every `live` row in
-that pile may have copies sitting in the deck's group behind it. Left where they were, those copies
-would stay filed under a deck that has never heard of them — invisible on the collection page under
-a folder for a pile that is gone, and unavailable to every other deck for ever. That is the
-feature's central invariant broken quietly: **a copy in a deck's group is backed by a deck card in
-that deck.**
+**The same act in bulk, and there are four of them.** `deck_meta::delete_category` (in its cascade
+arm), `deck::clear_category`, `deck::clear_variant` and `import::commit_import`'s `replace` arm each
+take a whole set of `deck_cards` rows out at once, and every `live` row in that set may have copies
+sitting in the deck's group behind it. Left where they were, those copies would stay filed under a
+deck that has never heard of them — invisible on the collection page under a folder for a pile
+that is gone, and unavailable to every other deck for ever. That is the feature's central invariant
+broken quietly: **a copy in a deck's group is backed by a deck card in that deck.**
 
-So both writes release the copies first, in their own transaction and before anything is deleted,
-through `deck::release_group_copies`. **That function is the crate's one copy of the walk and
-`deck_to_collection` calls it too** — the single-card cut spelled the same backing query and the
-same greedy loop inline until this round, and what the cut has that this does not is only the
-`deck_cards` write, the history row and the `MoveOutcome` it answers. Four rules the one copy
+So all four release the copies first, in the caller's own transaction and before anything is
+deleted, through **`deck::release_live_copies`** — one loop over `deck::release_group_copies` that
+reads the doomed rows `ORDER BY id` before the `DELETE` that dooms them, taking `category_id` as an
+`Option`: `Some(id)` is one pile and `None` the whole variant. **The helper is where the `live`
+question is asked**, rather than at each of the four call sites, and it exists because it was not:
+the import's `replace` arm ran `clear_variant`'s exact `DELETE` with no release beside it until
+2026-09-01 (issue #336), so the same delete left a reader's copies in two different places depending
+on which press made it. **`release_group_copies` under it is still the crate's one copy of the
+walk and `deck_to_collection` calls it too** — the single-card cut spelled the same backing query
+and the same greedy loop inline until this round, and what the cut has that this does not is only
+the `deck_cards` write, the history row and the `MoveOutcome` it answers. Four rules the one copy
 holds: the deck's group is looked up and an absent one means "holds nothing" rather than a
 refusal; rows are taken **oldest first**; the take is **clamped** at what the group actually
 holds, because a list and a group can legitimately disagree; and `Recently removed` is resolved
@@ -658,7 +664,10 @@ that is itself an orphan degrades to exactly that arm.
 Three scopes are decisions rather than details:
 
 - **`live` only.** A theory row is a plan and no folder backs one — `THEORY_HOLDS_NOTHING` is a
-  refusal one card at a time and simply an empty loop here.
+  refusal one card at a time and simply an empty loop here. **Since 2026-09-01 none of the four
+  asks that question itself**: `release_live_copies` takes the variant and does nothing unless it
+  is `live`, so the fence cannot be dropped by a fifth site the way the release itself was dropped
+  by the fourth.
 - **`delete_category`'s move arm releases nothing.** Those cards are still in this deck, one pile
   over, so the group is still exactly where their copies belong. It is fenced on
   `move_to_category_id.is_none()` and the release runs *before* the move's own `DELETE`, rather
@@ -674,12 +683,12 @@ undone delete therefore reads with its owned counts at zero until the reader fil
 Teaching the journal about collection rows would be a change to what a step *is* — the argument in
 full is under "The history a cut writes, and the undo it deliberately does not" above.
 
-**These two do file a step where `deck_to_collection` does not**, and the difference is what the
-`deck_cards` half is worth on its own. A cleared or deleted pile is many rows in an order and a
-filing nothing else records, so the step is the only way back to it; one cut card is a single
-stepper press away from being put back by hand, and the copies are one drag from being back where
-they were. Neither restores custody, so both leave the same honest, representable state: a deck
-that wants cards it does not currently hold.
+**All four of these do file a step where `deck_to_collection` does not**, and the difference is what
+the `deck_cards` half is worth on its own. A cleared or deleted pile — or a list an import has
+replaced — is many rows in an order and a filing nothing else records, so the step is the only way
+back to it; one cut card is a single stepper press away from being put back by hand, and the
+copies are one drag from being back where they were. Neither restores custody, so both leave the
+same honest, representable state: a deck that wants cards it does not currently hold.
 
 The split itself is `collection_folders::take_copies`, which is where a partial row move lives:
 `refile_entry` moves a row **whole**, and a pile that claims 3 of the 4 copies the group holds for
@@ -1491,7 +1500,7 @@ React never sees** — go through
 | `src-tauri/src/collection_folders.rs` | The seven commands, `set_entry_folder` and its two fences, `refile_entry`, `take_copies` (the split), `merge_entry`, `folder_summary`, `FOLDER_NOT_YOURS`, `ENTRY_IN_A_DECK` |
 | `src-tauri/src/collection_alloc.rs` | `collection_to_deck` and `deck_to_collection` — the only pair that moves a row across the deck boundary — `take_from_deck_list`, `MoveOutcome`, the cut's history row and the argument for its missing undo step, and the seven refusal sentences |
 | `src-tauri/src/collection.rs` | The grain's other ten terms, `set_quantity`'s zero-delete, `update_entry`'s merge, `fold_entry`, `EntryChange`, `ENTRY_FINISH`, `Allocation` |
-| `src-tauri/src/deck.rs` | `owned_by_oracle` and `attribute_owned` — owned/missing as a sum over the group — `delete_deck`, which re-files into `Recently removed`, and `release_group_copies`, the crate's one walk over a group's rows — oracle-matched, exact printing first — which `clear_category`, `deck_meta::delete_category` and `deck_to_collection` all share |
+| `src-tauri/src/deck.rs` | `owned_by_oracle` and `attribute_owned` — owned/missing as a sum over the group — `delete_deck`, which re-files into `Recently removed`, and `release_group_copies`, the crate's one walk over a group's rows — oracle-matched, exact printing first — which `deck_to_collection` calls for its one row and `release_live_copies` loops for the four bulk sites (`clear_category`, `clear_variant`, `deck_meta::delete_category`'s cascade arm, `import::commit_import`'s `replace` arm), carrying the `live` fence for all of them |
 | `src-tauri/src/reset.rs` | `clear_collection` — entries, then folders |
 | `src-tauri/src/reconcile.rs` | `fold_into_existing`, which calls `fold_entry` as `merge_entry` does, and `collision_target`, the crate's other eleven-term probe |
 | `src/lib/folderTree.ts` | `buildFolderTree` and friends, shared with the deck gallery and the wishlist, **unchanged** |

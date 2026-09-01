@@ -702,6 +702,14 @@ export function ProblemList({ caption, lines }: { caption: string; lines: string
  * clears first, and the clearing one has to say what it would clear before it is chosen. It
  * clears **one variant** — the reason `variant` is in the deck-card grain at all — so the
  * sentence names the list on screen rather than "the deck".
+ *
+ * **The group says two things, and the second is under the radios rather than in one of them.**
+ * A radio's label says what the mode *does* — how many cards it would take out of which list —
+ * and the note below says where that cardboard then **goes**, which is a fact about the reader's
+ * collection rather than about the deck. It is a fourth site for a sentence three other presses
+ * already make (`ClearDeck`, `ClearCategory`, `CategoriesDialog`'s `go with it`), because since
+ * issue #336 a live `replace` releases the copies exactly as those do. See the note's own
+ * comment for why it is drawn behind three conditions and none of them can be dropped.
  */
 function Mode({
   value,
@@ -744,6 +752,31 @@ function Mode({
           ? `Replace — there is nothing in ${where} to remove`
           : `Replace — removes the ${plural(cardsInVariant, "card")} in ${where} first`}
       </label>
+      {/* Where the cardboard goes, which is not "nowhere" — `ClearDeck`'s own heading, and the
+          same sentence word for word, because since issue #336 this press makes the same
+          movement: a `replace` on the live list deletes the variant's `deck_cards` rows and
+          `release_live_copies` files the copies behind them into `Recently removed`. A reader
+          who has met that promise behind Clear live list… must meet it here rather than being
+          left to discover that an import moved their collection.
+
+          **Under the radios and not appended to the Replace label**, for two reasons that
+          agree. A radio's accessible name is what it *does*; growing a second sentence onto it
+          makes the control announce a paragraph and makes every query for it a prefix match.
+          And this is a consequence of the mode being chosen rather than a description of the
+          option, so it belongs after the choice — inside the fieldset, because it is still part
+          of what "what this does to Actual" answers.
+
+          **Three conditions, and each one is a promise the app could not keep.** A `merge`
+          removes nothing, so nothing is released; a theory list is a plan and has never held a
+          copy; and an empty list has none to give back — the radio above already says so, and a
+          folder named under that sentence would be a delivery no reader will ever find. This is
+          `ClearDeck`'s ternary and its `> 0` fence read together: a sentence promising a folder
+          nothing will arrive in is the exact failure both of those exist to avoid. */}
+      {value === "replace" && variant === "live" && cardsInVariant > 0 && (
+        <p className="text-[0.6875rem] leading-relaxed text-destructive">
+          Any copies you own go back to Recently removed.
+        </p>
+      )}
     </fieldset>
   );
 }

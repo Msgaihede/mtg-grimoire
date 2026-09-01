@@ -232,6 +232,13 @@ export const AmbiguousCommander: Story = {
  * **Replace names what it would clear before it clears it**, and it names the *variant* — an
  * import lands in one list and clears at most one, which is the reason `variant` is in the
  * deck-card grain at all.
+ *
+ * **And the sentence under the radios says where that cardboard then goes** (issue #336). A
+ * `replace` on the live list releases the copies behind the rows it deletes into
+ * `Recently removed`, exactly as **Clear live list…** does, so it makes the same promise in the
+ * same words — the fourth site for a sentence `ClearDeck`, `ClearCategory` and
+ * `CategoriesDialog` already share. It is drawn on the press rather than on the option: Merge
+ * removes nothing, so the frame this story opens on carries no such line at all.
  */
 export const IntoExistingDeck: Story = {
   args: { deckId: 2 },
@@ -243,8 +250,14 @@ export const IntoExistingDeck: Story = {
     await userEvent.click(canvas.getByRole("button", { name: "Preview" }));
 
     await expect(await canvas.findByLabelText(/^Merge/)).toBeChecked();
+    const replace = canvas.getByLabelText(/^Replace — removes the \d+ cards in Actual first/);
+    await expect(replace).toBeInTheDocument();
+
+    // Merge is the mode that clears nothing, so it promises nothing.
+    await expect(canvas.queryByText(/Recently removed/)).toBeNull();
+    await userEvent.click(replace);
     await expect(
-      canvas.getByLabelText(/^Replace — removes the \d+ cards in Actual first/),
+      canvas.getByText("Any copies you own go back to Recently removed."),
     ).toBeInTheDocument();
   },
 };

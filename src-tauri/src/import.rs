@@ -890,7 +890,7 @@ fn tag_for_name(
 /// [`crate::deck_audit::record`] call *inside* the caller's transaction. What it does not
 /// borrow is `add_card` itself — that is the whole point.
 ///
-/// Three decisions worth stating, because each is a thing that would be wrong the other way:
+/// Four decisions worth stating, because each is a thing that would be wrong the other way:
 ///
 /// * **`replace` clears the cards and leaves the categories.** A category is the reader's
 ///   filing, not the list's; a replace that swept them would delete piles somebody named,
@@ -903,6 +903,20 @@ fn tag_for_name(
 ///   a `remove` row. Neither names a card, because no one card is what happened. This is the
 ///   shape `deck_update` already uses (one row per changed field), and it needs no new
 ///   [`crate::schema::AUDIT_KINDS`] value and so no migration.
+/// * **The copies behind a replaced `live` list come back.** They are filed into
+///   `Recently removed` before the clear, through [`crate::deck::release_live_copies`] — a
+///   `deck_cards` row is an intention and a row in the deck's group is cardboard the reader
+///   physically owns, so replacing the list is not a reason to stop owning it. What the reader
+///   sees is worth saying plainly rather than leaving to be discovered: **an import in replace
+///   mode leaves the freshly imported rows owning nothing**, every owned count at zero, until
+///   the copies are filed back out of `Recently removed`. That is exactly where
+///   `Clear live list…` leaves them — [`crate::deck::clear_variant`] runs the identical DELETE
+///   and reached the identical conclusion — and it is the price of the copies being findable at
+///   all: the alternative is not that they stay in the deck, it is that they stay filed under a
+///   list that has never heard of them, invisible on the Collection page and unavailable to
+///   every other deck. Wrong the other way is
+///   [issue #336](https://github.com/Msgaihede/mtg-grimoire/issues/336), which is how this arm
+///   behaved until it was closed.
 pub fn commit_import(
     conn: &Connection,
     deck_id: i64,
@@ -945,6 +959,22 @@ pub fn commit_import(
                 |r| r.get(0),
             )
             .map_err(|e| e.to_string())?;
+        // **The copies behind the list this is about to delete come back.** A `deck_cards` row
+        // is an intention; a row in the deck's **group** is cardboard the reader physically
+        // owns, and importing over a list does not stop them owning it. So every copy the group
+        // holds behind a `live` row is filed into `Recently removed` first, through
+        // [`crate::deck::release_live_copies`] — before the DELETE, because those rows are what
+        // say which printings and how many, and inside this transaction, so a refused import has
+        // moved no card.
+        //
+        // This is the line that was missing until issue #336. [`crate::deck::clear_variant`]
+        // runs the identical DELETE for the identical reason, and had released since it was
+        // written; this arm had the DELETE and not the release, so importing over a live list
+        // left every copy filed under a deck with no row naming it — invisible on the Collection
+        // page since schema v25, and unavailable to every other deck. The two agree now, and the
+        // fence is `release_live_copies`' own: a `theory` replace releases nothing, because a
+        // plan holds no cards.
+        crate::deck::release_live_copies(&tx, deck_id, variant, None)?;
         tx.execute(
             "DELETE FROM deck_cards WHERE deck_id = ?1 AND variant = ?2",
             params![deck_id, variant],
@@ -1146,7 +1176,12 @@ pub async fn deck_import_commit(
 ) -> Result<ImportOutcome, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        // Plain `with_write`: a deck write moves nothing the reader owns. PR 3's
+        // **Plain `with_write`, and still plain now that a `live` replace writes
+        // `collection_entries`.** The release moves rows *between folders* and folds some of
+        // them away; `with_write_owned`'s whole extra step is the facet index's `owned`
+        // dimension, which is folder-blind, so no card enters or leaves the reader's ownership
+        // here and rebuilding it would read the collection to arrive at the answer it holds.
+        // The argument in full is on `deck::release_live_copies`.
         // `collection_to_deck`/`deck_to_collection` DO move ownership and must use
         // `collection_source::with_write_owned` instead.
         crate::sync::with_write(&state, |conn| {
@@ -1373,8 +1408,9 @@ mod tests {
             .card_id
     }
 
-    /// One collection row, at the plainest grain there is — [`crate::deck`]'s test helper.
-    fn own(conn: &Connection, card_id: &str, quantity: i64) {
+    /// One collection row, at the plainest grain there is — [`crate::deck`]'s test helper,
+    /// answering the row's id as that one does so [`file_into_group`] can go on and re-file it.
+    fn own(conn: &Connection, card_id: &str, quantity: i64) -> i64 {
         crate::collection::add_entry(
             conn,
             &crate::collection::EntryInput {
@@ -1384,7 +1420,8 @@ mod tests {
                 ..Default::default()
             },
         )
-        .unwrap();
+        .unwrap()
+        .id
     }
 
     #[test]
@@ -1892,6 +1929,53 @@ mod tests {
     /// Forget every history row, so what a test counts afterwards is only what it drove.
     fn clear_history(conn: &Connection) {
         conn.execute("DELETE FROM deck_audit", []).unwrap();
+    }
+
+    // The four collection-folder helpers below are [`crate::deck`]'s test module's, ported
+    // rather than shared: they are private to a `#[cfg(test)]` module and no `pub(crate)` on a
+    // fixture is worth the reach across files. What they answer is what an import in `replace`
+    // mode has to be asked about — where the copies behind a cleared `live` list ended up.
+
+    /// The `collection_folders` row that stands for this deck, which [`crate::deck::create_deck`]
+    /// makes. Panics rather than creating one: a deck with no group is a broken invariant.
+    fn group_of(conn: &Connection, deck_id: i64) -> i64 {
+        conn.query_row(
+            "SELECT id FROM collection_folders WHERE deck_id = ?1",
+            params![deck_id],
+            |r| r.get(0),
+        )
+        .unwrap_or_else(|e| panic!("deck {deck_id} has no collection group: {e}"))
+    }
+
+    /// The one holding area `Recently removed`, by id — where a released copy lands.
+    fn removed_group(conn: &Connection) -> i64 {
+        conn.query_row(
+            "SELECT id FROM collection_folders WHERE kind = 'removed'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("every database past v25 has one `removed` folder")
+    }
+
+    /// Copies of one printing sitting in one folder — `0` when it holds none. A sum over
+    /// `quantity` rather than a row count, because the question is how many *cards* are there.
+    fn folder_copies(conn: &Connection, folder: i64, card_id: &str) -> i64 {
+        conn.query_row(
+            "SELECT coalesce(sum(quantity), 0) FROM collection_entries
+              WHERE folder_id = ?1 AND card_id = ?2",
+            params![folder, card_id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// One collection row filed into the deck's own group — what "this deck holds this card"
+    /// means since schema v25. Written through the app's own pair of writes rather than a
+    /// hand-built row, so the grain and the merge are theirs.
+    fn file_into_group(conn: &Connection, deck_id: i64, card_id: &str, quantity: i64) {
+        let folder = group_of(conn, deck_id);
+        let entry = own(conn, card_id, quantity);
+        crate::collection_folders::refile_entry(conn, entry, Some(folder)).unwrap();
     }
 
     #[test]
@@ -2448,15 +2532,126 @@ mod tests {
         assert_eq!(rows[0].0, crate::deck_audit::ADD);
     }
 
+    /// **The copies behind a replaced `live` list come back** — issue #336, which was this
+    /// command running `clear_variant`'s exact DELETE with no release beside it.
+    ///
+    /// What would be wrong the other way is not a wrong number, it is cards the reader owns
+    /// going missing: a `deck_cards` row is an intention and a row in the deck's group is
+    /// cardboard, so a list emptied without releasing leaves every copy filed under a deck that
+    /// has no row for it — invisible on the Collection page since schema v25, and unavailable to
+    /// every other deck for ever.
+    ///
+    /// **Two piles holding one printing**, because that is the shape where the release has to
+    /// walk more than one `deck_cards` row for a single group row, and where `removed` being
+    /// copies rather than rows is visible: 2 + 1 is three cards over two rows.
+    #[test]
+    fn a_replace_files_the_live_copies_it_clears_into_recently_removed() {
+        let conn = seeded();
+        let id = deck(&conn);
+        put(&conn, id, "sol-clb", "Ramp", "live", 2);
+        put(&conn, id, "sol-clb", "Main deck", "live", 1);
+        file_into_group(&conn, id, "sol-clb", 3);
+        let group = group_of(&conn, id);
+        let removed = removed_group(&conn);
+        assert_eq!(
+            folder_copies(&conn, group, "sol-clb"),
+            3,
+            "before the import"
+        );
+
+        // A different printing, so the imported list has nothing to do with the copies that
+        // were there — the reader replaced their list, not their cards.
+        let out =
+            commit_import(&conn, id, "live", "replace", &[item("sol-40k", 1, "Ramp")]).unwrap();
+
+        assert_eq!(
+            folder_copies(&conn, group, "sol-clb"),
+            0,
+            "the deck no longer lists them, so its group may not go on holding them"
+        );
+        assert_eq!(
+            folder_copies(&conn, removed, "sol-clb"),
+            3,
+            "every copy is in `Recently removed`, where the reader can find and re-file it"
+        );
+        assert_eq!(
+            out.removed, 3,
+            "copies, not rows — two `deck_cards` rows held three cards"
+        );
+    }
+
+    /// **A plan holds no cards** ([`crate::collection_alloc::THEORY_HOLDS_NOTHING`]), so a
+    /// replace of the theory list releases nothing — and, more to the point, must not reach the
+    /// custody of the `live` list standing beside it. Wrong the other way, clearing a
+    /// scratchpad would empty the deck the reader had actually built.
+    #[test]
+    fn a_replace_of_a_plan_moves_no_copies() {
+        let conn = seeded();
+        let id = deck(&conn);
+        put(&conn, id, "sol-clb", "Ramp", "live", 2);
+        put(&conn, id, "sol-clb", "Ramp", "theory", 2);
+        file_into_group(&conn, id, "sol-clb", 2);
+        let group = group_of(&conn, id);
+        let removed = removed_group(&conn);
+
+        commit_import(
+            &conn,
+            id,
+            "theory",
+            "replace",
+            &[item("sol-40k", 1, "Ramp")],
+        )
+        .unwrap();
+
+        assert_eq!(
+            folder_copies(&conn, group, "sol-clb"),
+            2,
+            "the live list still lists them and its group still holds them"
+        );
+        assert_eq!(
+            folder_copies(&conn, removed, "sol-clb"),
+            0,
+            "and nothing was filed into the holding area"
+        );
+    }
+
+    /// A merge takes nothing out of the list, so it gives nothing back: the release is tied to
+    /// the DELETE and not to the command. Wrong the other way, every ordinary import would
+    /// scatter the deck's copies into `Recently removed` while adding to the very list they back.
+    #[test]
+    fn a_merge_moves_no_copies() {
+        let conn = seeded();
+        let id = deck(&conn);
+        put(&conn, id, "sol-clb", "Ramp", "live", 2);
+        file_into_group(&conn, id, "sol-clb", 2);
+        let group = group_of(&conn, id);
+        let removed = removed_group(&conn);
+
+        commit_import(&conn, id, "live", "merge", &[item("sol-40k", 1, "Ramp")]).unwrap();
+
+        assert_eq!(folder_copies(&conn, group, "sol-clb"), 2);
+        assert_eq!(folder_copies(&conn, removed, "sol-clb"), 0);
+    }
+
     /// The transaction rule, from the outside and at the worst moment: a **replace** whose
     /// second item names a card this app has not got. By then the clear has run, a category has
     /// been made and the first card has been written — and every one of those must be gone,
     /// including the deck the reader was about to lose.
+    ///
+    /// **And since issue #336 the release has run too, which is the half of this that is about
+    /// cardboard rather than rows.** [`crate::deck::release_live_copies`] files the group's
+    /// copies into `Recently removed` *before* the DELETE and inside this transaction, so a
+    /// rollback has to put them back in the group — a refused import that moved a reader's cards
+    /// anyway would be the worst failure this command has, because the deck would read exactly
+    /// as it did while the collection page quietly disagreed. The two folder assertions are the
+    /// only thing standing between that and a green suite: every other assertion here passes
+    /// with the copies in the wrong folder.
     #[test]
     fn a_refused_import_leaves_no_history_and_no_cards() {
         let conn = seeded();
         let id = deck(&conn);
         put(&conn, id, "sol-clb", "Main deck", "live", 3);
+        file_into_group(&conn, id, "sol-clb", 3);
         clear_history(&conn);
 
         let refused = commit_import(
@@ -2486,6 +2681,16 @@ mod tests {
             )
             .unwrap();
         assert_eq!(ramps, 0, "nor the category it made on the way through");
+        assert_eq!(
+            folder_copies(&conn, group_of(&conn, id), "sol-clb"),
+            3,
+            "and the copies the release had already filed away are back in the deck's group"
+        );
+        assert_eq!(
+            folder_copies(&conn, removed_group(&conn), "sol-clb"),
+            0,
+            "so `Recently removed` holds nothing from an import that never happened"
+        );
     }
 
     #[test]

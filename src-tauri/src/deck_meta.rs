@@ -867,7 +867,7 @@ pub fn reorder_categories(
 /// row is an intention and the CASCADE is right to take it; a row in the deck's **group** is a
 /// card the reader physically owns, and deleting a pile does not stop them owning it. So every
 /// copy the group holds for a `live` row of this category is filed into `Recently removed`
-/// first, through [`crate::deck::release_group_copies`] — the same act
+/// first, through [`crate::deck::release_live_copies`] — the same act
 /// [`crate::collection_alloc::deck_to_collection`] performs one card at a time. Left undone the
 /// copies stay filed under a deck that has never heard of them, invisible until the reader
 /// wonders why a card they own is unavailable to every deck they have.
@@ -963,30 +963,15 @@ pub fn delete_category(
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
-    // **The copies the CASCADE is about to strand**, released before anything moves and inside
-    // this transaction, so a delete that fails half way has moved no card. Only the `None`
-    // arm: the move arm re-files these cards into another pile of the same deck, so the group
-    // is still exactly where their copies belong — and it is fenced here rather than left to
-    // the move's own DELETE having emptied the pile first, because that is an ordering an edit
-    // three statements away can undo without meaning to. `live` only: a theory row is a plan,
-    // and no folder backs one.
+    // **The copies the CASCADE is about to strand**, released through
+    // [`crate::deck::release_live_copies`] — which owns the ordering, the `live` fence and the
+    // walk, so what is left here is only *why this scope*. **Only the `None` arm**: the move arm
+    // re-files these cards into another pile of the same deck, so the group is still exactly
+    // where their copies belong — and it is fenced by this `if` rather than left to the move's
+    // own DELETE having emptied the pile first, because that is an ordering an edit three
+    // statements away can undo without meaning to.
     if move_to_category_id.is_none() {
-        let held: Vec<(String, Option<String>, i64)> = tx
-            .prepare(
-                "SELECT card_id, finish, quantity FROM deck_cards
-                  WHERE category_id = ?1 AND variant = ?2
-                  ORDER BY id",
-            )
-            .and_then(|mut s| {
-                s.query_map(params![id, crate::schema::DECK_VARIANTS[0]], |r| {
-                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-                })?
-                .collect()
-            })
-            .map_err(|e| e.to_string())?;
-        for (card_id, finish, quantity) in held {
-            crate::deck::release_group_copies(&tx, deck_id, &card_id, finish.as_deref(), quantity)?;
-        }
+        crate::deck::release_live_copies(&tx, deck_id, crate::schema::DECK_VARIANTS[0], Some(id))?;
     }
     if let Some(target) = move_to_category_id {
         // `deck::move_card`'s INSERT … SELECT … ON CONFLICT shape verbatim, over categories
@@ -1979,7 +1964,10 @@ pub async fn deck_category_delete(
 ) -> Result<(), String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        // Plain `with_write`: a deck write moves nothing the reader owns. PR 3's
+        // **Plain `with_write` even though the cascade arm writes `collection_entries`** —
+        // `deck::deck_clear`'s note, and [`crate::deck::release_live_copies`] carries the
+        // argument: the release re-files rows between folders, and the facet index's `owned`
+        // dimension names no folder.
         // `collection_to_deck`/`deck_to_collection` DO move ownership and must use
         // `collection_source::with_write_owned` instead.
         with_write(&state, |c| delete_category(c, id, move_to_category_id))

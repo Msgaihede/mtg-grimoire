@@ -344,7 +344,7 @@ one per surface plus the deck's "start a new one":
 
 | Destination | Modes | Grain the write folds on | Notes |
 | --- | --- | --- | --- |
-| `deck` (existing) | `merge` / `replace` | `deck_id, variant, category_id, card_id, coalesce(finish,'')` (`schema::DECK_CARD_GRAIN`) | `replace` clears one **variant** first, named before it does; the mode radio says how many cards that would cost. Since 2026-08-23 it also draws the optional ["Add cards to collection" box](#the-deck-arms-add-cards-to-collection-box), which makes the press two writes |
+| `deck` (existing) | `merge` / `replace` | `deck_id, variant, category_id, card_id, coalesce(finish,'')` (`schema::DECK_CARD_GRAIN`) | `replace` clears one **variant** first, named before it does; the mode radio says how many cards that would cost, and on a `live` list a note under the radios says where the cardboard goes — since 2026-09-01 (issue #336) the commit calls `deck::release_live_copies` before that clear, so every copy the deck's group held lands in `Recently removed` instead of being stranded under a deck that no longer lists it. Since 2026-08-23 it also draws the optional ["Add cards to collection" box](#the-deck-arms-add-cards-to-collection-box), which makes the press two writes |
 | `newDeck` | `merge` only | same grain, on the deck just created | No mode radios at all — there is nothing to replace one line after `deck_create`, and `merge` is the mode that cannot clear anything if that ever stops being true. Draws the same "Add cards to collection" box, from the **same** exported `OwnCopies` rather than a second one written here |
 | `collection` | `add` / `set` | Every term of the storage grain (`schema::COLLECTION_GRAIN` — `card_id, finish, condition, lang, altered, signed, proxy, misprint, coalesce(serial_number,''), coalesce(grading,''), coalesce(folder_id, 0)`) the importer can vary, so nine of the eleven. `lang` follows `cardId` and `folder_id` is always the root. It was `cardId, finish, condition` alone until 2026-08-23 — see the fold section above for what that cost | No `replace`: the deck's version would empty a multi-thousand-row collection from a 40-line paste with the file that caused it looking ordinary |
 | `wishlist` | `add` / `set` | `oracleId, cardId, finish` (`destinations/wishlist.ts`) — the storage grain is `coalesce(oracle_id,''), coalesce(card_id,''), coalesce(preferred_finish,''), coalesce(folder_id,0)` (`schema::WISHLIST_GRAIN`) | `wishlist_set_quantity(id, 0)` **deletes** the wish — a wish for nothing is not a wish (`CHECK (quantity > 0)`) — but an import can never reach it: `parse.ts` refuses a quantity below 1 before a plan is even built (`:460`, `:671`), so `set` through this dialog never carries a 0 |
@@ -400,9 +400,17 @@ Four rules the pair holds, each with a reason that is not obvious:
   remounts the step under the reader.
 - **Absent and an empty array are the same statement**, which is what keeps every caller written
   before the box existed unchanged by construction.
-- **The invalidation is the union of the deck's roots and the collection's**, and only when the box
-  was ticked. The collection's list and summary, the wishlist's owned progress and the search
-  wall's owned badges each answer a question those copies just changed.
+- **The invalidation is the union of the deck's roots and the collection's**, and it is fired
+  when the box was ticked **or** when the press was a `replace` on a `live` list. The collection's
+  list and summary, the wishlist's owned progress and the search wall's owned badges each answer a
+  question those copies just changed — and since 2026-09-01 a live `replace` changes it without
+  the box being ticked at all, because the release files the deck's copies into `Recently removed`
+  (issue #336). It is the same `OWNED_WRITE_KEYS` union rather than a second set, because it is
+  the same claim about which roots a `collection_entries` write moves, and it is read off the
+  mutation's own variables because every press is the same mutation. **No count fence on that
+  arm**: whether the list held anything is not something the hook knows without another read, and
+  a refetch answering what is already on screen is cheaper than a collection left wrong for the
+  30 s `src/lib/query.ts` caches.
 
 **The copies land in the deck's own group, and a plain collection import still lands at the
 root.** `collection_import_commit` is `(items, mode, folderId)` since 2026-08-23 — `folderId`

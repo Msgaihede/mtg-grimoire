@@ -8048,10 +8048,16 @@ function releaseGroupCopies(
  * The bulk half of {@link releaseGroupCopies}: every `live` row of a pile that is about to be
  * deleted, released before anything goes.
  *
- * **Read and released before the delete**, the crate's ordering in both call sites and for its
- * reason: the `deck_cards` rows are what say which printings and how many, and an edit three
+ * **Read and released before the delete**, the crate's ordering in all four call sites and for
+ * its reason: the `deck_cards` rows are what say which printings and how many, and an edit three
  * statements away must not be able to leave the release looking at an emptied pile. Oldest row
  * first, so a printing filed in two categories gives its copies back in a defined order.
+ *
+ * The four are {@link deck_category_clear}, {@link deck_clear}, {@link deck_category_delete}'s
+ * `null` arm and — since 2026-09-01 — **{@link deck_import_commit}'s `replace`**, which is the
+ * fourth write that empties a list and was the last one leaving every copy behind it. This line
+ * said "both" through two of those arrivals, which is what a count in a doc comment is worth:
+ * name them instead, because a name that stops being true is a name somebody can see is wrong.
  */
 function releasePileCopies(db: FakeDb, deckId: number, doomed: FakeDeckCard[]): void {
   for (const dc of [...doomed].sort((a, b) => a.id - b.id)) {
@@ -10534,7 +10540,7 @@ export function writeHandlers(db: FakeDb) {
      * transaction**, so a list refused on line 90 does not leave 89 cards in the deck and a
      * history of 89 edits nobody made.
      *
-     * Three decisions borrowed verbatim, because each is a thing that would be wrong the other
+     * Four decisions borrowed verbatim, because each is a thing that would be wrong the other
      * way. **`replace` clears the cards and leaves the categories** — a category is the
      * reader's filing, not the list's, and sweeping them would delete piles somebody named,
      * reordered and switched off to import a file that mentions none of that. **It clears one
@@ -10542,6 +10548,20 @@ export function writeHandlers(db: FakeDb) {
      * row per *effect*, never one per card**: an import of 117 cards would otherwise bury every
      * other event of that day, so it writes an `add` row carrying the counts plus — on a
      * `replace` that actually cleared something — a `remove` row, neither naming a card.
+     *
+     * **And on a `replace`, the copies come back**, through {@link releasePileCopies}. A
+     * `deck_cards` row is an intention; a row in the deck's group is cardboard the reader owns,
+     * and importing over a list does not stop them owning it. Left where they were the copies
+     * stay filed under a deck that no longer lists them — invisible on the Collection page and
+     * unavailable to every other deck, which is the identical stranding `deck_clear` releases
+     * behind the identical delete, and which this fake and the crate both shipped until
+     * 2026-09-01. What the reader sees afterwards is a freshly imported list owning **nothing**
+     * until they file the copies again, exactly where `Clear live list…` leaves them: a replace
+     * is an emptying with an add behind it, and the emptying half is the whole of what moves
+     * cardboard. A **merge** releases nothing because a merge takes nothing out, and a
+     * **`theory`** replace releases nothing because a plan holds no cards —
+     * {@link releasePileCopies} enforces the second of those per row, so this handler never
+     * tests the variant it was handed.
      *
      * **Every refusal is raised before anything is written**, which is this fake's stand-in for
      * the transaction: the Rust checks each line as it reaches it and rolls back, and the only
@@ -10582,6 +10602,14 @@ export function writeHandlers(db: FakeDb) {
           (dc) => dc.deckId === deck.id && dc.variant === variant,
         );
         removed = cleared.reduce((n, dc) => n + dc.quantity, 0);
+        // **The copies come back**, and this fake released none of them until 2026-09-01. A
+        // `deck_cards` row is an intention; a row in the deck's group is cardboard the reader
+        // physically owns, and importing over a list does not stop them owning it. This is the
+        // same act `deck_clear` performs behind the identical delete, in the one place that
+        // emptied a list without it. **Before** the rows go, for {@link releasePileCopies}'s
+        // reason: those rows are what say which printings and how many. `live` only, which
+        // that helper enforces per row — so nothing here tests the variant.
+        releasePileCopies(db, deck.id, cleared);
         db.deckCards = db.deckCards.filter((dc) => !cleared.includes(dc));
       }
 

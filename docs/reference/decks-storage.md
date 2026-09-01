@@ -369,14 +369,16 @@ preferred_finish`'s nullability one table over.
   **The run list is not replaced by a shorter run list; it is replaced by nothing.** There is no
   derived table to keep in step, so no write "runs the allocator" and none can forget to. What
   moves a row *across* the deck boundary is exactly the pair in `collection_alloc.rs` —
-  `collection_to_deck` and `deck_to_collection` — plus the four bulk presses that empty a group
+  `collection_to_deck` and `deck_to_collection` — plus the six bulk presses that empty a group
   the reader is throwing away, every one of them into `Recently removed`: `delete_deck`,
-  `deck_meta::delete_category`'s cascade arm, `deck::clear_category`, and Settings'
-  `reset::clear_decks`. The three that release *one card at a time* share
-  `deck::release_group_copies`, the crate's one walk over a group's rows, which matches on the
-  oracle card with the exact printing first; the two that empty a whole folder — `delete_deck`
-  and `clear_decks` — walk the sub-tree and re-file every row through `refile_entry`, the
-  `delete_folder` rule reused. Everything else that changes the number is an ordinary
+  `deck_meta::delete_category`'s cascade arm, `deck::clear_category`, `deck::clear_variant`,
+  `import::commit_import`'s `replace` arm, and Settings' `reset::clear_decks`. The five that
+  release *one card at a time* share `deck::release_group_copies`, the crate's one walk over a
+  group's rows, which matches on the oracle card with the exact printing first — the four bulk
+  ones reach it through `release_live_copies`, which asks the `live` question for all of them;
+  the two that empty a whole folder — `delete_deck` and `clear_decks` — walk the sub-tree and
+  re-file every row through `refile_entry`, the `delete_folder` rule reused. Everything else that
+  changes the number is an ordinary
   collection write landing on a row that happens to be filed in a group (an edit, the importer's
   `set` mode, the reconciler's fold), and it is answered at the next read because the next read is
   a `sum()`. **A stepper is no longer one of them, and the change is in the app rather than in the
@@ -796,25 +798,31 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
     of zero copies is a history of a change that never happened. The two buttons are greyed in
     that state; the early return is the fence behind it.
   - **The live release is the half worth arguing, and it is where two commands running the same
-    `DELETE` part company.** Every copy the deck's group holds behind a `live` row is filed into
-    `Recently removed` first — one `release_group_copies` per row, read and released inside the
-    same transaction and before the rows are gone, so a clear that fails half way has moved
-    nothing. A `deck_cards` row is an intention and a row in the group is cardboard the reader
-    owns; emptying the list does not stop them owning it, and left undone this would put *every*
-    copy of a cleared deck under a deck that has never heard of them. **`theory` releases
-    nothing** and not as an optimisation: a plan holds no cards
-    (`collection_alloc::THEORY_HOLDS_NOTHING`), so the loop never runs.\
+    `DELETE` now agree rather than part company.** Every copy the deck's group holds behind a
+    `live` row is filed into `Recently removed` first — `deck::release_live_copies`, which is one
+    `release_group_copies` per row, read and released inside the same transaction and before the
+    rows are gone, so a clear that fails half way has moved nothing. A `deck_cards` row is an
+    intention and a row in the group is cardboard the reader owns; emptying the list does not stop
+    them owning it, and left undone this would put *every* copy of a cleared deck under a deck
+    that has never heard of them. **`theory` releases nothing** and not as an optimisation: a plan
+    holds no cards (`collection_alloc::THEORY_HOLDS_NOTHING`), so the loop never runs — and since
+    2026-09-01 that `variant == LIVE` question is asked inside the helper rather than at each call
+    site.\
     **`deck_import_commit` in `replace` mode executes the identical
-    `DELETE FROM deck_cards WHERE deck_id = ?1 AND variant = ?2` and calls no release at all** —
-    issue #336, open as of 2026-09-01 and deliberately left out of the clear's own PR. So the same
-    delete over the same rows leaves the reader's copies in two different places depending on
-    which press made it: **Clear live list…** puts them back on their desk, while importing over
-    the deck in replace mode leaves them filed under a deck that no longer lists them, invisible
-    on the Collection page and unavailable to every other deck. That is the difference to know
-    before touching either command, and the fix the issue sketches is one helper both of them call
-    — the crate already spells that read-the-doomed-rows-and-release-each loop out three times
-    (here, the stack clear, and `deck_meta::delete_category`'s cascade arm), which is the shape of
-    thing a fourth site forgets.
+    `DELETE FROM deck_cards WHERE deck_id = ?1 AND variant = ?2`, and since 2026-09-01 it releases
+    beside it too** — issue #336, closed by the one helper the issue sketched rather than by a
+    fourth copy of the loop. `release_live_copies(tx, deck_id, variant, category_id)` is
+    `release_group_copies`'s bulk half: `Some(id)` for `category_id` is one pile and `None` the
+    whole variant, it reads the doomed rows `ORDER BY id` before the caller's `DELETE` and inside
+    the caller's transaction, and the four sites that take a set of `deck_cards` rows out at once
+    all call it — this clear, the stack clear, `deck_meta::delete_category`'s cascade arm and the
+    import's `replace` arm. **The failure it prevents is worth keeping written down now that the
+    code cannot make it**: the same delete over the same rows left the reader's copies in two
+    different places depending on which press made it — **Clear live list…** put them back on
+    their desk, while importing over the deck in replace mode left them filed under a deck that no
+    longer listed them, invisible on the Collection page and unavailable to every other deck. A
+    fence spelled out at three call sites is a fence the fourth forgets, which is why the `live`
+    test moved into the helper along with the loop.
   - **The history row is a `remove` naming no card, carrying
     `{ action: "clear", scope: "deck", cards }` and a `-cards` delta.** `action` is the stack
     clear's field for the stack clear's reason. **`scope` is the new one**, and it is what tells
@@ -841,9 +849,21 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   `category_for_name` find-or-create (so a `Sideboard` section lands on the seeded `side` row
   and makes nothing). `mode` is `merge` or `replace` (`import::IMPORT_MODES`), and
   **`replace` clears the cards of the one variant it was given and leaves every category
-  standing** — a category is the reader's filing, not the list's. An empty item list is refused
-  in words (`NOTHING_TO_IMPORT`), which matters most in `replace`, where doing nothing and
-  clearing the deck to put nothing back are the same call.
+  standing** — a category is the reader's filing, not the list's. **On a `live` list it releases
+  the copies before it clears them** (2026-09-01, issue #336): `deck::release_live_copies` runs
+  between the `cleared` count and the `DELETE`, inside the commit's one transaction, so every copy
+  the deck's group held behind a `live` row lands in `Recently removed` — the same act, through
+  the same helper, that `deck_clear` and `deck_category_clear` perform. **What that costs the
+  reader is worth stating plainly, because it is a real consequence rather than a detail**: the
+  freshly imported rows own nothing until the copies are filed back by hand, exactly where
+  **Clear live list…** leaves them. The alternative is not "the copies stay attached" — a
+  `collection_entries` row is filed against a *printing* in a deck's group and the list that
+  replaced it may name none of them, so the choice was between copies sitting in a holding area
+  the reader can see and copies filed under a deck that has no row for them, which since v25 means
+  invisible on the Collection page and unavailable to every other deck. **`theory` releases
+  nothing**, because a plan holds no cards; the fence is inside the helper, so the `replace` arm
+  does not ask. An empty item list is refused in words (`NOTHING_TO_IMPORT`), which matters most
+  in `replace`, where doing nothing and clearing the deck to put nothing back are the same call.
 - **`ImportItem.inactive` is the one field this boundary grew for the format work, and it applies
   to a pile the import _creates_ and to nothing else.** Archidekt's `{noDeck}` is that site's word
   for a pile counting toward nothing, which is exactly this schema's `is_active = 0`; without it

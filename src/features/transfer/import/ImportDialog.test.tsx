@@ -831,6 +831,12 @@ describe("the import dialog", () => {
     expect(merge).toBeChecked();
     const replace = screen.getByLabelText("Replace — removes the 42 cards in Actual first");
     await userEvent.click(replace);
+    // And where that cardboard goes, which is the other half of what the press does — issue
+    // #336. The label above is asserted verbatim, so the sentence being a note under the radios
+    // rather than a second clause on the radio's own name is pinned by the two lines together.
+    expect(
+      screen.getByText("Any copies you own go back to Recently removed."),
+    ).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Import" }));
 
     await waitFor(() =>
