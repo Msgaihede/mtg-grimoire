@@ -116,6 +116,62 @@ export const dndManager = new DragDropManager({
 });
 
 /**
+ * **A source that brings its own sensors may not erase the configuration above** — issue #331,
+ * and it took the whole app's drag-and-drop with it.
+ *
+ * `Draggable`'s registration effect resolves a source's sensors as
+ * `this.sensors?.map(descriptor) ?? [...manager.sensors]`, and the two halves of that are not
+ * symmetrical. The manager's own list arrives as **instances**, which the effect binds with
+ * `bind(source, undefined)` — a `bind(source, options = this.options)` default parameter, so the
+ * source inherits what the instance was configured with. A per-source list arrives as
+ * **descriptors**, and the effect registers one with `manager.registry.register(entry.plugin)` —
+ * the constructor alone, the entry's options dropped on the floor. `PluginRegistry.register` then
+ * reads an omitted `options` as an instruction to *write* them:
+ * `if (existing.options !== options) existing.options = options`.
+ *
+ * So the first source in the window to declare `sensors` of its own sets this manager's one
+ * `PointerSensor` instance's `options` to `undefined` — permanently, because nothing ever writes
+ * them back. Every source registered **after** that binds with `options = this.options`, which is
+ * now nothing, and falls back to the library's own `preventActivation`: the rule the block above
+ * exists to replace, which refuses any press whose target sits inside an interactive element.
+ * **In this app a card's art is a button**, so what a reader saw was a tile that could still be
+ * dragged by its caption and not by its picture, on every card surface at once, until a reload —
+ * reported as "drag and drop is broken when dragging on an image".
+ *
+ * The trigger is the category grip (`features/decks/categoryDrag.ts`), the one source here that
+ * has to carry a `sensors` list, so **opening a deck editor once** was enough to break the search
+ * wall, the collection, the wishlist and the deck gallery behind it.
+ *
+ * The fence is the narrowest statement of what the library plainly meant — its own doc comment on
+ * `register` says an already-registered plugin's "options will be updated", and a caller that
+ * passes none has nothing to update with. So an omitted `options` keeps what the instance has
+ * instead of clearing it; a caller that passes some still replaces them. The per-source list goes
+ * on binding with its own options, because the effect passes those to `bind` directly and never
+ * through the registry.
+ *
+ * **Patched here rather than worked around at the one call site**, because the call site is not
+ * doing anything wrong: a `sensors` list is the library's documented way to say what a press
+ * costs on a source with a handle. A rule that said "never declare sensors" would be a landmine
+ * with no fence, and the failure it guards is silent — nothing throws, nothing logs, and the
+ * gesture merely stops starting. `dndManager.test.ts` drives the press that proves it.
+ */
+{
+  /**
+   * The registry as this patch has to hold it. `register` is generic over the plugin constructor
+   * and `get` returns that constructor's own instance type, so a wrapper that passes one's result
+   * to the other cannot be written in those generics — the compiler has no way to know the two
+   * mention the same plugin. The shape below is the whole of what this touches, and it is
+   * deliberately the narrowest reach past the library's types rather than an `any`.
+   */
+  const sensors = dndManager.registry.sensors as unknown as {
+    register: (plugin: object, options?: unknown) => unknown;
+    get: (plugin: object) => { options?: unknown } | undefined;
+  };
+  const register = sensors.register.bind(sensors);
+  sensors.register = (plugin, options) => register(plugin, options ?? sensors.get(plugin)?.options);
+}
+
+/**
  * The mark that says a drag is up, on `<html>` — and the fence for the two rules `index.css`
  * copies out of `Cursor` and `PreventSelection`.
  *
