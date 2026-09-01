@@ -1,13 +1,20 @@
 /**
  * The fake `listen`, aliased over `@tauri-apps/api/event`.
  *
- * Five events reach the frontend, and they are all of `app.emit` in `src-tauri/src`:
+ * Nine events reach the frontend, and they are all of `app.emit` in `src-tauri/src` —
+ * `grep -n 'app\.emit(' -r src-tauri/src` is what answers that count, not this list, because it
+ * has already drifted once (this read "five" while `combos:progress` and `art-tags:progress`
+ * were already live, and live sync then added two more without anybody re-counting):
  * `sync:progress` (`SyncProgressEvent`, subscribed once by `useSyncProgress`),
  * `collection:reconciled` (`ReconciledEvent`, subscribed by `useSyncInvalidation`),
  * `update:progress` (`UpdateProgressEvent`, subscribed by `useUpdate`),
- * `marketplace:progress` (`FeedProgressEvent`, subscribed once by `useMarketplaceProgress`) and
- * `oracle-tags:progress` (`OracleTagProgressEvent`, subscribed once by
- * `useOracleTagProgress`). A story drives any of them with `emitFake`.
+ * `marketplace:progress` (`FeedProgressEvent`, subscribed once by `useMarketplaceProgress`),
+ * `oracle-tags:progress` (`OracleTagProgressEvent`, subscribed once by `useOracleTagProgress`),
+ * `art-tags:progress` (`ArtTagProgressEvent`, subscribed by `TagsPage`),
+ * `combos:progress` (`ComboProgress`, subscribed by `CombosPanel`),
+ * `sync:applied` (`RelayOutcome`, subscribed by `useDeviceSyncInvalidation`) and
+ * `sync:live` (`SyncLiveEvent`, subscribed by `useDeviceSyncLive`). A story drives any of them
+ * with `emitFake`.
  *
  * `UnlistenFn` is not re-exported and does not need to be: `ipc.ts` imports it as
  * `type UnlistenFn`, which the transform erases, so the alias never has to answer for it at

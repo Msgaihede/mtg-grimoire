@@ -217,9 +217,15 @@ pub fn open_read(data_dir: &Path) -> rusqlite::Result<Connection> {
 /// `image_cache` produced no callback at all and the row was there. Twelve corpus tables are
 /// `WITHOUT ROWID`: `image_cache`, `marketplace_prices`, `art_tags`, `art_tag_parents`,
 /// `art_taggings`, `art_tag_illustrations`, `oracle_tags`, `oracle_tag_parents`,
-/// `oracle_taggings`, `oracle_tag_cards`, `cards_fts_idx` and `cards_fts_config`;
-/// `muted_tags` is the one on the user side. A transaction whose *only* corpus write is to
-/// one of those is invisible here, and `image_cache` is the likeliest candidate in the crate.
+/// `oracle_taggings`, `oracle_tag_cards`, `cards_fts_idx` and `cards_fts_config`. **Two are on
+/// the user side, not one — `muted_tags` and, since user schema v31, `device_names`**
+/// (`schema.rs:448-464` lists both in [`crate::schema::SYNCED_TABLES`], and both `CREATE TABLE`s
+/// carry the same `) WITHOUT ROWID;`). A transaction whose *only* corpus write is to one of the
+/// first twelve is invisible here, and `image_cache` is the likeliest candidate in the crate.
+/// **The same blind spot is why live sync's write-wake rides `commit_hook` rather than this
+/// one**: `commit_hook` fires once per transaction regardless of a table's rowid shape, where an
+/// update-hook debounce would silently never sync a muted tag or a device rename. See
+/// `sync_engine::live` and the design spec §6.3.
 ///
 /// An authorizer would see them — it reports the schema name and does fire for
 /// `WITHOUT ROWID`, both measured — but it fires at *prepare* time, and a `prepare_cached`

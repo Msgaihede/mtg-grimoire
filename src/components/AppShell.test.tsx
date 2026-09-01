@@ -33,6 +33,18 @@ const onMarketplaceProgress = vi.hoisted(() => vi.fn());
  *  refresh is spawned at launch, so the ribbon learns about it from `oracle_tags_status`
  *  rather than from an event this window was too late to hear. */
 const onOracleTagProgress = vi.hoisted(() => vi.fn());
+/**
+ * Task 10's and Task 11's four, for the shell's two "exactly one of these in the app" reasons:
+ * `useDeviceSyncInvalidation` refreshes the screen when a device sync lands from anywhere, and
+ * `useDeviceSyncLive` seeds and then follows the relay socket's state for the ribbon's marker.
+ * The fourth is the Android foreground effect's own write — unreachable in most of this file's
+ * cases, since it is gated on `isAndroid()`, but reached by the one test that redefines the
+ * user agent below.
+ */
+const onSyncApplied = vi.hoisted(() => vi.fn());
+const onSyncLive = vi.hoisted(() => vi.fn());
+const syncLiveState = vi.hoisted(() => vi.fn());
+const syncLiveForeground = vi.hoisted(() => vi.fn());
 /** The two writes a card dropped on the sidebar means, and the read that names the open
  *  deck — the sidebar borrows `useDeck`, so the shell asks for a deck like the editor does. */
 const deckAddCard = vi.hoisted(() => vi.fn());
@@ -60,6 +72,10 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     onCollectionReconciled,
     onMarketplaceProgress,
     onOracleTagProgress,
+    onSyncApplied,
+    onSyncLive,
+    syncLiveState,
+    syncLiveForeground,
     // A database that has never ingested the taxonomy: every field null, stale, and nothing
     // running. The honest resting state, and the one that puts no fourth job in the ribbon.
     oracleTagsStatus: vi.fn().mockResolvedValue({
@@ -252,6 +268,12 @@ beforeEach(() => {
   onCollectionReconciled.mockReset().mockReturnValue(() => {});
   onMarketplaceProgress.mockReset().mockReturnValue(() => {});
   onOracleTagProgress.mockReset().mockReturnValue(() => {});
+  onSyncApplied.mockReset().mockReturnValue(() => {});
+  onSyncLive.mockReset().mockReturnValue(() => {});
+  // "off" — the resting state every installation that has paired nothing is in, and the state
+  // that draws no marker at all.
+  syncLiveState.mockReset().mockResolvedValue("off");
+  syncLiveForeground.mockReset().mockResolvedValue(undefined);
   deckAddCard.mockReset().mockResolvedValue({ id: 1, quantity: 1, removed: false });
   wishlistAdd.mockReset().mockResolvedValue({ id: 1, quantity: 1, removed: false });
   deckGet.mockReset().mockResolvedValue(null);

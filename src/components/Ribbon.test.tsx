@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { TOOLTIP_OPEN_MS, TooltipProvider } from "@/components/tooltip/TooltipProvider";
@@ -231,6 +231,82 @@ describe("Ribbon", () => {
     render(<Ribbon {...props({ updateVersion: "0.3.0", updateInstallable: true, busy: true })} />);
     expect(screen.getByRole("button", { name: /refresh/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Update to 0.3.0" })).toBeEnabled();
+  });
+
+  /**
+   * `deviceSync` is `null` for both the web target and every installation that has paired
+   * nothing — which is every installation today. Neither is a failure, so the row says
+   * nothing rather than drawing a marker for a feature that does not apply.
+   */
+  it("says nothing about device sync when there is no group", () => {
+    render(<Ribbon {...props({ deviceSync: null })} />);
+    expect(screen.queryByLabelText(/sync/i)).not.toBeInTheDocument();
+  });
+
+  /**
+   * `null` and `"off"` are two different answers and this file's `null` case above does not
+   * stand in for this one. `AppShell` substitutes `null` only for the web target
+   * (`isWebTarget() ? null : deviceSync`); `useDeviceSyncLive` itself holds `"off"` on desktop
+   * and Android for every installation that has paired nothing, which is every installation
+   * today — so this is the branch every real desktop and Android reader is actually on.
+   */
+  it("says nothing when the socket is off", () => {
+    render(<Ribbon {...props({ deviceSync: "off" })} />);
+    expect(screen.queryByLabelText(/sync/i)).not.toBeInTheDocument();
+  });
+
+  /**
+   * The one state this marker exists for: a socket that died silently reads as a device with
+   * nothing to sync, and offline is the state a reader has to be told about.
+   */
+  it("shows an offline marker when the socket is down", () => {
+    render(<Ribbon {...props({ deviceSync: "offline" })} />);
+    expect(screen.getByLabelText("Sync is offline")).toBeInTheDocument();
+  });
+
+  /**
+   * **The label is written English rather than the wire word with a prefix.** It was
+   * `"Sync " + deviceSync`, which reads out as "Sync connecting" and "Sync live" — `LiveState`
+   * is an enum shared with Rust and is not a sentence. Asserted per state, because the map is
+   * the only thing standing between the enum and what a person hears.
+   */
+  it.each([
+    ["connecting", "Sync is reconnecting"],
+    ["live", "Sync is live"],
+    ["offline", "Sync is offline"],
+  ] as const)("names the %s marker in English", (state, label) => {
+    render(<Ribbon {...props({ deviceSync: state })} />);
+    expect(screen.getByLabelText(label)).toBeInTheDocument();
+  });
+
+  /**
+   * **The marker's `aria-live` region has to contain text, and for a while it contained none.**
+   * Its only child was an `aria-hidden` icon, so the region was live and permanently silent: a
+   * live region announces the text that changed inside it, and a changed `aria-label` is not
+   * reliably announced as a live update. The `sr-only` sentence is what it announces, and it is
+   * the same sentence the hover shows.
+   *
+   * `within` the marker rather than the whole row: the tooltip's own copy of that sentence
+   * mounts elsewhere when a pointer is over the button, and this assertion must be about the
+   * region.
+   */
+  it("gives the live region a sentence to announce", () => {
+    render(<Ribbon {...props({ deviceSync: "offline" })} />);
+    const marker = screen.getByLabelText("Sync is offline");
+    expect(marker).toHaveAttribute("aria-live", "polite");
+    const said = within(marker).getByText(/connection to your other devices dropped/i);
+    expect(said).toHaveClass("sr-only");
+  });
+
+  /**
+   * `getByRole("status")` is singular in six assertions in this file and throws on multiple
+   * matches. A working socket is not news, so the marker carries a tooltip and an
+   * `aria-label` and never a live-region role — this is the test that would fail loudly if a
+   * later edit gave it one.
+   */
+  it("adds no second live region", () => {
+    render(<Ribbon {...props({ deviceSync: "live" })} />);
+    expect(() => screen.getByRole("status")).not.toThrow();
   });
 });
 

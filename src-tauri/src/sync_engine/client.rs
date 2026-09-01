@@ -1,27 +1,55 @@
 //! Push, pull, and how often.
 //!
-//! # What this does not build: the WebSocket
+//! # What ships: the socket, not a poll
 //!
-//! Spec §7.7 says the Durable Object "fans out to connected devices over **hibernatable
-//! WebSockets**". **This ships HTTP pull-and-push instead**, and the Durable Object keeps a
-//! `/ws` route in its shape for the PR that adds it. Three reasons, in order of weight:
+//! **There is no poll and there never was.** This doc used to plan one — pull on open, pull
+//! every 60 s while the window has focus, push 2 s after the write mask goes quiet — and named
+//! two reasons the alternative, a WebSocket, was not built: `tokio-tungstenite` does not compile
+//! to `wasm32-unknown-unknown`, and a socket opened **from the page** would need the CSP widened.
+//! Both were true and neither was the obstacle they looked like, because the socket that shipped
+//! is opened from **this process**, not from the page: [`super::live`]'s connection manager holds
+//! a `tokio-tungstenite` client behind `cfg(not(target_family = "wasm"))` — so the wasm build
+//! never names it — alongside the `reqwest` connection to the relay this file already made.
+//! ⚠️ **Neither of those is "under" the CSP, and the phrasing this doc carried for a day said
+//! they were.** A Content-Security-Policy governs what the *webview* may fetch; a native HTTP or
+//! WebSocket client in the Rust process is outside its reach entirely — exempt, not permitted.
+//! The claim that matters is unchanged and is the stronger one: `tauri.conf.json` was not edited,
+//! and nothing was granted to the page. Neither blocker survived contact with where the socket
+//! actually lives; see the
+//! design spec §3 for the fuller argument, including the fourth reason the record never had: a
+//! browser's own `WebSocket` cannot set an `Authorization` header, and this one does.
 //!
-//! 1. **`reqwest` has no WebSocket client**, and the obvious addition — `tokio-tungstenite` —
-//!    does not compile to `wasm32-unknown-unknown`. Adding it would make the web target's core
-//!    un-buildable, which is the one thing this whole phase is arranged not to do.
-//! 2. **A WebSocket from the page would need the CSP widened.** `tauri.conf.json` grants
-//!    `connect-src 'self' ipc: http://ipc.localhost` and nothing else. Widening it is a decision
-//!    to take once, for all three targets, in the PR where the browser's own `WebSocket` is
-//!    available in the DB Worker.
-//! 3. **Polling is comfortably inside the free tier and this is arithmetic, not optimism.**
-//!    Pull on open, pull every 60 s while the window has focus, push 2 s after the write mask
-//!    goes quiet — `mirror::watch`'s own debounce, which this repo has already proven. Eight
-//!    hours of use is `28 800 / 60` = 480 pulls per device per day; three devices sharing one
-//!    group is **1 440**, which is **1.4%** of 100 000.
+//! **What runs**: a hibernatable WebSocket at `GET /g/{group}/ws`, held open for as long as the
+//! app is entitled-or-paired and in a group. It carries no card data — on every push the Durable
+//! Object sends the group's other sockets a `{"t":"head","cursor":N,"from":"<device>"}` doorbell,
+//! and a device that hears one runs exactly the HTTP round trip already in this file
+//! ([`run_once`]), the same one the **Sync now** button has always called. A frame is a hint and
+//! never a fact: it only ever brings a trip *forward*, never substitutes for one.
 //!
-//! What is lost is latency: a change made on a phone shows on the desktop within a minute
-//! rather than instantly. What is kept is a core that still compiles to wasm and a CSP that
-//! still grants nothing.
+//! **All the timing lives in [`super::schedule`], as a pure function of an explicit clock with no
+//! I/O**, and it comes down to two debounces. [`super::schedule::FRAME_DEBOUNCE_MS`] (1 s)
+//! coalesces a burst of `head` frames — a 50 000-row import is 250 sequential pushes and
+//! therefore 250 frames, and the receiving peer must react once, not 250 times.
+//! [`super::schedule::WRITE_DEBOUNCE_MS`] (3 s) waits out a local write and slides on every
+//! commit, so a transaction that keeps writing for a minute pushes once, at the end — armed off
+//! the mirror's own `commit_hook`, for the reason `db.rs`'s `CrossFileFence` doc gives: the
+//! update hook the mirror uses does not fire for `WITHOUT ROWID` tables, and two of the twelve
+//! synced ones are exactly that.
+//!
+//! **That hook fires for every transaction, so the debounce is armed only after the outbox has
+//! been asked** — `sync_ops WHERE pushed_at IS NULL`, in [`super::live`]'s `outbox_has_work`.
+//! Spec §6.3 states it as two halves and both are load-bearing: without the second, [`run_once`]
+//! stamping [`LAST_SYNC_AT`] at the end of every trip would arm the debounce that runs the next
+//! trip, for ever, and the Scryfall ingest's commit per 2 000 rows would ring the relay's
+//! doorbell as loudly as a deck edit. Every wake — a frame, a local write, launch, reconnect, Android
+//! resume, exit — feeds one single-flight queue, so at most one round trip is ever in flight and
+//! the rest coalesce into it rather than queuing a second.
+//!
+//! What is lost against instant delivery is nothing measurable in practice: "within a few
+//! seconds, always" is the design's own bar (spec §2), and the two debounces above are what holds
+//! the request count down without missing it. See [`super::live`] for the connection manager
+//! itself — when it opens a socket, the jittered reconnect backoff, and the protocol ping that
+//! keeps a hibernating socket alive for free.
 
 use crate::errors::{self, Kind, Source};
 use crate::sync_engine::apply::{self, ApplyReport};
@@ -47,6 +75,18 @@ pub const RELAY_URL: &str = "relay_url";
 
 /// How far this device has consumed the relay's log. The relay's `seq`, not a clock.
 pub const PULL_CURSOR: &str = "pull_cursor";
+
+/// The cursor this device last successfully handed to `/ack`.
+///
+/// **Separate from [`PULL_CURSOR`], and the separation is the whole point.** The relay answers
+/// a pull with the head of the *whole* log — including rows this device wrote, which `since`
+/// filters out of `envelopes` — so a device that pushes and then pulls gets an empty page and
+/// a higher cursor. Skipping the ack on "no envelopes" would mean the writing device never
+/// acks, its stored ack stays at its founding value, and `compact`'s floor pins there: nothing
+/// is ever compacted, for the life of the group, silently.
+///
+/// Written only after the relay took it, so a refused ack is retried on the next trip.
+pub const LAST_ACKED: &str = "last_acked";
 
 /// When the last complete round trip finished, in unix seconds.
 pub const LAST_SYNC_AT: &str = "last_sync_at";
@@ -966,6 +1006,10 @@ pub async fn ack(conn: &Connection, base: &str, token: &str) -> Result<(), Strin
     let cursor: i64 = get_state(conn, PULL_CURSOR)
         .and_then(|v| v.parse().ok())
         .unwrap_or(0);
+    let acked: Option<i64> = get_state(conn, LAST_ACKED).and_then(|v| v.parse().ok());
+    if acked == Some(cursor) {
+        return Ok(());
+    }
     let url = format!("{base}/g/{}/ack", group.group_id);
     // Written by hand rather than through reqwest's `json` feature, which this crate does not
     // enable: `serde_json` is already here, and a feature that changes what every other request
@@ -994,6 +1038,7 @@ pub async fn ack(conn: &Connection, base: &str, token: &str) -> Result<(), Strin
         note(conn, "ack", Kind::Http, &message, Some(&url));
         return Err(message);
     }
+    set_state(conn, LAST_ACKED, &cursor.to_string()).map_err(|e| e.to_string())?;
     Ok(())
 }
 

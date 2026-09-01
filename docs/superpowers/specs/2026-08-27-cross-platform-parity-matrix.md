@@ -164,7 +164,7 @@ The fifteen frontend files that name a Tauri API today, and what each becomes.
 | `plugin-clipboard-manager` | Tauri | `navigator.clipboard` | Tauri |
 | `plugin-opener` | Tauri | `window.open` | Tauri |
 | `api/window` + `TitleBar` + snap layouts | custom caption, Win32 hit-test | ⛔ — the browser owns the frame | ⛔ — the OS owns the frame |
-| `api/event` (sync/tag/combo progress) | Tauri events | `postMessage` from the Worker | Tauri events |
+| `api/event` (sync/tag/combo progress, plus live sync's `sync:applied`/`sync:live`) | Tauri events | `postMessage` from the Worker | Tauri events |
 | `mtgimg://` protocol (`src/lib/images.ts`) | custom protocol | Cache Storage + blob URLs | **custom URI scheme protocol**, origin `http://mtgimg.localhost` — not the asset protocol; `imageOrigin()` already returns that for an Android agent. Unverified on a device. |
 
 **The 136 commands are one file.** `src/lib/ipc.ts` is the only place the frontend names a

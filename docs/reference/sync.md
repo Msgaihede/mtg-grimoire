@@ -844,17 +844,24 @@ Spec §7.2 (what syncs), §7.3 (conflict semantics), §7.4 (what the reader sees
 
 ---
 
-## What syncs: eleven tables, and the twelfth does not exist
+## What syncs: twelve tables, and the spec's twelfth still does not exist
 
 `schema::SYNCED_TABLES`:
 
 `collection_entries` · `collection_folders` · `deck_audit` · `deck_cards` · `deck_categories` ·
-`deck_folders` · `deck_tags` · `decks` · `muted_tags` · `wishlist_entries` · `wishlist_folders`
+`deck_folders` · `deck_tags` · `decks` · `device_names` · `muted_tags` · `wishlist_entries` ·
+`wishlist_folders`
 
-**Eleven and not the spec's twelve.** The spec's list names `deck_allocations`, which **schema
-v25 dropped** — which deck holds a card is now which folder its row sits in, so the work that
-table did is inside `collection_folders`, which is on the list. A table that does not exist
-cannot be synced; the count moved and the intent did not.
+**Twelve, and not for the reason the spec's own count would suggest.** The spec's list names
+`deck_allocations`, which **schema v25 dropped** — which deck holds a card is now which folder
+its row sits in, so the work that table did is inside `collection_folders`, which is on the
+list. A table that does not exist cannot be synced, and that argument has not changed: it is
+why `deck_allocations` stays off this list for good. What brought the count back to twelve is a
+different table entirely — user schema **v31** added `device_names` (what each device in the
+group is called), a table the spec predates and never named. Two tables have each been "the
+twelfth" at different times, and they are not the same table: the spec's was dropped and is
+gone for good, this tree's is real and the spec never spoke of it. The count moved twice; the
+intent behind the first move did not.
 
 Two further corrections, both found by reading `schema.rs` rather than the spec:
 
@@ -929,9 +936,10 @@ while every count still reads one.
 **A sparse update op cannot describe a grain and does not need to** — the row it edits is found
 by uid. An *insert* op carries every field, which is what makes the grain rule work at all.
 
-**The row handle in `apply` is the uid and never the rowid.** Ten of the eleven tables have an
-`INTEGER PRIMARY KEY`; `muted_tags` has none at all, being `WITHOUT ROWID` on
-`(namespace, tag_id)`. Addressing by `sync_uid` is one spelling for all eleven.
+**The row handle in `apply` is the uid and never the rowid.** Ten of the twelve tables have an
+`INTEGER PRIMARY KEY`; two have none at all — `muted_tags` is `WITHOUT ROWID` on
+`(namespace, tag_id)` and `device_names` on `device_id` alone. Addressing by `sync_uid` is one
+spelling for all twelve.
 
 **Minting takes three sites, not one**, and only one of them is the ladder:
 
@@ -1645,66 +1653,78 @@ fix, not a pointer to a table that still disagrees with it.
 
 ---
 
-## What is not built: the WebSocket
+## The WebSocket is built — and two of the three reasons it wasn't were about the wrong socket
 
-§7.7 says the Durable Object "fans out to connected devices over hibernatable WebSockets". This
-ships **HTTP pull-and-push**, and the Durable Object keeps a `/ws` route in its shape — a `501`
-with the reason in the body — for the PR that adds it. Three reasons, in order of weight:
+⚠️ **Superseded 2026-08-31.** This section used to argue the Durable Object's `/ws` route stayed a
+`501` — a hibernating WebSocket, kept, but with nothing behind it. It is built now: see
+[the live-sync design](../superpowers/specs/2026-08-31-live-sync-design.md), which is the source
+for everything in this section, §§3–6 and §11 by name. The old three-reasons paragraph is kept
+below as history rather than deleted, because it was two-thirds wrong for a reason worth carrying
+forward: **two of the three were about a socket opened from the page, and the one that shipped is
+opened from the Rust process instead.** Neither blocker survived contact with where the socket
+actually lives.
 
-1. **`reqwest` has no WebSocket client**, and the obvious addition, `tokio-tungstenite`, does not
-   compile to `wasm32-unknown-unknown`. Adding it would make the web target's core un-buildable,
-   which is the one thing this phase is arranged not to do.
-2. **A WebSocket from the page would need the CSP widened.** `tauri.conf.json` grants
-   `connect-src 'self' ipc: http://ipc.localhost` and nothing else. Widening it is a decision to
-   take once, for all three targets.
-3. **Nothing polls, so nothing is being spent.** ⚠️ **Corrected 2026-08-29, and the old figure
-   was wrong twice.** This read "polling is comfortably inside the free tier": pull on open, pull
-   every 60 s while the window has focus, push 2 s after the write mask goes quiet — eight hours
-   at 28 800 / 60 = 480 pulls per device, three devices to a group, **1 440/day, 1.4% of
-   100 000**. It counted **pulls alone**, when a round trip is **two or three HTTP requests** —
-   `pull` and `ack` both fire once the device is in a group, and `push` short-circuits at `Ok(0)`
-   with nothing pending (`client.rs:291`). And it modelled **a poll that does not exist.** There
-   is no `setInterval`, no `refetchInterval` and no Rust timer: `round_trip` has exactly two
-   production callers — `sync_now` at `sync_engine/commands.rs:208` through `run_once`, and the
-   revoke path at `sync_pair/pairing.rs:543` through `run_once_without_baselines` — and in the
-   frontend `ipc.syncNow()` is called from one place, the mutation behind the **Sync now** button
-   at `SyncPanel.tsx:483`. **Sync today is manual.** `client.rs`'s module doc describes the poll
-   too, and it is describing a design rather than shipped code.
+The Durable Object accepts a hibernatable WebSocket at `GET /g/{group}/ws`, held open by
+`sync_engine::live`'s connection manager for as long as the device is entitled-or-paired and in a
+group — the same condition under which the old `round_trip` returned `Ok(None)` with no traffic,
+so an installation that has connected nothing opens no socket, exactly as before. On every push
+the Durable Object sends the group's other sockets a `{"t":"head","cursor":N,"from":"<device>"}`
+frame — a doorbell, never card data — and a device that hears one runs the same HTTP round trip
+the **Sync now** button has always run. The socket only ever decides *when* that trip happens; a
+frame is a hint and is never itself the cursor advancing.
 
-   Recomputed 2026-08-29 against Cloudflare limits verified live the same day. **Every relay
-   request bills twice** — one Worker invocation and one Durable Object request — except one the
-   auth gate refuses, which bills only the Worker. Per group of three devices, plus about **four**
-   token refreshes a day — a 24-hour token with a six-hour margin refreshes a little over once per
-   device per *day*, so the figure is per device and not per group. ⚠️ This said three;
-   **corrected 2026-08-29**, and spec §8 carries the same correction. The difference is inside the
-   rounding of every figure below:
+**The three original reasons, and what actually happened:**
 
-   | Cadence | Requests/day/group | Groups on **free** (100 000/day) | 1 000 groups, **paid** |
-   | --- | --- | --- | --- |
-   | **Manual — what ships today**, ~10 syncs/device | ~70 | **~1 400** | **~$5.20** |
-   | 5-minute poll | ~580 | ~170 | ~$9.60 |
-   | 60-second poll | ~2 900 | **~34** | ~$41 |
+1. **"`reqwest` has no WebSocket client, and the obvious addition, `tokio-tungstenite`, does not
+   compile to `wasm32-unknown-unknown`."** True, and irrelevant once nothing on the wasm target
+   names the crate: `tokio-tungstenite` sits in `Cargo.toml`'s existing
+   `[target.'cfg(not(target_family = "wasm"))'.dependencies]` block, and every line of
+   `sync_engine::live` — the only module that touches it — carries the same `cfg`, not just the
+   dependency declaration. `sync_engine` as a whole still compiles for wasm, which `lib.rs`'s
+   module doc states as the point rather than a bonus, and `npm run verify` cannot see whether the
+   gate is right — only CI's `wasm` job builds that target.
+2. **"A WebSocket from the page would need the CSP widened."** It would not, and this is the half
+   the record had backwards: `connect-src 'self' ipc: http://ipc.localhost` governs the
+   **webview's** connections, and the socket that shipped is opened by `tokio-tungstenite` inside
+   the Rust process — the same process that already reaches the relay over `reqwest`, proven live
+   by the 2026-08-29 two-device pass. ⚠️ **That clause read "over `reqwest` under that exact CSP"
+   for part of 2026-08-31, and "under" is the wrong word for what a CSP does.** A
+   Content-Security-Policy is a webview mechanism: it governs fetches the *page* makes, and a
+   native HTTP or WebSocket client in the Rust process is **exempt** from it rather than permitted
+   by it. Nothing in `connect-src` was ever consulted for either connection. The substantive claim
+   is unchanged and is the stronger one: `tauri.conf.json` was not edited by this change and the
+   page was granted nothing. A fourth reason the record never named: a browser's own `WebSocket` constructor
+   cannot set an `Authorization` header, so a socket opened from the page would have forced the
+   relay's bearer gate onto a query parameter or a subprotocol — a relay change, and a worse one.
+   Opening it from Rust keeps the existing gate unchanged.
+3. **"Nothing polls, so nothing is being spent."** Correct at the time, and it was a reason to
+   wait rather than a reason never to build it — see the cost below for what spending looks like
+   now that something does.
 
-   **The cadence is the entire cost model.** Data volume is irrelevant; a 5× change in the
-   interval is a 5× change in the bill, and the free plan's 100 000/day is a hard wall that
-   errors for every reader at once. That is why the scheduler is now a decision of its own rather
-   than a detail of whichever PR happens to touch the transport —
-   [the hosted relay design](../superpowers/specs/2026-08-29-hosted-relay-and-patreon-design.md)
-   §8 is the table to take it with.
+**The cost, re-derived** (spec §11; Cloudflare limits verified 2026-08-31):
 
-   **The plan decision, taken 2026-08-29: stay on the free tier and add a ceiling alarm**, rather
-   than buying the $5 plan ahead of the first patron. Spec §8 argued the other way and this is the
-   decision taken against it, for a reason the table above makes and the spec agrees with: **the
-   free ceiling is a cliff and not a slope.** Past 100 000 requests in a day it does not
-   degrade — every reader starts erroring at once, together, and the first anybody hears of it is
-   complaints. So the alarm notifies at roughly **70% of the daily cap**, which turns that cliff
-   into a warning with a day's room to move. At the manual cadence that ships today ~70 requests
-   per group per day is nowhere near it; the alarm is there for the poll, and for the afternoon a
-   reader base grows faster than anybody was watching.
+| | DO requests/group/day | Groups on free |
+| --- | --- | --- |
+| Idle group — connected, nobody editing | ~25 | ~4 000 |
+| Busy group — 50 edits → ~20 debounced bursts, 3 devices | ~225 | ~440 |
+| Manual — what shipped before this branch | ~70 | ~1 400 |
 
-What is lost is latency, and more of it than this used to say: with no poll, a change made on a
-phone reaches the desktop when someone presses **Sync now**, not within a minute. What is kept is
-a core that still compiles to wasm and a CSP that still grants nothing.
+A busy group costs about 3× the old manual cadence, but on a different curve: a poll is paid
+whether or not anybody is using the app, where this is paid only when somebody edits, so it cannot
+run away on its own — which is what the 2026-08-29 decision below was actually worried about.
+**That decision — stay on the free plan, add a Cloudflare notification at ~70% of the daily
+request cap — stands, and the notification matters more now that the number is reader-driven.**
+Storage and duration never bind: 484 KB/group against 5 GB, and ~0.02 GB-s/group/day against
+13 000.
+
+⚠️ One figure is unverified: Cloudflare's 20:1 ratio for incoming WebSocket messages is documented
+as *"for compute requests billing-only"*, and whether it applies to the free plan's 100 000/day
+counter is genuinely ambiguous. Every figure above assumes the pessimistic 1:1 — it barely bites,
+because protocol pings are free and the client sends almost nothing else inbound.
+
+What changed against the old manual baseline: a change made on a phone now reaches the desktop
+within a few seconds, rather than at the next press of **Sync now**. What did not change: the core
+still compiles to wasm, and the CSP still grants nothing.
 
 **One correction to the plan, and it is the difference between a stall and a loss.** The plan says
 an envelope that will not open must not advance the cursor past it. That is right for exactly one
@@ -2004,13 +2024,25 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
 
 ## What is still owed
 
-- **The WebSocket fan-out**, with the CSP decision that comes with it — and, ⚠️ **corrected
-  2026-08-29**, the poll it was meant to replace, which was never built either. This bullet said
-  "until then §7.7's request figure is the polled 1 440 rather than the ~150 an edit-driven relay
-  would spend". There is no poll: `round_trip` is reached only from the **Sync now** button and
-  from the revoke path, so the cadence that ships is manual and costs ~70 requests a day per
-  group. The 1 440 was a poll's figure and it counted pulls alone besides; the corrected table is
-  under "What is not built: the WebSocket" above.
+- ~~**The WebSocket fan-out**, with the CSP decision that comes with it.~~ **Built 2026-08-31** —
+  see [the live-sync design](../superpowers/specs/2026-08-31-live-sync-design.md) and "The
+  WebSocket is built" above: `sync_engine::live` holds a hibernatable socket per device, opened
+  from the Rust process rather than the page, so the CSP decision this bullet expected never had
+  to be taken. There never was a poll for it to replace either — the record's own confusion about
+  that is history now, folded into the section above rather than repeated here.
+- **`pull` has no page size, and the doorbell is what turns that from a latent hazard into a
+  routine path** (spec §8). `group.ts:172-197` returns every envelope past the cursor in one
+  response and `client.rs:917`'s `response.text()` has no cap, so a peer offline through a
+  50 000-row import pulls 250 envelopes in one body — **~46.6 MB**, held as row strings plus the
+  `JSON.stringify` copy at **~95 MB inside a 128 MB isolate shared with every other group's**
+  Durable Object, and over 150 MB peak on the phone. This is reachable today at
+  `wire::BATCH = 200` and has nothing to do with automatic sync — what automatic sync changes is
+  how often the path is taken: a `head` frame that wakes a peer holding a 250-row backlog *is*
+  this path, where before it needed a reader to press **Sync now** by hand onto a device that had
+  been stale for a while. The fix is a `LIMIT` on `pull` plus a cursor-carrying loop on the
+  client — a change to the pull contract on both sides, with its own tests — and it is the next
+  PR after this one; a live two-device pass must not import 50 000 rows against an offline peer
+  until it lands.
 - **A third device's tombstone against a third device's edit.** Add-wins reads this device's own
   history and the incoming batch; two *other* devices' ops only meet if they arrive together. A
   tombstone table would close it and is not built.
@@ -2029,9 +2061,32 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   and on `/claim`, `/claim`'s rebind and `/rotate`'s `keepOnly` are all written and tested and
   none of it is running: the live `/token` still accepts a body with no `device`. The migration
   file and the order it goes in are in the runbook.
-- **No WebSocket fan-out for the rewrap either.** `/keys` is checked on the same manual cadence
-  `round_trip` already has, so a removal reaches a remaining device the next time it syncs, not
-  instantly. That is the same latency the bullet above describes and not a second problem.
+- ~~**No WebSocket fan-out for the rewrap either.**~~ **Partly built 2026-08-31** — `check_keys`
+  runs at the top of every round trip, so a removal is now picked up by *whatever* wakes a device:
+  a `head` frame, a local write, launch, a reconnect. ⚠️ **This bullet claimed "within a few
+  seconds of the next `head` frame" for part of that day and it is false — there is no frame.**
+  A rotation never reaches the Durable Object at all: `index.ts` answers `/rotate` and `/keys`
+  ahead of the bearer gate, out of D1, precisely because a rotated-away device cannot mint a
+  token — and `notify()` is called from `push` and nowhere else, so nothing broadcasts. **A quiet
+  group therefore learns of a removal at its next trip for some other reason**, which on an idle
+  device is the next launch or the next reconnect. Still a large improvement on the manual press
+  it replaced, and still not a fan-out. Closing it properly means either a notify on the rotate
+  path — which would have to reach the object the rotate deliberately avoids — or the removing
+  device pushing something after it publishes.
+- **A round trip holds the write connection across the network, so a user edit can be told the
+  database is busy.** `live::trip` and `commands::sync_now` both wrap the whole of
+  `client::run_once` in `sync::with_write`, and that closure is `check_keys` → `push` → `pull` →
+  `emit_baselines` → `ack` — five HTTP requests, one of them a `push` that loops a batch at a
+  time. A write the reader makes while one is in flight waits out `db::WRITE_LOCK_WAIT` and then
+  answers `db::BUSY`: *"the database is busy finishing a sync"*, after five seconds, over a
+  keystroke. **It is not new** — that is the shape `sync_now` has always had, and pressing the
+  button has always been able to do it — but automatic sync makes it reachable without a press.
+  Two things keep it rare rather than fixed: trips are single-flight, and since the outbox gate
+  the local-write trip fires three seconds after writing goes *quiet*, so the reader is usually
+  not mid-edit when one starts. Fixing it properly means holding the connection only for the
+  statements that need it and letting the network happen outside — a change to this crate's write
+  discipline with its own failure modes (a push and a concurrent edit interleaving on `sync_ops`),
+  and it needs a spec rather than a patch at the end of a branch.
 - **`sync_ops` has no retention rule.** `pushed_at` is stamped and the row is kept, because the
   log is also this device's memory of what it did — add-wins and the cycle-break both read
   it. Nothing prunes it, so it grows for the life of the install: at the measured 453—698 B per
@@ -2041,3 +2096,26 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
 - ~~**Nothing has been driven in the shipped window.**~~ **Done 2026-08-29** — the relay is
   deployed and a desktop and a phone converged over it. See "The first end-to-end pass" below.
 - **The bulk-import cost.** 4.22× is measured and unaddressed; see above.
+- **A persistent push failure still retries every ~3 s while the socket is up.** The outbox gate
+  (`live::outbox_has_work`) improved this — before it, *every* commit rang the bell whether or
+  not there was anything to push — but it did not close it: a failing trip leaves its op
+  `pushed_at IS NULL`, so the next commit (the trip's own `error_log` row among them) finds a
+  pending op, the gate answers `true`, and `schedule.rs`'s `WRITE_DEBOUNCE_MS` fires the next
+  trip three seconds later. `schedule.rs`'s `backoff_ms`/`deserves_backoff` govern the
+  **socket** — how long `connect_once` waits before dialing again after a disconnect — not the
+  trip ladder, so a trip that keeps failing over a socket that stays up has no error backoff of
+  its own.
+- **`Wake::Resume` is declared but never constructed.** Its mechanism is real but unwired —
+  `live::resume()` only sets the `FOREGROUND` atomic and never calls
+  `sched.wake(Wake::Resume, …)`. The catch-up still happens: the outer loop dials on resume
+  regardless, and `connect_once` fires `Wake::Reconnect` on every socket that comes up, so
+  `Resume` is redundant rather than missing. But `Wake::Exit` was deleted from this very enum
+  for being never-constructed, and this one now sits in the state that condemned it — either
+  arm it or delete it.
+- **`WAKE_LOCK_WAIT`'s one-second timeout can drop a single wake.** `outbox_has_work` tries the
+  write connection for one second and answers `false` on a miss rather than waiting longer or
+  asking again on its own. If another writer holds `state.db` for longer than that with no
+  further commit to ring the bell a second time, that wake is lost. Self-healing in every case
+  examined — the competing writer is usually a `sync_now` press that pushes the very op the
+  missed wake would have pushed — but it is the one way the gate can fall quiet with real work
+  still in the outbox, and it was undocumented until now.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compact, since, TAIL_MS, type Row } from "./log";
+import { compact, since, TAIL_MS, type Row, deviceTag, headFrame, notifyTargets } from "./log";
 
 /**
  * A row with sensible defaults. `hlcMs` follows `seq` unless a test says otherwise, so a test
@@ -143,5 +143,53 @@ describe("compact", () => {
     compact(rows, new Map([["alpha", 1]]), 90 * DAY);
 
     expect(rows).toHaveLength(1);
+  });
+});
+
+describe("deviceTag", () => {
+  it("prefixes so a device id can never collide with a future tag namespace", () => {
+    expect(deviceTag("abc123")).toBe("d:abc123");
+  });
+});
+
+describe("headFrame", () => {
+  it("is the three-field hint and nothing else", () => {
+    expect(JSON.parse(headFrame(42, "abc123"))).toEqual({
+      t: "head",
+      cursor: 42,
+      from: "abc123",
+    });
+  });
+});
+
+describe("notifyTargets", () => {
+  const open = (tag: string | undefined) => ({ tag, open: true });
+
+  it("excludes the pusher's own socket", () => {
+    const targets = notifyTargets([open("d:me"), open("d:you")], "me");
+    expect(targets.map((s) => s.tag)).toEqual(["d:you"]);
+  });
+
+  it("excludes a socket that is closing", () => {
+    const targets = notifyTargets([{ tag: "d:you", open: false }], "me");
+    expect(targets).toEqual([]);
+  });
+
+  it("notifies every other device, not just one", () => {
+    const targets = notifyTargets([open("d:a"), open("d:b"), open("d:c")], "a");
+    expect(targets.map((s) => s.tag)).toEqual(["d:b", "d:c"]);
+  });
+
+  it("keeps a socket with no tag rather than dropping it", () => {
+    // An untagged socket cannot be proved to be the pusher's, and a missed notification is a
+    // stale device. Over-notifying costs one wasted pull; under-notifying costs correctness.
+    const targets = notifyTargets([open(undefined)], "me");
+    expect(targets).toHaveLength(1);
+  });
+
+  it("does not mutate its input", () => {
+    const sockets = [open("d:me"), open("d:you")];
+    notifyTargets(sockets, "me");
+    expect(sockets).toHaveLength(2);
   });
 });

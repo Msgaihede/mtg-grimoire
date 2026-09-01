@@ -159,8 +159,10 @@ tauri-plugin-opener = "2"
 # a path the backend reads or writes rather than bytes, so this plugin is what stands between a
 # button and a command that already exists. (`deck_set_cover_image` was a fourth until custom
 # deck covers were removed on 2026-08-31.)
-# `capabilities/default.json` grants `dialog:allow-open` **and `dialog:allow-save`** — the
-# second since the export dialog shipped, which this comment went on denying for a whole plan.
+# `capabilities/desktop.json` and `capabilities/mobile.json` both grant `dialog:allow-open`
+# **and `dialog:allow-save`** — the second since the export dialog shipped, which this comment
+# went on denying for a whole plan. (The file was `capabilities/default.json` until the Android
+# target split it in two; there is no `default.json` any more.)
 # The other three verbs (message, ask, confirm) are not permitted; the app's own questions are
 # drawn in the page. Never `dialog:default`.
 tauri-plugin-dialog = "2"
@@ -183,8 +185,9 @@ tauri-plugin-single-instance = "2"
 #
 # **A plain dependency rather than `[target.'cfg(windows)'.dependencies]`, for the reason the
 # mcp-bridge paragraph below gives**: `tauri-build` discovers a plugin's ACL permissions
-# through the dependency graph, so target-gating it would leave `capabilities/default.json`'s
-# two `snap-layout:` entries unresolvable on the Linux half of the CI matrix. The crate ships a
+# through the dependency graph, so target-gating it would leave `capabilities/desktop.json`'s
+# two `snap-layout:` entries unresolvable on the Linux half of the CI matrix — `mobile.json`
+# grants neither, on purpose (no caption, no maximize button to overlay). The crate ships a
 # dummy implementation for every non-Windows target and compiles to nothing there.
 #
 # **`cfg(not(target_family = "wasm"))` is not that target-gate and does not reintroduce its
@@ -198,15 +201,33 @@ tauri-plugin-snap-layout = "1"
 # `#[cfg(debug_assertions)]` in `lib.rs` — a release build compiles the crate and never opens
 # the port. It stays a plain dependency rather than an optional one on purpose: `tauri-build`
 # discovers a plugin's ACL permissions through the dependency graph, so dropping it from the
-# release profile would leave `capabilities/default.json`'s `mcp-bridge:` entries unresolvable
-# and fail the build that needs them least.
+# release profile would leave `capabilities/desktop.json`'s `mcp-bridge:` entries unresolvable
+# and fail the build that needs them least. (`mobile.json` grants none — an unauthenticated
+# WebSocket that evaluates arbitrary JavaScript has no place on a phone.)
 tauri-plugin-mcp-bridge = "0.12"
 # `rt` is not optional: tokio::fs runs every operation through spawn_blocking, which
 # needs a runtime handle. It reaches us through tauri's tokio today, but this crate
 # must not depend on another crate's feature selection to compile.
 # `sync` is the semaphore that caps concurrent image fetches; `time` is the sleep the
 # image cache's pacer and its 429 penalty are made of.
-tokio = { version = "1", features = ["fs", "io-util", "rt", "sync", "time"] }
+# `macros` is `sync_engine::live`'s `tokio::select!` and nothing else. It compiles without it
+# today only because something else in the graph turns it on, and a feature this crate's own
+# source names must be a feature this crate asks for - the artifact is unchanged either way.
+tokio = { version = "1", features = ["fs", "io-util", "macros", "rt", "sync", "time"] }
+# The relay doorbell. **`rustls-tls-webpki-roots` and never the `native-tls` default**:
+# `reqwest` above is `rustls-tls`, and a second TLS stack would put schannel into a portable
+# exe for no gain. In this block and not `[dependencies]` because `sync_engine` compiles for
+# wasm32 — see `lib.rs`'s module doc — so the crate must be invisible there.
+#
+# **0.28 and not 0.24, because `tauri-plugin-mcp-bridge` already pulls 0.28 and cargo unifies
+# on it.** The version the plan named was a second copy of both this crate and `tungstenite`
+# in one exe, and it dragged `rand 0.8`/`rand_chacha`/`rand_core 0.6` in with it — and with
+# those, `getrandom 0.2`, the one major in this tree that refuses to build for wasm32 without a
+# build flag. Matching the plugin costs a little API churn (`Utf8Bytes` and `Bytes` payloads)
+# and adds exactly **one** crate to `Cargo.lock`: `webpki-roots`. It is the same argument the
+# paragraph above makes about not admitting a second TLS stack, one crate over.
+tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+
 # ── Web ──────────────────────────────────────────────────────────────────────────
 # ⚠️ NEVER add `default-features = false` to this rusqlite line. `ffi-sqlite-wasm-rs` — the
 # FFI backend that makes wasm work at all — is in rusqlite's DEFAULT feature set, and

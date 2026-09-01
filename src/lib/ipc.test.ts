@@ -14,6 +14,8 @@ import deckRs from "../../src-tauri/src/deck.rs?raw";
 import deckTheoryRs from "../../src-tauri/src/deck_theory.rs?raw";
 import resetRs from "../../src-tauri/src/reset.rs?raw";
 import searchRs from "../../src-tauri/src/search.rs?raw";
+import syncCommandsRs from "../../src-tauri/src/sync_engine/commands.rs?raw";
+import syncLiveRs from "../../src-tauri/src/sync_engine/live.rs?raw";
 import wishlistRs from "../../src-tauri/src/wishlist.rs?raw";
 import ipcSource from "./ipc.ts?raw";
 import {
@@ -24,6 +26,8 @@ import {
   type ComboProgress,
   type FeedProgressEvent,
   type OracleTagProgressEvent,
+  type RelayOutcome,
+  type SyncLiveEvent,
   type SyncProgressEvent,
 } from "@/lib/ipc";
 
@@ -1410,6 +1414,106 @@ it("unwraps the sync:progress payload and returns the unlisten handle", async ()
 });
 
 /**
+ * `sync:applied` and `sync:live` — the connection manager's two events (`sync_engine/live.rs`,
+ * `sync_engine/commands.rs`). Same trap as every event name in this file: the string is the
+ * whole contract and nothing in the type system holds it, so a subscriber spelling either one
+ * differently — a hyphen, an underscore — hears nothing at all, forever, with no error
+ * anywhere. `RelayOutcome` already exists above as `syncNow`'s answer; `onSyncApplied` hands
+ * that same shape through unwrapped rather than redeclaring it.
+ */
+it("subscribes to sync:applied and hands the payload through unwrapped", async () => {
+  const unlisten = vi.fn();
+  let emit: ((evt: { payload: RelayOutcome }) => void) | undefined;
+  listen.mockImplementation(
+    (_name: string, handler: (evt: { payload: RelayOutcome }) => void) => {
+      emit = handler;
+      return Promise.resolve(unlisten);
+    },
+  );
+  const seen: RelayOutcome[] = [];
+  const outcome: RelayOutcome = {
+    pushed: 1,
+    pulled: 2,
+    unreadable: 0,
+    applied: 3,
+    resurrected: 0,
+    cyclesBroken: 0,
+    skipped: 0,
+    deferred: 0,
+    baselineOps: 0,
+    baselineHistory: 0,
+  };
+
+  const stop = await ipc.onSyncApplied((o) => seen.push(o));
+  emit?.({ payload: outcome });
+
+  expect(listen).toHaveBeenCalledWith("sync:applied", expect.any(Function));
+  expect(seen[0]).toEqual(outcome);
+  stop();
+  expect(unlisten).toHaveBeenCalledTimes(1);
+});
+
+it("subscribes to sync:live and hands the payload through unwrapped", async () => {
+  const unlisten = vi.fn();
+  let emit: ((evt: { payload: SyncLiveEvent }) => void) | undefined;
+  listen.mockImplementation(
+    (_name: string, handler: (evt: { payload: SyncLiveEvent }) => void) => {
+      emit = handler;
+      return Promise.resolve(unlisten);
+    },
+  );
+  const seen: SyncLiveEvent[] = [];
+
+  const stop = await ipc.onSyncLive((e) => seen.push(e));
+  emit?.({ payload: { state: "connecting" } });
+
+  expect(listen).toHaveBeenCalledWith("sync:live", expect.any(Function));
+  expect(seen).toEqual([{ state: "connecting" }]);
+  stop();
+  expect(unlisten).toHaveBeenCalledTimes(1);
+});
+
+/**
+ * **The two tests above pin only this side of the seam, and that is the failure this repo has
+ * already had twice.** A Rust↔`ipc.ts` contract has no compiler and no shared type: renaming
+ * `app.emit("sync:applied", …)` in the crate leaves every assertion here green, because they
+ * assert that `onSyncApplied` subscribes to the string *this file* wrote down — a listener
+ * hearing nothing, forever, with both suites passing.
+ *
+ * So the string is read out of the crate, the same way the DTO mirrors below read their struct
+ * fields. Two emitters, because the events come from two places: `sync_engine/live.rs` emits
+ * both from the background loop, and `sync_engine/commands.rs` emits `sync:applied` again for
+ * the manual **Sync now** press.
+ *
+ * The `raw.includes` shape is deliberately crude — this is a name check and not a parse. What
+ * it can catch is the whole class that has bitten: a rename on either side, a hyphen for a
+ * colon, an underscore for a hyphen.
+ */
+describe("the sync event names agree with the crate that emits them", () => {
+  const emitters: [name: string, source: string][] = [
+    ["sync_engine/live.rs", syncLiveRs],
+    ["sync_engine/commands.rs", syncCommandsRs],
+  ];
+
+  // Not `toContain` on the raw sources alone: a pass has to mean "both ends spell it", never
+  // "neither end was read", so each source is checked for length first.
+  it.each(emitters)("%s was read", (_name, source) => {
+    expect(source.length).toBeGreaterThan(1_000);
+  });
+
+  it("emits sync:applied on both sides of the boundary", () => {
+    expect(syncLiveRs).toContain('app.emit("sync:applied"');
+    expect(syncCommandsRs).toContain('app.emit("sync:applied"');
+    expect(ipcSource).toContain('"sync:applied"');
+  });
+
+  it("emits sync:live on both sides of the boundary", () => {
+    expect(syncLiveRs).toContain('app.emit("sync:live"');
+    expect(ipcSource).toContain('"sync:live"');
+  });
+});
+
+/**
  * `marketplace:progress` — its **own** event rather than a ninth `SyncPhase`.
  *
  * The name is the whole contract and there is nothing in the type system holding it: a
@@ -1926,6 +2030,21 @@ describe("pairing", () => {
     // which is the state every existing installation is in and is not an error.
     expect(await ipc.syncNow()).toBeNull();
     expect(invoke).toHaveBeenCalledWith("sync_now");
+  });
+
+  it("tells the socket whether the app is in front under `on`", async () => {
+    invoke.mockResolvedValue(undefined);
+
+    await ipc.syncLiveForeground(true);
+
+    expect(invoke).toHaveBeenCalledWith("sync_live_foreground", { on: true });
+  });
+
+  it("reads the socket's current state with no arguments", async () => {
+    invoke.mockResolvedValue("connecting");
+
+    expect(await ipc.syncLiveState()).toBe("connecting");
+    expect(invoke).toHaveBeenCalledWith("sync_live_state");
   });
 
   it("lists the review queue with no arguments and clears one row by table and uid", async () => {

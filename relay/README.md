@@ -466,49 +466,80 @@ group.
 Per group — three devices, plus about four token refreshes a day, since a 24-hour token with a
 six-hour margin refreshes a little over once per *device* per day. **The device cap is what bounds
 the worst case at all**: five devices is the ceiling since 2026-08-30, so no group can be more
-than ~1.7× the row below, where before it was unbounded.
+than ~1.7× any row below, where before it was unbounded.
 
-| Cadence | Requests/day/group | Groups on **free** | 1 000 groups, **paid** |
-| --- | --- | --- | --- |
-| **Manual (what ships today)**, ~10 syncs/device | ~70 | **~1 400** | **~$5.20** |
-| 5-minute poll | ~580 | ~170 | ~$9.60 |
-| 60-second poll | ~2 900 | **~34** | ~$41 |
+**Re-derived 2026-08-31** (design spec §11) now that live sync pays for a socket rather than a
+poll: what a group spends now tracks what it *does*, not a cadence every device pays alike
+regardless of whether anybody is at the keyboard.
+
+| | DO requests/group/day | Groups on **free** |
+| --- | --- | --- |
+| Idle group — connected, nobody editing | ~25 | ~4 000 |
+| Busy group — 50 edits → ~20 debounced bursts, 3 devices | ~225 | ~440 |
+| Manual — the **Sync now** button, still there as a fallback | ~70 | ~1 400 |
 
 Storage never binds: 484 KB/group against 5 GB is ~10 000 groups. Duration never binds. D1 never
 binds — the hot path reads no storage at all.
 
-Three conclusions:
+Two conclusions:
 
-- **The poll cadence is the entire cost model.** Data volume is irrelevant; a 5× change in the
-  interval is a 5× change in the bill. Sync is manual today, so the scheduler is a separate
-  decision and the table above is what to take it with.
-- **Even the worst case is ~4¢ per patron per month.** Billing here is not really about recouping
-  cost — it is about not waking to an unbounded bill.
+- **The cost is edit-driven, not clock-driven.** A poll is paid whether or not anybody is using
+  the app; this is paid only when somebody edits, so it cannot run away on its own — a busy group
+  costs about 3× an idle one paying for nothing, and that multiplier tracks how much editing
+  actually happens rather than a timer that ticks regardless of it.
 - **The free plan's 100 000/day is a cliff, not a slope.** Past it every reader starts erroring
   simultaneously, so without warning the first signal is complaints.
 
 **Decided 2026-08-29: stay on the free plan, and add a Cloudflare notification at ~70% of the
-daily request cap.** At the cadence that actually ships, ~1 400 groups fit inside the free tier, so
-paying now would buy headroom against a number no reader is near. What the alarm buys is the thing
-the free tier otherwise lacks — warning instead of complaints — and it costs nothing. Going paid
-stays a one-switch change if the alarm ever fires.
+daily request cap — and that decision stands.** Even the busiest cadence this design pays for, a
+group with somebody editing constantly, still leaves about 440 groups fitting inside the free
+tier, and a merely-connected idle group is closer to 4 000; paying now would buy headroom against
+numbers no reader is near. What the alarm buys is the thing the free tier otherwise lacks —
+warning instead of complaints — and it costs nothing. **The notification matters more now than it
+did**, because what a group spends is reader-driven — how much its devices edit — rather than a
+fixed cadence every device paid alike. Going paid stays a one-switch change if the alarm ever
+fires.
 
 **KV is ruled out of the hot path**: 1 000 writes/day on the free plan. **No R2.** One
 SQLite-backed Durable Object per pairing group, one D1 table beside it, and nothing else.
 
-## What is not built: the WebSocket
+## The WebSocket is built — and two of the three reasons below were about the wrong socket
 
-§7.7 of the spec says the Durable Object "fans out to connected devices over hibernatable
-WebSockets". This ships HTTP pull-and-push instead, and `/g/{group}/ws` is a `501` that keeps the
-route in the object's shape. Three reasons:
+⚠️ **Superseded 2026-08-31.** This section used to argue `/g/{group}/ws` stayed a `501`. It is
+built now — see
+[the live-sync design](../docs/superpowers/specs/2026-08-31-live-sync-design.md). The three
+reasons below are kept as history: two of them were about a WebSocket opened **from the page**,
+and the one that shipped opens from the app's own Rust process instead, so neither blocker
+survived contact with where the socket actually lives.
 
-1. **`reqwest` has no WebSocket client**, and `tokio-tungstenite` does not compile to
-   `wasm32-unknown-unknown` — which would make the web target's core un-buildable.
-2. **A socket from the page would need the CSP widened.** `tauri.conf.json` grants
-   `connect-src 'self' ipc: http://ipc.localhost` and nothing else. Widening it is a decision to
-   take once, for all three targets, in the PR where the browser's own `WebSocket` is available.
-3. **Polling is comfortably inside the free tier**, as the table above shows — and it is the
-   *manual* row that ships, which is cheaper still.
+`GET /g/{group}/ws` now upgrades to a hibernatable WebSocket, behind the same bearer gate every
+`/g/…` route sits behind — `/rotate` and `/keys` excepted. On every push the Durable Object
+sends the group's other connected sockets a `{"t":"head","cursor":N,"from":"<device>"}` frame —
+no card data, ever — and a device that hears one runs the ordinary HTTP round trip above. The
+socket only ever decides *when* that trip happens; a frame is a hint, never the cursor advancing
+on its own.
 
-What is lost is latency: a change made on a phone shows on the desktop within a minute rather than
-instantly. What is kept is a core that still compiles to wasm and a CSP that still grants nothing.
+1. **"`reqwest` has no WebSocket client, and `tokio-tungstenite` does not compile to
+   `wasm32-unknown-unknown`."** True, and it turned out not to be the obstacle it looked like:
+   nothing on the wasm target names the crate. It sits in `Cargo.toml`'s existing
+   `[target.'cfg(not(target_family = "wasm"))'.dependencies]` block, and the one module that
+   touches it — `sync_engine::live` — carries that same gate on every line, not just the
+   dependency.
+2. **"A socket from the page would need the CSP widened."** It would not, and this is the half the
+   record had backwards: `connect-src 'self' ipc: http://ipc.localhost` governs the **webview's**
+   connections, and the socket that shipped is opened by `tokio-tungstenite` inside the app's Rust
+   process — the same process that already reaches this relay over `reqwest` under that exact CSP.
+   `tauri.conf.json` was not touched. A fourth reason the record never named: a browser's own
+   `WebSocket` cannot set an `Authorization` header, so a socket from the page would have forced
+   the bearer gate above onto a query parameter or a subprotocol. Opening it from Rust needed no
+   change to the gate at all.
+3. **"Polling is comfortably inside the free tier."** There never was a poll to be comfortable —
+   see [sync.md](../docs/reference/sync.md) for that correction. The cost of what shipped instead
+   is re-derived in the design spec §11: an idle, connected group costs about ~25 DO requests/day,
+   a busy one (50 edits, 3 devices) about ~225, against the manual ~70/day the table above
+   measures — three times the manual figure at the busiest, and paid only when somebody edits
+   rather than on every tick of a clock. The free plan and the ~70% notification stand.
+
+What changed: a phone's edit now reaches a connected desktop within a few seconds, rather than at
+the next **Sync now** press. What did not: the core still compiles to wasm and the CSP still
+grants nothing.

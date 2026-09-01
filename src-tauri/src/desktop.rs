@@ -519,17 +519,20 @@ pub fn run() {
             sync_pair::pairing::sync_device_revoke,
             sync_pair::pairing::sync_group_leave,
             // The relay, the membership and the review queue (spec §6.1, §7.2–§7.4, §7.7 and
-            // §10). Seven: the panel's two reads, the Connect press, the claim code the reader
-            // pastes back, one round trip now, the rows carrying a sentence, and clearing one
-            // of them. **`sync_relay_set_url` is gone** — the relay is one hosted service, so
-            // its address is compiled in and stopped being a setting.
+            // §10). The panel's two reads, the Connect press, the claim code the reader pastes
+            // back, one round trip now, the rows carrying a sentence, clearing one of them, the
+            // live socket's state and Android's foreground gate on it.
+            // **`sync_relay_set_url` is gone** — the relay is one hosted service, so its address
+            // is compiled in and stopped being a setting.
             sync_engine::commands::sync_relay_status,
             sync_engine::commands::sync_supporter_status,
             sync_engine::commands::sync_patreon_begin,
             sync_engine::commands::sync_patreon_claim,
             sync_engine::commands::sync_now,
             sync_engine::commands::sync_review_list,
-            sync_engine::commands::sync_review_clear
+            sync_engine::commands::sync_review_clear,
+            sync_engine::commands::sync_live_foreground,
+            sync_engine::commands::sync_live_state
         ])
         .setup(|app| {
             // First, and before anything that can fail: the window is created **hidden**
@@ -560,6 +563,14 @@ pub fn run() {
             // both candidate folders into something unreadable.
             let state = Arc::new(init_state(app).inspect_err(|e| eprintln!("{e}"))?);
             app.manage(state.clone());
+
+            // The write-side half of live sync's wake. One `Arc` for the whole process: the
+            // commit hook installed below calls `notify_one` on it, and
+            // `sync_engine::live::spawn`'s `select!` wakes on the same handle — see the
+            // warning on `live::spawn` for why it must be `notify_one` and never
+            // `notify_waiters`. Created here rather than on `AppState` because nothing else
+            // needs to reach it: the two call sites below are the whole of its life.
+            let writes = Arc::new(tokio::sync::Notify::new());
 
             // Warm the facet index: ~767 ms of full table scan on its own thread and its own
             // read-only connection, so the window comes up now and the first searches answer
@@ -600,7 +611,12 @@ pub fn run() {
                 // user/corpus split: the hook has to be able to tell the mirror which of the
                 // two databases a write landed in.
                 let conn = db::lock_blocking(&state.db);
-                mirror::watch::install_hook(&conn, state.mirror.clone(), state.fence.clone());
+                mirror::watch::install_hook(
+                    &conn,
+                    state.mirror.clone(),
+                    state.fence.clone(),
+                    writes.clone(),
+                );
                 drop(conn);
 
                 // Then the thread. Detached and never fatal, exactly like the facet warm-up
@@ -707,22 +723,97 @@ pub fn run() {
             // cannot act on — `Updater::new` has already answered `InstallKind::Managed`
             // there, so every asset is refused and every button is hidden.
             #[cfg(desktop)]
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = update::check(&state, &updater, false).await {
-                    eprintln!("update check failed: {e}");
-                }
-            });
+            {
+                let update_state = state.clone();
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = update::check(&update_state, &updater, false).await {
+                        eprintln!("update check failed: {e}");
+                    }
+                });
+            }
+
+            // The relay doorbell. Its own task for the same reason as the five above — five
+            // services, five schedules, and none of them may be the reason another stops
+            // running. It opens no socket at all until this installation is in a group, which
+            // is every installation that has connected nothing.
+            crate::sync_engine::live::spawn(app.handle().clone(), state.clone(), writes.clone());
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        // `build` + `run(callback)` rather than `run(context)`, for one event: `Exit`.
-        .run(|app, event| {
-            if let tauri::RunEvent::Exit = event {
-                checkpoint_on_exit(app);
+        // `build` + `run(callback)` rather than `run(context)`, for two events: `ExitRequested`
+        // (before the window goes, for a last push) and `Exit` (after, for the WAL checkpoint).
+        .run(|app, event| match event {
+            // **A last push, with a hard budget.** The same discipline `EXIT_CHECKPOINT_WAIT`
+            // already applies, and for the reason its doc gives: a window-less process still
+            // sitting on a lock is a process the user believes has quit.
+            //
+            // The budget can be this brutal because **nothing is ever lost**. `sync_ops` is
+            // durable and `pushed_at IS NULL` survives the process, so a missed shutdown push
+            // is a delay until the next launch, not a loss.
+            tauri::RunEvent::ExitRequested { api, .. } => {
+                if EXIT_PUSH_TRIED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                    return;
+                }
+                let Some(state) = app.try_state::<Arc<AppState>>() else {
+                    return;
+                };
+                if !crate::sync_engine::live::anything_pending(&state) {
+                    return;
+                }
+                api.prevent_exit();
+                let handle = app.clone();
+                let owned = (*state).clone();
+                tauri::async_runtime::spawn(async move {
+                    // **The timeout bounds the *wait*, not the *work*.** `push_now` runs on
+                    // `spawn_blocking`'s OS thread pool, and `tokio::time::timeout` can only stop
+                    // *awaiting* that future — it cannot cancel the thread. If the round trip is
+                    // stuck inside `client::run_once` (a slow or unresponsive relay, bounded only
+                    // by `reqwest`'s own `connect_timeout`/`read_timeout` in `client.rs`), the
+                    // orphaned thread is still holding `state.db`'s write lock when this timeout
+                    // elapses and `handle.exit(0)` is called below.
+                    //
+                    // `exit(0)` does not skip straight to the OS: it synchronously drives
+                    // `RunEvent::Exit` → `checkpoint_on_exit` on this same process, **before**
+                    // anything actually terminates — and that handler makes two more bounded
+                    // attempts on the very same mutex (`flush_records` then `lock_for`). Without
+                    // `EXIT_PUSH_TIMED_OUT` below, a stuck push would compound worst-case shutdown
+                    // to roughly `EXIT_PUSH_BUDGET + 2×EXIT_CHECKPOINT_WAIT` (≈12s) rather than the
+                    // 2s this budget promises on its own.
+                    if tokio::time::timeout(
+                        EXIT_PUSH_BUDGET,
+                        crate::sync_engine::live::push_now(owned),
+                    )
+                    .await
+                    .is_err()
+                    {
+                        EXIT_PUSH_TIMED_OUT.store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    handle.exit(0);
+                });
             }
+            tauri::RunEvent::Exit => checkpoint_on_exit(app),
+            _ => {}
         });
 }
+
+/// How long the exit handler will wait for a last push. Two seconds, because the alternative
+/// is a window-less process on the taskbar and the cost of giving up is a delay, never data.
+const EXIT_PUSH_BUDGET: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// So a second `ExitRequested` — or `exit(0)` re-entering — cannot start a second push.
+static EXIT_PUSH_TRIED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Set when the last-push `timeout` above elapsed rather than the push finishing.
+///
+/// **What this actually records:** the *wait* was given up on, not that the *work* stopped —
+/// the `spawn_blocking` thread it was watching may still be running, and may still hold
+/// `state.db`'s write lock, when `checkpoint_on_exit` runs moments later. `checkpoint_on_exit`
+/// reads this to shorten its own two bounded attempts on that same lock
+/// (`EXIT_CHECKPOINT_WAIT_AFTER_A_STUCK_PUSH`) rather than spending the usual 5s on each —
+/// see the comment beside the timeout above for why the two would otherwise compound.
+static EXIT_PUSH_TIMED_OUT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// How long the exit handler will wait for the write connection.
 ///
@@ -732,6 +823,18 @@ pub fn run() {
 /// this wait is nearly always instant, and five seconds is simply where it stops trying. A
 /// window-less process still sitting on a lock is a process the user believes has quit.
 const EXIT_CHECKPOINT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The same wait, shortened, for the one case where it is very likely to be spent for nothing:
+/// [`EXIT_PUSH_TIMED_OUT`] is set only when the last-push `timeout` already gave up on the write
+/// lock once, after `EXIT_PUSH_BUDGET` (2s) of a relay that was slow or not answering at all. A
+/// thread that has already outlasted that budget rarely releases the lock in the next moment
+/// either, so a second full `EXIT_CHECKPOINT_WAIT` mostly buys nothing — one second is still a
+/// real, honest attempt (the checkpoint is fast whenever the lock is actually free, which is
+/// every ordinary shutdown), and caps the compounded worst case at
+/// `EXIT_PUSH_BUDGET + 2×this` ≈ 4s instead of ≈ 12s, which is the whole point: the checkpoint
+/// is worth trying, never worth a process that outstays its welcome on the taskbar for it.
+const EXIT_CHECKPOINT_WAIT_AFTER_A_STUCK_PUSH: std::time::Duration =
+    std::time::Duration::from_secs(1);
 
 /// Fold the write-ahead log back into `mtg.db` on the way out.
 ///
@@ -756,13 +859,27 @@ fn checkpoint_on_exit(app: &tauri::AppHandle) {
     // Bound to a local rather than matched in tail position: the guard borrows from
     // `state`, and a `match` at the end of the body would still hold it when `state` is
     // dropped.
+    //
+    // **Shortened when the last-push `timeout` in `ExitRequested` already gave up on this
+    // same lock** — see [`EXIT_PUSH_TIMED_OUT`]'s doc. `push_now`'s `spawn_blocking` thread may
+    // still be holding it here: a `timeout` around a `spawn_blocking` future stops *awaiting*
+    // it, not the OS thread underneath, so a push stuck in the network can still own the write
+    // connection when `RunEvent::Exit` runs this function moments later. Two full
+    // `EXIT_CHECKPOINT_WAIT`s stacked on top of a budget already spent waiting on a slow relay
+    // is exactly the "process the user believes has quit" symptom this whole feature exists to
+    // avoid — see [`EXIT_CHECKPOINT_WAIT_AFTER_A_STUCK_PUSH`] for the arithmetic.
+    let wait = if EXIT_PUSH_TIMED_OUT.load(std::sync::atomic::Ordering::SeqCst) {
+        EXIT_CHECKPOINT_WAIT_AFTER_A_STUCK_PUSH
+    } else {
+        EXIT_CHECKPOINT_WAIT
+    };
     // Before the checkpoint, and with the same wait: any `image_cache` row still owed is
     // bytes already on disk that nothing will ever serve, so paying the queue off here is
     // the difference between a warm cache and re-fetching those images forever. It is one
     // upsert per owed row and the queue is empty on a normal exit.
-    state.images.flush_records(&state.db, EXIT_CHECKPOINT_WAIT);
+    state.images.flush_records(&state.db, wait);
 
-    let held = db::lock_for(&state.db, EXIT_CHECKPOINT_WAIT);
+    let held = db::lock_for(&state.db, wait);
     match held {
         Some(conn) => {
             let _ = db::checkpoint_truncate(&conn);

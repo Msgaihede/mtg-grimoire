@@ -54,16 +54,33 @@ const backend = vi.hoisted(() => ({ syncStatus: null as SyncStatus | null }));
  * The page's hooks all reach the backend through the one `ipc` object, so one mock covers
  * them. Every other command answers `null`: those results are only ever handed to the stubs
  * above, and a hook that resolves is a hook that does not leave React in a suspended state.
+ *
+ * **`onSyncLive` is a third special case, beside `syncStatus`, and it has to be — not because
+ * `SettingsPage` reads it, but because `SyncPanel` does now (Task 12's `useDeviceSyncLive()`
+ * call), and `SyncPanel` is one of the panels this page mounts for real rather than stubbing.**
+ * The generic branch answers every command with `vi.fn().mockResolvedValue(null)`, a function
+ * that *resolves to* a value — correct for a `Promise<T>` command, and wrong for `onSyncLive`,
+ * whose contract is `Unlisten` returned **synchronously** so a mount effect can hand it straight
+ * back as its own cleanup. Proxied through the generic branch, `ipc.onSyncLive(cb)` returned a
+ * `Promise`, `useDeviceSyncLive`'s effect handed that back as its cleanup function, and React
+ * threw `TypeError: destroy is not a function` unmounting every test in this file that reaches
+ * `SyncPanel` — which, since the panel is not one of the nine stubs above, is all nine `it`s.
+ * `syncLiveState` is answered `"off"` rather than falling through to the generic `null`, for the
+ * same reason `RelayStatus`'s own em-dash rule exists: a `LiveState` of `null` is a value
+ * `liveNote`'s switch was never written to handle, and "off" is what the real command answers
+ * when nothing is paired, which is every world this file renders.
  */
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: new Proxy(
     {},
     {
-      get: (_target, name) =>
-        name === "syncStatus"
-          ? vi.fn(() => Promise.resolve(backend.syncStatus))
-          : vi.fn().mockResolvedValue(null),
+      get: (_target, name) => {
+        if (name === "syncStatus") return vi.fn(() => Promise.resolve(backend.syncStatus));
+        if (name === "onSyncLive") return vi.fn(() => () => {});
+        if (name === "syncLiveState") return vi.fn(() => Promise.resolve("off"));
+        return vi.fn().mockResolvedValue(null);
+      },
     },
   ) as unknown as typeof import("@/lib/ipc").ipc,
 }));

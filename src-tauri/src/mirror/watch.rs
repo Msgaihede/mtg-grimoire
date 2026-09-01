@@ -208,7 +208,12 @@ fn dirty_of(bits: u8) -> Option<Dirty> {
 /// Zone's three clears still mark: each of them empties a table other rows point at with
 /// `ON DELETE CASCADE`. The tests at the bottom of this file are what keep that true, rather
 /// than a claim about SQLite's release notes.
-pub fn install_hook(conn: &Connection, mask: Arc<Mask>, fence: Arc<crate::db::CrossFileFence>) {
+pub fn install_hook(
+    conn: &Connection,
+    mask: Arc<Mask>,
+    fence: Arc<crate::db::CrossFileFence>,
+    writes: Arc<tokio::sync::Notify>,
+) {
     // **The fence rides in the mirror's hook because SQLite allows exactly one update hook
     // per connection**, which is the rule stated two paragraphs up: a second `install_hook`
     // replaces rather than adds, so a second *installer* would silently take this one off.
@@ -229,6 +234,7 @@ pub fn install_hook(conn: &Connection, mask: Arc<Mask>, fence: Arc<crate::db::Cr
         eprintln!("the backup mirror will not see live edits: {e}");
     }
     let settling = fence.clone();
+    let settling_writes = writes.clone();
     // Both of these fail for the one reason the update hook does, and with the same answer:
     // a fence that could not be installed costs a diagnostic, never a launch.
     let _ = conn.commit_hook(Some(move || {
@@ -241,6 +247,28 @@ pub fn install_hook(conn: &Connection, mask: Arc<Mask>, fence: Arc<crate::db::Cr
                  SQLite does not guarantee those commit together"
             );
         }
+        // **Live sync's wake, riding in the hook the fence already owns** — SQLite allows one
+        // commit hook per connection, so a second installer would take this one off.
+        //
+        // A commit, not a row: `update_hook` does not fire for `WITHOUT ROWID` tables, and two
+        // of the twelve synced tables are exactly that (`muted_tags`, and `device_names` since
+        // user schema v31). A row-level wake would silently never sync a mute or a rename.
+        //
+        // **This says only "a transaction committed", and deciding is somebody else's job** —
+        // spec §6.3's "`commit_hook` wakes, the outbox decides". The decider is
+        // `sync_engine::live`'s `outbox_has_work`, on the arm that receives this signal:
+        // `sync_ops WHERE pushed_at IS NULL`, one partial-index scan. That is what keeps the
+        // Scryfall ingest, the image cache, the price and tag feeds and every `error_log` row
+        // off the relay — none of them is a synced table — and it is what closes the loop a
+        // round trip would otherwise be, since `round_trip` ends by stamping `last_sync_at` on
+        // this very connection and so rings this bell itself.
+        //
+        // ⚠️ **This comment described that gate for a day before the gate existed**, and the
+        // cost was a trip every three seconds for ever. If the sentence above is ever true
+        // again only of the design, delete it rather than leave it standing.
+        //
+        // `notify_one` does not block and cannot fail, which is what a commit hook requires.
+        settling_writes.notify_one();
         // **Never true.** A commit hook that answered `true` would abort the commit, which
         // would turn a diagnostic into data loss over a bug in this fence.
         false
@@ -580,7 +608,12 @@ mod tests {
         let conn = migrated_memory_db();
         let mask = Arc::new(Mask::default());
         let fence = Arc::new(crate::db::CrossFileFence::new());
-        install_hook(&conn, mask.clone(), fence.clone());
+        install_hook(
+            &conn,
+            mask.clone(),
+            fence.clone(),
+            Arc::new(tokio::sync::Notify::new()),
+        );
 
         conn.execute_batch(
             "BEGIN;
@@ -616,7 +649,12 @@ mod tests {
     fn a_rolled_back_cross_file_transaction_does_not_trip_the_fence() {
         let conn = migrated_memory_db();
         let fence = Arc::new(crate::db::CrossFileFence::new());
-        install_hook(&conn, Arc::new(Mask::default()), fence.clone());
+        install_hook(
+            &conn,
+            Arc::new(Mask::default()),
+            fence.clone(),
+            Arc::new(tokio::sync::Notify::new()),
+        );
         conn.execute_batch(
             "BEGIN;
              INSERT INTO decks (name, format_key, created_at, updated_at) VALUES ('x','casual',0,0);
@@ -637,6 +675,66 @@ mod tests {
         );
     }
 
+    /// The other half of the fence's own hook: a commit leaves `writes` a permit, not merely
+    /// a woken task. `notify_one` stores that permit even with nobody parked on it yet, which
+    /// is the whole reason `sync_engine::live::spawn` can rely on it — see the warning on that
+    /// function. If this ever regressed to `notify_waiters`, `notified()` below would find
+    /// nothing to return and the test would hang rather than fail cleanly, which is exactly
+    /// the silent loss the doc warns about.
+    #[test]
+    fn a_commit_leaves_a_permit_on_the_write_wake() {
+        use futures_util::FutureExt;
+
+        let conn = migrated_memory_db();
+        let writes = Arc::new(tokio::sync::Notify::new());
+        install_hook(
+            &conn,
+            Arc::new(Mask::default()),
+            Arc::new(crate::db::CrossFileFence::new()),
+            writes.clone(),
+        );
+
+        conn.execute(
+            "INSERT INTO decks (name, format_key, created_at, updated_at) VALUES ('d','casual',0,0)",
+            [],
+        )
+        .unwrap();
+
+        assert!(
+            writes.notified().now_or_never().is_some(),
+            "a commit on the write connection must leave a permit behind"
+        );
+    }
+
+    /// A rollback is not a commit, so it must not ring the doorbell either — `writes` is a fact
+    /// about what committed, and a live-sync trip triggered by an aborted write would poll the
+    /// relay for nothing every time a command's own validation refuses a write partway through.
+    #[test]
+    fn a_rollback_does_not_ring_the_write_wake() {
+        use futures_util::FutureExt;
+
+        let conn = migrated_memory_db();
+        let writes = Arc::new(tokio::sync::Notify::new());
+        install_hook(
+            &conn,
+            Arc::new(Mask::default()),
+            Arc::new(crate::db::CrossFileFence::new()),
+            writes.clone(),
+        );
+
+        conn.execute_batch(
+            "BEGIN;
+             INSERT INTO decks (name, format_key, created_at, updated_at) VALUES ('x','casual',0,0);
+             ROLLBACK;",
+        )
+        .unwrap();
+
+        assert!(
+            writes.notified().now_or_never().is_none(),
+            "a rollback must not notify the write wake"
+        );
+    }
+
     /// The mirror still sees every write it is supposed to, now that half the schema is in
     /// another file — and it still sees none of the ones it is not.
     #[test]
@@ -647,6 +745,7 @@ mod tests {
             &conn,
             mask.clone(),
             Arc::new(crate::db::CrossFileFence::new()),
+            Arc::new(tokio::sync::Notify::new()),
         );
 
         conn.execute(
@@ -907,6 +1006,7 @@ mod tests {
             &conn,
             mask.clone(),
             Arc::new(crate::db::CrossFileFence::new()),
+            Arc::new(tokio::sync::Notify::new()),
         );
         conn.execute(
             "INSERT INTO wishlist_folders (name, sort_order, created_at, updated_at)
@@ -927,6 +1027,7 @@ mod tests {
             &conn,
             mask.clone(),
             Arc::new(crate::db::CrossFileFence::new()),
+            Arc::new(tokio::sync::Notify::new()),
         );
         crate::app_meta::set_app_meta(&conn, "anything", "at all").unwrap();
         assert_eq!(mask.take(), None);
@@ -941,6 +1042,7 @@ mod tests {
             &conn,
             mask.clone(),
             Arc::new(crate::db::CrossFileFence::new()),
+            Arc::new(tokio::sync::Notify::new()),
         );
         conn.execute(
             "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,is_paper,raw)
@@ -972,6 +1074,7 @@ mod tests {
             &conn,
             mask.clone(),
             Arc::new(crate::db::CrossFileFence::new()),
+            Arc::new(tokio::sync::Notify::new()),
         );
         conn.execute("DELETE FROM wishlist_folders", []).unwrap();
         assert!(
@@ -1003,6 +1106,7 @@ mod tests {
             &conn,
             mask.clone(),
             Arc::new(crate::db::CrossFileFence::new()),
+            Arc::new(tokio::sync::Notify::new()),
         );
         conn.execute("DELETE FROM collection_entries", []).unwrap();
         assert!(
@@ -1021,6 +1125,7 @@ mod tests {
             &conn,
             mask.clone(),
             Arc::new(crate::db::CrossFileFence::new()),
+            Arc::new(tokio::sync::Notify::new()),
         );
         crate::deck::create_deck(
             &conn,

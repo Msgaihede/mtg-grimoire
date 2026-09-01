@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
+import { emitFake } from "../../../.storybook/fake/event";
 import { SyncPanel } from "./SyncPanel";
 
 const meta = {
@@ -771,5 +772,36 @@ export const TheReadsAreRefused: Story = {
       canvas.queryByRole("button", { name: /connect patreon/i }),
     ).not.toBeInTheDocument();
     await expect(canvas.queryByText(/nothing is waiting to go/i)).not.toBeInTheDocument();
+  },
+};
+
+/**
+ * The socket drops after a successful sync — the state automatic sync introduces and manual
+ * sync never had. `relayState`'s ladder has nothing to say about it: this device is still
+ * `synced` from its last round trip, and would go on reading that way for ever if the panel
+ * only asked *what happened last time* rather than *is anything listening right now*.
+ *
+ * **Nothing in the fake answers `sync_live_state` by default**, so `useDeviceSyncLive`'s own
+ * seed rejects here exactly as it does on the web target — swallowed, per its own doc — and the
+ * panel opens silent. What moves it is the same `sync:live` event the ribbon's marker
+ * subscribes to, driven by hand with `emitFake` the way `AppShell.stories.tsx`'s
+ * `FirstRunFailedMidRun` drives `sync:progress`.
+ */
+export const SocketDropsAfterASync: Story = {
+  parameters: { fake: { seed: "paired", fault: "patreonGroupEntitled" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await expect(await canvas.findByText(/supporting since/i)).toBeInTheDocument();
+    // A working socket is not news, and this is the panel's resting state until it drops.
+    await expect(canvas.queryByText(/not connected to the relay/i)).not.toBeInTheDocument();
+
+    emitFake("sync:live", { state: "offline" });
+
+    await expect(
+      await canvas.findByText(/not connected to the relay/i),
+    ).toBeInTheDocument();
+    // The one clause that matters: nothing was lost, only queued.
+    await expect(canvas.getByText(/still being kept/i)).toBeInTheDocument();
   },
 };

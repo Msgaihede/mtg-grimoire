@@ -73,6 +73,16 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // with `ipc.onOracleTagProgress is not a function`, thrown synchronously inside the
     // shell's mount effect where no `.catch` can reach it.
     onOracleTagProgress: vi.fn().mockReturnValue(() => {}),
+    // Task 10's and Task 11's four — the shell now mounts `useDeviceSyncInvalidation` and
+    // `useDeviceSyncLive` beside the subscriptions above, and its Android foreground effect
+    // calls `syncLiveForeground`. Same failure mode as every listener above: a bare call inside
+    // a mount effect, so a `vi.fn()` that is not there is a synchronous `TypeError` rather than
+    // a rejection anything can catch. `"off"` is the resting state every installation that has
+    // paired nothing is in, which is every fixture in this file.
+    onSyncApplied: vi.fn().mockReturnValue(() => {}),
+    onSyncLive: vi.fn().mockReturnValue(() => {}),
+    syncLiveState: vi.fn().mockResolvedValue("off"),
+    syncLiveForeground: vi.fn().mockResolvedValue(undefined),
     // The honest never-ingested row: every field null, so nothing in this file's cards is
     // filed by tag and the routing these tests are about is what they measure.
     oracleTagsStatus: vi.fn().mockResolvedValue({

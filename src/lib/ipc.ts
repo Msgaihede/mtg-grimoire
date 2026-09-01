@@ -3285,6 +3285,19 @@ export interface SyncProgressEvent {
 }
 
 /**
+ * What the relay socket is doing. Mirrors `LiveState` in `src-tauri/src/sync_engine/live.rs`.
+ *
+ * `"off"` is not a failure — it is every installation that has connected no membership and
+ * paired no device, which is all of them until somebody does.
+ */
+export type LiveState = "off" | "connecting" | "live" | "offline";
+
+/** Payload of the `sync:live` event. */
+export interface SyncLiveEvent {
+  state: LiveState;
+}
+
+/**
  * Payload of `collection:reconciled` — what one pass of Scryfall's id-migration log did to
  * the user's own rows (`sync::reconcile_ids`, from `reconcile::ReconcileStats`).
  *
@@ -5233,6 +5246,12 @@ export const ipc = {
   syncStatus: () => invoke<SyncStatus>("sync_status"),
   onSyncProgress: (cb: (e: SyncProgressEvent) => void): Unlisten =>
     core.listen<SyncProgressEvent>("sync:progress", cb),
+  /** A device sync applied or sent something. Call this once — see `useSyncProgress`. */
+  onSyncApplied: (cb: (e: RelayOutcome) => void): Unlisten =>
+    core.listen<RelayOutcome>("sync:applied", cb),
+  /** The relay socket's state. Call this once. */
+  onSyncLive: (cb: (e: SyncLiveEvent) => void): Unlisten =>
+    core.listen<SyncLiveEvent>("sync:live", cb),
   /** What is already known about a newer release. Reads `app_meta`; makes no network call. */
   /**
    * The error log, newest first. Repeats are folded, so a row's `count` is how many times
@@ -5831,6 +5850,19 @@ export const ipc = {
    * That is not an error, it is the state every existing installation is in.
    */
   syncNow: () => invoke<RelayOutcome | null>("sync_now"),
+  /** Tell the socket whether the app is in front. Android only — see Task 11's effect. */
+  syncLiveForeground: (on: boolean): Promise<void> =>
+    invoke("sync_live_foreground", { on }),
+  /** The relay socket's state right now. Seeds a listener that mounts after the last transition.
+   *
+   * The Rust manager **deduplicates** `sync:live` — it emits only on a transition, because
+   * otherwise `"off"` would be re-emitted every five seconds forever on every installation that
+   * has paired nothing, which is all of them today. So a listener that mounts *after* the last
+   * transition never learns the state by listening alone: Tauri also drops events emitted before
+   * the webview registered a listener, which makes that the common case at launch rather than a
+   * rare race. A later task seeds its hook from this command and then subscribes for changes.
+   */
+  syncLiveState: (): Promise<LiveState> => invoke<LiveState>("sync_live_state"),
   /** Every row carrying a sentence, from all six tables that can hold one. */
   syncReviewList: () => invoke<ReviewRow[]>("sync_review_list"),
   /**

@@ -1,8 +1,9 @@
-import { CircleArrowUp, RefreshCw } from "lucide-react";
+import { CircleArrowUp, LoaderCircle, RefreshCw, Wifi, WifiOff } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { ManaLine } from "@/components/ManaLine";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import type { Activity } from "@/lib/activity";
+import type { LiveState } from "@/lib/ipc";
 import { PRESS, TRANSITION } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
@@ -67,6 +68,13 @@ export interface RibbonProps {
   updateInstallable?: boolean;
   /** Opens Settings, where the release notes and the actual update controls are. */
   onOpenUpdate?: () => void;
+  /**
+   * The relay socket's state, or `null` where device sync does not exist — the web target,
+   * and every installation that has paired nothing.
+   */
+  deviceSync?: LiveState | null;
+  /** Opens Settings at the Sync panel. */
+  onOpenSync?: () => void;
 }
 
 /**
@@ -84,6 +92,38 @@ export interface RibbonProps {
  * in and does not have to ask about the pointer to answer this.
  */
 const TOUCH_FLOOR = { minWidth: "var(--target-min)", minHeight: "var(--target-min)" } as const;
+
+/**
+ * The one sentence a hover gets, per socket state — never `"off"` or `null`, which the row does
+ * not draw at all.
+ *
+ * **`live` says the least, on purpose.** A socket that is doing its job is not news: the whole
+ * reason this marker exists is `offline`, where a reader believes their edits are going
+ * somewhere and they are not. Saying more about `live` than "it is" would spend the same weight
+ * on the state that never needed defending.
+ */
+const DEVICE_SYNC_TOOLTIP: Record<Exclude<LiveState, "off">, string> = {
+  connecting: "Reconnecting to your other devices…",
+  live: "Synced with your other devices.",
+  offline:
+    "The connection to your other devices dropped. Changes made here are not reaching them " +
+    "until it reconnects.",
+};
+
+/**
+ * The accessible name of the marker, per socket state.
+ *
+ * **A map rather than `"Sync " + deviceSync`, which is what this was.** That produced
+ * "Sync connecting" and "Sync live" — the state's wire spelling with a word bolted on front,
+ * read out as-is by a screen reader. The `LiveState` values are an enum shared with Rust and
+ * are not English; the label a person hears has to be written as English somewhere, and beside
+ * {@link DEVICE_SYNC_TOOLTIP} is where the other sentence about each state already lives.
+ */
+const DEVICE_SYNC_LABEL: Record<Exclude<LiveState, "off">, string> = {
+  connecting: "Sync is reconnecting",
+  live: "Sync is live",
+  offline: "Sync is offline",
+};
 
 /**
  * The global ribbon: one 56px row that owns every action which is not about the view
@@ -163,6 +203,8 @@ export function Ribbon({
   updateVersion = null,
   updateInstallable = false,
   onOpenUpdate,
+  deviceSync = null,
+  onOpenSync,
 }: RibbonProps) {
   const tip = useTooltip();
   // Two sentences about one folder, in the tooltip that already names it. Not a banner:
@@ -255,6 +297,72 @@ export function Ribbon({
                   replace itself; an MSI or Linux build can only be shown where to
                   download — and a control says exactly what happens when it is used. */}
               {!narrow && updateLabel}
+            </button>
+          )}
+          {/* A small marker rather than a control that competes with Refresh — the row's other
+              two buttons announce something the reader can *do*; this only ever announces
+              something the reader could not otherwise see, which is why `live` and
+              `connecting` are drawn as dim as the row allows and only `offline` reaches for the
+              destructive colour. **No `role="status"`, deliberately**: the row's own status
+              line two elements over is the one live region here, and a reader does not need to
+              be told a working socket exists. The word is in a hover only, through
+              `useTooltip()` and never a native `title`, and the accessible name carries the
+              state on its own (`aria-label`) so a screen reader still gets it without one.
+
+              **`aria-live="polite"` all the same, and it does not conflict with the rule above.**
+              `role="status"` implies `aria-live="polite"`, but the implication does not run
+              backwards — this element still carries no `role`, so it is still invisible to
+              `getByRole("status")`, and a sighted reader still gets the live→offline flip for
+              free (the icon turning red in peripheral vision). Without this a screen-reader
+              user got nothing from that transition unless they happened to be tabbed to the
+              marker at the moment it happened, for the one event this whole feature exists to
+              surface.
+
+              ⚠️ **The `sr-only` span is what makes that paragraph true, and it was missing.**
+              A live region announces the *text* inside it when that text changes; this button's
+              only child was an `aria-hidden` icon, so the region had no text at all and a
+              changed `aria-label` is not reliably announced as a live update. The region was
+              live and permanently silent — the argument above describing a flip nothing said.
+              The sentence is {@link DEVICE_SYNC_TOOLTIP}'s, so the hover and the announcement
+              cannot drift, and it is invisible for the reason every other `sr-only` in this app
+              is: the icon is the sighted reader's copy of it.
+
+              **Floored for a finger exactly like its two siblings**, and for their reason:
+              `TOUCH_FLOOR`'s own comment measured `Refresh data` and the update button at 38px
+              icon-only, under `--target-min`'s 44px. This marker is icon-only *unconditionally*
+              — there is no wide-row label to lose — so without the floor it would ship at
+              roughly 28px (`p-1.5` around a `size-4` glyph) on the one layout `AppShell` nulls
+              it for the least: Android, once a phone install pairs. */}
+          {deviceSync !== null && deviceSync !== "off" && (
+            <button
+              type="button"
+              onClick={onOpenSync}
+              aria-label={DEVICE_SYNC_LABEL[deviceSync]}
+              aria-live="polite"
+              style={narrow ? TOUCH_FLOOR : undefined}
+              {...tip(DEVICE_SYNC_TOOLTIP[deviceSync])}
+              className={cn(
+                "inline-flex shrink-0 items-center justify-center rounded-md p-1.5",
+                PRESS,
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                deviceSync === "offline"
+                  ? "text-destructive hover:bg-destructive/10"
+                  : "text-dim hover:bg-bg",
+              )}
+            >
+              {deviceSync === "offline" ? (
+                <WifiOff className="size-4" aria-hidden="true" />
+              ) : deviceSync === "connecting" ? (
+                <LoaderCircle
+                  className="size-4 animate-spin motion-reduce:animate-none"
+                  aria-hidden="true"
+                />
+              ) : (
+                <Wifi className="size-4" aria-hidden="true" />
+              )}
+              {/* The live region's text. Without it the region has nothing to announce — see
+                  the paragraph above. */}
+              <span className="sr-only">{DEVICE_SYNC_TOOLTIP[deviceSync]}</span>
             </button>
           )}
           {/* A fade, and deliberately **not** `statusLine`: this line is a flex item in a

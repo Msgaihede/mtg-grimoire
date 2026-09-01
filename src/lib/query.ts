@@ -82,14 +82,40 @@ export const combosForCardsKey = (sortedCardIds: readonly string[]): QueryKey =>
  * combo feed's near-miss with the names swapped, and `COMBOS_KEY`'s paragraph above is the
  * whole argument.
  *
- * `["sync", …]` is already `SyncPanel`'s `PAIRING_KEY` prefix, so the bare root invalidates
- * the pairing, the relay and the review queue at once — which is exactly what a completed
- * round trip has changed.
+ * `["sync", …]` is already `PAIRING_KEY`'s prefix, declared just below, so the bare root
+ * invalidates the pairing, the relay and the review queue at once — which is exactly what a
+ * completed round trip has changed.
  */
 export const SYNC_KEY: QueryKey = ["sync"];
+
+/**
+ * This device's pairing state, under one key — `ipc.syncPairingStatus`.
+ *
+ * **Moved here from `SyncPanel.tsx:36`, though not for the reason that file's own comment had
+ * promised.** It pre-committed to this exact move "the moment a second surface" read the key,
+ * naming the ribbon's sync indicator — but the indicator that shipped reads
+ * `useDeviceSyncLive`'s `LiveState` off a Tauri event, never this query, so that trigger was
+ * never actually met. What moved it is a plainer inconsistency: `SYNC_KEY` above was already
+ * describing this key as its child, from a file that did not itself declare it. `COMBOS_KEY`'s
+ * reason at the top of this file still holds either way — two features must not spell one
+ * prefix two ways — this is just the honest account of which trigger fired.
+ */
+export const PAIRING_KEY: QueryKey = ["sync", "pairing"];
 
 /** The relay address, what is waiting, and the last round trip — `ipc.syncRelayStatus`. */
 export const RELAY_KEY: QueryKey = ["sync", "relay"];
 
 /** Every row carrying a sentence for the reader — `ipc.syncReviewList`. */
 export const REVIEW_KEY: QueryKey = ["sync", "review"];
+
+/**
+ * What a device sync can have changed on screen.
+ *
+ * **Not `SYNC_INVALIDATED`.** That is the *corpus* root set (`src/lib/useSyncInvalidation.ts`)
+ * and carries `["sets"]`, whose `staleTime` is `Infinity`, and `["card"]` — neither of which
+ * any relay op can touch: a sync applies pulled ops to the reader's own rows, it never rebuilds
+ * the Scryfall corpus. `OWNED_WRITE_KEYS` is already the constant for "a user write happened",
+ * which is exactly what applying a pulled op is; the relay adds `SYNC_KEY` on top, because
+ * `RelayStatus.pending`, `lastSyncAt` and `reviewCount` all move on a round trip too.
+ */
+export const DEVICE_SYNC_INVALIDATED: readonly QueryKey[] = [...OWNED_WRITE_KEYS, SYNC_KEY];
