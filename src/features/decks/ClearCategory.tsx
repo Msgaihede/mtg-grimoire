@@ -37,15 +37,10 @@
  * it says so instead rather than promising a folder nothing will arrive in. The two are one
  * ternary because they answer the same question and a reader must never see both.
  */
-import { plural } from "@/lib/counts";
+import { plural, verb } from "@/lib/counts";
 import type { DeckCategory, DeckVariant } from "@/lib/ipc";
+import { listName } from "./listNames";
 import { CONFIRM_CANCEL, CONFIRM_DESTRUCTIVE, useConfirmFocus } from "./metaRows";
-
-/** What each list is called in a sentence. The reader's own words for the two tabs, lowercased
- *  into prose — `DeckEditor`'s tabs read `Theory | Live`. */
-function listName(variant: DeckVariant): string {
-  return variant === "theory" ? "theory list" : "live list";
-}
 
 export function ClearCategory({
   category,
@@ -85,14 +80,16 @@ export function ClearCategory({
       {/* The sentence carries the outcome, not the button — `DeleteCategory`'s rule, and the
           reason holds here too: this is the line a reader's eye is on while they decide. */}
       <p className="mt-1.5 text-[0.6875rem] leading-relaxed text-destructive">
-        The {plural(here, "card")} in it leave the {listName(variant)} and the pile stays.{" "}
+        The {plural(here, "card")} in it {verb(here, "leaves", "leave")} the {listName(variant)}{" "}
+        and the pile stays.{" "}
         {variant === "live"
           ? "Any copies you own go back to Recently removed."
           : "A theory list holds no copies, so nothing else moves."}
       </p>
       {elsewhere > 0 && (
         <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">
-          The {plural(elsewhere, "card")} filed here in the other list are untouched.
+          The {plural(elsewhere, "card")} filed here in the other list{" "}
+          {verb(elsewhere, "is", "are")} untouched.
         </p>
       )}
 

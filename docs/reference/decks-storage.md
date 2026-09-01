@@ -405,11 +405,16 @@ folder|deck`, `schema::AUDIT_KINDS`), `variant`, a soft `card_id`/`card_name`, a
   called _inside the caller's already-open transaction_, which is what makes
   `a_recorded_change_that_rolls_back_leaves_no_history` and `a_refused_write_leaves_no_history_
 behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_row` drives
-  **28** cases, each carrying the number of rows it owes (count the list in `deck_audit.rs`,
-  never a remembered number — it has been written down wrong twice). It reached 28 on 2026-08-23
-  by taking in `collection_alloc`'s two commands, which had been writing history under it for two
-  PRs while the list stayed at 25: a sweep that exists to catch "a new deck write records nothing"
-  cannot skip the writes that move cards. "Exactly one" is per _change_, not per call, and
+  **27** cases, each carrying the number of rows it owes (count the list in `deck_audit.rs`,
+  never a remembered number — it has been written down wrong three times now). It reached 28 on
+  2026-08-23 by taking in `collection_alloc`'s two commands, which had been writing history under
+  it for two PRs while the list stayed at 25: a sweep that exists to catch "a new deck write
+  records nothing" cannot skip the writes that move cards. It fell back to 27 on 2026-08-31, when
+  custom deck covers took `deck_set_cover_image`'s case out with them and this sentence was the
+  half of that deletion nobody re-counted. **Neither clear is in the list** —
+  `deck_category_clear` never was, and `deck_clear` was not added beside it — so the test's name
+  is wider than what it drives, and each clear's history row is pinned by a test of its own in
+  `deck.rs` instead. "Exactly one" is per _change_, not per call, and
   **three** commands make more than one change in a call:
   **`deck_update` records one row per changed field**
   (`record_deck_edit`, pinned by `a_patch_that_changes_two_fields_records_both`), and it
@@ -455,7 +460,7 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   - **A step restores rows; it does not run a command backwards.** Four primitives — `cards`
     (an exact set of `deck_cards` rows over an explicit scope of `(variant, categoryId, cardId)`
     cells), `categories`, `tags`, `deck` — and `cards` alone covers add, remove, quantity, move,
-    swap **including the fold**, clear, both import modes and the theory move. There is no
+    swap **including the fold**, both clears, both import modes and the theory move. There is no
     `unswap_printing` and no un-import, and there could not be: `replace` cleared rows nothing
     recorded.
   - **`restore` and `patch` are two lists on the category and tag ops, because they are two
@@ -698,8 +703,8 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   tables the same v26 rung created); the floor they become — a floor rather than a bracket, and
   never 5 — is `src/features/decks/validation/bracket.ts`'s.
   [commander-brackets.md](commander-brackets.md) is the whole record.
-- **The six single-card commands, and what each takes** (the two bulk ones,
-  `deck_import_commit` and `deck_category_clear`, have their own bullets below).\
+- **The six single-card commands, and what each takes** (the three bulk ones,
+  `deck_import_commit`, `deck_category_clear` and `deck_clear`, have their own bullets below).\
   `deck_get(id, variant)`;
   `deck_add_card(deckId, cardId, categoryId, categoryName, variant, quantity)` — **either an id
   or a name**, id wins when both arrive, neither is refused in words, and the name is
@@ -758,7 +763,69 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
     "Removed 7 × a card", which is a sentence about a card the row has not got. It is
     `deck_import_commit`'s replace row one shelf over, which carries `{ import: { cleared } }`
     instead, and the two are deliberately different shapes because they are different events.
-- **`deck_import_commit(deckId, variant, mode, items)` is the other bulk card command. It existed
+- **`deck_clear(deckId, variant)` empties every pile of one list, and it is the bullet above's
+  argument one grain wider rather than a new one** (added 2026-09-01 for issue #281, behind an
+  **Empty a list** section at the foot of Deck settings). The editor holds every pile on screen,
+  so a loop over `deck_category_clear` would work — and would be a transaction, a `["decks"]`
+  invalidation and a **history row** per pile, which on a nine-column Commander deck is nine of
+  each and nine lines under one day header for one press, plus a refusal on the fourth column
+  leaving half the deck emptied with nothing able to say so. Drop `category_id` from that
+  bullet's `WHERE` and the arithmetic is unchanged, so the answer is: one statement, one
+  transaction, one invalidation, one line of history for one press. **The piles survive**, as
+  they do a stack clear — a reader emptying a deck to build it again keeps the columns they built
+  it in — and the scope is still one variant, because what a reader is pointing at when they
+  empty a deck is the list in front of them.
+  - **The undo step is one `Cell::pile` per pile that held cards, not one wide cell over the
+    deck.** `clear_variant` runs a `SELECT DISTINCT category_id … WHERE deck_id = ?1 AND
+    variant = ?2` before the `DELETE` and makes a cell out of each id, so the step's scope is
+    exactly the columns that had something in them and a column that was already empty costs
+    nothing. It is deliberately **not** `deck_undo::read_variant`, which would answer the same
+    rows here: that reader pairs with `record_variant`'s `Op::Variant`, while `record_cells` reads
+    its own "after" back through `read_cells` over these very cells, and a step whose "before" was
+    read over one scope and whose "after" over another is a pair that does not reverse.
+    `deck_undo.rs`'s round-trip registry carries `deck_clear` as a case of its own and says why
+    the `deck_category_clear` case cannot stand in for it: the fixture puts live cards in **two**
+    piles, so a `clear_variant` that recorded only the pile it happened to read first would
+    satisfy every assertion the narrower case makes and lose a whole column to Ctrl+Z.
+  - **It answers the copies it removed** — `sum(quantity)` over the variant, counted before the
+    `DELETE` and in copies rather than rows, exactly as the stack clear counts. How many
+    `deck_cards` rows the `DELETE` took is a number nobody is shown, and the two part company the
+    moment a deck holds one card in two printings.
+  - **An empty list writes nothing at all**: the early return sits above the cells, so no
+    `touch_deck`, no audit row and no undo step. Its sibling's reason unchanged — a `remove` row
+    of zero copies is a history of a change that never happened. The two buttons are greyed in
+    that state; the early return is the fence behind it.
+  - **The live release is the half worth arguing, and it is where two commands running the same
+    `DELETE` part company.** Every copy the deck's group holds behind a `live` row is filed into
+    `Recently removed` first — one `release_group_copies` per row, read and released inside the
+    same transaction and before the rows are gone, so a clear that fails half way has moved
+    nothing. A `deck_cards` row is an intention and a row in the group is cardboard the reader
+    owns; emptying the list does not stop them owning it, and left undone this would put *every*
+    copy of a cleared deck under a deck that has never heard of them. **`theory` releases
+    nothing** and not as an optimisation: a plan holds no cards
+    (`collection_alloc::THEORY_HOLDS_NOTHING`), so the loop never runs.\
+    **`deck_import_commit` in `replace` mode executes the identical
+    `DELETE FROM deck_cards WHERE deck_id = ?1 AND variant = ?2` and calls no release at all** —
+    issue #336, open as of 2026-09-01 and deliberately left out of the clear's own PR. So the same
+    delete over the same rows leaves the reader's copies in two different places depending on
+    which press made it: **Clear live list…** puts them back on their desk, while importing over
+    the deck in replace mode leaves them filed under a deck that no longer lists them, invisible
+    on the Collection page and unavailable to every other deck. That is the difference to know
+    before touching either command, and the fix the issue sketches is one helper both of them call
+    — the crate already spells that read-the-doomed-rows-and-release-each loop out three times
+    (here, the stack clear, and `deck_meta::delete_category`'s cascade arm), which is the shape of
+    thing a fourth site forgets.
+  - **The history row is a `remove` naming no card, carrying
+    `{ action: "clear", scope: "deck", cards }` and a `-cards` delta.** `action` is the stack
+    clear's field for the stack clear's reason. **`scope` is the new one**, and it is what tells
+    `auditText.ts` that the row is about a whole list rather than a pile: `clearedFrom` keys on
+    `scope === "deck"` and **never on `category` being absent**, because absence is also what an
+    older build's payload and a truncated one look like, and reading it as "the whole deck" would
+    label a stack clear as a list the reader never emptied. A row carrying no `scope` is a
+    category clear and reads exactly as it always did. There is no `category` on this row because
+    there was no category — it names the list instead, in the confirmation's own words, through
+    `src/features/decks/listNames.ts`.
+- **`deck_import_commit(deckId, variant, mode, items)` is the third bulk card command. It existed
   for the allocator and outlives it.** Looping `deck_add_card` from the frontend would have run
   `allocate_deck` **once per line** — a hundred rebuilds of a deck's claims for one import, each
   deleting and re-deriving every row the last one wrote — and this command ran it once, at the

@@ -262,6 +262,27 @@ reader to configure the deck they had just made; it now asks all of them.
   that is precisely what lets `CreateDeckDialog` render it **before the deck exists**. The rule is
   checkable rather than aspirational: `DeckSettingsForm.test.tsx` renders it with no
   `QueryClientProvider` at all, so a stray query fails the suite rather than the review.
+- **`Empty a list` is the one thing on this screen that is not a setting, and both halves of where
+  it sits are arguments rather than placements** (2026-09-01, issue #281). It is the dialog's own
+  section — `ClearDeck.tsx` hosted by `DeckSettingsDialog`, never by `DeckSettingsForm`. **Not the
+  form**, because the bullet above is what the form is: `CreateDeckDialog` draws it over a deck
+  that does not exist yet, where "empty the live list" is a question about nothing, and a
+  destructive control is the one thing that cannot follow a component whose whole guarantee is
+  that it reaches no backend. **Not the editor's toolbar**, because that row is full — `ACTIONS`
+  already gives up its longest word at `SETTINGS_ICON_PX` and the rest of them at
+  `TIGHT_HEADER_PX`, so a control pressed once a season would be paid for in width by the ones
+  pressed all day. This dialog is opened deliberately, read, and shut, which is the shape of press
+  a whole-list clear wants.
+  **Both counts come off the read this dialog already makes, and a second `useDeck` is the fix to
+  refuse.** `Settings` mounts `useDeck(deckId)` — the **live** list — and a `DeckCategory` carries
+  two counts: `cardCount` is that pile in the variant that was asked for, `cardCountAllVariants` is
+  the same pile across both lists whichever variant asked. So `liveCount` is `Σ cardCount`,
+  `theoryCount` is `Σ cardCountAllVariants − liveCount`, and mounting `useDeck(deckId, "theory")`
+  beside it buys a second `deck_get` for a number already in hand.
+  **The live button is unconditional and the theory one is drawn only on `theoryEnabled`**: every
+  deck has a live list, but a deck with the plan switched off has no theory list at all, and a
+  greyed `Clear theory list…` under a switch that turns theory on reads as something broken rather
+  than as something absent.
 - **Two callbacks, because the two hosts commit differently.** `onChange` fires for every change
   including each keystroke; `onCommit` fires only for the three text fields, when the reader is
   finished with one. `DeckSettingsDialog` writes on `onChange` for the controls that settle in a
@@ -497,19 +518,37 @@ reader to configure the deck they had just made; it now asks all of them.
   `DeckEditor`'s `setQuantityAt`, so it inherits the optimistic patch, the rollback and the
   hand-off of the caret to the pile the card just left. **No confirmation on it**, deliberately:
   one card is one add to put back, and the reader can see which one it was.
-- **Emptying a whole pile is a command, and that is the one write that is _not_ a loop over
-  `setQuantity`** (`useDeck.clearCategory` → `deck_category_clear`, 2026-08-15, behind a heading's
-  right-click `Clear stack…`). The rows are all in hand, so the loop would compile — and would be
-  a transaction and a `["decks"]` invalidation **per card**, plus a history line
-  each for one press. It is `deck_import_commit`'s argument applied to the reverse operation, and
-  [decks-storage.md](../../../docs/reference/decks-storage.md) carries the rest.
-  **It is scoped to the variant on screen**, which is the exact reverse of `deleteCategory`: that
-  one cascades through both lists, so its confirmation quotes `cardCountAllVariants`, while the
-  clear's quotes `cardCount` and says in words that the other list is untouched. Getting those two
-  numbers the wrong way round in either dialog mis-states a destructive press.
+- **Emptying is a command and _not_ a loop over `setQuantity`, and since 2026-09-01 that is true
+  at two scopes.** A pile is `useDeck.clearCategory` → `deck_category_clear` (2026-08-15, behind a
+  heading's right-click `Clear stack…`); a whole list is `useDeck.clearDeck` → `deck_clear`
+  (issue #281, behind **Empty a list** at the foot of Deck settings). The rows are all in hand at
+  either scope, so the loop would compile — and would be a transaction and a `["decks"]`
+  invalidation **per card**, plus a history line each for one press. It is `deck_import_commit`'s
+  argument applied to the reverse operation, and it only gets stronger one grain out: emptying a
+  nine-column deck by looping the _pile_ command is nine transactions and nine lines under one day
+  header, with a refusal on the fourth column leaving half the deck gone and nothing able to say
+  so. [decks-storage.md](../../../docs/reference/decks-storage.md) carries the rest, including the
+  copies a **live** clear files back into `Recently removed` at either scope.
+  **Both are scoped to one variant**, which is the exact reverse of `deleteCategory`: that one
+  cascades through both lists, so its confirmation quotes `cardCountAllVariants`, while a clear's
+  quotes the count of the list it is emptying and says in words that the other list is untouched.
+  Getting those two numbers the wrong way round in a confirmation mis-states a destructive press,
+  which is the one direction a confirmation must never be wrong in.
+  **`clearDeck` takes the variant as a mutation _argument_, and it is the one write in `useDeck`
+  that does not use the hook's own** — `DeckSettingsDialog` mounts `useDeck(deckId)`, which reads
+  **live**, and one of the two presses it draws empties _theory_. A `clearDeck` reading the hook's
+  variant would report the plan cleared while having emptied the deck the reader owns, behind a
+  confirmation that had just promised otherwise.
   **Both destructive rows ask first, and the type is what enforces it**: `CategoryMenuDeps` carries
   an `askClear` and an `askDelete` and neither mutation, so the menu structurally cannot reach
   either write — `buildDeckMenu`'s fence around a deck, twice over.
+  **Both _clear_ confirmations word their count through `plural` _and_ `verb`
+  (`src/lib/counts.ts`), and the second is not decoration**: `plural` gets a caller half a
+  sentence, so
+  `The ${plural(n, "card")} in it leave the deck` printed **"The 1 card in it leave the deck"** at
+  the count a reader is most likely to meet — a pile with one card left in it is exactly the pile
+  somebody clears. `ClearCategory` had carried that sentence since it shipped and was fixed in the
+  same commit that added `ClearDeck`.
 - **A drag has two ends now, and they are the two ends of the window** (added 2026-08-15).
   `QuickZones.tsx` draws four boxes across the top of the editor for the length of a drag —
   `Auto`, `New category`, and the deck's own Maybeboard and Sideboard — against the remove tray's
@@ -1241,6 +1280,16 @@ price | type`). An **inactive category stays its own group in all three grouping
   match a label is a migration bought with nothing. The word is the one on the button, and the
   join between them is `variantName` in
   [`transfer/import/destinations/DeckPreview.tsx`](../transfer/import/destinations/DeckPreview.tsx).
+  **`listNames.ts`'s `listName` is a second answer to a second question and the two must not be
+  merged** (2026-09-01). `variantName` names the **tabs a reader picks between** and answers
+  `Actual` / `Theory`; `listName` names the **list a sentence talks about** and answers
+  `live list` / `theory list`, lowercased into prose and without an article so each caller writes
+  its own `the`. They take the same argument and would collapse into one three-line function that
+  read wrongly on one of the two surfaces. It became a module when it reached three callers —
+  `ClearCategory` and `ClearDeck` each held a private copy, cheap to keep in step one press apart,
+  and `auditText.ts`'s whole-list clear line was the third: the history dialog is not one press
+  from either confirmation, so a reword that reached the two questions and stopped would be
+  invisible until somebody read their own history back.
   **Three other surfaces name the same list and were renamed with it**: the Compare dialog's own
   heading and footer sentence, the card menu's `Add to ▸ <deck> ▸` submenu, and the import
   dialog's `Into <deck> · Actual` line and its `Replace` label. **What did not follow** is that
@@ -2415,9 +2464,11 @@ longer-form record of the two hand-rolled comboboxes and their shared panel is
   on it by **scope** rather than whole since `Export deck` — the header's press opens the same
   layer, so the deck scope has a button and the category scope still does not. (A pile can still be
   deleted from the Categories dialog, which draws `DeleteCategory` for itself; that layer is the
-  _heading's_ route to the same component. The clear has no second host — `ClearCategory.tsx` is
-  the heading's alone, because there is no bulk surface that empties a pile.) This entry used to
-  end "**that is the whole
+  _heading's_ route to the same component. The clear still has no second host — `ClearCategory.tsx`
+  is the heading's alone, and that survived `Empty a list` landing in Deck settings on 2026-09-01:
+  a surface that empties *every* pile at once asks a different question about a different scope and
+  draws `ClearDeck.tsx` for it, so nothing but a heading ever asks about a **named** pile.) This
+  entry used to end "**that is the whole
   of what makes a third rung unnecessary**, so a future surface opened without moving the caret
   breaks it, and the fix is a depth in `useDismissOnEscape`, not a second `"inner"` and a hope".
   **That depth exists**: the hook keeps a stack of capture-phase registrations and only the token

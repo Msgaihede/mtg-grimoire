@@ -2711,6 +2711,144 @@ pub fn clear_category(
     Ok(cleared)
 }
 
+/// Empty a whole list — Deck settings' `Clear live list…`/`Clear theory list…`, which is
+/// [`clear_category`] one scope
+/// out (issue #281).
+///
+/// ## Why this is a command and not a loop over [`clear_category`]
+///
+/// The editor already knows every pile on screen, so clearing them one at a time would work —
+/// and would be a transaction, a walk across the deck boundary, a `["decks"]` invalidation and
+/// a **history row** per pile, which on a nine-column Commander deck is nine of each and nine
+/// lines under one day header for one press. That is [`clear_category`]'s own arithmetic at the
+/// next scope up, and the answer is the one [`crate::import::commit_import`] reached: one
+/// transaction, one invalidation, one line of history for one press.
+///
+/// ## Scope: this variant, and deliberately not both
+///
+/// [`clear_category`]'s rule, unchanged by dropping the category from the `WHERE`. What a
+/// reader is pointing at when they empty a deck is the list in front of them, so the live list
+/// and the theory list go one press at a time and the confirmation says which one went. **The
+/// piles themselves survive**: a clear is not [`crate::deck_meta::delete_category`], and a
+/// reader emptying a deck to build it again keeps the columns they built it in.
+///
+/// ## The two things a later reader will get wrong
+///
+/// **The answer is copies, never rows.** Two printings at 2 and 3 is `5` — the number the
+/// confirmation quoted and the number `delta` means in the history. How many `deck_cards` rows
+/// the DELETE took is not a number anybody is shown, and the two differ the moment a deck holds
+/// a printing twice.
+///
+/// **The live release is what keeps a cleared deck's cards findable.** A `deck_cards` row is an
+/// intention; a row in the deck's **group** is a card the reader physically owns, and emptying
+/// the list does not stop them owning it. So every copy the group holds behind a `live` row is
+/// filed into `Recently removed` first, through [`release_group_copies`] — the same act
+/// [`crate::collection_alloc::deck_to_collection`] performs one card at a time. Left undone,
+/// clearing a deck would leave *every* copy of it filed under a deck that has never heard of
+/// them: invisible on the Collection page, unavailable to every other deck, and with nothing
+/// anywhere to say where they went. **`theory` releases nothing**, and not as an optimisation —
+/// a plan holds no cards ([`crate::collection_alloc::THEORY_HOLDS_NOTHING`]), so the loop simply
+/// never runs.
+///
+/// ## An empty list writes nothing
+///
+/// [`clear_category`]'s early return, for its reason: a `remove` row of zero copies is a history
+/// of a change that never happened, so no `touch_deck`, no audit row and no undo step.
+/// `commit_import`'s replace mode makes the same call in the same words — a replace that found
+/// nothing to clear writes no `remove` row at all.
+///
+/// **Undo puts the list back and not the custody** — [`clear_category`]'s note at this scope:
+/// the copies have gone to `Recently removed` and stay there, so an undone clear reads with its
+/// owned counts at zero until the reader files them again.
+pub fn clear_variant(conn: &Connection, deck_id: i64, variant: &str) -> Result<i64, String> {
+    let variant = crate::deck_meta::valid_variant(variant)?;
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    // **No `category_of_deck` fence**, which is not an omission: this command takes no category
+    // to check, and `deck_id` is the whole scope. Every row it can reach belongs to the deck the
+    // caller named by construction.
+    //
+    // Summed **before** the delete, and in copies rather than rows — [`clear_category`]'s count,
+    // one scope out.
+    let cleared: i64 = tx
+        .query_row(
+            "SELECT coalesce(sum(quantity), 0) FROM deck_cards
+              WHERE deck_id = ?1 AND variant = ?2",
+            params![deck_id, variant],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if cleared == 0 {
+        return Ok(0);
+    }
+    // One wide cell per pile that actually holds something — [`clear_category`]'s single cell,
+    // as many times as there are columns with cards in them. `cleared` is copies and cannot
+    // rebuild a row; these are the only record of what the list contained.
+    //
+    // **Not `read_variant`**, which is the other shape in that module and would answer the same
+    // rows here: it pairs with `record_variant`'s `Op::Variant`, and a step whose "before" was
+    // read over one scope and whose "after" is read over another is a pair that does not
+    // reverse. `record_cells` reads its own "after" through `read_cells` over these very cells,
+    // so these cells are what the "before" has to come from.
+    let piles: Vec<i64> = tx
+        .prepare(
+            "SELECT DISTINCT category_id FROM deck_cards
+              WHERE deck_id = ?1 AND variant = ?2
+              ORDER BY category_id",
+        )
+        .and_then(|mut s| {
+            s.query_map(params![deck_id, variant], |r| r.get(0))?
+                .collect()
+        })
+        .map_err(|e| e.to_string())?;
+    let cells: Vec<crate::deck_undo::Cell> = piles
+        .into_iter()
+        .map(|category_id| crate::deck_undo::Cell::pile(variant, category_id))
+        .collect();
+    let before = crate::deck_undo::read_cells(&tx, deck_id, &cells)?;
+    // Before the DELETE, because the rows are what say which printings and how many — and in
+    // this transaction, so a clear that fails half way has moved nothing.
+    if variant == LIVE {
+        let held: Vec<(String, Option<String>, i64)> = tx
+            .prepare(
+                "SELECT card_id, finish, quantity FROM deck_cards
+                  WHERE deck_id = ?1 AND variant = ?2
+                  ORDER BY id",
+            )
+            .and_then(|mut s| {
+                s.query_map(params![deck_id, variant], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                })?
+                .collect()
+            })
+            .map_err(|e| e.to_string())?;
+        for (card_id, finish, quantity) in held {
+            release_group_copies(&tx, deck_id, &card_id, finish.as_deref(), quantity)?;
+        }
+    }
+    tx.execute(
+        "DELETE FROM deck_cards WHERE deck_id = ?1 AND variant = ?2",
+        params![deck_id, variant],
+    )
+    .map_err(|e| e.to_string())?;
+    touch_deck(&tx, deck_id)?;
+    // `REMOVE` with **no card**, [`clear_category`]'s row with one field moved: `scope` is what
+    // tells `auditText.ts` this line is about a whole list rather than one pile, and there is no
+    // `category` because there was no category — a clear of the deck names none, and a renderer
+    // that read a missing name as a pile called `undefined` is exactly what the field prevents.
+    let audit_id = crate::deck_audit::record(
+        &tx,
+        deck_id,
+        variant,
+        crate::deck_audit::REMOVE,
+        None,
+        &json!({ "action": "clear", "scope": "deck", "cards": cleared }),
+        -cleared,
+    )?;
+    crate::deck_undo::record_cells(&tx, audit_id, deck_id, cells, before, None)?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(cleared)
+}
+
 /// Move every copy from one category to another, in one transaction, folding into the row the
 /// target category already holds. **Within one variant**: a move is a re-filing, never a
 /// promotion of a theory row into the live deck.
@@ -4272,6 +4410,26 @@ pub async fn deck_category_clear(
     .map_err(unfinished)?
 }
 
+/// Answers the copies it removed, so the caller can say what happened without re-reading the
+/// deck to work it out.
+#[cfg(not(target_family = "wasm"))]
+#[tauri::command]
+pub async fn deck_clear(
+    state: tauri::State<'_, Arc<AppState>>,
+    deck_id: i64,
+    variant: String,
+) -> Result<i64, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        // Plain `with_write`: a deck write moves nothing the reader owns. PR 3's
+        // `collection_to_deck`/`deck_to_collection` DO move ownership and must use
+        // `collection_source::with_write_owned` instead.
+        with_write(&state, |c| clear_variant(c, deck_id, &variant))
+    })
+    .await
+    .map_err(unfinished)?
+}
+
 /// A drag onto a column, and the quick zones' `Auto` — one command, two ways of naming the
 /// target, which is [`add_card`]'s arrangement and is documented on [`move_card`]. Answers the
 /// category the copies are now in, because the name arm's caller has no other way to learn what
@@ -5089,6 +5247,273 @@ mod tests {
 
         assert_eq!(clear_category(&conn, deck.id, main, LIVE).unwrap(), 4);
         assert_eq!(count(&conn, "collection_entries"), 0);
+    }
+
+    /// A whole-list clear empties **every pile of one list**, and the two things it must not reach are
+    /// the other list and the columns themselves.
+    ///
+    /// The theory row is what pins the scope, [`clearing_a_stack_empties_one_pile_of_one_variant`]'s
+    /// reason: with `variant` dropped from the `WHERE` the live rows still vanish and nothing else
+    /// in the assertion would notice. The `deck_categories` read is the other half — a clear is
+    /// not [`crate::deck_meta::delete_category`], and a reader emptying a deck to build it again
+    /// keeps the columns they built it in.
+    #[test]
+    fn clearing_a_deck_empties_the_live_list_and_leaves_the_plan_standing() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        let side = kind_of(&conn, deck.id, "side");
+
+        add(&conn, deck.id, "bolt-lea", main, 2);
+        add(&conn, deck.id, "bolt-m10", main, 3);
+        add(&conn, deck.id, "bolt-lea", side, 4);
+        add_card(
+            &conn,
+            deck.id,
+            "serra-lea",
+            Some(main),
+            None,
+            THEORY,
+            None,
+            1,
+        )
+        .unwrap();
+
+        let piles = |c: &Connection| -> Vec<(i64, String)> {
+            c.prepare("SELECT id, name FROM deck_categories WHERE deck_id = ?1 ORDER BY id")
+                .unwrap()
+                .query_map(params![deck.id], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        };
+        let columns = piles(&conn);
+        assert!(columns.len() > 1, "the fixture has piles to lose");
+
+        // Three live rows across two piles: 2 + 3 + 4.
+        assert_eq!(clear_variant(&conn, deck.id, LIVE).unwrap(), 9);
+
+        let rows: Vec<(i64, String, i64)> = conn
+            .prepare(
+                "SELECT category_id, variant, quantity FROM deck_cards
+                  WHERE deck_id = ?1 ORDER BY category_id, variant",
+            )
+            .unwrap()
+            .query_map(params![deck.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![(main, THEORY.to_owned(), 1)],
+            "every live pile went and the plan is untouched"
+        );
+        assert_eq!(
+            piles(&conn),
+            columns,
+            "a clear is not a delete: every column survives it, empty"
+        );
+    }
+
+    /// And the same press on the other list, which is not the test above read backwards: the live
+    /// rows are what prove the scope this time.
+    #[test]
+    fn clearing_a_deck_empties_the_plan_and_leaves_the_live_list_standing() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        let side = kind_of(&conn, deck.id, "side");
+
+        add(&conn, deck.id, "bolt-lea", main, 2);
+        add(&conn, deck.id, "bolt-lea", side, 1);
+        for pile in [main, side] {
+            add_card(
+                &conn,
+                deck.id,
+                "serra-lea",
+                Some(pile),
+                None,
+                THEORY,
+                None,
+                3,
+            )
+            .unwrap();
+        }
+
+        assert_eq!(clear_variant(&conn, deck.id, THEORY).unwrap(), 6);
+
+        let rows: Vec<(i64, String, i64)> = conn
+            .prepare(
+                "SELECT category_id, variant, quantity FROM deck_cards
+                  WHERE deck_id = ?1 ORDER BY category_id, variant",
+            )
+            .unwrap()
+            .query_map(params![deck.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![(side, LIVE.to_owned(), 1), (main, LIVE.to_owned(), 2)],
+            "the sleeved deck is exactly where it was"
+        );
+    }
+
+    /// **Copies, never rows** — the number the confirmation quoted and the number `delta` means
+    /// in the history. Two printings at 2 and 3 is 5 and not 2, and the two can only be told
+    /// apart by a deck holding one printing more than once.
+    #[test]
+    fn clearing_a_deck_answers_copies_and_not_rows() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-lea", main, 2);
+        add(&conn, deck.id, "bolt-m10", main, 3);
+
+        assert_eq!(count(&conn, "deck_cards"), 2, "two rows");
+        assert_eq!(
+            clear_variant(&conn, deck.id, LIVE).unwrap(),
+            5,
+            "five cards"
+        );
+    }
+
+    /// **Emptying a deck gives every copy behind it back**, which is
+    /// [`clearing_a_pile_files_its_copies_into_recently_removed`] with the pile boundary taken
+    /// away: the group's three copies back two piles, and clearing the list takes all three
+    /// where clearing the main deck took two. Left undone they stay filed under a deck that no
+    /// longer lists them — invisible, and unavailable to every other deck for ever.
+    #[test]
+    fn clearing_a_deck_files_every_live_copy_into_recently_removed() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        let side = kind_of(&conn, deck.id, "side");
+        add(&conn, deck.id, "bolt-lea", main, 2);
+        add(&conn, deck.id, "bolt-lea", side, 1);
+        file_into_group(&conn, deck.id, "bolt-lea", 3);
+
+        assert_eq!(clear_variant(&conn, deck.id, LIVE).unwrap(), 3);
+
+        assert_eq!(
+            folder_copies(&conn, removed_group(&conn), "bolt-lea"),
+            3,
+            "every copy the deck was holding is on the reader's desk"
+        );
+        assert_eq!(
+            folder_copies(&conn, group_of(&conn, deck.id), "bolt-lea"),
+            0,
+            "and the group is holding nothing for a list that is empty"
+        );
+    }
+
+    /// A plan holds no cards, so emptying one moves nothing — even where the *live* list of the
+    /// same deck is holding copies of the very printing being cleared.
+    /// [`crate::collection_alloc::THEORY_HOLDS_NOTHING`] is the refusal one card at a time; here
+    /// it is a loop that never runs, and the live deck's custody is what proves it.
+    #[test]
+    fn clearing_a_planned_deck_moves_no_copies() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-lea", main, 2);
+        add_card(
+            &conn,
+            deck.id,
+            "bolt-lea",
+            Some(main),
+            None,
+            THEORY,
+            None,
+            2,
+        )
+        .unwrap();
+        file_into_group(&conn, deck.id, "bolt-lea", 2);
+
+        assert_eq!(clear_variant(&conn, deck.id, THEORY).unwrap(), 2);
+
+        assert_eq!(
+            folder_copies(&conn, group_of(&conn, deck.id), "bolt-lea"),
+            2,
+            "the live deck still holds every copy"
+        );
+        assert_eq!(folder_copies(&conn, removed_group(&conn), "bolt-lea"), 0);
+    }
+
+    /// An empty list is not a write, [`clearing_an_empty_stack_writes_nothing_at_all`]'s rule one
+    /// scope out — and the deck here is not an empty deck, it is a deck whose *other* list holds
+    /// everything. No history, no `updated_at`.
+    #[test]
+    fn clearing_an_empty_deck_writes_nothing_at_all() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-lea", main, 4);
+
+        conn.execute(
+            "UPDATE decks SET updated_at = 0 WHERE id = ?1",
+            params![deck.id],
+        )
+        .unwrap();
+        let before = crate::deck_audit::list(&conn, deck.id, 50).unwrap().len();
+
+        assert_eq!(clear_variant(&conn, deck.id, THEORY).unwrap(), 0);
+        assert_eq!(
+            crate::deck_audit::list(&conn, deck.id, 50).unwrap().len(),
+            before,
+            "a `remove` of zero copies is a history of a change that never happened"
+        );
+        let touched: i64 = conn
+            .query_row(
+                "SELECT updated_at FROM decks WHERE id = ?1",
+                params![deck.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(touched, 0, "and the deck did not move");
+        assert_eq!(count(&conn, "deck_cards"), 1, "nor did the other list");
+    }
+
+    /// **One press, one line of history** — the whole argument for this being a command rather
+    /// than a loop over [`clear_category`], asserted rather than left to the reader of the
+    /// transaction. `scope` is the field that tells `auditText.ts` this row is about a whole list,
+    /// and there is no `category` at all, because a clear of the deck names none.
+    #[test]
+    fn clearing_a_deck_records_one_history_row_for_the_whole_list() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        let side = kind_of(&conn, deck.id, "side");
+        add(&conn, deck.id, "bolt-lea", main, 4);
+        add(&conn, deck.id, "bolt-m10", main, 2);
+        add(&conn, deck.id, "bolt-lea", side, 1);
+
+        assert_eq!(clear_variant(&conn, deck.id, LIVE).unwrap(), 7);
+
+        let history = crate::deck_audit::list(&conn, deck.id, 50).unwrap();
+        let removes: Vec<(i64, Option<String>, serde_json::Value)> = history
+            .iter()
+            .filter(|r| r.kind == crate::deck_audit::REMOVE)
+            .map(|r| {
+                (
+                    r.delta,
+                    r.card_id.clone(),
+                    serde_json::from_str(&r.payload).unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            removes,
+            vec![(
+                -7,
+                None,
+                json!({ "action": "clear", "scope": "deck", "cards": 7 })
+            )],
+            "one row for three piles, naming no card and no category — and `scope` is what \
+             separates it from a `Clear stack` row"
+        );
     }
 
     /// A stepper pointed at a row that is not in that category any more is a stale editor,

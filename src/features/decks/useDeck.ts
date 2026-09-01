@@ -329,8 +329,8 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    * the shape PR 2 shipped a ghost row for: the collection's list, its summary, both folder
    * cards and the folder tree are all now wrong, and the deck root reaches none of them.
    *
-   * **Two writes here call it, and each is as precise as its own answer allows.** Both only
-   * *move* a row between folders, so the total the reader owns cannot have changed — which is
+   * **Three writes here call it, and each is as precise as its own answer allows.** All three
+   * only *move* a row between folders, so the total the reader owns cannot have changed — which is
    * why this is narrower than `query.ts`'s `OWNED_WRITE_KEYS` rather than a smaller version of it. The
    * one write in this hook that could create a binder row went with the `own` add on 2026-08-25;
    * see the note where its invalidation stood.
@@ -341,12 +341,20 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    * arguments that went in cannot tell the two apart; only {@link MoveOutcome} can.
    *
    * The **clear** ({@link clearCategory}) is the second, and it cannot be that precise:
-   * `deck_category_clear` answers how many `deck_cards` rows it emptied, never how many copies
-   * moved, so a pile of cards the reader never owned reads the same as one they did. What it can
-   * say is when nothing moved *for certain* — a `theory` clear (a plan holds no cards, and the
-   * backend's release is fenced on `live`) and a clear that emptied no rows at all — and it is
-   * gated on both. The remaining over-fire is one refetch against a ghost row, which is the
+   * `deck_category_clear` answers the copies it took out of `deck_cards` — `sum(quantity)`,
+   * counted before the DELETE — never the copies that reached a folder, so a pile of cards the
+   * reader never owned reads the same as one they did. What it can say is when nothing moved
+   * *for certain* — a `theory` clear (a plan holds no cards, and the backend's release is
+   * fenced on `live`) and a clear that emptied nothing at all — and it is gated on both. The remaining over-fire is one refetch against a ghost row, which is the
    * right way round.
+   *
+   * The **whole-list clear** ({@link clearDeck}) is the third and is imprecise in exactly the
+   * same way, one grain wider: `deck_clear` answers the copies it took out of `deck_cards`,
+   * never the copies that reached `Recently removed`, so a deck of cards nobody owned reads the
+   * same as a deck of cards they did. The gate is therefore the same two certainties and no
+   * more — a `theory` clear moves nothing (the backend's release is fenced on `live`), and a
+   * clear that answered `0` emptied nothing to move — and it is deliberately **not** written as
+   * a claim that a positive answer means copies changed folders. It only means they might have.
    */
   const invalidateCollection = () => {
     void queryClient.invalidateQueries({ queryKey: ["collection"] });
@@ -690,6 +698,41 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
     },
   });
 
+  /**
+   * Empty **one whole list** of this deck — Deck settings' **Clear live list…** and
+   * **Clear theory list…** — and answer the copies
+   * it removed.
+   *
+   * {@link clearCategory} one grain wider, and every argument on that mutation applies here more
+   * strongly rather than differently: one command instead of a clear per pile, which would be a
+   * transaction, a history row and a `["decks"]` invalidation per column while the reader
+   * watches; and **no optimistic patch**, because this is one press behind a confirmation and
+   * guessing would delete every column from the cache before knowing the write landed. The
+   * piles themselves survive — `deck_categories` is untouched, so the desk the reader arranged
+   * is still there once the cards are gone.
+   *
+   * **The variant is a mutation argument, and it is the one thing in this hook that does not use
+   * the hook's own {@link variant}.** That is a fact about the caller rather than a style
+   * choice: `DeckSettingsDialog` mounts `useDeck(deckId)` — no second argument, so the hook is
+   * reading the **live** list — and one of the two presses it draws clears the *theory* list. A
+   * `clearDeck` that read `variant` would answer "cleared the theory list" while having emptied
+   * the deck the reader actually owns, silently and behind a confirmation that said otherwise.
+   * So the caller says which list every time and this mutation never guesses.
+   *
+   * **On the live list it is a collection write too** — `live` rows release their backing copies
+   * into `Recently removed` — and the gate below is {@link invalidateCollection}'s, character
+   * for character `clearCategory`'s and for the identical reason: the command answers copies
+   * removed from `deck_cards`, never copies that reached a folder, so `theory` and a clear that
+   * answered `0` are the only two cases it can rule out for certain.
+   */
+  const clearDeck = useMutation({
+    mutationFn: (target: DeckVariant) => ipc.deckClear(opened(id), target),
+    onSuccess: (cleared, target) => {
+      invalidate();
+      if (target === "live" && cleared > 0) invalidateCollection();
+    },
+  });
+
   /** Move every copy from one category to another. It moves no copy out of the deck's group —
    *  the cards are still in this deck, one pile over — but a pile can be switched off, and an
    *  inactive pile is handed nothing from that group, so every `ownedQuantity` in the deck can
@@ -928,6 +971,9 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
     addCard,
     setQuantity,
     clearCategory,
+    /** Empty a whole list of this deck. **Takes the variant as its argument** rather than using
+     *  the hook's — see the mutation's own doc for the caller that makes that necessary. */
+    clearDeck,
     moveCard,
     refileCard,
     swapPrinting,

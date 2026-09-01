@@ -16,6 +16,7 @@ const deckAddCard = vi.hoisted(() => vi.fn());
 const deckSetCardQuantity = vi.hoisted(() => vi.fn());
 const deckToCollection = vi.hoisted(() => vi.fn());
 const deckCategoryClear = vi.hoisted(() => vi.fn());
+const deckClear = vi.hoisted(() => vi.fn());
 const deckMoveCard = vi.hoisted(() => vi.fn());
 const deckMissingToWishlist = vi.hoisted(() => vi.fn());
 const deckSwapPrinting = vi.hoisted(() => vi.fn());
@@ -36,6 +37,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckSetCardQuantity,
     deckToCollection,
     deckCategoryClear,
+    deckClear,
     deckMoveCard,
     deckMissingToWishlist,
     deckSwapPrinting,
@@ -195,6 +197,8 @@ beforeEach(() => {
     .mockResolvedValue({ entryId: 21, fromDeck: null, deckCardId: null, quantity: 1 });
   // The copies it removed — this command answers a number, not a row.
   deckCategoryClear.mockReset().mockResolvedValue(4);
+  // The same answer one grain wider: `sum(quantity)` over the whole list, never a row count.
+  deckClear.mockReset().mockResolvedValue(12);
   deckMoveCard.mockReset().mockResolvedValue(undefined);
   deckMissingToWishlist.mockReset().mockResolvedValue(2);
   deckSwapPrinting.mockReset().mockResolvedValue({ folded: false, quantity: 4 });
@@ -378,6 +382,108 @@ describe("useDeck", () => {
     seedOwned(client);
 
     await result.current.clearCategory.mutateAsync(MAIN.id);
+
+    await waitFor(() => expect(staleRoots(client)).toEqual(["decks"]));
+  });
+
+  /**
+   * **Emptying a whole list is one command too**, and the piles are not part of what it takes:
+   * `deck_clear` is `deck_category_clear` one grain wider, so the same argument that made the
+   * pile clear a command rather than a loop over the stepper makes this one a command rather
+   * than a loop over the pile clear.
+   */
+  it("empties a whole list in one command rather than a clear per pile", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    const cleared = await result.current.clearDeck.mutateAsync("live");
+
+    // The copies, not the rows — the figure the confirmation counted.
+    expect(cleared).toBe(12);
+    expect(deckClear).toHaveBeenCalledWith(4, "live");
+    expect(deckClear).toHaveBeenCalledTimes(1);
+    expect(deckCategoryClear).not.toHaveBeenCalled();
+    expect(deckSetCardQuantity).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The variant is the mutation's argument and never the hook's, and this is the case that
+   * pins it.**
+   *
+   * Every other write in this hook goes to the list it was opened on — the test above,
+   * "writes to the variant it was opened on", is that rule — and this one deliberately does
+   * not. `DeckSettingsDialog` mounts `useDeck(deckId)` with no second argument, so the hook is
+   * reading **live**, and it draws a press that clears the **theory** list. A `clearDeck` that
+   * read `variant` would empty the deck the reader actually owns while the confirmation said it
+   * was clearing the plan — silent, irreversible, and invisible to every test that mounts the
+   * hook on the list it is clearing.
+   *
+   * Both directions, because the defect is symmetric: reading the hook's variant is wrong
+   * whichever list it happens to hold.
+   */
+  it("clears the variant it is asked for, not the one the hook was opened on", async () => {
+    const live = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(live.result.current.deck).toEqual(DECK));
+    // The hook took the default and is reading `live`, which is the state the dialog mounts in.
+    expect(live.result.current.variant).toBe("live");
+
+    await live.result.current.clearDeck.mutateAsync("theory");
+
+    expect(deckClear).toHaveBeenCalledWith(4, "theory");
+
+    const theory = renderHook(() => useDeck(4, "theory"), { wrapper });
+    await waitFor(() => expect(theory.result.current.deck).toEqual(DECK));
+
+    await theory.result.current.clearDeck.mutateAsync("live");
+
+    expect(deckClear).toHaveBeenCalledWith(4, "live");
+  });
+
+  /**
+   * **Clearing the live list moves collection rows**, for {@link clearCategory}'s reason at the
+   * deck's grain: every `live` row releases its backing copies into `Recently removed`, so the
+   * collection's list, its summary and its folder tree are all now wrong and the deck root
+   * reaches none of them.
+   */
+  it("marks the collection stale when the live list is cleared", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    seedOwned(client);
+    expect(staleRoots(client)).toEqual([]);
+
+    await result.current.clearDeck.mutateAsync("live");
+
+    await waitFor(() => expect(staleRoots(client)).toEqual(["collection", "decks"]));
+  });
+
+  /**
+   * And a **theory** clear does not — the absence worth pinning, because the gate is on the
+   * mutation's argument rather than on the hook's variant and a gate written against the wrong
+   * one would pass every test that mounts the hook on the list it clears. So this hook is
+   * deliberately mounted on **live** and asked to clear the plan.
+   */
+  it("leaves the collection alone when the theory list is cleared", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    seedOwned(client);
+
+    await result.current.clearDeck.mutateAsync("theory");
+
+    await waitFor(() => expect(staleRoots(client)).toEqual(["decks"]));
+  });
+
+  /**
+   * And neither does a live clear that emptied nothing. `0` copies is a list that was already
+   * empty: no `deck_cards` row was taken out, so nothing was released and a refetch could only
+   * re-answer what is already on screen — {@link invalidateCollection}'s second certainty.
+   */
+  it("leaves the collection alone when a live clear removed no copies", async () => {
+    deckClear.mockResolvedValue(0);
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    seedOwned(client);
+
+    await result.current.clearDeck.mutateAsync("live");
 
     await waitFor(() => expect(staleRoots(client)).toEqual(["decks"]));
   });

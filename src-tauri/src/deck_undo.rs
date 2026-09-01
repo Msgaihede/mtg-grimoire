@@ -1762,6 +1762,18 @@ mod tests {
                 crate::deck::clear_category(c, id, ramp(c, id), "live").unwrap();
             }),
             (
+                // The same press one scope out, and the case above cannot stand in for it:
+                // [`fresh`] puts live cards in **two** piles, so this step carries a cell per
+                // pile where that one carries a single cell. A `clear_variant` that recorded
+                // only the pile it happened to read first would pass every assertion the
+                // category clear makes and lose a whole column to Ctrl+Z.
+                "deck_clear",
+                nothing,
+                |c, id| {
+                    crate::deck::clear_variant(c, id, "live").unwrap();
+                },
+            ),
+            (
                 // The name arm, which **creates** a pile. Undo has to take the column away
                 // again along with the card that made it — otherwise the deck keeps a
                 // `Landfall` heading for a card it no longer holds, which TypeScript happens to

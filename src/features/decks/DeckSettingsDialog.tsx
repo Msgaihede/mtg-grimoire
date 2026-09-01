@@ -1,9 +1,11 @@
-import { useCallback, useId, useMemo, type JSX } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type JSX } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ipc, ipcError } from "@/lib/ipc";
+import { ipc, ipcError, type DeckVariant } from "@/lib/ipc";
 import { writeFailure } from "@/lib/writes";
 import { Dialog } from "@/components/Dialog";
+import { ClearDeck } from "./ClearDeck";
 import { DeckSettingsForm, folderPaths, type DeckSettingsValue } from "./DeckSettingsForm";
+import { RowAction } from "./metaRows";
 import { useDeck } from "./useDeck";
 import { useDeckField } from "./useDeckField";
 import { useDeckFolders } from "./useDeckFolders";
@@ -33,8 +35,11 @@ export interface DeckSettingsDialogProps {
  * `CreateDeckDialog` asks the same ones about a deck that does not exist yet. {@link Dialog}
  * is the chrome: the scrim, the panel, the trap, the Escape rung, the header and the ✕, shared
  * with every other modal the deck builder opens. What is left here is {@link Settings}, and it
- * is everything that is about *this deck existing*: reading it, the two commands that write
- * it, the banner when one is refused, and the loading, read-failure and deck-is-gone states.
+ * is everything that is about *this deck existing*: reading it, the commands that write it, the
+ * banner when one is refused, and the loading, read-failure and deck-is-gone states. **Emptying
+ * a whole list is the one thing here that is not a setting**, and it is here for want of a
+ * cheaper screen rather than because it belongs — the section's own comment argues that, and
+ * argues why it could not follow the form into `CreateDeckDialog`.
  *
  * **There is no Save button and there is not meant to be one.** Every control writes when it is
  * done with — a select on change, the switch on press, a text field on blur, which is the form's
@@ -133,12 +138,94 @@ function Settings({ deckId }: { deckId: number }) {
   /** The read succeeded and answered nothing: another view has deleted this deck. */
   const gone = !loading && !deck.query.isError && deck.query.data === null;
 
+  /**
+   * Which list a destructive question is up about, or `null` while the two buttons are drawn.
+   *
+   * **One piece of state rather than a flag each**, so "only one question at a time" is
+   * structural rather than something two `useState`s have to be remembered to agree about —
+   * `DeckEditor`'s `Layer` union, at the scale this section needs.
+   */
+  const [confirming, setConfirming] = useState<DeckVariant | null>(null);
+  const liveTrigger = useRef<HTMLButtonElement>(null);
+  const theoryTrigger = useRef<HTMLButtonElement>(null);
+  /** Which trigger is owed the caret back, set by a cancel and cleared by the effect below. */
+  const owedFocus = useRef<DeckVariant | null>(null);
+
+  /**
+   * The caret's way back out of a question the reader declined.
+   *
+   * `CategoryRow`'s effect, and it has to be an effect for a sharper version of that row's
+   * reason: there the trigger is merely **disabled** while the question is up, here it is not in
+   * the tree at all — the question replaces it — so a `focus()` from the Cancel handler would be
+   * a call on a ref that is still `null`. The render this runs after is the one that puts the
+   * button back.
+   *
+   * **Only after a cancel.** A clear that went through leaves a different screen behind it: the
+   * counts have moved, so the button the reader pressed is the one that has just greyed itself,
+   * and handing the caret to a disabled control is the dead-caret failure `metaRows.tsx` names
+   * rather than a courtesy.
+   */
+  useEffect(() => {
+    if (confirming !== null || owedFocus.current === null) return;
+    const owed = owedFocus.current;
+    owedFocus.current = null;
+    (owed === "theory" ? theoryTrigger : liveTrigger).current?.focus();
+  }, [confirming]);
+
+  /**
+   * How many copies each list holds — **both answers off the read this dialog already makes**.
+   *
+   * `Settings` mounts `useDeck(deckId)`, which is the **live** list, and a {@link DeckCategory}
+   * carries two counts rather than one: `cardCount` is the copies filed in that pile *in the
+   * variant that was asked for* — so, here, live — and `cardCountAllVariants` is the copies
+   * across both lists at once, the same answer whichever variant did the asking. The plan's
+   * total is therefore a subtraction, and that is the whole reason there is no second query on
+   * this screen: a later reader who "fixes" this by mounting `useDeck(deckId, "theory")` beside
+   * it would be buying a second `deck_get` for a number already in hand.
+   *
+   * Read both fields' own docs in `src/lib/ipc.ts` before touching either. They are one word
+   * apart, and a destructive control quoting the wrong one mis-states the press being confirmed
+   * — which is the one direction a confirmation must never be wrong in.
+   */
+  const { liveCount, theoryCount } = useMemo(() => {
+    let live = 0;
+    let both = 0;
+    for (const category of deck.categories) {
+      live += category.cardCount;
+      both += category.cardCountAllVariants;
+    }
+    return { liveCount: live, theoryCount: both - live };
+  }, [deck.categories]);
+
   /** The most recently *started* of the writes this dialog speaks for — the one whose refusal
    *  is still news. `lib/writes.ts`, the one definition of that rule: a refused move must not
-   *  leave its sentence up while the reader goes on to rename the deck successfully. Two
-   *  entries and not three: the cover is a field of `deck.update` now, not a command of its
-   *  own. */
-  const bannerFailure = writeFailure([deck.update, setFolder]);
+   *  leave its sentence up while the reader goes on to rename the deck successfully. The cover
+   *  is not among them — it is a field of `deck.update` now, not a command of its own — and the
+   *  clear is, so a refused clear draws the sentence this dialog already had rather than a
+   *  second one of its own. Read the array; a count written out here is a number no build
+   *  answers. */
+  const bannerFailure = writeFailure([deck.update, setFolder, deck.clearDeck]);
+
+  /**
+   * The question actually on screen, which is not always the one that was opened.
+   *
+   * **The theory switch is a few rows up this same dialog**, so a reader can take the deck's
+   * plan away with its own clear confirmation standing — and `Clear the theory list?` over a
+   * deck that has just reported it keeps no plan is a question about a list nothing else on the
+   * screen admits to. The trigger below is gated on `theoryEnabled` and the open question was
+   * not, which is the two halves of one control disagreeing about whether the list is there.
+   *
+   * **Derived rather than reconciled in an effect.** It is a render-time consequence of two
+   * pieces of state that are both already here, and a `setConfirming(null)` from an effect is
+   * exactly the reflexive derived-state sync `no-setstate-in-an-effect` exists to refuse.
+   *
+   * **`confirming` is deliberately left alone**, so switching the plan back on puts the reader's
+   * own unanswered question back rather than making them find the button again. The switch's own
+   * copy promises that turning it off "keeps every row", so the cards this question is about are
+   * still there — it is the *list* that has gone, not its contents.
+   */
+  const asking: DeckVariant | null =
+    confirming === "theory" && row?.theoryEnabled !== true ? null : confirming;
 
   // `mutate` rather than the mutation object, which is what the memos below can depend on:
   // `useMutation` answers a fresh object every render and a stable `mutate`.
@@ -294,6 +381,85 @@ function Settings({ deckId }: { deckId: number }) {
             }}
             idPrefix={id}
           />
+
+          {/* **Emptying a whole list is drawn here because this is the deck's cheapest
+              screen, and that is an argument rather than a placement.** The other candidate
+              was the editor's toolbar, and it is full: `ACTIONS` already gives up a word per
+              button at 1100px and the rest of them at 900px, so a control pressed once a
+              season would be paid for in width by the six that are pressed all day. This
+              dialog is opened deliberately, read, and shut.
+
+              **It is deliberately not in `DeckSettingsForm`, and that fence is structural
+              rather than tidy.** `CreateDeckDialog` draws the same form over a deck that does
+              not exist yet, where "empty the live list" is a question about nothing — the form
+              owns no mutation and reaches no backend precisely so that it can be drawn there,
+              and a destructive control is the one thing that cannot follow it.
+
+              **The live button is unconditional and the theory one is not**, because the two
+              lists are not peers. Every deck has a live list. A deck with `theoryEnabled` off
+              has no plan at all, so a greyed `Clear theory list…` under it would be a control
+              about a feature the reader has not turned on — which reads as something broken
+              rather than as something absent, on a screen whose own switch is the way to turn
+              it on. */}
+          <div className="mt-5 border-t border-border pt-4">
+            <h3 className="text-xs">Empty a list</h3>
+            <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">
+              Every card leaves the list. The piles it was filed in stay where they are.
+            </p>
+
+            {asking === null ? (
+              <div className="mt-2.5 flex flex-wrap items-center gap-4">
+                {/* The reason travels in the *name*, because a greyed control whose name is
+                    the bare label reads to a screen reader — and to a test — as a control
+                    that is missing rather than one that has nothing to do. It is the visible
+                    words that carry it: `RowAction` is a row's small print and takes no label
+                    of its own, and a sighted reader is owed the same sentence. */}
+                <RowAction
+                  ref={liveTrigger}
+                  destructive
+                  disabled={liveCount === 0 || deck.clearDeck.isPending}
+                  onClick={() => setConfirming("live")}
+                >
+                  {liveCount === 0 ? "Clear live list… (already empty)" : "Clear live list…"}
+                </RowAction>
+
+                {row.theoryEnabled && (
+                  <RowAction
+                    ref={theoryTrigger}
+                    destructive
+                    disabled={theoryCount === 0 || deck.clearDeck.isPending}
+                    onClick={() => setConfirming("theory")}
+                  >
+                    {theoryCount === 0
+                      ? "Clear theory list… (already empty)"
+                      : "Clear theory list…"}
+                  </RowAction>
+                )}
+              </div>
+            ) : (
+              /* The question stands where the buttons were — `CategoryRow`'s shape, an inline
+                 confirmation inside a dialog that is already open, rather than a second scrim
+                 over the first one. **It closes on success and only on success**: a refused
+                 clear leaves the question up with the banner below explaining why, which is
+                 what `ClearDeck` taking `pending` rather than closing itself is for. */
+              <ClearDeck
+                variant={asking}
+                cardCount={asking === "theory" ? theoryCount : liveCount}
+                // The list that is *not* being emptied, which is the reassurance the sentence
+                // is there to give — so it is the other one of the same pair, never a repeat
+                // of the subject.
+                otherCount={asking === "theory" ? liveCount : theoryCount}
+                pending={deck.clearDeck.isPending}
+                onCancel={() => {
+                  owedFocus.current = asking;
+                  setConfirming(null);
+                }}
+                onCleared={() =>
+                  deck.clearDeck.mutate(asking, { onSuccess: () => setConfirming(null) })
+                }
+              />
+            )}
+          </div>
 
           {/* Under both columns rather than beside the fields, which is where it used to
               sit: the form owns the two-column layout now, and a refused filing is as much

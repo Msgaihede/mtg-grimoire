@@ -4157,6 +4157,141 @@ describe("moving copies across the deck boundary", () => {
   });
 });
 
+/**
+ * `deck_clear` — the pile clear above with one filter dropped, so these are the same questions
+ * asked of the whole list.
+ *
+ * **Every assertion here has something outside its scope to be wrong about**, which is the only
+ * way this shape of command can be tested: a handler that cleared both variants, or both decks,
+ * or the categories along with the cards, passes every assertion made purely about what went
+ * away. So the fixture carries a `theory` row, a second deck and five categories that must all
+ * still be standing afterwards.
+ */
+describe("deck_clear", () => {
+  /** Copies in one folder. The boundary suite above declares its own; this describe is not
+   *  inside it, and a clear is not a move. */
+  const copiesIn = (db: FakeDb, folderId: number | null) =>
+    db.collectionEntries
+      .filter((e) => e.folderId === folderId)
+      .reduce((n, e) => n + e.quantity, 0);
+
+  /**
+   * Two decks with their categories and their groups. Deck 1 lists **six** live copies over
+   * three rows in two piles — two printings of one card, which is what makes copies and rows
+   * different numbers — plus seven in the plan; its group holds exactly the six the live list
+   * claims, which is the state a reader who filed their cards into the deck is in. Deck 2 lists
+   * four of its own.
+   */
+  const listed = () =>
+    makeDeckDb({
+      decks: [deck({ id: 1, name: "Deck A" }), deck({ id: 2, name: "Deck B" })],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT.id, quantity: 3, folderId: groupId(1) }),
+        entry({ id: 2, cardId: BOLT_2X2.id, quantity: 3, folderId: groupId(1) }),
+      ],
+      deckCards: [
+        deckCard({ id: 1, cardId: BOLT.id, categoryKind: "main", quantity: 2 }),
+        deckCard({ id: 2, cardId: BOLT_2X2.id, categoryKind: "main", quantity: 3 }),
+        deckCard({ id: 3, cardId: BOLT.id, categoryKind: "side", quantity: 1 }),
+        deckCard({ id: 4, cardId: BOLT.id, categoryKind: "main", variant: "theory", quantity: 7 }),
+        deckCard({ id: 5, deckId: 2, cardId: BOLT.id, categoryKind: "main", quantity: 4 }),
+      ],
+    });
+
+  /** The scope, from all three sides at once: every pile of this deck's `live` list goes, and
+   *  the plan beside it and the other deck's list are untouched. */
+  it("empties every pile of one variant and leaves the other list and the other deck alone", () => {
+    const db = listed();
+
+    writeHandlers(db).deck_clear({ deckId: 1, variant: "live" });
+
+    expect(db.deckCards.map((dc) => dc.id)).toEqual([4, 5]);
+    expect(db.deckCards.find((dc) => dc.id === 4)!.quantity).toBe(7);
+    expect(db.deckCards.find((dc) => dc.id === 5)!.quantity).toBe(4);
+  });
+
+  /** **The piles survive**, which is the whole difference between this and `deck_delete` — and
+   *  the assertion is the rows themselves rather than a count, because a handler that rebuilt
+   *  the five defaults would answer 5 to a count and have thrown the reader's work away. */
+  it("leaves the deck's categories standing", () => {
+    const db = listed();
+    const before = db.deckCategories.map((c) => ({ ...c }));
+
+    writeHandlers(db).deck_clear({ deckId: 1, variant: "live" });
+
+    expect(db.deckCategories).toEqual(before);
+  });
+
+  /** Copies, not rows: three rows holding 2, 3 and 1 is the **6** the confirmation quoted. */
+  it("answers the copies it removed rather than the rows", () => {
+    const db = listed();
+
+    expect(writeHandlers(db).deck_clear({ deckId: 1, variant: "live" })).toBe(6);
+  });
+
+  /**
+   * A `deck_cards` row is an intention and a row in the deck's group is a card the reader
+   * physically owns — so the copies come back rather than staying filed under a list that has
+   * stopped naming them. Asserted against the same two folders the pile clear's tests use.
+   */
+  it("files a cleared live list's copies into Recently removed", () => {
+    const db = listed();
+    expect(copiesIn(db, groupId(1))).toBe(6);
+
+    writeHandlers(db).deck_clear({ deckId: 1, variant: "live" });
+
+    expect(copiesIn(db, groupId(1))).toBe(0);
+    expect(copiesIn(db, REMOVED_FOLDER)).toBe(6);
+  });
+
+  /** A plan holds no cards, so there is nothing behind a theory row in any folder to give
+   *  back — and the group keeps its six even though seven copies just left the list. */
+  it("moves nothing when the list being cleared is the plan", () => {
+    const db = listed();
+
+    expect(writeHandlers(db).deck_clear({ deckId: 1, variant: "theory" })).toBe(7);
+
+    expect(copiesIn(db, groupId(1))).toBe(6);
+    expect(copiesIn(db, REMOVED_FOLDER)).toBe(0);
+  });
+
+  /** **An empty list writes nothing at all**, `updatedAt` included: the handler returns before
+   *  opening a transaction, where `deck_set_card_quantity`'s zero arm commits whatever it
+   *  found. The deck's stamp is the assertion that separates the two. */
+  it("answers 0 for an empty list and moves nothing, the deck's own stamp included", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 3, folderId: groupId(1) })],
+      deckCards: [deckCard({ id: 1, cardId: BOLT.id, categoryKind: "main", variant: "theory" })],
+    });
+    const stamped = db.decks[0].updatedAt;
+
+    expect(writeHandlers(db).deck_clear({ deckId: 1, variant: "live" })).toBe(0);
+
+    expect(db.decks[0].updatedAt).toBe(stamped);
+    expect(db.deckCards).toHaveLength(1);
+    expect(copiesIn(db, groupId(1))).toBe(3);
+    expect(copiesIn(db, REMOVED_FOLDER)).toBe(0);
+  });
+
+  /** The busy sweep below walks this handler too; asserted here as well because the sweep
+   *  proves *a* write refuses and this proves it is this one — and everything after the door
+   *  in this command moves the reader's cards. */
+  it("refuses while a sync holds the write lock", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1 })], fault: "busy" });
+
+    expect(() => writeHandlers(db).deck_clear({ deckId: 1, variant: "live" })).toThrow(/busy/i);
+  });
+
+  /** The deck has to exist, and the check is at the top with the other two — a clear aimed at a
+   *  deck another view deleted is not a clear that quietly succeeds over no rows. */
+  it("refuses a deck that is not there", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1 })] });
+
+    expect(() => writeHandlers(db).deck_clear({ deckId: 99, variant: "live" })).toThrow();
+  });
+});
+
 describe("collection_import_commit", () => {
   it("accumulates a repeated grain and counts added versus updated", () => {
     const db = makeDb();
@@ -5609,7 +5744,14 @@ describe("the busy fault", () => {
     // being stored absolute. It was a write and it took `refuseIfBusy`, so this is a plain
     // deletion from the list rather than a handler moving to `unlocked`. Re-counted by running
     // the sweep, not by subtracting on paper.
-    expect(names).toHaveLength(86);
+    //
+    // `Clear list` then added **one**, 86 → 87: `deck_clear` empties every pile of one variant
+    // and is a card write in the same sense `deck_category_clear` is — it takes `with_write`
+    // like every other and changes nothing about a category — so it belongs in the loop rather
+    // than in `unlocked`. Its command is a *widening* of one already counted here and the count
+    // still moved by one, for the reason the bulk-import pair moved it by two: the narrow
+    // command did not go away. Re-counted by running the sweep.
+    expect(names).toHaveLength(87);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
