@@ -37,14 +37,31 @@
  * bracket 2 that reads as a floor of 4 is a mismatch worth a sentence, and a deck told it is
  * bracket 5 never is.
  *
- * ## Why the floor is never 5
+ * ## Why the floor is never 5 — and, since 2026-09-01, never 1
  *
- * It used to be, and a reader who remembers `bracket: 5` should know where it went.
+ * **Both ends of the scale are an intent; only the middle three are a card list.** A reader who
+ * remembers `bracket: 5`, or a deck that used to read `~1`, should know where each went.
+ *
  * **Brackets 4 and 5 have identical *deck* restrictions.** Both allow unlimited Game Changers,
  * mass land denial, extra turns and combos; what separates them is whether the deck is built
  * for the cEDH metagame, which is an intent no card list shows. An estimator that reads card
- * contents can therefore never honestly return 5, so this one does not. A reader who is
- * playing cEDH sets the bracket by hand, which is the whole reason that control exists.
+ * contents can therefore never honestly return 5, so this one does not.
+ *
+ * **Bracket 1 is that same claim upside down**, which this module missed by reading Exhibition as
+ * a table of prohibitions. The October 2025 update words it entirely in terms of what the deck
+ * is *for*: players expect "decks to prioritize a goal, theme, or idea over power", "win
+ * conditions to be highly thematic or substandard", "gameplay to be an opportunity to show off
+ * your creations". Its only *card* prohibition bracket 2 does not also carry is extra turns — so
+ * a pile of Grizzly Bears, Rampant Growth and sixty Islands satisfies every printed restriction
+ * bracket 1 names and is still not an Exhibition deck unless its builder says so. Returning `~1`
+ * off a card list was this module claiming to see the one thing it cannot see. **Bracket 2 Core
+ * is what a deck that flags nothing honestly reads as**: "decks to be unoptimized and
+ * straightforward", which is a description of a deck with no Game Changers, no denial, no
+ * chained turns and no combo in it.
+ *
+ * So the estimate spans **2 to 4**, {@link BASE_FLOOR} is where it starts, and 1 and 5 are the
+ * two numbers only a reader can write down. That is the whole reason the picker exists, and why
+ * `decks.bracket` accepts numbers the estimate cannot produce.
  *
  * ## Why tutors are gone
  *
@@ -54,7 +71,14 @@
  * its bracket 1 from its bracket 2 — so deleting it would have collapsed the bottom of the
  * scale had nothing taken the job. **Extra turns took it**: bracket 1 forbids them outright,
  * and bracket 2 allows them "in low quantities … not intended to be chained in succession or
- * looped". One Time Warp is now what lifts a deck off the floor.
+ * looped".
+ *
+ * That line is still drawn and it is no longer drawn by the *number*, because 1 is not a number
+ * this module returns. It is drawn by {@link bracketWarning} instead: a deck the reader has set
+ * to bracket 1 that holds one Time Warp gets told so, because the extra-turn rule fires at 2 and
+ * 2 is above the 1 they set. A deck that flags nothing and is set to 1 is told nothing at all,
+ * which is the correct answer — Exhibition is a claim about intent, and no card in that deck
+ * contradicts it.
  *
  * Full record: `docs/superpowers/research/2026-08-27-commander-brackets-and-combos.md`.
  */
@@ -90,8 +114,8 @@ export interface BracketReason {
 /** A reading of a deck's power level: the floor, and everything it was read from. */
 export interface BracketEstimate {
   /**
-   * **1–4, and never 5** — the lowest bracket this deck is allowed in, not the bracket it is.
-   * See the module header for where 5 went.
+   * **2–4, and never 1 or 5** — the lowest bracket this deck is allowed in, not the bracket it
+   * is. See the module header for where both ends went; {@link BASE_FLOOR} is the bottom.
    */
   floor: number;
   gameChangers: number;
@@ -116,7 +140,13 @@ export interface BracketEstimate {
    * the split is a field rather than a filter.
    */
   possibleCombos: DeckCombo[];
-  /** Every rule that set or matched {@link floor}. Empty exactly when the floor is 1. */
+  /**
+   * Every rule that set or matched {@link floor}.
+   *
+   * **Empty exactly when no rule fired at all** — which is now a floor of {@link BASE_FLOOR}
+   * reached by nothing rather than a floor of 1, and is why {@link bracketWarning} carries a
+   * guard for an empty list instead of an assertion.
+   */
   reasons: BracketReason[];
 }
 
@@ -278,6 +308,21 @@ const COMBO_FLOOR: Record<DeckCombo["bracketTag"], number | null> = {
 };
 
 /**
+ * Where the estimate starts: **2, Core** — the bracket a deck that flags nothing reads as.
+ *
+ * It was `1` until 2026-09-01 and that was the wrong bottom, for the reason the module header
+ * gives at length: bracket 1 Exhibition is described in the October 2025 update entirely by what
+ * its builder is *trying to do*, and no card list can see that. Bracket 2 is the lowest rung
+ * whose description — "unoptimized and straightforward" — is a claim about the cards themselves.
+ *
+ * Nothing else moved with it. Every rung in {@link rulesThatFired} still fires exactly where it
+ * did, so a deck that read 3 or 4 reads the same number today; what changed is only the deck
+ * that fires nothing, and the two rules that fire *at* 2 keep their whole job, which is
+ * {@link bracketWarning} against a bracket 1 the reader set by hand.
+ */
+const BASE_FLOOR = 2;
+
+/**
  * A reading of this deck's bracket floor.
  *
  * An inactive category is dropped for the same reason every rule in `engine.ts` drops one — a
@@ -328,7 +373,7 @@ export function estimateBracket(
   const possibleCombos = combos.filter((combo) => combo.templateCount !== 0);
 
   const fired = rulesThatFired(gameChangerNames, massLandDenial, extraTurns, definite);
-  const floor = fired.reduce((high, reason) => Math.max(high, reason.floor), 1);
+  const floor = fired.reduce((high, reason) => Math.max(high, reason.floor), BASE_FLOOR);
 
   return {
     floor,
@@ -352,7 +397,14 @@ export function estimateBracket(
  *     4  ≥ 4 Game Changers · any mass land denial · ≥ 3 extra-turn cards · a combo tagged R
  *     3  1–3 Game Changers · a combo tagged P or S
  *     2  any extra-turn card · a combo tagged C or O
- *     1  none of the above
+ *     2  none of the above — {@link BASE_FLOOR}, and not a rule, so it fires no reason
+ *
+ * The bottom two rows read the same number and are not the same thing, which is the one shape in
+ * this table worth reading twice. {@link BASE_FLOOR} is where the caller's `Math.max` *starts*;
+ * the extra-turn and combo rules above it are rules that **fired**, so they land in
+ * {@link BracketEstimate.reasons} and the base does not. Both give a floor of 2 and only one of
+ * them can tell a reader why — which is exactly the distinction {@link bracketWarning} needs
+ * when the bracket set by hand is 1.
  *
  * Three of those cells deserve their provenance stated, because two are the document's and one
  * is not:
@@ -474,9 +526,15 @@ export function describeReason(reason: BracketReason): string {
 export function bracketWarning(set: number, estimate: BracketEstimate): string | null {
   if (set < 1) return null;
   if (estimate.floor <= set) return null;
-  // Unreachable in practice — a floor above 1 is a floor some rule set — and a guard rather
-  // than a case: `reasons` is empty exactly when the floor is 1, and a floor of 1 is at or
-  // below every settable bracket.
+  // **Reachable since the floor stopped being able to reach 1, and it is now the case that
+  // matters most.** It used to be a guard against nothing — `reasons` was empty exactly when the
+  // floor was 1, which is at or below every settable bracket — and today it is exactly one deck:
+  // one the reader has set to **bracket 1** that fires no rule at all. Its floor is
+  // `BASE_FLOOR`, which is above the 1 they set, and there is nothing to tell them. That silence
+  // is the right answer rather than a missing sentence: Exhibition is a claim about what the
+  // deck is *for*, the estimate reads only what is in it, and not one card in that deck
+  // contradicts the claim. A deck set to 1 that plays a Time Warp is the other case, and it does
+  // get its sentence — the extra-turn rule fired, so there is a reason to name.
   if (estimate.reasons.length === 0) return null;
 
   return (

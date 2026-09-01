@@ -41,17 +41,19 @@ for ten months. Three things had to move when it was brought current:
   bracket 1 from its bracket 2, and the separation no longer exists in the rules. The grep and
   everything that fed it were deleted. **Extra turns took the job**: bracket 1 forbids them
   outright and bracket 2 allows them "in low quantities … not intended to be chained in
-  succession or looped", so one Time Warp is now what lifts a deck off the bottom.
+  succession or looped". That line survives the 2026-09-01 change that stopped the floor reaching
+  1 at all: extra turns no longer lift a deck off the bottom, because the bottom is 2 — what they
+  do instead is give `bracketWarning` its one sentence for a deck the reader has set to 1 by hand.
 - **Mass land denial became a bracket-4 signal.** It mapped to **5** here, on the argument that
   a deck playing it "has decided something about the table" — an over-read the file made on
   purpose and which the current text simply contradicts. One Armageddon does not make a cEDH
   deck.
 - **The number stopped being a bracket and became a floor**, and stopped being able to reach 5
-  at all. Both have sections of their own below.
+  at all — and, from 2026-09-01, 1 either. Both have sections of their own below.
 
 The clauses the bracket picker draws beside each rung (`BRACKETS` in `DeckBracket.tsx`) are that
-table paraphrased, and 5's clause says out loud what no card list can show — see **Why the floor
-is never 5**.
+table paraphrased, and 1's and 5's clauses both say out loud what no card list can show — see
+**Why the floor is never 5, and never 1**.
 
 ## The estimate is a floor
 
@@ -67,16 +69,22 @@ The rungs, as shipped in `rulesThatFired` (`src/features/decks/validation/bracke
 4  ≥ 4 Game Changers · any mass land denial · ≥ 3 extra-turn cards · a combo tagged R
 3  1–3 Game Changers · a combo tagged P or S
 2  any extra-turn card · a combo tagged C or O
-1  none of the above
+2  none of the above — BASE_FLOOR, and not a rule, so it fires no reason
 ```
 
-Highest wins. Two things about the shape rather than the numbers:
+Highest wins, and the seed of that `Math.max` is `BASE_FLOOR` rather than 1. Three things about
+the shape rather than the numbers:
 
+- **The bottom two rows read the same number and are not the same thing.** `BASE_FLOOR` is where
+  the fold *starts*; the extra-turn and combo rules above it are rules that **fired**, so they land
+  in `BracketEstimate.reasons` and the base does not. Both give a floor of 2 and only one of them
+  can say why — which is exactly the distinction `bracketWarning` needs when the bracket set by
+  hand is 1.
 - **A rule that fired below the floor is a signal, not a reason.** Every entry in
   `BracketEstimate.reasons` forces the floor the estimate reports; the rest are still listed by
   name on the estimate's own fields (`gameChangerNames`, `massLandDenial`, `extraTurns`), which
-  is what the advisory's *What this read* disclosure draws. `reasons` is empty exactly when the
-  floor is 1.
+  is what the advisory's *What this read* disclosure draws. `reasons` is empty exactly when no rule
+  fired at all — a floor of `BASE_FLOOR` reached by nothing.
 - **A reason carries the cards it read**, and `describeReason` is the one place a reason becomes
   a phrase — exported so the button and the panel cannot word the same fact two different ways.
   It lists at most three card names before it starts counting (`NAMES_IN_A_SENTENCE`), because a
@@ -89,7 +97,9 @@ floor is two oracle-text greps and a third party's classification, and the reade
 knows whether their playgroup cares); and it **names one reason, not all of them** (every entry
 in `reasons` forces the same floor, so there is no strongest one to find).
 
-## Why the floor is never 5
+## Why the floor is never 5, and never 1
+
+**Both ends of the scale are an intent; only the middle three are a card list.**
 
 **Brackets 4 and 5 have identical _deck_ restrictions.** Both allow unlimited Game Changers,
 mass land denial, extra turns and two-card combos. What separates them is whether the deck is
@@ -97,8 +107,33 @@ built for the cEDH metagame — an intent, not a card. An estimator that reads c
 therefore never honestly return 5, so this one does not, and `bracket.ts`'s module header says
 where the old `bracket: 5` went for the reader who remembers it.
 
-A reader who is playing cEDH sets 5 by hand. That is the whole reason the picker exists, and it
-is why `decks.bracket` accepts a number the estimate cannot produce.
+**Bracket 1 went the same way on 2026-09-01**
+([#342](https://github.com/Msgaihede/mtg-grimoire/issues/342)), and it is the same argument
+upside down. The October 2025 update words Exhibition entirely in terms of what the deck is
+*for* — players expect "decks to prioritize a goal, theme, or idea over power", "win conditions
+to be highly thematic or substandard", "gameplay to be an opportunity to show off your
+creations" (read live from the announcement, 2026-09-01). Its only *card* prohibition that
+bracket 2 does not also carry is extra turns, so a pile of Grizzly Bears, Rampant Growth and
+sixty Islands satisfies every printed restriction bracket 1 names and is still not an Exhibition
+deck unless its builder says it is. Answering `~1` off a card list was this module claiming to
+see the one thing it cannot see.
+
+**Bracket 2 Core is what a deck that flags nothing honestly reads as** — "decks to be
+unoptimized and straightforward", which is a description of a deck with no Game Changers, no
+denial, no chained turns and no combo in it. `BASE_FLOOR` in `bracket.ts` is that number, and
+nothing else moved with it: every rung in `rulesThatFired` fires exactly where it did, so a deck
+that read 3 or 4 reads the same today.
+
+**What the two rules that fire *at* 2 kept is their whole job**, which used to be a side effect
+of raising the number and is now the point of them. A deck the reader has set to bracket 1 that
+plays one Time Warp is told so, because the extra-turn rule fired and 2 is above the 1 they set;
+a deck set to 1 that fires nothing is told nothing, because there is no reason to name and
+Exhibition is a claim no card in it contradicts. That is `bracketWarning`'s empty-`reasons`
+guard, which was unreachable before this change and is now the case that matters most.
+
+A reader who is playing cEDH sets 5 by hand, and a reader building an Exhibition deck sets 1.
+That is the whole reason the picker exists, and it is why `decks.bracket` accepts numbers the
+estimate cannot produce.
 
 ## Three judgements that are this app's rather than the document's
 

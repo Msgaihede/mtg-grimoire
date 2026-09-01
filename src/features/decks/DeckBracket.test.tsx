@@ -41,10 +41,14 @@ vi.mock("./validation/bracket", () => ({
 
 /** A reading, with whatever this test needs changed about it. `floor` and never `bracket`: what
  *  the cards can honestly say is the bottom of a range, which is what a bracket restriction has
- *  always been ("not allowed below bracket N"). */
+ *  always been ("not allowed below bracket N").
+ *
+ *  **The default is `BASE_FLOOR`, 2, and was `1` until 2026-09-01** — a fixture must not encode a
+ *  reading the estimator cannot produce, or a state this control will never be handed becomes the
+ *  one most of these tests are written against. */
 function estimate(over: Partial<BracketEstimate> = {}): BracketEstimate {
   return {
-    floor: 1,
+    floor: 2,
     gameChangers: 0,
     gameChangerNames: [],
     massLandDenial: [],
@@ -186,7 +190,7 @@ describe("DeckBracket", () => {
   it("says the estimate is one, in the name the glyph cannot carry", () => {
     wrap(<Harness cards={DECK} />);
 
-    expect(trigger()).toHaveAccessibleName("Bracket 1, an estimate");
+    expect(trigger()).toHaveAccessibleName("Bracket 2, an estimate");
   });
 
   /**
@@ -197,7 +201,7 @@ describe("DeckBracket", () => {
    * reader's own answer from the app's guess.
    */
   it("prints a set bracket plainly, with no tilde", () => {
-    vi.mocked(estimateBracket).mockReturnValue(estimate({ floor: 1 }));
+    vi.mocked(estimateBracket).mockReturnValue(estimate({ floor: 2 }));
     wrap(<Harness cards={DECK} bracket={3} />);
 
     expect(trigger()).toHaveTextContent("Bracket 3");
@@ -269,12 +273,13 @@ describe("DeckBracket", () => {
   });
 
   /** The one card fact that decides the number is a column a sync fills, so a deck with none of
-   *  them reads as the bottom of the scale rather than as nothing at all. */
+   *  them reads as the bottom of the scale rather than as nothing at all — and since 2026-09-01
+   *  that bottom is **2 Core**, not 1: bracket 1 is an intent no card list shows. */
   it("estimates the lowest bracket for a deck with nothing in it to see", async () => {
     wrap(<Harness cards={DECK} />);
     await userEvent.click(trigger());
 
-    expect(within(await panel()).getByText("Bracket ~1 · 0 game changers")).toBeInTheDocument();
+    expect(within(await panel()).getByText("Bracket ~2 · 0 game changers")).toBeInTheDocument();
   });
 
   /** The disclosure names every card the number was read from — a reader who disagrees with a

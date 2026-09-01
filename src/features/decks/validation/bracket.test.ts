@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { DeckCombo } from "@/lib/ipc";
 import { card, gameChanger, islands, resetRowIds } from "./fixtures";
 import { bracketWarning, describeReason, estimateBracket } from "./bracket";
+import type { CardFacts } from "./types";
 
 /**
  * The bracket estimate is an **advisory**, and these tests are written to say so: they assert
@@ -161,11 +162,13 @@ const GRIZZLY_BEARS = card({
   colorIdentity: "G",
 });
 
-/** The whole reading of a deck that flags nothing, so the floor-1 tests assert the shape and
+/** The whole reading of a deck that flags nothing, so the base-floor tests assert the shape and
  *  not just the digit — a new field that silently defaults wrong is exactly what a `toEqual`
- *  against this catches. */
+ *  against this catches. **`floor: 2` since 2026-09-01, and `reasons: []` beside it is the
+ *  half that says why**: no rule fired, so the number is the base rather than a reading, and
+ *  those two fields have to move together or the estimate is claiming a reason it has not got. */
 const NOTHING_FOUND = {
-  floor: 1,
+  floor: 2,
   gameChangers: 0,
   gameChangerNames: [],
   massLandDenial: [],
@@ -176,12 +179,39 @@ const NOTHING_FOUND = {
 };
 
 describe("the floor", () => {
-  it("reads a deck that flags nothing as 1", () => {
+  it("reads a deck that flags nothing as 2", () => {
     expect(estimateBracket([GRIZZLY_BEARS, RAMPANT_GROWTH, islands(60)])).toEqual(NOTHING_FOUND);
   });
 
   it("reads an empty deck rather than throwing on one", () => {
     expect(estimateBracket([])).toEqual(NOTHING_FOUND);
+  });
+
+  /**
+   * **1 is a number this estimator cannot produce, and that is the rule rather than a property
+   * of these fixtures** — bracket 1 Exhibition is described by what its builder is *for*
+   * ("prioritize a goal, theme, or idea over power"), which no card list shows, exactly as
+   * bracket 5 is. So the whole corpus of decks this file builds is swept for the two numbers
+   * that may only ever be set by hand.
+   */
+  it("never answers 1 or 5, whatever it is handed", () => {
+    const decks: CardFacts[][] = [
+      [],
+      [GRIZZLY_BEARS, RAMPANT_GROWTH, islands(60)],
+      [DEMONIC_TUTOR, islands(60)],
+      [TIME_WARP, islands(60)],
+      [ARMAGEDDON, JOKULHAUPS, RUINATION, WILDFIRE],
+      [gameChanger("Rhystic Study"), islands(60)],
+    ];
+    const combos: DeckCombo[][] = [[], [combo({ bracketTag: "E" })], [combo({ bracketTag: "R" })]];
+
+    for (const deck of decks) {
+      for (const list of combos) {
+        const { floor } = estimateBracket(deck, list);
+        expect(floor).toBeGreaterThanOrEqual(2);
+        expect(floor).toBeLessThanOrEqual(4);
+      }
+    }
   });
 
   /** The document's own numbered cell: bracket 3 allows "up to 3", so one to three of them
@@ -311,7 +341,7 @@ describe("tutors, which are no longer a signal", () => {
     expect(estimateBracket([DEMONIC_TUTOR, islands(60)])).toEqual(NOTHING_FOUND);
   });
 
-  it("reads a pile of nothing but tutors and ramp as 1", () => {
+  it("reads a pile of nothing but tutors and ramp as 2", () => {
     const vampiricTutor = card({
       name: "Vampiric Tutor",
       manaCost: "{B}",
@@ -324,7 +354,7 @@ describe("tutors, which are no longer a signal", () => {
       gameChanger: false,
     });
 
-    expect(estimateBracket([DEMONIC_TUTOR, vampiricTutor, RAMPANT_GROWTH]).floor).toBe(1);
+    expect(estimateBracket([DEMONIC_TUTOR, vampiricTutor, RAMPANT_GROWTH]).floor).toBe(2);
   });
 
   /** …and a tutor cannot lift a floor that combos and text already set, either: the estimate
@@ -382,7 +412,7 @@ describe("Game Changers", () => {
     const deck = [gameChanger("Rhystic Study", "maybe"), islands(60)];
 
     expect(estimateBracket(deck).gameChangers).toBe(0);
-    expect(estimateBracket(deck).floor).toBe(1);
+    expect(estimateBracket(deck).floor).toBe(2);
   });
 });
 
@@ -444,7 +474,7 @@ describe("mass land denial", () => {
 
     const estimate = estimateBracket([apocalypseChime, islands(60)]);
     expect(estimate.massLandDenial).toEqual([]);
-    expect(estimate.floor).toBe(1);
+    expect(estimate.floor).toBe(2);
   });
 
   /**
@@ -472,7 +502,7 @@ describe("mass land denial", () => {
 
     const estimate = estimateBracket([bontusLastReckoning, islands(60)]);
     expect(estimate.massLandDenial).toEqual([]);
-    expect(estimate.floor).toBe(1);
+    expect(estimate.floor).toBe(2);
   });
 
   /** Sacrificing your own lands is a cost you pay, not denial aimed at the table — so the
@@ -585,7 +615,7 @@ describe("extra turns", () => {
 
     const estimate = estimateBracket([stranglehold, islands(60)]);
     expect(estimate.extraTurns).toEqual([]);
-    expect(estimate.floor).toBe(1);
+    expect(estimate.floor).toBe(2);
   });
 
   /**
@@ -632,7 +662,7 @@ describe("combos", () => {
     const exhibition = combo({ bracketTag: "E", cards: ["Squirrel Nest", "Earthcraft"] });
     const estimate = estimateBracket([islands(60)], [exhibition]);
 
-    expect(estimate.floor).toBe(1);
+    expect(estimate.floor).toBe(2);
     expect(estimate.reasons).toEqual([]);
     expect(estimate.combos).toEqual([exhibition]);
   });
@@ -643,7 +673,7 @@ describe("combos", () => {
     const banned = combo({ bracketTag: "B", cards: ["Flash", "Protean Hulk"] });
     const estimate = estimateBracket([islands(60)], [banned]);
 
-    expect(estimate.floor).toBe(1);
+    expect(estimate.floor).toBe(2);
     expect(estimate.reasons).toEqual([]);
     expect(estimate.combos).toEqual([banned]);
   });
@@ -653,7 +683,7 @@ describe("combos", () => {
   it("raises nothing for a tag it has never seen", () => {
     const future = combo({ bracketTag: "Z" as DeckCombo["bracketTag"] });
 
-    expect(estimateBracket([islands(60)], [future]).floor).toBe(1);
+    expect(estimateBracket([islands(60)], [future]).floor).toBe(2);
   });
 
   /**
@@ -670,7 +700,7 @@ describe("combos", () => {
     });
     const estimate = estimateBracket([islands(60)], [templated]);
 
-    expect(estimate.floor).toBe(1);
+    expect(estimate.floor).toBe(2);
     expect(estimate.reasons).toEqual([]);
     expect(estimate.combos).toEqual([]);
     expect(estimate.possibleCombos).toEqual([templated]);
@@ -898,8 +928,29 @@ describe("bracketWarning", () => {
     expect(bracketWarning(5, armageddonDeck())).toBeNull();
   });
 
-  it("says nothing about a deck that flags nothing at all", () => {
+  /**
+   * **The empty-`reasons` guard, which became reachable on 2026-09-01 and is the whole of what
+   * keeps bracket 1 settable.** This deck's floor is `2` and the reader has set `1`, so the
+   * first two guards let it through; what stops the sentence is that no rule fired, and there
+   * is therefore nothing to tell them. Exhibition is a claim about what a deck is *for* and no
+   * card in this one contradicts it.
+   */
+  it("says nothing to a deck set to bracket 1 that flags nothing at all", () => {
     expect(bracketWarning(1, estimateBracket([GRIZZLY_BEARS, islands(60)]))).toBeNull();
+  });
+
+  /**
+   * …and the other half of the same rule: bracket 1 is the one bracket that forbids extra turns
+   * outright, so the rule that fires at 2 is what a reader who set 1 hears about. This is the
+   * whole job the extra-turn rung kept when it stopped being what lifted a deck off the floor.
+   */
+  it("names the extra turn to a deck set to bracket 1 that plays one", () => {
+    const message = bracketWarning(1, estimateBracket([TIME_WARP, GRIZZLY_BEARS, islands(60)]));
+
+    expect(message).toBe(
+      "Set to bracket 1, but this deck reads as bracket 2 or higher " +
+        "(1 extra-turn card: Time Warp) — worth a word with the table before the game.",
+    );
   });
 
   it("names both numbers and the reason when the set bracket is below the floor", () => {

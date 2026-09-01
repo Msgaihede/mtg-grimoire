@@ -51,8 +51,11 @@ import { bracketWarning, estimateBracket } from "./validation/bracket";
  * document says "not allowed below bracket N" — never "this deck is an N" — so what the cards
  * can honestly say is the bottom of a range. That is also the only thing that makes a *mismatch*
  * statable: a bracket set below the floor is a deck whose cards say it cannot sit that low.
- * It is **never 5**: brackets 4 and 5 have identical deck restrictions and what separates them
- * is an intent no card list shows, so 5 is a number only a reader can write down.
+ * It is **never 5, and since 2026-09-01 never 1**: both ends of the scale are an intent rather
+ * than a card list — 4 and 5 have identical deck restrictions and differ only on whether the deck
+ * is built for the cEDH metagame, and 1 Exhibition asks that its builder "prioritize a goal,
+ * theme, or idea over power". So the reading spans 2 to 4 and the two ends are numbers only the
+ * picker in the panel can produce. A deck that flags nothing reads `Bracket ~2`.
  *
  * **The fourth signal is two-card combos, which cannot be read out of a card's own text at
  * all** — a combo is a fact about an *interaction*. Commander Spellbook's bulk file supplies
@@ -269,10 +272,11 @@ type ComboState = "never" | "reading" | "failed" | "read";
  * sits in — so it goes in three places that cost no width: the chip's accessible name, its
  * tooltip, and the caption under the row, which spells out whichever one is currently chosen.
  *
- * The clauses are the October 2025 wording, paraphrased from the research doc's table. **5 is
- * the one a card list can never produce**, and its clause says so: brackets 4 and 5 have
- * identical deck restrictions, so setting 5 is a statement about the metagame the deck is built
- * for and is exactly the kind of thing this picker exists to let a reader say.
+ * The clauses are the October 2025 wording, paraphrased from the research doc's table. **1 and 5
+ * are the two a card list can never produce**, and both clauses say so: 4 and 5 have identical
+ * deck restrictions, so setting 5 is a statement about the metagame the deck is built for, and 1
+ * asks that the deck prioritise a theme over power, which is a statement about why it was built.
+ * Both are exactly the kind of thing this picker exists to let a reader say.
  */
 const BRACKETS: readonly { value: number; label: string; name: string; clause: string }[] = [
   {
@@ -285,7 +289,7 @@ const BRACKETS: readonly { value: number; label: string; name: string; clause: s
     value: 1,
     label: "1",
     name: "Exhibition",
-    clause: "no Game Changers, no extra turns, no two-card combos",
+    clause: "a theme over power, and no extra turns — no card list can show it",
   },
   { value: 2, label: "2", name: "Core", clause: "extra turns in low quantities, never chained" },
   {

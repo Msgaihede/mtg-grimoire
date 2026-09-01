@@ -35,11 +35,24 @@ Full record, with every measurement and the provenance of each rung:
   as a prohibition — bracket 2 may not play mass land denial, bracket 3 may play at most three
   Game Changers — so what a card list can honestly say is "not allowed below N". Highest rung
   wins, a rule that fired lower is a *signal* and not a `reason`, and `reasons` is empty exactly
-  when the floor is 1. **Nothing here may make a deck illegal**, which is why this module returns
-  a `BracketEstimate` rather than `ValidationIssue`s and why every sentence it words is a remark.
-- **It never returns 5, and nothing may add a rung that does.** Brackets 4 and 5 have identical
-  *deck* restrictions; what separates them is whether the deck is built for the cEDH metagame,
-  which is an intent no card list shows. 5 is a number only a reader can write down.
+  when no rule fired at all. **Nothing here may make a deck illegal**, which is why this module
+  returns a `BracketEstimate` rather than `ValidationIssue`s and why every sentence it words is a
+  remark.
+- **It never returns 5 or 1, and nothing may add a rung that does. Both ends of the scale are an
+  intent; only the middle three are a card list.** Brackets 4 and 5 have identical *deck*
+  restrictions and differ only on whether the deck is built for the cEDH metagame. Bracket 1
+  Exhibition is the same claim upside down — the October 2025 update words it as "prioritize a
+  goal, theme, or idea over power" and "win conditions to be highly thematic or substandard", and
+  its one card prohibition bracket 2 does not also carry is extra turns, so a deck of vanilla
+  creatures and basic lands satisfies every printed restriction and is still not an Exhibition
+  deck unless its builder says so. **`BASE_FLOOR` is 2** (2026-09-01, issue #342), which is where
+  the `Math.max` starts and what a deck that fires no rule reads as; 1 and 5 are numbers only a
+  reader can write down.
+- **The two rules that fire *at* 2 still matter, and what they are for changed.** Any extra-turn
+  card and a combo tagged `C`/`O` no longer raise the number — they land in `reasons`, and that is
+  what gives `bracketWarning` its sentence for a deck the reader has **set to bracket 1**, the one
+  bracket that forbids extra turns outright. A deck set to 1 that fires nothing gets no sentence:
+  the empty-`reasons` guard, unreachable until this change and now the case that matters most.
 - **`decks.bracket` is that reader's answer, and `AUTO_BRACKET` (`0`) hands the question back to
   the estimate.** The button prints `Bracket ~3` for a reading and `Bracket 3` for an answer, and
   the `~` is the whole of the visible difference. `bracketWarning` is the **only** place a

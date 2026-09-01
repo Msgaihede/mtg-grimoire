@@ -701,7 +701,7 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   **Rust stores the number and concludes nothing from it**, `AUTO_CATEGORY`'s rule exactly. The
   four facts an estimate reads are the crate's (`cards.game_changer`, oracle text, and the `combos`
   tables the same v26 rung created); the floor they become — a floor rather than a bracket, and
-  never 5 — is `src/features/decks/validation/bracket.ts`'s.
+  never 1 or 5 — is `src/features/decks/validation/bracket.ts`'s.
   [commander-brackets.md](commander-brackets.md) is the whole record.
 - **The six single-card commands, and what each takes** (the three bulk ones,
   `deck_import_commit`, `deck_category_clear` and `deck_clear`, have their own bullets below).\
