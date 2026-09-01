@@ -2426,14 +2426,35 @@ export function CollectionPage() {
                       // through. `0` on the ordinary single-entry tile, so zero deletes the entry
                       // exactly as the table's stepper does.
                       min={step.floor}
-                      // **Name the object, not the control.** The finish is in the name only where
-                      // the tile carries a mark, because two tiles of one printing are otherwise
-                      // one name twice — and a wall of `Increase` would be a wall of controls a
-                      // screen reader cannot tell apart.
+                      // **Name the object, not the control** — and the object is a *printing in a
+                      // finish*, which is the whole of this wall's grain, so the name has to carry
+                      // both or it is not a name.
+                      //
+                      // **The set and number are not decoration here, and a live pass is what
+                      // proved it.** Driven in the browser (2026-09-01, Storybook's
+                      // `SteppingFromTheWall` at 170px), the seed put three Lightning Bolt tiles on
+                      // one screen — 2X2 ×4, LEA ×1 and an etched STA — and with the printing left
+                      // out the first two both announced `Copies of Lightning Bolt`. A collection
+                      // holds several printings of one card as a matter of course, far more often
+                      // than a wishlist does, so that is the ordinary case rather than a corner:
+                      // two controls with one name, on a surface where the only other thing
+                      // distinguishing them is a picture. jsdom cannot referee it — both names are
+                      // *correct*, they are merely not *unique*, and no assertion about one tile
+                      // can see the other.
+                      //
+                      // {@link wishLabel}'s grammar exactly — `Name (SET 123)`, with the finish
+                      // folded into the same bracket — because the wishlist's wall stands one tab
+                      // away and reached this conclusion first. The chin under the art already
+                      // draws `SET · number`, so the name says what the tile shows.
+                      //
+                      // The finish rides it **only where the tile wears a mark**: a plain copy
+                      // draws no chip ({@link finishMarkOf}), so announcing `(Nonfoil)` would be
+                      // the wall's own rule contradicted in words six pixels from where it is
+                      // being obeyed in pixels.
                       label={
-                        mark === null
-                          ? `Copies of ${tile.name}`
-                          : `Copies of ${tile.name} (${finishLabel(mark)})`
+                        `Copies of ${tile.name} ` +
+                        `(${tile.setCode.toUpperCase()} ${tile.collectorNumber}` +
+                        `${mark === null ? "" : `, ${finishLabel(mark)}`})`
                       }
                       // **A delta applied to the addressed row**, because the control shows a sum
                       // and the write moves one entry: the reader asked for one more copy of this

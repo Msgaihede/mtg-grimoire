@@ -342,11 +342,12 @@ export const SteppingFromTheWall: Story = {
   args: { view: "grid", flatten: true },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    // **`Copies of <card>`, not the table's `Quantity of <card> (Nonfoil, NM)`.** A row names an
-    // entry, condition and all; a tile names the object the art is a picture of. The finish rides
-    // the name only where the tile wears the mark, and a plain copy draws no chip — so this one is
-    // bare, which is the wall's own nonfoil rule stated in words.
-    const label = "Copies of Black Lotus";
+    // **`Copies of <card> (<SET> <number>)`, not the table's `Quantity of <card> (Nonfoil, NM)`.**
+    // A row names an *entry*, condition and all; a tile names the printing the art is a picture
+    // of. The finish rides the same bracket only where the tile wears the mark, and a plain copy
+    // draws no chip — so this one ends at the collector number, which is the wall's own nonfoil
+    // rule stated in words instead of in a sheen.
+    const label = "Copies of Black Lotus (LEA 232)";
     const box = await canvas.findByRole("spinbutton", { name: label });
     await expect(box).toHaveValue(1);
 
@@ -357,6 +358,20 @@ export const SteppingFromTheWall: Story = {
     });
     // No refusal: this is a successful write, not a tolerated failure.
     await expect(canvas.queryByRole("alert")).toBeNull();
+
+    // **The printing in that name is load-bearing, and this seed is why.** It puts three Lightning
+    // Bolt tiles on one wall — two of them plain, differing only in which cardboard they are — so
+    // a name built from the card alone gives two controls one name, on the one surface where the
+    // only other thing telling them apart is a picture. Driving the real browser is what found it
+    // (2026-09-01): jsdom cannot referee it, because both names are *correct* and merely not
+    // unique, and no assertion about one tile can see the other. `getAllByRole` here, then the
+    // uniqueness check — a `getBy*` would throw on the duplicate and read as a missing control.
+    const bolts = canvas
+      .getAllByRole("spinbutton")
+      .map((el) => el.getAttribute("aria-label") ?? "")
+      .filter((name) => name.startsWith("Copies of Lightning Bolt"));
+    await expect(bolts.length).toBeGreaterThan(1);
+    await expect(new Set(bolts).size).toBe(bolts.length);
   },
 };
 
@@ -393,14 +408,14 @@ export const DeckCopiesAreNotStepped: Story = {
     const canvas = within(canvasElement);
     // The census has answered, so a filed tile is allowed one.
     await expect(
-      await canvas.findByRole("spinbutton", { name: "Copies of Black Lotus" }),
+      await canvas.findByRole("spinbutton", { name: "Copies of Black Lotus (LEA 232)" }),
     ).toBeInTheDocument();
 
     // The tile is a tile — art, badge, menu, drag — and only the control is missing. Named with
     // the finish because this copy is foil and the art wears the chip that says so.
     await expect(canvas.getByRole("button", { name: "Counterspell" })).toBeInTheDocument();
     await expect(
-      canvas.queryByRole("spinbutton", { name: "Copies of Counterspell (Foil)" }),
+      canvas.queryByRole("spinbutton", { name: /^Copies of Counterspell \(.*Foil\)$/ }),
     ).toBeNull();
   },
 };

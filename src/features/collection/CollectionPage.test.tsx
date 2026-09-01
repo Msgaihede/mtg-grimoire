@@ -1527,16 +1527,32 @@ describe("CollectionPage", () => {
     beforeEach(() => useAppStore.setState({ collectionView: "grid" }));
 
     /**
-     * A tile's stepper, by the name it announces.
+     * A tile's stepper, by the name it announces: `Copies of <card> (<SET> <number>[, <Finish>])`.
      *
-     * **`Copies of <card>`, and the finish only where the tile wears the mark** — the wall's own
-     * rule (a plain tile draws no finish chip), stated in words instead of in a sheen. It is
-     * deliberately *not* the table's `Quantity of Lightning Bolt (Foil, NM)`: a row names an
-     * entry, condition and all, where a tile names the object the art is a picture of.
+     * The finish is in the name **only where the tile wears the mark** — the wall's own rule (a
+     * plain tile draws no finish chip), stated in words instead of in a sheen. It is deliberately
+     * *not* the table's `Quantity of Lightning Bolt (Foil, NM)`: a row names an entry, condition
+     * and all, where a tile names the object the art is a picture of.
+     *
+     * **The printing is matched rather than spelled**, and that is the point of the helper. A name
+     * carrying `LEA 161` would pin this block to the seed's collector numbers, so every case here
+     * would go red the day a fixture moved — for a reason that has nothing to do with the rule
+     * being tested. What the pattern *does* assert is that the segment is there at all, which is
+     * what stops the label collapsing back to the card's own name.
      */
-    const stepper = (direction: "Increase" | "Decrease", named: string) =>
-      screen.getByRole("button", { name: `${direction} Copies of ${named}` });
-    const box = (named: string) => screen.getByRole("spinbutton", { name: `Copies of ${named}` });
+    const ESCAPE = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const named = (label: string) => {
+      const finish = /\(([^)]+)\)$/.exec(label)?.[1] ?? null;
+      const card = label.replace(/\s*\([^)]+\)$/, "");
+      return `Copies of ${ESCAPE(card)} \\([^,)]+${finish ? `, ${ESCAPE(finish)}` : ""}\\)`;
+    };
+    const stepper = (direction: "Increase" | "Decrease", label: string) =>
+      screen.getByRole("button", { name: new RegExp(`^${direction} ${named(label)}$`) });
+    const box = (label: string) => screen.getByRole("spinbutton", { name: new RegExp(`^${named(label)}$`) });
+    /** The same lookup where the expected answer is *nothing* — a fenced tile, or one that has
+     *  left the list. `query`, so a miss is `null` rather than a throw. */
+    const noBox = (label: string) =>
+      screen.queryByRole("spinbutton", { name: new RegExp(`^${named(label)}$`) });
 
     /** Every stepper on the wall, however many tiles drew one. */
     const steppers = () => screen.queryAllByRole("spinbutton");
@@ -1725,7 +1741,7 @@ describe("CollectionPage", () => {
       wrap(<CollectionPage />);
       await screen.findAllByAltText("Lightning Bolt");
 
-      expect(await screen.findByRole("spinbutton", { name: "Copies of Lightning Bolt" })).toHaveValue(
+      expect(await screen.findByRole("spinbutton", { name: new RegExp(`^${named("Lightning Bolt")}$`) })).toHaveValue(
         1,
       );
       expect(box("Lightning Bolt (Foil)")).toHaveValue(2);
@@ -1773,10 +1789,10 @@ describe("CollectionPage", () => {
       await screen.findByAltText("Counterspell");
 
       // The sentinel: the census has answered, so a filed tile can draw one.
-      expect(await screen.findByRole("spinbutton", { name: "Copies of Lightning Bolt" })).toHaveValue(
+      expect(await screen.findByRole("spinbutton", { name: new RegExp(`^${named("Lightning Bolt")}$`) })).toHaveValue(
         1,
       );
-      expect(screen.queryByRole("spinbutton", { name: "Copies of Counterspell" })).toBeNull();
+      expect(noBox("Counterspell")).toBeNull();
       // And the tile is still a tile — badged with what the deck holds, openable, draggable.
       expect(screen.getByText("4 in your collection")).toBeInTheDocument();
     });
@@ -1829,10 +1845,10 @@ describe("CollectionPage", () => {
 
       // The sentinel, filed in the very drawer the mixed tile's first row is in: the census has
       // answered and a binder tile draws a stepper, so the absence below is the mixture's doing.
-      expect(await screen.findByRole("spinbutton", { name: "Copies of Counterspell" })).toHaveValue(
+      expect(await screen.findByRole("spinbutton", { name: new RegExp(`^${named("Counterspell")}$`) })).toHaveValue(
         1,
       );
-      expect(screen.queryByRole("spinbutton", { name: "Copies of Lightning Bolt" })).toBeNull();
+      expect(noBox("Lightning Bolt")).toBeNull();
       // Three copies behind one piece of art, and the badge still says so.
       expect(screen.getByText("3 in your collection")).toBeInTheDocument();
     });
