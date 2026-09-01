@@ -31,7 +31,12 @@ import type { FolderDrag, FolderEdge } from "@/lib/folderDrag";
 import { reorderedLevel } from "@/lib/folderOrder";
 import { isFinish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
-import { buildFolderTree, folderDescendants, type FolderNode } from "@/lib/folderTree";
+import {
+  buildFolderTree,
+  folderDescendants,
+  folderLevel,
+  type FolderNode,
+} from "@/lib/folderTree";
 import {
   ipc,
   ipcError,
@@ -45,7 +50,7 @@ import { useAppStore } from "@/lib/store";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { writeFailure } from "@/lib/writes";
-import { WishFolderCard } from "./WishFolderCard";
+import { WishFolderCard, WishParentFolderCard } from "./WishFolderCard";
 import { WishlistBreadcrumb } from "./WishlistBreadcrumb";
 import { WishlistGrid } from "./WishlistGrid";
 import { WishlistTable } from "./WishlistTable";
@@ -65,6 +70,18 @@ import type { WishDrag } from "./wishDrag";
  * buying.
  */
 const ROOT_LABEL = "Wishlist";
+
+/**
+ * The root as {@link reorderedLevel} has to address it — an id no folder has, because
+ * `wishlist_folders.id` is an `INTEGER PRIMARY KEY` and therefore always positive.
+ *
+ * Only the **up** tile needs it, and only to satisfy an argument it does not use: an `inside`
+ * landing reads `target` for one thing, the "dropped on itself" refusal, and a folder can never
+ * be dropped on the root. The alternative is widening `reorderedLevel`'s `target` to
+ * `number | null`, which would put a case in the shared arithmetic that only one caller has.
+ * `DecksPage` spells the same constant for the same reason.
+ */
+const ROOT_TARGET = 0;
 
 /**
  * The one dismissible layer this page can have open — the union, and never four flags.
@@ -388,6 +405,15 @@ export function WishlistPage() {
     // Optimistic on the row's own number and nothing else. Without it, holding `+` sends the
     // same number three times — the box is controlled by the cache, so a second press before
     // the first answer would be computed from a stale value.
+    //
+    // **It writes a `0` into the row for one round trip now that the stepper's floor is zero
+    // (issue #284), and that is accepted rather than special-cased** — the collection's twin
+    // accepts the same one. Guessing the *removal* here instead is the guess this page is not
+    // entitled to make: a refusal would then have to put a row back at a sort position and on a
+    // page only the backend knows, which is the argument {@link setFolder} makes at length about
+    // its own write. What a reader sees in the meantime is the number they pressed to, on a row
+    // that leaves a few milliseconds later — a stepper that reported a different number from the
+    // one under their finger would be worse than a row that lingers.
     onMutate: ({ row, quantity }) => {
       const saved = snapshot();
       patchWish(row.id, (r) => ({ ...r, quantity }));
@@ -399,9 +425,32 @@ export function WishlistPage() {
     },
     onSuccess: (change) => {
       // The answer, not the guess: the backend clamps and canonicalises, and this is the
-      // number it actually stored. Then the re-read, for what the new number is counted into —
-      // the folder subtotal a copy count multiplies straight through.
-      patchWish(change.id, (r) => ({ ...r, quantity: change.quantity }));
+      // number it actually stored — **or says the row is not there any more**. Then the
+      // re-read, for what the new number is counted into — the folder subtotal a copy count
+      // multiplies straight through.
+      //
+      // `removed` is not decoration. `set_wish_quantity(id, 0)` returns `remove_wish(conn, id)`
+      // — `wishlist_entries.quantity` carries `CHECK (quantity > 0)`, so it always has — and
+      // since issue #284 the stepper is `min={0}`, which puts that delete one press away on a
+      // single-copy wish.
+      //
+      // **What reading the answer as "quantity 0" costs here is a round trip, not a permanent
+      // ghost**, and the distinction is worth getting right because the collection's twin
+      // handler has the harsher version of it. {@link settleWhole} invalidates `["wishlist"]`
+      // *whole* and this list's own key is `["wishlist", "list", …]` (`useWishlist.ts`), so the
+      // refetch does take the row — eventually. Until it lands the wish sits in the list wanting
+      // none of something, and the `+` beside it answers GONE. That is exactly what
+      // `remove.onSuccess` below refuses to let a crossed-off wish do: "the row goes at once —
+      // a crossed-off wish must not sit there for the length of a round trip". A
+      // removal and a stepper taken to zero are **one write with two gestures**, so the two
+      // handlers are the same two lines; anything else is one gesture behaving differently from
+      // the other for a reason no reader could name.
+      //
+      // `CollectionPage`'s handler is these same two lines and its comment carries the live
+      // sighting — but not its reason: `settle()` there re-reads the summaries and pointedly
+      // **not** the list, so the same misreading leaves a row that outlives every round trip.
+      // Do not port that sentence back here.
+      patchWish(change.id, change.removed ? null : (r) => ({ ...r, quantity: change.quantity }));
       settleWhole();
     },
   });
@@ -656,18 +705,22 @@ export function WishlistPage() {
    * another surface deleted surfaces here at the root instead of disappearing with the parent
    * that is gone — `buildFolderTree`'s rule, and the reason this is not a one-line `filter`.
    */
-  const childFolders = useMemo(() => {
-    if (folderId === null) return nodes;
-    const find = (list: readonly FolderNode<WishlistFolder>[]): FolderNode<WishlistFolder> | null => {
-      for (const node of list) {
-        if (node.folder.id === folderId) return node;
-        const inside = find(node.children);
-        if (inside !== null) return inside;
-      }
-      return null;
-    };
-    return find(nodes)?.children ?? [];
-  }, [nodes, folderId]);
+  const childFolders = useMemo(() => folderLevel(nodes, folderId), [nodes, folderId]);
+
+  /**
+   * The level **above** the one on screen — `null` at the root, and `null` again for a `folderId`
+   * this cabinet cannot place, which is the same destination the breadcrumb offers for it.
+   *
+   * Read off the {@link trail} rather than off the open folder's own `parentId`, and the two are
+   * not always the same word: `trailOf` walks up through `parentId` and stops at a folder this
+   * list does not carry, so a drawer whose parent another surface deleted has a one-segment trail
+   * and climbs to the root — which is exactly where `buildFolderTree` has drawn it. The tile and
+   * the trail therefore lead to the same place by construction rather than by agreement.
+   */
+  const upFolderId = useMemo(
+    () => (folderId === null ? null : (trail[trail.length - 2]?.id ?? null)),
+    [folderId, trail],
+  );
 
   /**
    * What to call the folder a wish is filed in — the join the two lists ask for, done once here
@@ -988,6 +1041,64 @@ export function WishlistPage() {
     [folderPlacement, folders.reorder],
   );
 
+  /**
+   * The **up** tile's folder drop: a sub-folder moved out of the level on screen and into the one
+   * above it, last in that level.
+   *
+   * **Not a special case of {@link folderPlacement}, because that one is asked about a card on the
+   * wall and this destination has no card.** The level above is the one the reader walked out of;
+   * nothing on screen belongs to it, so there is no target row, no `before`/`after`, and no order
+   * to point into — which is precisely the objection {@link canPlaceFolder} raises against letting
+   * a breadcrumb segment take a folder. **What answers it here is that the tile says "last"
+   * without having to draw it**: `inside` is the landing a reader already gets by dropping a
+   * folder on another folder's middle, it already means "which drawer, and nothing about where in
+   * it", and `reorderedLevel` already appends. The tile is one landing wide, so there is no second
+   * position for the reader to have meant and nothing a mark could promise that this does not do.
+   *
+   * Three refusals, and each of them is one {@link folderPlacement} makes too. **Already there**
+   * — a folder whose parent is the level above has nowhere to arrive, and draws no ring rather
+   * than a ring that would reorder it for nothing. **Into itself or into anything it holds** —
+   * the backend refuses it in words, and the guard is not cosmetic, since `parent_id` cascades on
+   * itself and a cycle is a graph SQLite would walk forever the day the folder is deleted. It is
+   * unreachable from this page for the same reason it is there: the wall draws one level, so a
+   * folder's own ancestor is never a card on it. And **`reorderedLevel`'s own `null`**, which for
+   * an `inside` landing is only ever the folder dropped on itself.
+   */
+  const upPlacement = useCallback(
+    (drag: FolderDrag): { parentId: number | null; ids: number[] } | null => {
+      if (folderId === null) return null;
+      if (drag.parentId === upFolderId) return null;
+      if (
+        upFolderId !== null &&
+        (upFolderId === drag.folderId ||
+          folderDescendants(folders.folders, drag.folderId).has(upFolderId))
+      ) {
+        return null;
+      }
+      const ids = reorderedLevel({
+        // The destination level as the tree draws it, which is what makes the arriving folder
+        // *last* rather than last among whatever the flat rows happen to name.
+        siblings: folderLevel(nodes, upFolderId).map((one) => one.folder.id),
+        dragged: drag.folderId,
+        target: upFolderId ?? ROOT_TARGET,
+        edge: "inside",
+      });
+      return ids === null ? null : { parentId: upFolderId, ids: [...ids] };
+    },
+    [folderId, upFolderId, nodes, folders.folders],
+  );
+  const canMoveFolderUp = useCallback(
+    (drag: FolderDrag) => upPlacement(drag) !== null,
+    [upPlacement],
+  );
+  const moveFolderUp = useCallback(
+    (drag: FolderDrag) => {
+      const plan = upPlacement(drag);
+      if (plan !== null) folders.reorder.mutate(plan);
+    },
+    [upPlacement, folders.reorder],
+  );
+
   const failure = query.isError ? ipcError(query.error) : null;
   // The *latest* write on the screen, not whichever is still holding an error: a refused stepper
   // press would otherwise leave "Could not change your wishlist" up while the reader went on to
@@ -1300,6 +1411,26 @@ export function WishlistPage() {
                   It is handed {@link openNewFolder} directly rather than through an arrow: the
                   panel this raises has to give the caret back to the control it was raised from,
                   and `NewFolderCard` hands over its own button for exactly that. */}
+              {/* **Before the tile that makes a folder, and only inside one.** The way *out* is
+                  the first thing a reader looks for on a wall they have walked into, and the wall
+                  is read leading edge first — so at the root, where there is nowhere to go up to,
+                  nothing moves and `New folder` is still the first tile.
+
+                  It is what issue #283 asked for: a folder card only ever takes a wish deeper, and
+                  the only target that took one back out was a breadcrumb segment — one word of
+                  `text-sm`, a target a fifth the height of the drawers beside it, in a bar the
+                  pointer has already left. The trail stays exactly as it was; this is the same
+                  destination at the size of the things it stands among. */}
+              {folderId !== null && (
+                <WishParentFolderCard
+                  label={folderNameOf(upFolderId) ?? ROOT_LABEL}
+                  onOpen={() => wishlist.openFolder(upFolderId)}
+                  canDrop={(drag) => canFile(drag, upFolderId)}
+                  onDropWish={(drag) => fileWish(drag, upFolderId)}
+                  canDropFolder={canMoveFolderUp}
+                  onDropFolder={moveFolderUp}
+                />
+              )}
               <NewFolderCard onClick={openNewFolder} />
               {childFolders.map((node) => (
                 <WishFolderCard

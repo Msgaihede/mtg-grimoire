@@ -27,7 +27,7 @@ import { CreateDeckDialog } from "./CreateDeckDialog";
 import { DeckTile } from "./DeckTile";
 import { type DeckMenuDeps } from "./deckMenu";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
-import { decksUnder, FolderCard } from "./FolderCard";
+import { decksUnder, FolderCard, ParentDeckFolderCard } from "./FolderCard";
 import { buildFolderMenu, type FolderMenuDeps } from "./folderMenu";
 import {
   buildFolderTree,
@@ -36,6 +36,7 @@ import {
   FOLDER_ROW_ATTR,
   FolderTree,
   MoveToFolder,
+  ROOT_LABEL,
   useDeckDragging,
   type DeckDrag,
   type FolderNaming,
@@ -456,12 +457,27 @@ export function DecksPage() {
     // A refusal from the last attempt is not news about this one.
     decks.create.reset();
     openerRef.current = newDeckRef.current;
-    // The top level, and deliberately not the drawer the reader happens to be standing in:
-    // this control says "New deck" and promises nothing about where, while the folder row's
-    // menu says "New deck here" and promises exactly that. Changing this one would move a
-    // behaviour nobody asked to have moved.
-    setPanel({ kind: "createDeck", folderId: null });
-  }, [decks.create]);
+    // **The drawer the reader is standing in, and it was the top level whatever was open until
+    // 2026-09-01** ([#332](https://github.com/Msgaihede/mtg-grimoire/issues/332)). The rule this
+    // reverses read: the control says "New deck" and promises nothing about where, while the
+    // folder row's menu says "New deck here" and promises exactly that — true about the *words*
+    // and wrong about the *act*. This button is drawn in the heading row of the folder whose
+    // name is set in type beside it, over a wall showing that folder's decks and nothing else,
+    // so a press there is a reader filing a deck where they already are. Making it at the root
+    // meant every such deck had to be moved afterwards, which is the thing that was reported.
+    //
+    // **A default and not a destination**, which is what keeps the button's old promise intact
+    // rather than trading it away: the form's own Folder select opens on this and offers every
+    // other drawer, so a reader browsing one folder and building for another says so in one
+    // press. The folder row's menu is untouched and still means exactly what it says.
+    //
+    // **`folderView` rather than `selectedFolderId`**, for {@link upOneFolder}'s reason: a
+    // folder deleted by another surface leaves that number naming nothing, and this screen's
+    // answer to a stale id is to *derive* it away rather than write it back. `folderView` is
+    // that resolved answer, so the deck is made where the reader can **see** they are — the top
+    // level in that case, which is where the wall already put them.
+    setPanel({ kind: "createDeck", folderId: folderView });
+  }, [decks.create, folderView]);
 
   // `null` is a real answer for the opener and not a missing argument: a layer raised from a
   // context menu has no trigger of its own on screen, and the menu hands the caret back to
@@ -678,6 +694,28 @@ export function DecksPage() {
   }, [nodes]);
 
   /**
+   * The level **above** the folder that is open, and what to call it — `null` and {@link
+   * ROOT_LABEL} when the open folder sits at the top level, and the whole thing is absent when
+   * nothing is open, because the root has nowhere above it.
+   *
+   * **Read out of {@link levels}, never off `openNode.folder.parentId`.** The two differ in
+   * exactly the case that map was built for: `buildFolderTree` draws a folder whose parent is
+   * missing — and one caught in a corrupt cycle — at the **root**, so a stored `parentId` can
+   * name a level that is nowhere on screen. The tile is a gesture made against what the reader
+   * can see, so it climbs to the level the folder is *drawn* in, which is where the sidebar's
+   * tree would take them too.
+   */
+  const up = useMemo(() => {
+    if (openNode === null) return null;
+    const id = levels.parent.get(openNode.folder.id) ?? null;
+    const label =
+      id === null
+        ? ROOT_LABEL
+        : (flattenFolders(nodes).find((n) => n.folder.id === id)?.folder.name ?? ROOT_LABEL);
+    return { id, label };
+  }, [openNode, levels, nodes]);
+
+  /**
    * What a folder drop **means**: the level it lands in, and that level's ids in their new order —
    * or `null` for a drop that may not happen or would change nothing.
    *
@@ -879,7 +917,7 @@ export function DecksPage() {
   // off the wall without anything on this screen asking it to. The rule lives on the mutation
   // definitions, which is the one place it can be kept.
 
-  const heading = openNode === null ? "All decks" : openNode.folder.name;
+  const heading = openNode === null ? ROOT_LABEL : openNode.folder.name;
   const counts = [
     childFolders.length > 0 ? plural(childFolders.length, "folder") : null,
     plural(here.length, "deck"),
@@ -1090,9 +1128,11 @@ export function DecksPage() {
                 // because the value is already real by the time the button is pressed.
                 defaultFormatKey={newDeckFormatKey}
                 // Where the deck lands, which is a fact about *which control opened this*: the
-                // button beside it means the top level, a folder row's "New deck here" means
-                // that folder. Read off the open `Panel` for the same reason the format is read
-                // off state — the dialog seeds its draft at mount and never again.
+                // button beside it means the drawer the wall is standing in, a folder row's
+                // "New deck here" means that row's folder. Read off the open `Panel` for the
+                // same reason the format is read off state — the dialog seeds its draft at
+                // mount and never again, so the answer has to be settled by the press rather
+                // than recomputed under a dialog the reader is already typing into.
                 defaultFolderId={panel?.kind === "createDeck" ? panel.folderId : null}
                 open={panel?.kind === "createDeck"}
                 onOpen={openCreate}
@@ -1139,6 +1179,24 @@ export function DecksPage() {
             // `aria-label`) — but left a list rather than made a group, because these tiles are
             // countable and a list says how many there are on the way in.
             <ul aria-label="Your decks" className={GRID} style={wallStyle(zoom)}>
+              {/* **First on the wall, and only inside a folder.** The way *out* is the first thing
+                  a reader looks for on a wall they have walked into, and it is what issue #283
+                  asked for: a folder card only ever takes a deck deeper. The gallery has had a way
+                  back since folders shipped — every row of the sidebar's tree is a deck target,
+                  including "All decks" — but it is a 32px row on the far side of the window from
+                  the tile being dragged, and a reader working on the wall should not have to cross
+                  the page to undo a drop they made on it. The tree stays exactly as it was. */}
+              {up !== null && (
+                <ParentDeckFolderCard
+                  label={up.label}
+                  drag={drag}
+                  onOpen={() => setSelectedFolderId(up.id)}
+                  canDrop={(d) => canFile(d, up.id)}
+                  onDropDeck={(d) => fileDeck(d, up.id)}
+                  canDropFolder={(d) => canDropFolder(d, up.id, "inside")}
+                  onDropFolder={(d) => dropFolder(d, up.id, "inside")}
+                />
+              )}
               {childFolders.map((node) => (
                 <FolderCard
                   key={node.folder.id}

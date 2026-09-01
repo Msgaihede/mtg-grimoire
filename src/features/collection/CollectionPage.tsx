@@ -15,6 +15,7 @@ import type { MenuItem } from "@/components/menu/types";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import { NewFolderCard } from "@/components/NewFolderCard";
 import { OwnedBadge } from "@/components/OwnedBadge";
+import { QuantityStepper } from "@/components/QuantityStepper";
 import { buildCardMenu, type CardMenuDeps, type CardMenuTarget } from "@/features/card/cardMenu";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { listWalkStops, usePublishCardWalk } from "@/features/card/cardWalk";
@@ -33,9 +34,14 @@ import { CONDITION_LABEL, CONDITIONS } from "@/lib/conditions";
 import { DROP_MARK_ROOM } from "@/lib/dropMarks";
 import type { FolderDrag, FolderEdge } from "@/lib/folderDrag";
 import { reorderedLevel } from "@/lib/folderOrder";
-import { FINISHES, FINISH_LABEL, isFinish, type Finish } from "@/lib/finish";
+import { FINISHES, FINISH_LABEL, finishLabel, isFinish, type Finish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
-import { buildFolderTree, folderDescendants, type FolderNode } from "@/lib/folderTree";
+import {
+  buildFolderTree,
+  folderDescendants,
+  folderLevel,
+  type FolderNode,
+} from "@/lib/folderTree";
 import {
   ipc,
   ipcError,
@@ -52,7 +58,11 @@ import { useNarrowWindow } from "@/lib/useNarrowWindow";
 import { cn } from "@/lib/utils";
 import { writeFailure } from "@/lib/writes";
 import { CollectionBreadcrumb } from "./CollectionBreadcrumb";
-import { CollectionFolderCard, type CollectionFolderTotals } from "./CollectionFolderCard";
+import {
+  CollectionFolderCard,
+  CollectionParentFolderCard,
+  type CollectionFolderTotals,
+} from "./CollectionFolderCard";
 import { CollectionSummaryHeader } from "./CollectionSummary";
 import { CollectionTable } from "./CollectionTable";
 import {
@@ -75,6 +85,18 @@ import { useCollectionFolders, useSetCollectionFolder } from "./useCollectionFol
  * to show a reader filing a copy they own.
  */
 const ROOT_LABEL = "Collection";
+
+/**
+ * The root as `reorderedLevel` has to address it — an id no folder has, because
+ * `collection_folders.id` is an `INTEGER PRIMARY KEY` and therefore always positive.
+ *
+ * Only the **up** tile needs it, and only to satisfy an argument it does not use: an `inside`
+ * landing reads `target` for one thing, the "dropped on itself" refusal, and a folder can never
+ * be dropped on the root. The alternative is widening `reorderedLevel`'s `target` to
+ * `number | null`, which would put a case in the shared arithmetic that only one caller has.
+ * `DecksPage` and `WishlistPage` spell the same constant for the same reason.
+ */
+const ROOT_TARGET = 0;
 
 /**
  * The one dismissible layer this page can have open — the union, and never four flags.
@@ -277,6 +299,31 @@ interface CollectionTile extends GridCard {
    * census: {@link filedIn} is where the words are chosen, at render, from the page's own map.
    */
   folders: readonly (number | null)[];
+}
+
+/**
+ * The finish this tile is **marked** with — the tile's own word, with `nonfoil` mapped to nothing.
+ *
+ * **`nonfoil` is not a mark, and that is a rule with a shipped failure behind it.** `CardArt` gates
+ * its whole top-right chip on `finish !== null` while `FinishMark` early-returns for a plain copy,
+ * so handing the word straight through paints the `bg-bg/85` felt with nothing inside it — an
+ * empty rectangle over the art, on most tiles of most collections. `soleFinish` maps it to `null`
+ * and `DeckFinish` excludes it outright; this is that convention on the one wall whose rows can
+ * actually carry the word.
+ *
+ * **It is a function rather than an expression written twice because two things read it now**: the
+ * chip over the art, and the accessible name of the stepper drawn in the same corner of the same
+ * tile. A tile that drew no sheen while its stepper announced "(Nonfoil)" would be one fact
+ * answered two ways six pixels apart — the class of drift this file already fixed once for the
+ * chip itself. Module scope so `CardGrid`'s `finish` slot can be handed it directly rather than a
+ * fresh arrow per render, which is what that prop asks for.
+ *
+ * A `null` `tile.finish` is a word this build cannot name (see {@link CollectionTile.finish}) and
+ * stays `null` here: marking the art with a sheen no stylesheet has, or announcing a word the
+ * reader's own row spells and this build does not, are the same mistake.
+ */
+function finishMarkOf(tile: CollectionTile): Finish | null {
+  return tile.finish === "nonfoil" ? null : tile.finish;
 }
 
 /**
@@ -1103,20 +1150,22 @@ export function CollectionPage() {
    * another surface deleted surfaces here at the root instead of disappearing with the parent that
    * is gone — `buildFolderTree`'s rule, and the reason this is not a one-line `filter`.
    */
-  const childFolders = useMemo(() => {
-    if (folderId === null) return nodes;
-    const find = (
-      list: readonly FolderNode<CollectionFolder>[],
-    ): FolderNode<CollectionFolder> | null => {
-      for (const node of list) {
-        if (node.folder.id === folderId) return node;
-        const inside = find(node.children);
-        if (inside !== null) return inside;
-      }
-      return null;
-    };
-    return find(nodes)?.children ?? [];
-  }, [nodes, folderId]);
+  const childFolders = useMemo(() => folderLevel(nodes, folderId), [nodes, folderId]);
+
+  /**
+   * The level **above** the one on screen — `null` at the root, and `null` again inside a deck
+   * group or `Recently removed`, which are pinned at the top level and hold nothing but cards.
+   *
+   * Read off the {@link trail} rather than off the open folder's own `parentId`, and the two are
+   * not always the same word: `trailOf` walks up through `parentId` and stops at a folder this
+   * list does not carry, so a binder whose parent another surface deleted has a one-segment trail
+   * and climbs to the root — which is exactly where `buildFolderTree` has drawn it. The tile and
+   * the trail therefore lead to the same place by construction rather than by agreement.
+   */
+  const upFolderId = useMemo(
+    () => (folderId === null ? null : (trail[trail.length - 2]?.id ?? null)),
+    [folderId, trail],
+  );
 
   /**
    * What to call a folder, for the two sentences the layers below build out of one.
@@ -1347,6 +1396,179 @@ export function CollectionPage() {
   );
 
   /**
+   * **A place the reader themselves arranged: the root, or a drawer they made.** One predicate,
+   * several questions, one answer.
+   *
+   * They are genuinely different questions — may a copy be dropped *into* this folder
+   * ({@link canMoveCopy}), may a new folder be created *inside* it ({@link canMakeFolder}), may a
+   * row filed *here* be stepped on the wall ({@link stepperByTile}) or in the table
+   * ({@link quantityBlocked}) — and they share an answer because they share a backend rule:
+   * `collection_folders.rs`'s `user_folder`, which every one of those writes calls and which
+   * refuses a deck group and `Recently removed` in words. A spelling of it per call site is a call
+   * site per edit to keep in step with that function, and this page has already watched two
+   * gestures drift apart once (`collection-folders.md` records the `Move to` whose settle set took
+   * `["decks"]` while the drag's did not). Grep this name rather than trusting a count written
+   * here.
+   *
+   * **Written positively — `null` or `user` — and never as a blocklist of the two app-owned
+   * kinds.** `collection_folders.kind` is three words today; a fourth added later defaults to
+   * *fenced* under this spelling and to *permitted* under `!deckGroupIds.has(id)`, and a control
+   * that quietly turns itself on for a kind nobody has thought about is the failure this shape
+   * exists to prevent. It is also why `deckGroupIds` above is not the input: that set is
+   * {@link canMoveCopy}'s *source* fence, which is a different question about the other end of a
+   * drag, and it is deliberately narrower — `Recently removed` is not in it, because dragging back
+   * out of the holding area is the whole of what #209 asked for.
+   *
+   * The root is a level too, and it is the one `null` names — hence the first arm rather than a
+   * lookup that would fail for it.
+   */
+  const readersOwnLevel = useCallback(
+    (id: number | null) => id === null || userFolderIds.has(id),
+    [userFolderIds],
+  );
+
+  /**
+   * Which `collection_entries` row a press on a tile's stepper writes to — **the wall's twin of
+   * {@link copiesByTile}**, and absent where the wall draws no stepper at all.
+   *
+   * # Why it is not beside its twin
+   *
+   * {@link copiesByTile} sits with {@link tiles} because both are pure over `rows`. This one is
+   * not: its fence is {@link readersOwnLevel}, which is built from the folder census read further
+   * down the page, so it can only be stated after the cabinet is. Reading it up there would be a
+   * temporal dead zone rather than a style choice.
+   *
+   * # The fence
+   *
+   * A stepper is drawn only where **every** row behind the art is at the root or in a drawer the
+   * reader made. Not *any*: the number the control shows is the tile's **sum**, so a tile mixing a
+   * copy in a binder with a copy in a deck's group would move a total that is partly untouchable —
+   * the reader would press `−` on a 3 and watch it become a 2 while one of those three copies is
+   * the deck's custody and `set_entry_folder`'s `ENTRY_IN_A_DECK` exists precisely to keep it
+   * there. `canFile` takes the opposite rule for the opposite reason and says so at its own site:
+   * a *drag* asks which copies may move and the reader answers, where a stepper is a number with
+   * no question attached to it.
+   *
+   * **This is also why no page-level branch is needed for "the reader is standing inside a deck
+   * group".** Unflattened, every row on that wall is in that folder, so every tile is fenced by
+   * this rule alone; and flatten ships **on** (`useCollection.ts`), so the per-tile rule is the one
+   * that actually does the work in the state a reader meets. A second gate on `folderId` would be
+   * a fact this map already knows, stated again somewhere it could drift.
+   *
+   * **A filed tile is fenced until the census has answered**, which is the fail-*closed* direction
+   * and is deliberate: `useCollectionFolderList` starts empty, and "empty" is a collection nobody
+   * has filed as well as one that has not loaded — that hook says so at its own site. So a tile in
+   * a drawer draws no stepper for the length of one query and then grows one, where the permissive
+   * reading would draw a control over a deck's copies for exactly that window. The root needs no
+   * census at all, which is most of the wall.
+   *
+   * # Which row, and what the floor is
+   *
+   * **The first row behind the art** — the same row {@link tiles} takes `id`, `name`, `unitPrice`
+   * and `imageUris` from, so the tile's identity and the tile's writes address one entry rather
+   * than two. "First" is the query's **current sort order** and is therefore not stable across a
+   * re-sort: the same picture can address a different entry after the reader presses a column
+   * header. That is the accepted cost of the decision rather than an oversight — the alternative
+   * is a dialog per press (which is what a *drag* gets, because a drag is already a question), and
+   * the copies behind one tile differ only in grade, language and drawer, none of which a wall of
+   * art shows.
+   *
+   * `floor` is `tile.copies - row.quantity`: the copies this stepper **cannot reach**, because they
+   * belong to the rows it does not address. **Taken off the tile's own sum and never re-summed
+   * here** — the badge in the corner and the number in the stepper are the same figure, so a second
+   * walk over `rows` would be a second definition of it, and the two disagreeing is a control whose
+   * floor is wrong in a way nothing on screen explains.
+   *
+   * Two consequences fall out of those two numbers rather than being special-cased. On the
+   * ordinary single-entry tile `floor` is **0**, so stepping to zero deletes the entry exactly as
+   * the table's stepper does (`collection::set_quantity(id, 0)` deletes — see `setQuantity`'s
+   * `onSuccess`). And on a tile of 3 copies made of an NM row of 2 and a Played row of 1, `floor`
+   * is **1**: `−` walks 3 → 2 → 1 and then disables, the NM row is gone, the wall re-reads its
+   * rows, the Played row becomes first, the floor recomputes to 0 and `−` walks that one out too.
+   *
+   * # The key
+   *
+   * {@link tileKeyOf}, the same function {@link tiles} and {@link copiesByTile} are built from —
+   * **the printing *and* the finish**. Keying by card alone would point a foil tile's stepper at
+   * the plain copies while the badge six pixels above it counted the foils, which is the exact
+   * silent wrongness {@link copiesByTile} records having shipped for its own `Move to`.
+   */
+  const stepperByTile = useMemo(() => {
+    const first = new Map<string, CollectionRow>();
+    const fenced = new Set<string>();
+    for (const row of rows) {
+      const key = tileKeyOf(row.cardId, row.finish);
+      if (!first.has(key)) first.set(key, row);
+      if (!readersOwnLevel(row.folderId)) fenced.add(key);
+    }
+    const out = new Map<string, { row: CollectionRow; floor: number }>();
+    for (const tile of tiles) {
+      const row = first.get(tile.key);
+      // `undefined` is unreachable while the tiles are built from these very rows, and it is
+      // answered rather than asserted for {@link tileDrag}'s reason.
+      if (row === undefined || fenced.has(tile.key)) continue;
+      out.set(tile.key, { row, floor: tile.copies - row.quantity });
+    }
+    return out;
+  }, [rows, tiles, readersOwnLevel]);
+
+  /**
+   * Why one **table row's** copies cannot be stepped where they sit, or `null` for a row that can
+   * — `CollectionTable`'s `quantityBlocked`, and the other half of the wall's fence above.
+   *
+   * **One predicate, two drawings.** The table and the wall are the same list in two layouts, so a
+   * row the wall will not let a reader step and a row the table will is not a difference a reader
+   * can make any sense of — and it is a difference two independently-written fences arrive at the
+   * first time either moves. {@link readersOwnLevel} is the whole of the test on both sides;
+   * everything below it is *words*, which is the only thing the two surfaces legitimately differ
+   * in. The wall says it by drawing nothing (there is no room on a 170px tile for a sentence, and
+   * the strip it would sit in is revealed on hover), where a table row has a whole cell and can
+   * afford to say what to do instead.
+   *
+   * **The grain is a row here and a tile there, and that is not a second rule.** A tile is fenced
+   * when *any* row behind it is; a row is fenced when it is. The wall's is that same predicate
+   * over the several rows one piece of art sums, which is why {@link stepperByTile} does the
+   * folding and this does not.
+   *
+   * # Which sentence
+   *
+   * Two of the three arms name what the folder *is*, because the way out differs: copies in a
+   * deck's group leave by being cut from the deck (`deck_to_collection`, which decrements
+   * `deck_cards` in the same transaction), and copies in `Recently removed` leave by being filed
+   * back. Both are the grammar {@link blockedReason} already uses for the picker's greyed rows —
+   * where you are, then what to do — so this feature speaks with one voice about a refusal.
+   *
+   * **The third arm names no mechanism, on purpose.** It is reached by a fourth
+   * `collection_folders.kind` — the reason the fence is written positively at all — and a fourth
+   * kind wearing the deck sentence would tell the reader to cut a card from a deck that does not
+   * exist. So it says only what is certainly true of anything that is not the reader's own filing:
+   * the copies are somewhere they did not put them, and the way to change the count is to move
+   * them somewhere they did.
+   *
+   * **It is also, for the length of one query, what a row in the reader's own binder gets**, and
+   * that is the cost of the fence failing closed. `useCollectionFolderList` starts empty and
+   * "empty" is a cabinet nobody has filed as well as one that has not loaded, so until it answers
+   * every filed row is outside {@link readersOwnLevel} and reads a sentence that is wrong about a
+   * drawer the reader made. Accepted over the alternative, which is a live stepper standing over a
+   * deck's copies for the same window against a `collection::set_quantity` that has **no folder
+   * fence of its own** — a briefly wrong sentence self-corrects and a written quantity does not.
+   * The root needs no census, so this is only ever about filed rows.
+   */
+  const quantityBlocked = useCallback(
+    (row: CollectionRow): string | null => {
+      if (readersOwnLevel(row.folderId)) return null;
+      if (row.folderId !== null && deckGroupIds.has(row.folderId)) {
+        return `In ${row.folderName ?? "a deck"}. Cut the card from the deck to change how many you hold.`;
+      }
+      if (row.folderId === pinned.removed?.id) {
+        return "In Recently removed. Move it back to your collection to change how many you hold.";
+      }
+      return `In ${row.folderName ?? "a folder you did not make"}. Move it into one of your own folders to change how many you hold.`;
+    },
+    [readersOwnLevel, deckGroupIds, pinned.removed],
+  );
+
+  /**
    * Where a copy in the air may be let go — asked per target, because the answer differs per
    * target: the folder a row is already filed in refuses it and draws no ring at all, rather than
    * a ring that would write nothing and bump `updated_at`. `dropWrite`'s rule about a card dropped
@@ -1380,10 +1602,12 @@ export function CollectionPage() {
   const canMoveCopy = useCallback(
     (from: number | null, to: number | null) => {
       if (from === to) return false;
-      if (to !== null && !userFolderIds.has(to)) return false;
+      // {@link readersOwnLevel}, which is this clause's own expression given a name so that
+      // everything on this page asking `user_folder`'s question asks it once.
+      if (!readersOwnLevel(to)) return false;
       return from === null || !deckGroupIds.has(from);
     },
-    [userFolderIds, deckGroupIds],
+    [readersOwnLevel, deckGroupIds],
   );
   /**
    * The same three clauses asked of whichever shape is in the air.
@@ -1663,6 +1887,74 @@ export function CollectionPage() {
   );
 
   /**
+   * The **up** tile's folder drop: a binder moved out of the level on screen and into the one
+   * above it, last in that level.
+   *
+   * **Not a special case of {@link folderPlacement}, because that one is asked about a card on the
+   * wall and this destination has no card.** The level above is the one the reader walked out of;
+   * nothing on screen belongs to it, so there is no target row, no `before`/`after`, and no order
+   * to point into — which is precisely the objection {@link canPlaceFolder} raises against letting
+   * a breadcrumb segment take a folder. **What answers it here is that the tile says "last"
+   * without having to draw it**: `inside` is the landing a reader already gets by dropping a
+   * folder on another folder's middle, it already means "which drawer, and nothing about where in
+   * it", and `reorderedLevel` already appends. The tile is one landing wide, so there is no second
+   * position for the reader to have meant.
+   *
+   * The four refusals are {@link folderPlacement}'s own, asked of a destination rather than of a
+   * card. **Both ends must be a folder the reader made** — this cabinet's alone, because
+   * `collection_folders::reorder_folders` calls `user_folder` on the destination and on every id
+   * it is handed. The destination is never anything else in practice (nothing nests inside a deck
+   * group or `Recently removed`, so a trail's second-from-last segment is a user folder or the
+   * root), which makes this the fence rather than the affordance — exactly as it is one function
+   * up. **Already there**, **into itself or into what it holds**, and `reorderedLevel`'s own
+   * `null` complete the set; the middle one is unreachable while the wall draws one level, and is
+   * kept because `parent_id` cascades onto itself and a cycle is a graph SQLite would walk
+   * forever.
+   *
+   * **Inside `Recently removed` the "already there" clause is the whole of the answer**, and that
+   * is the one place it does real work: the wall there is not that level's children but the
+   * reader's own top level ({@link wall}), so every folder card on it is *already* at the
+   * destination this tile names, and each of them draws no ring rather than one that would shuffle
+   * it to the end of the level it is in.
+   */
+  const upPlacement = useCallback(
+    (drag: FolderDrag): { parentId: number | null; ids: number[] } | null => {
+      if (folderId === null) return null;
+      if (!userFolderIds.has(drag.folderId)) return null;
+      if (upFolderId !== null && !userFolderIds.has(upFolderId)) return null;
+      if (drag.parentId === upFolderId) return null;
+      if (
+        upFolderId !== null &&
+        (upFolderId === drag.folderId ||
+          folderDescendants(userFolders, drag.folderId).has(upFolderId))
+      ) {
+        return null;
+      }
+      const ids = reorderedLevel({
+        // The destination level as the tree draws it, which is what makes the arriving folder
+        // *last* rather than last among whatever the flat rows happen to name.
+        siblings: folderLevel(nodes, upFolderId).map((one) => one.folder.id),
+        dragged: drag.folderId,
+        target: upFolderId ?? ROOT_TARGET,
+        edge: "inside",
+      });
+      return ids === null ? null : { parentId: upFolderId, ids: [...ids] };
+    },
+    [folderId, upFolderId, nodes, userFolderIds, userFolders],
+  );
+  const canMoveFolderUp = useCallback(
+    (drag: FolderDrag) => upPlacement(drag) !== null,
+    [upPlacement],
+  );
+  const moveFolderUp = useCallback(
+    (drag: FolderDrag) => {
+      const plan = upPlacement(drag);
+      if (plan !== null) folders.reorder.mutate(plan);
+    },
+    [upPlacement, folders.reorder],
+  );
+
+  /**
    * **Whether the cabinet is drawn at all — and it is drawn over an empty one on purpose.**
    *
    * Deliberately *not* {@link filed}, and deliberately not `wall.length > 0`, which is what gated
@@ -1690,10 +1982,12 @@ export function CollectionPage() {
    * in that wall is a real drop target and the tile beside them would be the one control that is
    * not, filing into an app-owned holding area.
    *
-   * The root is a level too, and it is the one `null` names — hence the first arm rather than a
-   * lookup that would fail for it.
+   * The root-is-a-level arm and the reason the test is written positively both live on
+   * {@link readersOwnLevel} now, which is this line's own expression named once and read by the
+   * drag's destination fence and the wall's stepper as well. It was spelled out here until the
+   * stepper needed a third copy of it.
    */
-  const canMakeFolder = folderId === null || userFolderIds.has(folderId);
+  const canMakeFolder = readersOwnLevel(folderId);
 
   /**
    * What the export dialog's two sentences have to say about where the reader is standing.
@@ -1994,6 +2288,34 @@ export function CollectionPage() {
                   It is handed {@link openNewFolder} directly rather than through an arrow: the
                   panel this raises has to give the caret back to the control it was raised from,
                   and `NewFolderCard` hands over its own button for exactly that. */}
+              {/* **Before the tile that makes a folder, and only inside one.** The way *out* is
+                  the first thing a reader looks for on a wall they have walked into, and the wall
+                  is read leading edge first — so at the root, where there is nowhere to go up to,
+                  nothing moves and `New folder` is still the first tile.
+
+                  It is what issue #283 asked for: a folder card only ever takes a copy deeper, and
+                  the only target that took one back out was a breadcrumb segment — one word of
+                  `text-sm`, a target a fifth the height of the drawers beside it, in a bar the
+                  pointer has already left. The trail stays exactly as it was; this is the same
+                  destination at the size of the things it stands among.
+
+                  **It rides the wall's own gate rather than adding a clause to it**, which is what
+                  keeps it out of a deck group: there the wall is not drawn at all, because that
+                  level has no children of its own and refuses a new folder — and a lone tile in an
+                  otherwise empty band, whose ring refuses every card in the group
+                  ({@link canFile}), is the invitation to a gesture that does nothing that
+                  {@link wall} declines to make one paragraph up. The breadcrumb is still the way
+                  out of one, as it always was. */}
+              {folderId !== null && (
+                <CollectionParentFolderCard
+                  label={folderNameOf(upFolderId) ?? ROOT_LABEL}
+                  onOpen={() => collection.openFolder(upFolderId)}
+                  canDrop={(drop) => canFile(drop, upFolderId)}
+                  onDropCard={(drop) => fileCard(drop, upFolderId)}
+                  canDropFolder={canMoveFolderUp}
+                  onDropFolder={moveFolderUp}
+                />
+              )}
               {canMakeFolder && <NewFolderCard onClick={openNewFolder} />}
               {wall.map((node) => (
                 <CollectionFolderCard
@@ -2164,21 +2486,105 @@ export function CollectionPage() {
               // The sheen over the art and the glyph in the chin, which is the *other* half of
               // what tells a reader the two tiles of one printing apart.
               //
-              // **`nonfoil` is mapped to `null` here, and that is not a tidy-up.** `CardArt` gates
-              // its whole corner chip on `finish !== null` while `FinishMark` early-returns for a
-              // plain copy — so handing this slot the word paints the `bg-bg/85` felt with nothing
-              // inside it: an empty rectangle over the art, on most tiles of most collections.
-              // This wall was the app's first caller to have a `nonfoil` to pass at all, which is
-              // why the slot had never had to say so; the convention it would have broken is
-              // written down twice already, in `soleFinish` (which maps nonfoil to `null`) and in
-              // `DeckFinish` (which excludes the word outright).
-              finish={(tile) => (tile.finish === "nonfoil" ? null : tile.finish)}
+              // **`nonfoil` is mapped to `null`, and that is not a tidy-up** — {@link finishMarkOf}
+              // is where that argument lives, and it is a named function rather than the inline
+              // expression this slot held until the stepper below started announcing the same fact
+              // in words.
+              finish={finishMarkOf}
               // **Only while flattened**, which is the one state where a tile cannot be read off
               // the level it is drawn on: with the filing ignored there is no breadcrumb saying
               // which drawer these are, so the caption has to say it per tile. Unset otherwise, so
               // the wall draws its own `SET · number` and this page spells that text exactly once
               // — in {@link captionFor}, which is the flattened line and nothing else.
               caption={flatten ? captionFor(folderNameOf) : undefined}
+              /* **The wall's own stepper** (issue #284), in the strip over the foot of the art —
+                 the slot the search's quick-add and the wishlist's pencil already ride in, and the
+                 same place the deck editor puts a card's stepper. It costs the wall no height:
+                 the strip is `absolute inset-x-0 bottom-0`, so `tileHeight` is unchanged by its
+                 existence. Until it landed this view could maintain quantities in its *table*
+                 alone, which made the wall the layout a reader looked at and the table the one
+                 they worked in.
+
+                 **Absent is a real answer, not a fallback**: {@link stepperByTile} draws nothing
+                 for a tile whose copies the reader may not step, and that is the fence rather than
+                 an affordance — every rule about it is at that map's own site. */
+              action={(tile) => {
+                const step = stepperByTile.get(tile.key);
+                if (step === undefined) return null;
+                // The mark the art is drawing, read through the same function the chip above it
+                // takes — so a plain tile is announced "Copies of Black Lotus" and never
+                // "(Nonfoil)", which is the wall's own rule stated in words instead of in a sheen.
+                const mark = finishMarkOf(tile);
+                return (
+                  // **`data-no-drag` is load-bearing and must not be dropped.** `NOT_A_DRAG`
+                  // (`dnd.ts`) is `"[data-no-drag], input, select, textarea"`, so the stepper's
+                  // `<input>` is excluded by tag and its two `<button>`s are not — and the whole
+                  // tile is a drag source. Without this mark a press on `−` plus five pixels of
+                  // travel is a drag of the card, and the press is never delivered as a click.
+                  // `cardDraggable` asks `closest()`, so one mark on the wrapper covers both
+                  // buttons; `DeckCardControls` carries the identical mark for the identical
+                  // reason. The wrapper is also the direct child `CardGrid`'s strip gives
+                  // `pointer-events-auto` back to.
+                  <span data-no-drag="" className="flex">
+                    <QuantityStepper
+                      // The 20px box, which scales with the reader's zoom through
+                      // `--control-scale` — `xs` and `card` are the two sizes drawn on a card
+                      // face, and this is a 170px tile rather than a 210px one.
+                      size="xs"
+                      // Drawn over an illustration, and inside a box that clips its own corners —
+                      // the deck stepper's two reasons, unchanged one surface over.
+                      tone="art"
+                      focus="inset"
+                      // **The tile's sum, never the addressed row's own number.** `OwnedBadge`
+                      // draws that same figure in the corner six pixels away, and two numbers
+                      // that close together disagreeing about one piece of art is not a state
+                      // this wall may show.
+                      value={tile.copies}
+                      // The copies this control cannot reach — see {@link stepperByTile}, where
+                      // the arithmetic and the two behaviours that fall out of it are worked
+                      // through. `0` on the ordinary single-entry tile, so zero deletes the entry
+                      // exactly as the table's stepper does.
+                      min={step.floor}
+                      // **Name the object, not the control** — and the object is a *printing in a
+                      // finish*, which is the whole of this wall's grain, so the name has to carry
+                      // both or it is not a name.
+                      //
+                      // **The set and number are not decoration here, and a live pass is what
+                      // proved it.** Driven in the browser (2026-09-01, Storybook's
+                      // `SteppingFromTheWall` at 170px), the seed put three Lightning Bolt tiles on
+                      // one screen — 2X2 ×4, LEA ×1 and an etched STA — and with the printing left
+                      // out the first two both announced `Copies of Lightning Bolt`. A collection
+                      // holds several printings of one card as a matter of course, far more often
+                      // than a wishlist does, so that is the ordinary case rather than a corner:
+                      // two controls with one name, on a surface where the only other thing
+                      // distinguishing them is a picture. jsdom cannot referee it — both names are
+                      // *correct*, they are merely not *unique*, and no assertion about one tile
+                      // can see the other.
+                      //
+                      // {@link wishLabel}'s grammar exactly — `Name (SET 123)`, with the finish
+                      // folded into the same bracket — because the wishlist's wall stands one tab
+                      // away and reached this conclusion first. The chin under the art already
+                      // draws `SET · number`, so the name says what the tile shows.
+                      //
+                      // The finish rides it **only where the tile wears a mark**: a plain copy
+                      // draws no chip ({@link finishMarkOf}), so announcing `(Nonfoil)` would be
+                      // the wall's own rule contradicted in words six pixels from where it is
+                      // being obeyed in pixels.
+                      label={
+                        `Copies of ${tile.name} ` +
+                        `(${tile.setCode.toUpperCase()} ${tile.collectorNumber}` +
+                        `${mark === null ? "" : `, ${finishLabel(mark)}`})`
+                      }
+                      // **A delta applied to the addressed row**, because the control shows a sum
+                      // and the write moves one entry: the reader asked for one more copy of this
+                      // *object*, and the row this tile addresses is where that copy goes.
+                      onChange={(next) =>
+                        onSetQuantity(step.row, step.row.quantity + (next - tile.copies))
+                      }
+                    />
+                  </span>
+                );
+              }}
               // The whole tile is the target: the art, its badge and the caption.
               cardMenu={tileMenu}
               cardMenuKey={tileMenuKey}
@@ -2194,6 +2600,12 @@ export function CollectionPage() {
                 onNeedNextPage={onNeedNextPage}
                 onSetQuantity={onSetQuantity}
                 onRemove={onRemove}
+                // **The same fence the wall draws, said in words** (issue #284). It is one
+                // predicate on this page rather than one per layout, because the table and the
+                // wall are two drawings of one list and a row editable in one of them and not the
+                // other is a difference no reader can account for. See {@link quantityBlocked},
+                // which carries the three sentences and why the third names no mechanism.
+                quantityBlocked={quantityBlocked}
                 rowMenu={rowMenu}
                 rowMenuKey={rowMenuKey}
                 marketplace={marketplace}

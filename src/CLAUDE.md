@@ -341,12 +341,16 @@ Every one of these has its measurement and its story in
   than "not on the bar"** — a distinction the first draft of this rule collapsed. Where the reader
   is *standing* is navigation, so the breadcrumb and the drill-down stay off the row entirely:
   either one among the filters would be the one thing in it Reset all could not undo. The other two
-  moved, and each moved to the place that already says what it is. **`+ New folder` is the first
-  tile of the folder wall** (`NewFolderCard`), shaped to a folder card's footprint and
+  moved, and each moved to the place that already says what it is. **`+ New folder` is a tile of
+  the folder wall** (`NewFolderCard`), shaped to a folder card's footprint and
   solid-bordered where the folders are dashed — the dash means *container, not a thing you own*,
   and a button wearing it would spend that vocabulary. It is drawn wherever the wall is, which is
   why the wall now renders at zero folders: gated on the folder count, a reader with an empty
-  cabinet had no way to make their first one. **`Flatten` rides the bar past the hairline
+  cabinet had no way to make their first one. **The first tile is the way *out* wherever there is
+  one** — `ParentFolderCard`, drawn only inside a folder, dashed like the drawers because it *is*
+  one (the level above), naming that level and taking a card or a folder dropped on it. At the root
+  it is absent and `New folder` is first again; the breadcrumb above is untouched. Issue #283, and
+  [wishlist-folders.md](../docs/reference/wishlist-folders.md) carries the argument. **`Flatten` rides the bar past the hairline
   divider**, beside the grid-or-table pair. That end of the row is already the home for controls
   about how the list is *drawn* rather than which rows are in it, and it is already untouched by
   Reset all — so Flatten satisfies the fence on the far side of the rule rather than breaking it.

@@ -377,8 +377,16 @@ preferred_finish`'s nullability one table over.
   oracle card with the exact printing first; the two that empty a whole folder — `delete_deck`
   and `clear_decks` — walk the sub-tree and re-file every row through `refile_entry`, the
   `delete_folder` rule reused. Everything else that changes the number is an ordinary
-  collection write landing on a row that happens to be filed in a group (a stepper, an edit, the
-  reconciler's fold), and it is answered at the next read because the next read is a `sum()`.
+  collection write landing on a row that happens to be filed in a group (an edit, the importer's
+  `set` mode, the reconciler's fold), and it is answered at the next read because the next read is
+  a `sum()`. **A stepper is no longer one of them, and the change is in the app rather than in the
+  crate** (2026-09-01, [issue #284](https://github.com/Msgaihede/mtg-grimoire/issues/284)): the
+  collection page draws no copies control on a row filed in a group, in either view, so the reader
+  cannot change what a deck holds from a screen that does not mention the deck.
+  `collection::set_quantity` still permits it and still must — it is the one write the importer,
+  the reconciler and `take_copies`' split all go through. The fence and why it is not in the
+  command are in
+  [collection-folders.md](collection-folders.md#the-copies-control-belongs-to-a-normal-folder-in-both-views).
   **No deck write changes what a deck owns as a side effect any more**, which is the debugging
   property the old run list was trying to give and could not.
 - Deck cards ride **`images::prewarm_keys`' UNION** (one arm, `grid` only, like the collection

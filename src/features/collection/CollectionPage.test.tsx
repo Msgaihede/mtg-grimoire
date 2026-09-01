@@ -423,6 +423,25 @@ const folderSlot = (name: string): HTMLElement =>
   folderCard(name).firstElementChild as HTMLElement;
 
 /**
+ * The **up one level** tile, by the level it leads to.
+ *
+ * One box rather than three, where a drawer needs its `<li>`, the wrapper inside it and its face:
+ * this tile has a single landing — every part of it means "up there" — so both drop targets
+ * register on the `<li>` and there is nothing for a second box to be measured for.
+ * `ParentFolderCard` carries the rest.
+ */
+const upTile = (label: string): HTMLElement =>
+  screen.getByRole("button", { name: `Up one level to ${label}` }).closest("li")!;
+/** Give it somewhere to be — one rect, on the one element both targets are registered on. */
+const standUp = (label: string): HTMLElement => {
+  const tile = upTile(label);
+  for (const element of [tile, tile.querySelector("button")!]) {
+    element.getBoundingClientRect = () => CARD_BOX;
+  }
+  return tile;
+};
+
+/**
  * Two boxes and three landings, because dnd-kit hit-tests by **coordinate** and jsdom measures
  * every rectangle as zero.
  *
@@ -1503,6 +1522,453 @@ describe("CollectionPage", () => {
     expect(screen.queryByText(pricesAsOf(MARKETPLACES.tcgplayer))).toBeNull();
   });
 
+  /* ---------------------------------------------------------------------------------------- *
+   * The wall's own stepper (issue #284)
+   * ---------------------------------------------------------------------------------------- */
+
+  /**
+   * **Quantities were maintainable in the table and nowhere else**, which made the wall the
+   * layout a reader looked at and the table the one they worked in. The stepper rides
+   * `CardGrid`'s `action` strip over the foot of the art — the slot the search's quick-add and
+   * the wishlist's pencil already use.
+   *
+   * Two things about it have no equivalent in the table and are what the cases below are mostly
+   * about. **A tile is a sum where a row is an entry**, so the number the control shows is not
+   * the number the write moves: a press is a *delta* applied to one addressed row, and the floor
+   * is the copies that row cannot reach. And **not every tile gets one**: a stepper is drawn only
+   * where every copy behind the art is at the root or in a drawer the reader made, because a
+   * control that moved a total partly held in a deck's custody would be writing where
+   * `set_entry_folder`'s `ENTRY_IN_A_DECK` exists to stop a drag.
+   */
+  describe("the wall's stepper", () => {
+    /** Card view for every case here — the table draws its own stepper, with its own name, and
+     *  the grid is the only layout this block is about. */
+    beforeEach(() => useAppStore.setState({ collectionView: "grid" }));
+
+    /**
+     * A tile's stepper, by the name it announces: `Copies of <card> (<SET> <number>[, <Finish>])`.
+     *
+     * The finish is in the name **only where the tile wears the mark** — the wall's own rule (a
+     * plain tile draws no finish chip), stated in words instead of in a sheen. It is deliberately
+     * *not* the table's `Quantity of Lightning Bolt (Foil, NM)`: a row names an entry, condition
+     * and all, where a tile names the object the art is a picture of.
+     *
+     * **The printing is matched rather than spelled**, and that is the point of the helper. A name
+     * carrying `LEA 161` would pin this block to the seed's collector numbers, so every case here
+     * would go red the day a fixture moved — for a reason that has nothing to do with the rule
+     * being tested. What the pattern *does* assert is that the segment is there at all, which is
+     * what stops the label collapsing back to the card's own name.
+     */
+    const ESCAPE = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const named = (label: string) => {
+      const finish = /\(([^)]+)\)$/.exec(label)?.[1] ?? null;
+      const card = label.replace(/\s*\([^)]+\)$/, "");
+      return `Copies of ${ESCAPE(card)} \\([^,)]+${finish ? `, ${ESCAPE(finish)}` : ""}\\)`;
+    };
+    const stepper = (direction: "Increase" | "Decrease", label: string) =>
+      screen.getByRole("button", { name: new RegExp(`^${direction} ${named(label)}$`) });
+    const box = (label: string) => screen.getByRole("spinbutton", { name: new RegExp(`^${named(label)}$`) });
+    /** The same lookup where the expected answer is *nothing* — a fenced tile, or one that has
+     *  left the list. `query`, so a miss is `null` rather than a throw. */
+    const noBox = (label: string) =>
+      screen.queryByRole("spinbutton", { name: new RegExp(`^${named(label)}$`) });
+
+    /** Every stepper on the wall, however many tiles drew one. */
+    const steppers = () => screen.queryAllByRole("spinbutton");
+
+    /**
+     * The ordinary tile: one entry behind the art, so the sum the control shows and the number it
+     * writes are the same and the delta is invisible. This is the case that proves the plumbing —
+     * the press reaches `collection_set_quantity` with the **entry's** id rather than the card's.
+     */
+    it("writes a press on a tile through to the entry behind the art", async () => {
+      wrap(<CollectionPage />);
+      await screen.findByAltText("Lightning Bolt");
+
+      await userEvent.click(stepper("Increase", "Lightning Bolt (Foil)"));
+
+      expect(collectionSetQuantity).toHaveBeenCalledWith(7, 3);
+      // And the tile's own figure follows the press rather than the round trip — the badge in the
+      // corner and the box in the strip are one number, so both moved.
+      await waitFor(() => expect(box("Lightning Bolt (Foil)")).toHaveValue(3));
+      expect(screen.getByText("3 in your collection")).toBeInTheDocument();
+    });
+
+    /**
+     * **The floor of a single-entry tile is zero, and zero is a real press.** `min` is arithmetic
+     * — `tile.copies - row.quantity` — rather than a constant, so this is the arm where that
+     * arithmetic lands on the table's own `min={0}`, and the consequence is the same one: since
+     * schema v24 `collection::set_quantity(id, 0)` **deletes**, so the last `−` on a tile is how a
+     * mis-added copy leaves. Mirrors the table's case, which is the shape this is measured
+     * against.
+     */
+    it("floors a single-entry tile at zero, where zero deletes the entry", async () => {
+      collectionSetQuantity.mockResolvedValue({ id: 7, quantity: 0, removed: true });
+      collectionList.mockResolvedValue(page([{ ...BOLT, quantity: 1 }]));
+      wrap(<CollectionPage />);
+      await screen.findByAltText("Lightning Bolt");
+
+      expect(box("Lightning Bolt (Foil)")).toHaveAttribute("min", "0");
+      await userEvent.click(stepper("Decrease", "Lightning Bolt (Foil)"));
+
+      expect(collectionSetQuantity).toHaveBeenCalledWith(7, 0);
+      // The tile goes with the entry — there is nothing left behind that art.
+      await waitFor(() => expect(screen.queryByAltText("Lightning Bolt")).not.toBeInTheDocument());
+      // And on the one command: the delete happened inside `collection_set_quantity`.
+      expect(collectionRemove).not.toHaveBeenCalled();
+    });
+
+    /**
+     * **The number shown and the number written are two different things, and this is the case
+     * that can only pass if the write is a delta.**
+     *
+     * Two entries of one printing in one finish — an NM pair and a played single — are one piece
+     * of art holding three copies, and `OwnedBadge` in the corner already says `3`. So the control
+     * says 3 too, because two numbers six pixels apart disagreeing about one tile is not a state
+     * this wall may draw. The press then moves the **addressed row** by one: `2 - 1`, never
+     * `3 - 1`. A build that sent the control's own next value would write `(7, 2)` here, which is
+     * the reader asking for one fewer copy and getting one more.
+     */
+    it("shows a two-entry tile's sum and writes one press to the first entry behind it", async () => {
+      collectionList.mockResolvedValue(
+        page([
+          { ...BOLT, id: 7, finish: "nonfoil", condition: "NM", quantity: 2 },
+          { ...BOLT, id: 8, finish: "nonfoil", condition: "MP", quantity: 1 },
+        ]),
+      );
+      collectionSetQuantity.mockResolvedValue({ id: 7, quantity: 1, removed: false });
+      wrap(<CollectionPage />);
+      await screen.findByAltText("Lightning Bolt");
+
+      // One tile for the two entries — the finish is the wall's grain and the condition is not.
+      expect(screen.getAllByAltText("Lightning Bolt")).toHaveLength(1);
+      expect(box("Lightning Bolt")).toHaveValue(3);
+
+      await userEvent.click(stepper("Decrease", "Lightning Bolt"));
+
+      expect(collectionSetQuantity).toHaveBeenCalledWith(7, 1);
+    });
+
+    /**
+     * **The floor is the copies this stepper cannot reach** — `tile.copies - row.quantity`, i.e.
+     * everything the rows it does not address are holding. Without it the control would walk a
+     * three-copy tile down to zero while writing negative numbers at one entry, and the backend
+     * would clamp them into a delete of the wrong row.
+     *
+     * The fixture puts the addressed row at **zero copies**, which is a real state rather than a
+     * contrivance: `collection_update` sends eight fields at once and must not delete its own
+     * subject, so a row holding none is a shape the backend still produces and the seeded fixture
+     * in `.storybook/fake/seeds.ts` carries one. There the sum *is* the floor, so `−` has nowhere
+     * to go and says so by greying — while `+` still reaches the row it addresses.
+     */
+    it("stops a tile's minus at the copies its own entry cannot reach", async () => {
+      collectionList.mockResolvedValue(
+        page([
+          { ...BOLT, id: 7, finish: "nonfoil", condition: "NM", quantity: 0 },
+          { ...BOLT, id: 8, finish: "nonfoil", condition: "MP", quantity: 2 },
+        ]),
+      );
+      collectionSetQuantity.mockResolvedValue({ id: 7, quantity: 1, removed: false });
+      wrap(<CollectionPage />);
+      await screen.findByAltText("Lightning Bolt");
+
+      expect(box("Lightning Bolt")).toHaveValue(2);
+      expect(box("Lightning Bolt")).toHaveAttribute("min", "2");
+      expect(stepper("Decrease", "Lightning Bolt")).toBeDisabled();
+
+      await userEvent.click(stepper("Increase", "Lightning Bolt"));
+      expect(collectionSetQuantity).toHaveBeenCalledWith(7, 1);
+    });
+
+    /**
+     * **The walk out of a multi-entry tile, which is a consequence of the two formulas rather
+     * than a case anything special-cases.**
+     *
+     * Three copies as an NM single and a played pair: the floor is 2, so `−` moves the NM row to
+     * zero and `collection::set_quantity` deletes it. The list drops the row on the answer — the
+     * page deliberately does not re-read it — the played row becomes the first behind the art, and
+     * the floor recomputes to 0 against a tile now holding 2. So the same button that had one
+     * press left in it has two more.
+     */
+    it("re-aims at the next entry when the addressed one is stepped away", async () => {
+      collectionList.mockResolvedValue(
+        page([
+          { ...BOLT, id: 7, finish: "nonfoil", condition: "NM", quantity: 1 },
+          { ...BOLT, id: 8, finish: "nonfoil", condition: "MP", quantity: 2 },
+        ]),
+      );
+      collectionSetQuantity.mockResolvedValue({ id: 7, quantity: 0, removed: true });
+      wrap(<CollectionPage />);
+      await screen.findByAltText("Lightning Bolt");
+      expect(box("Lightning Bolt")).toHaveAttribute("min", "2");
+
+      await userEvent.click(stepper("Decrease", "Lightning Bolt"));
+      expect(collectionSetQuantity).toHaveBeenCalledWith(7, 0);
+
+      // The art stays — the tile still stands for the played pair — and the control is now aimed
+      // at them, which is the whole of what the recomputed floor says.
+      await waitFor(() => expect(box("Lightning Bolt")).toHaveValue(2));
+      expect(box("Lightning Bolt")).toHaveAttribute("min", "0");
+      expect(stepper("Decrease", "Lightning Bolt")).not.toBeDisabled();
+    });
+
+    /**
+     * **A tile is a drag source and the whole of it is the handle**, so a press on `−` that
+     * travels five pixels would drag the card and the press would never be delivered as a click —
+     * the reader's counts, lost to a gesture they did not make. `data-no-drag` on the wrapper is
+     * the whole of the fix: `NOT_A_DRAG` (`dnd.ts`) excludes fields by tag but not buttons, and
+     * `cardDraggable` asks `closest()`, so one mark covers both of the stepper's.
+     *
+     * The table's rows carry the identical case, for the identical reason. This presses one place
+     * and drags from another, exactly as a hand does.
+     */
+    it("does not drag a tile when the press landed on its stepper", async () => {
+      const { container } = wrap(<CollectionPage />);
+      await screen.findByAltText("Lightning Bolt");
+      const tile = cardSources(container)[0];
+
+      const held = await holdCopy(tile, { pressOn: stepper("Decrease", "Lightning Bolt (Foil)") });
+      expect(held.started).toBe(false);
+      await held.cancel();
+
+      // And the tile itself still is a source: the guard is a control's press, not a tile's.
+      const again = await holdCopy(tile, {
+        pressOn: screen.getByRole("button", { name: "Lightning Bolt" }),
+      });
+      expect(again.started).toBe(true);
+      await again.cancel();
+    });
+
+    /**
+     * **The root and the reader's own drawers are where a stepper is drawn**, which is the
+     * positive half of the fence — and the half that would go red if the predicate were narrowed
+     * to the root alone.
+     *
+     * It doubles as this block's proof that the accessible name follows the wall's finish mark: a
+     * foil tile says so and a plain one does not, because the plain tile draws no chip either.
+     * Both tiles are one printing, so a name without the finish in it would be two controls a
+     * screen reader could not tell apart.
+     */
+    it("draws a stepper at the root and in a drawer the reader made", async () => {
+      collectionFolderList.mockResolvedValue([BINDER]);
+      collectionList.mockResolvedValue(
+        page([
+          { ...BOLT, id: 7, finish: "foil", folderId: null, quantity: 2 },
+          { ...BOLT, id: 8, finish: "nonfoil", folderId: 3, folderName: "Trade binder", quantity: 1 },
+        ]),
+      );
+      wrap(<CollectionPage />);
+      await screen.findAllByAltText("Lightning Bolt");
+
+      expect(await screen.findByRole("spinbutton", { name: new RegExp(`^${named("Lightning Bolt")}$`) })).toHaveValue(
+        1,
+      );
+      expect(box("Lightning Bolt (Foil)")).toHaveValue(2);
+    });
+
+    /**
+     * **A copy in a deck's group is where the card physically is, and the wall may not move it.**
+     *
+     * Since schema v25 a deck owns what its own group holds, so a stepper there would take a card
+     * out of the deck's custody without touching `deck_cards` — the deck would go on listing a
+     * card whose copies had walked off. `set_entry_folder` fences the *drag* out of a deck group
+     * with `ENTRY_IN_A_DECK`; this is the same boundary reached by the other gesture.
+     *
+     * **The binder row is not scenery.** The fence is fail-closed while the folder census is still
+     * loading, so a bare "no stepper" assertion would pass over a page that had simply not
+     * answered `collection_folder_list` yet — a green test for a defect. A stepper on a tile in
+     * `Trade binder` can only be drawn once that census has arrived, which is what makes the
+     * absence below a claim about the fence rather than about the clock.
+     */
+    it("draws no stepper on a tile the deck's own group holds", async () => {
+      collectionFolderList.mockResolvedValue([BINDER, DECK_GROUP, REMOVED]);
+      collectionList.mockResolvedValue(
+        page([
+          {
+            ...BOLT,
+            id: 7,
+            finish: "nonfoil",
+            folderId: 3,
+            folderName: "Trade binder",
+            quantity: 1,
+          },
+          {
+            ...BOLT,
+            id: 8,
+            cardId: "c2",
+            name: "Counterspell",
+            finish: "nonfoil",
+            folderId: 20,
+            folderName: "Mono-Red Aggro",
+            quantity: 4,
+          },
+        ]),
+      );
+      wrap(<CollectionPage />);
+      await screen.findByAltText("Counterspell");
+
+      // The sentinel: the census has answered, so a filed tile can draw one.
+      expect(await screen.findByRole("spinbutton", { name: new RegExp(`^${named("Lightning Bolt")}$`) })).toHaveValue(
+        1,
+      );
+      expect(noBox("Counterspell")).toBeNull();
+      // And the tile is still a tile — badged with what the deck holds, openable, draggable.
+      expect(screen.getByText("4 in your collection")).toBeInTheDocument();
+    });
+
+    /**
+     * **Every copy behind the art, not any of them** — the clause that decides what a *mixed* tile
+     * does, and the one a build spelling `some` would get wrong.
+     *
+     * Flattened, one printing in one finish can perfectly well stand for a copy in a binder and a
+     * copy in a deck's group at once ({@link CollectionTile.folders} carries that). The control
+     * shows the **sum**, so a stepper here would move a total that is partly the deck's — and the
+     * reader would have no way of knowing which of the three copies the press was about. The
+     * drag takes the opposite rule on purpose (`canFile` is `some`), because a drag ends in a
+     * question and a stepper does not.
+     */
+    it("draws no stepper on a tile whose copies are split between a binder and a deck", async () => {
+      collectionFolderList.mockResolvedValue([BINDER, DECK_GROUP, REMOVED]);
+      collectionList.mockResolvedValue(
+        page([
+          {
+            ...BOLT,
+            id: 7,
+            finish: "nonfoil",
+            folderId: 3,
+            folderName: "Trade binder",
+            quantity: 1,
+          },
+          {
+            ...BOLT,
+            id: 8,
+            finish: "nonfoil",
+            folderId: 20,
+            folderName: "Mono-Red Aggro",
+            quantity: 2,
+          },
+          {
+            ...BOLT,
+            id: 9,
+            cardId: "c2",
+            name: "Counterspell",
+            finish: "nonfoil",
+            folderId: 3,
+            folderName: "Trade binder",
+            quantity: 1,
+          },
+        ]),
+      );
+      wrap(<CollectionPage />);
+      await screen.findByAltText("Counterspell");
+
+      // The sentinel, filed in the very drawer the mixed tile's first row is in: the census has
+      // answered and a binder tile draws a stepper, so the absence below is the mixture's doing.
+      expect(await screen.findByRole("spinbutton", { name: new RegExp(`^${named("Counterspell")}$`) })).toHaveValue(
+        1,
+      );
+      expect(noBox("Lightning Bolt")).toBeNull();
+      // Three copies behind one piece of art, and the badge still says so.
+      expect(screen.getByText("3 in your collection")).toBeInTheDocument();
+    });
+
+    /**
+     * **`Recently removed` is a holding area the app owns, and the same fence covers it** — which
+     * is what makes this case worth writing separately from the deck group's: the rule is
+     * `collection_folders.kind` being `user`, stated positively, rather than a blocklist of deck
+     * groups. A fourth kind added later is fenced by default under that spelling and permitted by
+     * default under the other.
+     *
+     * Driven by **standing in the folder** rather than by a flattened row filed there, because
+     * that is the half with no page-level branch behind it: unflattened, every row on that wall is
+     * in the folder, so the per-tile rule fences the whole wall on its own and the page needs no
+     * second gate on `folderId` to keep in step with it.
+     *
+     * The pinned entry is drawn from the folder census, so pressing it is itself proof the census
+     * arrived — no sentinel is needed here.
+     */
+    it("draws no stepper on the wall inside Recently removed", async () => {
+      useAppStore.setState({ collectionFlattened: false });
+      collectionFolderList.mockResolvedValue([DECK_GROUP, REMOVED]);
+      collectionList.mockResolvedValue(
+        page([
+          {
+            ...BOLT,
+            id: 7,
+            finish: "nonfoil",
+            folderId: 21,
+            folderName: "Recently removed",
+            quantity: 2,
+          },
+        ]),
+      );
+      wrap(<CollectionPage />);
+
+      await userEvent.click(
+        await screen.findByRole("button", { name: /^Recently removed folder/ }),
+      );
+      await waitFor(() => expect(lastQuery().folderId).toBe(21));
+
+      await screen.findByAltText("Lightning Bolt");
+      expect(steppers()).toHaveLength(0);
+    });
+  });
+
+  /**
+   * **The table's half of the same fence — and this is the *wiring* test rather than the fence's
+   * own.**
+   *
+   * `CollectionTable` owns the cell and has its own cases for what a blocked row draws; what
+   * cannot be proved from inside that component is that anything ever hands it the predicate.
+   * This repo has shipped a fix that was fully tested and unreachable, with the whole suite
+   * green, for exactly that reason — the question "what calls this?" belongs in the plan and not
+   * only in the diff. So the claim here is the page's: the same `readersOwnLevel` that decides
+   * which tiles draw a stepper is what reaches the table's rows, so the two layouts of one list
+   * cannot disagree about which copies are editable.
+   */
+  describe("the table's stepper, fenced by the same predicate", () => {
+    it("hands the table the page's fence, so a row in a deck's group cannot be stepped", async () => {
+      collectionFolderList.mockResolvedValue([BINDER, DECK_GROUP, REMOVED]);
+      collectionList.mockResolvedValue(
+        page([
+          { ...BOLT, id: 7, folderId: null, quantity: 2 },
+          {
+            ...BOLT,
+            id: 8,
+            cardId: "c2",
+            name: "Counterspell",
+            finish: "nonfoil",
+            condition: "NM",
+            folderId: 20,
+            folderName: "Mono-Red Aggro",
+            quantity: 4,
+          },
+        ]),
+      );
+      wrap(<CollectionPage />);
+      await screen.findByText("Counterspell");
+
+      // The row the deck physically holds: no control, and a sentence saying where the way out
+      // is. The words are the page's — `CollectionTable` prints what it is given.
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("spinbutton", { name: "Quantity of Counterspell (Nonfoil, NM)" }),
+        ).toBeNull(),
+      );
+      expect(
+        screen.getByText(
+          "In Mono-Red Aggro. Cut the card from the deck to change how many you hold.",
+        ),
+      ).toBeInTheDocument();
+
+      // And the unfiled row beside it still is maintained here, which is what keeps the absence
+      // above a claim about the fence rather than about the table having lost its stepper.
+      expect(
+        screen.getByRole("spinbutton", { name: "Quantity of Lightning Bolt (Foil, NM)" }),
+      ).toHaveValue(2);
+    });
+  });
+
   /**
    * **Task 11's first export entry point outside the deck editor.** The list here is a
    * `useInfiniteQuery` at 100 rows a page, so what is in memory is a scroll position rather
@@ -2277,6 +2743,97 @@ describe("the collection's folders", () => {
     await user.click(screen.getByRole("button", { name: "Create folder" }));
 
     await waitFor(() => expect(collectionFolderCreate).toHaveBeenCalledWith(null, "Trade binder"));
+  });
+
+  /**
+   * **The way back out at the size of the things it stands among** — issue #283. The breadcrumb
+   * above could always take a copy, and a segment is one word of `text-sm` in a bar the pointer
+   * has already left; a folder card only ever takes a copy deeper.
+   *
+   * The tile names its **destination**, because that is what a reader has to read before letting
+   * go, and it is drawn only where there is somewhere to go: at the root there is not.
+   *
+   * **Two levels deep on purpose.** A tile that always went to the root would pass a one-level
+   * test and strand anyone who had drilled twice — which is why the destination is read off the
+   * trail rather than off the open folder's own `parentId`.
+   */
+  it("names the level above, and draws nothing at the root", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, FOILS]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await screen.findByRole("button", { name: /^Trade binder folder/ });
+    expect(screen.queryByRole("button", { name: /^Up one level/ })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /^Trade binder folder/ }));
+    expect(
+      await screen.findByRole("button", { name: "Up one level to Collection" }),
+    ).toBeInTheDocument();
+
+    await user.click(await screen.findByRole("button", { name: /^Foils folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(9));
+    expect(
+      await screen.findByRole("button", { name: "Up one level to Trade binder" }),
+    ).toBeInTheDocument();
+  });
+
+  /** Pressed, it is the breadcrumb's parent segment — one level, not the root. */
+  it("walks up one level when the tile is pressed", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, FOILS]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await user.click(await screen.findByRole("button", { name: /^Trade binder folder/ }));
+    await user.click(await screen.findByRole("button", { name: /^Foils folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(9));
+
+    await user.click(screen.getByRole("button", { name: "Up one level to Trade binder" }));
+
+    await waitFor(() => expect(lastQuery().folderId).toBe(3));
+  });
+
+  /** And the drop the tile exists for: a copy carried out of the drawer it is in, onto the
+   *  drawer-sized target that says where it is going. */
+  it("files a copy up a level when it is dropped on the tile", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, FOILS]);
+    collectionList.mockResolvedValue(page([{ ...BOLT, folderId: 9, folderName: "Foils" }]));
+    const user = userEvent.setup();
+    const { container } = wrap(<CollectionPage />);
+    await user.click(await screen.findByRole("button", { name: /^Trade binder folder/ }));
+    await user.click(await screen.findByRole("button", { name: /^Foils folder/ }));
+    await screen.findByText("Lightning Bolt");
+
+    const tile = standUp("Trade binder");
+    const row = cardSources(container)[0];
+    const held = await holdCopy(row, { pressOn: screen.getByText("Lightning Bolt") });
+    await held.over(tile);
+    await held.drop();
+
+    await waitFor(() => expect(collectionSetFolder).toHaveBeenCalledWith(7, 3));
+  });
+
+  /**
+   * **Inside `Recently removed` the tile is the one target the wall could not draw.** That level
+   * substitutes the reader's own top level for its own children (#209), so every drawer on screen
+   * is a place to file a copy *into* — and the root itself, which is where a copy that belongs in
+   * no binder goes, was reachable only from the breadcrumb.
+   */
+  it("files a copy out of Recently removed and back to the root", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, DECK_GROUP, REMOVED]);
+    collectionList.mockResolvedValue(
+      page([{ ...BOLT, folderId: 21, folderName: "Recently removed" }]),
+    );
+    const user = userEvent.setup();
+    const { container } = wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+    await user.click(await screen.findByRole("button", { name: /^Recently removed folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(21));
+
+    const tile = standUp("Collection");
+    const row = cardSources(container)[0];
+    const held = await holdCopy(row, { pressOn: screen.getByText("Lightning Bolt") });
+    await held.over(tile);
+    await held.drop();
+
+    await waitFor(() => expect(collectionSetFolder).toHaveBeenCalledWith(7, null));
   });
 
   /**
@@ -3520,6 +4077,56 @@ describe("rearranging the collection's cabinet", () => {
     await held.drop();
 
     await waitFor(() => expect(collectionSetFolder).toHaveBeenCalledWith(7, 3));
+    expect(collectionFolderReorder).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The other half of issue #283, and the half a folder card cannot do either.** A drawer could
+   * be pushed deeper by a drag from the day this wall learnt to reorder, and the only route back
+   * up was `Move to folder…` on its own `⋯`.
+   *
+   * `inside` is what the tile means, so the arriving drawer goes **last** in the level above —
+   * `Trade binder` and `Sealed` in the order the tree already draws them, then `Foils`. There is
+   * no second position in the gesture for the reader to have meant: the tile is one landing wide,
+   * which is exactly the objection that keeps a breadcrumb segment from taking a folder at all.
+   */
+  it("moves a drawer up a level when it is dropped on the up tile", async () => {
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await wall();
+    await user.click(screen.getByRole("button", { name: /^Trade binder folder/ }));
+    await screen.findByRole("button", { name: /^Foils folder/ });
+    standUp("Collection");
+
+    const held = await holdCard("Foils");
+    await held.over(upTile("Collection"), AT_MIDDLE);
+    await held.drop();
+
+    await waitFor(() => expect(collectionFolderReorder).toHaveBeenCalledWith(null, [3, 4, 9]));
+  });
+
+  /**
+   * **A drawer already in the level above draws no ring and writes nothing**, which is the one
+   * refusal this page can actually reach: inside `Recently removed` the wall is the reader's own
+   * *top level* rather than that folder's children (#209), so every card on it is already at the
+   * destination the tile names. Without the clause each of them would offer a mark that shuffled
+   * it to the end of the level it is in — a write to arrive at a different list from the one the
+   * reader was shown.
+   */
+  it("refuses a drawer that is already in the level above", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, SEALED, REMOVED]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await wall();
+    await user.click(screen.getByRole("button", { name: /^Recently removed folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(21));
+    standUp("Collection");
+
+    const held = await holdCard("Trade binder");
+    expect(upTile("Collection").classList.contains("ring-2")).toBe(false);
+    await held.over(upTile("Collection"), AT_MIDDLE);
+    await held.drop();
+
     expect(collectionFolderReorder).not.toHaveBeenCalled();
   });
 });

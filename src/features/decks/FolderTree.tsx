@@ -84,6 +84,17 @@ export type FolderNaming =
 export const FOLDER_ROW_ATTR = "data-folder-id";
 
 /**
+ * What the gallery calls the top level — the row this tree draws above every folder, and the
+ * destination `null` names everywhere else.
+ *
+ * **Exported because three surfaces say it and one of them is new.** The tree's own root row, the
+ * wall's heading, and — since issue #283 — the wall's up-one-level tile, which names the level it
+ * would move a deck *to*. A tile that said "Top level" over a tree row saying "All decks" would be
+ * two names for the destination of one drag, and the reader is looking at both at once.
+ */
+export const ROOT_LABEL = "All decks";
+
+/**
  * A folder that can be picked up — a row here, or a card on the wall.
  *
  * **One hook for the gallery's two drawings of a folder**, which is why it is exported rather
@@ -298,7 +309,7 @@ export function FolderTree({
             the top level") is already the first folder's own leading edge, which is the same drop
             spelled once. */}
         <FolderRow
-          label="All decks"
+          label={ROOT_LABEL}
           count={totalDecks}
           depth={0}
           selected={selectedId === null}

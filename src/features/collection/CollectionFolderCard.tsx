@@ -42,6 +42,7 @@ import {
 } from "react";
 import { Folder, MoreHorizontal } from "lucide-react";
 import { FolderDropLine } from "@/components/FolderDropLine";
+import { ParentFolderCard } from "@/components/ParentFolderCard";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { count } from "@/lib/counts";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
@@ -308,6 +309,70 @@ export function CollectionFolderCard({
           why the card's box is `relative`. */}
       <FolderDropLine edge={edge} axis="horizontal" />
     </li>
+  );
+}
+
+/**
+ * The collection's **up one level** tile — the level above this one, drawn as a drawer among the
+ * drawers so a copy can be dropped back out of a binder as easily as it was dropped into one.
+ * Issue #283.
+ *
+ * `ParentFolderCard` is the whole of what it looks like; what is here is the pair of drop targets,
+ * which is the part that is this cabinet's own. Both register on the **same `<li>`** — the tile
+ * has one landing, so it needs none of the geometry a folder card's second box exists for, and
+ * `readCollectionDrop` and `readFolderDrag` are disjoint, so `accepts()` keeps the two apart.
+ *
+ * **The folder half ignores the edge on purpose.** `useFolderDropTarget` divides a target into
+ * before / inside / after because a folder card offers three landings; this tile offers one, and
+ * the wall is not the level the dragged folder would be joining, so "beside this tile" is not a
+ * position that exists. Every part of it means *up there*.
+ *
+ * **It is the one drop target on this page whose destination can be an app-owned level, and it
+ * never is.** The tile is drawn from the reader's own trail, and nothing nests inside a deck
+ * group or `Recently removed` — so the level above is always either the root or a folder the
+ * reader made. The page asks `canMoveCopy`'s question anyway, which is the fence rather than the
+ * affordance and stays local for the day something is nested there.
+ */
+export function CollectionParentFolderCard({
+  label,
+  onOpen,
+  canDrop,
+  onDropCard,
+  canDropFolder,
+  onDropFolder,
+}: {
+  /** The parent folder's name, or `Collection` at the root — the breadcrumb's own word for the
+   *  same place, so the tile and the trail above it cannot name one destination two ways. */
+  label: string;
+  onOpen: () => void;
+  /** Whether the level above would take what is in the air — either shape of collection drop, a
+   *  table row's single entry or a wall tile's whole shelf of copies, exactly as a folder card
+   *  takes them and with the same page answering. */
+  canDrop: (drop: CollectionDrop) => boolean;
+  onDropCard: (drop: CollectionDrop) => void;
+  /** The other drag: a **folder** moved up out of the level on screen, landing last in the level
+   *  above. Answered by the page, which is what holds the cabinet the order comes from. */
+  canDropFolder: (drag: FolderDrag) => boolean;
+  onDropFolder: (drag: FolderDrag) => void;
+}) {
+  const ref = useRef<HTMLLIElement>(null);
+  const { armed, over } = useCollectionDropTarget({ ref, canDrop, onDrop: onDropCard });
+  const { armed: folderArmed, edge } = useFolderDropTarget({
+    ref,
+    scope: "collection",
+    axis: "horizontal",
+    canDrop: (drag) => canDropFolder(drag),
+    onDrop: (drag) => onDropFolder(drag),
+  });
+
+  return (
+    <ParentFolderCard
+      cardRef={ref}
+      label={label}
+      armed={armed || folderArmed}
+      over={over || edge !== null}
+      onOpen={onOpen}
+    />
   );
 }
 

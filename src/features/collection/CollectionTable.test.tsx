@@ -1,6 +1,7 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { TooltipContext, type TooltipApi } from "@/components/tooltip/useTooltip";
 import type { CollectionRow } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { CollectionTable } from "./CollectionTable";
@@ -56,11 +57,48 @@ const ROW: CollectionRow = {
   legalities: null,
 };
 
+/**
+ * The same entry filed in a **deck's group** — the folder the app owns on a deck's behalf since
+ * schema v25, and the first of the two places the quantity may not be stepped.
+ *
+ * A different card and a different count from {@link ROW} on purpose: the fence has to be visible
+ * discriminating between two rows of one list, and two rows sharing a name would collide in every
+ * `getByRole` name query on the page.
+ */
+const DECK_FOLDER_ID = 7;
+const IN_A_DECK: CollectionRow = {
+  ...ROW,
+  id: 43,
+  cardId: "c2",
+  name: "Counterspell",
+  folderId: DECK_FOLDER_ID,
+  folderName: "Meren, the Slavemaster",
+  quantity: 3,
+};
+
+/**
+ * The page's own sentence for a deck's group, written out here rather than imported from the
+ * component — the table's contract is that it prints *whatever the caller returned*, so a test
+ * that read back the string the implementation prints would only prove one variable reached
+ * itself. Its grammar is `PickCopies`' `blockedReason`: where you are, then what to do instead.
+ */
+const IN_A_DECK_REASON = `In ${IN_A_DECK.folderName}. Cut the card from the deck to change how many you hold.`;
+
+/** Blocked exactly where the page blocks — a copy filed in a deck's group, and nowhere else. */
+const blockDeckGroup = (row: CollectionRow) =>
+  row.folderId === DECK_FOLDER_ID ? IN_A_DECK_REASON : null;
+
 function renderTable(
   rows: CollectionRow[],
-  handlers: { onSetQuantity?: () => void; onRemove?: () => void } = {},
+  handlers: {
+    onSetQuantity?: () => void;
+    onRemove?: () => void;
+    quantityBlocked?: (row: CollectionRow) => string | null;
+    /** Mounted only where a test is about the hover panel; everything else takes the no-op API. */
+    tooltip?: TooltipApi;
+  } = {},
 ) {
-  return render(
+  const table = (
     <CollectionTable
       rows={rows}
       total={rows.length}
@@ -70,8 +108,16 @@ function renderTable(
       onNeedNextPage={vi.fn()}
       onSetQuantity={handlers.onSetQuantity ?? vi.fn()}
       onRemove={handlers.onRemove ?? vi.fn()}
+      quantityBlocked={handlers.quantityBlocked}
       marketplace={MARKETPLACES.tcgplayer}
-    />,
+    />
+  );
+  return render(
+    handlers.tooltip ? (
+      <TooltipContext.Provider value={handlers.tooltip}>{table}</TooltipContext.Provider>
+    ) : (
+      table
+    ),
   );
 }
 
@@ -94,6 +140,99 @@ describe("CollectionTable", () => {
       screen.getByRole("button", { name: "Increase Quantity of Lightning Bolt (Nonfoil, NM)" }),
     );
     expect(onSetQuantity).toHaveBeenCalledWith(ROW, 6);
+  });
+
+  /**
+   * **The quantity control belongs to a normal folder and to nothing else** (issue #284). A row
+   * filed in a deck's group is what the deck physically holds, so a stepper there would change the
+   * deck without `deck_cards` being touched — and `collection::set_quantity` has no folder fence
+   * of its own to catch it afterwards, which makes this the guard rather than a second opinion.
+   *
+   * Asserted as *no control at all* rather than as a greyed one, because those are different
+   * claims: a `disabled` stepper is still a `spinbutton` in the accessibility tree and would pass
+   * a "the stepper is gone" test written any other way.
+   */
+  it("draws a blocked row's copies as plain text instead of a stepper", () => {
+    renderTable([IN_A_DECK], { quantityBlocked: blockDeckGroup });
+
+    expect(screen.queryByRole("spinbutton")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Increase/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Decrease/ })).not.toBeInTheDocument();
+    // The count is still on the row: the reader is being told what they hold, not that the
+    // number has become unavailable.
+    expect(screen.getByText("3")).toBeInTheDocument();
+  });
+
+  /**
+   * **The reason reaches a screen reader as text**, which is the `Finish · condition` cell's route
+   * rather than the Value header's: that header can put its sentence in the *column's* name
+   * because it is true of every row, and this one is about one row. The tooltip cannot carry it
+   * alone — `aria-describedby` is wired only while the panel is open, and the panel opens on a
+   * pointer or on the anchor taking focus, which a `<span>` in a row whose tab stop is the row
+   * never does.
+   */
+  it("puts a blocked row's reason in the accessibility tree beside the number", () => {
+    renderTable([IN_A_DECK], { quantityBlocked: blockDeckGroup });
+
+    const reason = screen.getByText(IN_A_DECK_REASON);
+    expect(reason).toHaveClass("sr-only");
+  });
+
+  /**
+   * The same sentence for the pointer, through `useTooltip()`'s spread — never a `title`, which
+   * `src/CLAUDE.md` forbids outright and which no test in this file would otherwise notice.
+   *
+   * `describes: false` is asserted with it for the `<abbr>` cell's reason one column over: the
+   * `sr-only` twin already puts the sentence in the accessibility tree, so a panel that also wired
+   * `aria-describedby` would have it announced twice.
+   */
+  it("binds a blocked row's reason to the number as a tooltip, not a title", () => {
+    const tooltip: TooltipApi = { enter: vi.fn(), focus: vi.fn(), leave: vi.fn() };
+    renderTable([IN_A_DECK], { quantityBlocked: blockDeckGroup, tooltip });
+
+    const number = screen.getByText("3");
+    expect(number).not.toHaveAttribute("title");
+
+    fireEvent.pointerEnter(number);
+    expect(tooltip.enter).toHaveBeenCalledWith(
+      number,
+      IN_A_DECK_REASON,
+      expect.objectContaining({ describes: false }),
+    );
+  });
+
+  /**
+   * **A fence between two rows of one list, not a table drawn one way throughout.** Both rows are
+   * on screen for this: the predicate is asked per row, and a mount that blocked the whole column
+   * the moment one row was blocked would pass any test that rendered the blocked row alone.
+   */
+  it("leaves a row the predicate clears alone", async () => {
+    const onSetQuantity = vi.fn();
+    const user = userEvent.setup();
+    renderTable([ROW, IN_A_DECK], { onSetQuantity, quantityBlocked: blockDeckGroup });
+
+    expect(screen.getByText(IN_A_DECK_REASON)).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: "Increase Quantity of Lightning Bolt (Nonfoil, NM)" }),
+    );
+    expect(onSetQuantity).toHaveBeenCalledWith(ROW, 6);
+    expect(onSetQuantity).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * **The opt-in guarantee.** No predicate is every story, every read-only mount and every
+   * consumer of this table before the folders existed — so the table invents no fence of its own,
+   * not even for the row that is sitting in a deck's group and would be blocked the moment a
+   * caller asked.
+   */
+  it("steps every row when no predicate is passed", () => {
+    renderTable([ROW, IN_A_DECK]);
+
+    expect(screen.getAllByRole("spinbutton")).toHaveLength(2);
+    expect(
+      screen.getByRole("spinbutton", { name: "Quantity of Counterspell (Nonfoil, NM)" }),
+    ).toBeInTheDocument();
   });
 
   /**
