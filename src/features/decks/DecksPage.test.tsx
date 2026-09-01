@@ -2199,13 +2199,91 @@ describe("the folder row's menu", () => {
     expect(screen.getByLabelText("New folder name")).toBeInTheDocument();
   });
 
-  /** …and the heading's own "New deck" still makes one at the top level, which is what makes the
-   *  assertion above about the *folder* rather than about the dialog's default. */
-  it("still creates at the top level from the heading's New deck", async () => {
+  /**
+   * …and at the root the heading's own "New deck" still makes one at the top level — which is
+   * what keeps the assertion above about the *row the menu was opened on* rather than about the
+   * dialog's default.
+   *
+   * It used to be the whole claim ("the heading's button always means the top level"). It is the
+   * root **case** of a wider rule since 2026-09-01 — the button means the drawer the wall is
+   * standing in — and at "All decks" that drawer is the top level. See the two below.
+   */
+  it("still creates at the top level from the heading's New deck at the root", async () => {
     withFolders();
 
     wrap(<DecksPage />);
     await userEvent.click(await screen.findByRole("button", { name: "New deck" }));
+    await userEvent.type(await screen.findByLabelText("Name"), "Aristocrats");
+
+    expect(screen.getByRole("button", { name: "Folder" })).toHaveTextContent("Top level");
+  });
+
+  /**
+   * **The heading's "New deck" means the drawer it is drawn in the heading row of**
+   * ([#332](https://github.com/Msgaihede/mtg-grimoire/issues/332)).
+   *
+   * The button sits under the folder's own name and over a wall showing that folder's decks, so
+   * a press there is a reader filing a deck where they already are — and every one of those
+   * decks had to be moved out of the top level afterwards.
+   *
+   * Both halves are the claim, because the dialog can only seed its draft once: the select opens
+   * on the folder, **and** the write goes there. A wiring that reached one and not the other is
+   * exactly what the folder menu's own case above was written for.
+   */
+  it("creates in the folder the wall is standing in, from the heading's New deck", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Commander, 2 decks" }));
+    expect(screen.getByRole("heading", { name: "Commander" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "New deck" }));
+    await userEvent.type(await screen.findByLabelText("Name"), "Aristocrats");
+    expect(screen.getByRole("button", { name: "Folder" })).toHaveTextContent("Commander");
+    await userEvent.click(screen.getByRole("button", { name: "Create deck" }));
+
+    await waitFor(() =>
+      expect(deckCreate).toHaveBeenCalledWith({
+        name: "Aristocrats",
+        formatKey: "commander",
+        gameKey: "any",
+        theoryEnabled: false,
+        folderId: 1,
+      }),
+    );
+  });
+
+  /**
+   * **The default is read off the *resolved* node, so a folder that has gone under the reader
+   * means the top level rather than a number naming nothing.**
+   *
+   * `selectedFolderId` still holds the deleted id — this screen deliberately corrects a stale id
+   * by *deriving* it away rather than writing it back, so there is no render where the heading
+   * says a folder that is not there — and the wall is therefore already at the root. Reading the
+   * raw id here would file the deck into a drawer no tree holds, under a wall saying "All decks".
+   *
+   * **Measured against that version rather than argued**: seeded with the stale id the Folder
+   * control draws `—`, the select's answer for a value no option carries. So the failure is not
+   * merely a wrong folder, it is a form with no readable answer in it — which is what makes this
+   * worth a case of its own rather than a note on the one above.
+   */
+  it("falls back to the top level once the open folder has gone from the tree", async () => {
+    withFolders();
+
+    const { client } = wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Legends, 1 deck" }));
+    expect(screen.getByRole("heading", { name: "Legends" })).toBeInTheDocument();
+
+    // Another surface deleted it, exactly as the Escape case above stages it.
+    deckFolderList.mockResolvedValue([EDH]);
+    await act(async () => {
+      await client.refetchQueries({ queryKey: ["decks", "folders"] });
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "All decks" })).toBeInTheDocument(),
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "New deck" }));
     await userEvent.type(await screen.findByLabelText("Name"), "Aristocrats");
 
     expect(screen.getByRole("button", { name: "Folder" })).toHaveTextContent("Top level");

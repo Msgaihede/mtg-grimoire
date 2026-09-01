@@ -346,6 +346,54 @@ export const Folders: Story = {
 };
 
 /**
+ * **A deck made in the drawer the reader is standing in**
+ * ([#332](https://github.com/Msgaihede/mtg-grimoire/issues/332)).
+ *
+ * `Ideas` is the seed's empty root folder, which is the whole point of opening this one: a reader
+ * standing in an empty drawer, pressing the control drawn under that drawer's own name, over a
+ * wall showing that drawer's decks. Until 2026-09-01 the deck was made at the **top level** and
+ * the reader had to move it afterwards — the button promising nothing about where, on the
+ * argument that only the folder row's "New deck here" promised anything. That is true about the
+ * words and wrong about the act.
+ *
+ * **A default, not a destination**, which is why the Folder select is asserted rather than
+ * assumed away: it opens on `Ideas` and still offers every other drawer, so a reader browsing
+ * one folder and building for another is one press from saying so. {@link NewDeck} is the same
+ * dialog opened at the root, where the drawer *is* the top level.
+ */
+export const NewDeckInFolder: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const tree = await canvas.findByRole("navigation", { name: "Folders" });
+    await userEvent.click(within(tree).getByRole("button", { name: /^Ideas/ }));
+    await expect(canvas.getByRole("heading", { name: "Ideas" })).toBeInTheDocument();
+    // An empty drawer says so, which is the state this story is standing in.
+    await expect(canvas.getByText(/^Nothing is filed in Ideas yet/)).toBeInTheDocument();
+
+    await userEvent.click(canvas.getByRole("button", { name: "New deck" }));
+    const form = canvas.getByRole("dialog", { name: "New deck" });
+    // `waitFor` for {@link NewDeck}'s reason — the folder list is a read, so the select cannot
+    // name a drawer before it lands, and `toHaveTextContent` does not retry on its own.
+    await waitFor(async () => {
+      await expect(within(form).getByRole("button", { name: "Folder" })).toHaveTextContent(
+        "Ideas",
+      );
+    });
+
+    await userEvent.type(within(form).getByLabelText("Name"), "Sunday Cube");
+    await userEvent.click(within(form).getByRole("button", { name: "Create deck" }));
+
+    // The other end of the default, and the half a select cannot show: the deck the write
+    // answered with is filed **here**, so it is on the wall the reader was already looking at
+    // rather than at the root behind them — and the drawer has stopped saying it is empty.
+    await waitFor(async () => {
+      await expect(canvas.getByText("Sunday Cube")).toBeInTheDocument();
+    });
+    await expect(canvas.queryByText(/^Nothing is filed in Ideas yet/)).toBeNull();
+  },
+};
+
+/**
  * The folder list refused — **and every deck still on the wall.**
  *
  * The state worth pinning: a deck whose `folderId` names a folder this screen does not have is

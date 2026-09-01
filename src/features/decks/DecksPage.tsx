@@ -456,12 +456,27 @@ export function DecksPage() {
     // A refusal from the last attempt is not news about this one.
     decks.create.reset();
     openerRef.current = newDeckRef.current;
-    // The top level, and deliberately not the drawer the reader happens to be standing in:
-    // this control says "New deck" and promises nothing about where, while the folder row's
-    // menu says "New deck here" and promises exactly that. Changing this one would move a
-    // behaviour nobody asked to have moved.
-    setPanel({ kind: "createDeck", folderId: null });
-  }, [decks.create]);
+    // **The drawer the reader is standing in, and it was the top level whatever was open until
+    // 2026-09-01** ([#332](https://github.com/Msgaihede/mtg-grimoire/issues/332)). The rule this
+    // reverses read: the control says "New deck" and promises nothing about where, while the
+    // folder row's menu says "New deck here" and promises exactly that — true about the *words*
+    // and wrong about the *act*. This button is drawn in the heading row of the folder whose
+    // name is set in type beside it, over a wall showing that folder's decks and nothing else,
+    // so a press there is a reader filing a deck where they already are. Making it at the root
+    // meant every such deck had to be moved afterwards, which is the thing that was reported.
+    //
+    // **A default and not a destination**, which is what keeps the button's old promise intact
+    // rather than trading it away: the form's own Folder select opens on this and offers every
+    // other drawer, so a reader browsing one folder and building for another says so in one
+    // press. The folder row's menu is untouched and still means exactly what it says.
+    //
+    // **`folderView` rather than `selectedFolderId`**, for {@link upOneFolder}'s reason: a
+    // folder deleted by another surface leaves that number naming nothing, and this screen's
+    // answer to a stale id is to *derive* it away rather than write it back. `folderView` is
+    // that resolved answer, so the deck is made where the reader can **see** they are — the top
+    // level in that case, which is where the wall already put them.
+    setPanel({ kind: "createDeck", folderId: folderView });
+  }, [decks.create, folderView]);
 
   // `null` is a real answer for the opener and not a missing argument: a layer raised from a
   // context menu has no trigger of its own on screen, and the menu hands the caret back to
@@ -1090,9 +1105,11 @@ export function DecksPage() {
                 // because the value is already real by the time the button is pressed.
                 defaultFormatKey={newDeckFormatKey}
                 // Where the deck lands, which is a fact about *which control opened this*: the
-                // button beside it means the top level, a folder row's "New deck here" means
-                // that folder. Read off the open `Panel` for the same reason the format is read
-                // off state — the dialog seeds its draft at mount and never again.
+                // button beside it means the drawer the wall is standing in, a folder row's
+                // "New deck here" means that row's folder. Read off the open `Panel` for the
+                // same reason the format is read off state — the dialog seeds its draft at
+                // mount and never again, so the answer has to be settled by the press rather
+                // than recomputed under a dialog the reader is already typing into.
                 defaultFolderId={panel?.kind === "createDeck" ? panel.folderId : null}
                 open={panel?.kind === "createDeck"}
                 onOpen={openCreate}

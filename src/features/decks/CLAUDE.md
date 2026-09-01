@@ -304,6 +304,32 @@ reader to configure the deck they had just made; it now asks all of them.
   destination asks nothing and passes nothing. The query key is
   `["decks", "lastFormat"]`, under the root every `useDecks` mutation invalidates, so a create
   refreshes it for free.
+- **A new deck starts in the drawer the reader is standing in, and that reverses "the gallery's
+  button always means the top level"** (2026-09-01,
+  [#332](https://github.com/Msgaihede/mtg-grimoire/issues/332)). `CreateDeckDialog` has taken a
+  `defaultFolderId` since the folder row's menu grew `New deck here`; what changed is that
+  `DecksPage`'s own `openCreate` answers it too, with `folderView` rather than the `null` it
+  passed whatever was open. The rule it replaces was written down and was wrong about the act
+  rather than the words: the button is drawn in the heading row of the folder whose name is set
+  in type beside it, over a wall showing that folder's decks, so a press there is a reader filing
+  a deck where they already are — and every one of those decks had to be moved afterwards.
+  Three things hold it:
+  - **It is a *default* and not a destination**, which is the whole of what keeps the button's
+    old promise: the form's Folder select opens on it and still offers every drawer, so a reader
+    browsing one folder and building for another says so in one press. That is also why nothing
+    about the prop had to change — it was documented as a default from the day it was added — and
+    why the folder row's menu is untouched and still means exactly what it says.
+  - **`folderView`, never `selectedFolderId`.** A folder deleted by another surface leaves that
+    number naming nothing, and this screen corrects a stale id by *deriving* it away rather than
+    writing it back; `folderView` is that resolved answer, so a vanished drawer means the top
+    level, which is where the wall already is. `upOneFolder`'s reason, one control over.
+  - **The press settles it, not the dialog.** `openCreate` writes the folder into the `Panel`,
+    which `NewDeck` reads back — the format's arrangement, for the format's reason: the draft is
+    seeded in a mount-only initializer, so a value recomputed under a dialog the reader is
+    already typing into could not be honoured anyway.
+
+  **The import dialog's new-deck destination is deliberately not part of this**: it draws no
+  folder control at all and `newDeck.ts` sends no `folderId`, so there was nothing to default.
 - **The gallery's no-deck state is the two words `No decks`.** It was a paragraph explaining what
   a deck is and what the app would do with one; the affordance was never the words — `New deck`
   sits in the heading row above, where it is on every other visit. No `max-w-prose`: that width
