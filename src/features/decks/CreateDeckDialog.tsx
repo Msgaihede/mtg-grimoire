@@ -96,8 +96,7 @@ export interface CreateDeckDialogProps {
    */
   defaultFormatKey: string;
   /**
-   * The folder the draft starts in — `null` for the top level, which is where a deck made from
-   * the gallery's own "New deck" has always started.
+   * The folder the draft starts in — `null` for the top level.
    *
    * **It exists because a folder row's menu offers "New deck here", and "here" has to be true.**
    * The draft used to seed `folderId: null` whatever opened it, so that row would have made the
@@ -105,6 +104,12 @@ export interface CreateDeckDialogProps {
    * the same mount-only initializer and for the same reason: this is a *default*, not a
    * constraint, and the form's own Folder select is right there for a reader who changes their
    * mind.
+   *
+   * **Since 2026-09-01 the gallery's own "New deck" passes a folder too**
+   * ([#332](https://github.com/Msgaihede/mtg-grimoire/issues/332)) — the drawer the wall is open
+   * on, where it passed `null` whatever was open. So this stopped being the menu row's private
+   * argument and became what every host answers; nothing about the prop changed, which is the
+   * point of it having been a *default* from the day it was added.
    *
    * Optional, unlike the format, and the asymmetry is deliberate: the format is a question every
    * deck must answer and Casual is a wrong answer to have arrived at by accident, while the top
@@ -280,9 +285,11 @@ function CreateDeckBody({
   const [value, setValue] = useState<DeckSettingsValue>(() => ({
     ...BLANK,
     formatKey: defaultFormatKey,
-    // The same mount-only seed, for a folder row's "New deck here" — see {@link
-    // CreateDeckDialogProps.defaultFolderId}. `null` is the top level and is what every other
-    // way into this dialog passes.
+    // The same mount-only seed — see {@link CreateDeckDialogProps.defaultFolderId}. Both ways
+    // into this dialog answer it now: a folder row's "New deck here" with that row's folder,
+    // the gallery's button with the drawer the wall is open on. `null` is the top level, which
+    // is what the second of those passes at the root and what a host with no folder in mind
+    // gets by default.
     folderId: defaultFolderId,
   }));
   /**
