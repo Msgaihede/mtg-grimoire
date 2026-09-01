@@ -20,7 +20,7 @@ use serde_json::Value;
 /// sentence that stood here said **154** while the census said 156, having rotted twice with
 /// nothing going red — a prose-only edit routes to neither CI job. The first four here are
 /// the browse, which is the read path spec 8 requires measured in wasm rather than guessed;
-/// the thirteen after them are the Decks destination's reads and the thirty-three after those
+/// the thirteen after them are the Decks destination's reads and the thirty-four after those
 /// are its writes - **the whole deck cluster**, with no exception left to name: it read
 /// "except `deck_set_cover_image`" until custom deck covers went on 2026-08-31. The rest arrive
 /// with their modules - see `lib.rs`'s module map for which are still desktop-only.
@@ -67,6 +67,7 @@ pub const COMMANDS: &[&str] = &[
     "deck_add_card",
     "deck_set_card_quantity",
     "deck_category_clear",
+    "deck_clear",
     "deck_move_card",
     "deck_swap_printing",
     "deck_set_card_finish",
@@ -577,6 +578,18 @@ pub fn call(
                 command,
                 crate::sync::with_write(state, |c| {
                     crate::deck::clear_category(c, deck_id, category_id, &variant)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_clear" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let variant: String = field(command, args, "variant")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::deck::clear_variant(c, deck_id, &variant)
                 })
                 .map_err(RouteError::Failed)?,
             )
@@ -2392,7 +2405,7 @@ mod tests {
         }
         assert_eq!(
             COMMANDS.len(),
-            120,
+            121,
             "update this number when a command is added"
         );
     }

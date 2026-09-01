@@ -10227,6 +10227,59 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
+     * `deck::clear` — the list's **Clear list**, answering the **copies** it removed.
+     *
+     * {@link deck_category_clear} above with exactly one filter dropped: the same variant
+     * scope, the same release, the same copies-not-rows answer, over **every** category of the
+     * deck rather than one named pile. Not a loop over the piles either, here or in the crate —
+     * one filter over `deck_cards` is what the statement is, and a per-category loop would move
+     * `updatedAt` once per pile and answer a sum assembled from several passes.
+     *
+     * **The piles themselves stay.** `deck_categories` is untouched, which is what separates
+     * this from `deck_delete`: a reader emptying a list has said nothing about the columns they
+     * arranged, and a deck that came back with five default categories after a Clear would have
+     * thrown away work the press never mentioned.
+     *
+     * **One variant still**, and it is the same argument the sibling makes one scope down: a
+     * reader clearing the plan has said nothing about the live deck, and a reader clearing the
+     * live deck is very often keeping the plan on purpose. The `variant` in the filter is what
+     * a story about a theory-enabled deck exercises.
+     *
+     * **An empty list writes nothing at all** — no `updatedAt` — for the sibling's reason: it
+     * returns before opening a transaction, where `deck_set_card_quantity`'s zero arm commits
+     * whatever it found.
+     *
+     * **And the copies come back**, through {@link releasePileCopies}. A `deck_cards` row is an
+     * intention; a row in the deck's group is a card the reader physically owns, and emptying a
+     * list does not stop them owning it. Left where they were the copies stay filed under a
+     * deck that no longer lists them — invisible, and unavailable to every other deck for ever,
+     * which is the invariant this fake broke quietly until 2026-08-23. **`theory` releases
+     * nothing**, and {@link releasePileCopies} enforces that per row rather than this handler
+     * branching on the argument: a plan holds no cards, so nothing in any folder backs a theory
+     * row and there is nothing to give back. Doing it per row rather than at the door is what
+     * keeps the rule in one place for all three callers.
+     *
+     * The answer stays the count of `deck_cards` copies and never the copies that moved: the
+     * two differ wherever the group holds fewer than the list claims, and what the confirmation
+     * quoted is what left the deck.
+     */
+    deck_clear: (args: { deckId: number; variant: DeckVariant }): number => {
+      refuseIfBusy(db);
+      const variant = validVariant(args.variant);
+      const deck = requireDeck(db, args.deckId);
+      const doomed = db.deckCards.filter(
+        (dc) => dc.deckId === args.deckId && dc.variant === variant,
+      );
+      // Copies, not rows — two printings at 2 and 3 is the 5 the confirmation quoted.
+      const cleared = doomed.reduce((copies, dc) => copies + dc.quantity, 0);
+      if (cleared === 0) return 0;
+      releasePileCopies(db, args.deckId, doomed);
+      db.deckCards = db.deckCards.filter((dc) => !doomed.includes(dc));
+      deck.updatedAt = stamp(db);
+      return cleared;
+    },
+
+    /**
      * `deck::move_card` — every copy from one category to another, folding into what the
      * target already holds. **Within one variant**: a move is a re-filing, never a promotion
      * of a theory row into the live deck.
@@ -12972,16 +13025,25 @@ const NO_UNDO_STEP: ReadonlySet<string> = new Set([
  * all — an untouched patch, a stepper landing on an already-empty slot — files nothing, because
  * a step for a change that did not happen is a press that appears to do nothing.
  *
- * **Known gap, and it is this fake's rather than this feature's**: the five card writes
+ * **Known gap, and it is this fake's rather than this feature's**: the seven card writes
  * (`deck_add_card`, `deck_set_card_quantity`, `deck_move_card`, `deck_swap_printing`,
- * `deck_category_clear`) record no history row here, though their Rust twins do and
- * `deck_audit.rs`'s `every_deck_write_leaves_exactly_one_audit_row` pins it. So Storybook's
- * history drawer has never listed a card add, and — consistently — its Undo button does not
- * offer to take one back. The app is unaffected; closing it means giving those five handlers a
- * `record(…)` call, which is a change to what the *history* stories draw and belongs with them.
+ * `deck_set_card_finish`, `deck_category_clear` and `deck_clear`) record no history row here,
+ * though their Rust twins do and `deck_audit.rs`'s
+ * `every_deck_write_leaves_exactly_one_audit_row` pins the four of them that sweep drives. So
+ * Storybook's history drawer has never listed a card add, and — consistently — its Undo button
+ * does not offer to take one back. The app is unaffected; closing it means giving those seven
+ * handlers a `record(…)` call, which is a change to what the *history* stories draw and belongs
+ * with them.
+ *
+ * **The list said "five" until `deck_clear` landed and it was wrong by one before that**, which
+ * is the reason it is spelled out rather than counted: `deck_set_card_finish` arrived with
+ * `Set as foil`, `set_card_finish` writes a `SWAP` row on the crate side, and the fake's twin
+ * has never written one — so the gap widened once without anybody noticing and once here.
+ * `deck_clear` is `deck_category_clear`'s neighbour and joins for its reason: `clear_variant`
+ * writes a `REMOVE` row with no card and a `scope` of the whole list.
  *
  * **`collection_to_deck` and `deck_to_collection` are outside that gap and always were.** They
- * are not among the five, and closing the gap on the add side alone would have left the pair
+ * are not among the seven, and closing the gap on the add side alone would have left the pair
  * telling a reader a half-story — a Collection Search add in the drawer with the cut that
  * reverses it missing — so both record, and both are on {@link NO_UNDO_STEP} above rather than
  * relying on the wrapper finding no deck id.

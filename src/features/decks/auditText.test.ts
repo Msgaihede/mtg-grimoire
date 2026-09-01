@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DeckAuditEntry, DeckAuditKind } from "@/lib/ipc";
+import type { DeckAuditEntry, DeckAuditKind, DeckVariant } from "@/lib/ipc";
 import { auditDays, auditSentence } from "./auditText";
 
 let nextId = 1;
@@ -80,6 +80,117 @@ describe("auditSentence", () => {
         entry("remove", { action: "clear", category: "Ramp", cards: 1 }, { cardId: null }),
       ).text,
     ).toBe("Cleared 1 card from Ramp");
+  });
+
+  /**
+   * **The whole-list clear falls into that same branch and must not borrow the pile's
+   * sentence.** `deck_clear` empties every card of one variant and leaves the piles standing, so
+   * its payload names no category at all — and the branch above would word that as "Cleared 42
+   * cards from a category", which is worse than saying nothing: a plausible sentence naming a
+   * pile the reader never emptied.
+   *
+   * The list comes from the entry's `variant`, which is a **fact** for the `remove` kind rather
+   * than the filler it is for a category write or a deck field.
+   */
+  it("names the list a whole-deck clear emptied, and never a pile", () => {
+    const cleared = (variant: DeckVariant) =>
+      auditSentence(
+        entry(
+          "remove",
+          { action: "clear", scope: "deck", cards: 42 },
+          { variant, cardId: null, cardName: null, delta: -42 },
+        ),
+      );
+
+    expect(cleared("live")).toEqual({ text: "Cleared 42 cards from the live list", detail: null });
+    expect(cleared("theory")).toEqual({
+      text: "Cleared 42 cards from the theory list",
+      detail: null,
+    });
+    // The wrong-but-plausible half, asserted the way the X split's spelling is: every fallback
+    // in this file is a true sentence, so a drift here fails nothing on its own.
+    expect(cleared("live").text).not.toContain("a category");
+  });
+
+  it("says one card, not 1 cards, when a whole list held one", () => {
+    expect(
+      auditSentence(
+        entry(
+          "remove",
+          { action: "clear", scope: "deck", cards: 1 },
+          { variant: "theory", cardId: null, cardName: null, delta: -1 },
+        ),
+      ).text,
+    ).toBe("Cleared 1 card from the theory list");
+  });
+
+  /**
+   * **The regression guard.** A row with no `scope` is a pile's clear whatever else it carries,
+   * which is why the branch is keyed on `scope` being `"deck"` and never on `category` being
+   * absent: an older build's payload and a truncated one are absent too, so keying on the
+   * absence would relabel a pile clear as a whole-list one. The theory variant is the case that
+   * would go wrong quietly — a pile emptied on the plan still names the pile.
+   */
+  it("still names the pile when a clear carries no scope", () => {
+    expect(
+      auditSentence(
+        entry(
+          "remove",
+          { action: "clear", category: "Ramp", cards: 7 },
+          { variant: "theory", cardId: null, cardName: null, delta: -7 },
+        ),
+      ),
+    ).toEqual({ text: "Cleared 7 cards from Ramp", detail: null });
+  });
+
+  /** A clear that names neither a scope nor a pile: the shortest honest form is the pile it
+   *  cannot name, never a list it was never told about. */
+  it("falls back to a category when a clear names neither a scope nor a pile", () => {
+    const cleared = auditSentence(
+      entry("remove", { action: "clear", cards: 3 }, { cardId: null, cardName: null, delta: -3 }),
+    );
+
+    expect(cleared).toEqual({ text: "Cleared 3 cards from a category", detail: null });
+    expect(cleared.text).not.toContain("list");
+  });
+
+  /** A payload an older or a newer build wrote: no count, a count that is not a number, and a
+   *  scope of a shape `text()` cannot print. None of them throws and none claims a list. */
+  it("degrades a clear whose payload it cannot read", () => {
+    expect(
+      auditSentence(entry("remove", { action: "clear", scope: "deck" }, { cardId: null })).text,
+    ).toBe("Cleared 0 cards from the live list");
+    expect(
+      auditSentence(
+        entry("remove", { action: "clear", scope: "deck", cards: "lots" }, { cardId: null }),
+      ).text,
+    ).toBe("Cleared 0 cards from the live list");
+    // A scope that is not the word is every row written before `deck_clear` existed: a pile's.
+    expect(
+      auditSentence(
+        entry(
+          "remove",
+          { action: "clear", scope: { deck: true }, category: "Ramp", cards: 4 },
+          { cardId: null },
+        ),
+      ).text,
+    ).toBe("Cleared 4 cards from Ramp");
+  });
+
+  /** A variant this build has never heard of — the `kind` fallback's rule one field over.
+   *  `deck_audit.variant` carries a CHECK, so this is the case the column says cannot happen and
+   *  the renderer answers anyway: it names no list rather than guessing one, and "the deck" stays
+   *  true of a whole-list clear whichever list it was. */
+  it("names no list for a variant it does not know", () => {
+    expect(
+      auditSentence(
+        entry(
+          "remove",
+          { action: "clear", scope: "deck", cards: 5 },
+          { variant: "sideboard" as DeckVariant, cardId: null },
+        ),
+      ).text,
+    ).toBe("Cleared 5 cards from the deck");
   });
 
   it("says both numbers on a quantity change", () => {

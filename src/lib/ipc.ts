@@ -5088,6 +5088,31 @@ export const ipc = {
   deckCategoryClear: (deckId: number, categoryId: number, variant: DeckVariant) =>
     invoke<number>("deck_category_clear", { deckId, categoryId, variant }),
   /**
+   * Empty **one whole list of one deck** — Deck settings' **Clear live list…** and
+   * **Clear theory list…** — and answer the
+   * **copies** it removed: `sum(quantity)`, never a count of `deck_cards` rows.
+   *
+   * `deckCategoryClear` one grain wider, and it makes that command's arithmetic argument more
+   * loudly rather than differently: a hundred-card deck emptied a pile at a time is a
+   * transaction, a history row and an invalidation *per pile*, and one emptied a row at a time
+   * through `deckSetCardQuantity(…, 0)` is a hundred of each. This is one of each.
+   *
+   * **The piles survive.** `deck_categories` is untouched, so every column the reader arranged
+   * is still on the desk when the deck is empty — which is the whole difference between this and
+   * a sweep of `deckCategoryDelete`, and what makes the press an *emptying* rather than a
+   * demolition. It is also why nothing here cascades into the other list: a category is not
+   * variant-scoped, and this command is.
+   *
+   * **This variant only, and the argument is the whole of what says which.** On `live` it is a
+   * collection write too — the reader's owned copies are released back into `Recently removed`,
+   * through the same walk a cut goes through — where a `theory` clear moves nothing at all,
+   * because a plan holds no copies to release.
+   *
+   * An already-empty list answers `0`.
+   */
+  deckClear: (deckId: number, variant: DeckVariant) =>
+    invoke<number>("deck_clear", { deckId, variant }),
+  /**
    * Move every copy from one category to another **within one variant**, folding into whatever
    * the target already holds. The identity travels from the moved row, so an orphan can be
    * tidied out of the scratchpad like anything else.

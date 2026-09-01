@@ -5063,7 +5063,12 @@ describe("DeckEditor — a category's menu", () => {
     await waitFor(() =>
       expect(within(dialog).getByText(/4 cards in it leave the live list/)).toBeVisible(),
     );
-    expect(within(dialog).getByText(/1 card filed here in the other list/)).toBeInTheDocument();
+    // **Through the verb, not up to it.** `/1 card filed here in the other list/` passed against
+    // "…other list are untouched" as readily as against the "is" that agrees with one card, so
+    // the assertion could not fail for the thing it looks like it is checking.
+    expect(
+      within(dialog).getByText(/1 card filed here in the other list is untouched/),
+    ).toBeInTheDocument();
   });
 
   /** A refused clear is said **inside** the dialog, for the reason the delete's refusal is: the

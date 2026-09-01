@@ -26,9 +26,10 @@ const deckUpdate = vi.hoisted(() => vi.fn());
 const deckSetFolder = vi.hoisted(() => vi.fn());
 const deckFolderList = vi.hoisted(() => vi.fn());
 const formatSpecs = vi.hoisted(() => vi.fn());
+const deckClear = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { deckGet, deckUpdate, deckSetFolder, deckFolderList, formatSpecs },
+  ipc: { deckGet, deckUpdate, deckSetFolder, deckFolderList, formatSpecs, deckClear },
 }));
 
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
@@ -91,6 +92,25 @@ function detail(deck: Partial<DeckRow> = {}, cards: DeckCard[] = []): DeckDetail
   return { deck: { ...BURN, ...deck }, cards, categories: CATEGORIES, tags: [] };
 }
 
+/**
+ * A deck with a plan, whose two lists hold **different** numbers of cards.
+ *
+ * That difference is the whole point of the fixture. `cardCount` is the copies in the variant
+ * that was asked for — the dialog reads `live` — and `cardCountAllVariants` is both lists
+ * together, so live is `4 + 3 = 7` and the plan is `(10 + 5) − 7 = 8`. With the two equal, a
+ * confirmation handed the wrong one of them draws exactly the same sentence as one handed the
+ * right one, and every case below would pass against a host that had them the wrong way round.
+ */
+function withPlan(): DeckDetail {
+  return {
+    ...detail({ theoryEnabled: true }),
+    categories: [
+      { ...CATEGORIES[0], cardCount: 4, cardCountAllVariants: 10 },
+      { ...CATEGORIES[1], cardCount: 3, cardCountAllVariants: 5 },
+    ],
+  };
+}
+
 function wrap(ui: ReactElement) {
   // No retries: a test that mocks a refusal should see it on the first answer, not after
   // three, and TanStack's default would otherwise stall every failing-write assertion.
@@ -135,6 +155,8 @@ beforeEach(() => {
   deckSetFolder.mockResolvedValue(BURN);
   deckFolderList.mockResolvedValue(FOLDERS);
   formatSpecs.mockResolvedValue(SPECS);
+  // `deck_clear` answers the copies it removed, never a row count — see `ipc.deckClear`.
+  deckClear.mockResolvedValue(7);
 });
 
 /**
@@ -653,6 +675,147 @@ describe("DeckSettingsDialog", () => {
     open();
 
     expect(await screen.findByText(/This deck is gone/)).toBeInTheDocument();
+  });
+
+  /*
+   * **Emptying a list**, the one thing in this dialog that is not a setting.
+   *
+   * The names are matched on a **pattern** throughout, because a greyed button's name carries
+   * the reason it is greyed — `getByRole("button", { name: "Clear live list…" })` finds nothing
+   * on the empty deck and reads exactly like the control never being drawn.
+   */
+
+  /** A deck with a plan has two lists, so it offers two presses. */
+  it("offers a clear for each of the deck's lists", async () => {
+    deckGet.mockResolvedValue(withPlan());
+    open();
+    await loaded();
+
+    expect(screen.getByRole("button", { name: /Clear live list/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Clear theory list/ })).toBeInTheDocument();
+  });
+
+  /** And a deck with no plan offers **one**. A greyed control for a list the deck has not got
+   *  reads as something broken rather than as something absent. */
+  it("offers no theory clear on a deck with no plan", async () => {
+    open();
+    await loaded();
+
+    expect(screen.getByRole("button", { name: /Clear live list/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Clear theory list/ })).toBeNull();
+  });
+
+  /** One question at a time, and it is about the list whose button was pressed — the group's
+   *  own name is what says which, since both questions are drawn in the same place. */
+  it("opens the question for the list the press was about", async () => {
+    deckGet.mockResolvedValue(withPlan());
+    open();
+    await loaded();
+
+    await userEvent.click(screen.getByRole("button", { name: /Clear theory list/ }));
+
+    expect(screen.getByRole("group", { name: "Clear the theory list" })).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Clear the live list" })).toBeNull();
+    // The buttons are replaced by the question rather than sitting under it.
+    expect(screen.queryByRole("button", { name: /Clear live list/ })).toBeNull();
+  });
+
+  /**
+   * **The case this whole section is riskiest in.** The dialog mounts `useDeck(deckId)`, which
+   * is the *live* list, and the theory total is a subtraction over the same rows — so the one
+   * mistake available here is handing the theory question the live figure, which would quote a
+   * destructive press wrong in the only direction that matters.
+   *
+   * Both questions, in one case, against a fixture whose two lists genuinely differ: a host
+   * that passed the same number to both fails on the second half whichever number it picked.
+   */
+  it("quotes each list's own count, and the other list's as the untouched one", async () => {
+    deckGet.mockResolvedValue(withPlan());
+    open();
+    await loaded();
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: /Clear live list/ }));
+    const live = screen.getByRole("group", { name: "Clear the live list" });
+    expect(within(live).getByRole("button", { name: "Remove 7 cards" })).toBeInTheDocument();
+    expect(within(live).getByText(/8 cards in the other list/)).toBeInTheDocument();
+
+    await user.click(within(live).getByRole("button", { name: "Keep them" }));
+
+    await user.click(screen.getByRole("button", { name: /Clear theory list/ }));
+    const theory = screen.getByRole("group", { name: "Clear the theory list" });
+    expect(within(theory).getByRole("button", { name: "Remove 8 cards" })).toBeInTheDocument();
+    expect(within(theory).getByText(/7 cards in the other list/)).toBeInTheDocument();
+  });
+
+  /** The variant is the mutation's **argument**, not the hook's — which is what lets a dialog
+   *  reading the live list empty the plan. The question closes once the write lands. */
+  it("clears the list the question was about, and closes on success", async () => {
+    deckGet.mockResolvedValue(withPlan());
+    open();
+    await loaded();
+
+    await userEvent.click(screen.getByRole("button", { name: /Clear theory list/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Remove 8 cards" }));
+
+    await waitFor(() => expect(deckClear).toHaveBeenCalledWith(4, "theory"));
+    expect(deckClear).toHaveBeenCalledTimes(1);
+    await waitFor(() =>
+      expect(screen.queryByRole("group", { name: /^Clear the/ })).toBeNull(),
+    );
+  });
+
+  /** A refusal is not an answer, so the question stays up over it — closing would leave the
+   *  reader with a banner and nothing to press again. The sentence is the dialog's existing
+   *  one, which is what putting the clear in `writeFailure`'s list buys. */
+  it("leaves a refused clear's question up, with the banner saying why", async () => {
+    deckGet.mockResolvedValue(withPlan());
+    deckClear.mockRejectedValue("Database is busy.");
+    open();
+    await loaded();
+
+    await userEvent.click(screen.getByRole("button", { name: /Clear live list/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Remove 7 cards" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could not save that change — Database is busy.",
+    );
+    expect(screen.getByRole("group", { name: "Clear the live list" })).toBeInTheDocument();
+  });
+
+  /**
+   * Declining puts the caret back on the button that asked.
+   *
+   * The trigger is **not in the tree** on the render the cancel happens in — the question stood
+   * where it was — so this can only be done from an effect, and without one the caret is on
+   * `<body>` and the reader's next Tab restarts at the top of the document.
+   */
+  it("hands the caret back to the button that opened a declined question", async () => {
+    deckGet.mockResolvedValue(withPlan());
+    open();
+    await loaded();
+
+    await userEvent.click(screen.getByRole("button", { name: /Clear theory list/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Keep them" }));
+
+    expect(screen.queryByRole("group", { name: /^Clear the/ })).toBeNull();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /Clear theory list/ })).toHaveFocus(),
+    );
+  });
+
+  /** Nothing to empty is nothing to press — and the **name** says so, because a greyed control
+   *  whose name is the bare label reads as a control that is missing. */
+  it("greys the clear for a list with nothing in it, and says so in its name", async () => {
+    deckGet.mockResolvedValue(detail({ theoryEnabled: true }));
+    open();
+    await loaded();
+
+    const live = screen.getByRole("button", { name: /Clear live list/ });
+    expect(live).toBeDisabled();
+    expect(live).toHaveAccessibleName("Clear live list… (already empty)");
+    expect(screen.getByRole("button", { name: /Clear theory list/ })).toBeDisabled();
+    expect(deckClear).not.toHaveBeenCalled();
   });
 });
 

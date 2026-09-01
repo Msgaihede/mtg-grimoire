@@ -727,6 +727,52 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
+   * The two clears, and the **name** is what is really under test on the second one.
+   *
+   * They are the same write at two grains — `deck_category_clear` empties one pile of one
+   * variant, `deck_clear` empties one variant of the whole deck — so the payloads differ by
+   * exactly one key, which is the shape a copy-paste gets wrong without a type error anywhere:
+   * a `categoryId` sent to `deck_clear` is a parameter Tauri cannot fill, and a `deck_clear`
+   * that dropped `variant` would empty whichever list the backend defaulted to. Both answer a
+   * **number of copies** rather than a row, and both are read back here for it — a mirror typed
+   * `void` would throw away the figure the confirmation counted.
+   *
+   * **The crate is read for the wire name, because nothing else in this build compares the two
+   * sides.** These are irreversible commands behind one confirmation each, and a name Rust does
+   * not register is a runtime rejection with no type error and nothing on screen naming the
+   * culprit — the same argument `reset.rs`'s four clears are pinned on, one module over. The
+   * `includes` is deliberately crude: this is a name check, not a parse, and what it catches is
+   * the whole class that has bitten this repo — a rename on either side, or the plural
+   * `decks_clear` (the Settings danger zone's command, which empties *every* deck) reached for
+   * by autocomplete.
+   */
+  it("sends both clears under the name its command declares, and the crate declares them", async () => {
+    // Not `toContain` on the source alone: a pass has to mean "the crate spells it", never
+    // "the crate was never read".
+    expect(deckRs.length).toBeGreaterThan(1_000);
+    expect(deckRs).toContain("fn deck_category_clear(");
+    expect(deckRs).toContain("fn deck_clear(");
+
+    invoke.mockResolvedValue(4);
+    expect(await ipc.deckCategoryClear(4, 7, "live")).toBe(4);
+    expect(invoke).toHaveBeenCalledWith("deck_category_clear", {
+      deckId: 4,
+      categoryId: 7,
+      variant: "live",
+    });
+
+    // No `categoryId`, and `variant` is the whole of what says which list is emptied — the piles
+    // themselves are untouched, so there is no id to name.
+    invoke.mockResolvedValue(99);
+    expect(await ipc.deckClear(4, "theory")).toBe(99);
+    expect(invoke).toHaveBeenCalledWith("deck_clear", { deckId: 4, variant: "theory" });
+
+    invoke.mockResolvedValue(0);
+    expect(await ipc.deckClear(4, "live")).toBe(0);
+    expect(invoke).toHaveBeenCalledWith("deck_clear", { deckId: 4, variant: "live" });
+  });
+
+  /**
    * The six tag commands, and the two that break the module's own pattern.
    *
    * `deck_tag_suggestions` takes **no deck id at all** — the palette is a property of the

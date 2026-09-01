@@ -15,6 +15,7 @@
 import { plural } from "@/lib/counts";
 import { finishLabel } from "@/lib/finish";
 import type { DeckAuditEntry, DeckAuditKind } from "@/lib/ipc";
+import { listName } from "./listNames";
 import { gameLabel } from "./useFormatSpecs";
 
 /** One line of `DeckHistoryDialog`: the sentence, and the quieter half under it. */
@@ -128,9 +129,17 @@ export function auditSentence(
       // this arm `deck_category_clear`'s row renders as "Removed 7 × a card": a sentence about a
       // card the row has not got, and one that reads as a bug in the history rather than in the
       // renderer. The word is `deck.rs`'s `clear_category`; copy it, never re-derive it.
+      //
+      // **Two writes now share that word, and `scope` is what tells them apart.** A pile's clear
+      // names the pile; `deck_clear` empties every pile of one variant, so it names none and says
+      // `scope: "deck"` instead. The test is that positive statement and **never `category` being
+      // absent**, because absence is also what an older build's payload and a truncated one look
+      // like — keying on it would relabel a pile clear as a whole-list one, which is a history
+      // naming a list the reader never emptied. A row with no `scope` is a category clear and
+      // reads exactly as it always did.
       if (text(p.action) === "clear") {
         return {
-          text: `Cleared ${plural(numberField(p.cards), "card")} from ${text(p.category) ?? "a category"}`,
+          text: `Cleared ${plural(numberField(p.cards), "card")} from ${clearedFrom(entry, p)}`,
           detail: null,
         };
       }
@@ -296,6 +305,37 @@ function importLine(kind: DeckAuditKind, p: Record<string, unknown>): AuditLine 
     default:
       return null;
   }
+}
+
+/**
+ * What a `clear` row emptied: a pile by name, or one of the deck's two whole lists.
+ *
+ * **The list is named from {@link DeckAuditEntry.variant}, and that field's own doc is worth
+ * reading before leaning on it.** It is filler for a category write, a folder filing and most
+ * `deck` fields — which is why it warns against *filtering* a history by it — but it is a
+ * **fact** for `remove`, and a whole-list clear is exactly a `remove` about one list. Naming the
+ * list a row says it emptied is the other thing from hiding rows that carry no opinion.
+ *
+ * The two words are the confirmation dialogs' own, through {@link listName} — because a reader
+ * who pressed **Clear** and then went looking for the press in their history has to meet the
+ * same sentence, and this surface is the one that is *not* one press from either question, so a
+ * reword that reached the two confirmations and stopped would be invisible until somebody read
+ * their own history back. That module exists because this file was its third caller.
+ *
+ * **The two known variants are matched explicitly rather than handed to {@link listName}
+ * unchecked**, and that is this file's defensiveness rather than ceremony: every other field
+ * here is read through `text()` or `numberField()` because a payload is a string some other
+ * build wrote, and `entry.variant` is typed {@link DeckVariant} without anything having
+ * *checked* that it is one. A variant this build has never heard of names no list and falls back
+ * to the deck, which stays true of a whole-list clear whichever list it was — where a bare
+ * `listName(entry.variant)` would confidently call it the live list.
+ */
+function clearedFrom(entry: DeckAuditEntry, p: Record<string, unknown>): string {
+  if (text(p.scope) !== "deck") return text(p.category) ?? "a category";
+  if (entry.variant === "theory" || entry.variant === "live") {
+    return `the ${listName(entry.variant)}`;
+  }
+  return "the deck";
 }
 
 /** A label put on a card, taken off it, or swapped for another one. */

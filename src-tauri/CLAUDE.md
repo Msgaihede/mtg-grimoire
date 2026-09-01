@@ -431,10 +431,12 @@ shared_cell` walks both into two databases and compares them column by column.
   It refuses both where `deck::add_card` lets the id win, because there a drag carries both and
   here nothing does;
   `deck_to_collection` cuts a deck card and files whatever the group held into `Recently removed`.
-  **Two writes in `deck.rs`/`deck_meta.rs` do the second of those in bulk and are not a third
-  route**: `deck_meta::delete_category`'s cascade arm and `deck::clear_category` take a whole pile
-  of `deck_cards` rows out at once, so the copies behind their `live` rows have to be released the
-  same way — both go through `deck::release_group_copies`, and **so does `deck_to_collection`
+  **Three writes in `deck.rs`/`deck_meta.rs` do the second of those in bulk and are not a third
+  route**: `deck_meta::delete_category`'s cascade arm, `deck::clear_category` and — since
+  2026-09-01 — `deck::clear_variant`, which is the same DELETE with `category_id` dropped from the
+  `WHERE`. Each takes a whole set of `deck_cards` rows out at once, so the copies behind their
+  `live` rows have to be released the same way — all three go through
+  `deck::release_group_copies`, and **so does `deck_to_collection`
   itself**: that walk is the crate's one copy, and the cut is it plus the `deck_cards` write, the
   history row and the `MoveOutcome`. Four rules it holds (absent group means "holds
   nothing", oldest row first, clamped at what the group holds, `Recently removed` resolved only
@@ -445,7 +447,15 @@ shared_cell` walks both into two databases and compares them column by column.
   so an exact-only match strands copies under a deck that no longer lists them. It is
   `owned_by_oracle`'s "a Bolt is a Bolt" read from the other end. `delete_category`'s **move** arm
   releases nothing: those cards are still in this deck, one pile over. `deck::delete_deck` is the
-  third such site and files the whole group.
+  fourth such site and files the whole group.
+  **`import::commit_import`'s `replace` arm is the one bulk removal that does *not* release, and
+  that is a bug rather than an exception** — issue #336, open as of 2026-09-01. It runs
+  `clear_variant`'s exact `DELETE FROM deck_cards WHERE deck_id = ?1 AND variant = ?2` with no
+  release beside it, so importing over a live list leaves every copy the reader owns filed under a
+  deck that has no row for it — invisible on the Collection page, and unavailable to every other
+  deck. It is filed rather than fixed here because the fix is one helper the three sites that
+  already spell that read-and-release loop out should share — do not close it by writing the loop
+  a fourth time.
   Six rules hold it together, each with a test:
   - **A deck group is not a drop target**, because a card reaches one only through
     `collection_to_deck`. A bare drag would go through `collection_set_folder`, which knows
@@ -489,8 +499,10 @@ shared_cell` walks both into two databases and compares them column by column.
     back into the deck's group and writes the `deck_cards` row again. Until that tab landed the
     command had no caller at all and the way back was two presses done by hand — so a note here
     saying nothing calls it is now a note telling the next agent the feature does not exist.
-    `deck::clear_category` reached the same conclusion for the same reason and does file a step,
-    because its `deck_cards` half is a whole pile no stepper can rebuild.
+    **Both clears** reached the same conclusion for the same reason and do file a step, because
+    their `deck_cards` half is a whole pile — or every pile of a list — that no stepper can
+    rebuild. So an undone clear puts the rows back and not the custody: the copies are in
+    `Recently removed` and stay there.
   Every refusal is a **sentence** rather than a `CHECK` or a foreign-key failure —
   `deck::set_folder`'s rule, and `PRAGMA foreign_keys` is per-connection anyway. Both writes are
   one transaction: mid-move the copies are in both places or in neither.

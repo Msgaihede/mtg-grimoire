@@ -158,12 +158,18 @@ deliberately**: no screenshots are stored.
   the deck twice rather than transcribing the crate's four `Op` primitives, deliberately: a step's
   whole job is "make the deck look like this again", the crate needs ops because SQL has no other
   way to say it, and a second transcription would be a second implementation to keep in step.
-  **The known gap is the fake's own and predates this**: the five card writes (`deck_add_card`,
-  `deck_set_card_quantity`, `deck_move_card`, `deck_swap_printing`, `deck_category_clear`) record
-  no history row here, so Storybook's history drawer does not list a card added from *search* and
-  — consistently — Undo does not offer to take one back. Closing it means giving those five a
-  `record(…)` call, which changes what the *history* stories draw and belongs with them.
-  **`collection_to_deck` and `deck_to_collection` are outside that five and record as of
+  **The known gap is the fake's own and predates this**: the **seven** card writes
+  (`deck_add_card`, `deck_set_card_quantity`, `deck_move_card`, `deck_swap_printing`,
+  `deck_set_card_finish`, `deck_category_clear` and `deck_clear`) record no history row here, so
+  Storybook's history drawer does not list a card added from *search* and — consistently — Undo
+  does not offer to take one back. Closing it means giving those seven a `record(…)` call, which
+  changes what the *history* stories draw and belongs with them.
+  **It said "five" here and in `db.ts` until 2026-09-01, and it was wrong by one before
+  `deck_clear` was written**: `deck_set_card_finish` arrived with `Set as foil` and its crate twin
+  `set_card_finish` writes a `SWAP` row, so the gap had widened once with nothing to notice. That
+  is the argument for naming them rather than counting them — a count in prose routes to neither
+  CI job, and this one drifted twice before anybody read it.
+  **`collection_to_deck` and `deck_to_collection` are outside that gap and record as of
   2026-08-23**, when the Collection Search tab gave the first of them a caller; both are on
   `NO_UNDO_STEP` because a step could restore the `deck_cards` half and would leave the copies
   where they went. **`collection_to_deck` also rolls back the pile its name arm invented when a
