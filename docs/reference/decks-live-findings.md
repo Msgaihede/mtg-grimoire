@@ -563,6 +563,58 @@ in a render is the whole window going blank, and jsdom never assembled the state
   35 ms** across eight bursts, plus 16 real Chromium clicks, left `root` at 1, the pressed tab
   `aria-pressed="true"` every time, and **zero** console errors.
 
+## Switching the theory list **off** took the app down — 2026-09-01, `npm run tauri dev` (debug), a copy of the real db
+
+The second crash of the same family, and the first one reached by an ordinary press rather than
+by racing a control. Reported by the reader as *"when disabling theory deck on a deck that
+already has cards in the theory deck, it crashes the entire frontend app"*. Driven on deck
+**Serah** (Commander, 100 cards, **105 rows in the plan**, `last_variant: "theory"`) out of a copy
+of the real database, from `d14af80`'s parent and then from `d14af80`.
+
+- **The window goes blank the same way**: `document.getElementById('root').childElementCount`
+  reads **0**, and the editor's own `[aria-label^="Deck editor"]` is gone.
+- **The marker was the fix for the 2026-08-16 crash, and it carried the same defect one column
+  over.** `${deckId}:${theoryEnabled}` is built from `row`, which *is* the per-variant snapshot —
+  so `theory_enabled` also has one value in the database and two in the cache. `deck_update`
+  invalidates `["decks"]` and both lists re-read; until the second answer lands, the list the
+  reader is **not** on still says the deck keeps a plan.
+- **A render probe caught the oscillation verbatim**, `console.log`ged out of the restore itself
+  and read back over CDP. Fifteen pairs, alternating, with nothing else between them:
+
+  ```
+  {"variant":"theory","theoryEnabled":false,"honouredView":"2:true","remembered":"2:false","last":"theory"}
+  {"variant":"live",  "theoryEnabled":true, "honouredView":"2:false","remembered":"2:true", "last":"theory"}
+  ```
+
+  Off, on the plan's row, asks for Actual; on, on the deck's row, asks for `last_variant` — which
+  is `theory`. Each answer moves the variant, the variant moves the row, and the row asks for the
+  move back.
+- **`last_variant: "theory"` is why the report names a plan with cards in it.** A deck whose plan
+  is empty is a deck nobody has switched to, so its column reads `live`, both readings ask for
+  Actual and nothing oscillates. That is the whole of the "only on a deck that already has cards"
+  half of the report, and it is why the empty case looked fine to everyone who tried it.
+- **The ordering has to be forced to make it reliable, and the reader's timing supplies it for
+  free.** Whichever `deck_get` answers first wins, and on all three of this database's decks the
+  *live* list is the shorter of the two, so it usually lands first and the rows never cross —
+  five full off/on cycles on the unfixed build passed cleanly before the ordering was pinned.
+  `ipc.deckGet` patched in the running window to delay the `live` variant by **800 ms** made it
+  fire on the first press, every time. A deck whose plan is *shorter* than its actual list needs
+  no patch at all.
+- **After the fix**, the identical gesture with the identical 800 ms delay: `root` stays **1**,
+  the editor stays mounted, and the probe shows the restore declining to run a second time —
+  `honoured: [false, true]` through the crossed beat, settling on Actual when the deck's own row
+  lands. Switching the plan back on and pressing `Theory` read **105 rows**, the number the
+  database held before the pass: the column moves and no card does.
+
+**One trap that cost most of this pass, and it is not about the bug.** Editing a source file in a
+worktree did **not** reach the running window: HMR never fired, and both `location.reload()` and a
+`fetch()` of the module handed back the *previous* transform — so four separate "it does not
+reproduce" readings were all taken against code that was no longer on disk. `Network.clearBrowserCache`
+plus `Page.reload({ignoreCache:true})` did not cure it either. What cured it was **restarting
+`tauri dev`** (and deleting `node_modules/.vite`). The tell is cheap and worth taking first: put a
+`console.log` in the file you just edited and confirm it fires before believing any live reading,
+because a stale transform reads exactly like a fixed bug.
+
 ## The quick zones, drawn to be found — 2026-08-17, **not the shipped window**
 
 The reader's report was that the bar of four drop targets is easy to miss. The change is four
