@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Card scanner — live</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --ground:#0d1014; --panel:#151a20; --sunk:#1c232b; --line:#28313b;
+    --ink:#e8edf2; --ink-2:#9aa7b4; --ink-3:#6b7986;
+    --accent:#54c3e0;
+    --hit:#5ed69a; --doubt:#e8b45c; --miss:#f08b85;
+    --mono:"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing:border-box; }
+  body {
+    margin:0; background:var(--ground); color:var(--ink);
+    font:14px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif;
+    -webkit-text-size-adjust:100%;
+  }
+  /* `align-items:start` keeps the video its own height — stretching the stage to the
+     column would letterbox a 16:9 feed against a tall panel. */
+  .app { display:grid; grid-template-columns:minmax(0,1fr) 340px; gap:14px; padding:14px;
+         min-height:100vh; align-items:start; }
+  @media (max-width:900px) { .app { grid-template-columns:1fr; } }
+
+  .stage { position:relative; background:#000; border:1px solid var(--line); border-radius:12px; overflow:hidden; }
+  .stage video, .stage canvas { display:block; width:100%; height:auto; }
+  .stage canvas { position:absolute; inset:0; }
+
+  /* The headline readout sits on the video so you can watch the card, not the panel. */
+  .hud {
+    position:absolute; left:12px; top:12px; display:flex; gap:8px; align-items:center;
+    background:rgba(13,16,20,.78); backdrop-filter:blur(8px);
+    border:1px solid var(--line); border-radius:999px; padding:6px 12px;
+    font-family:var(--mono); font-size:12px;
+  }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--miss); flex:none; }
+  .dot.hit { background:var(--hit); } .dot.doubt { background:var(--doubt); }
+  .hud .fps { color:var(--ink-3); }
+
+  aside { display:flex; flex-direction:column; gap:12px; min-width:0; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px 14px; }
+  .card h2 {
+    margin:0 0 10px; font-family:var(--mono); font-size:10.5px; font-weight:600;
+    letter-spacing:.12em; text-transform:uppercase; color:var(--accent);
+  }
+
+  /* Stage timings as a stacked bar: the point is which stage owns the frame budget. */
+  .bar { display:flex; height:9px; border-radius:5px; overflow:hidden; background:var(--sunk); margin-bottom:9px; }
+  .bar i { display:block; height:100%; }
+  .legend { display:grid; grid-template-columns:1fr auto; gap:2px 10px; font-family:var(--mono); font-size:11.5px; }
+  .legend .k { color:var(--ink-2); display:flex; align-items:center; gap:6px; }
+  .legend .k::before { content:""; width:8px; height:8px; border-radius:2px; background:var(--sw); flex:none; }
+  .legend .v { text-align:right; font-variant-numeric:tabular-nums; }
+  .total { border-top:1px solid var(--line); margin-top:8px; padding-top:8px; font-weight:600; }
+
+  dl.metrics { display:grid; grid-template-columns:1fr auto; gap:3px 10px; margin:0; font-family:var(--mono); font-size:12px; }
+  dl.metrics dt { color:var(--ink-3); }
+  dl.metrics dd { margin:0; text-align:right; font-variant-numeric:tabular-nums; }
+  dl.metrics dd.warn { color:var(--doubt); }
+
+  label.row { display:grid; grid-template-columns:76px 1fr 46px; gap:9px; align-items:center; margin-bottom:9px; font-size:12px; color:var(--ink-2); }
+  label.row output { font-family:var(--mono); text-align:right; color:var(--ink); font-variant-numeric:tabular-nums; }
+  input[type=range] { width:100%; accent-color:var(--accent); }
+  .seg { display:flex; gap:4px; background:var(--sunk); padding:3px; border-radius:8px; margin-bottom:11px; }
+  .seg button {
+    flex:1; border:0; background:transparent; color:var(--ink-2); cursor:pointer;
+    font-family:var(--mono); font-size:11.5px; padding:5px 0; border-radius:6px;
+  }
+  .seg button[aria-pressed=true] { background:var(--accent); color:#07222b; font-weight:600; }
+  .seg button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+
+  .rect { display:flex; gap:10px; align-items:flex-start; }
+  .rect img { width:120px; border-radius:7px; background:#000; border:1px solid var(--line); }
+  .stages { display:grid; grid-template-columns:repeat(3,1fr); gap:7px; }
+  .stages figure { margin:0; }
+  .stages img { width:100%; border-radius:6px; background:#000; border:1px solid var(--line); }
+  .stages figcaption { font-family:var(--mono); font-size:10px; color:var(--ink-3); margin-top:4px; }
+  .muted { color:var(--ink-3); font-size:12px; margin:0; }
+  code { font-family:var(--mono); background:var(--sunk); padding:1px 5px; border-radius:4px; font-size:11.5px; }
+  .err { color:var(--miss); font-family:var(--mono); font-size:11.5px; word-break:break-word; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="stage">
+    <video id="v" playsinline muted autoplay></video>
+    <canvas id="overlay"></canvas>
+    <div class="hud"><span class="dot" id="dot"></span><span id="verdict">starting camera…</span><span class="fps" id="fps"></span></div>
+  </div>
+
+  <aside>
+    <div class="card">
+      <h2>Detection</h2>
+      <dl class="metrics" id="metrics">
+        <dt>aspect</dt><dd id="m-aspect">—</dd>
+        <dt>frame area</dt><dd id="m-area">—</dd>
+        <dt>corner err</dt><dd id="m-angle">—</dd>
+        <dt>detector</dt><dd id="m-method">—</dd>
+        <dt>geometry</dt><dd id="m-via">—</dd>
+        <dt>dhash</dt><dd id="m-hash">—</dd>
+      </dl>
+      <p class="err" id="err" hidden></p>
+    </div>
+
+    <div class="card">
+      <h2>Frame budget</h2>
+      <div class="bar" id="bar"></div>
+      <div class="legend" id="legend"></div>
+    </div>
+
+    <div class="card">
+      <h2>Rectified</h2>
+      <div class="rect">
+        <img id="rect" alt="rectified card" hidden>
+        <p class="muted" id="rect-empty">No card in the frame yet.</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Controls</h2>
+      <div class="seg" id="method">
+        <button data-v="canny" aria-pressed="true">canny</button>
+        <button data-v="otsu" aria-pressed="false">otsu</button>
+        <button data-v="both" aria-pressed="false">both</button>
+      </div>
+      <label class="row">work edge<input type="range" id="edge" min="320" max="1600" step="64" value="1024"><output id="edge-o">1024</output></label>
+      <label class="row">canny lo<input type="range" id="lo" min="5" max="120" step="5" value="40"><output id="lo-o">40</output></label>
+      <label class="row">canny hi<input type="range" id="hi" min="20" max="300" step="10" value="100"><output id="hi-o">100</output></label>
+      <label class="row">aspect tol<input type="range" id="aspect" min="4" max="40" step="1" value="18"><output id="aspect-o">0.18</output></label>
+      <label class="row">send px<input type="range" id="send" min="480" max="1440" step="80" value="960"><output id="send-o">960</output></label>
+      <div class="seg" id="stages-toggle">
+        <button data-v="0" aria-pressed="true">overlay only</button>
+        <button data-v="1" aria-pressed="false">full stages</button>
+      </div>
+      <p class="muted">Stage images roughly double the round trip, so they are off by default.</p>
+    </div>
+
+    <div class="card" id="stages-card" hidden>
+      <h2>Pipeline</h2>
+      <div class="stages">
+        <figure><img id="s-binary" alt="mask"><figcaption>02 mask</figcaption></figure>
+        <figure><img id="s-contours" alt="contours"><figcaption>03 contours</figcaption></figure>
+        <figure><img id="s-quad" alt="quad"><figcaption>04 quad</figcaption></figure>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const video = $('v'), overlay = $('overlay'), ctx = overlay.getContext('2d');
+const grab = document.createElement('canvas');
+const CARD_ASPECT = 63 / 88;
+
+// The detector runs at ~9 fps; the camera runs at 30–60. Keeping the two apart is the whole
+// design: `latest` is the most recent detection, redrawn on every animation frame, and
+// `inFlight` guarantees exactly one request is outstanding so later frames are dropped
+// rather than queued. Queuing would make the overlay drift further behind the longer you
+// watched it.
+let latest = null, inFlight = false, stopped = false;
+let detTimes = [];
+
+const opts = () => ({
+  method: document.querySelector('#method [aria-pressed=true]').dataset.v,
+  edge: +$('edge').value,
+  lo: +$('lo').value,
+  hi: +$('hi').value,
+  aspect: (+$('aspect').value / 100).toFixed(2),
+  stages: document.querySelector('#stages-toggle [aria-pressed=true]').dataset.v,
+  send: +$('send').value,
+});
+
+function segment(container, onChange) {
+  container.addEventListener('click', (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    for (const x of container.querySelectorAll('button')) x.setAttribute('aria-pressed', String(x === b));
+    onChange?.(b.dataset.v);
+  });
+}
+segment($('method'));
+segment($('stages-toggle'), (v) => { $('stages-card').hidden = v !== '1'; });
+for (const [id, fmt] of [['edge', String], ['lo', String], ['hi', String], ['send', String],
+                         ['aspect', (v) => (v / 100).toFixed(2)]]) {
+  const el = $(id), out = $(id + '-o');
+  const sync = () => { out.value = fmt(el.value); };
+  el.addEventListener('input', sync); sync();
+}
+
+async function start() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+      audio: false,
+    });
+    video.srcObject = stream;
+    await video.play();
+    $('verdict').textContent = 'looking…';
+    pump();
+    requestAnimationFrame(draw);
+  } catch (e) {
+    // getUserMedia on a non-secure origin never resolves or rejects with anything useful,
+    // so name the actual cause rather than echoing the exception.
+    $('verdict').textContent = 'no camera';
+    $('err').hidden = false;
+    $('err').textContent = window.isSecureContext
+      ? String(e)
+      : 'This page is not a secure context, so the browser refuses the camera. Reach it on localhost — from a phone, adb reverse tcp:7777 tcp:7777.';
+  }
+}
+
+async function pump() {
+  while (!stopped) {
+    if (inFlight || video.readyState < 2) { await new Promise(r => setTimeout(r, 16)); continue; }
+    const o = opts();
+    const scale = Math.min(1, o.send / Math.max(video.videoWidth, video.videoHeight));
+    grab.width = Math.round(video.videoWidth * scale);
+    grab.height = Math.round(video.videoHeight * scale);
+    grab.getContext('2d').drawImage(video, 0, 0, grab.width, grab.height);
+    const blob = await new Promise(r => grab.toBlob(r, 'image/jpeg', 0.72));
+    if (!blob) { await new Promise(r => setTimeout(r, 16)); continue; }
+
+    inFlight = true;
+    const t0 = performance.now();
+    try {
+      const q = `edge=${o.edge}&method=${o.method}&lo=${o.lo}&hi=${o.hi}&aspect=${o.aspect}&stages=${o.stages}`;
+      const res = await fetch('/frame?' + q, { method: 'POST', body: blob });
+      const j = await res.json();
+      j.round_trip_ms = performance.now() - t0;
+      latest = j;
+      render(j);
+    } catch (e) {
+      $('err').hidden = false; $('err').textContent = String(e);
+    } finally {
+      inFlight = false;
+    }
+  }
+}
+
+function render(j) {
+  detTimes.push(j.round_trip_ms);
+  if (detTimes.length > 20) detTimes.shift();
+  const mean = detTimes.reduce((a, b) => a + b, 0) / detTimes.length;
+  $('fps').textContent = `${(1000 / mean).toFixed(1)}/s`;
+
+  const aspectOk = j.ok && Math.abs(j.score.aspect - CARD_ASPECT) / CARD_ASPECT < 0.08;
+  const state = !j.ok ? '' : aspectOk ? 'hit' : 'doubt';
+  $('dot').className = 'dot ' + state;
+  $('verdict').textContent = !j.ok ? 'no card' : aspectOk ? 'card located' : 'suspect shape';
+
+  $('err').hidden = j.ok;
+  if (!j.ok) $('err').textContent = j.error ?? '';
+
+  const set = (id, v, warn) => { const el = $(id); el.textContent = v; el.classList.toggle('warn', !!warn); };
+  if (j.ok) {
+    set('m-aspect', j.score.aspect.toFixed(3), !aspectOk);
+    set('m-area', (j.score.area_frac * 100).toFixed(1) + '%');
+    set('m-angle', j.score.max_angle_error.toFixed(1) + '°');
+    set('m-method', j.method);
+    set('m-via', j.score.via);
+    set('m-hash', j.hash.slice(0, 12));
+    $('rect').src = j.rectified ?? ''; $('rect').hidden = !j.rectified;
+    $('rect-empty').hidden = !!j.rectified;
+  } else {
+    for (const id of ['m-aspect', 'm-area', 'm-angle', 'm-method', 'm-via', 'm-hash']) set(id, '—');
+    $('rect').hidden = true; $('rect-empty').hidden = false;
+  }
+
+  if (j.stages) {
+    for (const [k, id] of [['binary', 's-binary'], ['contours', 's-contours'], ['quad', 's-quad']])
+      if (j.stages[k]) $(id).src = j.stages[k];
+  }
+
+  // Stage timings, stacked. Network and JPEG decode are shown alongside the detector's own
+  // stages because on a phone they are not a rounding error.
+  const t = j.timings ?? {};
+  const parts = [
+    ['decode', j.decode_ms ?? 0, '#54c3e0'],
+    ['resize', t.resize_ms ?? 0, '#7dd3c0'],
+    ['mask', t.mask_ms ?? 0, '#e8b45c'],
+    ['contour', t.contour_ms ?? 0, '#c3a6e0'],
+    ['rectify', t.rectify_ms ?? 0, '#5ed69a'],
+  ];
+  const acc = parts.reduce((a, [, v]) => a + v, 0);
+  const other = Math.max(0, j.round_trip_ms - acc);
+  parts.push(['transport', other, '#6b7986']);
+  const total = acc + other;
+  $('bar').innerHTML = parts.map(([, v, c]) =>
+    `<i style="width:${total ? (v / total) * 100 : 0}%;background:${c}"></i>`).join('');
+  $('legend').innerHTML = parts.map(([k, v, c]) =>
+    `<span class="k" style="--sw:${c}">${k}</span><span class="v">${v.toFixed(1)} ms</span>`).join('')
+    + `<span class="k total" style="--sw:transparent">round trip</span><span class="v total">${total.toFixed(1)} ms</span>`;
+}
+
+// Redraws every animation frame from the most recent detection, so the box is smooth and
+// correctly placed even though it only updates when a detection lands.
+function draw() {
+  if (video.videoWidth) {
+    if (overlay.width !== video.videoWidth) { overlay.width = video.videoWidth; overlay.height = video.videoHeight; }
+    ctx.clearRect(0, 0, overlay.width, overlay.height);
+    const j = latest;
+    if (j?.ok && j.quad) {
+      // The quad is in the coordinates of the frame that was *sent*, which is smaller than
+      // the video. Scaling here rather than server-side keeps the wire payload independent
+      // of the preview size.
+      const sx = overlay.width / j.frame.w, sy = overlay.height / j.frame.h;
+      const ok = Math.abs(j.score.aspect - CARD_ASPECT) / CARD_ASPECT < 0.08;
+      ctx.lineWidth = Math.max(2, overlay.width / 300);
+      ctx.strokeStyle = ok ? '#5ed69a' : '#e8b45c';
+      ctx.beginPath();
+      j.quad.forEach(([x, y], i) => i ? ctx.lineTo(x * sx, y * sy) : ctx.moveTo(x * sx, y * sy));
+      ctx.closePath(); ctx.stroke();
+      // Mark the corner the rectifier treats as top-left, so a 180° flip is visible live.
+      ctx.fillStyle = '#e05ad0';
+      ctx.beginPath();
+      ctx.arc(j.quad[0][0] * sx, j.quad[0][1] * sy, ctx.lineWidth * 2.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  requestAnimationFrame(draw);
+}
+
+start();
+</script>
+</body>
+</html>

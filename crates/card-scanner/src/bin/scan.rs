@@ -208,6 +208,7 @@ fn main() -> std::process::ExitCode {
                             "elapsed_ms": elapsed,
                             "quad": d.quad.corners,
                             "score": d.score,
+                            "timings": trace.as_ref().map(|t| t.timings),
                             "candidates": trace.as_ref().map(|t| t.candidates.iter().map(|c| serde_json::json!({
                                 "corners": c.quad.corners, "score": c.score,
                             })).collect::<Vec<_>>()),
@@ -222,6 +223,7 @@ fn main() -> std::process::ExitCode {
                         serde_json::json!({
                             "file": name, "found": true, "method": method.as_str(),
                             "elapsed_ms": elapsed, "score": d.score,
+                            "timings": trace.as_ref().map(|t| t.timings),
                             "hash": descriptor.to_hex(),
                         })
                     );

@@ -260,9 +260,29 @@ impl std::fmt::Debug for Detection {
     }
 }
 
+/// Where the time went, per stage.
+///
+/// Carried on the trace rather than measured by the caller because the caller can only ever
+/// time the whole call, and "detection is too slow" is not actionable without knowing which
+/// of the four stages owns it. The live view renders these directly.
+#[derive(Debug, Clone, Copy, Default, serde::Serialize)]
+pub struct DetectTimings {
+    /// Downscaling the source to `work_long_edge`. Proportional to the *source* pixels, so
+    /// this is the stage a 12 MP still pays and a camera frame does not.
+    pub resize_ms: f32,
+    /// Canny or Otsu, plus the morphology, across every mask in the pool.
+    pub mask_ms: f32,
+    /// Contours, hulls, polygon approximation and scoring.
+    pub contour_ms: f32,
+    /// The two homographies, warped from the full-resolution source.
+    pub rectify_ms: f32,
+    pub total_ms: f32,
+}
+
 /// Every intermediate, kept for the debug artifacts. Cheap to produce and the reason the
 /// CLI is worth having.
 pub struct DetectTrace {
+    pub timings: DetectTimings,
     pub gray: GrayImage,
     /// Canny edges or the Otsu mask, whichever ran.
     pub binary: GrayImage,
@@ -292,6 +312,10 @@ pub fn detect(
     source: &DynamicImage,
     opts: &DetectOptions,
 ) -> (Result<Detection, DetectError>, Option<DetectTrace>) {
+    let t_start = std::time::Instant::now();
+    let mut timings = DetectTimings::default();
+    let ms = |t: std::time::Instant| t.elapsed().as_secs_f32() * 1000.0;
+
     let (sw, sh) = source.dimensions();
     if sw == 0 || sh == 0 {
         return (Err(DetectError::EmptyFrame), None);
@@ -304,8 +328,12 @@ pub fn detect(
         ((sw as f32 / scale).round() as u32).max(1),
         ((sh as f32 / scale).round() as u32).max(1),
     );
+    let t_resize = std::time::Instant::now();
     let work = source.resize_exact(ww, wh, image::imageops::FilterType::Triangle);
     let gray = work.to_luma8();
+    timings.resize_ms = ms(t_resize);
+
+    let t_mask = std::time::Instant::now();
 
     // ── Stage 2: separate the card from its background ────────────────────────────
     let masks: Vec<GrayImage> = match opts.method {
@@ -363,7 +391,10 @@ pub fn detect(
         }
     };
 
+    timings.mask_ms = ms(t_mask);
+
     // ── Stages 3-5: contours, polygon approximation, scoring ──────────────────────
+    let t_contour = std::time::Instant::now();
     let frame_area = (ww * wh) as f32;
     let mut candidates: Vec<ScoredQuad> = Vec::new();
     let mut examined = 0usize;
@@ -434,7 +465,11 @@ pub fn detect(
     candidates.dedup_by(|a, b| (a.score.total - b.score.total).abs() < 1e-4);
     candidates.truncate(opts.max_candidates);
 
+    timings.contour_ms = ms(t_contour);
+    timings.total_ms = ms(t_start);
+
     let trace = DetectTrace {
+        timings,
         gray: gray.clone(),
         binary: masks[0].clone(),
         contours: draw_contours(&work.to_rgb8(), &all_contours),
@@ -452,6 +487,7 @@ pub fn detect(
     let source_quad = Quad {
         corners: best.quad.corners.map(|(x, y)| (x * scale, y * scale)),
     };
+    let t_rectify = std::time::Instant::now();
     let rgb = source.to_rgb8();
     let (Some(rectified), Some(rectified_180)) = (
         rectify(&rgb, &source_quad),
@@ -459,6 +495,10 @@ pub fn detect(
     ) else {
         return (Err(DetectError::Degenerate), Some(trace));
     };
+
+    let mut trace = trace;
+    trace.timings.rectify_ms = ms(t_rectify);
+    trace.timings.total_ms = ms(t_start);
 
     (
         Ok(Detection { quad: source_quad, score: best.score, rectified, rectified_180 }),
