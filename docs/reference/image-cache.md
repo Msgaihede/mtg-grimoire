@@ -89,6 +89,54 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `cards.scryfall.io` is the **only** host images are fetched from; an off-host URI is
   refused and warned about once per process. A placeholder is served `no-store` (it is the
   one 200 whose content is meant to change), real bytes `max-age=86400`.
+- **A request the protocol never answers is the one failure the app could not see, and it is why
+  a wall sometimes finished with two black cards in it.** Reported 2026-09-01: "some card images
+  don't load and appear stuck, but as soon as I mouse over them they continue loading."
+  Investigated against the reporter's own dev database, which is what settles where it is *not*.
+  The stuck tile in the screenshot was **Accomplished Alchemist** (`pstx` 119p): its `display`
+  bytes had been on disk since **2026-08-22**, 81 816 of them, and `image_cache.source_uri`
+  still equalled `cards.image_uris.display` — so `is_current` vouched for the row and `Cache::get`
+  answered it from `tokio::fs::read` in the 2–3 ms a warm serve costs. No fetch, no permit, no
+  gate. **`error_log` held zero rows from `scryfall_image` or `image_store`, ever** — the two
+  rows in it were the relay's — so no 502, no 503, no 429 and no timeout ever reached the
+  renderer either. The fetcher is exonerated end to end.
+
+  What is left is the delivery. **On Windows every `mtgimg:` response is handed to the UI thread
+  with `PostMessageW`** — `wry 0.55.1`'s `webview2::dispatch_handler`, because the responder is
+  called from a tokio task and `ICoreWebView2WebResourceRequestedEventArgs::SetResponse` and the
+  deferral's `Complete()` may only be touched there. The post's failure is *ignored*
+  (`let _res = PostMessageW(…)`, warned about in a debug build and nowhere else), and a post that
+  does not arrive leaves the boxed closure leaked and the deferral uncompleted **forever**. An
+  `<img>` in that state fires no `load`, no `error` and nothing in the console, and
+  `useImageRetry` — which only ever reacted to `error` — had no way to know: the frame drew the
+  empty box with no fallback text, which is exactly the screenshot.
+
+  So `CardImage` watches for silence: a frame with a layout box that has heard nothing by
+  `IMAGE_STALL_DEADLINE_MS` re-requests with a `?stall=N` mark, twice, then dispatches `error` on
+  the element so the ordinary backoff takes over. The mark is a query string and `images::serve`
+  parses only the path, so nothing between the renderer and the handler can answer the second ask
+  out of what it made of the first.
+
+  **The deadline is 5 s against a measured ceiling of 451 ms.** Timed in the shipped window
+  (debug build, 1691×911 client, the reporter's own corpus and image cache) over **400** tiles of
+  the search wall on 2026-09-01: **p50 7 ms, p90 275 ms, p99 421 ms, max 451 ms**. A deliberate
+  burst of **200 simultaneous** warm protocol requests returned a median of **116 ms** and a worst
+  of **167 ms**; repeated with the machine held at **72 % CPU** across 16 cores, 132/216 ms. It
+  costs little when it fires early, because `Cache::get` is single-flight per key: a second ask
+  for a picture already being fetched waits on that key's mutex and reads what the first one
+  writes, so pre-empting a slow *network* fetch — itself bounded at 10 s by `IMAGE_TIMEOUT` —
+  buys one extra local request and no extra download.
+
+  **What could not be reproduced, and it is worth writing down so nobody re-runs it.** Across
+  roughly 3 300 images driven over CDP in one session: jump scrolling, real `mouseWheel` bursts
+  with quiet settles, 400-tick runs into uncached cards (330 genuine cold fetches), a data
+  refresh pressed mid-browse, the window fully occluded by a topmost window, and the 200-way
+  burst above under 16-way CPU load — **zero failed, zero stalled**, and a screenshot-and-canvas
+  pass measuring the pixel variance of every fully visible tile found no loaded-but-unpainted
+  frame either. The trigger is rarer than a test harness can provoke on demand, which is the
+  argument for healing the state rather than for hunting it further. Hovering was also checked
+  and does **not** remount a tile's `<img>` — the same element survives the pointer — so
+  "it loads when I mouse over it" is the app being woken, not the tile being redrawn.
 - Images are fetched **once per key** even when a screenful asks at the same moment
   (`Cache`'s per-key mutex + a re-read of the disk). The waiter re-reads rather than being
   handed the bytes, so it degrades to a second fetch when the write connection was busy or

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { pickOption } from "@/test-dropdown";
@@ -715,5 +715,65 @@ describe("MultiDropdown", () => {
     );
     await user.keyboard("{Enter}");
     expect(onToggle).toHaveBeenCalledWith("legacy");
+  });
+});
+
+describe("Dropdown dismissal on scroll", () => {
+  /**
+   * `usePopupPlacement` closes the panel when an ancestor scrolls, because the panel is placed
+   * once and never followed — a trigger that scrolls out from under it leaves an orphan. The
+   * listener is on `window` in the **capture** phase, which is the only way a scroller five
+   * levels down inside a view is seen at all, since `scroll` does not bubble.
+   *
+   * Capture from `window` reaches every scroll in the document, and **the panel's own list is one
+   * of them**: the options are drawn in a `max-h-64 overflow-auto` `<ul>`, so a wheel spin over
+   * the rows, or a drag of that list's own scrollbar, closed the dropdown the moment it moved
+   * (issue #335). The panel is a descendant of the trigger's root rather than an ancestor of the
+   * trigger, so nothing the close exists for can be true of it.
+   *
+   * **jsdom has no layout engine, so nothing here can scroll a box.** What a wheel spin and a
+   * scrollbar drag have in common is the `scroll` event they end in, on the element that
+   * scrolled — that is the part a suite without layout can still pin, and it is dispatched
+   * directly for the same reason `ContextMenu.test.tsx` dispatches its own.
+   */
+  it("stays open when its own option list scrolls", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.click(screen.getByRole("button", { name: "Format" }));
+
+    act(() => void screen.getByRole("listbox").dispatchEvent(new Event("scroll")));
+
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+  });
+
+  it("stays open when anything else inside the panel scrolls", async () => {
+    // The list is the scroller today, but the guard is the panel rather than the list: a footer
+    // or a search box that grows one later must not reintroduce the bug.
+    const user = userEvent.setup();
+    render(
+      <Dropdown label="Format" value="modern" onChange={vi.fn()} options={FORMATS} searchable />,
+    );
+    await user.click(screen.getByRole("button", { name: "Format" }));
+
+    act(() =>
+      void screen.getByRole("combobox", { name: "Search" }).dispatchEvent(new Event("scroll")),
+    );
+
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+  });
+
+  it("closes when a scroller outside the panel scrolls", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.click(screen.getByRole("button", { name: "Format" }));
+
+    // A scroller inside a view rather than the window, which is the case the capture phase was
+    // added for and the one a wall's own scrollport actually produces.
+    const scroller = document.createElement("div");
+    document.body.append(scroller);
+    act(() => void scroller.dispatchEvent(new Event("scroll")));
+
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    scroller.remove();
   });
 });

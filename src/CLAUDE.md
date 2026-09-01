@@ -50,6 +50,25 @@ Every one of these has its measurement and its story in
   library's, and that one refuses any press landing inside a button. A card's art **is** a button,
   so the symptom was identical and the attribute was innocent. `dndManager.ts` carries the fence
   and [frontend-design.md](../docs/reference/frontend-design.md) the whole reading.
+  **It also asks again for a picture that never answers, and that is a third failure neither the
+  hook nor any call site can see** (2026-09-01). `useImageRetry` heals a picture the protocol
+  *refused* — a 502 or a 503 arrives as an `error` event and the frame comes back on a backoff.
+  Nothing heals a request answered by **nothing at all**: no `load`, no `error`, no console line,
+  and a frame that stays empty for the rest of the session, which is what a reader reports as
+  "some cards never load until I move the mouse over them". It is reachable on Windows — every
+  `mtgimg:` response is handed to the UI thread with `PostMessageW` (`wry`'s
+  `webview2::dispatch_handler`), and a post that does not arrive leaves the request's deferral
+  uncompleted forever. So a visible frame that has heard nothing for **5 s** asks again with a
+  `?stall=N` mark, twice, and then dispatches `error` on the element so the hook's ordinary
+  failure path takes it. **In `CardImage` rather than in `useImageRetry`, because two frames that
+  draw a card use no hook at all** — `CardDetailPane`'s printing rows and `TheoryDiffDialog`'s —
+  which is the `draggable` paragraph above happening a second time. **It is gated on the frame
+  having a layout box**, which is both the right semantics (nothing to heal where nobody is
+  looking) and what keeps it out of the suite's way: jsdom reports `width: 0` and
+  `complete: false` for every image forever, so without the gate every mounted card in every test
+  would arm a timer against a picture that can never arrive. Nothing in jsdom can go red for the
+  behaviour itself; the deadline is sized from the shipped window and the figures are in
+  [image-cache.md](../docs/reference/image-cache.md).
 - **A card frame is `components/CardArt`** — the 5:7 box, `CardImage`, `useImageRetry`, the
   no-art fallback and the foil marking, in one place. **Every wall of card faces draws it**: the
   search's, the collection's, the deck editor's docked search column and — since 2026-08-16 —

@@ -3028,6 +3028,43 @@ dialog panel, the scroller is not in that chain, and `Dialog.tsx` records that t
 deliberately does not clip its content. But that is **two subtle facts holding it up, neither
 measured**. The first in-dialog migration should take the reading rather than inherit this one.
 
+### The panel's own list is not an ancestor — issue #335
+
+**A dropdown closed when the reader scrolled it.** `usePopupPlacement` closes rather than follows,
+which needs a `scroll` listener on `window` in the **capture** phase — `scroll` does not bubble, so
+a view's own scrollport is invisible any other way. Capture from `window` then delivers *every*
+scroll in the document, and the options are drawn in a `max-h-64 overflow-auto` list, so the panel
+closed itself the instant its own list moved. The close exists for a **trigger that scrolls out
+from under a panel placed once**; the panel is a descendant of the trigger's root and can never be
+that, so the guard is `panelRef.contains(e.target)` — a carve-out, not a heuristic. It is written
+against the panel rather than the list so a footer or a search box that grows a scroller later
+cannot bring it back.
+
+**It cost more than the wheel, which is the part the report could not see.** `Dropdown`'s
+cursor-reveal effect calls `scrollIntoView({ block: "nearest" })` on the active row, and that is a
+scroll of the same list — so arrow-walking past the fold, and opening a picker whose *picked* row
+sits below the fold, closed the panel too. Measured in headless Edge 152 at 1280×900 against the
+worktree's Storybook (`search-setcombobox--open`, 36 rows, `scrollHeight` **1152** in a
+`clientHeight` of **256**): `scrollIntoView` on the last row took the list to **896** and the panel
+stayed up, where every one of those scrolls had reached a `window` capture listener with
+`target` = the listbox.
+
+**Both gestures in the report were driven as real input, because neither suite can express them.**
+jsdom has no layout, so nothing there can scroll a box — `Dropdown.test.tsx` dispatches the
+`scroll` event the gestures end in, which is the part a suite without layout can still pin. The
+gestures themselves went through `Input.dispatchMouseEvent` over raw CDP, since the panel's
+scrollbar is not an element any tool can be handed: a press-drag-release on the list's own **15 px**
+scrollbar took `scrollTop` **0 → 838** with the panel still open and `aria-expanded` still `true`.
+
+**That drag also settles a question the `focusout` closes all depend on.** The press moved focus —
+`focusout` from the trigger to the `<ul>` — so a scrollbar drag *is* a blur, and a panel that
+closes on one survives only because the new focus is inside it. Chromium walks focus to the
+**nearest focusable ancestor**, measured on a probe of `MoveToFolder`'s exact shape (a plain
+scroller inside a `tabIndex={-1}` panel): focus landed on the panel, not on `<body>`, so
+`relatedTarget` is non-null and contained. `MoveToFolder`, `DeckBracket` and `ValidationPanel` are
+each that shape and none of them registers a scroll listener at all, so the bug was `Dropdown`'s
+alone.
+
 ## The card's chin, and the one foot under every card in the app
 
 `src/components/CardChin.tsx`, 2026-08-26. Three surfaces drew a foot under a card and each held

@@ -74,6 +74,15 @@ export function usePopupPlacement({
    * that scrolls out from under an open panel leaves an orphan, and a dropdown is open for about
    * two seconds. Following it would mean re-measuring on every scroll frame for a control nobody
    * scrolls while using.
+   *
+   * **"An ancestor" is load-bearing, and taking it literally is the whole of issue #335.** The
+   * listener below has to be on `window` in the capture phase — `scroll` does not bubble, so a
+   * view's own scrollport is invisible to anything else — and capture from `window` sees *every*
+   * scroll in the document, the panel's own included. The options are drawn in a
+   * `max-h-64 overflow-auto` list, so a wheel spin over the rows and a drag of that list's
+   * scrollbar each closed the picker the instant it moved. The panel is a descendant of the
+   * trigger's root, never an ancestor of the trigger, so it can never be the thing this close
+   * exists for; the guard is the panel subtree and it is a carve-out rather than a heuristic.
    */
   onClose: () => void;
 }): { placement: Placement | null; minWidth: number } {
@@ -145,14 +154,22 @@ export function usePopupPlacement({
     if (!open) return;
     const onResize = () => measure();
     // Capture, so an inner scroller counts — the import previews and every dialog body scroll
-    // without the window ever seeing it.
-    window.addEventListener("scroll", onClose, true);
+    // without the window ever seeing it. And capture is also why the panel has to be excluded by
+    // hand: it puts every scroll in the document through here, and the panel's own list is one.
+    // Guarded on the panel rather than on the list, so a footer or a search box that grows a
+    // scroller later cannot bring the bug back. `contains` takes any node, and a window scroll
+    // arrives with `document` as its target, which no element contains.
+    const onScroll = (e: Event) => {
+      if (panelRef.current?.contains(e.target as Node)) return;
+      onClose();
+    };
+    window.addEventListener("scroll", onScroll, true);
     window.addEventListener("resize", onResize);
     return () => {
-      window.removeEventListener("scroll", onClose, true);
+      window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("resize", onResize);
     };
-  }, [open, measure, onClose]);
+  }, [open, measure, onClose, panelRef]);
 
   return useSyncExternalStore(subscribe, getSnapshot);
 }
