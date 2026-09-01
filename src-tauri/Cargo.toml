@@ -1,6 +1,6 @@
 [package]
 name = "mtg-grimoire"
-version = "0.17.0"
+version = "0.18.0"
 description = "MTG Grimoire"
 authors = ["Markus Seerup"]
 license = "AGPL-3.0-or-later"
