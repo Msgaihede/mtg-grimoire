@@ -18,8 +18,12 @@ path = "src/lib.rs"
 [features]
 default = []
 # The developer tools. Neither ever enters the app's dependency graph.
-cli = ["dep:clap", "dep:tiny_http"]
-builder = ["dep:clap", "dep:rusqlite", "dep:ureq", "dep:rayon"]
+# `corpus` is the optional join back to the app's `corpus.db` — it turns a matched id into
+# a card name. Separate from `cli` because the library can match without it, and a bundle
+# with no corpus beside it still answers, just with ids.
+corpus = ["dep:rusqlite"]
+cli = ["dep:clap", "dep:tiny_http", "corpus"]
+builder = ["dep:clap", "dep:ureq", "dep:rayon", "corpus"]
 
 [dependencies]
 # `webp` is not optional here: every reference image the builder hashes comes from

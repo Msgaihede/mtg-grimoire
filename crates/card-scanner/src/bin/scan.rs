@@ -13,6 +13,8 @@ use card_scanner::debug::{
 };
 use card_scanner::detect::{detect, DetectOptions, DetectTrace, Detection, EdgeMethod};
 use card_scanner::hash::{hash, HashKind};
+use card_scanner::index::{Bundle, Mask};
+use card_scanner::reference::Reference;
 use clap::Parser;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -54,6 +56,17 @@ struct Args {
     hash: HashArg,
     #[arg(long, default_value_t = 256)]
     bits: u16,
+
+    /// The reference bundle from `build-hashes`. Without it this detects and rectifies but
+    /// names nothing.
+    #[arg(long)]
+    bundle: Option<PathBuf>,
+    /// The app's `corpus.db`, to turn a matched id into a card name.
+    #[arg(long)]
+    corpus: Option<PathBuf>,
+    /// Candidates to report per scan.
+    #[arg(long, default_value_t = 3)]
+    top: usize,
 
     /// Print one JSON object per scan instead of the table.
     #[arg(long)]
@@ -110,6 +123,39 @@ fn main() -> std::process::ExitCode {
         }
     }
 
+    // Loading the bundle is best effort: a missing or half-built one costs the naming and
+    // nothing else, which matters because the bundle takes half an hour to build and the
+    // detector is worth running against the corpus meanwhile.
+    let reference = args.bundle.as_ref().and_then(|path| {
+        let bytes = std::fs::read(path)
+            .map_err(|e| eprintln!("bundle {}: {e}", path.display()))
+            .ok()?;
+        let bundle = Bundle::from_bytes(&bytes)
+            .map_err(|e| eprintln!("bundle {}: {e}", path.display()))
+            .ok()?;
+        eprintln!(
+            "bundle: {} printings, {} artworks, {} at {} bits",
+            bundle.cards.len(),
+            bundle.arts.len(),
+            bundle.kind.as_str(),
+            bundle.bits
+        );
+        let mut reference = Reference::new(bundle);
+        if let Some(corpus) = &args.corpus {
+            match rusqlite::Connection::open_with_flags(
+                corpus,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+            ) {
+                Ok(conn) => match reference.load_labels(&conn) {
+                    Ok(n) => eprintln!("corpus: {n} labels"),
+                    Err(e) => eprintln!("corpus {}: {e}", corpus.display()),
+                },
+                Err(e) => eprintln!("corpus {}: {e}", corpus.display()),
+            }
+        }
+        Some(reference)
+    });
+
     let mut entries: Vec<SheetEntry> = Vec::new();
     let mut found = 0usize;
     let mut failed_to_open = 0usize;
@@ -118,7 +164,8 @@ fn main() -> std::process::ExitCode {
     if !args.json {
         println!(
             "{:<28} {:>7} {:>6} {:>7} {:>6} {:>6}  {}",
-            "file", "ms", "method", "aspect", "area", "angle", "hash"
+            "file", "ms", "method", "aspect", "area", "angle",
+            if reference.is_some() { "match" } else { "hash" }
         );
     }
 
@@ -188,6 +235,16 @@ fn main() -> std::process::ExitCode {
                     args.hash.into(),
                     args.bits,
                 );
+                // Both orientations, because a card is 180°-symmetric and the quad cannot
+                // say which end is the top.
+                let matched = reference.as_ref().map(|r| {
+                    let upright =
+                        image::DynamicImage::ImageRgb8(d.rectified.clone()).to_luma8();
+                    let flipped =
+                        image::DynamicImage::ImageRgb8(d.rectified_180.clone()).to_luma8();
+                    r.match_card(&upright, &flipped, args.top.clamp(1, 25), &Mask::all())
+                });
+
                 let detail = format!(
                     "{} aspect={:.3} area={:.3} angle={:.1}deg score={:.3}",
                     method.as_str(),
@@ -213,6 +270,7 @@ fn main() -> std::process::ExitCode {
                                 "corners": c.quad.corners, "score": c.score,
                             })).collect::<Vec<_>>()),
                             "hash": { "kind": args.hash_kind_str(), "bits": args.bits, "hex": descriptor.to_hex() },
+                            "match": matched,
                         }),
                     );
                 }
@@ -225,16 +283,28 @@ fn main() -> std::process::ExitCode {
                             "elapsed_ms": elapsed, "score": d.score,
                             "timings": trace.as_ref().map(|t| t.timings),
                             "hash": descriptor.to_hex(),
+                            "match": matched,
                         })
                     );
                 } else {
+                    let tail = match &matched {
+                        Some(m) => match m.candidates.first() {
+                            Some(c) => format!(
+                                "{:<38} d={} {}",
+                                c.label.as_ref().map(|l| l.display()).unwrap_or_else(|| c.id[..8].to_string()),
+                                c.distance,
+                                if m.rotated { "(180)" } else { "" }
+                            ),
+                            None => "no candidate".to_string(),
+                        },
+                        None => descriptor.to_hex()[..16].to_string(),
+                    };
                     println!(
-                        "{name:<28} {elapsed:>7.0} {:>6} {:>7.3} {:>6.3} {:>6.1}  {}",
+                        "{name:<28} {elapsed:>7.0} {:>6} {:>7.3} {:>6.3} {:>6.1}  {tail}",
                         method.as_str(),
                         d.score.aspect,
                         d.score.area_frac,
                         d.score.max_angle_error,
-                        &descriptor.to_hex()[..16],
                     );
                 }
 

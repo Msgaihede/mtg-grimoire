@@ -27,7 +27,10 @@
 
 use card_scanner::detect::{detect, DetectOptions, DetectTrace, Detection, EdgeMethod};
 use card_scanner::hash::{hash, HashKind};
+use card_scanner::index::{Bundle, Mask};
+use card_scanner::reference::Reference;
 use clap::Parser;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tiny_http::{Header, Response, Server};
 
@@ -40,6 +43,18 @@ struct Args {
     /// couple only helps when the page also asks for the debug stage images.
     #[arg(long, default_value_t = 3)]
     workers: usize,
+
+    /// The reference bundle from `build-hashes`. Without it the page detects and rectifies
+    /// but names nothing — which is still the useful half while the bundle is building.
+    #[arg(long)]
+    bundle: Option<PathBuf>,
+    /// The app's `corpus.db`, to turn a matched id into a card name. Optional: a match
+    /// without a corpus is an id, which still proves the pipeline.
+    #[arg(long)]
+    corpus: Option<PathBuf>,
+    /// How many candidates to return per frame.
+    #[arg(long, default_value_t = 5)]
+    top: usize,
 }
 
 /// Everything the page can change between frames, parsed from the query string.
@@ -137,7 +152,12 @@ fn base64(data: &[u8]) -> String {
     out
 }
 
-fn handle_frame(body: &[u8], opts: &FrameOptions) -> serde_json::Value {
+fn handle_frame(
+    body: &[u8],
+    opts: &FrameOptions,
+    reference: Option<&Reference>,
+    top: usize,
+) -> serde_json::Value {
     let decode_started = std::time::Instant::now();
     let source = match image::load_from_memory(body) {
         Ok(i) => i,
@@ -206,6 +226,16 @@ fn handle_frame(body: &[u8], opts: &FrameOptions) -> serde_json::Value {
                     });
                 }
             }
+
+            // The match itself. Both orientations are hashed inside `match_card`, because a
+            // card is 180°-symmetric and the quad cannot say which end is the top.
+            if let Some(r) = reference {
+                let upright = image::DynamicImage::ImageRgb8(d.rectified.clone()).to_luma8();
+                let flipped =
+                    image::DynamicImage::ImageRgb8(d.rectified_180.clone()).to_luma8();
+                let report = r.match_card(&upright, &flipped, top, &Mask::all());
+                out["match"] = serde_json::to_value(&report).unwrap_or_default();
+            }
         }
         None => {
             out["error"] = error.unwrap_or_else(|| "no card".into()).into();
@@ -225,6 +255,51 @@ fn handle_frame(body: &[u8], opts: &FrameOptions) -> serde_json::Value {
     out
 }
 
+/// Load the bundle and, if one is given, the corpus labels beside it.
+///
+/// Every failure here is reported and then ignored: the page is useful without a bundle, and
+/// a debug tool that refuses to start because an optional file is mid-build is a debug tool
+/// that cannot be used while the thing it debugs is being built.
+fn load_reference(args: &Args) -> Option<Reference> {
+    let path = args.bundle.as_ref()?;
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("bundle {}: {e} — running without a matcher", path.display());
+            return None;
+        }
+    };
+    let bundle = match Bundle::from_bytes(&bytes) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("bundle {}: {e} — running without a matcher", path.display());
+            return None;
+        }
+    };
+    eprintln!(
+        "  bundle: {} printings, {} artworks, {} at {} bits",
+        bundle.cards.len(),
+        bundle.arts.len(),
+        bundle.kind.as_str(),
+        bundle.bits
+    );
+    let mut reference = Reference::new(bundle);
+
+    if let Some(corpus) = &args.corpus {
+        match rusqlite::Connection::open_with_flags(
+            corpus,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+        ) {
+            Ok(conn) => match reference.load_labels(&conn) {
+                Ok(n) => eprintln!("  corpus: {n} labels"),
+                Err(e) => eprintln!("  corpus {}: {e} — matches will be ids", corpus.display()),
+            },
+            Err(e) => eprintln!("  corpus {}: {e} — matches will be ids", corpus.display()),
+        }
+    }
+    Some(reference)
+}
+
 fn main() {
     let args = Args::parse();
     let addr = format!("127.0.0.1:{}", args.port);
@@ -236,6 +311,9 @@ fn main() {
         }
     };
 
+    let reference = Arc::new(load_reference(&args));
+    let top = args.top.clamp(1, 25);
+
     println!("card-scanner live view: http://{addr}");
     println!();
     println!("  On this machine, open that URL.");
@@ -246,6 +324,7 @@ fn main() {
     let mut handles = Vec::new();
     for _ in 0..args.workers.max(1) {
         let server = Arc::clone(&server);
+        let reference = Arc::clone(&reference);
         handles.push(std::thread::spawn(move || loop {
             let Ok(mut request) = server.recv() else { return };
             let url = request.url().to_string();
@@ -269,7 +348,7 @@ fn main() {
                     Ok(_) => {
                         let opts = FrameOptions::from_query(&url);
                         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            handle_frame(&body, &opts)
+                            handle_frame(&body, &opts, reference.as_ref().as_ref(), top)
                         }))
                         .unwrap_or_else(|_| {
                             serde_json::json!({

@@ -70,6 +70,34 @@
   dl.metrics dd { margin:0; text-align:right; font-variant-numeric:tabular-nums; }
   dl.metrics dd.warn { color:var(--doubt); }
 
+  /* The match panel. Every part of it is a fixed size, for the reason the rest of this
+     panel is: it updates several times a second and anything that resizes drags the controls
+     below it out from under the pointer. The candidate list is `top` rows tall whether or not
+     there are that many candidates. */
+  .match-head { display:flex; align-items:baseline; gap:8px; min-height:22px; margin-bottom:9px; }
+  .match-name {
+    font-size:15px; font-weight:600; letter-spacing:-.01em; white-space:nowrap;
+    overflow:hidden; text-overflow:ellipsis; flex:1 1 auto; min-width:0;
+  }
+  .match-conf {
+    flex:none; font-family:var(--mono); font-size:10px; font-weight:600; letter-spacing:.07em;
+    text-transform:uppercase; padding:2px 7px; border-radius:999px;
+    background:var(--sunk); color:var(--ink-3);
+  }
+  .match-conf.sure { background:#14301f; color:var(--hit); }
+  .match-conf.maybe { background:#332612; color:var(--doubt); }
+  .cands {
+    list-style:none; margin:10px 0 0; padding:9px 0 0; border-top:1px solid var(--line);
+    display:grid; grid-auto-rows:19px; gap:2px; height:114px; overflow:hidden;
+  }
+  .cands li {
+    display:grid; grid-template-columns:1fr 5ch; gap:8px; align-items:baseline;
+    font-family:var(--mono); font-size:11px; color:var(--ink-3);
+  }
+  .cands li span:first-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .cands li span:last-child { text-align:right; font-variant-numeric:tabular-nums; }
+  .cands li.best { color:var(--ink-2); }
+
   label.row { display:grid; grid-template-columns:76px 1fr 46px; gap:9px; align-items:center; margin-bottom:9px; font-size:12px; color:var(--ink-2); }
   label.row output { font-family:var(--mono); text-align:right; color:var(--ink); font-variant-numeric:tabular-nums; }
   input[type=range] { width:100%; accent-color:var(--accent); }
@@ -126,6 +154,21 @@
   </div>
 
   <aside>
+    <div class="card">
+      <h2>Match</h2>
+      <div class="match-head">
+        <span class="match-name" id="mt-name">&mdash;</span>
+        <span class="match-conf" id="mt-conf">no bundle</span>
+      </div>
+      <dl class="metrics">
+        <dt>distance</dt><dd id="mt-dist">&mdash;</dd>
+        <dt>margin</dt><dd id="mt-margin">&mdash;</dd>
+        <dt>orientation</dt><dd id="mt-rot">&mdash;</dd>
+        <dt>search</dt><dd id="mt-ms">&mdash;</dd>
+      </dl>
+      <ol class="cands" id="mt-list"></ol>
+    </div>
+
     <div class="card">
       <h2>Detection</h2>
       <dl class="metrics" id="metrics">
@@ -286,7 +329,11 @@ function render(j) {
   const aspectOk = j.ok && Math.abs(j.score.aspect - CARD_ASPECT) / CARD_ASPECT < 0.08;
   const state = !j.ok ? '' : aspectOk ? 'hit' : 'doubt';
   $('dot').className = 'dot ' + state;
-  $('verdict').textContent = !j.ok ? 'no card' : aspectOk ? 'card located' : 'suspect shape';
+  const named = j.match?.candidates?.[0];
+  const namedWell = named && named.normalized <= PLAUSIBLE_DISTANCE && named.label;
+  $('verdict').textContent = !j.ok ? 'no card'
+    : namedWell ? named.label.name
+    : aspectOk ? 'card located' : 'suspect shape';
 
   // Emptied rather than hidden: the element keeps its reserved two lines either way, so a
   // card entering or leaving frame never changes this card's height.
@@ -308,6 +355,8 @@ function render(j) {
   if (rect) $('rect').src = rect;
   $('rect').hidden = !rect;
   $('rect-empty').hidden = !!rect;
+
+  renderMatch(j.match, j.ok);
 
   if (j.stages) {
     for (const [k, id] of [['binary', 's-binary'], ['contours', 's-contours'], ['quad', 's-quad']])
@@ -333,6 +382,54 @@ function render(j) {
   $('legend').innerHTML = parts.map(([k, v, c]) =>
     `<span class="k" style="--sw:${c}">${k}</span><span class="v">${v.toFixed(1)} ms</span>`).join('')
     + `<span class="k total" style="--sw:transparent">round trip</span><span class="v total">${total.toFixed(1)} ms</span>`;
+}
+
+// A dHash distance is only meaningful as a fraction of the descriptor's width, which is why
+// the server sends `normalized` alongside. These two thresholds are provisional: they were
+// chosen to be obviously-right rather than measured, and the corpus is what should set them
+// once the full bundle exists.
+const SURE_DISTANCE = 0.12, SURE_MARGIN = 12, PLAUSIBLE_DISTANCE = 0.22;
+
+function renderMatch(m, detected) {
+  const name = $('mt-name'), conf = $('mt-conf'), list = $('mt-list');
+  const rows = (m?.candidates ?? []);
+
+  if (!m) {
+    // No bundle loaded at all — say so once rather than showing dashes that look like a
+    // failed match.
+    name.textContent = '—';
+    conf.textContent = 'no bundle';
+    conf.className = 'match-conf';
+    for (const [id, v] of [['mt-dist','—'],['mt-margin','—'],['mt-rot','—'],['mt-ms','—']])
+      $(id).textContent = v;
+    list.innerHTML = '';
+    return;
+  }
+
+  const best = rows[0];
+  const sure = best && best.normalized <= SURE_DISTANCE && (m.margin ?? 0) >= SURE_MARGIN;
+  const plausible = best && best.normalized <= PLAUSIBLE_DISTANCE;
+
+  name.textContent = !detected ? '—'
+    : !best ? 'nothing in the bundle'
+    : (best.label ? `${best.label.name} — ${best.label.set.toUpperCase()} ${best.label.number}`
+                  : best.id.slice(0, 8));
+  conf.textContent = !detected ? 'no card' : sure ? 'confident' : plausible ? 'provisional' : 'too far';
+  conf.className = 'match-conf' + (!detected ? '' : sure ? ' sure' : plausible ? ' maybe' : '');
+
+  $('mt-dist').textContent = best ? `${best.distance} (${(best.normalized * 100).toFixed(1)}%)` : '—';
+  $('mt-margin').textContent = m.margin != null ? `${m.margin} bits` : '—';
+  // Worth surfacing: a scan that always reports `rotated` is a card being held upside-down,
+  // which is invisible in the overlay because both orientations rectify perfectly.
+  $('mt-rot').textContent = m.rotated ? 'rotated 180°' : 'upright';
+  $('mt-ms').textContent = `${(m.search_ms ?? 0).toFixed(2)} ms`;
+
+  list.innerHTML = rows.map((c, i) => {
+    const label = c.label
+      ? `${c.label.name} · ${c.label.set.toUpperCase()} ${c.label.number}` + (c.printings > 1 ? ` (${c.printings}×)` : '')
+      : c.id.slice(0, 13);
+    return `<li class="${i === 0 ? 'best' : ''}"><span>${label.replace(/[<&]/g, ch => ch === '<' ? '&lt;' : '&amp;')}</span><span>${c.distance}</span></li>`;
+  }).join('');
 }
 
 // Redraws every animation frame from the most recent detection, so the box is smooth and
