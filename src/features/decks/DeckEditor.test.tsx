@@ -3628,6 +3628,164 @@ describe("DeckEditor", () => {
     expect(tab("Actual")).toHaveAttribute("aria-pressed", "false");
   });
 
+  /**
+   * **Switching the plan off under an open editor must not take the window down** —
+   * reported from the shipped app as "it crashes the entire frontend app".
+   *
+   * The same two-cached-rows shape as the test above, one field along, and reached by an ordinary
+   * press rather than by a race the reader has to be quick to feel. `deck_update` invalidates
+   * `["decks"]`, so **both** lists re-read — and until the second answer lands, the query the
+   * editor is not looking at goes on serving the row it already had. `theoryEnabled` is read off
+   * *that* row, which is the whole bug: the restore's marker was the deck and the switch, so the
+   * switch it keyed on moved with the variant the restore had just set. Off, on the plan's row,
+   * said "land on Actual"; on, on the deck's row, said "land on `lastVariant`" — and `lastVariant`
+   * is `"theory"` on exactly the decks the report is about, because that is the tab their reader
+   * was last on. Round and round, until React threw **"Too many re-renders"** into a tree with no
+   * error boundary above it and the window went blank.
+   *
+   * A deck whose plan is empty is a deck nobody has switched to, so its `lastVariant` is `"live"`,
+   * both readings ask for Actual and nothing oscillates — which is why the report says *"a deck
+   * that already has cards in the theory deck"*, and why an empty plan looked fine.
+   *
+   * Driven the way the reader drives it, and back again: the switch goes off, the tab strip goes
+   * with it, and turning it back on finds the plan's cards exactly where they were left.
+   * **Nothing about this write touches a row** — see `deck.rs`, where only the column moves.
+   */
+  it("survives the plan being switched off under it, and keeps the plan's cards", async () => {
+    const ON: Partial<DeckRow> = { theoryEnabled: true, lastVariant: "theory" };
+    const OFF: Partial<DeckRow> = { theoryEnabled: false, lastVariant: "theory" };
+    let deckRow = ON;
+    /** Holds the *deck's* re-read so it is the slower of the two and its old row is still what
+     *  the editor reads when the plan's lands — a race in the shipped app, a certainty here.
+     *
+     *  An array rather than a `let`, and only because of TypeScript: a mutable binding assigned
+     *  solely inside a callback is still `null` to control-flow analysis at the call below, so
+     *  `releaseLive?.()` narrowed to `never`. A `length` check is a claim the test can make
+     *  about the same thing without a cast. */
+    const held: (() => void)[] = [];
+    deckGet.mockImplementation((_id: number, variant: string) => {
+      const answer = () =>
+        variant === "theory"
+          ? detail(deckRow, [
+              bolt({ quantity: 2, variant: "theory" }),
+              card({ name: "Bear", variant: "theory" }),
+            ])
+          : detail(deckRow, [bolt({ quantity: 4 })]);
+      if (variant === "live" && deckRow === OFF && held.length === 0) {
+        return new Promise((resolve) => {
+          held.push(() => resolve(answer()));
+        });
+      }
+      return Promise.resolve(answer());
+    });
+
+    await open();
+    await screen.findByRole("group", { name: "Deck list" });
+    await waitFor(() => expect(tab("Theory")).toHaveAttribute("aria-pressed", "true"));
+
+    // Deck settings is the only place the switch lives, and opening it is what puts the deck's
+    // own list in the cache beside the plan's — the second row the restore can read.
+    await userEvent.click(screen.getByRole("button", { name: "Deck settings" }));
+    await screen.findByText("Theory deck");
+    const theorySwitch = () => within(screen.getByRole("dialog")).getByRole("switch");
+
+    deckUpdate.mockImplementation(async () => {
+      deckRow = OFF;
+      return { ...DECK, theoryEnabled: false };
+    });
+    await userEvent.click(theorySwitch());
+
+    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { theoryEnabled: false }));
+    await waitFor(() => expect(held).toHaveLength(1));
+    held[0]?.();
+
+    // Alive — the assertion the bug failed, and it failed by rendering nothing at all.
+    expect(await screen.findByLabelText("Deck name")).toBeInTheDocument();
+    // The plan is hidden, which is the whole of what the reader asked the switch for.
+    await waitFor(() =>
+      expect(screen.queryByRole("group", { name: "Deck list" })).not.toBeInTheDocument(),
+    );
+    expect(screen.queryByRole("button", { name: "Compare" })).not.toBeInTheDocument();
+
+    // And back: the plan is still there to be read, because turning the switch off hid it and
+    // wrote nothing to the cards.
+    deckUpdate.mockImplementation(async () => {
+      deckRow = ON;
+      return { ...DECK, theoryEnabled: true };
+    });
+    await userEvent.click(theorySwitch());
+
+    await waitFor(() => expect(deckUpdate).toHaveBeenLastCalledWith(4, { theoryEnabled: true }));
+    await userEvent.click(screen.getByRole("button", { name: "Close deck settings" }));
+    await screen.findByRole("group", { name: "Deck list" });
+    await userEvent.click(tab("Theory"));
+    await waitFor(() => expect(tab("Theory")).toHaveAttribute("aria-pressed", "true"));
+    expect(await screen.findByRole("button", { name: /^Bear/ })).toBeInTheDocument();
+  });
+
+  /**
+   * The same invariant with no press to reach it: **two cached rows that disagree about the
+   * switch settle**, exactly as two that name each other's tab do.
+   *
+   * Fed in crossed on the way in, which is what the test above reaches through a write — and the
+   * shape the restore has to be safe against however it arises, since the two rows are two round
+   * trips and any invalidation can land between them.
+   */
+  it("survives two cached rows that disagree about the theory switch", async () => {
+    const live = detail({ theoryEnabled: true, lastVariant: "theory" }, [bolt({ quantity: 4 })]);
+    const theory = detail({ theoryEnabled: false, lastVariant: "theory" }, [
+      bolt({ quantity: 2, variant: "theory" }),
+    ]);
+    deckGet.mockImplementation((_id: number, variant: string) =>
+      Promise.resolve(variant === "theory" ? theory : live),
+    );
+
+    await open();
+
+    expect(await screen.findByLabelText("Deck name")).toBeInTheDocument();
+  });
+
+  /**
+   * **The plan's ticks go with the switch.** The slots query is only `enabled` on a deck that
+   * keeps a plan, and this file's own note says why that is not enough: a disabled `useQuery`
+   * still serves whatever sits in the cache under its key, and that key is the deck's. So a
+   * reader who had the marks on screen and then switched the plan off kept every one of them —
+   * a mark about a list the deck no longer admits to having.
+   *
+   * The same argument as "takes the theory tick off every row when the reader switches to the
+   * plan", one axis over: the gate belongs on the **derivation**, where the question is asked.
+   */
+  it("takes the theory tick off every row when the plan is switched off", async () => {
+    let deckRow: Partial<DeckRow> = { theoryEnabled: true, lastVariant: "live" };
+    deckGet.mockImplementation((_id: number, variant: string) =>
+      Promise.resolve(
+        variant === "theory"
+          ? detail(deckRow, [bolt({ quantity: 2, variant: "theory" })])
+          : detail(deckRow, [bolt({ quantity: 4 })]),
+      ),
+    );
+    deckTheorySlots.mockResolvedValue([{ key: theorySlot(bolt()), quantity: 2 }]);
+
+    await open();
+    await waitFor(() =>
+      expect(document.querySelectorAll(`[${THEORY_MATCH_ATTR}]`).length).toBeGreaterThan(0),
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Deck settings" }));
+    await screen.findByText("Theory deck");
+    deckUpdate.mockImplementation(async () => {
+      deckRow = { theoryEnabled: false, lastVariant: "live" };
+      return { ...DECK, theoryEnabled: false };
+    });
+    await userEvent.click(within(screen.getByRole("dialog")).getByRole("switch"));
+
+    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { theoryEnabled: false }));
+    await waitFor(() =>
+      expect(screen.queryByRole("group", { name: "Deck list" })).not.toBeInTheDocument(),
+    );
+    expect(document.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)).toHaveLength(0);
+  });
+
   /** The one write on the stats aside, end to end: what the deck is short of becomes wishes,
    *  and the aside says how many in words. */
   it("sends what the deck is missing to the wishlist", async () => {

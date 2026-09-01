@@ -780,8 +780,12 @@ reader to configure the deck they had just made; it now asks all of them.
   and the key is `["decks", "theorySlots", deckId]` — the **deck's**, deliberately, so both tabs
   share one entry — so pressing `Theory` after Live had loaded carried Live's answer over and
   ticked every row of the plan, which matches it by definition. The gate that means it lives on
-  the **derivation** in `DeckEditor` (`variant === "live" ? theoryMatchPlan(…) : undefined`);
-  `enabled` promises only that no query is spent. It read as intermittent because it needs the
+  the **derivation** in `DeckEditor`
+  (`theoryEnabled && variant === "live" ? theoryMatchPlan(…) : undefined`); `enabled` promises
+  only that no query is spent. **`theoryEnabled` is on that line for the same reason the tab is,
+  and was missing from it until the theory-switch crash was fixed**: switching the plan off in
+  Deck settings took the tab strip and `Compare` away and left every tick standing, because
+  nothing had emptied the cache the derivation reads. Same mistake, one axis over. It read as intermittent because it needs the
   Live tab to have been on screen first — the report came from a printing swapped through
   `View all printings`, which invalidates `["decks"]` and refills that cache. **Any second reader
   of these slots takes the same care**: not fetching is not the same as not answering.
@@ -1336,20 +1340,51 @@ price | type`). An **inactive category stays its own group in all three grouping
   are this layer's words, so `asGroupBy` (`grouping.ts`) and `asSortBy` (`sorting.ts`) narrow
   them on read and fall back to the default — a stored word nothing offers reopens the editor on
   `category`/`alphabetical` rather than in a state no control can draw.
-- **The restore is honoured once per _deck and switch_ — never once per stored value, and the
-  difference is a crash** (fixed 2026-08-16). `DeckEditor`'s render-phase restore keys on
-  `${deckId}:${theoryEnabled}`, which is the pair of things that genuinely ask _where should the
-  reader be_: the deck being opened, and the theory switch being turned on, which leaves
-  `last_variant` at `theory` because that write moves the cards there. It used to key on the
-  stored **triple**, and that marker held a value the restore's own `setVariant` could change —
-  the variant decides which query's row `row` is, **each list caches its own snapshot of the one
-  deck row**, and two snapshots naming each other's tab are `setVariant` → different row →
-  `setVariant` back until React throws **"Too many re-renders"**. There is no error boundary
-  anywhere in this app, so that is the window going blank; switching the tabs at 40 ms intervals
-  did it in three presses. **The two snapshots really do disagree and nothing at the write end
-  fixes that** — see the bullet below for why `rememberView` must not invalidate, and
+- **The restore is honoured once per _deck and reading of the switch_ — never once per stored
+  value, and the difference is a crash this file has had twice.** `DeckEditor`'s render-phase
+  restore holds `{ deckId, switches }`: the deck it has restored for, and **every reading of
+  `theoryEnabled` it has already restored under**. Those are the two things that genuinely ask
+  _where should the reader be_ — the deck being opened, and the theory switch being turned on,
+  which leaves `last_variant` at `theory` because that write moves the cards there.
+  - **First crash (fixed 2026-08-16): the stored triple.** The marker was
+    `${deckId}:${row.lastVariant}:${row.lastGroupBy}:${row.lastSortBy}`, which held a value the
+    restore's own `setVariant` could change — the variant decides which query's row `row` is,
+    **each list caches its own snapshot of the one deck row**, and two snapshots naming each
+    other's tab are `setVariant` → different row → `setVariant` back until React throws **"Too
+    many re-renders"**. There is no error boundary anywhere in this app, so that is the window
+    going blank; switching the tabs at 40 ms intervals did it in three presses.
+  - **Second crash: `${deckId}:${theoryEnabled}`, which was the first fix.** `theory_enabled` is
+    a column of the same per-variant snapshot, so keying on it as a **value** left the marker
+    moving with the variant all over again — and this time an ordinary press reached it. Turning
+    the plan off invalidates `["decks"]`, both lists re-read, and until the second answer lands
+    the list the reader is _not_ on still says the deck keeps a plan: off said "land on Actual",
+    on said "land on `last_variant`", and `last_variant` is `theory` on exactly the decks whose
+    plan has cards in it. Reported from the shipped app as *"disabling the theory deck crashes
+    the entire frontend"*, and **only** on such a deck — an empty plan is one nobody has switched
+    to, so its `last_variant` is `live`, both readings ask for Actual and nothing oscillates.
+  - **A list is what makes it stop, rather than a better value to compare.** A switch has two
+    readings, so honouring each at most once bounds the restore at two runs per deck _by
+    construction_ — the property a comparison against a moving value cannot have. Nothing is
+    given up: a switch turned on for the first time is a reading the deck has not seen, so the
+    reader still follows their cards onto the plan, and a second time could not move any, because
+    `deck.rs` pours the live list into an **empty** theory list only and a plan that is switched
+    off is a plan no control in this window can empty.
+
+  **The two snapshots really do disagree and nothing at the write end fixes that** — see the
+  bullet below for why `rememberView` must not invalidate, and
   [decks-live-findings.md](../../../docs/reference/decks-live-findings.md) for the read caught
   answering the old tab mid-write. A marker the restore cannot move is the whole fix.
+- **`useDeck.update` drops the deck's _unwatched_ lists when the patch carries `theoryEnabled`,
+  and that is the write end of the same fact.** An invalidation only refetches what somebody is
+  looking at, so the other variant keeps its old row until something mounts it and then serves it
+  **stale before the refetch lands** — a reader who switches the plan back on and presses
+  `Theory` in the same second reads a row that still says the deck keeps no plan, and the clamp
+  takes them straight back to `Actual`. `removeQueries({ queryKey: ["decks", "detail", id], type:
+  "inactive" })` makes that beat a *read* instead: `isPending`, no row, and neither the restore
+  nor the clamp acts on one. `type: "inactive"` is the whole of the care needed — the list on
+  screen has an observer and is refreshed by the ordinary invalidation, so nothing flashes a
+  loading state for a switch it was not showing. It does **not** retire the marker above: a sync
+  from another device can cross the two rows with no press in this window at all.
 - **`rememberView` is the one `useDeck` mutation that does not invalidate, and that is the
   interesting part.** The editor is already showing what the reader picked; this write only makes
   it survive the deck being closed, so there is nothing to re-read. Invalidating hands the editor
@@ -1905,6 +1940,21 @@ price | type`). An **inactive category stays its own group in all three grouping
   not answer is anything about _size_ — a headless browser at a story's own viewport is not the
   app's window — so the rail's **height** remains the unmeasured thing, and its width was never in
   question.
+- **The wall's first tile is the way back *up*, and only inside a folder** (2026-09-01, issue
+  #283). `ParentDeckFolderCard` in `FolderCard.tsx` wraps `components/ParentFolderCard` — the same
+  tile the wishlist and the collection draw — around this gallery's two payloads, and it names the
+  level above (`ROOT_LABEL`, `All decks`, at the top). **The gallery already had a way back and it
+  was in the wrong place**: every row of the sidebar's tree is a deck target, `All decks` included,
+  so a deck could always be filed up — by dragging it onto a 32px-tall row on the far side of the
+  window from the tile in hand. The tree is untouched. Three things about it are this page's own: the
+  destination is read out of `levels.parent` rather than off `openNode.folder.parentId`, so an
+  orphan climbs to where the tree **drew** it; the ring comes from the page's `drag` rather than
+  from the target, which is `deckDrag.ts`'s split and why this wrapper takes a `drag` where the
+  other two do not; and a **folder** dropped on it is `folderLanding(drag, up, "inside")` verbatim
+  — no second rule, so the cycle fence, the already-there refusal and `reorderedLevel`'s no-op all
+  hold. It draws no strip of member art: a strip is what a folder is *recognised* by, and this tile
+  is the way out rather than a folder to pick out of a wall.
+
 - **A deck card is the whole card, and the app's marks are overlays on it.** The picture _is_ the
   card, so `deckCardName` on the button is the **only** name a screen reader gets — but the app
   draws a **printed-card frame under it** (name, cost, type line) that the picture paints over,
