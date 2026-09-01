@@ -4,6 +4,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { CardDetail, Printing, PrintingsResponse } from "@/lib/ipc";
 import type { MarketplaceId } from "@/lib/marketplace";
 import { boxed, startPointerDrag } from "@/test-drag";
+import { isWebTarget } from "@/pwa/target";
+
+/** Which build a card frame thinks it is in. `isWebTarget()` reads `__CORE__`, a build-time
+ *  constant vitest fixes at `"tauri"`, so the web answer cannot be arranged any other way — see
+ *  `src/pwa/target.ts`. Desktop unless a case says otherwise. */
+vi.mock("@/pwa/target", () => ({ isWebTarget: vi.fn(() => false) }));
 
 const detail: CardDetail = {
   promoTypes: null,
@@ -82,6 +88,17 @@ import { useAppStore } from "@/lib/store";
 const previews = () => Array.from(document.querySelectorAll<HTMLImageElement>('img[alt=""]'));
 const preview = () => previews()[0] ?? null;
 
+/**
+ * The floating **frame**, whether or not there is a picture in it.
+ *
+ * Needed only by the web cases below, and needed there for a reason worth stating: a preview
+ * with no `<img>` and a dwell that never opened look identical through {@link preview}, so
+ * "the picture is missing" cannot be told from "nothing happened" without this. The three
+ * classes are the frame's own and none of them is shared by anything else in the pane.
+ */
+const previewFrame = () =>
+  document.querySelector<HTMLElement>("div.pointer-events-none.absolute.rounded-xl");
+
 /** The row a printing is drawn in, found by the one control that names the printing. */
 const rowOf = (setAndNumber: string) =>
   screen
@@ -98,9 +115,9 @@ const onClose = vi.fn();
  * fake clock (`SearchPage.test.tsx` says the same, having hung on it). Everything the dwell
  * itself does is `fireEvent` plus an explicit tick, so nothing here needs the wrapper.
  */
-async function openPane() {
+async function openPane(printings: PrintingsResponse = PRINTINGS) {
   cardDetail.mockResolvedValue(detail);
-  cardPrintings.mockResolvedValue(PRINTINGS);
+  cardPrintings.mockResolvedValue(printings);
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={qc}>
@@ -116,6 +133,8 @@ async function openPane() {
 const tick = (ms: number) => act(() => void vi.advanceTimersByTime(ms));
 
 beforeEach(() => {
+  // Desktop unless a case says otherwise — a leaked `true` would blank every preview here.
+  vi.mocked(isWebTarget).mockReturnValue(false);
   cardDetail.mockReset();
   cardPrintings.mockReset();
   onClose.mockReset();
@@ -207,6 +226,90 @@ describe("the printings list preview", () => {
     tick(1);
     // The row's own printing, front face, at the size the pane's own art is fetched in.
     expect(preview()).toHaveAttribute("src", expect.stringContaining("/display/p2/0"));
+  });
+
+  /**
+   * **The preview in a browser, where `mtgimg://` reaches nothing.**
+   *
+   * It is a Tauri custom protocol and wasm cannot register a URL scheme with a browser, and
+   * `card_printings` is in `web/route.rs`'s `COMMANDS` — so this picture was the platform's
+   * broken-image glyph on web and on the phone. `cardArtSrc` is the whole of the branch and
+   * needs both candidates, only one of which can be built from an id: the dwell hands over an
+   * **id**, so the URL is threaded down beside it from `CardDetailPane`, which is the one place
+   * holding the `Printing` that id names.
+   *
+   * Which is also what the first case here proves, and it is the half a prop test could not:
+   * three rows are on screen carrying three different URLs, and the picture has to be the one
+   * the pointer rested on.
+   */
+  describe("on the web build", () => {
+    const P2 = "https://cards.scryfall.io/display/front/0/0/p2.webp?1706230661";
+    const P3 = "https://cards.scryfall.io/display/front/0/0/p3.webp?1706230661";
+    /** The same three printings, two of them carrying a picture a browser can reach. */
+    const WITH_URLS: PrintingsResponse = {
+      ...PRINTINGS,
+      items: [
+        PRINTINGS.items[0],
+        { ...PRINTINGS.items[1], imageUris: { display: P2 } },
+        { ...PRINTINGS.items[2], imageUris: { display: P3 } },
+      ],
+    };
+
+    beforeEach(() => {
+      vi.mocked(isWebTarget).mockReturnValue(true);
+    });
+
+    it("draws the URL carried by the row the pointer rested on, not another row's", async () => {
+      await openPane(WITH_URLS);
+
+      fireEvent.mouseEnter(rowOf("M10 146"));
+      tick(PREVIEW_DWELL_MS);
+
+      expect(preview()).toHaveAttribute("src", P2);
+      expect(preview()!.getAttribute("src")).not.toBe(P3);
+    });
+
+    /**
+     * A row carrying no picture opens the frame and leaves it empty. That is
+     * `useImageRetry`'s own answer — the frame *is* the placeholder — and it is what this
+     * preview already shows for the ~127 ms before the bytes arrive, so a browser sees the
+     * state it would have seen anyway rather than a broken-image glyph hanging off a row.
+     */
+    it("opens an empty frame for a row that carries no URL, rather than a broken image", async () => {
+      await openPane();
+
+      fireEvent.mouseEnter(rowOf("M10 146"));
+      tick(PREVIEW_DWELL_MS);
+
+      // The dwell fired — the frame is up — and there is simply nothing in it.
+      expect(previewFrame()).not.toBeNull();
+      expect(preview()).toBeNull();
+    });
+  });
+
+  /**
+   * The other side of the branch: on desktop the local cache already holds the bytes at this
+   * exact size, so a row carrying a URL is still drawn from the protocol. A frame that
+   * preferred the supplied one would refetch a 672×936 image over the network on every dwell.
+   */
+  it("keeps drawing the protocol picture on desktop when the row hands it a URL", async () => {
+    await openPane({
+      ...PRINTINGS,
+      items: [
+        PRINTINGS.items[0],
+        {
+          ...PRINTINGS.items[1],
+          imageUris: { display: "https://cards.scryfall.io/display/front/0/0/p2.webp?1" },
+        },
+        PRINTINGS.items[2],
+      ],
+    });
+
+    fireEvent.mouseEnter(rowOf("M10 146"));
+    tick(PREVIEW_DWELL_MS);
+
+    expect(preview()).toHaveAttribute("src", expect.stringContaining("/display/p2/0"));
+    expect(preview()!.getAttribute("src")).not.toContain("scryfall.io");
   });
 
   it("never draws it for a pointer that left before the quarter second was up", async () => {

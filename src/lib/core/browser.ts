@@ -1,5 +1,5 @@
 import { clearImageCache } from "@/pwa/imageCacheClear";
-import { feedRefreshFor } from "@/workers/protocol";
+import { feedRefreshFor, updateCheckForce } from "@/workers/protocol";
 import type { FromWorker, Opened, ToWorker } from "@/workers/protocol";
 import type { Core } from "./types";
 
@@ -122,6 +122,18 @@ export function createBrowserCore(spawn: () => Worker): BrowserCore {
       const feed = feedRefreshFor(command, args);
       if (feed !== undefined) {
         post({ kind: "feed-refresh", id, ...feed });
+        return answer;
+      }
+      // **The fifth, and the only one that is not a download.** `update_check` asks
+      // `api.github.com` what has been released and writes three `app_meta` rows; the
+      // download and the swap stay desktop's, because there is no `.exe` beside a browser to
+      // replace. It is diverted here for the four above's reason and by the same rule —
+      // `glue::update_check` is `async`, `web::route::call` is not — so `ipc.updateCheck(true)`
+      // reaches the export on a browser and the Tauri command on a desktop, and the Updates
+      // panel branches on `installKind` rather than on which target it is running in.
+      const force = updateCheckForce(command, args);
+      if (force !== undefined) {
+        post({ kind: "update-check", id, force });
         return answer;
       }
       // `args` omitted rather than sent as `undefined`, mirroring `core/tauri.ts`: the

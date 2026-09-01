@@ -25,6 +25,21 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   - **An empty repository answers `200 []` here where it answered `404` before.** Both arms
     survive and both clear the two cached keys; a check that learned nothing must not leave
     yesterday's history standing under a freshly stamped `lastCheckAt`.
+- **The check runs on every target; the download does not** (2026-08-31 — *"check and notes,
+  no download"*). The half of `update.rs` after the bytes arrive is portable — `releases_url`,
+  `classify_status`, `page_from_body`, `record_check`, `last_check_at` — so a browser and a
+  phone reach GitHub through `web::glue::update_check` and the desktop's `check_inner`
+  respectively, and both write the same three `app_meta` rows. **Android never needed the
+  Rust**: `desktop.rs` is gated `not(target_family = "wasm")`, which is desktop *and* mobile,
+  so the command has always been registered there — only the *startup* check is
+  `#[cfg(desktop)]`, and it stays that way. What was missing on both was a Check button, and
+  that is `UpdatePanel`'s `canCheck` (drawn wherever the backend has answered) as against
+  `selfUpdating` (drawn only where this app replaces itself). `pick_asset` still answers
+  `None` for `Web` and `Managed`, so nothing offers a download it cannot make.
+  **Measured live the same day**: `api.github.com` sends `Access-Control-Allow-Origin: *`, its
+  preflight allows `X-GitHub-Api-Version` with a 24 h max-age, and the `User-Agent` GitHub
+  insists on (no header → **403**) is the browser's own, since `fetch` forbids setting it.
+  Full record: [web-target.md](web-target.md).
 - **`update_history` reads a row and never the network.** The page the check cached lands in
   `app_meta.update_release_history` as `Vec<ReleaseNote>` — `ReleaseInfo` minus its assets,
   because thirty releases' worth of asset URLs and 64-character digests is not something a

@@ -4,9 +4,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import type { DeckFolder, DeckRow, FormatSpec, ImportMatch, SyncStatus } from "@/lib/ipc";
-import { cardImageUrl, imageOrigin } from "@/lib/images";
+import { cardImageUrl } from "@/lib/images";
+import { isWebTarget } from "@/pwa/target";
 import { openDropdown } from "@/test-dropdown";
 import { spec } from "./validation/fixtures";
+
+/**
+ * Which build a cover frame thinks it is in.
+ *
+ * `isWebTarget()` reads `__CORE__`, a build-time constant vitest fixes at `"tauri"`, so the web
+ * answer cannot be arranged any other way — `src/pwa/target.ts`'s own comment says why that is
+ * deliberate. Mocked `false` by default, which is what every case in this file but the web
+ * describe block expects, and reset in `beforeEach` so one case cannot leak into the next.
+ */
+vi.mock("@/pwa/target", () => ({ isWebTarget: vi.fn(() => false) }));
 
 const deckList = vi.hoisted(() => vi.fn());
 /** Read by `DeckSettingsDialog`, which the gallery hosts — and **only** while it is open, which
@@ -239,6 +250,9 @@ async function rightClick(target: HTMLElement) {
 }
 
 beforeEach(() => {
+  // Desktop unless a case says otherwise. A leaked `true` would draw every cover in this file
+  // from a row field the fixtures do not carry, which reads as "the gallery stopped drawing art".
+  vi.mocked(isWebTarget).mockReturnValue(false);
   deckList.mockReset().mockResolvedValue([BURN, DRAFT, FILED]);
   // The hosted settings dialog's own read. Empty lists: this screen's cases are about the deck
   // row, and what the form does with cards, categories and tags is its own suite's.
@@ -382,134 +396,56 @@ describe("DecksPage", () => {
   });
 
   /**
-   * **A custom cover is drawn, and it is drawn from `coverKind`.**
+   * **A cover is a card's art crop and nothing else, and three cases here went with the other
+   * kind.**
    *
-   * The bug this pins was found in the live window and is invisible to a reading of the tile:
-   * `Cover` took only `cardId`, so a deck wearing the reader's own picture rendered "No cover"
-   * and no `<img>` at all while the route answered the file 626×457 in 2 ms. Nothing was wrong
-   * underneath — the gallery never asked.
+   * A deck could wear a picture the reader had chosen off disk, served at `/cover/<deckId>`, and
+   * `coverKind` was the only answer to which of the two a tile drew — a deck carried both at
+   * once, since setting either left the other alone. The three deleted cases pinned that half:
+   * the route reaching the frame rather than the card id, a deck with *only* a file (no card id,
+   * so no artist, which is exactly the row a `coverArtist` gate would have hidden), and the
+   * `updatedAt` key that replaced the `<img>` element when new bytes landed behind a URL that
+   * had not changed.
    *
-   * The URL names the **deck**, not the picture, and carries no cache-buster: the route is
-   * served `no-store` so a stable URL can carry changing bytes.
+   * All of it is deleted, because the picture never survived a sync: the path was stored
+   * absolute, so a second device was handed a `D:\\…` and drew the card art instead. This case
+   * is what is left to assert — that a row still carrying the retired word draws its card art
+   * rather than nothing, which is the state a device on an older rung can still send.
    */
-  it("draws a custom cover from the cover route, not from the card id", async () => {
+  it("draws card art for a row still carrying the retired cover kind", async () => {
     deckList.mockResolvedValue([{ ...BURN, coverKind: "custom" }]);
-
-    wrap(<DecksPage />);
-
-    const tile = (await tileFor("Burn")).closest("li")!;
-    const img = tile.querySelector("img");
-    expect(img).toHaveAttribute("src", `${imageOrigin(navigator.userAgent)}/cover/4`);
-    // Not the card art, even though this deck still carries a `coverCardId`: setting a custom
-    // cover never clears the card id, so "has one" and "is showing one" are different questions.
-    expect(img).not.toHaveAttribute("src", cardImageUrl(BURN.coverCardId!, 0, "art"));
-    expect(tile).not.toHaveTextContent("No cover");
-  });
-
-  /**
-   * **The artist rule is Scryfall's, so it stops at Scryfall's pictures.**
-   *
-   * A file the reader uploaded carries no Scryfall artist and needs no credit — so the custom
-   * arm must never be gated on `coverArtist` (or on `coverCardId`), or every custom cover
-   * disappears for a second and quieter reason than the first.
-   *
-   * The fixture is the deck that has only ever worn its own picture: **no card id, and so no
-   * artist either.** That is exactly the row such a gate would render invisible, and it is the
-   * ordinary state of a deck whose reader uploaded a photograph and never picked a card.
-   */
-  it("draws a custom cover for a deck that has no card art and no artist", async () => {
-    deckList.mockResolvedValue([
-      { ...BURN, coverKind: "custom", coverCardId: null, coverArtist: null },
-    ]);
 
     wrap(<DecksPage />);
 
     const tile = (await tileFor("Burn")).closest("li")!;
     expect(tile.querySelector("img")).toHaveAttribute(
       "src",
-      `${imageOrigin(navigator.userAgent)}/cover/4`,
+      cardImageUrl(BURN.coverCardId!, 0, "art"),
     );
-    // And not the empty frame: "No cover" is what this said before the fix.
     expect(tile).not.toHaveTextContent("No cover");
-    expect(screen.queryByText(/art by/i)).not.toBeInTheDocument();
+    // And the credit with it: the picture on screen is the crop, so the illustrator is named.
+    expect(within(tile).getByText("Art by Rebecca Guay")).toBeInTheDocument();
   });
 
   /**
-   * **A replaced cover is new bytes behind a URL that did not change, so the frame has to
-   * become a new element or the reader goes on looking at the old picture.**
+   * The credit rides the picture it is about, and `coverArtist` is now the whole test.
    *
-   * `/cover/<deckId>` names the deck rather than the picture and `images.ts` forbids a
-   * cache-buster on it, so `CardImage`'s own key — the `src` — cannot notice an upload, and the
-   * route's `no-store` never gets a say, because no request is made. This screen is where it
-   * bit: `DeckSettingsDialog` is mounted here, so the wall behind the scrim kept painting the
-   * file the reader had just replaced. `deck_set_cover_image` moves `updated_at` in the same
-   * statement that writes the path, so the deck row is what says a new file has landed.
-   *
-   * **Asserted as element identity and not as an attribute.** Every attribute of this `<img>`
-   * is identical before and after — that is the entire shape of the defect — so a `src`
-   * assertion passes against the broken code. `src/CLAUDE.md` states the rule: a stale frame is
-   * invisible to the DOM, so assert identity.
-   *
-   * The card-art tile beside it is the control, and it is a decision rather than an omission:
-   * its URL names a printing, so it must **not** be thrown away and re-decoded every time some
-   * other field of its deck is written.
+   * Two decks, identical but for whether the printing they name is one `cards` still has — so
+   * the only thing that can explain one credit and not two is the artist. It used to be
+   * `coverKind` that separated them, one deck wearing a file and one wearing a crop.
    */
-  it("replaces a custom cover's element on a deck write, at an unchanged URL", async () => {
-    // Named for the cover each one wears rather than reusing `Burn`/`Sunday burn`: the case
-    // below hands those same two names the opposite roles, and two adjacent cases where "Burn"
-    // means card art in one and an uploaded file in the other is how a reader comes to read one
-    // of them backwards.
-    const CUSTOM: DeckRow = { ...BURN, name: "Uploaded burn", coverKind: "custom" };
-    const ART: DeckRow = { ...BURN, id: 5, name: "Card-art burn" };
-    deckList.mockResolvedValue([CUSTOM, ART]);
-
-    wrap(<DecksPage />);
-
-    // The tiles themselves are keyed by deck id and outlive a refetch — it is what is *inside*
-    // them that this case is about.
-    const customTile = (await tileFor("Uploaded burn")).closest("li")!;
-    const artTile = (await tileFor("Card-art burn")).closest("li")!;
-    const before = customTile.querySelector("img");
-    const artBefore = artTile.querySelector("img");
-    const url = `${imageOrigin(navigator.userAgent)}/cover/4`;
-    expect(before).toHaveAttribute("src", url);
-
-    // The upload itself opens a native picker no test can reach, so what is driven here is what
-    // reaches the gallery from it: a deck write invalidates `["decks"]` and the gallery refetches.
-    // **The list below is hand-authored and bumps `updatedAt` on _both_ rows** — the deck the
-    // click actually writes (the duplicate) is never in it, and `deckDuplicate`'s own answer is
-    // never read back into this list. That is the control the case depends on rather than an
-    // approximation of the real flow: both tiles are handed a moved `updatedAt`, so the only
-    // thing that can explain one element being replaced and the other surviving is `coverKind`.
-    deckList.mockResolvedValue([
-      { ...CUSTOM, updatedAt: CUSTOM.updatedAt + 1 },
-      { ...ART, updatedAt: ART.updatedAt + 1 },
-    ]);
-    await userEvent.click(screen.getByRole("button", { name: "Duplicate Uploaded burn" }));
-
-    await waitFor(() => expect(customTile.querySelector("img")).not.toBe(before));
-    // A new element asking for the same thing: the URL is what `no-store` is attached to, and
-    // re-requesting it is the whole point.
-    expect(customTile.querySelector("img")).toHaveAttribute("src", url);
-    // And the crop is untouched, on a row whose `updatedAt` moved by exactly as much.
-    expect(artTile.querySelector("img")).toBe(artBefore);
-  });
-
-  /** And the card-art arm keeps the rule: the credit rides the picture it is about. */
-  it("still credits the illustrator when the deck is showing card art", async () => {
-    // Two decks, identical but for which cover they wear — so the only thing that can explain
-    // one credit and not two is `coverKind`.
+  it("credits the illustrator, and only where there is one", async () => {
     deckList.mockResolvedValue([
       BURN,
-      { ...BURN, id: 5, name: "Sunday burn", coverKind: "custom" },
+      { ...BURN, id: 5, name: "Sunday burn", coverArtist: null },
     ]);
 
     wrap(<DecksPage />);
 
-    const cardArt = (await tileFor("Burn")).closest("li")!;
-    const custom = (await tileFor("Sunday burn")).closest("li")!;
-    expect(within(cardArt).getByText("Art by Rebecca Guay")).toBeInTheDocument();
-    expect(within(custom).queryByText(/art by/i)).not.toBeInTheDocument();
+    const credited = (await tileFor("Burn")).closest("li")!;
+    const orphaned = (await tileFor("Sunday burn")).closest("li")!;
+    expect(within(credited).getByText("Art by Rebecca Guay")).toBeInTheDocument();
+    expect(within(orphaned).queryByText(/art by/i)).not.toBeInTheDocument();
     expect(screen.getAllByText("Art by Rebecca Guay")).toHaveLength(1);
   });
 
@@ -544,6 +480,120 @@ describe("DecksPage", () => {
     expect(within(tile).getByText("No cover")).toBeInTheDocument();
     expect(screen.queryByText(/art by/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/null/i)).not.toBeInTheDocument();
+  });
+
+  /**
+   * **The web build has no protocol to ask, and this gallery was the loudest place it showed.**
+   *
+   * `mtgimg://` is registered natively with the webview and wasm cannot register a URL scheme
+   * with a browser, so a tile handed `http://mtgimg.localhost/art/<id>/0` in a browser draws the
+   * platform's broken-image glyph. PRs #320/#321 routed the card walls through `cardArtSrc` and
+   * missed the cover frames — and PR #327 then made the card-art crop the *only* deck cover, so
+   * **every** cover on web and on the phone was that glyph. Confirmed on the device before this
+   * was written.
+   *
+   * The three cases are the three states, and each is a different `<img>` on screen: the row's
+   * own URL drawn, no `<img>` at all, and — the one a browser can never see — the protocol URL
+   * still winning on the desktop build even when the row carries a picture.
+   */
+  describe("the cover frame on the web build, where there is no protocol", () => {
+    /** A real `art` crop URL: the host and the `?<epoch>` are what `is_fetchable` demands, so
+     *  this is the shape the backend can actually put on a row. */
+    const SUPPLIED = "https://cards.scryfall.io/art/front/0/0/0000419b.webp?1706230661";
+
+    beforeEach(() => {
+      vi.mocked(isWebTarget).mockReturnValue(true);
+    });
+
+    it("draws the URL the deck's own row carries", async () => {
+      deckList.mockResolvedValue([{ ...BURN, imageUris: { art: SUPPLIED } }]);
+
+      wrap(<DecksPage />);
+
+      const tile = (await tileFor("Burn")).closest("li")!;
+      expect(tile.querySelector("img")).toHaveAttribute("src", SUPPLIED);
+      // The credit rides the picture, and the picture is on screen.
+      expect(within(tile).getByText("Art by Rebecca Guay")).toBeInTheDocument();
+    });
+
+    /**
+     * **"No image", not "No cover" — and the distinction is the whole of why `hasCover` was
+     * split out of `coverUrl`.** The deck has chosen a cover; what is missing is the bytes.
+     * Telling a reader they have not picked one, when they have, is a sentence that sends them
+     * to the wrong dialog.
+     */
+    it("draws no img at all for a cover whose row carries no URL, and says the picture is what is missing", async () => {
+      deckList.mockResolvedValue([BURN]);
+
+      wrap(<DecksPage />);
+
+      const tile = (await tileFor("Burn")).closest("li")!;
+      expect(tile.querySelector("img")).toBeNull();
+      expect(within(tile).getByText("No image")).toBeInTheDocument();
+      expect(within(tile).queryByText("No cover")).not.toBeInTheDocument();
+    });
+
+    /** A deck that really has no cover still says so, on either build. */
+    it("still says No cover for a deck that has chosen none", async () => {
+      deckList.mockResolvedValue([DRAFT]);
+
+      wrap(<DecksPage />);
+
+      const tile = (await tileFor("Sunday draft")).closest("li")!;
+      expect(within(tile).getByText("No cover")).toBeInTheDocument();
+    });
+
+    /** The strip is the same branch one component over, per member row. */
+    it("draws a folder's member art from the member row's own URL", async () => {
+      deckFolderList.mockResolvedValue([EDH, LEGENDS]);
+      deckList.mockResolvedValue([
+        BURN,
+        { ...DRAFT, folderId: 1 },
+        { ...KENRITH, imageUris: { art: SUPPLIED } },
+      ]);
+
+      wrap(<DecksPage />);
+
+      const card = (
+        await screen.findByRole("button", { name: "Commander folder, 2 decks" })
+      ).closest("li")!;
+      expect(card.querySelector("img")).toHaveAttribute("src", SUPPLIED);
+    });
+
+    /** And a member whose row carries none leaves an empty cell rather than a broken one — the
+     *  strip's existing "the bytes have not arrived" state, which keeps its geometry. */
+    it("leaves a member cell empty when that row carries no URL", async () => {
+      withFolders();
+
+      wrap(<DecksPage />);
+
+      const card = (
+        await screen.findByRole("button", { name: "Commander folder, 2 decks" })
+      ).closest("li")!;
+      expect(card.querySelectorAll("img")).toHaveLength(0);
+      // The credit is about the cover the folder *holds*, not about whether it drew — so it is
+      // still named, exactly as on the desktop build.
+      expect(within(card).getByText("Art by Kieran Yanner")).toBeInTheDocument();
+    });
+  });
+
+  /**
+   * The other side of the branch, and it is the half a browser can never show: on desktop the
+   * local cache already holds the crop at the right size, so a row that carries a URL is still
+   * drawn from the protocol. A frame that preferred the supplied URL would refetch every cover
+   * over the network on a wall the reader has already paid for.
+   */
+  it("keeps drawing the cached protocol picture on desktop when a row hands it a URL", async () => {
+    deckList.mockResolvedValue([
+      { ...BURN, imageUris: { art: "https://cards.scryfall.io/art/front/0/0/x.webp?1" } },
+    ]);
+
+    wrap(<DecksPage />);
+
+    const tile = (await tileFor("Burn")).closest("li")!;
+    const img = tile.querySelector("img");
+    expect(img).toHaveAttribute("src", cardImageUrl(BURN.coverCardId!, 0, "art"));
+    expect(img!.getAttribute("src")).not.toContain("scryfall.io");
   });
 
   /** A filed deck is kept, not shown: it is behind its own disclosure, shut. */

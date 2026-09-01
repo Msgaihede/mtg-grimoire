@@ -39,6 +39,15 @@ interface Glue {
     onProgress: (json: string) => void,
   ): Promise<string>;
   ingest_prices(marketplace: string, onProgress: (json: string) => void): Promise<string>;
+  /**
+   * Ask GitHub what has been released — the one network entry point here that downloads
+   * nothing and reports no progress.
+   *
+   * It answers the same `{ kind, result }` envelope the three feeds do, so `handle` resolves
+   * it through the same `ok`/`err` pair on the same id. The `result` is `UpdateStatus`, which
+   * is what `ipc.updateCheck` already resolves with on a desktop.
+   */
+  update_check(force: boolean): Promise<string>;
   close(): void;
 }
 
@@ -193,13 +202,32 @@ async function handle(message: ToWorker): Promise<void> {
         );
         return;
       }
+      case "update-check": {
+        // No progress channel: one request, one page of JSON, three `app_meta` rows. The
+        // envelope and the id discipline are `feed-refresh`'s, so `useUpdate`'s
+        // `.then(setStatus)` gets the `UpdateStatus` it gets on a desktop and its `.catch`
+        // gets the rejection.
+        const answer = JSON.parse(await runUpdateCheck(wasm, message)) as
+          | { kind: "ok"; result: unknown }
+          | { kind: "err"; message: string };
+        send(
+          answer.kind === "ok"
+            ? { kind: "ok", id: message.id, result: answer.result }
+            : { kind: "err", id: message.id, message: answer.message },
+        );
+        return;
+      }
     }
   } catch (err) {
     // A wasm trap surfaces here and NOWHERE the page can read — probe 2 spent a run sitting
     // at "running…" for exactly this reason. Forwarding it by hand is the only way a failure
     // in the Worker becomes something a reader can be shown.
     const text = err instanceof Error ? (err.stack ?? err.message) : String(err);
-    if (message.kind === "call" || message.kind === "feed-refresh")
+    if (
+      message.kind === "call" ||
+      message.kind === "feed-refresh" ||
+      message.kind === "update-check"
+    )
       send({ kind: "err", id: message.id, message: text });
     else if (message.kind === "open")
       send({ kind: "opened", opened: { kind: "failed", message: text } });
@@ -228,6 +256,22 @@ export function runFeed(
     case "prices":
       return wasm.ingest_prices(message.marketplace, onProgress);
   }
+}
+
+/**
+ * One `update-check` message onto the export it names — {@link runFeed}'s seam, for a
+ * milder version of its reason.
+ *
+ * There is one export and one argument, so nothing here can reach the wrong function; what
+ * it can do is drop the `force`. That is a Check now button that answers instantly with
+ * yesterday's page for a day at a time, and nothing about that looks like a bug — the same
+ * failure `runFeed`'s doc names, at one request out of sixty an hour rather than 27.5 MB.
+ */
+export function runUpdateCheck(
+  wasm: Glue,
+  message: Extract<ToWorker, { kind: "update-check" }>,
+): Promise<string> {
+  return wasm.update_check(message.force);
 }
 
 self.addEventListener("beforeunload", () => glue?.close());

@@ -112,8 +112,28 @@ export function UpdatePanel({
    * answer to a phone or a browser than no answer at all.
    */
   const elsewhere = status ? ELSEWHERE[status.installKind] : undefined;
-  /** Nothing on this panel presses until the backend has said which kind of install this is. */
+  /**
+   * Can this build replace itself? Governs the Download / Restart / release-page controls
+   * and nothing else since 2026-08-31.
+   *
+   * Nothing on this panel presses until the backend has said which kind of install this is.
+   */
   const selfUpdating = status !== null && elsewhere === undefined;
+  /**
+   * Can this build *ask* — which is a different question, and separating the two is the
+   * whole of "check and notes, no download".
+   *
+   * **Every target, once the backend has answered at all.** `update_check` is desktop's and
+   * Android's as an ordinary command and the browser's as `glue::update_check`, so a reader
+   * on a phone or in a tab can read what the release they are about to be handed actually
+   * changed — which is the only thing `update_history` had to say and could not, because
+   * until the check ran on those targets that row was never written.
+   *
+   * It is not `!== elsewhere`: a managed or web install can check and cannot install, and
+   * reading one flag for both questions is what drew a Download button over a page that can
+   * download nothing.
+   */
+  const canCheck = status !== null;
 
   return (
     <SettingsSection id="updates" title="Updates">
@@ -155,7 +175,13 @@ export function UpdatePanel({
             <p className="text-xs text-dim">{formatChecked(status?.lastCheckAt ?? null)}</p>
           </div>
         </div>
-        {selfUpdating && (
+        {/* **On every install kind, which reverses what this button used to be.** It was
+            drawn only where the app could replace itself, on the reasoning that a check with
+            no download behind it answers nothing — true only while `update_check` was
+            desktop's, because the release *notes* and the version history are written by the
+            very same request and by nothing else. A phone and a browser can ask now, so they
+            are asked to press. See `canCheck`. */}
+        {canCheck && (
           <button
             type="button"
             onClick={update.check}
@@ -169,13 +195,18 @@ export function UpdatePanel({
         )}
       </div>
 
-      {elsewhere ? (
+      {elsewhere && (
         <p className="border-t border-border pt-4 text-sm text-dim">
-          <span className="text-text">{elsewhere}</span> This build cannot replace itself, and
-          there is nothing to check for here.
+          <span className="text-text">{elsewhere}</span> This build cannot replace itself, so a
+          check here reads what changed rather than offering a download.
         </p>
-      ) : release ? (
-        <div className="space-y-3 border-t border-border pt-4">
+      )}
+
+      {/* **The release block is drawn on every target; only its buttons are the desktop's.**
+          The border moves onto whichever of the two is first, so a panel that draws the
+          sentence above does not draw a second rule directly under it. */}
+      {release ? (
+        <div className={cn("space-y-3", !elsewhere && "border-t border-border pt-4")}>
           <div>
             <p className="text-sm text-text">
               <span className="font-mono tabular-nums text-accent">{release.version}</span> is
@@ -197,52 +228,73 @@ export function UpdatePanel({
 
           {progress && <Bar done={progress.done} total={progress.total} />}
 
-          <div className="flex flex-wrap items-center gap-3">
-            <PrimaryAction update={update} />
-            {action !== "unavailable" && (
-              <button
-                type="button"
-                onClick={update.openReleasePage}
-                className={cn(BUTTON, "border-border text-dim hover:bg-bg hover:text-text")}
-              >
-                <ExternalLink className="size-4" aria-hidden="true" />
-                View on GitHub
-              </button>
-            )}
-          </div>
+          {/* **`selfUpdating`, not `canCheck`** — this is the half that stays the desktop's.
+              `PrimaryAction` reads `action`, which is `"unavailable"` for a managed or web
+              install (`pick_asset` refuses both kinds), and its `"unavailable"` branch offers
+              a release page carrying a Windows exe and an NSIS setup — the wrong answer to
+              somebody holding a phone, which is the same mistake `ELSEWHERE` exists to stop
+              `other` making. `update_open_release_page` is not routed on web either, so the
+              GitHub button beside it would answer `unknown command`. */}
+          {selfUpdating && (
+            <>
+              <div className="flex flex-wrap items-center gap-3">
+                <PrimaryAction update={update} />
+                {action !== "unavailable" && (
+                  <button
+                    type="button"
+                    onClick={update.openReleasePage}
+                    className={cn(BUTTON, "border-border text-dim hover:bg-bg hover:text-text")}
+                  >
+                    <ExternalLink className="size-4" aria-hidden="true" />
+                    View on GitHub
+                  </button>
+                )}
+              </div>
 
-          {action === "install" && (
-            <p className="text-xs text-dim">
-              The app will close and reopen. Nothing in your collection is touched.
-            </p>
-          )}
-          {action === "unavailable" && (
-            <p className="text-xs text-dim">
-              This copy was installed in a way the app can&rsquo;t update on its own. Download{" "}
-              {release.version} from the release page and install it over this one — your
-              collection stays where it is.
-            </p>
+              {action === "install" && (
+                <p className="text-xs text-dim">
+                  The app will close and reopen. Nothing in your collection is touched.
+                </p>
+              )}
+              {action === "unavailable" && (
+                <p className="text-xs text-dim">
+                  This copy was installed in a way the app can&rsquo;t update on its own.
+                  Download {release.version} from the release page and install it over this one
+                  — your collection stays where it is.
+                </p>
+              )}
+            </>
           )}
         </div>
-      ) : (
-        <p className="flex items-center gap-2 border-t border-border pt-4 text-sm text-dim">
-          {status?.lastCheckAt ? (
-            <>
-              <CircleCheck className="size-4 shrink-0" aria-hidden="true" />
-              You&rsquo;re on the latest version.
-            </>
-          ) : (
-            "Checking for updates…"
+      ) : status?.lastCheckAt ? (
+        <p
+          className={cn(
+            "flex items-center gap-2 text-sm text-dim",
+            !elsewhere && "border-t border-border pt-4",
           )}
+        >
+          <CircleCheck className="size-4 shrink-0" aria-hidden="true" />
+          You&rsquo;re on the latest version.
+        </p>
+      ) : elsewhere ? null : (
+        // **Only where something really is checking.** `desktop.rs` spawns a check at
+        // startup under `#[cfg(desktop)]`, so a portable, NSIS or unrecognised install is
+        // doing exactly this while the panel renders — and so is the first frame on every
+        // target, where `status` is still `null` and `elsewhere` cannot be set. A browser
+        // and a phone run no startup check, and the `elsewhere` sentence above already
+        // points at the button; a third line promising a check nobody started would be the
+        // panel describing something that is not happening.
+        <p className="flex items-center gap-2 border-t border-border pt-4 text-sm text-dim">
+          Checking for updates…
         </p>
       )}
 
-      {/* Hidden with the rest of it: the list is populated by the very check that is not run
-          here, so wherever something else does the updating it is an empty accordion
-          promising nothing. `update_history` answers on every target now — in a browser it
-          answers `[]`, because only a check ever writes that row — so what is hidden here is
-          an empty section rather than a broken call. */}
-      {selfUpdating && (
+      {/* **Drawn wherever a check can fill it**, which since 2026-08-31 is everywhere. It was
+          hidden with the buttons while `update_check` was desktop's, because the list is
+          written by that one request and by nothing else — `update_history` answered `[]` in
+          a browser and on a phone, and an empty accordion promising a changelog is worse than
+          no accordion. `VersionHistory` still says so itself before the first check. */}
+      {canCheck && (
         <VersionHistory history={history} currentVersion={status?.currentVersion} />
       )}
 

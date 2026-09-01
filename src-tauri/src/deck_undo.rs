@@ -96,6 +96,15 @@ const DECK_FIELDS: &[&str] = &[
     "notes",
     "cover_card_id",
     "cover_kind",
+    // **Retired, and it must stay on this list until the column itself goes.** Nothing has
+    // written `decks.cover_image_path` since custom deck covers were removed on 2026-08-31, so
+    // every step recorded from then on carries the same value it read. That is not a reason to
+    // drop it: `read_deck_row` records *all* of `DECK_FIELDS` into every step, so every step
+    // already on a reader's disk names this column — and `apply` refuses a step naming a field
+    // that is not here. Measured by handing `apply` an `Op::Deck` naming only this column: it
+    // answers `Ok(())` with the entry present and
+    // "`cover_image_path` is not a deck column an undo step may write" without it. So taking it
+    // off breaks Ctrl+Z on every deck edit made before the upgrade, on every existing database.
     "cover_image_path",
     "folder_id",
     "theory_enabled",

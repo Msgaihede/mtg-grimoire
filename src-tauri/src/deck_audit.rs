@@ -157,6 +157,12 @@ pub struct DeckAuditEntry {
 /// | `folder` | `{ "action": "move", "folder": "Commander › Legends" }` |
 /// | `deck` | `{ "field": "name\|format\|cover\|description\|notes\|built\|archived\|theory", "from": "…", "to": "…" }` |
 ///
+/// **A `cover` row's `to` could be the word `custom` until 2026-08-31 and the renderer must
+/// keep reading it**, for `built`'s reason exactly one paragraph down: custom deck covers were
+/// removed, `deck_set_cover_image` was the command that wrote that value, and every row a
+/// reader wrote before the upgrade still carries it. `from` can still be `custom` on a new row —
+/// see `deck::cover_value` for the sync path that produces one.
+///
 /// **`built` is a value nothing writes any more and the renderer must keep reading.** Schema v25
 /// dropped `decks.is_built` — a deck no longer *claims* copies, it holds the ones filed in its
 /// group — so no new row carries it, and every row a reader wrote before the upgrade still does.
@@ -456,17 +462,10 @@ mod tests {
         let folder = crate::deck_meta::create_folder(&conn, None, "Commander")
             .unwrap()
             .id;
-        // A scratch covers directory for the one case that writes a file. Process-unique, for
-        // the reason `deck::tests::covers` gives.
-        let covers = std::env::temp_dir().join(format!("mtgtest-audit-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&covers);
-        std::fs::create_dir_all(&covers).unwrap();
-        image::RgbaImage::new(8, 8)
-            .save(covers.join("source.png"))
-            .unwrap();
-        // `set_cover_image` takes bytes, not a path — the encode belongs outside the write
-        // lock and its signature is what says so.
-        let cover_bytes = crate::images::encode_cover(&covers.join("source.png")).unwrap();
+        // **Nothing in this sweep touches the filesystem any more.** One case did —
+        // `deck_set_cover_image`, which needed a scratch covers directory and a real encoded
+        // WEBP to hand it — and it went with custom deck covers on 2026-08-31. Every command
+        // below is `&Connection` in and rows out.
 
         /// One command under test: what to call it in a failure, how many rows it owes, and
         /// how to drive it.
@@ -576,14 +575,7 @@ mod tests {
                 "deck_duplicate",
                 1,
                 Box::new(|| {
-                    crate::deck::duplicate_deck(&conn, id, None).unwrap();
-                }),
-            ),
-            (
-                "deck_set_cover_image",
-                1,
-                Box::new(|| {
-                    crate::deck::set_cover_image(&conn, &covers, id, &cover_bytes).unwrap();
+                    crate::deck::duplicate_deck(&conn, id).unwrap();
                 }),
             ),
             (
@@ -907,7 +899,6 @@ mod tests {
                 "`{name}` must record exactly {owed} audit row(s)"
             );
         }
-        let _ = std::fs::remove_dir_all(&covers);
     }
 
     #[test]
@@ -1457,7 +1448,7 @@ mod tests {
         crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", None, 1).unwrap();
         assert!(rows(&conn, id) > 0);
 
-        crate::deck::delete_deck(&conn, id, None).unwrap();
+        crate::deck::delete_deck(&conn, id).unwrap();
 
         let left: i64 = conn
             .query_row("SELECT count(*) FROM deck_audit", [], |r| r.get(0))

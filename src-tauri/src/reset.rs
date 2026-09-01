@@ -35,8 +35,11 @@
 //!
 //! [`cache_clear`] deletes only bytes the app can fetch again with no user action:
 //! `data/images/`, the picture cache, and `data/tmp/`, where the three bulk downloads land.
-//! It never touches `data/covers/` — a deck cover is a picture the *reader* chose, and the
-//! file beside the database is the only record that they chose it — and it never touches a
+//! **Those two directories are the whole of its reach, and the list is now exhaustive rather
+//! than illustrative**: `data/covers/` was the third directory in this folder and the one thing
+//! this button was documented as never touching, because a deck cover was a picture the reader
+//! had chosen and the file was the only record that they had. Custom covers went on 2026-08-31,
+//! so there is no such folder to spare and no such promise left to keep. It never touches a
 //! table other than `image_cache`, whose rows are bookkeeping for exactly the files it swept.
 //! The marketplace and Oracle Tag tables stay: those re-download on a *button*, not on demand,
 //! so emptying them would leave every price an em dash until the reader noticed and pressed
@@ -44,13 +47,20 @@
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
-use std::fs;
-use std::path::Path;
 
 // **Gated rather than deleted, because an unused import is a red build on the web target.**
 // CI runs `cargo clippy --lib --target wasm32-unknown-unknown -- -D warnings`, and every one
 // of these is reachable only from [`clear_cache`] or from the `#[tauri::command]` block at
 // the foot of this file — all of which carry the same gate.
+//
+// **`fs` and `Path` joined this list on 2026-08-31**, and they are the tell for the whole of
+// what this file lost: they were the two the module could import unconditionally, because
+// `clear_decks` swept the covers directory and `clear_decks` compiles everywhere. With custom
+// deck covers gone, every path this module touches is `clear_cache`'s.
+#[cfg(not(target_family = "wasm"))]
+use std::fs;
+#[cfg(not(target_family = "wasm"))]
+use std::path::Path;
 #[cfg(not(target_family = "wasm"))]
 use std::sync::atomic::Ordering;
 #[cfg(not(target_family = "wasm"))]
@@ -82,14 +92,15 @@ pub struct CollectionCleared {
 /// `ON DELETE SET NULL`, so deleting every deck leaves the whole folder tree standing and
 /// empty. Clearing them is a second statement, deliberately taken (see [`decks_clear`]).
 ///
-/// `covers` is files, not rows — the `<deckId>.webp` pictures beside the database, which no
-/// `DELETE` can reach.
+/// **It carried a third field, `covers`, and losing it is the only shape change here.** That
+/// was a count of *files* rather than rows — the `<deckId>.webp` pictures beside the database,
+/// which no `DELETE` could reach — and it went with custom covers on 2026-08-31. A deck is rows
+/// again, so both remaining numbers come from `execute`.
 #[derive(Debug, Clone, Copy, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DecksCleared {
     pub decks: i64,
     pub folders: i64,
-    pub covers: u64,
 }
 
 /// What the cache sweep freed.
@@ -112,6 +123,14 @@ pub struct CacheCleared {
 }
 
 /// What a directory sweep did, accumulated across a walk.
+///
+/// **Gated with [`sweep_dir`] since 2026-08-31, and the gate is the module's own rule applied
+/// one level down.** `clear_decks` used to sweep the covers directory, which is what kept both
+/// of these alive on wasm even though `clear_cache` — the only other caller and the only one
+/// left — is desktop-only. Custom deck covers went, and a struct nothing constructs is a red
+/// `cargo clippy --target wasm32-unknown-unknown -- -D warnings`, the same build the imports
+/// above are gated for.
+#[cfg(not(target_family = "wasm"))]
 #[derive(Debug, Clone, Copy, Default)]
 struct Swept {
     files: u64,
@@ -133,6 +152,12 @@ struct Swept {
 /// the caller's promise is "the cache is disposable", and a cache that is partly still there
 /// costs a re-fetch rather than correctness — [`crate::images::Cache::get`] treats a row
 /// whose file is gone as a miss, and so does every bulk download.
+///
+/// **[`clear_cache`] is its only caller, and its two roots are the whole of what this app ever
+/// deletes recursively.** There was a third — `clear_decks` handed it the covers directory —
+/// until custom deck covers were removed on 2026-08-31. Nothing should give this function a
+/// fourth root without an argument for it: what it is handed, it empties.
+#[cfg(not(target_family = "wasm"))]
 fn sweep_dir(root: &Path, out: &mut Swept) {
     let Ok(entries) = fs::read_dir(root) else {
         return;
@@ -266,7 +291,7 @@ pub fn clear_wishlist(conn: &Connection) -> Result<i64, String> {
     Ok(entries as i64)
 }
 
-/// Empty the decks, the folders that filed them, and the cover pictures beside the database.
+/// Empty the decks and the folders that filed them.
 ///
 /// **`deck_folders` is a second statement because the schema will not do it.** Deleting a deck
 /// leaves its folder standing (`decks.folder_id` is `ON DELETE SET NULL` — the gallery's own
@@ -302,15 +327,14 @@ pub fn clear_wishlist(conn: &Connection) -> Result<i64, String> {
 /// and is not a deck's any more, so no cascade reaches it — see the statement's own comment for
 /// why "every deck" is the one case where clearing them is right.
 ///
-/// **Covers are swept whole rather than removed one id at a time.** [`crate::deck::delete_deck`]
-/// removes exactly `<id>.webp` because the decks beside it still need theirs; here there are no
-/// decks left when the sweep runs, so every file in that directory is an orphan by construction
-/// — including any left behind by the one seam `set_cover_image` documents, a commit that failed
-/// after the bytes landed. Nothing but `write_cover` ever puts a file there.
-///
-/// `covers` is `None` when the directory could not be resolved at all, which is the app still
-/// starting; the rows still go, and the pictures they pointed at are inert.
-pub fn clear_decks(conn: &Connection, covers: Option<&Path>) -> Result<DecksCleared, String> {
+/// **Nothing here touches the filesystem, and that is a change worth naming.** This took a
+/// covers directory and handed it to [`sweep_dir`] after the commit — a recursive delete over a
+/// path resolved from an `AppHandle` — because a deck's custom cover was a file and the wipe
+/// had to take the files too. Custom covers went on 2026-08-31, so the argument, the sweep and
+/// [`DecksCleared`]'s third field all went with them, and every number this answers now comes
+/// from a statement. `sweep_dir` itself stays: [`clear_cache`] is its remaining caller and has
+/// two directories of its own.
+pub fn clear_decks(conn: &Connection) -> Result<DecksCleared, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     // **Every deck group's copies go to `Recently removed`, by hand and before the `DELETE`** —
     // [`crate::deck::delete_deck`]'s destination and its loop, borrowed rather than re-argued.
@@ -381,17 +405,9 @@ pub fn clear_decks(conn: &Connection, covers: Option<&Path>) -> Result<DecksClea
         .map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())?;
 
-    // Outside the transaction, and after the commit: a file removed for a row that then rolled
-    // back would be a deck whose cover vanished for nothing. The other order costs an orphan,
-    // which is inert, and this order costs a broken tile.
-    let mut swept = Swept::default();
-    if let Some(covers) = covers {
-        sweep_dir(covers, &mut swept);
-    }
     Ok(DecksCleared {
         decks: decks as i64,
         folders: folders as i64,
-        covers: swept.files,
     })
 }
 
@@ -449,10 +465,12 @@ const SYNCING: &str = "a card update is running — clear the cache once it has 
 //
 // **The gate is on this block rather than on the module**, which is the shape `search.rs`
 // has always had and the one PR 10a moved eleven other modules into. Everything above is
-// `&Connection` in and a DTO out; what cannot cross is `tauri::State`, `tauri::AppHandle`
-// and [`crate::paths::covers_dir`]. Three of the four are reachable from a browser through
-// [`crate::web::route`] instead — and the fourth, `cache_clear`, is not: see [`clear_cache`]
-// above for why the image cache is a separate piece of work rather than a missing arm.
+// `&Connection` in and a DTO out; what cannot cross is `tauri::State` and the filesystem.
+// Three of the four commands are reachable from a browser through [`crate::web::route`]
+// instead — and the fourth, `cache_clear`, is not: see [`clear_cache`] above for why the image
+// cache is a separate piece of work rather than a missing arm. `tauri::AppHandle` was on that
+// list too, for `paths::covers_dir`; custom covers went on 2026-08-31 and `decks_clear` takes
+// no handle any more.
 
 #[cfg(not(target_family = "wasm"))]
 #[tauri::command]
@@ -483,19 +501,13 @@ pub async fn wishlist_clear(state: tauri::State<'_, Arc<AppState>>) -> Result<i6
 /// Empty every deck.
 #[cfg(not(target_family = "wasm"))]
 #[tauri::command]
-pub async fn decks_clear(
-    state: tauri::State<'_, Arc<AppState>>,
-    app: tauri::AppHandle,
-) -> Result<DecksCleared, String> {
+pub async fn decks_clear(state: tauri::State<'_, Arc<AppState>>) -> Result<DecksCleared, String> {
     let state = state.inner().clone();
-    // Resolved before the blocking task for `deck_delete`'s reason: `covers_dir` wants the
-    // `AppHandle`, which is not `Send` across the spawn.
-    let covers = crate::paths::covers_dir(&app).ok();
     tauri::async_runtime::spawn_blocking(move || {
         // Plain `with_write`: a deck write moves nothing the reader owns. PR 3's
         // `collection_to_deck`/`deck_to_collection` DO move ownership and must use
         // `collection_source::with_write_owned` instead.
-        with_write(&state, |c| clear_decks(c, covers.as_deref()))
+        with_write(&state, clear_decks)
     })
     .await
     .map_err(|e| format!("the decks could not be cleared: {e}"))?
@@ -819,7 +831,7 @@ mod tests {
         )
         .unwrap();
 
-        let out = clear_decks(&conn, None).unwrap();
+        let out = clear_decks(&conn).unwrap();
 
         assert_eq!(out.decks, 1);
         assert_eq!(out.folders, 1);
@@ -856,7 +868,7 @@ mod tests {
         let conn = db();
         seed(&conn);
 
-        clear_decks(&conn, None).unwrap();
+        clear_decks(&conn).unwrap();
 
         assert_eq!(count(&conn, "collection_entries"), 1);
         let (quantity, folder): (i64, Option<i64>) = conn
@@ -880,22 +892,6 @@ mod tests {
             "and they wait in `Recently removed` — the same destination `delete_deck` uses, \
              because a wiped deck's cards are exactly cards taken out of a deck"
         );
-    }
-
-    #[test]
-    fn clearing_the_decks_sweeps_the_cover_pictures() {
-        let dir = tempfile::tempdir().unwrap();
-        let covers = dir.path();
-        crate::images::write_cover(covers, 1, b"pretend webp").unwrap();
-        crate::images::write_cover(covers, 7, b"an orphan").unwrap();
-        let conn = db();
-        seed(&conn);
-
-        let out = clear_decks(&conn, Some(covers)).unwrap();
-
-        assert_eq!(out.covers, 2, "the orphan goes too — no deck can claim it");
-        assert!(!crate::images::cover_file(covers, 1).exists());
-        assert!(covers.is_dir(), "the directory itself must survive");
     }
 
     /// The sweep walks `images/<variant>/<shard>/` and empties `tmp/` beside it, and leaves the
@@ -971,25 +967,34 @@ mod tests {
         assert_eq!(out.failed, 0);
     }
 
-    /// The one directory this command must never reach into, asserted from the outside: the
-    /// covers folder is a sibling of `images/` and `tmp/`, and a sweep given the data directory
-    /// by mistake would take it.
+    /// **The blast radius, asserted from the outside**: this command is handed two paths and
+    /// reaches neither their parent nor a sibling of theirs. `sweep_dir` deletes recursively, so
+    /// the failure this fences is not a wrong file but a wrong *root* — `clear_cache` called
+    /// with the data directory instead of `images/` would take everything in it.
+    ///
+    /// The sibling was `covers/` until 2026-08-31, and it was the reader's own pictures, which
+    /// made this test's subject obvious. Custom covers are gone and the fence is not: a bare
+    /// sibling stands in, because what is being proved is a property of the sweep rather than a
+    /// promise about any one folder. `user.db` and `corpus.db` are the real neighbours now.
     #[test]
-    fn the_cache_sweep_never_touches_the_deck_covers() {
+    fn the_cache_sweep_reaches_no_sibling_of_the_two_roots() {
         let dir = tempfile::tempdir().unwrap();
         let images = dir.path().join("images");
         let tmp = dir.path().join("tmp");
-        let covers = dir.path().join("covers");
+        let sibling = dir.path().join("neighbour");
         fs::create_dir_all(&images).unwrap();
         fs::create_dir_all(&tmp).unwrap();
-        fs::create_dir_all(&covers).unwrap();
-        crate::images::write_cover(&covers, 3, b"the reader's own picture").unwrap();
+        fs::create_dir_all(&sibling).unwrap();
+        let bystander = sibling.join("do-not-touch");
+        fs::write(&bystander, b"not this command's to delete").unwrap();
         let cache = crate::images::Cache::new(images.clone());
         let conn = db();
 
         clear_cache(&conn, &images, &tmp, &cache).unwrap();
 
-        assert!(crate::images::cover_file(&covers, 3).exists());
+        assert!(bystander.is_file(), "a sibling directory is out of reach");
+        assert!(images.is_dir(), "and both roots themselves survive");
+        assert!(tmp.is_dir());
     }
 
     /// A symlink is unlinked, never followed. The sweep would otherwise walk into whatever a

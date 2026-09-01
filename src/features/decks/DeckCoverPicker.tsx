@@ -1,31 +1,15 @@
 import { useEffect, useMemo, useState, type JSX } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { open as pickFile } from "@tauri-apps/plugin-dialog";
 import { CardImage } from "@/components/CardImage";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { DEBOUNCE_MS } from "@/features/search/useCardSearch";
 import { count } from "@/lib/counts";
-import { FOCUS, FOCUS_INSET } from "@/lib/focus";
-import { ART_ASPECT, cardImageUrl } from "@/lib/images";
-import { ipc, ipcError, type CardSummary, type DeckCard, type DeckCoverKind } from "@/lib/ipc";
+import { FOCUS_INSET } from "@/lib/focus";
+import { ART_ASPECT, cardArtSrc, cardImageUrl } from "@/lib/images";
+import { ipc, ipcError, type CardSummary, type DeckCard } from "@/lib/ipc";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
 import { CAPTION, FIELD } from "./formFields";
-
-/**
- * What the file picker will offer, and it is **the backend's decoder list written out**.
- *
- * `src-tauri/Cargo.toml` builds the `image` crate with exactly five formats — `png`, `jpeg`,
- * `gif`, `bmp`, `webp` — chosen as "the five a person actually has on disk". A filter wider
- * than that would let a reader pick a TIFF the re-encode then refuses, which is a refusal the
- * picker could have prevented; a filter narrower would hide files that work. `jpg` and `jpeg`
- * are one decoder and two extensions people really have.
- *
- * A list, not a scope: the dialog plugin has no path scope to grant (measured against the
- * generated ACL manifest — `dialog:allow-open` carries no `scope` and the plugin declares no
- * global scope schema), so *which files* may be offered is decided here and nowhere else.
- */
-const COVER_EXTENSIONS = ["png", "jpg", "jpeg", "gif", "bmp", "webp"];
 
 /**
  * How many printings one search offers.
@@ -52,33 +36,22 @@ const CHOICE_GRID = "grid max-h-52 grid-cols-4 gap-1.5 overflow-y-auto";
 export interface DeckCoverPickerProps {
   /** What the preview draws, and what a tile marks as current. `null` before a deck has one. */
   coverCardId: string | null;
-  coverKind: DeckCoverKind;
   /** Credited under the preview. `null` draws no line — never the word "null". */
   coverArtist: string | null;
   /**
-   * A custom cover's URL names the deck, not the picture (`/cover/<deckId>`, served
-   * `no-store`), so the preview keys on {@link DeckCoverPickerProps.customCoverKey} to notice a
-   * replaced file. `null` at create — there is no deck id yet, and therefore no route.
+   * Where the cover printing's `art` crop is on `cards.scryfall.io` — **the web build's only
+   * way to draw the preview**, and ignored on desktop, where `cardArtSrc` prefers the local
+   * cache. Absent or `null` is "no picture", never a URL to build one from.
+   *
+   * A prop rather than a lookup of this component's own, because the two hosts know it from two
+   * places: the settings dialog has the deck's own `DeckRow.imageUris`, and the create dialog —
+   * which has no deck yet — reads the `CardDetail` it already fetches for the credit line. The
+   * tiles below take theirs the same way, off whichever row the reader is picking from.
    */
-  customCoverUrl: string | null;
-  /**
-   * Whatever moves when the file behind {@link DeckCoverPickerProps.customCoverUrl} is
-   * replaced — the deck's `updatedAt`, in the settings dialog. It becomes the image element's
-   * React key, which is the only thing that can force a re-decode of a URL that did not change.
-   */
-  customCoverKey?: string | number;
+  coverImageUrl?: string | null;
   /** The deck's own printings, offered when the search box is empty. `[]` at create. */
   deckCards: readonly DeckCard[];
   onPickCard: (cardId: string) => void;
-  /** The file picker's answer — a path the backend reads. */
-  onPickFile: (sourcePath: string) => void;
-  /**
-   * A file chosen but not applied yet: the create dialog has no deck id to upload against, so
-   * it shows the name instead of a preview. `null` in the settings dialog, which uploads on the
-   * press and has a preview to show for it.
-   */
-  pendingFileName: string | null;
-  uploading: boolean;
   /** Namespace for this instance's element ids — two of these on one page is two pickers. */
   idPrefix: string;
 }
@@ -86,11 +59,22 @@ export interface DeckCoverPickerProps {
 /**
  * The picture, the choices, and the credit the choices' own frames cannot carry.
  *
- * **Presentational, and it writes nothing.** Two commands set a cover and they are not
- * interchangeable — `deckUpdate({ coverCardId })` points a deck at a printing's art crop and
- * puts `coverKind` back to `card_art`, while `deck_set_cover_image` takes a *path* the backend
- * re-encodes and marks `custom` — but which of them runs, and when, belongs to the host. This
- * component answers `onPickCard` and `onPickFile` and knows nothing else about either.
+ * **Presentational, and it writes nothing.** One command sets a cover —
+ * `deckUpdate({ coverCardId })`, which points the deck at a printing's art crop — and *when* it
+ * runs belongs to the host: this component answers {@link DeckCoverPickerProps.onPickCard} and
+ * knows nothing about the command behind it, which is what lets the settings dialog write on
+ * the press while the create dialog folds the id into its draft and sends one `deck_create`.
+ *
+ * **There was a second command and a second control, and both are gone.** A cover could also be
+ * a picture the reader chose off disk — `deck_set_cover_image` took a *path*, the backend
+ * re-encoded it beside the database and set `cover_kind` to `custom`, and this picker carried an
+ * `Upload an image…` button, a `PendingFile` frame for the create dialog's no-deck-id case and
+ * an `onPickFile` callback beside `onPickCard`. It was deleted whole rather than ported to the
+ * web and Android builds, because the file **never survived a sync** (the stored path was
+ * absolute, so a phone was handed `D:\…\covers\7.webp`) and every device but the one that set it
+ * already drew the card art instead. A cover is a card id now — a short string that syncs, that
+ * is identical on all three targets, and that needs no encoder, no directory and no URL scheme.
+ * So the grid below is not one of two ways in any more; it is the picker.
  *
  * ## Two sources for one grid
  *
@@ -112,29 +96,25 @@ export interface DeckCoverPickerProps {
  * is shown the illustrator must be credited (Scryfall's image policy). The **preview** below
  * obeys it strictly — it draws `Art by {coverArtist}` and refuses to draw a crop whose artist is
  * unknown, which is {@link DeckRow.coverArtist}'s own ruling and the same refusal `DecksPage`'s
- * gallery tile makes.
+ * gallery tile makes. Since a cover can only be a crop now, "no artist" and "no picture" are one
+ * condition here rather than two that had to be kept in step across two kinds of cover.
  *
  * **The tiles do not, and the search tiles are a fifth instance of a gap recorded rather than
  * quietly inherited.** {@link ChoiceTile}'s doc has the whole argument for the four that came
  * before — `CardStack`, `views/GridView`, `TheoryDiffDialog` and the in-deck tiles here — and it
  * covers a search result for the same two reasons plus one of its own: `CardSummary` carries no
- * `artist` field (`src/lib/ipc.ts:152-250`, and `search.rs`'s SELECT does not select one), and
- * widening the search command for a picker's thumbnails would put a column on every result row
- * in the app to credit a crop that sits inside a control naming its card. It is repeated here
- * rather than left to be read next door because **an undocumented instance of a known gap is how
- * a known gap becomes an unknown one**.
+ * `artist` field (`src/lib/ipc.ts`, and `search.rs`'s SELECT does not select one), and widening
+ * the search command for a picker's thumbnails would put a column on every result row in the app
+ * to credit a crop that sits inside a control naming its card. It is repeated here rather than
+ * left to be read next door because **an undocumented instance of a known gap is how a known gap
+ * becomes an unknown one**.
  */
 export function DeckCoverPicker({
   coverCardId,
-  coverKind,
   coverArtist,
-  customCoverUrl,
-  customCoverKey,
+  coverImageUrl,
   deckCards,
   onPickCard,
-  onPickFile,
-  pendingFileName,
-  uploading,
   idPrefix,
 }: DeckCoverPickerProps): JSX.Element {
   const tip = useTooltip();
@@ -198,23 +178,18 @@ export function DeckCoverPicker({
     <div className="space-y-3.5">
       <div>
         <p className={cn(CAPTION, "mb-1.5")}>Deck picture</p>
-        {pendingFileName !== null ? (
-          <PendingFile name={pendingFileName} />
-        ) : (
-          <CoverPreview
-            coverCardId={coverCardId}
-            coverKind={coverKind}
-            coverArtist={coverArtist}
-            customCoverUrl={customCoverUrl}
-            customCoverKey={customCoverKey}
-          />
-        )}
+        <CoverPreview
+          coverCardId={coverCardId}
+          coverArtist={coverArtist}
+          coverImageUrl={coverImageUrl}
+        />
         {/* Scryfall's image policy, and the gallery tile's ruling verbatim: an `art` crop has
             no printed frame, so the illustrator is credited wherever one is shown — and a cover
-            whose artist is unknown draws no line at all rather than the word "null". A custom
-            cover is the reader's own picture and has no Scryfall artist to credit, which is why
-            `coverArtist` is `null` for one while the frame quite properly draws it. */}
-        {pendingFileName === null && coverArtist !== null && coverKind === "card_art" && (
+            whose artist is unknown draws no line at all rather than the word "null". The
+            condition is the preview's own, so the credit and the picture appear together or
+            not at all; while a deck could also wear a file there was a second test beside this
+            one, and the two had to agree about which picture was on screen. */}
+        {coverArtist !== null && (
           <p
             className="mt-1.5 truncate text-[0.6875rem] text-dim"
             {...tip(coverArtist, { whenClipped: true })}
@@ -274,7 +249,6 @@ export function DeckCoverPicker({
             loading={search.isFetching && results.length === 0}
             failed={searchFailure !== null}
             coverCardId={coverCardId}
-            coverKind={coverKind}
             onPickCard={onPickCard}
           />
         ) : choices.length === 0 ? (
@@ -288,15 +262,14 @@ export function DeckCoverPicker({
                 <ChoiceTile
                   cardId={card.cardId}
                   name={card.name}
-                  current={coverKind === "card_art" && coverCardId === card.cardId}
+                  artUrl={card.imageUris?.art}
+                  current={coverCardId === card.cardId}
                   onPick={() => onPickCard(card.cardId)}
                 />
               </li>
             ))}
           </ul>
         )}
-
-        <Upload upload={onPickFile} pending={uploading} />
       </div>
     </div>
   );
@@ -318,7 +291,6 @@ function SearchResults({
   loading,
   failed,
   coverCardId,
-  coverKind,
   onPickCard,
 }: {
   headingId: string;
@@ -332,7 +304,6 @@ function SearchResults({
   /** The failure is already said above this; all this branch owes is not to claim a miss. */
   failed: boolean;
   coverCardId: string | null;
-  coverKind: DeckCoverKind;
   onPickCard: (cardId: string) => void;
 }) {
   if (results.length === 0) {
@@ -350,7 +321,8 @@ function SearchResults({
             <ChoiceTile
               cardId={row.id}
               name={row.name}
-              current={coverKind === "card_art" && coverCardId === row.id}
+              artUrl={row.imageUris?.art}
+              current={coverCardId === row.id}
               onPick={() => onPickCard(row.id)}
             />
           </li>
@@ -370,30 +342,33 @@ function SearchResults({
 }
 
 /**
- * The cover as the gallery would draw it: the card's `art` crop, or the reader's own picture.
+ * The cover as the gallery would draw it: the card's `art` crop.
  *
- * {@link DeckCoverKind} is the one answer to which of the two is showing — a deck usually
- * carries both, because setting one leaves the other alone.
+ * **One arm, and it used to be two.** `DeckCoverKind` decided between this crop and a file the
+ * reader had uploaded, and a deck carried both at once because setting either left the other
+ * alone — so the column was the only answer to which one was showing. The file half is deleted,
+ * so a cover is a card id and this draws it or says there is none.
  */
 function CoverPreview({
   coverCardId,
-  coverKind,
   coverArtist,
-  customCoverUrl,
-  customCoverKey,
+  coverImageUrl,
 }: {
   coverCardId: string | null;
-  coverKind: DeckCoverKind;
   coverArtist: string | null;
-  customCoverUrl: string | null;
-  customCoverKey?: string | number;
+  coverImageUrl?: string | null;
 }) {
-  const custom = coverKind === "custom";
-  const url = custom
-    ? customCoverUrl
-    : coverCardId !== null && coverArtist !== null
-      ? cardImageUrl(coverCardId, 0, "art")
-      : null;
+  // The credit is the condition, not a line drawn beside one: an `art` crop with no printed
+  // frame may be shown only where the illustrator is named, so a cover this app cannot credit
+  // is a cover it does not draw. `DecksPage`'s gallery tile makes the same refusal.
+  //
+  // Whether it is *drawable* is a second question and `cardArtSrc` is the whole of it: on
+  // desktop the protocol URL, on web the row's own URL and `null` when the row has none, since
+  // wasm cannot register a URL scheme with a browser. Kept apart from `chosen` below so the
+  // frame's three words stay true on both builds — `DeckTile.hasCover` makes the same split for
+  // the same reason.
+  const chosen = coverCardId !== null && coverArtist !== null;
+  const url = chosen ? cardArtSrc(cardImageUrl(coverCardId, 0, "art"), coverImageUrl) : null;
   const image = useImageRetry(url);
 
   return (
@@ -407,12 +382,11 @@ function CoverPreview({
           // credit line underneath already says whose picture it is.
           alt=""
           src={image.src}
-          // **A custom cover's URL never changes**, because it names the deck and not the
-          // picture (`/cover/<deckId>`, served `no-store` for exactly this reason). So
-          // `CardImage`'s own key cannot notice a new upload, and this one does: the host
-          // passes the deck's `updatedAt`, which moves on every write to the deck, including
-          // the one that replaced the file.
-          key={custom ? customCoverKey : undefined}
+          // No `key` of this component's own: `CardImage` keys itself on the `src`, which is
+          // the whole answer for a card cover, because a different printing is a different URL.
+          // The custom arm needed one — its route named the *deck*, so nothing keyed on the URL
+          // could notice a replaced file, and the host passed the deck's `updatedAt` — and that
+          // is the second thing the deletion took away.
           decoding="async"
           onError={image.onError}
           className="size-full object-cover"
@@ -423,40 +397,10 @@ function CoverPreview({
         // this app does not know is not drawn at all, and an orphaned cover heals on the next
         // sync — which is why this says "No cover" rather than claiming a failure.
         <span aria-hidden="true" className="text-xs text-dim">
-          {url === null ? "No cover" : image.retrying ? "Retrying…" : "No image"}
+          {!chosen ? "No cover" : image.retrying ? "Retrying…" : "No image"}
         </span>
       )}
     </span>
-  );
-}
-
-/**
- * A file the reader has chosen for a deck that does not exist yet.
- *
- * **It cannot be previewed, and that is a fact about the route rather than a shortcut.** The
- * image protocol serves a custom cover at `/cover/<deckId>`, and the bytes behind that route are
- * the ones `deck_set_cover_image` re-encoded — so there is nothing to draw until there is a deck
- * to draw it for. Reading the file here instead is not the alternative it looks like: the picker
- * hands back a **path**, which is the whole of what `dialog:allow-open` grants, and this app asks
- * for no filesystem permission anywhere. So the frame says which file it is, which is the one
- * true thing there is to say.
- */
-function PendingFile({ name }: { name: string }) {
-  return (
-    <>
-      <span
-        className={cn(
-          "grid w-full place-items-center overflow-hidden rounded-lg border border-dashed",
-          "border-border bg-surface px-3",
-        )}
-        style={{ aspectRatio: ART_ASPECT }}
-      >
-        <span className="line-clamp-3 text-center text-xs break-all text-dim">{name}</span>
-      </span>
-      <p className="mt-1.5 text-[0.6875rem] text-dim">
-        Saved as the deck’s picture once the deck is made.
-      </p>
-    </>
   );
 }
 
@@ -466,10 +410,11 @@ function PendingFile({ name }: { name: string }) {
  * The `art` crop, at the shape a cover is: this is a picture of what pressing it would do, and
  * a 5:7 card face here would be a preview of a different picture.
  *
- * **Takes an id and a name rather than a row**, because the two sources it is drawn from are two
- * types — a {@link DeckCard} from the deck and a `CardSummary` from the search — and they agree
- * about exactly these two fields. Narrowing to them is also what keeps the tile from acquiring
- * an opinion about which list it is in.
+ * **Takes pieces rather than a row**, because the two sources it is drawn from are two types —
+ * a {@link DeckCard} from the deck and a `CardSummary` from the search — and they agree about
+ * exactly the three fields below. Narrowing to them is also what keeps the tile from acquiring
+ * an opinion about which list it is in. (It was two fields until 2026-08-31; `imageUris` is the
+ * third, and it is on both types for the same reason it is on the tile.)
  *
  * **A known gap against the art-credit rule, recorded here rather than quietly inherited.**
  * The rule is absolute — an `art` crop has no printed frame, so wherever one is shown the
@@ -493,15 +438,27 @@ function PendingFile({ name }: { name: string }) {
 function ChoiceTile({
   cardId,
   name,
+  artUrl,
   current,
   onPick,
 }: {
   cardId: string;
   name: string;
+  /**
+   * The `art` crop's URL on `cards.scryfall.io`, off whichever row this tile was drawn from —
+   * `DeckCard.imageUris` for the deck's own printings, `CardSummary.imageUris` for a search
+   * answer. **The web build's only picture**, ignored on desktop by `cardArtSrc`, and `null`
+   * for a row that carries none — which draws the empty, bordered tile below rather than a
+   * broken `<img>`. The tile still names its card, so it is still pickable.
+   *
+   * It is the third field the two sources agree about, which is why the tile can go on taking
+   * pieces rather than a row.
+   */
+  artUrl?: string | null;
   current: boolean;
   onPick: () => void;
 }) {
-  const image = useImageRetry(cardImageUrl(cardId, 0, "art"));
+  const image = useImageRetry(cardArtSrc(cardImageUrl(cardId, 0, "art"), artUrl));
   const tip = useTooltip();
 
   return (
@@ -534,78 +491,6 @@ function ChoiceTile({
         />
       )}
     </button>
-  );
-}
-
-/**
- * The reader's own picture, through the system file picker.
- *
- * **One press, one `open()`, and the path goes straight to the command that already existed.**
- * `deck_set_cover_image` takes a path the backend reads rather than bytes — that is its whole
- * contract — so the picker's answer is handed across unchanged. Nothing is read in the webview,
- * which is why this needs no filesystem permission of any kind: `dialog:allow-open` lets the
- * page *ask for a name*, and Rust is what opens the file.
- *
- * The disclosure this replaced asked the reader to type a path. It worked, and it was the wrong
- * affordance for a desktop app.
- */
-function Upload({ upload, pending }: { upload: (sourcePath: string) => void; pending: boolean }) {
-  /** The picker itself could not be opened — a different failure from a write the database
-   *  refused, and it belongs beside the button rather than in the dialog's write banner. */
-  const [pickerFailure, setPickerFailure] = useState<string | null>(null);
-  const [picking, setPicking] = useState(false);
-
-  const choose = async () => {
-    setPickerFailure(null);
-    setPicking(true);
-    try {
-      const chosen = await pickFile({
-        multiple: false,
-        directory: false,
-        title: "Choose a deck picture",
-        filters: [{ name: "Images", extensions: COVER_EXTENSIONS }],
-      });
-      // **A cancelled picker is not a failure.** `open` answers `null` when the reader closed
-      // it without choosing, which is an ordinary way to use a file dialog — the most ordinary
-      // one after changing your mind. Treating it as an error would put a red sentence under
-      // the button every time somebody looked and decided not to.
-      if (chosen !== null) upload(chosen);
-    } catch (e) {
-      setPickerFailure(ipcError(e));
-    } finally {
-      setPicking(false);
-    }
-  };
-
-  return (
-    <>
-      <button
-        type="button"
-        onClick={() => void choose()}
-        // Disabled through both halves of the round trip — the picker being up and the
-        // re-encode running — because both are states in which a second press does nothing
-        // useful. The label does not change: an action keeps its name through the whole flow.
-        disabled={picking || pending}
-        className={cn(
-          "mt-2 h-8 w-full rounded-md border border-dashed border-border text-xs text-dim",
-          "transition-colors duration-150 hover:border-accent hover:text-accent",
-          "disabled:opacity-50 disabled:hover:border-border disabled:hover:text-dim",
-          "motion-reduce:transition-none",
-          FOCUS,
-        )}
-      >
-        Upload an image…
-      </button>
-      <p className="mt-1 text-[0.6875rem] text-dim">
-        Copied and re-encoded into the deck’s own picture, so moving or deleting the original
-        afterwards changes nothing.
-      </p>
-      {pickerFailure !== null && (
-        <p role="alert" className="mt-1 text-[0.6875rem] text-destructive">
-          Could not open the file picker — {pickerFailure}
-        </p>
-      )}
-    </>
   );
 }
 

@@ -67,15 +67,19 @@ describe("wishlistOutcome", () => {
 });
 
 describe("decksOutcome", () => {
-  it("lists all three when all three happened", () => {
-    expect(decksOutcome({ decks: 12, folders: 3, covers: 2 })).toBe(
-      "Cleared 12 decks, 3 folders and 2 cover images.",
-    );
+  /**
+   * **Two numbers, and it listed three until 2026-08-31.** The third was `cover image` — files
+   * beside the database rather than rows, and only on a deck the reader had given a picture to.
+   * Custom covers are deleted and `DecksCleared` lost the field with them, so this is now the
+   * whole sentence rather than its common shape.
+   */
+  it("lists both when both happened", () => {
+    expect(decksOutcome({ decks: 12, folders: 3 })).toBe("Cleared 12 decks and 3 folders.");
   });
 
-  /** Only a deck the reader gave a picture to has a cover file, so this is the common shape. */
-  it("omits the covers when no deck had one", () => {
-    expect(decksOutcome({ decks: 4, folders: 1, covers: 0 })).toBe("Cleared 4 decks and 1 folder.");
+  /** The plural is per number, not per sentence. */
+  it("counts each number in its own words", () => {
+    expect(decksOutcome({ decks: 4, folders: 1 })).toBe("Cleared 4 decks and 1 folder.");
   });
 
   /**
@@ -83,11 +87,11 @@ describe("decksOutcome", () => {
    * clearing it is a real thing that happened.
    */
   it("reports folders cleared even when there were no decks", () => {
-    expect(decksOutcome({ decks: 0, folders: 2, covers: 0 })).toBe("Cleared 2 folders.");
+    expect(decksOutcome({ decks: 0, folders: 2 })).toBe("Cleared 2 folders.");
   });
 
   it("says nothing happened only when nothing did", () => {
-    expect(decksOutcome({ decks: 0, folders: 0, covers: 0 })).toBe(
+    expect(decksOutcome({ decks: 0, folders: 0 })).toBe(
       "There were no decks or folders to clear.",
     );
   });

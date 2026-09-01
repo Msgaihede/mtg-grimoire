@@ -170,6 +170,31 @@ describe("the browser core", () => {
   });
 
   /**
+   * **The fifth diverted command, and the only one that is not a download.** `update_check`
+   * asks `api.github.com` what has been released and writes three `app_meta` rows; it is here
+   * for the four above's reason — `glue::update_check` is `async`, `web::route::call` is not
+   * — and it is what makes the already-routed `update_history` answer anything but `[]` in a
+   * browser. `update_download` and `update_apply` stay desktop's: there is no `.exe` beside a
+   * tab to replace.
+   */
+  it("diverts the update check, and only the check", async () => {
+    const c = core();
+    const answer = c.call("update_check", { force: true });
+    expect(worker.posted).toEqual([{ kind: "update-check", id: 1, force: true }]);
+    worker.reply({ kind: "ok", id: 1, result: { currentVersion: "0.17.0" } });
+    await expect(answer).resolves.toEqual({ currentVersion: "0.17.0" });
+
+    // The two reads beside it are ordinary `web::route` arms and must stay that way — a
+    // divert would send them to an export that does not exist.
+    c.call("update_status");
+    c.call("update_history");
+    expect(worker.posted.slice(1)).toEqual([
+      { kind: "call", id: 2, command: "update_status" },
+      { kind: "call", id: 3, command: "update_history" },
+    ]);
+  });
+
+  /**
    * The *status* reads share a prefix with the refreshes and must not be diverted: they are
    * ordinary routed commands, and sending one to an export that does not exist would hang
    * the panel's query for ever with nothing on screen to say why.

@@ -5,25 +5,19 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import type { CardSummary } from "@/lib/ipc";
 import { cardImageUrl } from "@/lib/images";
+import { isWebTarget } from "@/pwa/target";
 import { card } from "./validation/fixtures";
+
+/** Which build a frame thinks it is in. `isWebTarget()` reads `__CORE__`, a build-time constant
+ *  vitest fixes at `"tauri"`, so the web answer cannot be arranged any other way — see
+ *  `src/pwa/target.ts`. Desktop unless a case says otherwise. */
+vi.mock("@/pwa/target", () => ({ isWebTarget: vi.fn(() => false) }));
 
 const searchCards = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: { searchCards },
 }));
-
-/**
- * The system file picker.
- *
- * Mocked for the reason `DeckSettingsDialog.test.tsx` mocks it: there is no OS dialog in jsdom,
- * and the real `open` reaches `invoke`, which needs `window.__TAURI_INTERNALS__` and would throw
- * identically for all three answers a picker can give. The three are exercised on the dialog's
- * own suite; here the mock exists so pressing Upload does not explode a test about something
- * else.
- */
-const pickFile = vi.hoisted(() => vi.fn());
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: pickFile }));
 
 import { coverChoices, DeckCoverPicker, type DeckCoverPickerProps } from "./DeckCoverPicker";
 
@@ -67,29 +61,26 @@ function wrap(ui: ReactElement) {
 /** The picker with a cover it can credit and nothing else going on. */
 function picker(props: Partial<DeckCoverPickerProps> = {}) {
   const onPickCard = vi.fn();
-  const onPickFile = vi.fn();
   const view = wrap(
     <DeckCoverPicker
       coverCardId="c-Lightning Bolt"
-      coverKind="card_art"
       coverArtist="Christopher Rush"
-      customCoverUrl={null}
       deckCards={[]}
       onPickCard={onPickCard}
-      onPickFile={onPickFile}
-      pendingFileName={null}
-      uploading={false}
       idPrefix="cover"
       {...props}
     />,
   );
-  return { onPickCard, onPickFile, ...view };
+  return { onPickCard, ...view };
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // `clearAllMocks` wipes the implementation a `vi.fn(() => false)` was created with, so this
+  // is a restore rather than a reset: without it every case after the first reads `undefined`
+  // and the whole file quietly runs on the web branch.
+  vi.mocked(isWebTarget).mockReturnValue(false);
   searchCards.mockResolvedValue(page([]));
-  pickFile.mockResolvedValue("C:\\pics\\dragon.png");
 });
 
 describe("DeckCoverPicker", () => {
@@ -265,25 +256,6 @@ describe("DeckCoverPicker", () => {
     expect(await screen.findByText(/Showing 1 of 5,000\+ matches/)).toBeInTheDocument();
   });
 
-  /**
-   * At create there is no deck id, so there is no `/cover/<deckId>` to draw and no bytes to
-   * draw from — the picker names the file instead of pretending to a preview.
-   */
-  it("shows a chosen file's name when there is no deck to upload it against", () => {
-    picker({ pendingFileName: "dragon.png", coverCardId: null, coverArtist: null });
-
-    expect(screen.getByText("dragon.png")).toBeInTheDocument();
-    expect(screen.queryByText("No cover")).toBeNull();
-  });
-
-  /** A pending file is what the deck will wear, so the card art's credit line stands down —
-   *  a line crediting an illustrator over a picture nobody can see would credit the wrong one. */
-  it("draws no art credit while a file is waiting to be applied", () => {
-    picker({ pendingFileName: "dragon.png" });
-
-    expect(screen.queryByText(/Art by/)).toBeNull();
-  });
-
   /** Scryfall's image policy: an `art` crop has no printed frame, so the illustrator is credited
    *  wherever one is shown. */
   it("draws a cover it can credit, with the credit", () => {
@@ -308,26 +280,114 @@ describe("DeckCoverPicker", () => {
   });
 
   /**
-   * A custom cover is the reader's own picture served at a route that names the **deck**, so
-   * there is no Scryfall artist to credit and none is drawn — while the frame quite properly
-   * draws the picture.
+   * **The picker in a browser, where `mtgimg://` reaches nothing.**
+   *
+   * It is a Tauri custom protocol and wasm cannot register a URL scheme with a browser, so the
+   * preview and every choice tile drew a broken `<img>` on web and on the phone. `cardArtSrc`
+   * is the whole of the branch, and both frames now go through it — the preview from the host's
+   * `coverImageUrl`, the tiles from whichever row they were drawn from.
+   *
+   * The `src` is asserted rather than the prop, so a case cannot pass by reading its own
+   * constant back off the thing it handed in.
    */
-  it("draws a custom cover from the URL it was given, uncredited", () => {
-    const url = "http://mtgimg.localhost/cover/4";
-    const { container } = picker({ coverKind: "custom", customCoverUrl: url });
+  describe("on the web build", () => {
+    const SUPPLIED = "https://cards.scryfall.io/art/front/0/0/bolt.webp?1706230661";
 
-    expect(container.querySelector(`img[src="${url}"]`)).not.toBeNull();
-    expect(screen.queryByText(/Art by/)).toBeNull();
+    beforeEach(() => {
+      vi.mocked(isWebTarget).mockReturnValue(true);
+    });
+
+    it("draws the preview from the URL the host handed it", () => {
+      const { container } = picker({ coverImageUrl: SUPPLIED });
+
+      expect(container.querySelector(`img[src="${SUPPLIED}"]`)).not.toBeNull();
+      expect(screen.getByText("Art by Christopher Rush")).toBeInTheDocument();
+    });
+
+    /** "No image", not "No cover": a cover **is** chosen, and only the bytes are out of reach.
+     *  `DeckTile`'s frame makes the same split, in the same words, for the same reason. */
+    it("says the picture is missing rather than the cover when no URL was handed in", () => {
+      const { container } = picker();
+
+      expect(container.querySelector("img")).toBeNull();
+      expect(screen.getByText("No image")).toBeInTheDocument();
+      expect(screen.queryByText("No cover")).toBeNull();
+    });
+
+    /** A deck with no cover at all still says so — `coverArtist` is the condition, and it is
+     *  unchanged by which build this is. */
+    it("still says No cover for a cover it cannot credit", () => {
+      picker({ coverArtist: null, coverImageUrl: SUPPLIED });
+
+      expect(screen.getByText("No cover")).toBeInTheDocument();
+      expect(screen.queryByText("No image")).toBeNull();
+    });
+
+    /** A choice tile from the deck's own printings — its URL is the `DeckCard` row's. */
+    it("draws a deck choice tile from that card's own row", () => {
+      picker({
+        deckCards: [
+          card({ name: "Shivan Dragon", imageUris: { art: SUPPLIED } }),
+          card({ name: "Mox Pearl" }),
+        ],
+      });
+
+      expect(screen.getByRole("button", { name: "Shivan Dragon" }).querySelector("img")).toHaveAttribute(
+        "src",
+        SUPPLIED,
+      );
+      // The row that carries none draws an empty, bordered tile — still named, still pickable.
+      expect(screen.getByRole("button", { name: "Mox Pearl" }).querySelector("img")).toBeNull();
+    });
+
+    /** And a search answer's tile — its URL is the `CardSummary` row's. */
+    it("draws a search result tile from that result's own row", async () => {
+      searchCards.mockResolvedValue(page([{ ...found("Goblin Guide"), imageUris: { art: SUPPLIED } }]));
+      picker();
+
+      await userEvent.type(screen.getByLabelText("Search every card"), "gob");
+
+      const tile = await screen.findByRole("button", { name: "Goblin Guide" });
+      expect(tile.querySelector("img")).toHaveAttribute("src", SUPPLIED);
+    });
   });
 
-  /** The picker's answer is a **path**, handed straight back to the host — the backend reads
-   *  the file, not the webview. */
-  it("hands the picked path back to the host", async () => {
-    const { onPickFile } = picker();
+  /**
+   * The desktop half of the same branch: the local cache already holds the crop at the right
+   * size, so a row that carries a URL is still drawn from the protocol. Asserted because a
+   * frame that preferred the supplied URL would refetch every tile in the grid over the
+   * network, and nothing on screen would say so.
+   */
+  it("keeps drawing the protocol picture on desktop even when a URL is handed in", () => {
+    const { container } = picker({ coverImageUrl: "https://cards.scryfall.io/art/x.webp?1" });
 
-    await userEvent.click(screen.getByRole("button", { name: "Upload an image…" }));
+    const img = container.querySelector("img");
+    expect(img).toHaveAttribute("src", cardImageUrl("c-Lightning Bolt", 0, "art"));
+    expect(img!.getAttribute("src")).not.toContain("scryfall.io");
+  });
 
-    await waitFor(() => expect(onPickFile).toHaveBeenCalledWith("C:\\pics\\dragon.png"));
+  /**
+   * **The file half of this picker is gone, and its absence is the assertion.**
+   *
+   * A cover could also be a picture the reader chose off disk: an `Upload an image…` button
+   * here, an `onPickFile` beside `onPickCard`, a `PendingFile` frame naming a file the create
+   * dialog had no deck id to send yet, and a `custom` preview drawn from a `/cover/<deckId>`
+   * URL. All of it is deleted — the command, the route, the encoder and the directory with it
+   * — because the picture never survived a sync and every device but the uploader already drew
+   * the card art.
+   *
+   * Written as a case rather than left to the type, because a **prop** that no longer exists is
+   * a compile error while a **control** that came back would be caught by nothing here: every
+   * other case in this suite would go on passing beside a second way to set a cover.
+   */
+  it("offers no way to set a cover but a card", () => {
+    picker({ deckCards: [card({ name: "Lightning Bolt" })] });
+
+    expect(screen.queryByRole("button", { name: /upload/i })).toBeNull();
+    // The re-encode's own sentence, which stood under that button.
+    expect(screen.queryByText(/re-encoded/i)).toBeNull();
+    // The grid is the whole picker: the deck's one printing, and no other press on the panel.
+    expect(screen.getAllByRole("button")).toHaveLength(1);
   });
 });
 

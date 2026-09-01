@@ -46,6 +46,7 @@ const EXPORTS = [
   "ingest_combos",
   "ingest_tags",
   "ingest_prices",
+  "update_check",
   "close",
 ];
 

@@ -375,11 +375,11 @@ export interface FakeCollectionFolder {
 /**
  * One row of `decks`.
  *
- * `coverImagePath` is the one column omitted: the file it names is served at
- * `<origin>/cover/<deckId>`, which is a route this fake's image handler does not have, so
- * storing the path would be storing a string nothing can follow. {@link coverKind} is here
- * without it because that column is what a *tile* reads — which of the two covers is showing —
- * and the answer is a fact whether or not the bytes behind it can be drawn.
+ * `coverImagePath` is the one column omitted, and it is a retired one: it named a file served
+ * at `<origin>/cover/<deckId>`, a route this fake's image handler never had, so storing the path
+ * would have been storing a string nothing could follow. Nothing writes that column any more
+ * either — the custom cover is deleted — and it stays in the crate's schema and on the sync
+ * wire only until a later rung drops it.
  */
 export interface FakeDeck {
   id: number;
@@ -392,10 +392,9 @@ export interface FakeDeck {
   description: string | null;
   coverCardId: string | null;
   /**
-   * Which of the two covers a tile draws. **A deck may carry both at once and usually does**:
-   * `deck_set_cover_image` leaves `cover_card_id` alone and a `coverCardId` patch sets this
-   * back to `card_art`, so switching back and forth costs nothing — which is only coherent
-   * because this column is the one answer to the question.
+   * `card_art` on every deck, because that is the only cover there is. A `coverCardId` patch
+   * writes it, and nothing writes the other word: see {@link COVER_CARD_ART} for why the word
+   * is still in the type and why nothing may branch on it.
    */
   coverKind: DeckCoverKind;
   archived: boolean;
@@ -6976,8 +6975,22 @@ const mirrorRootGone = (root: string) =>
 /** `deck::DEFAULT_FORMAT` — `decks.format_key`'s own DDL default, so a blank key means here
  *  exactly what it means in SQL. */
 const DEFAULT_FORMAT = "casual";
-/** `deck::COVER_CUSTOM`/`COVER_CARD_ART` — `decks.cover_kind`'s two values, the second being
- *  the column's DDL default. */
+/**
+ * `deck::COVER_CARD_ART` — `decks.cover_kind`'s DDL default and, since 2026-08-31, the only one
+ * of its two values anything writes.
+ *
+ * The other word is `'custom'`, and this fake can no longer produce it: the custom cover is
+ * deleted — `deck_set_cover_image`, the `/cover/<deckId>` route, the encoder and the
+ * `data/covers/` directory with it — and a migration flips every surviving row. It stays in
+ * {@link DeckCoverKind} because the column's CHECK still carries it and `cover_kind` is a synced
+ * field, so a device on an older rung can still put it on the wire; **nothing that draws a
+ * picture may branch on it**.
+ *
+ * The one thing that still reads it is `deck_update`'s history row, which is `deck::cover_value`
+ * kept verbatim: a cover change is "which picture is showing", so a `from` side naming a row that
+ * *was* `custom` has to say so rather than name the card id underneath it, and the crate keeps
+ * its own `COVER_CUSTOM` for exactly that.
+ */
 const COVER_CARD_ART: DeckCoverKind = "card_art";
 const COVER_CUSTOM: DeckCoverKind = "custom";
 /** `collection::Grading`'s three fields, in **declaration order**: the canonical text is
@@ -9633,10 +9646,11 @@ export function writeHandlers(db: FakeDb) {
      *   difference is the whole meaning of the field — absent **is** the top level and means
      *   it, while {@link deck_set_folder} remains the only way to un-file a deck that already
      *   exists.
-     * - **`coverKind` is not settable at create** and keeps its `card_art` default. A custom
-     *   picture is {@link deck_set_cover_image}, which takes a path and a deck id and therefore
-     *   cannot run until the deck is there; the create dialog holds a chosen file and uploads
-     *   it afterwards.
+     * - **`coverKind` is not settable at create** and does not need to be: it keeps its
+     *   `card_art` default, which is the only kind there is. It used to be the one answer this
+     *   command could not give — a picture off disk was `deck_set_cover_image`, which took a
+     *   path *and* a deck id and so could only run afterwards, making the create dialog a
+     *   two-step write. `coverCardId` travels here, so it is one again.
      * - **`theoryEnabled` sets the column and seeds nothing.** The patch seeds the theory list
      *   from live on the off → on transition; a deck being born has no live cards to copy, and
      *   a deck born with the switch already on has made that transition at birth.
@@ -9871,38 +9885,6 @@ export function writeHandlers(db: FakeDb) {
       // truthiness test would read it as no change at all. The validated local rather than
       // `patch.bracket`, so a refused number can never reach the row.
       deck.bracket = bracket ?? deck.bracket;
-      deck.updatedAt = stamp(db);
-      return toDeckRow(db, deck);
-    },
-
-    /**
-     * `deck::set_cover_image` — point the deck at a picture on disk.
-     *
-     * `sourcePath` is a **path the backend reads**, never bytes and never a `file://` URL. There
-     * is no disk here and no `cover/<deckId>` route on the fake image handler, so what this
-     * models is the *state change* the command makes and not the encode: `coverKind` becomes
-     * `custom` and {@link FakeDeck.coverCardId} is deliberately **left alone**, which is what
-     * makes switching back to card art lose nothing.
-     *
-     * The history row is written **even when both sides read `custom`** — replacing one picture
-     * with another is exactly the change this command exists to make, and the payload
-     * deliberately does not name the file, so the two sides matching is what "a different
-     * picture" looks like from here.
-     */
-    deck_set_cover_image: (args: { deckId: number; sourcePath: string }): DeckRow => {
-      refuseIfBusy(db);
-      const deck = requireDeck(db, args.deckId);
-      const coverWas = deck.coverKind === COVER_CUSTOM ? COVER_CUSTOM : deck.coverCardId;
-      record(
-        db,
-        deck.id,
-        DECK_LEVEL,
-        "deck",
-        null,
-        { field: "cover", from: coverWas, to: COVER_CUSTOM },
-        0,
-      );
-      deck.coverKind = COVER_CUSTOM;
       deck.updatedAt = stamp(db);
       return toDeckRow(db, deck);
     },
@@ -11320,8 +11302,10 @@ export function writeHandlers(db: FakeDb) {
      * `deck_folders` in a *second* statement, and a fake that stopped at the cascade would draw
      * a gallery with an empty folder tree still standing in it.
      *
-     * `covers` counts the decks showing a custom picture, which is what has a file in the app.
-     * A `card_art` deck has none, so counting decks would report pictures that were never there.
+     * **`covers` is gone from the answer**, and it is `reset.rs`'s only shape change. It counted
+     * the decks showing a custom picture, which was what had a *file* in the app; custom covers
+     * are deleted, a migration flips every row, and a clear is a `DELETE` over rows and nothing
+     * else.
      *
      * **The copies in every deck's group go to `Recently removed`, and the groups go with the
      * decks** — `deck_delete`'s destination, agreed with deliberately: a wiped deck's cards are
@@ -11337,7 +11321,6 @@ export function writeHandlers(db: FakeDb) {
       refuseIfBusy(db);
       const decks = db.decks.length;
       const folders = db.deckFolders.length;
-      const covers = db.decks.filter((d) => d.coverKind === COVER_CUSTOM).length;
       const groups = db.collectionFolders.filter((f) => f.kind === COLLECTION_DECK_KIND);
       if (groups.length > 0) {
         const groupIds = new Set(groups.map((f) => f.id));
@@ -11357,7 +11340,7 @@ export function writeHandlers(db: FakeDb) {
       db.deckTags = [];
       db.deckAudit = [];
       db.deckUndo = [];
-      return { decks, folders, covers };
+      return { decks, folders };
     },
 
     /**

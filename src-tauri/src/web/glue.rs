@@ -1,6 +1,6 @@
 //! The `#[wasm_bindgen]` surface `src/workers/db.ts` imports.
 //!
-//! Five functions, and every one of them returns a **JSON string**. Not a `JsValue`, and not
+//! Every one of them returns a **JSON string**. Not a `JsValue`, and not
 //! a `Result<JsValue, JsValue>`: the TypeScript side already has to know the shape of
 //! [`crate::web::wire`], and a second, structural representation of the same thing is a
 //! second place for it to drift. A caller does `JSON.parse` once and switches on `kind`.
@@ -583,6 +583,98 @@ pub async fn ingest_prices(marketplace: String, on_progress: js_sys::Function) -
             err(e)
         }
     }
+}
+
+// ---------------------------------------------------------------------------------------
+// The update check
+// ---------------------------------------------------------------------------------------
+
+/// Ask GitHub what has been released, and cache the answer — the browser's `update_check`.
+///
+/// **A sixth `#[wasm_bindgen]` entry for the four feeds' reason**, and not a
+/// [`crate::web::route`] arm: this is `async` and makes a network call, and `route::call` is
+/// synchronous and makes neither. `COMMANDS` does not move; `src/lib/core/browser.ts` diverts
+/// the *name* onto this, exactly as it does for the four refreshes.
+///
+/// **The check, and only the check.** `update_download` and `update_apply` stay desktop's
+/// — they verify a `sha256`, unpack a zip beside a running `.exe` and relaunch it, none of
+/// which a browser or a phone has any equivalent for — and [`crate::update::pick_asset`]
+/// already answers `None` for [`crate::update::InstallKind::Web`], so what this fills in is
+/// the release *notes* and the version history. That is the whole of the feature: a reader on
+/// a browser or a phone can see what the release they are about to be given actually changed.
+///
+/// **Everything after the bytes is `crate::update`'s**, so a check means the same thing to
+/// `app_meta` here as on a desktop: `classify_status`, `page_from_body`, `record_check`. What
+/// is not shared is the `Updater` — its `busy` flag guards a download this target cannot make
+/// — and the `error_log` row, which is PR 11's rule for the three feeds: a press is on the
+/// screen of the reader who made it, and the rejected promise is what the panel shows.
+///
+/// **`SELECT unixepoch()` and not `SystemTime::now()`**, which *panics* on
+/// `wasm32-unknown-unknown` rather than failing. `crate::update::unix_now` is gated away for
+/// exactly that and [`now_seconds`] is this module's answer, reached here for the fifth time.
+#[wasm_bindgen]
+pub async fn update_check(force: bool) -> String {
+    let app = match state() {
+        Ok(a) => a,
+        Err(message) => return err(message),
+    };
+
+    // The same throttle the desktop honours, off the same `app_meta` key. `force` is what the
+    // Check now button sends, so a reader who presses it is never told to come back tomorrow;
+    // this arm is for anything that calls without one.
+    let now = now_seconds(&app).max(0) as u64;
+    let last = crate::update::last_check_at(&crate::sync::lock_db_read(&app));
+    if !crate::update::should_check(last, now, force) {
+        return done(&web_status(&app));
+    }
+
+    let url = crate::update::releases_url(crate::update::GITHUB_API);
+    let (code, body) = match net::get_with_status(
+        &url,
+        &[
+            ("Accept", "application/vnd.github+json"),
+            ("X-GitHub-Api-Version", "2022-11-28"),
+        ],
+    )
+    .await
+    {
+        Ok(pair) => pair,
+        // `net`'s own sentence names the URL; the desktop's names GitHub. Both say the
+        // request did not happen, which is what the panel prints.
+        Err(message) => return err(message),
+    };
+
+    let page = match crate::update::classify_status(code) {
+        // A repository that is not there at all. Record the check, cache nothing, and answer
+        // "nothing new" — `crate::update::check_inner`'s arm, including its refusal to turn a
+        // failed write on the way out into a banner.
+        Ok(crate::update::PageStatus::Missing) => Vec::new(),
+        Ok(crate::update::PageStatus::Read) => match crate::update::page_from_body(&body) {
+            Ok(page) => page,
+            Err(message) => return err(message),
+        },
+        Err(message) => return err(message),
+    };
+
+    {
+        let conn = crate::sync::lock_db(&app);
+        if let Err(message) = crate::update::record_check(&conn, now, &page) {
+            if code != 404 {
+                return err(message);
+            }
+        }
+    }
+    done(&web_status(&app))
+}
+
+/// The DTO an update command answers here.
+///
+/// `Web`, `false`, `false` — [`crate::web::route`]'s `update_status` arm passes the same
+/// three, and this is a second call site for one decision rather than a second decision:
+/// nothing in a browser can be busy with a *download*, and nothing can be staged where there
+/// is no file to stage.
+fn web_status(app: &AppState) -> crate::update::UpdateStatus {
+    crate::update::status_for(app, crate::update::InstallKind::Web, false, false)
 }
 
 /// Drop the connection so the pool's access handles are released.

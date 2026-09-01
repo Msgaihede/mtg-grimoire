@@ -763,18 +763,18 @@ function starterDecks(): FakeDeck[] {
       name: "Rhystic Testbed",
       formatKey: "commander",
       description: "The plan beside the deck: a theory list, a pile switched off, two labels.",
-      // **The one deck showing a cover of the reader's own**, and the only seeded deck with no
-      // `coverCardId` at all — which is exactly why it credits nobody: `coverArtist` follows the
-      // card id and an uploaded picture has no Scryfall illustrator to name.
+      // **The one seeded deck with no cover at all**, which is why it credits nobody:
+      // `coverArtist` follows the card id, and a deck with no card id has nothing to name. So
+      // what its tile draws is the no-cover affordance, which is the state this seeds.
       //
-      // A deck carrying *both* covers at once is the commoner state and is deliberately not
-      // seeded: it is reachable through `deck_set_cover_image`, which is the path a reader
-      // actually takes to it, and seeding one here would put a card-art credit on the folder
-      // card of every gallery story that has nothing to do with covers. There is no
-      // `cover/<deckId>` route on the fake image handler either, so what a tile draws for this
-      // is the no-cover affordance — the state, not the bytes, is what this seeds.
+      // It said `coverKind: "custom"` until 2026-08-31 and was the workbench's one deck wearing
+      // a picture of the reader's own. The custom cover is deleted — the command, the
+      // `/cover/<deckId>` route, the encoder and the directory — and a migration flips every
+      // such row to `card_art`, which is what this line now is. **Nothing on screen moved**:
+      // the fake image handler never served that route, so this deck drew the no-cover
+      // affordance then too.
       coverCardId: null,
-      coverKind: "custom",
+      coverKind: "card_art",
       archived: false,
       // Filed, so the root wall is still the three decks every gallery story was written
       // against — see {@link FILED_DECK_FOLDER}.

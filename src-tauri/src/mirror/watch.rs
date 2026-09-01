@@ -331,7 +331,7 @@ pub fn record(state: &AppState, outcome: &Result<PassReport, String>) {
 /// Start the mirror thread. Detached, and never fatal.
 ///
 /// **No `AppHandle`.** The brief's signature carried one for the `try_state` race
-/// [`crate::paths::covers_dir`] documents, but that race is the *webview* reaching a command
+/// [`crate::images::not_ready`] documents, but that race is the *webview* reaching a command
 /// before `setup` has managed the state — and this is called from inside `setup` with the
 /// `Arc` already in hand, after `prepare_database`. There is nothing to wait for and nothing
 /// to emit: the Backup panel polls `mirror_status` rather than listening for an event.

@@ -113,10 +113,13 @@ export function useUpdate(): Update {
       // **Read once on the web target, rather than not at all.** `update_status` answers
       // there since 2026-08-31 — it is `installKind: "web"` and two `app_meta` reads — and
       // `UpdatePanel` needs that answer to know it must not draw a Download button. What it
-      // does not need is a second read: this poll exists for exactly one thing, the check
-      // Rust spawns at startup and emits no event for, and a browser runs no such check. So
-      // the answer cannot change while the tab is open, and re-asking every minute would be
-      // a write-lock acquisition a minute for a constant.
+      // does not need is a *second* read, and the reason is what this poll is for rather
+      // than what can change: it exists for the check Rust spawns at startup and emits no
+      // event for, and that spawn is `#[cfg(desktop)]`. A browser can check now — `check()`
+      // below reaches `glue::update_check` — but that answer arrives as the resolved value
+      // of the call the reader made, on this same `setStatus`. So the only thing a minutely
+      // re-read could catch here is nothing at all, at the price of a lock acquisition a
+      // minute, in a Worker where every read and every write is one queue.
       if (!isWebTarget()) timer = setTimeout(poll, POLL_MS);
     };
     void poll();

@@ -271,6 +271,22 @@ pub const TABLES: [Spec; 12] = [
             "description",
             "cover_kind",
             "cover_card_id",
+            // **Retired at user schema v32 and still on the wire, deliberately.** The
+            // reader-picked cover picture is gone: nothing in the crate writes this column any
+            // more, the v32 rung flipped every `cover_kind` that said `'custom'` to
+            // `'card_art'`, and every device already drew the card art anyway — the path was
+            // stored absolute, so a `D:\…\covers\7.webp` that reached a phone named nothing
+            // there.
+            //
+            // It stays here because **taking a field off a spec is a change to what this
+            // device sends and there is no rule written down for making one**. The receiving
+            // half looks safe by inspection — `apply::updates` and `apply::creations` both walk
+            // the *local* spec and ask the incoming op for each name, so a field they do not
+            // know is never read, and `merge::fold` is an untyped map that validates nothing —
+            // but "safe by inspection" is not the same as budgeted, and what removing it buys
+            // today is one dead key out of a deck op that is already sent. A later rung takes
+            // the column, this line and the `CHECK` that still names `'custom'` together, once
+            // every device in a group is past v32.
             "cover_image_path",
             "archived",
             "notes",

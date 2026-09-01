@@ -204,6 +204,25 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   wall that can draw art at all — `mtgimg://` is a Tauri protocol and wasm cannot register a URL
   scheme, so on web the URL travels with the row or there is no picture.
 
+- **2026-08-31 doubled those two `json_extract`s to four, and the query cost was *not*
+  re-measured.** `image_uri::LIST_VARIANTS` gained `art` beside `display`, because a deck cover,
+  a folder card's member strip, both halves of the cover picker and the theory diff all draw the
+  frameless crop and every one of them was a blank frame in a browser — five surfaces, five
+  readers, which is what that constant's doc asks for before a name goes on it. **The payload
+  was re-measured** the same way the figure above was taken (debug, `run_search`, a byte copy of
+  the dev pair, one collapsed 50-row page, `serde_json`): 23 196 B with no field → 29 346 B with
+  `display` → **34 396 B with both, so +5 050 B, +17.2 %, 101 B a row**. The same run reproduces
+  2026-08-29's four-variant figure exactly (+21 600 B, +93.1 %), which is what makes the two
+  comparable.
+
+  **The stopwatch half is a gap and is written down as one.** The shape is unchanged — the
+  `json_extract`s read a `cards` row the query is already holding, for the 50 rows the page
+  produces, and the collapsed column is dominated by the count walking to `TOTAL_CAP` — so a
+  cost that could not be resolved at two columns is not going to resolve at four; but "predicted"
+  is not "measured", and the table above is a measurement. What would settle it is that table's
+  own method: two release binaries from one tree, `FRONT_FACE_COLUMNS`' expressions replaced by
+  `NULL` in one, run alternately, medians of the pooled samples.
+
   **One caveat, because it nearly became a fiction.** The first with-and-without pair taken this
   session read 28.4 / 146.6 against 61.4 / 318.9 — a 2× "regression" that reproduced on a second
   run. It was the machine: rebuilding the *with* binary and running it again gave 57.7 / 276.7
@@ -484,10 +503,15 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   answers the question the switch was asking — the decks *are* where the cards are now.
 - **The single-file ladder is frozen at v26**, and `schema::LEGACY_SINGLE_FILE_VERSION` is the
   answer; schema 27 splits the file in two and the halves number themselves separately
-  (`USER_SCHEMA_VERSION` **30** on the reader's file, `CORPUS_SCHEMA_VERSION` 1 on the
+  (`USER_SCHEMA_VERSION` **32** on the reader's file, `CORPUS_SCHEMA_VERSION` 1 on the
   rebuildable one). This line read **v18** for two
   whole rungs, because a prose-only edit routes to neither CI job and nothing goes red when a
-  ladder entry rots.
+  ladder entry rots. **It then read 30 for two more**, through v31 and v32, and so did
+  `src-tauri/CLAUDE.md`'s copy of the same pair — the identical failure, twice over, on the one
+  number in this file that a single `grep USER_SCHEMA_VERSION src-tauri/src/schema.rs` answers.
+  Read it off the constant; v30 and v31 have no paragraph of their own below, and
+  `USER_SCHEMA_VERSION`'s own doc comment is where every rung from 27 to head is described in
+  one place, one sentence each.
   **v28 is the first rung above the split, and it is what turned `migrate_user` from a version
   check into a ladder.** It creates pairing's three tables — `sync_identity`, `sync_group`,
   `sync_devices` — and mints nothing: an upgrading machine gets the tables and no identity,
@@ -516,6 +540,49 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   takes **three** sites, not one — the rung for an upgraded file, `schema::mint_missing_uids`
   inside `split::extract_user_file` for a converted one, and `USER_SEED_SQL` for a fresh one.
   Measured on a copy of the real database: **14.35 ms** over 1 069 synced rows (debug).
+  **v32 is the first rung on either ladder that changes no shape at all**, and everything odd
+  about it follows from that. It is one statement —
+  `UPDATE decks SET cover_kind = 'card_art' WHERE cover_kind = 'custom'` — landed 2026-08-31 with
+  the removal of the reader-picked deck cover, so that the word no writer in the crate spells any
+  more is also not sitting in anybody's rows. **It owes no line in `USER_SCHEMA_SQL`**, which is
+  the first exception to the rule v28's paragraph states above: that literal describes a
+  *shape*, and
+  `the_user_schema_is_byte_identical_to_what_the_ladder_builds` compares shapes, so a rung that
+  only moves values has nothing to add to it and nothing for that fence to catch. Nothing is
+  FTS-indexed, no `cards` rowid is renumbered, no index is rebuilt, and there is no rewind
+  constant beside it because a v31 and a v32 database *are* the same schema.
+  **Three things about it are worth carrying.** First, the `CHECK` still names `'custom'` and
+  `decks.cover_image_path` is still a column: SQLite has no `ALTER … CHECK`, so narrowing the
+  vocabulary is a whole-table rebuild — v29's `error_log` is what one costs — and
+  `cover_image_path` is on `sync_engine::capture`'s `decks` `Spec`, so dropping it changes what
+  this device puts on the wire as well as what the file holds. Both go together in a later rung,
+  which **must repeat this `UPDATE` rather than assume this one ran**, since a database
+  `split::convert` built never climbed this one. Second, **it is the first rung to `UPDATE` a
+  *captured* column with the capture triggers live**, and the resulting sync traffic is the
+  wanted behaviour rather than a side effect to suppress: the triggers are persistent, so on any
+  machine that has launched before they are already in the file, each flipped deck writes one
+  `put` carrying `cover_kind`, and a peer still on the old build is moved to the state it was
+  going to reach anyway. An unpaired device records nothing — the trigger's cross join against
+  `sync_group` produces no row. Third, **a file `split::convert` built never climbs this rung**,
+  which is left open on purpose rather than missed: that path stamps `USER_SCHEMA_VERSION`
+  directly, the same hole `mint_missing_uids` and the clock repair were each written to close —
+  but a leftover `'custom'` is **already a supported state**, because it is exactly what a peer
+  on an older rung pushes over sync, so `deck.rs` has to tolerate one whatever this rung does. It
+  reads such a row as card art and repairs it the next time the reader picks a cover. There is
+  nothing here for a repair to protect that is not protected one module over.
+  ⚠️ **And the thing that rung *could* have done and did not: taking a field off a `Spec` is safe
+  in both directions, which is written nowhere else.** The plan for v32 first claimed the
+  opposite — that there was no unknown-field handling and a removal was therefore an unbudgeted
+  wire risk — and it was checked rather than assumed. `apply::updates` and `apply::creations`
+  both iterate **`spec.fields`, the *local* spec**, and look each name up with `.get` on the
+  incoming op: a field an op carries that this device's spec does not name is never read, and a
+  field the spec names that the op omits is skipped by the same `get`. `merge::fold` folds a
+  `BTreeMap` with no spec reference at all. What has no fence is the *census* —
+  `capture::tests::every_column_a_spec_names_exists_on_its_table` runs one direction only
+  (spec ⊆ table) and would not have caught a removal either way. **So the reason
+  `cover_image_path` stays on the `decks` spec is not danger.** It is that removing it buys one
+  dead key out of a deck op that is sent regardless, which is not worth a second change to the
+  sync surface in the week the relay work is moving.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every

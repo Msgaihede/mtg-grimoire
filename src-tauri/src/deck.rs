@@ -42,7 +42,6 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
 #[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
@@ -228,10 +227,20 @@ fn valid_bracket(bracket: i64) -> Result<i64, String> {
 /// [`update_deck`] puts back the moment a `coverCardId` arrives.
 const COVER_CARD_ART: &str = "card_art";
 
-/// `decks.cover_kind` when the deck shows the file the user picked, at
-/// `<data dir>/covers/<id>.webp`. The two words are CHECK-constrained on the column; they are
-/// constants here so a typo is a compile error rather than a `CHECK constraint failed` on the
-/// one write nobody tests by hand.
+/// `decks.cover_kind`'s **retired** word, and the reason it is still spelled here.
+///
+/// It meant "the deck shows the file the reader picked, at `<data dir>/covers/<id>.webp`".
+/// Custom covers went on 2026-08-31 — a cover is [`DeckRow::cover_card_id`]'s art crop and
+/// nothing else — so **nothing in this crate writes it any more**. Three things keep it a
+/// constant rather than a deleted line:
+///
+/// * The column's `CHECK (cover_kind IN ('card_art','custom'))` still allows it, because the
+///   column is retired in two phases and the DDL is phase two.
+/// * `cover_kind` is a **synced** field (`sync_engine::capture`'s `decks` `Spec`), so a device
+///   that has not taken this rung yet can still push a `custom` row onto this one. The read
+///   side has to mean something when that lands, which is what [`cover_value`] is for.
+/// * [`update_deck`] writes [`COVER_CARD_ART`] over it the moment a card is picked, which is
+///   what repairs such a row locally.
 const COVER_CUSTOM: &str = "custom";
 
 /// What [`swap_printing`] says when it is asked to change a printing to itself. The pane
@@ -294,10 +303,10 @@ pub fn normalise_finish(raw: Option<&str>) -> Result<Option<String>, String> {
 /// Two things it deliberately cannot say:
 ///
 /// * **`cover_kind`.** It keeps its DDL default, [`COVER_CARD_ART`], whatever
-///   [`Self::cover_card_id`] holds. The other word means a file at
-///   `<data dir>/covers/<id>.webp`, and writing that file needs the id this statement is still
-///   making — so a custom picture is [`set_cover_image`], a follow-up call, and the create
-///   dialog has to treat a failure there as a deck that exists without its picture.
+///   [`Self::cover_card_id`] holds — and since custom covers went on 2026-08-31 that is the
+///   only word anything writes, so there is nothing for this struct to say. It is still absent
+///   rather than present-and-fixed, because a create that named the column would be a create
+///   that could be asked for the other word.
 /// * **Anything about cards.** A deck is born empty and with its four predefined categories;
 ///   [`add_card`] and [`crate::import::commit_import`] are what fill it.
 ///
@@ -493,14 +502,14 @@ pub struct DeckRow {
     pub game_key: String,
     pub description: Option<String>,
     pub cover_card_id: Option<String>,
-    /// `card_art` | `custom` — **which of the two cover fields a tile should draw**, and the
-    /// only thing that decides it. `card_art` means [`Self::cover_card_id`]'s art crop;
-    /// `custom` means `mtgimg://<origin>/cover/<id>`, the file the user picked.
+    /// `card_art`, on every row this app writes — see [`COVER_CUSTOM`] for the word that is
+    /// retired and why it is still spellable.
     ///
-    /// A deck can carry both at once and usually does: setting a custom cover leaves the card
-    /// id alone and picking a card leaves the file on disk, so switching back and forth costs
-    /// nothing and loses nothing. That is only coherent because this column is the one answer
-    /// to "which one is showing".
+    /// It decided which of two pictures a tile drew while there were two. There is one:
+    /// [`Self::cover_card_id`]'s art crop. **The field stays on the wire** because the column
+    /// is retired in two phases and this is phase one, and because a `custom` row can still
+    /// arrive over sync from a device that has not taken this rung — a tile that reads this at
+    /// all must treat it as "draw the card art" either way.
     pub cover_kind: String,
     /// Scryfall image policy: an `art` crop lacks the printed frame, so wherever the
     /// gallery shows one it must credit the artist — read here so the tile can.
@@ -608,6 +617,28 @@ pub struct DeckRow {
     /// all conclusions and all TypeScript's; this is the stored fact and the four signals the
     /// rule reads are supplied separately.
     pub bracket: i64,
+    /// **The cover printing's picture, not the deck's** — the row [`Self::cover_card_id`] names,
+    /// read off the same `LEFT JOIN cards` [`Self::cover_artist`] comes from. A deck is not a
+    /// card and has no images of its own; this is the one field on this struct that describes a
+    /// *different* row, which is why it is worth saying twice.
+    ///
+    /// The key a tile wants is [`crate::image_uri::ART_VARIANT`]. A deck's cover is a crop
+    /// rather than a card face, and it is the only cover mechanism there is since custom covers
+    /// went — so `display` is here because [`crate::image_uri::LIST_VARIANTS`] emits the pair
+    /// and not because anything on a gallery reads it.
+    ///
+    /// **Why it is on the wire at all**, [`crate::search::CardSummary::image_uris`]' argument
+    /// in full: `mtgimg://` is a Tauri custom protocol and wasm cannot register a URL scheme
+    /// with a browser, so on web and on Android the URL travels with the row or the tile draws
+    /// nothing. That is what it was doing — every deck cover in a browser was a blank frame the
+    /// moment PR #327 made the card crop the only cover. On desktop this is ignored, because
+    /// `src/lib/images.ts`'s `cardArtSrc` takes the local cache.
+    ///
+    /// `None` for a deck with no cover, for a cover whose printing has left `cards`, and for a
+    /// printing with no fetchable image — three states the tile draws identically, because from
+    /// the reader's side they are one: nothing to show yet. The first two heal on the next sync,
+    /// which is [`Self::cover_artist`]'s own note.
+    pub image_uris: Option<BTreeMap<String, String>>,
 }
 
 /// A name a gallery can show. A deck with no name is a nameless tile, and `decks.name` has
@@ -820,12 +851,21 @@ fn category_name(conn: &Connection, category_id: i64) -> Result<Option<String>, 
 /// `deck_cards.category_id` is `NOT NULL` with an enforced foreign key: a card with no category
 /// is a row the schema cannot hold.
 ///
-/// `'live'` is spelled out rather than interpolated from [`LIVE`] because this is a `const` and
-/// there is nothing to interpolate with;
+/// `'live'` is spelled out rather than interpolated from [`LIVE`] because there is nothing to
+/// interpolate with at that point;
 /// `the_gallery_count_reads_only_live_rows_in_active_categories` is what keeps the literal
 /// honest, and `an_active_maybeboard_is_part_of_the_deck_and_an_inactive_one_is_not` is what
 /// keeps the kind list in step with `SIZE_KINDS`.
-const DECK_SELECT: &str = "SELECT d.id, d.name, d.format_key, fs.display_name, d.description,
+///
+/// **A `LazyLock<String>` rather than a `const`, and the `LEFT JOIN cards` is why.** That join
+/// was here for `c.artist` alone; [`crate::image_uri::front_face_selects`] reads the same row
+/// for the cover printing's picture, and the variants it emits come from
+/// [`crate::image_uri::LIST_VARIANTS`] rather than from anything spellable in a `const`. The
+/// `format!` is spent once per process — `OWNED_SPARE_SQL`'s arrangement one file over, for the
+/// same reason: a live read has to mean whatever the constant means today.
+static DECK_SELECT: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "SELECT d.id, d.name, d.format_key, fs.display_name, d.description,
             d.cover_card_id, d.cover_kind, c.artist, d.archived,
             coalesce((SELECT sum(dc.quantity) FROM deck_cards dc
                         JOIN deck_categories cat ON cat.id = dc.category_id
@@ -835,12 +875,20 @@ const DECK_SELECT: &str = "SELECT d.id, d.name, d.format_key, fs.display_name, d
                          AND cat.kind IN ('main','commander','maybe')), 0),
             d.updated_at, d.folder_id, d.notes, d.theory_enabled,
             d.last_variant, d.last_group_by, d.last_sort_by, d.separate_x_group,
-            d.default_category_id, d.game_key, d.bracket
+            d.default_category_id, d.game_key, d.bracket,
+            {images}
        FROM decks d
        LEFT JOIN format_specs fs ON fs.key = d.format_key
-       LEFT JOIN cards c ON c.id = d.cover_card_id";
+       LEFT JOIN cards c ON c.id = d.cover_card_id",
+        images = crate::image_uri::front_face_selects("c").join(", ")
+    )
+});
 
 fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
+    /// Where `DECK_SELECT`'s image columns start — one past `d.bracket`, the last named
+    /// column. Named rather than inlined for `deck_card_select`'s reason: the pairing
+    /// arithmetic below is `front_face_map`'s and only the *offset* is this function's.
+    const IMAGE_COL: usize = 21;
     Ok(DeckRow {
         id: r.get(0)?,
         name: r.get(1)?,
@@ -890,6 +938,20 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
         // to a bracket, with every field still holding a number SQLite is perfectly happy to
         // give back.
         bracket: r.get(20)?,
+        // **From 21**, last of all, for the reason written four comments up — the
+        // `crate::image_uri::FRONT_FACE_COLUMNS` expressions `front_face_selects` appended, in
+        // the (top-level, face) pairs `front_face_map` folds back up, one pair per variant.
+        //
+        // This read carries a failure the twenty above it do not. Every one of those is caught
+        // by a value of the wrong *kind* turning up in a field; here the pair is
+        // (top-level, face) and `for_face` prefers the face, so a read one column out still
+        // answers a perfectly real URL — the right picture from the wrong slot, or the crop
+        // where the card belongs. No fixture carrying a single column can tell the two apart;
+        // `image_uri`'s `meld` row, which disagrees with itself in both columns and for both
+        // variants, is the shape that can.
+        image_uris: crate::image_uri::front_face_map(|i| {
+            r.get::<_, Option<String>>(IMAGE_COL + i)
+        })?,
     })
 }
 
@@ -897,7 +959,7 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
 /// caller gets back is the row the gallery would have read.
 pub(crate) fn read_deck(conn: &Connection, id: i64) -> Result<Option<DeckRow>, String> {
     conn.query_row(
-        &format!("{DECK_SELECT} WHERE d.id = ?1"),
+        &format!("{} WHERE d.id = ?1", *DECK_SELECT),
         params![id],
         deck_row,
     )
@@ -1251,14 +1313,18 @@ struct DeckBefore {
     bracket: i64,
 }
 
-/// What a `deck`/`cover` history row records as the cover: the card's id when the deck is
-/// showing card art, and the word [`COVER_CUSTOM`] when it is showing the user's own file.
+/// What a `deck`/`cover` history row records as the cover: the card's id, and the word
+/// [`COVER_CUSTOM`] on the one kind of row that can still carry it.
 ///
-/// One value for two columns, because "what is the cover" has one answer at a time — which is
-/// [`DeckRow::cover_kind`]'s whole job — and a history that recorded the card id of a deck
-/// showing a custom picture would be recording the cover it *would* fall back to. The custom
-/// file's path is deliberately **not** what is written: it is a path on this machine, it says
-/// nothing a reader wants, and it is not what the change was about.
+/// **The interesting case is now the only one this branch exists for.** Custom covers went on
+/// 2026-08-31, so nothing here writes `custom` — but `cover_kind` is a synced field, a device
+/// still on the old rung can push a `custom` row onto this one, and the *first* edit made to
+/// such a deck is a history line whose `from` side describes what the reader was looking at. A
+/// card id there would name the cover the tile had already fallen back to rather than the one
+/// that was stored, which is a history that disagrees with the screen.
+///
+/// The file's path was never written and could not be now: it was a path on one machine, it
+/// said nothing a reader wants, and it was not what the change was about.
 fn cover_value(kind: &str, cover_card_id: Option<&str>) -> serde_json::Value {
     if kind == COVER_CUSTOM {
         json!(COVER_CUSTOM)
@@ -1363,12 +1429,13 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 format_key = coalesce(?3, format_key),
                 description = coalesce(?4, description),
                 cover_card_id = coalesce(?5, cover_card_id),
-                -- Picking a card is what puts the deck back on card art, and it is the only
-                -- way back: `deck_set_cover_image` writes 'custom' and nothing else clears it.
-                -- The custom **file is left alone** on purpose, so switching between the two
-                -- costs nothing and loses nothing — a user who tries a card and changes their
-                -- mind still has the picture they chose. `?11` is bound rather than spelled,
-                -- so the word this writes and the word `cover_value` reads are one constant.
+                -- **The one writer of this column left, and it is a repair as well as a
+                -- write.** Nothing writes 'custom' any more, so on a database that has taken
+                -- the rung this is `card_art` over `card_art` — but `cover_kind` syncs, and a
+                -- device still on the old rung can push a 'custom' row here; picking a card is
+                -- what puts that row back on the only word this app means. Bound rather than
+                -- spelled, so the word this writes and the word `cover_value` reads are one
+                -- constant.
                 cover_kind = CASE WHEN ?5 IS NULL THEN cover_kind ELSE ?10 END,
                 archived = coalesce(?6, archived),
                 folder_id = coalesce(?7, folder_id),
@@ -1598,8 +1665,9 @@ fn record_deck_edit(
         field("description", json!(before.description), json!(to))?;
     }
     // A cover change is "which picture is showing", so a card id that is already stored still
-    // changes the cover when the deck was showing a custom file — and the `from` side says
-    // `custom` rather than the card underneath it. See [`cover_value`].
+    // changes the cover when the deck's row had arrived from an un-upgraded device saying
+    // `custom` — and the `from` side says so rather than naming the card underneath it. See
+    // [`cover_value`].
     let cover_was = cover_value(&before.cover_kind, before.cover_card_id.as_deref());
     if let Some(to) = patch
         .cover_card_id
@@ -1930,7 +1998,9 @@ pub fn set_view_state(conn: &Connection, id: i64, state: &DeckViewState) -> Resu
 /// saying it.
 ///
 /// One transaction throughout: mid-delete the cards are all in the holding area and the deck is
-/// gone, or none of it happened. The cover file is outside it, for the reason below.
+/// gone, or none of it happened. Nothing is outside it: this took a covers directory and
+/// removed the deck's `<id>.webp` after the commit until custom covers went on 2026-08-31, and
+/// with that gone a deck is rows and only rows.
 ///
 /// **Records nothing**, and cannot: `deck_audit.deck_id` is `NOT NULL` and CASCADEs from
 /// `decks`, so a row written to say "this deck was deleted" would be removed by the very
@@ -1939,13 +2009,7 @@ pub fn set_view_state(conn: &Connection, id: i64, state: &DeckViewState) -> Resu
 /// `deleting_a_deck_takes_its_history_with_it` pins that this is a property of the schema and
 /// not an omission.
 ///
-/// **The custom cover file goes too, best-effort.** `covers` is the directory or `None` when it
-/// could not even be resolved, and a failure to delete is logged and never returned: the deck
-/// is gone, and refusing a delete that already happened because a picture of it survived would
-/// be an error the user can do nothing with. What is left behind in that case is one orphaned
-/// `<id>.webp` in a folder that is safe to delete — the cost of the softer failure.
-#[cfg_attr(target_family = "wasm", allow(unused_variables))]
-pub fn delete_deck(conn: &Connection, id: i64, covers: Option<&Path>) -> Result<(), String> {
+pub fn delete_deck(conn: &Connection, id: i64) -> Result<(), String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     if let Some(group) = deck_group(&tx, id)? {
         // **The destination is looked up rather than assumed.** Schema v25 creates exactly one
@@ -1998,112 +2062,7 @@ pub fn delete_deck(conn: &Connection, id: i64, covers: Option<&Path>) -> Result<
     tx.execute("DELETE FROM decks WHERE id = ?1", params![id])
         .map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())?;
-    // **No cover directory on the web target**, so `covers` is always `None` there and this
-    // block is unreachable rather than skipped — `images` is the byte cache and a filesystem,
-    // which a browser has neither of. Gated rather than stubbed: a `remove_cover` that
-    // silently did nothing would be a deleted picture that is still on disk.
-    #[cfg(not(target_family = "wasm"))]
-    if let Some(covers) = covers {
-        if let Err(e) = crate::images::remove_cover(covers, id) {
-            eprintln!("could not delete the cover image for deck {id}: {e}");
-        }
-    }
     Ok(())
-}
-
-/// Point a deck at a picture the user picked: write the already-encoded bytes beside the
-/// database and record that the deck is showing them.
-///
-/// **This function is handed `bytes` and never encodes**, and that signature is the whole of
-/// the ordering rule: [`crate::images::encode_cover`] runs in [`deck_set_cover_image`] *before*
-/// `with_write`, so the decode, the Lanczos resample and the lossless WEBP encode are outside
-/// the app-wide write mutex. A source is bounded at
-/// [`crate::images::MAX_COVER_SOURCE_PIXELS`]-worth of pixels rather than by taste, so holding
-/// the mutex across it would put every collection edit in the app behind a hundred-megapixel
-/// decode. Taking a path here instead — which is what this did — made that ordering a sentence
-/// in a doc that the call site could contradict, and it did.
-///
-/// **The file is written inside the transaction**, which is the other half of that order: the
-/// deck's existence is checked by [`touch_deck`] first, so a cover is never written for a deck
-/// that is not there, and a failed write rolls the row back rather than leaving a deck pointing
-/// at a picture that was never stored. The one seam left is a commit that fails after the file
-/// landed — which leaves an orphaned `<id>.webp` that the next set-cover overwrites and
-/// [`delete_deck`] removes. Bytes on disk with no row pointing at them are inert; a row
-/// pointing at bytes that are not there is a broken tile.
-///
-/// `cover_image_path` is stored **absolute**, as the path actually written. It is not what the
-/// route reads — `mtgimg://…/cover/<deckId>` resolves the covers directory itself, which is what
-/// keeps a portable app working after its folder is moved — it is the record of what was
-/// written, for a reader and for anything that ever has to clean up.
-/// **Desktop and Android only.** It takes a cover directory that is not `Option`, writes a file
-/// into it and stores that path — there is no web equivalent to gate down to, so the whole
-/// function goes rather than its middle. `deck_set_cover_image` is its only caller.
-#[cfg(not(target_family = "wasm"))]
-pub fn set_cover_image(
-    conn: &Connection,
-    covers: &Path,
-    deck_id: i64,
-    bytes: &[u8],
-) -> Result<DeckRow, String> {
-    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    let before: (Option<String>, String) = tx
-        .query_row(
-            "SELECT cover_card_id, cover_kind FROM decks WHERE id = ?1",
-            params![deck_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .optional()
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| GONE.to_owned())?;
-    let row_before = crate::deck_undo::read_deck_row(&tx, deck_id)?;
-    touch_deck(&tx, deck_id)?;
-    crate::images::write_cover(covers, deck_id, bytes)?;
-    let stored = crate::images::cover_file(covers, deck_id);
-    tx.execute(
-        "UPDATE decks SET cover_kind = ?2, cover_image_path = ?3, updated_at = unixepoch()
-          WHERE id = ?1",
-        params![deck_id, COVER_CUSTOM, stored.to_string_lossy()],
-    )
-    .map_err(|e| e.to_string())?;
-    // The same `deck`/`cover` row [`update_deck`] writes, from the other direction — one field,
-    // one history line, whichever kind of cover the deck was showing before. **Recorded even
-    // when both sides read `custom`**, which is the case a `from != to` guard would swallow:
-    // replacing one picture with another is exactly the change this command exists to make,
-    // and the payload deliberately does not name the file (see [`cover_value`]), so the two
-    // sides matching is what "a different picture" looks like from here.
-    let audit_id = crate::deck_audit::record(
-        &tx,
-        deck_id,
-        crate::deck_audit::DECK_LEVEL,
-        crate::deck_audit::DECK,
-        None,
-        &json!({
-            "field": "cover",
-            "from": cover_value(&before.1, before.0.as_deref()),
-            "to": COVER_CUSTOM,
-        }),
-        0,
-    )?;
-    // **Undo restores the three columns, and cannot restore the file** — the one place in this
-    // feature where "put it back exactly" stops at the database. `images::cover_file` is one
-    // path per deck, so uploading a second picture overwrites the first on disk; an undo takes
-    // the deck back to whatever it was showing before, and if that was *another custom
-    // picture* the row is right and the bytes behind it are the new ones. Restoring those would
-    // mean keeping every superseded cover for as long as its step lives, which is a cache with
-    // no ceiling for a case a reader can fix by picking the picture again.
-    crate::deck_undo::record_step(
-        &tx,
-        audit_id,
-        deck_id,
-        &crate::deck_undo::Step::new(
-            vec![crate::deck_undo::Op::Deck { fields: row_before }],
-            vec![crate::deck_undo::Op::Deck {
-                fields: crate::deck_undo::read_deck_row(&tx, deck_id)?,
-            }],
-        ),
-    )?;
-    tx.commit().map_err(|e| e.to_string())?;
-    read_deck(conn, deck_id)?.ok_or_else(|| GONE.to_owned())
 }
 
 /// One `deck_cards` row on its way from a deck to its copy — every column that describes the
@@ -2152,14 +2111,14 @@ struct CopiedCard {
 /// with them for the same reason: copying the rows and leaving the flag off would give the
 /// copy a list it cannot open.
 ///
-/// **A custom cover is copied as a file, not as a path**, and that is the trap this argument
-/// exists for: `cover_kind` and `cover_image_path` come across in the `INSERT … SELECT` above
-/// like every other column, which on its own leaves the copy claiming `custom` with no
-/// `<newId>.webp` behind it and a path pointing at the *original's* file — `mtgimg://…/cover/…`
-/// then 404s and the tile is blank. So the bytes are copied too, and if they cannot be (no
-/// covers directory, no source file, an unwritable disk) the copy falls back to `card_art`
-/// rather than keeping a claim it cannot honour. Best-effort like [`delete_deck`]'s removal: a
-/// failure is logged, never fatal, and a duplicate is never refused over a picture.
+/// **The cover is `cover_card_id` and copies like any other column**, which is the whole of
+/// what used to be this function's hardest argument. While a cover could be a *file* there was
+/// a trap here: `cover_kind` and `cover_image_path` came across in the `INSERT … SELECT` like
+/// everything else, which left the copy claiming `custom` with no `<newId>.webp` behind it and
+/// a path naming the *original's* file — so the bytes had to be copied too, best-effort,
+/// falling back to `card_art` when they could not be. Custom covers went on 2026-08-31 and the
+/// whole apparatus went with them. **`cover_image_path` is no longer named in the statement
+/// below** — it is retired, phase one is to stop writing it, and a copy is a write.
 ///
 /// **`default_category_id` is the one column that comes across *remapped* rather than copied**,
 /// and it is why the `INSERT … SELECT` below does not name it: it holds a `deck_categories.id`,
@@ -2180,33 +2139,26 @@ struct CopiedCard {
 /// would be a second write with a failure mode of its own (a user category named "Sideboard"
 /// collides with the seeded one on `DECK_CATEGORY_GRAIN`) in exchange for an invariant that
 /// already holds.
-pub fn duplicate_deck(
-    conn: &Connection,
-    id: i64,
-    covers: Option<&Path>,
-) -> Result<DeckRow, String> {
+pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    let copy: Option<(i64, String, String)> = tx
+    let copy: Option<(i64, String)> = tx
         .query_row(
             "INSERT INTO decks (name, format_key, description, cover_kind, cover_card_id,
-                                cover_image_path, folder_id, notes, theory_enabled,
+                                folder_id, notes, theory_enabled,
                                 separate_x_group, bracket, archived, created_at, updated_at)
              SELECT name || ' (copy)', format_key, description, cover_kind, cover_card_id,
-                    cover_image_path, folder_id, notes, theory_enabled, separate_x_group,
+                    folder_id, notes, theory_enabled, separate_x_group,
                     bracket, 0, unixepoch(), unixepoch()
                FROM decks WHERE id = ?1
-             RETURNING id, name, cover_kind",
+             RETURNING id, name",
             params![id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .optional()
         .map_err(|e| e.to_string())?;
-    let Some((copy, copy_name, copy_cover_kind)) = copy else {
+    let Some((copy, copy_name)) = copy else {
         return Err(GONE.to_owned());
     };
-    if copy_cover_kind == COVER_CUSTOM {
-        copy_cover_file(&tx, covers, id, copy)?;
-    }
     create_deck_group(&tx, copy, &copy_name)?;
     // **Its own group, and empty** — see this function's doc. Named after the copy, which is the
     // original's name plus ` (copy)`, so the folder tree and the gallery agree about what this
@@ -2361,66 +2313,12 @@ pub fn duplicate_deck(
     read_deck(conn, copy)?.ok_or_else(|| GONE.to_owned())
 }
 
-/// Give a freshly duplicated deck its own copy of the original's cover image, or take the claim
-/// away.
-///
-/// The columns are already `custom` when this runs — [`duplicate_deck`]'s `INSERT … SELECT`
-/// copied them — so the only two honest outcomes are "the copy has its own file, pointing at
-/// itself" and "the copy shows card art". What must not survive is the state in between: a deck
-/// claiming `custom` whose `cover_image_path` names *another deck's* file, which outlives that
-/// deck's deletion as a path to nothing.
-///
-/// Best-effort in the sense [`delete_deck`] is: every failure lands in the second branch and is
-/// logged, and the duplicate itself is never refused. Inside the caller's transaction, so the
-/// columns and the file agree or neither happened.
-fn copy_cover_file(
-    tx: &Connection,
-    covers: Option<&Path>,
-    from: i64,
-    to: i64,
-) -> Result<(), String> {
-    match copied_cover(covers, from, to) {
-        Some(path) => tx.execute(
-            "UPDATE decks SET cover_image_path = ?2 WHERE id = ?1",
-            params![to, path.to_string_lossy()],
-        ),
-        None => tx.execute(
-            "UPDATE decks SET cover_kind = ?2, cover_image_path = NULL WHERE id = ?1",
-            params![to, COVER_CARD_ART],
-        ),
-    }
-    .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-/// Where the duplicate's cover landed, or `None` if there was no directory to copy within or
-/// the copy failed. **Answering the path rather than a `bool` is what retires the `expect`**
-/// this used to carry: "a copy cannot have happened without a directory" was true and had to
-/// be argued in a panic message, where the `Option` now says it in the type.
-#[cfg(not(target_family = "wasm"))]
-fn copied_cover(covers: Option<&Path>, from: i64, to: i64) -> Option<std::path::PathBuf> {
-    let dir = covers?;
-    match crate::images::copy_cover(dir, from, to) {
-        Ok(()) => Some(crate::images::cover_file(dir, to)),
-        Err(e) => {
-            eprintln!("could not copy the cover image from deck {from} to deck {to}: {e}");
-            None
-        }
-    }
-}
-
-/// **The web target has no cover directory**, so a duplicate never copies a file and takes
-/// `copy_cover_file`'s second arm — the same one a desktop duplicate of a deck with no custom
-/// cover takes. Not a stub standing in for a missing feature: `covers` is `None` on every web
-/// call, so this is the answer the other arm would give.
-#[cfg(target_family = "wasm")]
-fn copied_cover(_covers: Option<&Path>, _from: i64, _to: i64) -> Option<std::path::PathBuf> {
-    None
-}
-
 /// The gallery, archived decks last and most recently touched first.
 pub fn list_decks(conn: &Connection) -> Result<Vec<DeckRow>, String> {
-    let sql = format!("{DECK_SELECT} ORDER BY d.archived ASC, d.updated_at DESC, d.id DESC");
+    let sql = format!(
+        "{} ORDER BY d.archived ASC, d.updated_at DESC, d.id DESC",
+        *DECK_SELECT
+    );
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt.query_map([], deck_row).map_err(|e| e.to_string())?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -3594,9 +3492,10 @@ fn deck_card_select(marketplace: crate::sorting::Marketplace) -> String {
             -- beside `c.finishes` at 30, where it would have handed a printing's finishes to
             -- its treatments and a set name to its finishes, both still plausible strings.
             c.promo_types,
-            -- 36 and 37, last of all, for the reason written above `dc.finish`: this read is
+            -- From 36, last of all, for the reason written above `dc.finish`: this read is
             -- positional and a column added anywhere else shifts every index after it into a
-            -- field of the same SQLite type, silently.
+            -- field of the same SQLite type, silently. As many columns as
+            -- `image_uri::FRONT_FACE_COLUMNS` says — two per variant a list row carries.
             {image_uris}
        FROM deck_cards dc
        JOIN deck_categories cat ON cat.id = dc.category_id
@@ -3714,8 +3613,9 @@ fn read_deck_cards(
                 finish: r.get(34)?,
                 // 35, after it, for the same reason.
                 promo_types: r.get(35)?,
-                // 36 and 37 — the pair `front_face_selects` added, folded back up by the
-                // module that added them, face-first precedence and `soon.jpg` fence included.
+                // From 36 — the (top-level, face) pairs `front_face_selects` added, one per
+                // variant, folded back up by the module that added them, face-first precedence
+                // and `soon.jpg` fence included.
                 image_uris: crate::image_uri::front_face_map(|i| {
                     r.get::<_, Option<String>>(IMAGE_COL + i)
                 })?,
@@ -4080,79 +3980,41 @@ pub async fn deck_update(
     .map_err(unfinished)?
 }
 
-/// Delete a deck, and the custom cover file that was only ever about it.
+/// Delete a deck.
 ///
-/// The covers directory is resolved before the blocking task rather than inside it, because
-/// `AppHandle` is what resolves it and the task owns everything it touches. `None` — the app
-/// still starting, an unwritable data folder — is not a reason to refuse a delete: see
-/// [`delete_deck`].
+/// **No `AppHandle`, where every other wrapper in this pair has one**: this took one solely to
+/// resolve the covers directory so the deck's `<id>.webp` could go with it, and custom covers
+/// went on 2026-08-31.
 #[cfg(not(target_family = "wasm"))]
 #[tauri::command]
-pub async fn deck_delete(
-    state: tauri::State<'_, Arc<AppState>>,
-    app: tauri::AppHandle,
-    id: i64,
-) -> Result<(), String> {
+pub async fn deck_delete(state: tauri::State<'_, Arc<AppState>>, id: i64) -> Result<(), String> {
     let state = state.inner().clone();
-    let covers = crate::paths::covers_dir(&app).ok();
     tauri::async_runtime::spawn_blocking(move || {
         // Plain `with_write`: a deck write moves nothing the reader owns. PR 3's
         // `collection_to_deck`/`deck_to_collection` DO move ownership and must use
         // `collection_source::with_write_owned` instead.
-        with_write(&state, |c| delete_deck(c, id, covers.as_deref()))
+        with_write(&state, |c| delete_deck(c, id))
     })
     .await
     .map_err(unfinished)?
 }
 
-/// Point a deck at a picture on disk. Answers the deck as the gallery would read it.
+/// Copy a deck, its categories, its tags and its cards. See [`duplicate_deck`].
 ///
-/// **The encode is inside the blocking task and outside the write lock**, and the order is the
-/// point rather than a detail: a decode of up to
-/// [`crate::images::MAX_COVER_SOURCE_PIXELS`] plus a Lanczos resample plus a lossless WEBP
-/// encode is not tens of milliseconds at the top of that range, and holding the app-wide write
-/// mutex across it would put every collection edit in the app behind one file-picker. It is
-/// [`set_cover_image`]'s **signature** that keeps this true — it takes bytes and cannot
-/// encode — because the version of this that took a path had the doc and the wiring disagree.
-#[cfg(not(target_family = "wasm"))]
-#[tauri::command]
-pub async fn deck_set_cover_image(
-    state: tauri::State<'_, Arc<AppState>>,
-    app: tauri::AppHandle,
-    deck_id: i64,
-    source_path: String,
-) -> Result<DeckRow, String> {
-    let state = state.inner().clone();
-    let covers = crate::paths::covers_dir(&app)?;
-    // `app` is cloned into the blocking task the way `state` is, because on Android the source
-    // is a `content://` URI and `encode_cover_picked` needs the handle to reach the
-    // ContentResolver. On desktop the handle is unused and the path is opened directly.
-    tauri::async_runtime::spawn_blocking(move || {
-        let bytes = crate::images::encode_cover_picked(&app, &source_path)?;
-        with_write(&state, |c| set_cover_image(c, &covers, deck_id, &bytes))
-    })
-    .await
-    .map_err(unfinished)?
-}
-
-/// Copy a deck, its categories, its tags, its cards — and its custom cover file.
-///
-/// The covers directory is resolved before the blocking task, like [`deck_delete`]'s, and `None`
-/// is not a reason to refuse: the copy falls back to card art. See [`duplicate_deck`].
+/// **No `AppHandle`, for [`deck_delete`]'s reason**: it carried one only to resolve the covers
+/// directory the copy's own `<id>.webp` was written into.
 #[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_duplicate(
     state: tauri::State<'_, Arc<AppState>>,
-    app: tauri::AppHandle,
     id: i64,
 ) -> Result<DeckRow, String> {
     let state = state.inner().clone();
-    let covers = crate::paths::covers_dir(&app).ok();
     tauri::async_runtime::spawn_blocking(move || {
         // Plain `with_write`: a deck write moves nothing the reader owns. PR 3's
         // `collection_to_deck`/`deck_to_collection` DO move ownership and must use
         // `collection_source::with_write_owned` instead.
-        with_write(&state, |c| duplicate_deck(c, id, covers.as_deref()))
+        with_write(&state, |c| duplicate_deck(c, id))
     })
     .await
     .map_err(unfinished)?
@@ -5792,7 +5654,7 @@ mod tests {
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
         let main = main_of(&conn, deck.id);
         add(&conn, deck.id, "bolt-lea", main, 3);
-        delete_deck(&conn, deck.id, None).unwrap();
+        delete_deck(&conn, deck.id).unwrap();
 
         let err =
             swap_printing(&conn, deck.id, "bolt-lea", "bolt-m10", main, LIVE, None).unwrap_err();
@@ -5872,7 +5734,7 @@ mod tests {
             .unwrap();
         file_into_group(&conn, deck.id, "bolt-lea", 4);
 
-        let copy = duplicate_deck(&conn, deck.id, None).unwrap();
+        let copy = duplicate_deck(&conn, deck.id).unwrap();
 
         assert_ne!(copy.id, deck.id);
         assert_eq!(copy.name, "Burn (copy)");
@@ -5972,7 +5834,7 @@ mod tests {
 
         // The remap, proven the only way it can be: deleting the source fires the CASCADE on
         // every category and tag it owns, and the copy is untouched by it.
-        delete_deck(&conn, deck.id, None).unwrap();
+        delete_deck(&conn, deck.id).unwrap();
         assert_eq!(
             count(&conn, "deck_cards"),
             3,
@@ -5998,7 +5860,7 @@ mod tests {
         assert_eq!(origin_of(&conn, auto), "auto", "the premise, not the claim");
         assert_eq!(origin_of(&conn, mine.id), "user");
 
-        let copy = duplicate_deck(&conn, deck.id, None).unwrap();
+        let copy = duplicate_deck(&conn, deck.id).unwrap();
 
         let origins: Vec<(String, String)> = conn
             .prepare(
@@ -6115,6 +5977,122 @@ mod tests {
         assert_eq!(decks[0].format_name.as_deref(), Some("Commander"));
         assert_eq!(decks[0].cover_artist.as_deref(), Some("Christopher Rush"));
         assert_eq!(decks[1].card_count, 0);
+    }
+
+    /// **A deck row carries the *cover printing's* picture** — the gallery tile's only way to
+    /// draw a cover on web or on the phone, where `mtgimg://` is a scheme no browser has.
+    ///
+    /// It is the one field on `DeckRow` that describes a different row, and the join it comes
+    /// off is `LEFT JOIN cards c ON c.id = d.cover_card_id` — the same one `cover_artist` uses.
+    /// So the failure this guards is not only an off-by-one: it is also reading the *deck's*
+    /// own row, which has no images at all and would answer `None` for every deck, silently,
+    /// with a suite full of decks that have no cover anyway.
+    ///
+    /// **`bolt-m10` is shaped like a `meld` printing and carries all four variants in both
+    /// columns, every one a different URL**, which is the only shape where every way of getting
+    /// this wrong gives a different answer rather than the right one by luck: face-first
+    /// precedence reversed answers `top.webp`, a pair read one column out answers the other
+    /// variant's, and a widening back to four answers extra keys that are real URLs.
+    ///
+    /// Four states, and three of them are the *same* blank frame to a reader: no cover at all,
+    /// a cover whose printing has left `cards`, and a printing whose only URL is Scryfall's
+    /// error page. `DeckTile` draws all three as "No cover" rather than as a failure.
+    #[test]
+    fn a_deck_row_carries_the_cover_printings_art() {
+        let conn = seeded();
+        conn.execute(
+            "UPDATE cards SET
+                 image_uris = json_object(
+                     'thumb','https://cards.scryfall.io/thumb/top.webp?4',
+                     'grid','https://cards.scryfall.io/grid/top.webp?4',
+                     'display','https://cards.scryfall.io/display/top.webp?4',
+                     'art','https://cards.scryfall.io/art/top.webp?4'),
+                 face_image_uris = json_array(json_object(
+                     'thumb','https://cards.scryfall.io/thumb/face0.webp?4',
+                     'grid','https://cards.scryfall.io/grid/face0.webp?4',
+                     'display','https://cards.scryfall.io/display/face0.webp?4',
+                     'art','https://cards.scryfall.io/art/face0.webp?4'))
+             WHERE id = 'bolt-m10'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE cards SET image_uris = json_object(
+                 'art','https://errors.scryfall.com/soon.jpg')
+             WHERE id = 'bolt-jp'",
+            [],
+        )
+        .unwrap();
+
+        let cover = |card_id: &str| {
+            let deck = create_deck(&conn, &input(card_id, "commander")).unwrap();
+            update_deck(
+                &conn,
+                deck.id,
+                &DeckPatch {
+                    cover_card_id: Some(card_id.to_owned()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            deck.id
+        };
+        let art = cover("bolt-m10");
+        let poisoned = cover("bolt-jp");
+        let orphan = cover("gone-from-the-corpus");
+        let bare = create_deck(&conn, &input("No cover", "commander"))
+            .unwrap()
+            .id;
+
+        // Through `list_decks` *and* `read_deck`: both go through `deck_row`, and this is what
+        // says so rather than the call graph.
+        for reader in ["list", "read"] {
+            let of = |id: i64| -> Option<BTreeMap<String, String>> {
+                if reader == "list" {
+                    list_decks(&conn)
+                        .unwrap()
+                        .into_iter()
+                        .find(|d| d.id == id)
+                        .unwrap()
+                        .image_uris
+                } else {
+                    read_deck(&conn, id).unwrap().unwrap().image_uris
+                }
+            };
+
+            let uris = of(art).unwrap_or_else(|| panic!("the cover has a picture ({reader})"));
+            assert_eq!(
+                uris[crate::image_uri::ART_VARIANT],
+                "https://cards.scryfall.io/art/face0.webp?4",
+                "the tile's crop, from the face and not the top-level blob ({reader})"
+            );
+            assert_eq!(
+                uris[crate::image_uri::LIST_VARIANT],
+                "https://cards.scryfall.io/display/face0.webp?4",
+                "and the card, at its own offset ({reader})"
+            );
+            // Spelled out rather than read off `LIST_VARIANTS`: an assertion that reads the
+            // constant it is fencing can never fail when that constant moves, and the cover
+            // printing here carries all four variants, so a widening comes back as real URLs
+            // under real keys. A widening has to come here and say so.
+            assert_eq!(
+                uris.keys().map(String::as_str).collect::<Vec<_>>(),
+                ["art", "display"],
+                "what a list row carries and nothing else ({reader})"
+            );
+
+            assert_eq!(
+                of(poisoned),
+                None,
+                "an error page is a gap, not a cover ({reader})"
+            );
+            assert_eq!(
+                of(orphan),
+                None,
+                "a cover whose printing has left `cards` draws nothing ({reader})"
+            );
+            assert_eq!(of(bare), None, "and a deck with no cover ({reader})");
+        }
     }
 
     /// The gallery's caption is about the deck the user has, and two things are not it: a
@@ -6706,7 +6684,7 @@ mod tests {
         crate::deck_meta::create_tag(&conn, deck.id, "Flex", "amber").unwrap();
         file_into_group(&conn, deck.id, "bolt-lea", 4);
 
-        delete_deck(&conn, deck.id, None).unwrap();
+        delete_deck(&conn, deck.id).unwrap();
 
         assert_eq!(count(&conn, "decks"), 0);
         assert_eq!(count(&conn, "deck_cards"), 0);
@@ -6722,7 +6700,7 @@ mod tests {
             "the copies are still owned"
         );
 
-        delete_deck(&conn, deck.id, None).expect("a deck that is already gone is gone");
+        delete_deck(&conn, deck.id).expect("a deck that is already gone is gone");
     }
 
     /// **Every deck made from here on has a group**, `ensure_predefined_categories`' precedent
@@ -6797,7 +6775,7 @@ mod tests {
         file_into_group(&conn, deck.id, "bolt-m10", 1);
         assert_eq!(count(&conn, "collection_entries"), 3);
 
-        delete_deck(&conn, deck.id, None).unwrap();
+        delete_deck(&conn, deck.id).unwrap();
 
         let held: Vec<(String, i64)> = conn
             .prepare(
@@ -6833,9 +6811,9 @@ mod tests {
         let conn = seeded();
         conn.pragma_update(None, "foreign_keys", "ON").unwrap();
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
-        delete_deck(&conn, deck.id, None).unwrap();
+        delete_deck(&conn, deck.id).unwrap();
         assert_eq!(count(&conn, "collection_entries"), 0);
-        delete_deck(&conn, deck.id, None).expect("a deck that is already gone is gone");
+        delete_deck(&conn, deck.id).expect("a deck that is already gone is gone");
     }
 
     /// A copy is a **draft**: it lists the same cards and holds none of them, which is what
@@ -6847,7 +6825,7 @@ mod tests {
         add(&conn, deck.id, "bolt-lea", main_of(&conn, deck.id), 4);
         file_into_group(&conn, deck.id, "bolt-lea", 4);
 
-        let copy = duplicate_deck(&conn, deck.id, None).unwrap();
+        let copy = duplicate_deck(&conn, deck.id).unwrap();
 
         let group = group_of(&conn, copy.id);
         assert_ne!(group, group_of(&conn, deck.id));
@@ -6891,77 +6869,90 @@ mod tests {
         assert_eq!(owned_by_oracle(&conn, deck.id).unwrap().get("o1"), Some(&4));
     }
 
-    /// A scratch `covers/` directory and a valid WEBP to put in it. Written through the real
-    /// encoder, so what the tests below move around is the shape the app actually stores.
+    /// **The cover survives a duplicate, and it survives as a card id.**
     ///
-    /// Named for **this process** as well as for the test. That is a precaution rather than a
-    /// fix for anything measured: the directory is removed and recreated a moment later, and on
-    /// Windows a pending-delete directory and a file a scanner has just opened both surface as
-    /// `Access is denied`, so two `cargo test` processes sharing a fixed name would have a
-    /// window in which one can fail the other. One red run of this suite was seen and never
-    /// reproduced in twenty-four more; this removes a failure mode that could have caused it,
-    /// and does not diagnose it.
-    fn covers(name: &str) -> (std::path::PathBuf, Vec<u8>) {
-        let dir =
-            std::env::temp_dir().join(format!("mtgtest-deck-covers-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let source = dir.join("source.png");
-        image::RgbaImage::new(40, 30).save(&source).unwrap();
-        let bytes = crate::images::encode_cover(&source).unwrap();
-        (dir, bytes)
-    }
-
-    /// The cover file is only ever about one deck, so it goes when the deck does — nothing
-    /// else will ever look at it, and a portable app's `data/` folder is the user's disk.
-    #[test]
-    fn deleting_a_deck_takes_its_cover_file() {
-        let conn = seeded();
-        let (dir, bytes) = covers("delete");
-        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
-        set_cover_image(&conn, &dir, deck.id, &bytes).unwrap();
-        let file = crate::images::cover_file(&dir, deck.id);
-        assert!(file.is_file(), "the fixture must have written a cover");
-        assert_eq!(std::fs::read(&file).unwrap(), bytes);
-
-        delete_deck(&conn, deck.id, Some(&dir)).unwrap();
-
-        let gone = !file.exists();
-        // And a deck with no cover file is deleted without complaint: `remove_cover` reads a
-        // missing file as a success, because a deck the user deleted is deleted whatever the
-        // disk says about a picture of it.
-        let second = create_deck(&conn, &input("Other", "modern")).unwrap();
-        let no_cover = delete_deck(&conn, second.id, Some(&dir));
-        let _ = std::fs::remove_dir_all(&dir);
-        assert!(gone, "the cover file must go with the deck");
-        assert!(no_cover.is_ok());
-    }
-
-    /// Setting a custom cover is one write: the file lands, `cover_kind` says which of the two
-    /// covers is showing, and `cover_image_path` records what was written.
+    /// Five tests stood here while a cover could also be a *file*: the delete removing
+    /// `<id>.webp`, the two kinds taking turns, a set for a deck that is gone writing nothing,
+    /// and the duplicate's own file plus its fallback. Custom covers went on 2026-08-31 and all
+    /// five went with them. What is worth keeping is the half that is now the whole feature --
+    /// `cover_card_id` is a column like any other and the `INSERT ... SELECT` carries it -- plus
+    /// the assertion that the statement no longer writes the **retired** `cover_image_path`,
+    /// which is the one thing about that statement a reader could get wrong by putting the old
+    /// column list back.
     ///
-    /// **Picking a card afterwards leaves the file alone**, which is the half that makes the
-    /// pair usable: a user who tries a card art and changes their mind still has the picture
-    /// they chose, and switching back is one column.
+    /// **The source's path is seeded by hand, and without that line this test cannot fail.**
+    /// Nothing writes `cover_image_path` any more, so a freshly created deck's is NULL, a
+    /// statement that copied the column would copy NULL, and the assertion below would pass
+    /// against exactly the defect it exists to catch. The seeded value is what an upgraded
+    /// database really holds: the rung flips `cover_kind` and deliberately leaves this column
+    /// where it is, so every deck that ever had a custom cover still carries an absolute path
+    /// to a file nothing serves.
     #[test]
-    fn a_custom_cover_and_a_card_cover_take_turns_without_losing_either() {
+    fn a_duplicate_carries_the_cover_card_and_writes_no_retired_path() {
         let conn = seeded();
-        let (dir, bytes) = covers("switch");
-        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let deck = create_deck(
+            &conn,
+            &DeckInput {
+                name: "Burn".to_owned(),
+                format_key: "modern".to_owned(),
+                cover_card_id: Some("bolt-lea".to_owned()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE decks SET cover_image_path = ?2 WHERE id = ?1",
+            params![deck.id, "D:\\app\\data\\covers\\1.webp"],
+        )
+        .unwrap();
 
-        let row = set_cover_image(&conn, &dir, deck.id, &bytes).unwrap();
-        assert_eq!(row.cover_kind, COVER_CUSTOM);
+        let copy = duplicate_deck(&conn, deck.id).unwrap();
+
+        assert_eq!(copy.cover_card_id.as_deref(), Some("bolt-lea"));
+        assert_eq!(copy.cover_kind, COVER_CARD_ART);
         let stored: Option<String> = conn
+            .query_row(
+                "SELECT cover_image_path FROM decks WHERE id = ?1",
+                params![copy.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            stored, None,
+            "`cover_image_path` is retired: nothing writes it, a copy included"
+        );
+        // And the source keeps what it had: phase one stops *writing* the column, it does not
+        // clear it. Dropping it is a later rung's, once every device is past this one.
+        let source: Option<String> = conn
             .query_row(
                 "SELECT cover_image_path FROM decks WHERE id = ?1",
                 params![deck.id],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(
-            stored.as_deref(),
-            crate::images::cover_file(&dir, deck.id).to_str()
-        );
+        assert!(source.is_some(), "the source's retired path is left alone");
+    }
+
+    /// **A `custom` row arriving over sync is repaired by the next card the reader picks**, and
+    /// this is the only path left that writes `decks.cover_kind` at all.
+    ///
+    /// `cover_kind` is a synced field, and the rung that flips every local `custom` row to
+    /// `card_art` cannot reach a device that has not taken it -- so that device can push a
+    /// `custom` row here afterwards. Seeded by hand for exactly that reason: no command in this
+    /// crate can produce this state any more, which is what makes it worth pinning rather than
+    /// leaving to the migration's own test.
+    ///
+    /// The history line is the second half. Its `from` side says `custom` rather than naming
+    /// the card the tile had already fallen back to -- see [`cover_value`].
+    #[test]
+    fn a_synced_in_custom_row_is_put_back_on_card_art_by_picking_a_card() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        conn.execute(
+            "UPDATE decks SET cover_kind = ?2 WHERE id = ?1",
+            params![deck.id, COVER_CUSTOM],
+        )
+        .unwrap();
 
         let back = update_deck(
             &conn,
@@ -6972,93 +6963,21 @@ mod tests {
             },
         )
         .unwrap();
-        let file_kept = crate::images::cover_file(&dir, deck.id).is_file();
-        let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(back.cover_kind, COVER_CARD_ART, "the card is showing now");
+
+        assert_eq!(back.cover_kind, COVER_CARD_ART);
         assert_eq!(back.cover_card_id.as_deref(), Some("bolt-lea"));
-        assert!(file_kept, "and the picture the user chose is still there");
-    }
-
-    /// A cover for a deck that is not there writes **no file**: the existence check runs before
-    /// the write, so a stale gallery cannot leave a `<id>.webp` behind for a deck id that will
-    /// one day belong to somebody else's deck.
-    #[test]
-    fn a_cover_for_a_deck_that_is_gone_writes_nothing() {
-        let conn = seeded();
-        let (dir, bytes) = covers("gone");
-
-        let refused = set_cover_image(&conn, &dir, 404, &bytes).unwrap_err();
-
-        let written = crate::images::cover_file(&dir, 404).exists();
-        let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(refused, GONE);
-        assert!(!written);
-    }
-
-    /// A duplicate of a custom-cover deck gets **its own file**, not a path to the original's.
-    ///
-    /// The columns come across in the `INSERT … SELECT` like everything else, which on its own
-    /// leaves the copy claiming `custom` over a file that is not there — the route 404s and the
-    /// tile is blank — and pointing at a path that dies with the original.
-    #[test]
-    fn duplicating_a_deck_gives_the_copy_its_own_cover_file() {
-        let conn = seeded();
-        let (dir, bytes) = covers("duplicate");
-        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
-        set_cover_image(&conn, &dir, deck.id, &bytes).unwrap();
-
-        let copy = duplicate_deck(&conn, deck.id, Some(&dir)).unwrap();
-
-        let file = crate::images::cover_file(&dir, copy.id);
-        let landed = std::fs::read(&file).ok();
-        let stored: Option<String> = conn
+        let payload: String = conn
             .query_row(
-                "SELECT cover_image_path FROM decks WHERE id = ?1",
-                params![copy.id],
+                "SELECT payload FROM deck_audit
+                  WHERE deck_id = ?1 AND kind = 'deck' ORDER BY id DESC LIMIT 1",
+                params![deck.id],
                 |r| r.get(0),
             )
             .unwrap();
-        let original_kept = crate::images::cover_file(&dir, deck.id).is_file();
-        let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(copy.cover_kind, COVER_CUSTOM);
-        assert_eq!(landed.as_deref(), Some(bytes.as_slice()));
         assert_eq!(
-            stored.as_deref(),
-            file.to_str(),
-            "and the row points at the copy's own file, not the original's"
+            serde_json::from_str::<serde_json::Value>(&payload).unwrap(),
+            json!({ "field": "cover", "from": "custom", "to": "bolt-lea" })
         );
-        assert!(original_kept, "the original is untouched");
-    }
-
-    /// When the bytes cannot be copied the claim is given up rather than kept: a deck showing
-    /// its card art is a deck that looks right, and one claiming `custom` over nothing is a
-    /// blank tile. Best-effort in both directions — the duplicate itself never fails over a
-    /// picture.
-    #[test]
-    fn a_duplicate_falls_back_to_card_art_when_the_cover_cannot_be_copied() {
-        let conn = seeded();
-        let (dir, bytes) = covers("duplicate-fallback");
-        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
-        set_cover_image(&conn, &dir, deck.id, &bytes).unwrap();
-        // The file goes, the columns stay — which is exactly the state a hand-deleted
-        // `data/covers` leaves behind, and `covers/` is documented as safe to delete.
-        std::fs::remove_file(crate::images::cover_file(&dir, deck.id)).unwrap();
-
-        let copy = duplicate_deck(&conn, deck.id, Some(&dir)).unwrap();
-        // And with no covers directory at all, which is what an unwritable data folder gives.
-        let no_dir = duplicate_deck(&conn, deck.id, None).unwrap();
-
-        let stored: Option<String> = conn
-            .query_row(
-                "SELECT cover_image_path FROM decks WHERE id = ?1",
-                params![copy.id],
-                |r| r.get(0),
-            )
-            .unwrap();
-        let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!(copy.cover_kind, COVER_CARD_ART);
-        assert_eq!(no_dir.cover_kind, COVER_CARD_ART);
-        assert_eq!(stored, None, "and no path to a file that is not there");
     }
 
     /// The one thing a [`DeckPatch`] cannot say: **put this deck back at the root**. `None` is
@@ -7145,6 +7064,13 @@ mod tests {
     /// The two words `decks.cover_kind`'s CHECK allows, walked against the live column — the
     /// discipline `schema::CATEGORY_KINDS` gets, for the same reason: a typo in either constant
     /// is otherwise a `CHECK constraint failed` on the one write nobody exercises by hand.
+    ///
+    /// **Both words, though only one is written any more.** [`COVER_CUSTOM`] is retired — see
+    /// its own doc — and the column still accepts it, because retiring the *feature* and
+    /// narrowing the *DDL* are two rungs and this is the first. A row carrying it can still
+    /// arrive over sync, and `apply/` writes what it is given: the day this assertion stops
+    /// passing is the day such a row is refused at the far end of a sync with nothing in the
+    /// app able to say why.
     #[test]
     fn the_cover_kinds_are_the_ones_the_column_allows() {
         let conn = seeded();
@@ -7256,6 +7182,20 @@ mod tests {
             separate_x_group: true,
             default_category_id: 12,
             bracket: 3,
+            // Two keys, both real URLs, because this is the one field on the row whose *shape*
+            // crosses the boundary rather than a scalar: `Option<BTreeMap>` has to reach
+            // TypeScript as an object of variant keys and not as a list or a bare string, and
+            // the deck tile reads `art` out of it by name.
+            image_uris: Some(BTreeMap::from([
+                (
+                    "art".to_owned(),
+                    "https://cards.scryfall.io/art/front/0/0/bolt.webp?17".to_owned(),
+                ),
+                (
+                    "display".to_owned(),
+                    "https://cards.scryfall.io/display/front/0/0/bolt.webp?17".to_owned(),
+                ),
+            ])),
         })
         .unwrap();
         assert_eq!(
@@ -7284,7 +7224,14 @@ mod tests {
                 // And a real bracket rather than `0`, third application of the same rule:
                 // zero is [`AUTO_BRACKET`] and would be the answer whether or not the column
                 // reached the wire at all.
-                "bracket": 3
+                "bracket": 3,
+                // The cover printing's picture, spelled out key by key: this is the deck
+                // gallery's only way to draw a cover on web and on the phone, and it is a map
+                // rather than a URL because `LIST_VARIANTS` decides what a row carries.
+                "imageUris": {
+                    "art": "https://cards.scryfall.io/art/front/0/0/bolt.webp?17",
+                    "display": "https://cards.scryfall.io/display/front/0/0/bolt.webp?17"
+                }
             })
         );
 
@@ -7627,7 +7574,7 @@ mod tests {
         )
         .unwrap();
 
-        let copy = duplicate_deck(&conn, deck.id, None).unwrap();
+        let copy = duplicate_deck(&conn, deck.id).unwrap();
         assert!(copy.separate_x_group, "how it is read comes across");
         assert!(!copy.archived, "what state it is in does not");
     }
@@ -7810,7 +7757,7 @@ mod tests {
         )
         .unwrap();
 
-        let copy = duplicate_deck(&conn, deck.id, None).unwrap();
+        let copy = duplicate_deck(&conn, deck.id).unwrap();
         assert_eq!(copy.bracket, 4, "what the deck *is* comes across");
         assert!(!copy.archived, "what state it is in does not");
     }
@@ -8015,7 +7962,7 @@ mod tests {
         )
         .unwrap();
 
-        let copy = duplicate_deck(&conn, deck.id, None).unwrap();
+        let copy = duplicate_deck(&conn, deck.id).unwrap();
 
         assert_ne!(
             copy.default_category_id, pile,
@@ -8040,7 +7987,7 @@ mod tests {
             },
         )
         .unwrap();
-        let plain = duplicate_deck(&conn, deck.id, None).unwrap();
+        let plain = duplicate_deck(&conn, deck.id).unwrap();
         assert_eq!(plain.default_category_id, AUTO_CATEGORY);
     }
 
@@ -8527,7 +8474,7 @@ mod tests {
         let main = main_of(&conn, deck.id);
         add_foil(&conn, deck.id, "bolt-m10", main, 2);
 
-        let copy = duplicate_deck(&conn, deck.id, None).unwrap();
+        let copy = duplicate_deck(&conn, deck.id).unwrap();
         assert_eq!(
             live_rows(&conn, copy.id),
             vec![(Some("foil".to_owned()), 2)]
@@ -9339,18 +9286,27 @@ mod tests {
     /// `mtgimg://` is a Tauri custom protocol and wasm cannot register one with a browser, so
     /// without this a deck opened on the web build is a wall of named, artless frames.
     ///
-    /// **`bolt-m10` is the row that makes the offset visible at all.** 36 and 37 sit directly
+    /// **`bolt-m10` is the row that makes the offset visible at all.** The pair starts directly
     /// after `c.promo_types`, and with only top-level pictures in the fixture a read one column
     /// early lands the top-level URL in the `face` slot and answers correctly anyway — the
     /// mutation survived exactly that way. A `meld`-shaped row carrying **both** columns is the
     /// only shape where the shifted read gives a different, wrong answer, and it pins the
     /// face-first precedence in the same breath.
+    ///
+    /// **Both variants, since 2026-08-31**, and the second one is a second way for the offset
+    /// to be wrong rather than more of the same: with `display` and `art` the select list is
+    /// four expressions, and a read that pairs them up wrong hands the crop back under
+    /// `display` — still a URL, still on the image host, still versioned, and the wrong
+    /// picture. Every row here therefore carries a *different* URL per variant per column.
     #[test]
     fn a_deck_card_carries_the_front_faces_image_url() {
         let conn = seeded();
         conn.execute(
             "UPDATE cards SET image_uris = json_object(
-                 'display','https://cards.scryfall.io/display/front/0/0/x.webp?17')
+                 'thumb','https://cards.scryfall.io/thumb/front/0/0/x.webp?17',
+                 'grid','https://cards.scryfall.io/grid/front/0/0/x.webp?17',
+                 'display','https://cards.scryfall.io/display/front/0/0/x.webp?17',
+                 'art','https://cards.scryfall.io/art/front/0/0/x.webp?17')
              WHERE id = 'bolt-lea'",
             [],
         )
@@ -9367,9 +9323,11 @@ mod tests {
         conn.execute(
             "UPDATE cards SET
                  image_uris = json_object(
-                     'display','https://cards.scryfall.io/display/top.webp?1'),
+                     'display','https://cards.scryfall.io/display/top.webp?1',
+                     'art','https://cards.scryfall.io/art/top.webp?1'),
                  face_image_uris = json_array(json_object(
-                     'display','https://cards.scryfall.io/display/face0.webp?1'))
+                     'display','https://cards.scryfall.io/display/face0.webp?1',
+                     'art','https://cards.scryfall.io/art/face0.webp?1'))
              WHERE id = 'bolt-m10'",
             [],
         )
@@ -9394,22 +9352,36 @@ mod tests {
             "https://cards.scryfall.io/display/front/0/0/x.webp?17"
         );
         assert_eq!(
-            art.keys().collect::<Vec<_>>(),
-            [crate::image_uri::LIST_VARIANT]
+            art[crate::image_uri::ART_VARIANT],
+            "https://cards.scryfall.io/art/front/0/0/x.webp?17",
+            "the crop, under its own key — a pairing read wrong swaps these two"
+        );
+        // Spelled out rather than read off `LIST_VARIANTS`, for the reason
+        // `a_deck_row_carries_the_cover_printings_art` gives: a widening has to edit a test.
+        assert_eq!(
+            art.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["art", "display"],
+            "every variant a list row carries, and nothing else"
         );
         // The two columns an off-by-one would have reached, both still plausible strings.
         assert_eq!(row.promo_types, None, "the column directly before the pair");
         assert_eq!(row.finish, None);
 
-        // The precedence **and** the offset. See the doc above for why no other row here can
-        // fail when the pair is read a column early.
+        // The precedence **and** the offset, for both variants. See the doc above for why no
+        // other row here can fail when the pair is read a column early.
+        let meld = card_row(&detail, "bolt-m10", main)
+            .image_uris
+            .as_ref()
+            .expect("a meld-shaped printing has a front face");
         assert_eq!(
-            card_row(&detail, "bolt-m10", main)
-                .image_uris
-                .as_ref()
-                .expect("a meld-shaped printing has a front face")[crate::image_uri::LIST_VARIANT],
+            meld[crate::image_uri::LIST_VARIANT],
             "https://cards.scryfall.io/display/face0.webp?1",
             "the face wins over the top-level blob, and the pair is read at its own offset"
+        );
+        assert_eq!(
+            meld[crate::image_uri::ART_VARIANT],
+            "https://cards.scryfall.io/art/face0.webp?1",
+            "and the second variant's pair is read at its own offset too"
         );
 
         assert_eq!(

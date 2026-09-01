@@ -12,30 +12,24 @@ import type {
   FormatSpec,
 } from "@/lib/ipc";
 import { cardImageUrl } from "@/lib/images";
+import { isWebTarget } from "@/pwa/target";
 import { openDropdown, pickOption } from "@/test-dropdown";
 import { card, spec } from "./validation/fixtures";
+
+/** Which build the cover frame thinks it is in. `isWebTarget()` reads `__CORE__`, a build-time
+ *  constant vitest fixes at `"tauri"`, so the web answer cannot be arranged any other way — see
+ *  `src/pwa/target.ts`. Desktop unless a case says otherwise. */
+vi.mock("@/pwa/target", () => ({ isWebTarget: vi.fn(() => false) }));
 
 const deckGet = vi.hoisted(() => vi.fn());
 const deckUpdate = vi.hoisted(() => vi.fn());
 const deckSetFolder = vi.hoisted(() => vi.fn());
-const deckSetCoverImage = vi.hoisted(() => vi.fn());
 const deckFolderList = vi.hoisted(() => vi.fn());
 const formatSpecs = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { deckGet, deckUpdate, deckSetFolder, deckSetCoverImage, deckFolderList, formatSpecs },
+  ipc: { deckGet, deckUpdate, deckSetFolder, deckFolderList, formatSpecs },
 }));
-
-/**
- * The system file picker.
- *
- * Mocked because there is no OS dialog in jsdom — the real `open` reaches `invoke`, which needs
- * `window.__TAURI_INTERNALS__` and would throw the same way in every test, telling us nothing
- * about which of the three answers a picker really gives (a path, a cancel, a failure) this
- * dialog handles. All three are exercised below.
- */
-const pickFile = vi.hoisted(() => vi.fn());
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: pickFile }));
 
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
 
@@ -130,15 +124,17 @@ async function loaded() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // A restore rather than a reset: `clearAllMocks` wipes the implementation a
+  // `vi.fn(() => false)` was created with, so without this every case after the first reads
+  // `undefined` and the whole file quietly runs on the web branch.
+  vi.mocked(isWebTarget).mockReturnValue(false);
   deckGet.mockResolvedValue(detail());
   deckUpdate.mockImplementation((_id: number, patch: Record<string, unknown>) =>
     Promise.resolve({ ...BURN, ...patch }),
   );
   deckSetFolder.mockResolvedValue(BURN);
-  deckSetCoverImage.mockResolvedValue({ ...BURN, coverKind: "custom" });
   deckFolderList.mockResolvedValue(FOLDERS);
   formatSpecs.mockResolvedValue(SPECS);
-  pickFile.mockResolvedValue("C:\\pics\\dragon.png");
 });
 
 /**
@@ -326,10 +322,16 @@ describe("DeckSettingsDialog", () => {
   });
 
   /**
-   * Two commands set a cover and picking the wrong one is silent: a card's art is a patch, and
-   * a patch is what puts `coverKind` back to `card_art`.
+   * **A cover is a `deckUpdate` and there is nothing else it could be.**
+   *
+   * This case used to be one of a pair — "sets card art with deckUpdate, never with
+   * deckSetCoverImage" — against a second command that took a *path* and marked the deck
+   * `custom`. That command is deleted, so what is worth asserting is no longer *which* of two
+   * writes ran but that the picker's press reaches the patch **and reaches nothing else**: this
+   * host holds one mutation of its own (`deckSetFolder`), and a press that touched it would be
+   * a cover write filing the deck somewhere.
    */
-  it("sets card art with deckUpdate, never with deckSetCoverImage", async () => {
+  it("sets the cover with a deckUpdate patch, and writes nothing else", async () => {
     deckGet.mockResolvedValue(
       detail({}, [card({ name: "Shivan Dragon" }), card({ name: "Lightning Bolt" })]),
     );
@@ -341,7 +343,10 @@ describe("DeckSettingsDialog", () => {
     await waitFor(() =>
       expect(deckUpdate).toHaveBeenCalledWith(4, { coverCardId: "c-Shivan Dragon" }),
     );
-    expect(deckSetCoverImage).not.toHaveBeenCalled();
+    // One write, and the whole of it: no `coverKind` travels with the id (Rust sets it), and
+    // the dialog's other command is untouched.
+    expect(deckUpdate).toHaveBeenCalledTimes(1);
+    expect(deckSetFolder).not.toHaveBeenCalled();
   });
 
   /** The tile that is already the cover says so, rather than leaving the reader to match the
@@ -363,71 +368,28 @@ describe("DeckSettingsDialog", () => {
     );
   });
 
-  /** The other half of the pair: a file goes through the command that re-encodes it, and the
-   *  picker's answer travels as the backend wants it — a path it reads, unchanged, not bytes
-   *  and not a `file://` URL. */
-  it("uploads the picked path with deckSetCoverImage, never with deckUpdate", async () => {
-    open();
-    await loaded();
-
-    await userEvent.click(screen.getByRole("button", { name: "Upload an image…" }));
-
-    await waitFor(() => expect(deckSetCoverImage).toHaveBeenCalledWith(4, "C:\\pics\\dragon.png"));
-    expect(deckUpdate).not.toHaveBeenCalled();
-  });
-
   /**
-   * The picker is asked for one image file, and the extension list is the **backend's decoder
-   * list**: `Cargo.toml` builds the `image` crate with png, jpeg, gif, bmp and webp, so a
-   * filter wider than that would offer a file the re-encode then refuses.
+   * **The upload is gone, and the absence is what this asserts.**
+   *
+   * Five cases stood here — the path handed to `deck_set_cover_image`, the picker's filter list
+   * (the backend's own decoder list: png, jpg, jpeg, gif, bmp, webp), a cancelled picker writing
+   * nothing, a picker that could not be opened saying so, and the refusal banner over a refused
+   * upload. All five went with the command, the `/cover/<deckId>` route, the encoder and the
+   * `data/covers/` directory: the picture never survived a sync, because the path was stored
+   * absolute, so every device but the one that uploaded already drew the card art.
+   *
+   * It is worth a case rather than left to the deleted mock, because the mock's absence is a
+   * compile error only where a name is *used* — an `Upload an image…` button coming back with a
+   * picker of its own would break nothing else in this file. It also pins the second half of
+   * that removal: this suite no longer mocks `@tauri-apps/plugin-dialog` at all, so a press that
+   * reached the plugin would fail here loudly rather than being quietly stubbed.
    */
-  it("asks for a single image file", async () => {
+  it("offers no way to set a cover from a file", async () => {
     open();
     await loaded();
 
-    await userEvent.click(screen.getByRole("button", { name: "Upload an image…" }));
-
-    expect(pickFile).toHaveBeenCalledWith(
-      expect.objectContaining({ multiple: false, directory: false }),
-    );
-    const { filters } = pickFile.mock.calls[0][0] as {
-      filters: { extensions: string[] }[];
-    };
-    expect(filters[0].extensions).toEqual(["png", "jpg", "jpeg", "gif", "bmp", "webp"]);
-  });
-
-  /**
-   * **A cancelled picker is not a failure**, and this is the most ordinary way anyone will use
-   * the control after changing their mind. `open` answers `null`; nothing is written and no red
-   * sentence appears.
-   */
-  it("says nothing when the picker is cancelled", async () => {
-    pickFile.mockResolvedValue(null);
-    open();
-    await loaded();
-
-    await userEvent.click(screen.getByRole("button", { name: "Upload an image…" }));
-
-    await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Upload an image…" })).toBeEnabled(),
-    );
-    expect(deckSetCoverImage).not.toHaveBeenCalled();
-    expect(screen.queryByRole("alert")).toBeNull();
-  });
-
-  /** A picker that could not be opened at all is a different failure from a write the database
-   *  refused, and it is reported beside the button that was pressed. */
-  it("reports a picker that could not be opened", async () => {
-    pickFile.mockRejectedValue("dialog.open not allowed");
-    open();
-    await loaded();
-
-    await userEvent.click(screen.getByRole("button", { name: "Upload an image…" }));
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Could not open the file picker — dialog.open not allowed",
-    );
-    expect(deckSetCoverImage).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: /upload/i })).toBeNull();
+    expect(screen.queryByText(/re-encoded/i)).toBeNull();
   });
 
   /**
@@ -456,6 +418,28 @@ describe("DeckSettingsDialog", () => {
     expect(
       dialog.querySelector(`img[src="${cardImageUrl("c-Lightning Bolt", 0, "art")}"]`),
     ).toBeNull();
+  });
+
+  /**
+   * **What this host adds to the picker, and the half a picker test cannot reach.**
+   *
+   * `DeckCoverPicker` takes the URL as a prop and its own suite hands one in — so the picker
+   * could be perfectly correct and this dialog still draw nothing, which is the "tested but
+   * unwired" failure this repo has shipped before. The wire is `row.imageUris?.art`, off the
+   * same `LEFT JOIN cards` the credit comes from, and on the web build it is the only picture a
+   * browser can reach: `mtgimg://` is a Tauri custom protocol and wasm cannot register a URL
+   * scheme with one.
+   */
+  it("hands the picker the cover printing's own URL, which is what a browser draws", async () => {
+    vi.mocked(isWebTarget).mockReturnValue(true);
+    const supplied = "https://cards.scryfall.io/art/front/0/0/bolt.webp?1706230661";
+    deckGet.mockResolvedValue(detail({ imageUris: { art: supplied } }));
+
+    open();
+    const dialog = await loaded();
+
+    expect(dialog.querySelector(`img[src="${supplied}"]`)).not.toBeNull();
+    expect(screen.getByText("Art by Christopher Rush")).toBeInTheDocument();
   });
 
   /**

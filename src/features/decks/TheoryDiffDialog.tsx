@@ -5,7 +5,7 @@ import { Figure } from "@/components/Figure";
 import { FinishMark } from "@/components/FinishMark";
 import { FINISH_LABEL } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
-import { cardImageUrl } from "@/lib/images";
+import { cardArtSrc, cardImageUrl } from "@/lib/images";
 import { ipc, ipcError, type TheoryDiffRow } from "@/lib/ipc";
 import type { Currency, Marketplace, MarketplaceId } from "@/lib/marketplace";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
@@ -837,6 +837,12 @@ function Row({
   onWishlist: () => void;
 }) {
   const note = heldNote(row);
+  // The desktop/web branch, in the one place it is ever written: the protocol URL on Tauri, the
+  // row's own `cards.scryfall.io` URL in a browser — which has no `mtgimg://` to ask, because
+  // wasm cannot register a URL scheme with one — and `null` when the row carries neither. A
+  // `null` draws no `<img>` at all, leaving the `bg-surface` frame below, which is what this
+  // line already showed while the bytes were on their way and for a printing that has no art.
+  const art = cardArtSrc(cardImageUrl(row.cardId, 0, "art"), row.imageUris?.art);
   // Named for the card the way the row's own button is, and for the same reason: a column of
   // twelve checkboxes all called "Select" is twelve controls a screen reader cannot tell apart.
   // The quantity because that is what a press carries, the finish because two lines can
@@ -864,16 +870,18 @@ function Row({
           a browser paints an `<img>`'s last decoded frame until the new src decodes, so the
           picture would lag the name by the length of the fetch. */}
       <span aria-hidden="true" className="h-8 w-11 shrink-0 overflow-hidden rounded bg-surface">
-        <CardImage
-          src={cardImageUrl(row.cardId, 0, "art")}
-          alt=""
-          draggable={false}
-          // Lazy, for the zone column's reason and not the wall's: this is a plain scroller, so a
-          // sixty-card difference really is sixty mounted rows.
-          loading="lazy"
-          decoding="async"
-          className="size-full object-cover"
-        />
+        {art !== null && (
+          <CardImage
+            src={art}
+            alt=""
+            draggable={false}
+            // Lazy, for the zone column's reason and not the wall's: this is a plain scroller, so
+            // a sixty-card difference really is sixty mounted rows.
+            loading="lazy"
+            decoding="async"
+            className="size-full object-cover"
+          />
+        )}
       </span>
 
       {/* How many more, in the data face — **the row's full quantity, in every view.** A

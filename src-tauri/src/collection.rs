@@ -1783,7 +1783,9 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
                 e.tags, e.notes, e.needs_review, e.updated_at, c.oracle_id, c.promo_types,
                 c.legalities, e.folder_id,
                 (SELECT f.name FROM collection_folders f WHERE f.id = e.folder_id),
-                -- 35 and 36, on the end like every appended column above them. Built by
+                -- From 35, on the end like every appended column above them, and as many as
+                -- `image_uri::FRONT_FACE_COLUMNS` says — two per variant a list row carries.
+                -- Built by
                 -- `image_uri::front_face_selects` rather than written out, because the
                 -- precedence between the two columns is applied in Rust by `front_face_map`
                 -- and a `COALESCE` spelled here would be a second copy of it.
@@ -1860,9 +1862,10 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
                     // so two of them swapping would still hand back a plausible string.
                     folder_id: r.get(33)?,
                     folder_name: r.get(34)?,
-                    // 35 and 36 — the pair `front_face_selects` added, folded back up by the
-                    // module that added them. The face-first precedence and the `soon.jpg`
-                    // fence both live in there, so this mapping applies no rule of its own.
+                    // From 35 — the (top-level, face) pairs `front_face_selects` added, one per
+                    // variant, folded back up by the module that added them. The face-first
+                    // precedence and the `soon.jpg` fence both live in there, so this mapping
+                    // applies no rule of its own.
                     image_uris: crate::image_uri::front_face_map(|i| {
                         r.get::<_, Option<String>>(IMAGE_COL + i)
                     })?,
@@ -4564,7 +4567,10 @@ mod tests {
         let conn = seeded();
         conn.execute(
             "UPDATE cards SET image_uris = json_object(
-                 'display','https://cards.scryfall.io/display/front/0/0/x.webp?17')
+                 'thumb','https://cards.scryfall.io/thumb/front/0/0/x.webp?17',
+                 'grid','https://cards.scryfall.io/grid/front/0/0/x.webp?17',
+                 'display','https://cards.scryfall.io/display/front/0/0/x.webp?17',
+                 'art','https://cards.scryfall.io/art/front/0/0/x.webp?17')
              WHERE id = 'bolt-lea'",
             [],
         )
@@ -4583,9 +4589,11 @@ mod tests {
         conn.execute(
             "UPDATE cards SET
                  image_uris = json_object(
-                     'display','https://cards.scryfall.io/display/top.webp?1'),
+                     'display','https://cards.scryfall.io/display/top.webp?1',
+                     'art','https://cards.scryfall.io/art/top.webp?1'),
                  face_image_uris = json_array(json_object(
-                     'display','https://cards.scryfall.io/display/face0.webp?1'))
+                     'display','https://cards.scryfall.io/display/face0.webp?1',
+                     'art','https://cards.scryfall.io/art/face0.webp?1'))
              WHERE id = 'card-1'",
             [],
         )
@@ -4620,11 +4628,18 @@ mod tests {
             art[crate::image_uri::LIST_VARIANT],
             "https://cards.scryfall.io/display/front/0/0/x.webp?17"
         );
-        // The one key, not four: the narrowing to `display` is a decision, and an accidental
-        // widening lands here rather than in a payload nobody measures.
         assert_eq!(
-            art.keys().collect::<Vec<_>>(),
-            [crate::image_uri::LIST_VARIANT]
+            art[crate::image_uri::ART_VARIANT],
+            "https://cards.scryfall.io/art/front/0/0/x.webp?17",
+            "the crop, under its own key -- a pairing read wrong swaps these two"
+        );
+        // Two keys, not four: the narrowing is a decision, and an accidental widening lands
+        // here rather than in a payload nobody measures.
+        // Spelled out rather than read off `LIST_VARIANTS`: an assertion that reads the
+        // constant it is fencing can never fail when that constant moves.
+        assert_eq!(
+            art.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["art", "display"]
         );
         // The two neighbours an off-by-one would have reached, both still plausible strings.
         assert_eq!(of("bolt-lea").folder_name, None);
@@ -4632,13 +4647,19 @@ mod tests {
 
         // The precedence **and** the offset, on the one row that can tell either from its
         // opposite: a pair read a column early answers `top.webp` here.
+        let meld = of("card-1")
+            .image_uris
+            .clone()
+            .expect("a meld-shaped printing has a front face");
         assert_eq!(
-            of("card-1")
-                .image_uris
-                .as_ref()
-                .expect("a meld-shaped printing has a front face")[crate::image_uri::LIST_VARIANT],
+            meld[crate::image_uri::LIST_VARIANT],
             "https://cards.scryfall.io/display/face0.webp?1",
             "the face wins over the top-level blob, and the pair is read at its own offset"
+        );
+        assert_eq!(
+            meld[crate::image_uri::ART_VARIANT],
+            "https://cards.scryfall.io/art/face0.webp?1",
+            "and the second variant's pair is read at its own offset too"
         );
 
         assert_eq!(

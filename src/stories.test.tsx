@@ -67,11 +67,16 @@ vi.mock("@tauri-apps/api/window", () => import("../.storybook/fake/window"));
  * **Measured 2026-08-14, which is the only reason this paragraph is not a guess.** With the two
  * mocks above and nothing else, `Decks/Export dialog`'s three save/copy plays failed with
  * `Could not save that export — Cannot read properties of undefined (reading 'invoke')` — the
- * app's own refusal banner reporting the workbench's plumbing. The five component tests that
- * touch a plugin all mock the **plugin package** rather than relying on the core mock
- * (`DeckCoverPicker`, `CreateDeckDialog`, `DeckSettingsDialog`, `ImportDialog`,
- * `ExportDialog`); a story cannot, because CSF indexes every non-default export and a `vi.mock`
- * belongs to a test file. So it belongs here, once, for every story.
+ * app's own refusal banner reporting the workbench's plumbing. Every component test that
+ * touches a plugin mocks the **plugin package** rather than relying on the core mock; a story
+ * cannot, because CSF indexes every non-default export and a `vi.mock` belongs to a test file.
+ * So it belongs here, once, for every story.
+ *
+ * **Which suites those are is deliberately not listed.** It was, and the roster was wrong twice
+ * over — it named three deck suites that stopped mocking the plugin when custom covers were
+ * removed on 2026-08-31, and it had never mentioned three others that always did.
+ * `grep -rln 'vi.mock("@tauri-apps/plugin-dialog"' src/` is the question, and it answers about
+ * the tree in front of you rather than the one somebody last edited this comment on.
  *
  * **Each stands in for the wrapper and not for the answer**, which is the whole point: the
  * command name and the argument names below are copied from the packages' own `dist-js` and the

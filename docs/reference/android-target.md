@@ -171,8 +171,14 @@ phone, saved, or opened. What is tested is that the archive's bytes match the de
 **A file the reader picks on Android is not a path.** `tauri-plugin-dialog`'s
 `DialogPlugin.kt` fires `ACTION_GET_CONTENT`/`ACTION_CREATE_DOCUMENT` and returns
 `uri.toString()` — a row in a ContentProvider. `std::fs::read` of one answers `No such file or
-directory`, which reads exactly like the reader picked a file that vanished. All three of
-`import_read_file`, `export_write_file` and `deck_set_cover_image` did that.
+directory`, which reads exactly like the reader picked a file that vanished. Both of
+`import_read_file` and `export_write_file` did that.
+
+**It was three until 2026-08-31**, and the third is worth naming because it is what made the
+seam's hardest requirement: `deck_set_cover_image` took the path a picker answered and handed it
+to the image decoder. Custom deck covers were removed that day — a cover is `decks.cover_card_id`,
+the art crop of a card, and nothing about picking one reaches a file picker — so the `Seek`
+bullet further down this section is the one part of it that is now history rather than live code.
 
 `src-tauri/src/picked.rs` is the one place that knows the difference.
 `tauri_plugin_fs::Fs::open` takes a `FilePath::Url`, asks the Kotlin side for a descriptor
@@ -230,8 +236,15 @@ read as a literal extension. It is a per-target filter list, which is `files.ts`
 Three things the implementation had to get right that a sketch would not:
 
 - **`open_read` answers a concrete `std::fs::File`, not a boxed `Read`.**
-  `image::ImageReader` requires `Seek`, and `encode_cover` reopens its source for the two-pass
+  `image::ImageReader` requires `Seek`, and `encode_cover` reopened its source for the two-pass
   pixel bound. A `Box<dyn Read + Send>` would have broken deck covers outright.
+  **The caller that needed `Seek` went on 2026-08-31 and the return type did not change.** With
+  custom covers removed there is no image decoder on this path — both survivors read a decklist
+  straight through and would be happy with a plain `Read` — so nothing in the crate would notice
+  the boxing today. It stays concrete anyway, because `Seek` is a property of the descriptor the
+  ContentResolver hands back rather than of whoever happens to be reading it, and narrowing the
+  return type to what today's two callers need is exactly the change that makes the *next* caller
+  a port instead of a call.
 - **No `url` dependency.** `FilePath` implements `FromStr` with `Err = Infallible` and already
   makes the path-or-URL decision — a scheme longer than one character is a URL, and a
   one-character scheme is a Windows drive letter.

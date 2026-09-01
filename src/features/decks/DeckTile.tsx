@@ -20,7 +20,7 @@ import { useTooltip } from "@/components/tooltip/useTooltip";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { cardScaleVars } from "@/lib/cardZoom";
 import { FOCUS } from "@/lib/focus";
-import { ART_ASPECT, cardImageUrl, deckCoverUrl } from "@/lib/images";
+import { ART_ASPECT, cardArtSrc, cardImageUrl } from "@/lib/images";
 import type { DeckRow } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { PRESS } from "@/lib/motion";
@@ -79,37 +79,57 @@ export function deckBadge(deck: DeckRow): DeckBadge {
 }
 
 /**
- * Which of a deck's two covers is showing, as a URL — or `null` when it has neither.
+ * Has this deck a cover the app is **allowed** to draw — a printing, and an illustrator to
+ * credit it to?
  *
- * **`coverKind` is the one answer, and reading either id instead is the bug this exists to
- * close.** A deck usually carries both at once: `deckSetCoverImage` leaves `coverCardId` alone
- * and picking a card leaves the file on disk, so "has a custom cover" and "is showing one" are
- * different questions. The gallery used to ask only for `coverCardId`, which meant a custom
- * cover was never drawn *anywhere* on this screen — measured in the live window, where the tile
- * said "No cover" while the route answered the file 626×457 in 2 ms.
+ * Split out from {@link coverUrl} on 2026-08-31, and the split is what keeps the empty frame
+ * honest on the web build. There a cover with no URL on the row is `null` from {@link coverUrl}
+ * just as a deck with no cover is, and the frame's three words are the only thing telling a
+ * reader which of the two happened. "No cover" means *you have not chosen one*; a deck that has
+ * chosen one and cannot be handed its bytes says "No image", which is the same sentence a
+ * failed fetch gets and the true one.
+ */
+function hasCover(deck: DeckRow): boolean {
+  return deck.coverCardId !== null && deck.coverArtist !== null;
+}
+
+/**
+ * A deck's cover as a URL — or `null` when it has none, or none this app may draw.
  *
- * **A card cover this app cannot credit is not drawn at all.** Scryfall's image policy is that
- * an `art` crop, having no printed frame, may be shown only where the illustrator is named — so
- * if the credit cannot be shown, neither can the crop. `DeckRow.coverArtist` is `null` exactly
- * when the printing has left `cards`, and it comes back on the next sync that brings the
- * printing back, so this is a state that heals itself and never a picture permanently withheld.
- * The frame then says "No cover" rather than claiming a failure, because from the reader's side
- * that is what it is: nothing to show yet.
+ * **A cover this app cannot credit is not drawn at all.** Scryfall's image policy is that an
+ * `art` crop, having no printed frame, may be shown only where the illustrator is named — so if
+ * the credit cannot be shown, neither can the crop. `DeckRow.coverArtist` is `null` exactly when
+ * the printing has left `cards`, and it comes back on the next sync that brings the printing
+ * back, so this is a state that heals itself and never a picture permanently withheld. The frame
+ * then says "No cover" rather than claiming a failure, because from the reader's side that is
+ * what it is: nothing to show yet.
  *
- * **The rule belongs to the card-art arm and must never be moved onto the custom one.** The
- * policy is about *Scryfall's* pictures. A file the reader uploaded is theirs, carries no
- * Scryfall artist, and needs no credit — so a `coverArtist === null` test on that arm would
- * hide every custom cover, and it would read like a missing guard rather than the bug it is.
+ * **It used to be two arms and a `coverKind` test, and the deletion is what makes the rule above
+ * unconditional.** A deck could also wear a picture the reader had chosen off disk, served at
+ * `/cover/<deckId>` — and it carried *both* covers at once, since setting either left the other
+ * alone, so `coverKind` was the only answer to which one was showing. Two things follow from its
+ * going and both are simplifications rather than losses: the policy no longer has to be kept off
+ * one of the arms (a reader's own photograph has no Scryfall illustrator, so an artist test there
+ * would have hidden every custom cover — which read like a missing guard and was the opposite),
+ * and a `custom` row arriving from a device on an older rung draws its card art, which is what
+ * every device but the uploader already drew.
  *
- * `DeckCoverPicker`'s `CoverPreview` makes the same two decisions in the same words, which is
- * the point: the gallery and the dialog draw one picture and used to disagree about this exact
- * case. If a third surface ever draws a cover, these four lines want a shared home rather than
- * a third copy.
+ * `DeckCoverPicker`'s `CoverPreview` makes the same decision in the same words, which is the
+ * point: the gallery and the dialog draw one picture and used to disagree about this exact case.
+ * If a third surface ever draws a cover, these three lines want a shared home rather than a
+ * third copy.
+ *
+ * **The platform branch is {@link cardArtSrc}'s and is written nowhere else.** `mtgimg://` is a
+ * Tauri custom protocol and wasm cannot register a URL scheme with a browser, so on web the only
+ * picture reachable is the one `deck_list` put on the row — and a deck whose row carries none
+ * answers `null` here, which is the empty frame rather than a broken `<img>`. This went missing
+ * when the walls were routed through `cardArtSrc` (PRs #320/#321), so every deck cover on web
+ * and on the phone was the platform's broken-image glyph from the day #327 made the card-art
+ * crop the *only* cover.
  */
 function coverUrl(deck: DeckRow): string | null {
-  if (deck.coverKind === "custom") return deckCoverUrl(deck.id);
   return deck.coverCardId !== null && deck.coverArtist !== null
-    ? cardImageUrl(deck.coverCardId, 0, "art")
+    ? cardArtSrc(cardImageUrl(deck.coverCardId, 0, "art"), deck.imageUris?.art)
     : null;
 }
 
@@ -325,13 +345,14 @@ export function DeckTile({
           unknown draws no line at all, never the word "null" and never a placeholder. An
           orphaned cover heals itself on the next sync.
 
-          `coverKind` is in the condition because `coverArtist` is a lookup on `coverCardId`
-          and nothing else — the backend's `LEFT JOIN cards c ON c.id = d.cover_card_id`, which
-          does not know or care which cover is showing. A deck carrying both (the ordinary case
-          after an upload) therefore answers an artist while wearing the reader's own picture,
-          and crediting an illustrator whose work is *not on screen* is the one thing this line
-          must never do. `DeckCoverPicker`'s `CoverPreview` guards the same way. */}
-      {deck.coverKind === "card_art" && deck.coverArtist && (
+          One test, and `coverArtist` is it: it is a lookup on `coverCardId` and nothing else
+          (the backend's `LEFT JOIN cards c ON c.id = d.cover_card_id`), which is exactly the
+          picture {@link coverUrl} draws, so the credit and the crop cannot come apart. There
+          was a `coverKind === "card_art"` beside it while a deck could wear a file instead: the
+          join answered an artist for the card id such a deck still carried, and crediting an
+          illustrator whose work is *not on screen* is the one thing this line must never do.
+          `DeckCoverPicker`'s `CoverPreview` guards the same way. */}
+      {deck.coverArtist && (
         <p
           className={cn(
             "mt-[calc(0.125rem*var(--mark-scale,1))] truncate text-dim",
@@ -469,44 +490,33 @@ export function DeckTile({
  * a third thing to say, "No cover", which is not a failure at all. What is shared is
  * {@link useImageRetry}: the schedule, and the reason for it.
  *
- * **Two things change what this frame should be painting, and only one of them changes the
- * URL.** Picking a different card, or switching between card art and the reader's own picture,
- * hands this component a different {@link coverUrl} — which is the reset the retry hook does
- * and the key `CardImage` puts on its own `<img>`, and it is the whole of what lets one frame
- * serve both kinds of cover with nothing written here. **Replacing the custom file changes no
- * URL at all**: `/cover/<deckId>` names the deck rather than the picture, `images.ts` forbids a
- * cache-buster on it, and the `no-store` that route is served with never gets a say — a header
- * decides what happens to a *request*, and a browser with no reason to make one goes on
- * painting the frame it already decoded. So the custom arm is keyed on `deck.updatedAt`, which
- * the upload moves because setting a cover is a write to the deck; a moved key is a new
- * element, and an element that has never decoded anything paints nothing.
+ * **One thing changes what this frame should be painting, and it changes the URL.** Picking a
+ * different card hands this component a different {@link coverUrl}, which is the reset the retry
+ * hook does and the key `CardImage` puts on its own `<img>` — so nothing about staleness is
+ * written here.
  *
- * **A moved key is a new element only when the key actually moved, and the floor on that is a
- * whole second.** `decks.updated_at` is `unixepoch()` — an integer count of seconds — so two
- * uploads inside one clock second leave the number where it was, the element is not replaced,
- * and the second picture waits for the next write to the deck. It is the narrowest case there
- * is and it is not repaired here: a cache-buster is what `images.ts` forbids, and a monotonic
- * counter would be a second answer to "has this deck changed". `DeckCoverPicker`'s
- * `CoverPreview` keys on the same number, so it shares the floor exactly.
+ * **It took a `key` until 2026-08-31, and the reason it needed one is the reason the feature is
+ * gone.** A cover could be a picture the reader had chosen off disk, served at `/cover/<deckId>`
+ * — a route naming the *deck* rather than the picture, with `images.ts` forbidding a
+ * cache-buster on it. Replacing that file therefore changed no URL at all, and the `no-store`
+ * the route was served with never got a say: a header decides what happens to a *request*, and a
+ * browser with no reason to make one goes on painting the frame it already decoded. So the
+ * custom arm was keyed on `deck.updatedAt`, which every write to a deck moves — a whole-second
+ * floor, since `decks.updated_at` is `unixepoch()`, so two uploads inside one clock second left
+ * the element in place. This screen was where it bit: `DeckSettingsDialog`, the surface that
+ * uploaded a cover, is mounted right here over this wall. Every line of that is now unreachable,
+ * because a printing's URL names its own picture.
  *
- * **This screen is where that bites**: `DeckSettingsDialog`, the surface that uploads a
- * cover, is mounted right here over this wall, so the tile behind the scrim was the one still
- * showing the replaced file. `DeckCoverPicker`'s `CoverPreview` makes the same move with the
- * same number under the name `customCoverKey` — one picture, on both sides of that scrim.
- *
- * **The card-art arm deliberately takes no key.** `updatedAt` moves for very nearly every write
- * to the deck — a rename does, and `deck_set_view_state` is the one that deliberately does not,
- * because reading a deck is not editing it — so keying it too would throw away a crop the
- * browser has already decoded and leave the tile blank while it came back, for a rename. There
- * is nothing there to notice: a printing's URL names its own picture.
- *
- * A missing custom file is a **404**, never a placeholder — `images.rs` chose that deliberately
- * so the fault is visible rather than hidden behind a grey rectangle that looks like a picture.
- * It arrives here as an `<img>` error like any other, so it lands in the same three sentences
- * below and never as a broken-image glyph.
+ * **The card-art arm deliberately took no key even then**, and that is what survives: `updatedAt`
+ * moves for very nearly every write to the deck — a rename does, and `deck_set_view_state` is
+ * the one that deliberately does not, because reading a deck is not editing it — so keying it
+ * would throw away a crop the browser has already decoded and leave the tile blank while it came
+ * back, for a rename.
  */
 function Cover({ deck }: { deck: DeckRow }) {
   const url = coverUrl(deck);
+  // Not `url === null`: on web those are two different states — see {@link hasCover}.
+  const chosen = hasCover(deck);
   const image = useImageRetry(url);
 
   return (
@@ -519,11 +529,9 @@ function Cover({ deck }: { deck: DeckRow }) {
           // Decorative: the deck's name is in the caption two lines down, and an `alt` here
           // would announce the tile twice.
           alt=""
-          // `CardImage` keys itself on the `src`, which is the whole answer for a card cover:
-          // a different printing is a different URL. A custom cover's URL names the *deck*, so
-          // nothing keyed on it can notice an upload — this key is the number that moves when
-          // the file behind that unchanged URL is replaced. See the note above the component.
-          key={deck.coverKind === "custom" ? deck.updatedAt : undefined}
+          // No `key` of this component's own: `CardImage` keys itself on the `src`, which is
+          // the whole answer for a card cover, because a different printing is a different URL.
+          // See the note above the component for the key this had while a cover could be a file.
           src={image.src}
           loading="lazy"
           decoding="async"
@@ -542,7 +550,7 @@ function Cover({ deck }: { deck: DeckRow }) {
         // three words centred in a doubled box at their shipped size read as a caption that
         // missed the zoom.
         <span aria-hidden="true" className="text-[calc(0.7rem*var(--mark-scale,1))] text-dim">
-          {!url ? "No cover" : image.retrying ? "Retrying…" : "No image"}
+          {!chosen ? "No cover" : image.retrying ? "Retrying…" : "No image"}
         </span>
       )}
     </span>

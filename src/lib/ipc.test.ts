@@ -11,6 +11,8 @@ vi.mock("@tauri-apps/api/event", () => ({ listen }));
 // TypeScript only quotes it, so the quote is what can rot.
 import collectionRs from "../../src-tauri/src/collection.rs?raw";
 import deckRs from "../../src-tauri/src/deck.rs?raw";
+import deckTheoryRs from "../../src-tauri/src/deck_theory.rs?raw";
+import resetRs from "../../src-tauri/src/reset.rs?raw";
 import searchRs from "../../src-tauri/src/search.rs?raw";
 import syncCommandsRs from "../../src-tauri/src/sync_engine/commands.rs?raw";
 import syncLiveRs from "../../src-tauri/src/sync_engine/live.rs?raw";
@@ -618,24 +620,20 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
-   * The two deck writes that are **not** a `DeckPatch`, and the reason neither can be one.
+   * The deck write that is **not** a `DeckPatch`, and the reason it cannot be one.
    *
    * `deck_update` writes every column with `coalesce(?n, column)`, which reads a bound NULL as
    * "leave it" — so a patch has no way to say *clear this*. Filing a deck back at the **root**
    * of the folder tree is exactly that sentence, which is why `deck_set_folder` exists and
-   * takes an `Option<i64>` of its own where `null` means the root. And a cover image is a file
-   * on disk rather than a column, so it arrives as the path the picker answered.
+   * takes an `Option<i64>` of its own where `null` means the root.
+   *
+   * **It was two, and the other was `deck_set_cover_image`** — a cover could be a file on disk
+   * rather than a column, so it arrived as the path the picker answered. That command is gone
+   * with the whole custom-cover feature; a cover is `DeckPatch.coverCardId`, a string, and this
+   * module has no second exception left.
    */
-  it("sends the two deck writes a patch cannot express under their own names", async () => {
+  it("sends the deck write a patch cannot express under its own name", async () => {
     invoke.mockResolvedValue({ id: 4 });
-
-    await ipc.deckSetCoverImage(4, "C:\\pics\\dragon.png");
-    // `deckId` and `sourcePath` — the command takes neither `id` nor `path`, and Tauri fills
-    // parameters by name.
-    expect(invoke).toHaveBeenCalledWith("deck_set_cover_image", {
-      deckId: 4,
-      sourcePath: "C:\\pics\\dragon.png",
-    });
 
     await ipc.deckSetFolder(4, 2);
     expect(invoke).toHaveBeenCalledWith("deck_set_folder", { deckId: 4, folderId: 2 });
@@ -2138,6 +2136,12 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
    *
    * Nothing in jsdom can notice a missing picture, and nothing in the build type-checks this
    * mirror against the crate, so the field name on both sides is the whole of the fence.
+   *
+   * **It is not only the walls, which is why the list below is longer than that paragraph.**
+   * Five more surfaces read `cardImageUrl` directly and were found blank on the phone the same
+   * day: the deck gallery's cover, a folder card's strip of member art, the cover picker's
+   * preview and its choice tiles, and the theory diff's row thumbnails. Two more DTOs carry the
+   * field for them, and both are pinned here rather than trusted — see the rows themselves.
    */
   // Annotated rather than inferred: without the tuple type TypeScript widens each row to
   // `string[]` and the three arguments below lose their names.
@@ -2147,6 +2151,15 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // The one pair whose two names differ: the crate calls a deck's line `DeckCardRow` and
     // this file calls it `DeckCard`, so the mapping is spelled out rather than assumed.
     ["DeckCard", deckRs, "DeckCardRow"],
+    // **The two rows that are not card walls, added 2026-08-31 with the surfaces that needed
+    // them.** A deck's gallery tile, a folder card's strip of member art, the cover picker's
+    // preview and the theory diff's row thumbnails all drew `mtgimg://` directly, so all four
+    // were blank in a browser and on the phone — the gallery from the day a card-art crop
+    // became the *only* deck cover. `DeckRow.image_uris` is the **cover printing's** picture,
+    // off the same `LEFT JOIN cards c ON c.id = d.cover_card_id` its `cover_artist` comes from,
+    // not the deck's own; `TheoryDiffRow.image_uris` is the row's printing.
+    ["DeckRow", deckRs, "DeckRow"],
+    ["TheoryDiffRow", deckTheoryRs, "TheoryDiffRow"],
   ];
 
   it.each(mirrors)(
@@ -2155,16 +2168,59 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     const rust = rustFields(rustSource, rustName).map(camel);
     const ts = tsFields(ipcSource, tsName);
 
+    // **First, because it is the assertion this whole block exists for** — and because the
+    // sanity floor below reads as nonsense when it is the one that trips ("expected 10 to be
+    // greater than 10" is a missing field, not a parser fault). Named on its own as well as
+    // counted, since its absence is silent on both sides: `undefined` at the call site, a
+    // blank frame on screen, and no type error anywhere.
+    expect(rust, `\`${rustName}\` (Rust) has no \`image_uris\``).toContain("imageUris");
+    expect(ts, `\`${tsName}\` (ipc.ts) has no \`imageUris\``).toContain("imageUris");
+
     // Not `toEqual` on the raw arrays: the parsers are the thing under suspicion, so a pass
     // has to mean "both found fields", never "both found nothing".
-    expect(rust.length).toBeGreaterThan(10);
-    expect(ts.length).toBeGreaterThan(10);
+    expect(rust.length, `nothing parsed out of \`${rustName}\``).toBeGreaterThan(10);
+    expect(ts.length, `nothing parsed out of \`${tsName}\``).toBeGreaterThan(10);
     expect([...ts].sort()).toEqual([...rust].sort());
+    },
+  );
 
-    // Named on its own as well as counted, because this is the field the whole widening was
-    // for and its absence is silent on both sides.
-    expect(rust).toContain("imageUris");
-    expect(ts).toContain("imageUris");
+  /**
+   * The same fence, for structs that are **not** card rows.
+   *
+   * `mirrors` above asserts two things beyond field parity — that `image_uris` is present, and
+   * that more than ten fields parsed — and both are properties of a card-bearing row rather
+   * than of a mirror. `DecksCleared` is two fields and has no picture, so it needs the parity
+   * rule and neither of the others.
+   *
+   * **These three are here because one of them drifted unnoticed on 2026-08-31.** Rust dropped
+   * `DecksCleared::covers` along with the custom deck cover; this file's mirror kept it, and
+   * `clearOutcome`'s `r.covers > 0` quietly became `undefined > 0` — **`false` rather than a
+   * type error** — so the panel stopped reporting a count while every mock still supplied
+   * `covers: 0`. Nothing went red. **A removal presents more quietly than a rename**: a renamed
+   * field at least reads `undefined` where a value is expected, whereas a removed number
+   * compared with `>` simply takes the other branch for ever.
+   *
+   * The lesson is the table itself. This fence is **opt-in per struct**, so "is this checked?"
+   * is answered by whether a name appears on one of these two lists and by nothing else.
+   * Adding a row is the whole of the fix and it costs one line.
+   */
+  const plainMirrors: [tsName: string, rustSource: string, rustName: string][] = [
+    ["CollectionCleared", resetRs, "CollectionCleared"],
+    ["DecksCleared", resetRs, "DecksCleared"],
+    ["CacheCleared", resetRs, "CacheCleared"],
+  ];
+
+  it.each(plainMirrors)(
+    "the %s mirror agrees with the Rust struct field for field",
+    (tsName, rustSource, rustName) => {
+      const rust = rustFields(rustSource, rustName).map(camel);
+      const ts = tsFields(ipcSource, tsName);
+
+      // A floor of one rather than ten, for the same reason the card table has ten: a pass has
+      // to mean "both parsers found fields", never "both found nothing".
+      expect(rust.length, `nothing parsed out of \`${rustName}\``).toBeGreaterThan(0);
+      expect(ts.length, `nothing parsed out of \`${tsName}\``).toBeGreaterThan(0);
+      expect([...ts].sort()).toEqual([...rust].sort());
     },
   );
 });

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useState, type JSX } from "react";
-import { skipToken, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { skipToken, useQuery } from "@tanstack/react-query";
 import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type DeckInput, type DeckRow } from "@/lib/ipc";
 import { DEFAULT_MARKETPLACE } from "@/lib/marketplace";
@@ -61,16 +61,6 @@ const BLANK: DeckSettingsValue = {
  * is the seed's and the value is the format the reader last built for.
  */
 const CASUAL_ONLY: readonly FormatOption[] = [{ key: DEFAULT_FORMAT, name: "Casual" }];
-
-/**
- * The last segment of a path the file picker answered with.
- *
- * Both separators, because the picker answers in the operating system's own spelling and this
- * app is built for Windows while its suites and its workbench run wherever they are run. `||`
- * rather than `??` so a path that somehow ends in a separator falls back to the whole string
- * instead of showing an empty frame.
- */
-const basename = (path: string): string => path.split(/[\\/]/).pop() || path;
 
 /**
  * A text field the reader left empty is **absent**, never `""`.
@@ -244,26 +234,17 @@ export function CreateDeckDialog({
  * entirely** — there is nothing to write to until the deck exists. Every change is merged into
  * one local {@link DeckSettingsValue} and sent as a single `deck_create`.
  *
- * ## The one non-obvious state: the deck was made and its picture was not
- *
- * `deck_set_cover_image` takes a **path and a deck id**, so a file the reader chose can only be
- * applied *after* the INSERT has answered — it is the one field of this form that cannot travel
- * in the create. That makes a two-step write out of a one-button act, and a two-step write has
- * a state in the middle:
- *
- * | What happened | What the reader sees |
- * | --- | --- |
- * | No file chosen | one `deck_create`, then the deck opens |
- * | File chosen, upload worked | the deck opens, showing the picture |
- * | File chosen, upload refused | **the deck exists** — it is held in `made`, the line says so, and the control becomes **Open deck** |
- *
- * The third row is the whole reason `made` is state rather than a local. **A deck that has been
- * created must be neither lost nor duplicated**: losing it would mean a refused *picture*
- * silently discarding a deck the database really has, and duplicating it is what a second press
- * of a button still saying "Create deck" would do. So the deck is held, the control is renamed
- * to what pressing it now does, and {@link CreateDeckBody}'s submit opens it instead of writing again.
- * `made` is set **only** on the upload's refusal, which is what keeps the label honest while
- * the upload is still in flight.
+ * **One press is one write again, and that is a deletion rather than a fix.** A cover could be
+ * a picture off disk until 2026-08-31, and `deck_set_cover_image` took a path **and a deck id**
+ * — so the file was the one answer on this form that could not travel in the create, and had to
+ * be uploaded after the INSERT had answered. That made a two-step write out of a one-button act,
+ * with a state in the middle nobody wanted: the deck exists and its picture does not. This file
+ * carried a `made` row of state, a second mutation, a second failure line and a button that
+ * renamed itself to **Open deck**, all of them for that one case — a created deck must be
+ * neither lost (a refused *picture* silently discarding a deck the database really has) nor
+ * duplicated (a second press of a button still saying "Create deck"). A cover is a card id now
+ * and travels in {@link DeckInput.coverCardId}, so the middle state cannot occur and all of it
+ * is gone.
  *
  * ## The cover's credit is fetched, because there is no `DeckRow` to carry it
  *
@@ -309,32 +290,10 @@ function CreateDeckBody({
    * the shape both hosts share, and the settings dialog's cover is a write rather than a field.
    */
   const [coverCardId, setCoverCardId] = useState<string | null>(null);
-  /** A path the file picker answered with, held until there is a deck id to upload it against. */
-  const [file, setFile] = useState<string | null>(null);
-  /** The deck, once it exists **and its picture did not save**. See {@link CreateDeckBody}'s
-   *  doc. */
-  const [made, setMade] = useState<DeckRow | null>(null);
 
   const { specs } = useFormatSpecs();
   const folders = useDeckFolders();
-  const queryClient = useQueryClient();
   const id = useId();
-
-  /**
-   * The follow-up write, and the only one this component owns.
-   *
-   * `useDecks().create` is the gallery's and arrives as a prop; this one has no home there
-   * because no tile ever makes it. Invalidating the whole `["decks"]` root on success **and**
-   * on refusal is `useDeck`'s rule kept on the write rather than on a call site: the create
-   * already invalidated once, before this ran, so without a second one the gallery would hold a
-   * tile drawn without the picture that had just been put on it.
-   */
-  const setCover = useMutation({
-    mutationFn: ({ deckId, sourcePath }: { deckId: number; sourcePath: string }) =>
-      ipc.deckSetCoverImage(deckId, sourcePath),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["decks"] }),
-    onError: () => void queryClient.invalidateQueries({ queryKey: ["decks"] }),
-  });
 
   /**
    * Who illustrated the picked printing — the one card fact this dialog reads, and the reason
@@ -436,38 +395,11 @@ function CreateDeckBody({
 
   const trimmed = value.name.trim();
   const createFailure = create.isError ? ipcError(create.error) : null;
-  const coverFailure = setCover.isError ? ipcError(setCover.error) : null;
-  const busy = create.isPending || setCover.isPending;
-
-  /** The upload arm, which can only run once the INSERT has answered with an id. */
-  const applyCover = (deck: DeckRow) => {
-    if (file === null) {
-      onCreated(deck);
-      return;
-    }
-    setCover.mutate(
-      { deckId: deck.id, sourcePath: file },
-      {
-        // The row the *upload* answered with, not the one the create did: it is the deck as the
-        // gallery would now read it, `coverKind` already `custom`.
-        onSuccess: (withCover) => onCreated(withCover),
-        // Hold the deck. This is the state {@link CreateDeckBody}'s doc is about, and setting `made`
-        // here — on the refusal alone — is what keeps the control saying "Create deck" while
-        // the upload is still running.
-        onError: () => setMade(deck),
-      },
-    );
-  };
+  const busy = create.isPending;
 
   const submit = () => {
-    // A write is in flight. The press is neither a second deck nor an early open.
+    // A write is in flight. The press is not a second deck.
     if (busy) return;
-    // The deck exists and only its picture failed: this press opens it, and there is no path
-    // from here to a second `deck_create`.
-    if (made !== null) {
-      onCreated(made);
-      return;
-    }
     // A name of nothing but spaces is not a name. The control is greyed on the same test, and
     // this is the half that actually refuses — an `aria-disabled` button still delivers its
     // press, which is the whole reason it is not the `disabled` attribute.
@@ -493,7 +425,9 @@ function CreateDeckBody({
         // hand-written and nothing checks it against the crate, so a field misspelled here
         // would otherwise travel as a silently ignored key.
       } satisfies DeckInput,
-      { onSuccess: applyCover },
+      // The row the INSERT answered with, cover and all — there is no follow-up write left to
+      // wait for, so the deck opens on the one answer.
+      { onSuccess: onCreated },
     );
   };
 
@@ -515,9 +449,9 @@ function CreateDeckBody({
           // select cannot show one format while the button makes a deck in another.
           value={{ ...value, formatKey }}
           onChange={onChange}
-          // Enter in the Name field, and the same function the button calls — so the three
-          // guards below (a write in flight, a deck already made, a blank name) refuse a
-          // keyboard press exactly as they refuse a pointer's.
+          // Enter in the Name field, and the same function the button calls — so both guards
+          // below (a write in flight, a blank name) refuse a keyboard press exactly as they
+          // refuse a pointer's.
           onSubmit={submit}
           formats={formats}
           folders={{
@@ -530,26 +464,23 @@ function CreateDeckBody({
           }}
           cover={{
             coverCardId,
-            // The DDL default, and not settable at create — a picked card *is* card art, and
-            // a custom picture becomes `custom` through the upload below.
-            coverKind: "card_art",
             // Fetched, because there is no `DeckRow` to read it off — see the `artist` query
             // above. `null` until it lands, and `null` if it cannot be found, which is the
             // preview's own ruling either way: an `art` crop this app cannot credit is not
             // drawn at all.
             coverArtist: artist.data?.artist ?? null,
-            // No deck id, so no `/cover/<deckId>` route for a custom picture to be served at.
-            customCoverUrl: null,
+            // Off the same fetched `CardDetail`, and for the same reason: there is no `DeckRow`
+            // to read it from yet. It is the web build's only picture — `cardArtSrc` ignores it
+            // on desktop — so on a browser the preview is empty until this query lands, exactly
+            // as the credit line under it is.
+            coverImageUrl: artist.data?.imageUris?.art ?? null,
             // A deck being made has none. The picker's own empty state says exactly that, and
             // its search box is what does the work here.
             deckCards: [],
+            // Straight into `useState`: at create the picked id is a draft field like every
+            // other, and it travels in the `deck_create` below. The settings dialog writes on
+            // this same callback, which is the whole of the difference between the two hosts.
             onPickCard: setCoverCardId,
-            onPickFile: setFile,
-            pendingFileName: file === null ? null : basename(file),
-            // The re-encode running — and one state more, which that button's own doc already
-            // covers: "a second press does nothing useful". Once the deck exists this surface
-            // is finished writing, so a file chosen now would never be applied by it.
-            uploading: setCover.isPending || made !== null,
             idPrefix: id,
           }}
           idPrefix={id}
@@ -557,17 +488,14 @@ function CreateDeckBody({
       </div>
 
       <footer className="flex items-center gap-4 border-t border-border px-5 py-4">
-        {/* One line, and at most one of the two can be true: a refused create leaves no deck
-              to have failed to picture. It sits in a row that already has the button's height,
-              so it grows nothing when it appears and needs no tween. */}
+        {/* One line, and one write to fail: the create is the whole of what this dialog does
+              now. There were two sentences here, the second for a deck that was made and could
+              not be pictured, which is a state a card-id cover cannot reach. It sits in a row
+              that already has the button's height, so it grows nothing when it appears and
+              needs no tween. */}
         {createFailure !== null && (
           <p role="alert" className="min-w-0 flex-1 text-xs text-destructive">
             Could not create the deck — {createFailure}
-          </p>
-        )}
-        {coverFailure !== null && (
-          <p role="alert" className="min-w-0 flex-1 text-xs text-destructive">
-            The deck was made, but its picture could not be saved — {coverFailure}
           </p>
         )}
 
@@ -578,7 +506,7 @@ function CreateDeckBody({
           // that started a write has to have somewhere to come back to. It also keeps the
           // trap's cycle the same length whatever the name field holds. The refusal itself is
           // `submit`'s, which is what makes the two halves one rule.
-          aria-disabled={made === null && (!trimmed || busy) ? true : undefined}
+          aria-disabled={!trimmed || busy ? true : undefined}
           onClick={submit}
           className={cn(
             "ml-auto h-9 shrink-0 rounded-md border border-accent px-4 text-sm text-accent",
@@ -591,10 +519,10 @@ function CreateDeckBody({
           )}
         >
           {/* The verb keeps its name through the flow, so the control that says "Create
-                deck" is the one whose press opens the deck it created — except in the one state
-                where the deck already exists, where saying "Create deck" would be an offer to
-                make a second one. */}
-          {made === null ? "Create deck" : "Open deck"}
+                deck" is the one whose press opens the deck it created. It used to have a second
+                label, **Open deck**, for the deck that existed with no picture on it — a state
+                the cover being a card id has taken away. */}
+          Create deck
         </button>
       </footer>
     </>

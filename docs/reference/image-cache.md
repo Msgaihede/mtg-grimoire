@@ -16,8 +16,14 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   the exact leak `flush_records` exists to close.
   It **refuses outright while a sync is running**: `data/tmp/` is where the corpus download puts
   77 MB the ingest then reads back, and a sweep landing between the write and the read fails a
-  90-second job the reader is watching a progress bar for. It never touches `data/covers/` —
-  those are pictures the reader *chose* — and no table but `image_cache`.
+  90-second job the reader is watching a progress bar for. It touches no table but `image_cache`.
+  **Those two directories are now the whole of its reach, and the list is exhaustive rather than
+  illustrative.** Until 2026-08-31 this sentence read "it never touches `data/covers/` — those
+  are pictures the reader *chose*", which was the one promise the button was documented as
+  making about a *third* directory. Custom deck covers went that day, so there is no third
+  directory to spare and no promise left to keep; `reset.rs`'s module doc carries the same
+  correction. The folder itself is not deleted on upgrade — see the standing note in the
+  `/cover/` bullet below.
   Measured on this machine 2026-08-20: **5,540 files, 329,682,302 bytes** in `data/images/`.
 - A `grid` image averages **59.6 KB**. 600 browsed cards cost ~36 MB, so all 116 k
   printings at `grid` would be ~7 GB — which is why Plan 3's pre-warm is scoped to what
@@ -87,24 +93,52 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   (`Cache`'s per-key mutex + a re-read of the disk). The waiter re-reads rather than being
   handed the bytes, so it degrades to a second fetch when the write connection was busy or
   the store failed — both acceptable, both documented at `images::fetch_and_store`.
-- **`mtgimg://` has a second route, and it touches Scryfall not at all: `/cover/<deckId>`.**
-  `images::serve` tries `parse_cover_path` **first**; it cannot collide with the card route
-  because `Variant::parse("cover")` is `None`. The bytes are a file the user picked, re-encoded
-  by `images::encode_cover` (magic-number sniff, `resize_to_fill` to the `art` crop's **626×457**,
+- **`mtgimg://` had a second route and now has one. `/cover/<deckId>` went on 2026-08-31, with
+  the custom deck cover it existed to serve.** A cover is `decks.cover_card_id` — the art crop of
+  a card — which the *card* route already serves as an ordinary image, so nothing replaced this
+  one: `images::serve` parses `/<variant>/<card id>/<face>` and that is the whole protocol.
+  Deleted with it: `parse_cover_path`, `COVER_ROUTE`, `encode_cover`, `encode_cover_picked`,
+  `encode_cover_from`, `write_cover`, `cover_file`, `serve_cover`, `MAX_COVER_SOURCE_PIXELS`,
+  `paths::covers_dir` and the `deck_set_cover_image` command. **`COVER_VARIANT` went too**, and
+  it is the one deletion that was in doubt: the plan flagged it as possibly load-bearing on the
+  card-art path and asked for it to be checked rather than assumed. It was
+  `pub const COVER_VARIANT: Variant = Variant::Art`, and its whole job was to promise that a
+  re-encoded upload came out the same 626×457 as a crop — a promise with only one kind of
+  picture left to make. Every surface that drew a cover now names `Variant::Art` directly,
+  which is what `images.rs`'s own header says about the four deck surfaces that ask for `art`
+  rather than `display`. Anything still citing `images::COVER_VARIANT` — the module-boundary
+  audit and the 2026-08-12 deckbuilder spec both do — is describing the shape as it was.
+
+  **What it was, kept because the shape is the argument for how it was built.** The bytes were a
+  file the user picked, re-encoded by `images::encode_cover` (magic-number sniff, `resize_to_fill`
+  to the `art` crop's **626×457** so a tile could wear either kind without the layout shifting,
   lossless WEBP, source capped at `MAX_COVER_SOURCE_PIXELS`) and written to
-  `<data dir>/covers/<deckId>.webp`. **The route resolves that directory itself** — `decks
-.cover_image_path` is a record of what was written, not what is read, which is what keeps a
-  portable install working after its folder moves. Served `no-store`, because it is the one image
-  URL whose content is _meant_ to change under a fixed name; **404 when absent, never a
-  placeholder**. The `i64` parse is the whole path-traversal fence, since the id becomes a
-  filename (`a_cover_path_is_parsed_or_refused_and_never_repaired` pins `/cover/../../mtg.db`,
-  `/cover/..%2fmtg.db`, `/cover/7/8`, `/cover/7.webp`).
-- **The CSP did not change for it, and that is the point.** `img-src 'self' data: mtgimg:
-http://mtgimg.localhost` already covered a fifth _path_; a route is not a source.
-  `images::tests::the_shipped_csp_is_untouched` asserts both the exact `img-src` and that the
-  policy does not mention `cover` at all. Measured 2026-08-11 in the shipped window: with no file
-  on disk the URL errors, and after one `deck_set_cover_image` the same URL loads **626×457 in
-  2 ms**.
+  `<data dir>/covers/<deckId>.webp`. `images::serve` tried `parse_cover_path` **first** and it
+  could not collide with the card route, because `Variant::parse("cover")` is `None`. The route
+  resolved the directory itself — `decks.cover_image_path` was a record of what had been written,
+  never what was read, which is what kept a portable install working after its folder moved. It
+  was served `no-store`, being the one image URL whose content was _meant_ to change under a fixed
+  name, and answered **404 when absent, never a placeholder**. The `i64` parse was the whole
+  path-traversal fence, since the id became a filename;
+  `a_cover_path_is_parsed_or_refused_and_never_repaired` pinned `/cover/../../mtg.db`,
+  `/cover/..%2fmtg.db`, `/cover/7/8` and `/cover/7.webp`, and went with the parser.
+
+  **`<data dir>/covers/` is not swept on upgrade and nothing reads it.** The v32 rung flips
+  `cover_kind` and writes nothing else, so an install that had custom covers keeps its
+  `<deckId>.webp` files as inert bytes; they are safe to delete by hand and no code path opens
+  the folder. That is deliberate rather than unfinished — removing a directory of unknown
+  contents means a recursive delete, and taking the recursive delete out of the deck path — see
+  `reset.rs`'s module doc and [web-target.md](web-target.md), which records the run of it that
+  ate a working tree — is one of the things this change is *for*.
+- **The CSP did not change when the route arrived and did not change when it left, and that is
+  the point.** `img-src 'self' data: mtgimg: http://mtgimg.localhost` covered a fifth _path_ for
+  free; a route is not a source. `images::tests::the_shipped_csp_is_untouched` still pins the
+  exact `img-src` and **outlived the route it was written for**, because serving any picture from
+  `file:`, `asset:` or a `blob:` would be the same change and would still be the one nothing else
+  in the app notices. What it no longer asserts is that the policy never mentions `cover` — there
+  is nothing left for that clause to be about. Measured 2026-08-11 in the shipped window, while
+  the route existed: with no file on disk the URL errored, and after one `deck_set_cover_image`
+  the same URL loaded **626×457 in 2 ms**.
 
 ## The protocol and the CSP
 

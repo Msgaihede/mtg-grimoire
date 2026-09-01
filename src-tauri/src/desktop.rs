@@ -403,7 +403,6 @@ pub fn run() {
             deck::deck_update,
             deck::deck_delete,
             deck::deck_duplicate,
-            deck::deck_set_cover_image,
             deck::deck_set_folder,
             deck::deck_set_view_state,
             deck::deck_list,

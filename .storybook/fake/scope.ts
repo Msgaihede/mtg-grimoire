@@ -41,8 +41,10 @@
  *
  * **The fifth way in is a click handler, and it is the one this file does not cover.** Five
  * `ipc.*` calls in `src/` are made straight out of an `onClick`, outside every mechanism
- * above: `useSync.ts:151`'s `syncRun(true)` and `useUpdate.ts`'s `updateCheck` (132),
- * `updateDownload` (144), `updateApply` (160) and `updateOpenReleasePage` (169). A handler
+ * above: `useSync.ts`'s `syncRun(true)` and `useUpdate.ts`'s `updateCheck`,
+ * `updateDownload`, `updateApply` and `updateOpenReleasePage`. (Line numbers stood here
+ * until 2026-08-31 and all five had drifted — a prose-only edit routes to neither CI job,
+ * and a grep for the name finds them in a second.) A handler
  * runs after the last commit on the page, so on a docs page with several stories mounted
  * inline it reads whichever story committed *last* — press Refresh on the first story and the
  * fifth story's world answers. Nothing here can fix that: there is no render, no effect and no

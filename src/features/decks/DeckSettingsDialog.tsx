@@ -1,6 +1,5 @@
 import { useCallback, useId, useMemo, type JSX } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { deckCoverUrl } from "@/lib/images";
 import { ipc, ipcError } from "@/lib/ipc";
 import { writeFailure } from "@/lib/writes";
 import { Dialog } from "@/components/Dialog";
@@ -34,7 +33,7 @@ export interface DeckSettingsDialogProps {
  * `CreateDeckDialog` asks the same ones about a deck that does not exist yet. {@link Dialog}
  * is the chrome: the scrim, the panel, the trap, the Escape rung, the header and the ✕, shared
  * with every other modal the deck builder opens. What is left here is {@link Settings}, and it
- * is everything that is about *this deck existing*: reading it, the three commands that write
+ * is everything that is about *this deck existing*: reading it, the two commands that write
  * it, the banner when one is refused, and the loading, read-failure and deck-is-gone states.
  *
  * **There is no Save button and there is not meant to be one.** Every control writes when it is
@@ -48,12 +47,24 @@ export interface DeckSettingsDialogProps {
  * which works because the shell renders `children` inside its own presence subtree — the one
  * thing about this arrangement that a careless edit could break without anything going red.
  *
- * **Two commands set a cover and they are not interchangeable.** `deckUpdate({ coverCardId })`
- * points the deck at a printing's art crop and puts `coverKind` back to `card_art`;
- * {@link ipc.deckSetCoverImage} hands the backend a path, which it re-encodes into the app's
- * own cover shape and marks `custom`. A deck usually carries both at once, so the grid and the
- * upload are two ways in rather than two modes. `DeckCoverPicker` knows neither command — it
- * answers `onPickCard` and `onPickFile`, and choosing between them is this host's job.
+ * **One command sets a cover, and this file used to be where the choice between two was made.**
+ * A cover is `deckUpdate({ coverCardId })` — a printing's art crop, named by a card id — and
+ * that is the whole of it. `DeckCoverPicker` still knows nothing about the command: it answers
+ * {@link DeckCoverPickerProps.onPickCard}, and *when* to write is this host's business, which is
+ * exactly what lets `CreateDeckDialog` render the same picker against a deck that does not exist
+ * and fold the id into a `deck_create` instead.
+ *
+ * **What the second command was, and why its absence is the feature.** `deck_set_cover_image`
+ * took a **path** the backend re-encoded beside the database, marked `cover_kind` as `custom`
+ * and served at `/cover/<deckId>`; a deck carried both covers at once, so this file chose
+ * between two writes and the picker drew two controls. It is deleted, along with the route, the
+ * encoder and the directory, because the picture **never survived a sync** — the path was stored
+ * absolute, so a second device was handed a `D:\…` that resolved to nothing and drew the card
+ * art. Every device but the one that uploaded already showed what this build now shows
+ * everywhere. Three things went with it here: the `setCoverImage` mutation, its place in
+ * {@link writeFailure}'s list, and the `customCoverUrl`/`customCoverKey` pair — the second of
+ * which existed only because that route named the *deck* rather than the picture, so nothing
+ * keyed on the URL could notice a replaced file and `updatedAt` had to stand in for one.
  *
  * **Filing goes through {@link ipc.deckSetFolder} in both directions**, and that is the one
  * decision in this file that is load-bearing rather than tidy. `DeckPatch.folderId` writes
@@ -116,13 +127,6 @@ function Settings({ deckId }: { deckId: number }) {
     onError: invalidate,
   });
 
-  /** The reader's own picture. A **path the backend reads**, not bytes and not a `file://` URL. */
-  const setCoverImage = useMutation({
-    mutationFn: (sourcePath: string) => ipc.deckSetCoverImage(deckId, sourcePath),
-    onSuccess: invalidate,
-    onError: invalidate,
-  });
-
   const row = deck.deck;
   const loading = deck.query.isPending;
   const readFailure = deck.query.isError ? ipcError(deck.query.error) : null;
@@ -131,8 +135,10 @@ function Settings({ deckId }: { deckId: number }) {
 
   /** The most recently *started* of the writes this dialog speaks for — the one whose refusal
    *  is still news. `lib/writes.ts`, the one definition of that rule: a refused move must not
-   *  leave its sentence up while the reader goes on to rename the deck successfully. */
-  const bannerFailure = writeFailure([deck.update, setFolder, setCoverImage]);
+   *  leave its sentence up while the reader goes on to rename the deck successfully. Two
+   *  entries and not three: the cover is a field of `deck.update` now, not a command of its
+   *  own. */
+  const bannerFailure = writeFailure([deck.update, setFolder]);
 
   // `mutate` rather than the mutation object, which is what the memos below can depend on:
   // `useMutation` answers a fresh object every render and a stable `mutate`.
@@ -274,30 +280,24 @@ function Settings({ deckId }: { deckId: number }) {
             }}
             cover={{
               coverCardId: row.coverCardId,
-              coverKind: row.coverKind,
               coverArtist: row.coverArtist,
-              customCoverUrl: deckCoverUrl(row.id),
-              // **A custom cover's URL never changes**, because it names the deck and not
-              // the picture (`/cover/<deckId>`, served `no-store` for exactly this reason),
-              // so nothing keyed on the URL can notice a new upload. `updatedAt` moves on
-              // every write to the deck, which includes the one that replaced the file.
-              customCoverKey: row.updatedAt,
+              // The cover printing's own URL, off the same `LEFT JOIN` `coverArtist` comes
+              // from — the web build's only way to draw the preview, and ignored on desktop.
+              // The gallery tile behind this dialog reads the very same field.
+              coverImageUrl: row.imageUris?.art,
               deckCards: deck.cards,
+              // The whole of what this host adds to the picker. `row.coverKind` is not passed
+              // and the picker takes none: it is `card_art` on every deck, so a component
+              // branching on it would be a branch with one live arm — see `DeckCoverKind`.
               onPickCard: (cardId) => update({ coverCardId: cardId }),
-              // This host has a deck id, so a chosen file is uploaded on the press and
-              // there is never a file waiting to be applied — that state is the create
-              // dialog's, which has no id to upload against.
-              onPickFile: setCoverImage.mutate,
-              pendingFileName: null,
-              uploading: setCoverImage.isPending,
               idPrefix: id,
             }}
             idPrefix={id}
           />
 
           {/* Under both columns rather than beside the fields, which is where it used to
-              sit: the form owns the two-column layout now, and a refused cover upload is
-              as much this banner's business as a refused rename. */}
+              sit: the form owns the two-column layout now, and a refused filing is as much
+              this banner's business as a refused rename. */}
           {bannerFailure !== null && (
             <p role="alert" className="mt-3.5 text-xs text-destructive">
               Could not save that change — {bannerFailure}
