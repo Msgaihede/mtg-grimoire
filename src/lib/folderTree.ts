@@ -162,6 +162,32 @@ export function flattenFolders<F extends FolderLike>(
 }
 
 /**
+ * One **level** of the tree: the folders filed directly under `parentId`, in the order they are
+ * drawn. `null` is the root level, and an id the tree does not carry answers the empty level —
+ * which is the same answer a folder with no children gives, and deliberately so: both mean
+ * "there are no cards to draw here".
+ *
+ * **Read off the tree rather than filtered out of the flat rows, and the two genuinely differ.**
+ * {@link buildFolderTree} resolves a folder whose parent is missing — and a folder caught in a
+ * corrupt cycle — *to the root*, so a row's stored `parentId` can name a level that is nowhere on
+ * screen. Every gesture a reader makes is made against what they can see, so "the level a folder
+ * is in" has to mean the level it is **drawn** in. A one-line `.filter(f => f.parentId === id)`
+ * over the flat list gets that wrong in exactly the case the tree was written to survive.
+ *
+ * Extracted on 2026-09-01 for the up-one-level tile, which needs the level **above** the one on
+ * screen and could not reach it through the `childFolders` memo each page had written out in
+ * full. Both pages call it for their own level too, so the walk that finds a level is written
+ * once rather than three times.
+ */
+export function folderLevel<F extends FolderLike>(
+  nodes: readonly FolderNode<F>[],
+  parentId: number | null,
+): readonly FolderNode<F>[] {
+  if (parentId === null) return nodes;
+  return flattenFolders(nodes).find((node) => node.folder.id === parentId)?.children ?? [];
+}
+
+/**
  * Every folder underneath one — what a folder may **not** be moved into.
  *
  * The backend refuses a move into a descendant in words, and that refusal is a fence rather

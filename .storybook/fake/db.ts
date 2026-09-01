@@ -9304,9 +9304,15 @@ export function writeHandlers(db: FakeDb) {
       return addWish(db, args.wish);
     },
 
-    /** `wishlist::set_wish_quantity`. **Zero removes the row** — the collection's opposite,
-     *  because `wishlist_entries` carries `CHECK (quantity > 0)` and a wish holds nothing
-     *  worth keeping once it is emptied. */
+    /** `wishlist::set_wish_quantity`. **Zero removes the row**, because `wishlist_entries`
+     *  carries `CHECK (quantity > 0)` and a wish holds nothing worth keeping once it is emptied.
+     *
+     *  This said "the collection's opposite" until 2026-09-01, and had been wrong since schema
+     *  v24 — `collection::set_quantity(0)` deletes the entry too, and the two tables have agreed
+     *  ever since. What differs is only what each one loses with the row: a collection entry
+     *  takes its condition and its purchase story with it, and a wish has neither. The two
+     *  *controls* stopped differing as well with issue #284, when the wishlist's steppers moved
+     *  off their UI-only floor of one. */
     wishlist_set_quantity: (args: { id: number; quantity: number }): EntryChange => {
       refuseIfBusy(db);
       validQuantity(args.quantity, "wishlist quantity");

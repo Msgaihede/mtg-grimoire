@@ -205,17 +205,34 @@ function columnsFor({
       // is *maintained*, and making the reader open an editor to change a 3 to a 4 is the
       // difference between a tool and a form.
       //
-      // `min={1}`, which is where this diverges from the collection's: there,
-      // `set_quantity(0)` keeps the row with its condition and its purchase story; here it
-      // *deletes* it, because a wish for none of something is not a wish. A stepper that
-      // deleted a row when held down would be a one-way door with no undo, so removal is its
-      // own control and this one stops at one.
+      // **`min={0}`, and zero removes the wish. That reverses this comment's own argument, on
+      // purpose (issue #284).** What stood here was a floor of one, justified as the place a
+      // wish diverges from a collection entry — there `set_quantity(0)` was said to keep the
+      // row, here it deletes, so a held-down `−` was a one-way door with no undo. Half of that
+      // premise had already gone: `collection::set_quantity(0)` has deleted the entry since
+      // schema v24 and `CollectionTable`'s stepper is `min={0}`, so what the floor actually
+      // bought was this list behaving differently from the one beside it for a reason the one
+      // beside it had stopped having. The three walls a reader edits — the collection's table,
+      // this one, and the wishlist's own grid — floor at zero and delete there, and two
+      // drawings of one list must not disagree about what can be edited.
+      //
+      // **The backend never held the old rule.** `set_wish_quantity` returns
+      // `remove_wish(conn, id)` at zero (`src-tauri/src/wishlist.rs`), because
+      // `wishlist_entries.quantity` carries `CHECK (quantity > 0)` — there is no stored zero
+      // for a floor to sit above, and there never was. Only the front of the control moved.
+      //
+      // The one-way door is answered by the control beside it rather than by the floor: the
+      // Actions column's `Remove … from your wishlist` is still offered on **every** row (see
+      // its own note below), so the named route out is a single labelled press and the stepper
+      // reaches the same write from the other end. Nothing here may go back to claiming a wish
+      // stops at one: a comment left asserting a reversed rule is green forever and reads as
+      // the code being the thing that is wrong.
       interactive: true,
       cell: (row) => (
         <QuantityStepper
           size="sm"
           value={row.quantity}
-          min={1}
+          min={0}
           label={`Copies wanted of ${wishLabel(row)}`}
           onChange={(next) => onSetQuantity(row, next)}
         />

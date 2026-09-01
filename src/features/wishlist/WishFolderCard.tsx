@@ -48,6 +48,7 @@ import {
 } from "react";
 import { Folder, MoreHorizontal } from "lucide-react";
 import { FolderDropLine } from "@/components/FolderDropLine";
+import { ParentFolderCard } from "@/components/ParentFolderCard";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { plural } from "@/lib/counts";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
@@ -300,6 +301,68 @@ export function WishFolderCard({
           why the card's box is `relative`. */}
       <FolderDropLine edge={edge} axis="horizontal" />
     </li>
+  );
+}
+
+/**
+ * The wishlist's **up one level** tile — the level above this one, drawn as a drawer among the
+ * drawers so a wish can be dropped back out of a folder as easily as it was dropped into one.
+ * Issue #283.
+ *
+ * `ParentFolderCard` is the whole of what it looks like; what is here is the pair of drop targets,
+ * which is the part that is the wishlist's own. Both register on the **same `<li>`** — the tile
+ * has one landing, so it needs none of the geometry a folder card's second box exists for, and
+ * `readWishDrag` and `readFolderDrag` are disjoint, so `accepts()` keeps the two apart.
+ *
+ * **The folder half ignores the edge on purpose.** {@link useFolderDropTarget} divides a target
+ * into before / inside / after because a folder card offers three landings; this tile offers one,
+ * and the wall is not the level the dragged folder would be joining, so "beside this tile" is not
+ * a position that exists. Every part of it means *up there*, and `edge !== null` is therefore the
+ * whole of "the pointer is on this tile and it would take what you are holding".
+ *
+ * It is not draggable and carries no `⋯`: the level above is a row of the wall one level up, and
+ * that is where it can be renamed, re-filed or deleted.
+ */
+export function WishParentFolderCard({
+  label,
+  onOpen,
+  canDrop,
+  onDropWish,
+  canDropFolder,
+  onDropFolder,
+}: {
+  /** The parent folder's name, or `Wishlist` at the root — the breadcrumb's own word for the
+   *  same place, so the tile and the trail above it cannot name one destination two ways. */
+  label: string;
+  onOpen: () => void;
+  /** Whether the level above would take the wish in the air — the page's own `canFile` bound to
+   *  the destination, so a wish already filed there draws no ring rather than a ring that does
+   *  nothing. */
+  canDrop: (drag: WishDrag) => boolean;
+  onDropWish: (drag: WishDrag) => void;
+  /** The other drag: a **folder** moved up out of the level on screen, landing last in the level
+   *  above. Answered by the page, which is what holds the cabinet the order comes from. */
+  canDropFolder: (drag: FolderDrag) => boolean;
+  onDropFolder: (drag: FolderDrag) => void;
+}) {
+  const ref = useRef<HTMLLIElement>(null);
+  const { armed, over } = useWishDropTarget({ ref, canDrop, onDrop: onDropWish });
+  const { armed: folderArmed, edge } = useFolderDropTarget({
+    ref,
+    scope: "wishlist",
+    axis: "horizontal",
+    canDrop: (drag) => canDropFolder(drag),
+    onDrop: (drag) => onDropFolder(drag),
+  });
+
+  return (
+    <ParentFolderCard
+      cardRef={ref}
+      label={label}
+      armed={armed || folderArmed}
+      over={over || edge !== null}
+      onOpen={onOpen}
+    />
   );
 }
 

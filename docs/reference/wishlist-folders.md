@@ -251,6 +251,52 @@ gets back *out*: without them a drag could only ever push wishes deeper. Both wr
 and the panel stays complete on its own, because a drag-only affordance is half a feature and it is
 the half a keyboard cannot use.
 
+## The way back up is a tile on the wall, not only a word in the trail
+
+Issue #283 is one sentence — *"there is no easy way to remove them from that folder and move them
+back to the main wishlist"* — and the interesting part is that the gesture already worked. A
+breadcrumb segment has taken a wish drop since the cabinet shipped, and the paragraph above says
+why: without it a drag could only ever push wishes deeper. What it did not have was **size**. A
+segment is one word of `text-sm` in a `nav` above the wall — a target roughly 20px tall, sitting in
+a bar the pointer left on its way down to the list — while every place a wish can be pushed *into*
+is a 62px tile in the row directly above the wishes. So the way in was drawer-sized and the way out
+was a link, and readers did what the issue describes: they gave up on the drag and reached for the
+row menu's `Move to folder…`.
+
+**The fix is a folder card for the level above**, first in the wall, drawn only when the reader is
+inside a folder. It is `src/components/ParentFolderCard.tsx`, shared by all three cabinets, with a
+thin per-page wrapper beside each page's own folder card (`WishParentFolderCard` here) holding the
+two drop targets. Four decisions:
+
+- **The name is the destination.** The tile prints the parent folder's name — or `Wishlist` at the
+  root, which is `ROOT_LABEL`, the same word the breadcrumb's own first segment uses — with
+  `Up one level` on the second line, where a folder card prints `6 wishes · $312.00`. A reader
+  mid-drag has to read *where this goes* before they let go, and "Up one level" alone does not say
+  it. The accessible name is built from both (`Up one level to Ordered`) rather than replacing
+  either.
+- **The destination is read off the trail, never off the open folder's `parentId`.** `trailOf`
+  stops at a folder this list does not carry, so a drawer whose parent another surface deleted has
+  a one-segment trail and climbs to the root — which is exactly where `buildFolderTree` has drawn
+  it. The tile and the trail therefore agree by construction rather than by two rules that happen
+  to say the same thing today.
+- **It takes a folder as well as a wish**, which is the half the breadcrumb refuses and still
+  refuses. That refusal's reasoning is unchanged and is quoted in `canPlaceFolder`:
+  `wishlist_folder_reorder` takes a destination **and that level's whole order**, and a segment is
+  one word with no order to point into, so the only thing a drop on it could say is "last, in a
+  level that is not on screen". What answers it here is that the tile is **one landing wide**:
+  every part of it means *up there*, which is the `inside` landing a reader already gets from the
+  middle of a folder card — "which drawer, and nothing about where in it" — and `reorderedLevel`
+  already appends. So the arriving drawer goes last in the level above, and there is no second
+  position in the gesture for the reader to have meant.
+- **A drawer already in the level above draws no ring.** Not reachable on this page — the wall
+  draws one level, so every card on it is a child of the folder the reader is standing in — but it
+  is `folderPlacement`'s own "already there" clause, kept local for the reason all four of its
+  refusals are: the collection's cabinet *does* reach it, inside `Recently removed`.
+
+**The trail is untouched.** It still takes a wish drop on every segment, still says where the
+reader is standing, and is still the only way out of a level whose wall is not drawn. What changed
+is that the ordinary case has a target the size of the things around it.
+
 ## What a wish costs, and which printing it is drawn as
 
 Two changes, both 2026-08-26, both in `src-tauri/src/wishlist.rs`, and the second one dragged
@@ -385,6 +431,57 @@ put a "could not price" note on a folder with nothing left to buy. A `null` pric
 never a reason to reach for another marketplace's, so `cost` and `unpriced` are always the same
 marketplace's and never travel across a switch.
 
+## The copies control, and the floor that stopped being 1
+
+**2026-09-01, [issue #284](https://github.com/Msgaihede/mtg-grimoire/issues/284), and it reverses a
+rule this app argued for in three separate places.** The wishlist's **wall** had no copies control
+at all: the table edited a wish in place, and on a tile the number could only be reached by opening
+the pencil's panel. A wall that is the view opening by default and cannot do what its own list view
+does is the gap the issue named, so the wall now carries a `QuantityStepper` beside the pencil, in
+`CardGrid`'s action strip over the art — the strip is absolutely positioned, so the wall's
+`tileHeight` is unchanged by it.
+
+**And every one of the three floors moved from `1` to `0`.** The rule they held said, in as many
+words, that "a wish for none of something is not a wish" and that "a stepper that deleted the row
+when held down would be a one-way door with no undo, so removal is the separate press below". That
+is no longer the rule. What replaced it is consistency across the two walls a reader reads one after
+the other: the collection's tile stepper floors at `0` and zero deletes there, and a wishlist tile
+that refused the same press would be one wall of art behaving unlike the other for a reason visible
+only in this file.
+
+The backend never disagreed. `wishlist::set_wish_quantity` has returned `remove_wish(conn, id)` at
+zero since it shipped, because `wishlist_entries.quantity` carries `CHECK (quantity > 0)` — the
+floor of `1` was always a guard drawn on the glass, never on the table.
+
+**Two things had to move with it, and the second was a live bug the floor was hiding.**
+
+- **`Remove from wishlist` stays** in the pencil's panel. It is now reachable two ways, which is the
+  arrangement the collection's table has had all along (a stepper that deletes at zero, plus a
+  control that says so) — and the named press is the one a keyboard reader finds without holding a
+  button down.
+- **`setQuantity`'s success handler ignored `EntryChange.removed`.** It patched `change.quantity`
+  and nothing else, which at a floor of `1` was unreachable and at `0` is one press away: a wish
+  stepped to zero stayed on screen at `0` for the length of the round trip, and the `+` a reader
+  pressed on it in that window answered `GONE`. It is the same defect the page's own `remove`
+  handler was written against — *"the row goes at once, a crossed-off wish must not sit there for
+  the length of a round trip"* — reached by the other gesture. The fix is that handler's two lines:
+  `patchWish(change.id, change.removed ? null : …)`. A removal and a stepper taken to zero are one
+  write with two gestures, so the two are now spelled the same way.
+
+  **The collection's version of this bug is worse and the difference is worth not confusing**, since
+  its comment is the one that was ported: `CollectionPage`'s `settle()` invalidates
+  `["collection","summary"]` and `["collection","folderSummary"]` and pointedly *not* `["collection"]`,
+  so its ghost persisted until something else re-read the list. `settleWhole()` invalidates
+  `["wishlist"]` whole, and this list's key is `["wishlist","list", …]` — broad on purpose, so a
+  collection write two views away refreshes an `ownedQuantity` computed from `collection_entries`
+  (`useWishlist.ts:221`). So the wishlist's ghost clears itself. It is a flicker rather than a
+  standing lie, and it is still not what a delete should look like.
+
+The collection's half of this — including the fence that keeps a stepper out of a deck's group and
+`Recently removed`, which the wishlist has no equivalent of because none of its folders belong to
+the app — is in
+[collection-folders.md](collection-folders.md#the-copies-control-belongs-to-a-normal-folder-in-both-views).
+
 ## The wipe
 
 `reset::clear_wishlist` empties `wishlist_entries` **and then** `wishlist_folders`, and needs the
@@ -457,4 +554,5 @@ dx 0.0 / dy 0.0 from its trigger on keyboard activation, which is what `menuClic
 | `src/lib/folderTree.ts` | `buildFolderTree` and friends, shared with the deck gallery |
 | `src/features/wishlist/wishDrag.ts` | The payload, the tile that offers it, the target that takes it |
 | `src/features/wishlist/WishFolderCard.tsx` | The tile, and its stories beside it |
+| `src/components/ParentFolderCard.tsx` | The up-one-level tile all three cabinets draw, and its stories |
 | `src/features/card/cardMenu.tsx` | `buildWishlistTargetItems` — `Add to → Wishlist` |

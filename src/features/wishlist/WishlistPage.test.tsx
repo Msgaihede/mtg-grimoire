@@ -329,6 +329,16 @@ const folderSlot = (name: string): HTMLElement =>
   folderCard(name).firstElementChild as HTMLElement;
 
 /**
+ * The **up one level** tile, by the level it leads to.
+ *
+ * One box rather than two, where a folder card has a `<li>` and a slot inside it: this tile has a
+ * single landing — every part of it means "up there" — so both drop targets register on the `<li>`
+ * and there is nothing for a second box to be measured for. `ParentFolderCard` carries the rest.
+ */
+const upTile = (label: string): HTMLElement =>
+  screen.getByRole("button", { name: `Up one level to ${label}` }).closest("li")!;
+
+/**
  * A wish carried out of the list and onto one of the two places it can be filed — a folder card,
  * or a segment of the breadcrumb.
  *
@@ -541,14 +551,22 @@ describe("WishlistPage", () => {
   });
 
   /**
-   * `wishlistSetQuantity(0)` *deletes* the row — the deliberate opposite of the collection's,
-   * because a wish for none of something is not a wish. So the stepper never reaches zero and
-   * the removal is its own control, always offered: crossing something off is what a shopping
-   * list is for.
+   * The named way out, still offered on **every** row and not only on an emptied one — crossing
+   * something off is what a shopping list is for.
+   *
+   * **This case asserted the opposite of its last line until issue #284**, and the correction is
+   * worth stating rather than quietly making: it used to check that `−` was `disabled` at one
+   * copy, on the argument that a wish is where the wishlist diverges from the collection because
+   * zero deletes here. Zero deletes in the collection too — since schema v24 — and that stepper
+   * has floored at zero the whole time, so the floor of one was this list behaving differently
+   * from the one beside it for a reason that had expired. The two controls overlap now, and both
+   * stay: this button is the discoverable route and the one press that works from any quantity,
+   * and the case below it — "drops a wish the stepper empties to zero" — is the other end of the
+   * same write.
    */
-  it("removes a wish through its own control, never through the stepper", async () => {
-    // At one copy, which is where the stepper would step into a deletion if it could. The list
-    // empties on the re-read for the reason the stepper's does above: `remove` settles the whole
+  it("removes a wish through its own control, on a row the stepper could also empty", async () => {
+    // At one copy, which is where the stepper now steps into the same deletion. The list empties
+    // on the re-read for the reason the stepper's does above: `remove` settles the whole
     // `["wishlist"]` root, so the backend's answer is what the row's absence rests on rather than
     // the optimistic patch alone.
     let gone = false;
@@ -562,11 +580,13 @@ describe("WishlistPage", () => {
     wrap(<WishlistPage />);
     await screen.findByText("Lightning Bolt");
 
+    // Reachable rather than greyed, which is the floor change seen from this file: put `min`
+    // back to 1 and this line goes red before anything else in the suite does.
     expect(
       screen.getByRole("button", {
         name: "Decrease Copies wanted of Lightning Bolt (LEA 161, Foil)",
       }),
-    ).toBeDisabled();
+    ).not.toBeDisabled();
 
     await userEvent.click(
       screen.getByRole("button", {
@@ -576,6 +596,93 @@ describe("WishlistPage", () => {
 
     expect(wishlistRemove).toHaveBeenCalledWith(7);
     await waitFor(() => expect(screen.queryByText("Lightning Bolt")).not.toBeInTheDocument());
+  });
+
+  /**
+   * **The bug the floor change created, and the reason `EntryChange.removed` is read rather than
+   * ignored.**
+   *
+   * `set_wish_quantity(id, 0)` returns `remove_wish(conn, id)` — `wishlist_entries.quantity`
+   * carries `CHECK (quantity > 0)`, so it always has — and with the stepper at `min={0}` that
+   * delete is one press away on a single-copy wish. `CollectionPage.test.tsx`'s "drops a row the
+   * stepper empties to zero" is the same case one list over.
+   *
+   * **What is being pinned is _when_ the row goes, and the held-open re-read is what makes that
+   * askable.** `settleWhole` invalidates `["wishlist"]` whole and this list's key is
+   * `["wishlist", "list", …]`, so a handler that ignored `removed` would still lose the row on
+   * the refetch — which means a mock that answers the second read empties the wall whatever the
+   * handler did, and the case would pass over the defect. Hung after the write, what stays on
+   * screen is the previous page, so the row leaving rests on the patch alone. That is the honest
+   * shape rather than a rigged one: the whole of what this handler buys is the round trip's
+   * length, and a wish sitting there wanting none of something with a `+` beside it that answers
+   * GONE is precisely what `remove.onSuccess` refuses to let a crossed-off wish do. This test
+   * fails on the defect; a test that let the re-read land could not.
+   */
+  it("drops a wish the stepper empties to zero, because zero deletes it", async () => {
+    let deleted = false;
+    wishlistList.mockImplementation(async () => {
+      if (deleted) await new Promise(() => {});
+      return page([{ ...BOLT, quantity: 1 }]);
+    });
+    wishlistSetQuantity.mockImplementation(async (id: number) => {
+      deleted = true;
+      return { id, quantity: 0, removed: true };
+    });
+    wrap(<WishlistPage />);
+    await screen.findByText("Lightning Bolt");
+
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: "Decrease Copies wanted of Lightning Bolt (LEA 161, Foil)",
+      }),
+    );
+
+    expect(wishlistSetQuantity).toHaveBeenCalledWith(7, 0);
+    await waitFor(() => expect(screen.queryByText("Lightning Bolt")).not.toBeInTheDocument());
+    // And on the one command: the delete happened inside `wishlist_set_quantity`, so a second
+    // write here would be the page removing a row that is already gone.
+    expect(wishlistRemove).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The other half of the floor change: a step to zero the backend **refuses** must put the row
+   * back, rather than leaving it at none or taking it off the list.
+   *
+   * The optimistic patch writes a `0` into the row for the length of the round trip — accepted
+   * deliberately, as the collection's twin accepts it — so a refusal here is the one press on
+   * this page where the rollback is the difference between a wish and no wish. The re-read is
+   * held open for the reason the case above holds it: `settleWhole` runs on the failure path too,
+   * and a list answer landing mid-assert would restore the row whether or not `restore(saved)`
+   * ran, which is a green test drawn over a missing rollback.
+   */
+  it("puts a wish back when a step to zero is refused", async () => {
+    let refused = false;
+    wishlistList.mockImplementation(async () => {
+      if (refused) await new Promise(() => {});
+      return page([{ ...BOLT, quantity: 1 }]);
+    });
+    wishlistSetQuantity.mockImplementation(async () => {
+      refused = true;
+      throw "That wishlist entry is not there any more.";
+    });
+    wrap(<WishlistPage />);
+    await screen.findByText("Lightning Bolt");
+
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: "Decrease Copies wanted of Lightning Bolt (LEA 161, Foil)",
+      }),
+    );
+
+    expect(wishlistSetQuantity).toHaveBeenCalledWith(7, 0);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/not there any more/i);
+    // The wish is still wanted, and still wanted in the number the wishlist actually holds.
+    expect(screen.getByText("Lightning Bolt")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("spinbutton", { name: /Copies wanted of Lightning Bolt/ }),
+      ).toHaveValue(1),
+    );
   });
 
   /**
@@ -1402,7 +1509,14 @@ describe("the wall", () => {
     await user.click(
       await screen.findByRole("button", { name: /Edit Lightning Bolt .* on your wishlist/ }),
     );
-    await user.click(screen.getByRole("button", { name: /Increase Copies wanted of Lightning/i }));
+    // **Scoped to the panel, because the tile draws a stepper of its own now** (issue #284) and
+    // the two carry the same accessible name — one wish, one label, wherever the number is
+    // edited. An unscoped query matched one control while the wall had none and matches two now,
+    // which reads as the panel being broken rather than as the wall having grown a control.
+    const panel = screen.getByRole("dialog", { name: "Edit Lightning Bolt" });
+    await user.click(
+      within(panel).getByRole("button", { name: /^Increase Copies wanted of Lightning/i }),
+    );
 
     await waitFor(() => expect(wishlistSetQuantity).toHaveBeenCalledWith(7, 5));
   });
@@ -2184,6 +2298,59 @@ describe("the folders", () => {
   });
 
   /**
+   * **The way back out at the size of the things it stands among** — issue #283, which was about
+   * exactly this: the breadcrumb above could always take a wish, and a segment is one word of
+   * `text-sm` in a bar the pointer has already left.
+   *
+   * The tile names its **destination**, because that is what a reader has to read before letting
+   * go, and it is drawn only where there is somewhere to go: at the root there is not.
+   *
+   * **Two levels deep on purpose.** A tile that always went to the root would pass a one-level
+   * test and strand anyone who had drilled twice — the same failure the trail-derived parent
+   * exists to prevent, and the reason it is read off the trail rather than off `parentId`.
+   */
+  it("names the level above, and draws nothing at the root", async () => {
+    wrap(<WishlistPage />);
+    await screen.findByRole("button", { name: /^Ordered folder/ });
+    expect(screen.queryByRole("button", { name: /^Up one level/ })).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: /^Ordered folder/ }));
+    expect(
+      await screen.findByRole("button", { name: "Up one level to Wishlist" }),
+    ).toBeInTheDocument();
+
+    await userEvent.click(await screen.findByRole("button", { name: /^Backordered folder/ }));
+    expect(
+      await screen.findByRole("button", { name: "Up one level to Ordered" }),
+    ).toBeInTheDocument();
+  });
+
+  /** Pressed, it is the breadcrumb's parent segment — one level, not the root. */
+  it("walks up one level when the tile is pressed", async () => {
+    wrap(<WishlistPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /^Ordered folder/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /^Backordered folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(2));
+
+    await userEvent.click(await screen.findByRole("button", { name: "Up one level to Ordered" }));
+
+    await waitFor(() => expect(lastQuery().folderId).toBe(1));
+    expect(within(crumbs()).getByText("Ordered")).toHaveAttribute("aria-current", "page");
+  });
+
+  /** And the drop the tile exists for: a wish carried out of the drawer it is in, onto the
+   *  drawer-sized target that says where it is going. */
+  it("un-files a wish dropped on the up tile", async () => {
+    const { container } = wrap(<WishlistPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /^Ordered folder/ }));
+    await screen.findByText("Rhystic Study");
+
+    await wishOnto(cardSources(container)[0], upTile("Wishlist"));
+
+    expect(wishlistSetFolder).toHaveBeenCalledWith(12, null);
+  });
+
+  /**
    * An empty folder is not an empty wishlist, and telling the reader how to put a card on a list
    * they already have is answering a question they did not ask.
    */
@@ -2503,5 +2670,49 @@ describe("rearranging the wishlist's cabinet", () => {
 
     expect(wishlistSetFolder).toHaveBeenCalledWith(7, 1);
     expect(wishlistFolderReorder).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The other half of issue #283, and the half a folder card cannot do either.** A drawer could
+   * be pushed deeper by a drag from the day the wall learnt to reorder, and the only route back up
+   * was `Move to folder…` on its own `⋯`.
+   *
+   * `inside` is what the tile means, so the arriving drawer goes **last** in the level above —
+   * `Ordered` and `Someday` in the order the tree already draws them, then `Backordered`. There is
+   * no second position in the gesture for the reader to have meant: the tile is one landing wide,
+   * which is exactly the objection that keeps a breadcrumb segment from taking a folder at all.
+   */
+  it("moves a drawer up a level when it is dropped on the up tile", async () => {
+    wrap(<WishlistPage />);
+    await wall();
+    await userEvent.click(screen.getByRole("button", { name: /^Ordered folder/ }));
+    await screen.findByRole("button", { name: /^Backordered folder/ });
+    upTile("Wishlist").getBoundingClientRect = () => CARD_BOX;
+
+    const held = await holdCard("Backordered");
+    await held.over(upTile("Wishlist"), AT_MIDDLE);
+    await held.drop();
+
+    await waitFor(() => expect(wishlistFolderReorder).toHaveBeenCalledWith(null, [1, 3, 2]));
+  });
+
+  /**
+   * **Every part of the tile is the same landing**, which is what makes it a target a reader can
+   * aim at while holding something: a folder card refuses its middle to a drawer that is already
+   * inside it and offers its edges instead, and this tile has no edges to offer. A drop a tenth of
+   * the way in writes exactly what a drop in the middle writes.
+   */
+  it("takes a drawer anywhere on the up tile, not only in its middle", async () => {
+    wrap(<WishlistPage />);
+    await wall();
+    await userEvent.click(screen.getByRole("button", { name: /^Ordered folder/ }));
+    await screen.findByRole("button", { name: /^Backordered folder/ });
+    upTile("Wishlist").getBoundingClientRect = () => CARD_BOX;
+
+    const held = await holdCard("Backordered");
+    await held.over(upTile("Wishlist"), AT_END);
+    await held.drop();
+
+    await waitFor(() => expect(wishlistFolderReorder).toHaveBeenCalledWith(null, [1, 3, 2]));
   });
 });

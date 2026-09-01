@@ -1917,6 +1917,21 @@ price | type`). An **inactive category stays its own group in all three grouping
   not answer is anything about _size_ — a headless browser at a story's own viewport is not the
   app's window — so the rail's **height** remains the unmeasured thing, and its width was never in
   question.
+- **The wall's first tile is the way back *up*, and only inside a folder** (2026-09-01, issue
+  #283). `ParentDeckFolderCard` in `FolderCard.tsx` wraps `components/ParentFolderCard` — the same
+  tile the wishlist and the collection draw — around this gallery's two payloads, and it names the
+  level above (`ROOT_LABEL`, `All decks`, at the top). **The gallery already had a way back and it
+  was in the wrong place**: every row of the sidebar's tree is a deck target, `All decks` included,
+  so a deck could always be filed up — by dragging it onto a 32px-tall row on the far side of the
+  window from the tile in hand. The tree is untouched. Three things about it are this page's own: the
+  destination is read out of `levels.parent` rather than off `openNode.folder.parentId`, so an
+  orphan climbs to where the tree **drew** it; the ring comes from the page's `drag` rather than
+  from the target, which is `deckDrag.ts`'s split and why this wrapper takes a `drag` where the
+  other two do not; and a **folder** dropped on it is `folderLanding(drag, up, "inside")` verbatim
+  — no second rule, so the cycle fence, the already-there refusal and `reorderedLevel`'s no-op all
+  hold. It draws no strip of member art: a strip is what a folder is *recognised* by, and this tile
+  is the way out rather than a folder to pick out of a wall.
+
 - **A deck card is the whole card, and the app's marks are overlays on it.** The picture _is_ the
   card, so `deckCardName` on the button is the **only** name a screen reader gets — but the app
   draws a **printed-card frame under it** (name, cost, type line) that the picture paints over,

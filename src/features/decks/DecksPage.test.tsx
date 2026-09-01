@@ -1620,6 +1620,16 @@ async function folderCard(name: string): Promise<HTMLElement> {
   return button.parentElement as HTMLElement;
 }
 
+/**
+ * The wall's **up one level** tile, addressed the way a reader hears it — and its `<li>`, which is
+ * the single element both of its drop targets are registered on. One box, where a folder card
+ * needs two: this tile has one landing, so there is no geometry for `folderEdge` to divide.
+ */
+async function upTile(label: string): Promise<HTMLElement> {
+  const button = await screen.findByRole("button", { name: `Up one level to ${label}` });
+  return button.parentElement as HTMLElement;
+}
+
 /** Pick a folder up, carry it over another one, let go at one of the three landings. */
 async function dropOn(
   source: HTMLElement,
@@ -1875,6 +1885,97 @@ describe("dragging a folder", () => {
     await held.drop();
 
     await waitFor(() => expect(deckSetFolder).toHaveBeenCalledWith(BURN.id, 1));
+    expect(deckFolderReorder).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The wall's way back up, and the second half of issue #283.** A folder card only ever takes a
+   * folder *deeper*; the sidebar's `All decks` row has taken one since folders shipped, but it is a
+   * 32px row on the far side of the window from the card being dragged.
+   *
+   * `inside` is what the tile means, so the arriving folder goes **last** in the level above —
+   * `Commander` and `Modern` in the order the tree already draws them, then `Legends`.
+   */
+  it("moves a folder up a level when it is dropped on the wall's up tile", async () => {
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /^Commander folder, / }));
+
+    await dropOn(await folderCard("Legends"), await upTile("All decks"), MIDDLE);
+
+    await waitFor(() => expect(deckFolderReorder).toHaveBeenCalledWith(null, [1, 3, 2]));
+  });
+
+  /**
+   * **Every part of the tile is the same landing.** A folder card refuses its middle to a folder
+   * already inside it and offers its edges instead; this tile has no edges to offer, because the
+   * wall is not the level the dragged folder would be joining. A drop a tenth of the way in writes
+   * exactly what a drop in the middle writes.
+   */
+  it("takes a folder anywhere on the up tile, not only in its middle", async () => {
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /^Commander folder, / }));
+
+    await dropOn(await folderCard("Legends"), await upTile("All decks"), TRAILING);
+
+    await waitFor(() => expect(deckFolderReorder).toHaveBeenCalledWith(null, [1, 3, 2]));
+  });
+});
+
+/**
+ * The wall's **up one level** tile — where it is drawn, what it is called, and the deck drag it
+ * exists for. Issue #283.
+ *
+ * The folder drag that lands on it is two cases up, with the rest of the folder gesture.
+ */
+describe("the wall's way up", () => {
+  /**
+   * **Two levels deep on purpose.** A tile that always went to the top level would pass a
+   * one-level test and strand anyone who had drilled twice — which is why the destination is read
+   * out of the tree's own level map rather than off the open folder's stored `parentId`.
+   */
+  it("names the level above, and draws nothing at the top level", async () => {
+    withFolders();
+    wrap(<DecksPage />);
+    await screen.findByRole("button", { name: /^Commander folder, / });
+    expect(screen.queryByRole("button", { name: /^Up one level/ })).toBeNull();
+
+    await userEvent.click(screen.getByRole("button", { name: /^Commander folder, / }));
+    expect(await upTile("All decks")).toBeInTheDocument();
+
+    await userEvent.click(await screen.findByRole("button", { name: /^Legends folder, / }));
+    expect(await upTile("Commander")).toBeInTheDocument();
+  });
+
+  /** Pressed, it is the folder one level up — not the top of the tree. */
+  it("walks up one level when the tile is pressed", async () => {
+    withFolders();
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /^Commander folder, / }));
+    await userEvent.click(await screen.findByRole("button", { name: /^Legends folder, / }));
+    expect(await screen.findByRole("heading", { name: "Legends" })).toBeInTheDocument();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Up one level to Commander" }));
+
+    expect(await screen.findByRole("heading", { name: "Commander" })).toBeInTheDocument();
+  });
+
+  /** And the drop it exists for: a deck carried out of the folder it is in, onto a target the
+   *  size of the tiles it is standing among. */
+  it("files a deck up a level when it is dropped on the tile", async () => {
+    withFolders();
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /^Commander folder, / }));
+    await userEvent.click(await screen.findByRole("button", { name: /^Legends folder, / }));
+
+    const tile = (await tileFor("Kenrith Two-Drops")).closest("li") as HTMLElement;
+    const up = await upTile("Commander");
+    place(up, TARGET_BOX);
+    const held = await hold(tile);
+    expect(held.started).toBe(true);
+    await held.over(up);
+    await held.drop();
+
+    await waitFor(() => expect(deckSetFolder).toHaveBeenCalledWith(KENRITH.id, 1));
     expect(deckFolderReorder).not.toHaveBeenCalled();
   });
 });
