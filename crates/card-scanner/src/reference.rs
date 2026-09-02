@@ -266,9 +266,39 @@ impl Reference {
         k: usize,
         mask: &Mask,
     ) -> MatchReport {
+        self.match_views_field(views, k, mask, crate::index::Field::All)
+    }
+
+    /// The same, comparing only one [`crate::index::Field`] of the descriptor.
+    pub fn match_views_field(
+        &self,
+        views: &[(&image::RgbImage, &image::RgbImage)],
+        k: usize,
+        mask: &Mask,
+        field: crate::index::Field,
+    ) -> MatchReport {
+        self.match_views_weighted(views, k, mask, field, None)
+    }
+
+    /// The same, optionally blending the two fields at a chosen chroma weight rather than
+    /// letting the bit counts decide it. See [`crate::index::Bundle::search_weighted`].
+    pub fn match_views_weighted(
+        &self,
+        views: &[(&image::RgbImage, &image::RgbImage)],
+        k: usize,
+        mask: &Mask,
+        field: crate::index::Field,
+        chroma_weight: Option<f32>,
+    ) -> MatchReport {
         let kind = self.bundle.kind;
         let bits = self.bundle.bits;
-        let best_of = |v: &[Match]| v.first().map(|m| m.distance).unwrap_or(u32::MAX);
+        // **`normalized`, not `distance`.** This chooses between orientations and between
+        // framings, and it has to use the same score the ranking used or it is answering a
+        // different question than the one just asked. A field search reports `distance` over
+        // the whole descriptor while ranking on one half of it, and a weighted search reports
+        // it over both halves while ranking on a blend — so comparing raw bits here picked a
+        // different framing than the ranking would have, and the two disagreed on a card.
+        let best_of = |v: &[Match]| v.first().map(|m| m.normalized).unwrap_or(f32::INFINITY);
 
         let mut hash_ms = 0.0;
         let mut search_ms = 0.0;
@@ -286,8 +316,11 @@ impl Reference {
             hash_ms += t_hash.elapsed().as_secs_f32() * 1000.0;
 
             let started = std::time::Instant::now();
-            let a = self.bundle.search(&hash_a, Section::Card, k, mask);
-            let b = self.bundle.search(&hash_b, Section::Card, k, mask);
+            let run = |h: &crate::hash::Descriptor| match chroma_weight {
+                Some(w) => self.bundle.search_weighted(h, Section::Card, k, mask, w),
+                None => self.bundle.search_field(h, Section::Card, k, mask, field),
+            };
+            let (a, b) = (run(&hash_a), run(&hash_b));
             search_ms += started.elapsed().as_secs_f32() * 1000.0;
 
             let rotated_wins = best_of(&b) < best_of(&a);

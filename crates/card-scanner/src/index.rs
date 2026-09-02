@@ -190,6 +190,93 @@ impl Mask {
     }
 }
 
+/// Which half of a descriptor a search compares.
+///
+/// **The colour kinds pack two different measurements into one word array**, and until now the
+/// only thing anyone could ask was their sum. `DHashChroma32` at 256 bits is 224 bits of
+/// luminance structure followed by 32 bits of chromaticity, so a plain Hamming distance gives
+/// colour a fixed one-eighth of the vote whatever the frame looks like.
+///
+/// That single ratio is wrong in both directions, and both were measured here. Under a point
+/// light a foil's colour is the part that has been destroyed, and grayscale identified those
+/// better than colour did. A basic land is the opposite case exactly: every Mountain and every
+/// Island shares a frame, a layout and an art position, and *only* colour separates them —
+/// matching one as the other was a real failure, and a confident one.
+///
+/// Splitting the fields costs no storage and no rebuild. The bits are already there, in a
+/// known order; this is a mask over them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Field {
+    /// Every bit, which is what a plain distance has always meant.
+    All,
+    /// Luminance only — structure, layout, art, and nothing about hue.
+    Luma,
+    /// Chromaticity only. Few bits and coarse, but the only field that tells a Mountain from
+    /// an Island.
+    Chroma,
+}
+
+impl Field {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Field::All => "all",
+            Field::Luma => "luma",
+            Field::Chroma => "chroma",
+        }
+    }
+
+    /// The word mask and the bit count this field covers, for a bundle of `kind` at `bits`.
+    ///
+    /// A grayscale bundle has no chroma to isolate, so `Chroma` covers nothing there — width
+    /// zero, which the caller turns into an empty result rather than a division by zero.
+    pub fn mask(self, kind: HashKind, bits: u16) -> ([u64; 4], u16) {
+        let full = ([!0u64; 4], bits);
+        let chroma_bits = match kind {
+            HashKind::DHashChroma => {
+                if bits == 128 {
+                    32
+                } else {
+                    64
+                }
+            }
+            HashKind::DHashChroma32 => {
+                if bits == 128 {
+                    16
+                } else {
+                    32
+                }
+            }
+            _ => {
+                return if self == Field::Chroma { ([0; 4], 0) } else { full };
+            }
+        };
+        match self {
+            Field::All => full,
+            // Bits are written least-significant-first and in order, so the luminance half is
+            // simply the low `bits - chroma_bits` of the array.
+            Field::Luma => (low_mask(bits - chroma_bits), bits - chroma_bits),
+            Field::Chroma => {
+                let lo = low_mask(bits - chroma_bits);
+                let all = low_mask(bits);
+                (std::array::from_fn(|i| all[i] & !lo[i]), chroma_bits)
+            }
+        }
+    }
+}
+
+/// A mask covering the low `n` bits of the four-word array.
+fn low_mask(n: u16) -> [u64; 4] {
+    std::array::from_fn(|i| {
+        let have = (n as usize).saturating_sub(i * 64).min(64);
+        if have == 64 {
+            !0
+        } else {
+            (1u64 << have) - 1
+        }
+    })
+}
+
 impl Bundle {
     pub fn section(&self, s: Section) -> &SectionData {
         match s {
@@ -210,8 +297,98 @@ impl Bundle {
         k: usize,
         mask: &Mask,
     ) -> Vec<Match> {
+        self.search_field(query, section, k, mask, Field::All)
+    }
+
+    /// Rank by luminance and chromaticity as two scores, blended at `chroma_weight`.
+    ///
+    /// **A plain Hamming distance over a colour descriptor already blends them — at a ratio
+    /// nobody chose.** `DHashChroma32` is 224 luma bits and 32 chroma bits, so summing the
+    /// differing bits weights colour at exactly 32/256, and that number is an artefact of how
+    /// many bits the chroma grid happened to need. This makes it a decision.
+    ///
+    /// The weight applies to each field's *normalized* distance, so `chroma_weight` of 0.125
+    /// reproduces the plain sum and 0.5 makes 32 bits of colour count for as much as 224 bits
+    /// of structure.
+    ///
+    /// Note what this is not: chroma cannot rank on its own. Measured over the corpus, a
+    /// chroma-only search has a median distance of 0.7 bits out of 32 — 113,375 cards in a
+    /// 32-bit space is saturated, thousands tie at nearly zero, and its top-1 is arbitrary. It
+    /// is a tie-breaker among candidates structure has already narrowed, and weighting it as
+    /// though it were a second opinion of equal standing is the way to make things worse.
+    pub fn search_weighted(
+        &self,
+        query: &Descriptor,
+        section: Section,
+        k: usize,
+        mask: &Mask,
+        chroma_weight: f32,
+    ) -> Vec<Match> {
         let data = self.section(section);
         if query.bits != self.bits || data.is_empty() || k == 0 {
+            return Vec::new();
+        }
+        let (lmask, lbits) = Field::Luma.mask(self.kind, self.bits);
+        let (cmask, cbits) = Field::Chroma.mask(self.kind, self.bits);
+        if cbits == 0 {
+            return self.search_field(query, section, k, mask, Field::All);
+        }
+        let w = chroma_weight.clamp(0.0, 1.0);
+        let stride = data.stride;
+
+        // Scored in floating point, so the insertion list is ordered on `normalized` and
+        // `distance` is reported as the plain bit count it has always been — a reader
+        // comparing two runs should not find the units changed underneath them.
+        let mut best: Vec<Match> = Vec::with_capacity(k + 1);
+        let mut worst = f32::INFINITY;
+
+        for (i, id) in data.ids.iter().enumerate() {
+            if !mask.permits(id) {
+                continue;
+            }
+            let row = &data.words[i * stride..i * stride + stride];
+            let (mut ld, mut cd) = (0u32, 0u32);
+            for j in 0..stride.min(4) {
+                let x = row[j] ^ query.words[j];
+                ld += (x & lmask[j]).count_ones();
+                cd += (x & cmask[j]).count_ones();
+            }
+            let score = (1.0 - w) * (ld as f32 / lbits as f32)
+                + w * (cd as f32 / cbits as f32);
+            if best.len() == k && score >= worst {
+                continue;
+            }
+            let m = Match { id: *id, distance: ld + cd, normalized: score };
+            let at = best
+                .iter()
+                .position(|e| e.normalized > score)
+                .unwrap_or(best.len());
+            best.insert(at, m);
+            best.truncate(k);
+            worst = best.last().map(|e| e.normalized).unwrap_or(f32::INFINITY);
+        }
+        best
+    }
+
+    /// The same, comparing only one [`Field`] of the descriptor.
+    ///
+    /// `normalized` divides by the bits *this field* covers, so a luma distance and a chroma
+    /// distance land on the same 0..1 scale and a caller can weigh one against the other
+    /// without knowing how the descriptor is laid out.
+    pub fn search_field(
+        &self,
+        query: &Descriptor,
+        section: Section,
+        k: usize,
+        mask: &Mask,
+        field: Field,
+    ) -> Vec<Match> {
+        let data = self.section(section);
+        if query.bits != self.bits || data.is_empty() || k == 0 {
+            return Vec::new();
+        }
+        let (fmask, fbits) = field.mask(self.kind, self.bits);
+        if fbits == 0 {
             return Vec::new();
         }
         let stride = data.stride;
@@ -228,8 +405,8 @@ impl Bundle {
             }
             let row = &data.words[i * stride..i * stride + stride];
             let mut d = 0u32;
-            for (w, q) in row.iter().zip(query.words.iter()) {
-                d += (w ^ q).count_ones();
+            for ((w, q), m) in row.iter().zip(query.words.iter()).zip(fmask.iter()) {
+                d += ((w ^ q) & m).count_ones();
             }
             if best.len() == k && d >= worst {
                 continue;
@@ -237,7 +414,7 @@ impl Bundle {
             let m = Match {
                 id: *id,
                 distance: d,
-                normalized: d as f32 / self.bits as f32,
+                normalized: d as f32 / fbits as f32,
             };
             let pos = best.partition_point(|e| e.distance <= d);
             best.insert(pos, m);
@@ -491,6 +668,69 @@ mod tests {
     fn a_width_mismatch_returns_nothing_rather_than_nonsense() {
         let b = sample(256);
         assert!(b.search(&desc(128, 7), Section::Card, 3, &Mask::all()).is_empty());
+    }
+
+    #[test]
+    fn the_two_fields_partition_the_descriptor() {
+        // A wrong mask compares the wrong bits and says nothing about it, so this pins the
+        // arithmetic rather than trusting it: luma and chroma must be disjoint, must cover
+        // every bit between them, and must be exactly as wide as they claim.
+        for (kind, bits, chroma) in [
+            (HashKind::DHashChroma32, 256u16, 32u16),
+            (HashKind::DHashChroma32, 128, 16),
+            (HashKind::DHashChroma, 256, 64),
+            (HashKind::DHashChroma, 128, 32),
+        ] {
+            let (lm, lb) = Field::Luma.mask(kind, bits);
+            let (cm, cb) = Field::Chroma.mask(kind, bits);
+            assert_eq!(cb, chroma, "{kind:?}@{bits} chroma width");
+            assert_eq!(lb + cb, bits, "{kind:?}@{bits} widths do not sum to the descriptor");
+            for i in 0..4 {
+                assert_eq!(lm[i] & cm[i], 0, "{kind:?}@{bits} word {i} overlaps");
+            }
+            let covered: u32 = (0..4).map(|i| (lm[i] | cm[i]).count_ones()).sum();
+            assert_eq!(covered, u32::from(bits), "{kind:?}@{bits} leaves bits uncompared");
+            let counted: u32 = (0..4).map(|i| cm[i].count_ones()).sum();
+            assert_eq!(counted, u32::from(cb), "{kind:?}@{bits} chroma mask is the wrong size");
+        }
+    }
+
+    #[test]
+    fn a_grayscale_bundle_has_no_chroma_to_search() {
+        // Not an error and not a full-width search: there is nothing there, so the honest
+        // answer is no candidates. Returning `All` instead would quietly answer a different
+        // question than the caller asked.
+        let (_, cb) = Field::Chroma.mask(HashKind::DHash, 256);
+        assert_eq!(cb, 0);
+        let (lm, lb) = Field::Luma.mask(HashKind::DHash, 256);
+        assert_eq!(lb, 256, "grayscale luma is the whole descriptor");
+        assert_eq!(lm, [!0u64; 4]);
+    }
+
+    #[test]
+    fn a_field_search_ranks_on_that_field_alone() {
+        // Two entries: one identical to the query in luma and wrong in chroma, one the
+        // reverse. Each field must pick its own.
+        let mut b = BundleBuilder::new(HashKind::DHashChroma32, 256);
+        let mut luma_twin = [0u64; 4];
+        luma_twin[3] = 0xFFFF_FFFF_0000_0000; // every chroma bit differs, no luma bit does
+        let mut chroma_twin = [!0u64; 4];
+        chroma_twin[3] = 0x0000_0000_FFFF_FFFF; // the mirror image
+        let id = |n: u8| {
+            let mut x = [0u8; ID_LEN];
+            x[0] = n;
+            x
+        };
+        b.push(Section::Card, id(1), &Descriptor { words: luma_twin, bits: 256 });
+        b.push(Section::Card, id(2), &Descriptor { words: chroma_twin, bits: 256 });
+        let bundle = b.finish(0);
+
+        let query = Descriptor { words: [0; 4], bits: 256 };
+        let by = |f| bundle.search_field(&query, Section::Card, 1, &Mask::all(), f)[0];
+        assert_eq!(by(Field::Luma).id, id(1), "luma picked the card that differs in luma");
+        assert_eq!(by(Field::Luma).distance, 0);
+        assert_eq!(by(Field::Chroma).id, id(2), "chroma picked the card that differs in chroma");
+        assert_eq!(by(Field::Chroma).distance, 0);
     }
 
     #[test]

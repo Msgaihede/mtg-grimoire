@@ -62,6 +62,13 @@ struct Args {
     /// Hash one framing only, at --inset exactly. The A/B against --query-insets.
     #[arg(long)]
     single_framing: bool,
+    /// Which half of the descriptor to compare. See index::Field.
+    #[arg(long, default_value = "all")]
+    field: FieldArg,
+    /// Blend the two fields at this chroma weight instead of letting the bit counts decide.
+    /// 0.125 reproduces the plain sum. See index::Bundle::search_weighted.
+    #[arg(long)]
+    chroma_weight: Option<f32>,
 
     /// Downscale each source image to this long edge before doing anything else.
     ///
@@ -118,6 +125,23 @@ struct Args {
     /// on this machine; this one can be sent to someone.
     #[arg(long)]
     embed: bool,
+}
+
+#[derive(Clone, Copy, Debug, clap::ValueEnum)]
+enum FieldArg {
+    All,
+    Luma,
+    Chroma,
+}
+
+impl From<FieldArg> for card_scanner::index::Field {
+    fn from(f: FieldArg) -> Self {
+        match f {
+            FieldArg::All => card_scanner::index::Field::All,
+            FieldArg::Luma => card_scanner::index::Field::Luma,
+            FieldArg::Chroma => card_scanner::index::Field::Chroma,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -371,7 +395,13 @@ fn main() -> std::process::ExitCode {
                 let mut views: Vec<(&image::RgbImage, &image::RgbImage)> =
                     vec![(&d.rectified, &d.rectified_180)];
                 views.extend(d.alternates.iter().map(|(a, b)| (a, b)));
-                    r.match_views(&views, args.top.clamp(1, 25), &Mask::all())
+                    r.match_views_weighted(
+                        &views,
+                        args.top.clamp(1, 25),
+                        &Mask::all(),
+                        args.field.into(),
+                        args.chroma_weight,
+                    )
                 });
 
                 let detail = format!(
