@@ -59,16 +59,42 @@ pub struct Cardness {
 }
 
 impl Cardness {
-    /// Is this plausibly a card?
-    ///
-    /// The threshold is set from the measured separation over the sample corpus; see
-    /// [`MIN_SCORE`].
+    /// Does this look like a *well-rectified* card, at the level measured to predict a good
+    /// match? Not a gate — see [`MIN_SCORE`].
     pub fn is_card(&self) -> bool {
-        self.score >= MIN_SCORE
+        self.score >= GOOD_SCORE
     }
 }
 
-/// Rejection threshold, swept rather than guessed.
+/// **The gate is off by default, and that is the measured choice.**
+///
+/// Card-likeness earns its place by *ranking* candidates, not by rejecting them. Measured
+/// over the sample corpus:
+///
+/// | | detections | good (<=66b) | bad |
+/// | --- | --- | --- | --- |
+/// | no card-likeness at all | 39 | 24 | 15 |
+/// | **ranking only** | **39** | **26** | **13** |
+/// | ranking + a 0.45 gate | 31 | 26 | 5 |
+///
+/// Ranking costs nothing and finds two more good matches; the gate buys precision by
+/// throwing away eight detections. On *video* it was far worse than that — a card held in a
+/// hand, under a lamp, in a room, scores lower than the same card flat on a table, and the
+/// gate rejected almost every frame. A hard threshold in the detector is a cliff, and this
+/// signal is not reliable enough to put a cliff on.
+///
+/// The junk it was aimed at is already handled downstream and more gracefully: a bad
+/// rectification matches at a distance well past the confidence threshold, and
+/// [`crate::track`] never accumulates evidence for an id that does not recur.
+///
+/// [`GOOD_SCORE`] keeps the measured figure for callers that want to weigh it.
+pub const MIN_SCORE: f32 = 0.0;
+
+/// The level at which card-likeness was measured to predict a good match, for callers that
+/// want to treat it as a signal rather than a gate. See [`MIN_SCORE`] for why it is not one.
+pub const GOOD_SCORE: f32 = 0.45;
+
+/// The swept figure, kept for reference.
 ///
 /// Over the 43 sample scans, gating on this score against whether the match landed in the
 /// good cluster (<= 66 bits):
@@ -84,7 +110,7 @@ impl Cardness {
 /// precision for one good frame, which is tempting and is deliberately not taken: with
 /// [`crate::track`] downstream, a junk frame contributes an id that never recurs and decays
 /// away, while a lost good frame is evidence that never existed.
-pub const MIN_SCORE: f32 = 0.45;
+const _SWEPT_REFERENCE: f32 = 0.45;
 
 /// Score both orientations and keep the better, reporting which won.
 ///

@@ -1126,7 +1126,10 @@ mod tests {
         // the artwork. Nothing about the art box's own shape is wrong; only its being inside
         // something larger is.
         let (w, h) = (700u32, 900u32);
-        let mut img = image::RgbImage::from_pixel(w, h, image::Rgb([225, 222, 216]));
+        // A dark ground. With a light one the card's near-white title and type bands barely
+        // separate from it, Canny finds only the art window's edges, and the fixture ends up
+        // testing contrast rather than the containment rule.
+        let mut img = image::RgbImage::from_pixel(w, h, image::Rgb([26, 24, 30]));
         // The card, with the bands that make it read as one.
         let (cx, cy, cw) = (180u32, 210u32, 320u32);
         let ch = (cw as f32 / CARD_ASPECT) as u32;
@@ -1147,7 +1150,13 @@ mod tests {
 
         for method in [EdgeMethod::Canny, EdgeMethod::Otsu] {
             let opts = DetectOptions { method, ..Default::default() };
-            let Ok(d) = detect(&src, &opts).0 else { continue };
+            // **Not `else { continue }`.** That is how this test passed vacuously for months:
+            // while a card-likeness gate was rejecting the art window outright, detection
+            // errored, the loop skipped, and the containment rule was never exercised at all.
+            // A test that silently declines to run is worse than one that fails.
+            let d = detect(&src, &opts)
+                .0
+                .unwrap_or_else(|e| panic!("{method:?} found nothing in the fixture: {e}"));
             // Whatever was chosen, it must not be the inset: the card's area is the whole
             // rectangle, the art window is well under half of it.
             let card_area = (cw * ch) as f32;

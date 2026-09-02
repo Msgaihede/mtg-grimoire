@@ -70,6 +70,7 @@ struct FrameOptions {
     canny_low: f32,
     canny_high: f32,
     aspect_tolerance: f32,
+    min_cardness: f32,
     /// Return the binary and contour images as well as the quad. Roughly doubles the
     /// response time, so the page asks for it only while the panel is open.
     stages: bool,
@@ -97,6 +98,7 @@ impl FrameOptions {
             canny_low: num("lo", 40.0),
             canny_high: num("hi", 100.0),
             aspect_tolerance: num("aspect", 0.18),
+            min_cardness: num("cardness", card_scanner::cardness::MIN_SCORE),
             stages: get("stages").as_deref() == Some("1"),
         }
     }
@@ -108,6 +110,7 @@ impl FrameOptions {
             canny_low: self.canny_low,
             canny_high: self.canny_high,
             aspect_tolerance: self.aspect_tolerance,
+            min_cardness: self.min_cardness,
             ..Default::default()
         }
     }
@@ -217,6 +220,7 @@ fn handle_frame(
             );
             out["method"] = method.as_str().into();
             out["quad"] = serde_json::json!(d.quad.corners);
+            out["cardness"] = serde_json::to_value(d.cardness).unwrap_or_default();
             out["score"] = serde_json::to_value(d.score).unwrap_or_default();
             out["hash"] = descriptor.to_hex().into();
             if let Some(t) = &trace {
@@ -273,6 +277,12 @@ fn handle_frame(
                 }
             }
             out["error"] = error.unwrap_or_else(|| "no card".into()).into();
+            if let Some(t) = &fallback_trace {
+                if let Some(best) = t.candidates.first() {
+                    out["rejected_cardness"] =
+                        serde_json::to_value(best.cardness).unwrap_or_default();
+                }
+            }
             if let Some(t) = &fallback_trace {
                 out["timings"] = serde_json::to_value(t.timings).unwrap_or_default();
                 out["candidates_examined"] = t.candidates.len().into();

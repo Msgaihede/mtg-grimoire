@@ -185,6 +185,7 @@
         <dt>distance</dt><dd id="mt-dist">&mdash;</dd>
         <dt>margin</dt><dd id="mt-margin">&mdash;</dd>
         <dt>orientation</dt><dd id="mt-rot">&mdash;</dd>
+        <dt>cardness</dt><dd id="mt-cardness">&mdash;</dd>
       </dl>
       <ol class="cands" id="mt-list"></ol>
       <p class="live-guess" id="mt-guess">&mdash;</p>
@@ -236,6 +237,7 @@
       <label class="row">canny hi<input type="range" id="hi" min="20" max="300" step="10" value="100"><output id="hi-o">100</output></label>
       <label class="row">aspect tol<input type="range" id="aspect" min="4" max="40" step="1" value="18"><output id="aspect-o">0.18</output></label>
       <label class="row">send px<input type="range" id="send" min="480" max="1440" step="80" value="960"><output id="send-o">960</output></label>
+      <label class="row">min cardness<input type="range" id="cardness" min="0" max="80" step="5" value="0"><output id="cardness-o">0.00</output></label>
       <div class="seg" id="stages-toggle">
         <button data-v="0" aria-pressed="true">overlay only</button>
         <button data-v="1" aria-pressed="false">full stages</button>
@@ -274,6 +276,7 @@ const opts = () => ({
   lo: +$('lo').value,
   hi: +$('hi').value,
   aspect: (+$('aspect').value / 100).toFixed(2),
+  cardness: (+$('cardness').value / 100).toFixed(2),
   stages: document.querySelector('#stages-toggle [aria-pressed=true]').dataset.v,
   send: +$('send').value,
 });
@@ -290,7 +293,8 @@ segment($('method'));
 segment($('stages-toggle'), (v) => { $('stages-card').hidden = v !== '1'; });
 $('mt-reset').addEventListener('click', () => { fetch('/reset', { method: 'POST' }); });
 for (const [id, fmt] of [['edge', String], ['lo', String], ['hi', String], ['send', String],
-                         ['aspect', (v) => (v / 100).toFixed(2)]]) {
+                         ['aspect', (v) => (v / 100).toFixed(2)],
+                         ['cardness', (v) => (v / 100).toFixed(2)]]) {
   const el = $(id), out = $(id + '-o');
   const sync = () => { out.value = fmt(el.value); };
   el.addEventListener('input', sync); sync();
@@ -331,7 +335,8 @@ async function pump() {
     inFlight = true;
     const t0 = performance.now();
     try {
-      const q = `edge=${o.edge}&method=${o.method}&lo=${o.lo}&hi=${o.hi}&aspect=${o.aspect}&stages=${o.stages}`;
+      const q = `edge=${o.edge}&method=${o.method}&lo=${o.lo}&hi=${o.hi}&aspect=${o.aspect}` +
+                `&cardness=${o.cardness}&stages=${o.stages}`;
       const res = await fetch('/frame?' + q, { method: 'POST', body: blob });
       const j = await res.json();
       j.round_trip_ms = performance.now() - t0;
@@ -465,6 +470,9 @@ function renderMatch(j, detected, hasBundle) {
   // A run that always reports "rotated" is a card being held upside-down, which is invisible
   // in the overlay because both orientations rectify perfectly.
   set('mt-rot', m ? (m.rotated ? 'rotated 180°' : 'upright') : '—');
+  const ck = j.cardness ?? j.rejected_cardness;
+  set('mt-cardness', ck ? `${ck.score.toFixed(2)} (t${ck.title.toFixed(2)}/y${ck.type_line.toFixed(2)})` : '—',
+      ck && ck.score < 0.45);
 
   // The standings are the accumulated evidence, not this frame's ranking — so the list is
   // stable too, and a contender climbing it is visible.

@@ -53,6 +53,20 @@ struct Args {
     #[arg(long, default_value_t = 1.07)]
     inset: f32,
 
+    /// Downscale each source image to this long edge before doing anything else.
+    ///
+    /// The corpus is 3000x4000 phone stills; the live view sends ~960 px camera frames. That
+    /// is the one systematic difference between the two paths, so anything that behaves
+    /// differently on video has to be reproducible by shrinking a still. Without this the
+    /// corpus can only answer questions about photographs.
+    #[arg(long)]
+    source_long_edge: Option<u32>,
+
+    /// Reject a detection below this card-likeness. 0 disables the gate and leaves
+    /// card-likeness as a ranking signal only.
+    #[arg(long, default_value_t = card_scanner::cardness::MIN_SCORE)]
+    min_cardness: f32,
+
     /// Descriptor to compute for the rectified card. Reported even with no bundle to search,
     /// so two scans of the same card can be compared by hand.
     #[arg(long, default_value = "dhash")]
@@ -179,7 +193,12 @@ fn main() -> std::process::ExitCode {
             .unwrap_or_else(|| path.display().to_string());
 
         let source = match image::open(path) {
-            Ok(i) => i,
+            Ok(i) => match args.source_long_edge {
+                Some(edge) if i.width().max(i.height()) > edge => {
+                    i.resize(edge, edge, image::imageops::FilterType::Triangle)
+                }
+                _ => i,
+            },
             Err(e) => {
                 failed_to_open += 1;
                 if args.json {
@@ -211,6 +230,7 @@ fn main() -> std::process::ExitCode {
                 aspect_tolerance: args.aspect_tolerance,
                 max_angle_error_deg: args.max_angle_error_deg,
                 inset: args.inset,
+                min_cardness: args.min_cardness,
                 ..Default::default()
             };
             let (result, trace) = detect(&source, &opts);
