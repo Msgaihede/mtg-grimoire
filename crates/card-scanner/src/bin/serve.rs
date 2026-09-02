@@ -57,6 +57,23 @@ struct Args {
     /// How many candidates to return per frame.
     #[arg(long, default_value_t = 5)]
     top: usize,
+
+    /// Print one line per frame: the lock, the top candidates and the tracker's verdict.
+    ///
+    /// The camera can only be held by one page at a time, so a second browser cannot be used
+    /// to watch what the first one is seeing. This is how a live session gets diagnosed
+    /// without taking the camera away from the person holding the card.
+    #[arg(long, default_value_t = true)]
+    log_frames: bool,
+
+    /// Write each frame's rectified card and its numbers into this directory.
+    ///
+    /// The camera is held by one page at a time, so the live rectification cannot be
+    /// inspected from a second browser — and it is the one thing that actually explains why a
+    /// card matching at 45 bits as a photograph matches at 70 from a webcam. Numbers describe
+    /// the failure; the image is the failure.
+    #[arg(long)]
+    dump_dir: Option<PathBuf>,
 }
 
 /// The tracker is shared rather than per-request, because it is the one deliberately stateful
@@ -172,6 +189,8 @@ fn handle_frame(
     top: usize,
     tracker: &Shared,
     quad_lock: &SharedLock,
+    log: bool,
+    dump: Option<&std::path::Path>,
 ) -> serde_json::Value {
     let decode_started = std::time::Instant::now();
     let source = match image::load_from_memory(body) {
@@ -242,6 +261,9 @@ fn handle_frame(
         }
     }
     let trusted = lock_state.as_ref().is_some_and(|s| s.is_trusted());
+    // Grabbed before the match consumes `best`, and only when dumping is on — a 488x680
+    // clone is a megabyte and there is no reason to pay it otherwise.
+    let dumped = dump.and(best.as_ref().map(|(_, d, _)| d.rectified.clone()));
 
     match best {
         Some((method, d, trace)) => {
@@ -333,6 +355,56 @@ fn handle_frame(
             }
         }
     }
+
+    if let Some(dir) = dump {
+        // A rolling window, so a long session does not fill the disk and the newest frames
+        // are always the ones on top.
+        static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 40;
+        let _ = std::fs::create_dir_all(dir);
+        if let Some(img) = &dumped {
+            let _ = img.save(dir.join(format!("{n:02}-rectified.png")));
+        }
+        let _ = std::fs::write(
+            dir.join(format!("{n:02}-frame.json")),
+            serde_json::to_vec_pretty(&out).unwrap_or_default(),
+        );
+    }
+
+    if log {
+        // One line per frame. The camera can only be held by one page at a time, so a second
+        // browser cannot be opened to watch what the first one is seeing — this is how a live
+        // session gets diagnosed without taking the card out of someone's hand.
+        let cands: Vec<String> = out["match"]["candidates"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .take(4)
+                    .map(|c| {
+                        format!(
+                            "{} d={}",
+                            c["label"]["name"].as_str().unwrap_or("?"),
+                            c["distance"].as_u64().unwrap_or(0)
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        eprintln!(
+            "frame lock={:<9} cardness={:.2} aspect={:.3} conf={:5.1}% {} | {}",
+            out["lock"]["phase"].as_str().unwrap_or("-"),
+            out["cardness"]["score"].as_f64().unwrap_or(0.0),
+            out["score"]["aspect"].as_f64().unwrap_or(0.0),
+            out["tracked"]["confidence"].as_f64().unwrap_or(0.0) * 100.0,
+            if out["tracked"]["committed"].as_bool().unwrap_or(false) { "OK " } else { "..." },
+            if cands.is_empty() {
+                out["error"].as_str().unwrap_or("(not matched)").to_string()
+            } else {
+                cands.join("  |  ")
+            }
+        );
+    }
+
     out
 }
 
@@ -440,6 +512,8 @@ fn main() {
         let reference = Arc::clone(&reference);
         let tracker = Arc::clone(&tracker);
         let quad_lock = Arc::clone(&quad_lock);
+        let log_frames = args.log_frames;
+        let dump_dir = args.dump_dir.clone();
         handles.push(std::thread::spawn(move || loop {
             let Ok(mut request) = server.recv() else { return };
             let url = request.url().to_string();
@@ -470,6 +544,8 @@ fn main() {
                                 top,
                                 &tracker,
                                 &quad_lock,
+                                log_frames,
+                                dump_dir.as_deref(),
                             )
                         }))
                         .unwrap_or_else(|_| {

@@ -82,6 +82,7 @@ enum HashArg {
     Dhash,
     Phash,
     DhashChroma,
+    DhashChroma32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, clap::ValueEnum)]
@@ -97,6 +98,7 @@ impl From<HashArg> for HashKind {
             HashArg::Dhash => HashKind::DHash,
             HashArg::Phash => HashKind::PHash,
             HashArg::DhashChroma => HashKind::DHashChroma,
+            HashArg::DhashChroma32 => HashKind::DHashChroma32,
         }
     }
 }

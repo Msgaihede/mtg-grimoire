@@ -85,6 +85,14 @@ struct Args {
     #[arg(long, default_value_t = 3)]
     top: usize,
 
+    /// Treat each input as an already-rectified card and skip detection entirely.
+    ///
+    /// Lets the matcher be tested on its own. A live frame dumped by `serve --dump-dir` is
+    /// already a 488x680 card, and feeding it back through detection would ask a different
+    /// question than "what would the matcher have said about this exact image".
+    #[arg(long)]
+    rectified: bool,
+
     /// Print one JSON object per scan instead of the table.
     #[arg(long)]
     json: bool,
@@ -212,6 +220,35 @@ fn main() -> std::process::ExitCode {
                 continue;
             }
         };
+
+        if args.rectified {
+            // No detection: the image *is* the card.
+            let rgb = source.to_rgb8();
+            let flipped = image::imageops::rotate180(&rgb);
+            let Some(r) = reference.as_ref() else {
+                eprintln!("--rectified needs a --bundle to match against");
+                return std::process::ExitCode::from(2);
+            };
+            let m = r.match_card(&rgb, &flipped, args.top.clamp(1, 25), &Mask::all());
+            // Counted, so the process does not exit 1 on a run that worked.
+            found += 1;
+            let card = card_scanner::cardness::cardness(&rgb);
+            println!(
+                "{name:<28} cardness={:.2} rotated={} margin={:?}",
+                card.score, m.rotated, m.margin
+            );
+            for c in &m.candidates {
+                println!(
+                    "      {:<30} {:>5} {:<7} d={:>3} ({:.1}%)",
+                    c.label.as_ref().map(|l| l.name.clone()).unwrap_or_else(|| c.id[..8].into()),
+                    c.label.as_ref().map(|l| l.set.to_uppercase()).unwrap_or_default(),
+                    c.label.as_ref().map(|l| l.number.clone()).unwrap_or_default(),
+                    c.distance,
+                    c.normalized * 100.0
+                );
+            }
+            continue;
+        }
 
         // Run each requested detector and keep the better-scoring result. With `--method
         // both` this is also the measurement: the per-scan `method` column is the answer to

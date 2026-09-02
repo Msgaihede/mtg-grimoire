@@ -59,6 +59,19 @@ pub enum HashKind {
     /// until you stop asking what colour something is and start asking which parts are redder
     /// than the rest of the same card.
     DHashChroma,
+    /// The same idea with **half the chroma**: 224 bits of luminance, 32 of colour.
+    ///
+    /// [`HashKind::DHashChroma`] fixed basic lands and broke foils. Measured on eight live
+    /// frames of a foil showcase card under a lamp, grayscale found it on 3 and 64-bit chroma
+    /// on 1 — the rainbow sheen corrupts the colour signal, and the 64 bits were paid for by
+    /// cutting luminance from a 16x8 grid to 12x8, so it lost structure *and* gained a
+    /// misleading signal on exactly the cards that need structure most.
+    ///
+    /// The tension is real rather than a tuning accident: a basic land is separated by
+    /// *global* colour, and foil sheen is also global, so no encoding tells them apart. This
+    /// variant is the compromise — enough colour to keep a Mountain away from an Island,
+    /// little enough that a sheen cannot outvote the card's structure.
+    DHashChroma32,
 }
 
 impl HashKind {
@@ -67,6 +80,7 @@ impl HashKind {
             HashKind::DHash => "dhash",
             HashKind::PHash => "phash",
             HashKind::DHashChroma => "dhash-chroma",
+            HashKind::DHashChroma32 => "dhash-chroma32",
         }
     }
 }
@@ -175,7 +189,9 @@ pub fn hash(img: &GrayImage, kind: HashKind, bits: u16) -> Descriptor {
     match kind {
         HashKind::DHash => dhash(img, bits),
         HashKind::PHash => phash(img, bits),
-        HashKind::DHashChroma => unreachable!("DHashChroma needs colour; call `hash_rgb`"),
+        HashKind::DHashChroma | HashKind::DHashChroma32 => {
+            unreachable!("the chroma kinds need colour; call `hash_rgb`")
+        }
     }
 }
 
@@ -187,7 +203,8 @@ pub fn hash(img: &GrayImage, kind: HashKind, bits: u16) -> Descriptor {
 pub fn hash_rgb(img: &image::RgbImage, kind: HashKind, bits: u16) -> Descriptor {
     assert!(matches!(bits, 128 | 256), "unsupported hash width {bits}");
     match kind {
-        HashKind::DHashChroma => dhash_chroma(img, bits),
+        HashKind::DHashChroma => dhash_chroma(img, bits, 64),
+        HashKind::DHashChroma32 => dhash_chroma(img, bits, 32),
         other => hash(&image::DynamicImage::ImageRgb8(img.clone()).to_luma8(), other, bits),
     }
 }
@@ -197,12 +214,9 @@ pub fn hash_rgb(img: &image::RgbImage, kind: HashKind, bits: u16) -> Descriptor 
 /// Three quarters luminance, one quarter chroma. Luminance still carries the card's structure
 /// and most of its art; chroma only has to answer "which parts of this card are redder or
 /// bluer than the rest of it", and 64 bits is a generous budget for that.
-fn chroma_split(bits: u16) -> (u16, u16) {
-    match bits {
-        256 => (192, 64),
-        128 => (96, 32),
-        _ => unreachable!("width validated by the caller"),
-    }
+fn chroma_split(bits: u16, chroma: u16) -> (u16, u16) {
+    let chroma = if bits == 128 { chroma / 2 } else { chroma };
+    (bits - chroma, chroma)
 }
 
 /// The grid a chroma field of `bits` is built on: two channels per cell.
@@ -210,6 +224,7 @@ fn chroma_grid(bits: u16) -> (u32, u32) {
     match bits {
         64 => (4, 8),
         32 => (4, 4),
+        16 => (2, 4),
         _ => unreachable!("width from `chroma_split`"),
     }
 }
@@ -217,14 +232,16 @@ fn chroma_grid(bits: u16) -> (u32, u32) {
 /// The grid the luminance half of a chroma descriptor uses.
 fn luma_grid(bits: u16) -> (u32, u32) {
     match bits {
-        192 => (12, 8), // 96 horizontal + 96 vertical
+        224 => (14, 8), // 112 horizontal + 112 vertical
+        192 => (12, 8), // 96 + 96
+        112 => (7, 8),  // 56 + 56
         96 => (6, 8),   // 48 + 48
         _ => unreachable!("width from `chroma_split`"),
     }
 }
 
-fn dhash_chroma(img: &image::RgbImage, bits: u16) -> Descriptor {
-    let (luma_bits, chroma_bits) = chroma_split(bits);
+fn dhash_chroma(img: &image::RgbImage, bits: u16, chroma: u16) -> Descriptor {
+    let (luma_bits, chroma_bits) = chroma_split(bits, chroma);
     let mut bw = BitWriter::new();
 
     // ── Luminance, exactly as `dhash` does it, at a coarser grid ──────────────────
