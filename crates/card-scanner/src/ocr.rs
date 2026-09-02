@@ -47,6 +47,23 @@ const TITLE_BAND: (f32, f32, f32, f32) = (0.045, 0.025, 0.780, 0.130);
 /// is another chance for a spurious pairing to resolve.
 const COLLECTOR_BAND: (f32, f32, f32, f32) = (0.018, 0.918, 0.285, 0.990);
 
+/// Where else to look when the first crop yields nothing.
+///
+/// **A single fixed rectangle assumes every card puts the line in the same place, and they do
+/// not.** A borderless printing, a full-art land and a showcase frame each shift it, and the
+/// rectification's own framing moves it again by a percent or two. Trying a wider crop and
+/// then a lower one recovers reads that the first band clips.
+///
+/// Ordered, and taken in order, with an early exit as soon as a crop yields any candidate at
+/// all: a read costs roughly 250 ms, so the common case has to stay at one. Only a card the
+/// first band cannot see pays for the second.
+const COLLECTOR_FALLBACKS: [(f32, f32, f32, f32); 2] = [
+    // Wider and taller — for a frame that sits the line lower or runs it longer.
+    (0.010, 0.900, 0.340, 1.000),
+    // Higher up, for a full-art or borderless card whose line is inset from the edge.
+    (0.020, 0.880, 0.300, 0.960),
+];
+
 /// What one attempt at reading the title produced.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TitleRead {
@@ -299,15 +316,44 @@ mod engine {
         /// corpus and an upside-down read simply produces none that resolve.
         pub fn read_collector(&self, upright: &RgbImage, flipped: &RgbImage) -> CollectorRead {
             let started = std::time::Instant::now();
-            let a = self.read_band(&collector_band(upright)).unwrap_or_default();
-            let b = self.read_band(&collector_band(flipped)).unwrap_or_default();
+            // **The first crop settles which way up, and the fallbacks only ever try that
+            // one.** Both orientations of every crop is six reads at ~130 ms each, and the
+            // cost lands exactly the wrong way round: a card that reads resolves on the first
+            // attempt, while a card that cannot be read pays for all six. Deciding the
+            // orientation once takes the worst case from 785 ms to roughly half that.
+            let up = self.read_band(&band(upright, COLLECTOR_BAND, 4)).unwrap_or_default();
+            let mut candidates = collector_candidates(&up);
+            let mut raw = up;
+            let mut rotated = false;
 
-            let mut candidates = collector_candidates(&a);
-            let rotated = candidates.is_empty() && !collector_candidates(&b).is_empty();
-            if rotated {
-                candidates = collector_candidates(&b);
+            if candidates.is_empty() {
+                let down = self.read_band(&band(flipped, COLLECTOR_BAND, 4)).unwrap_or_default();
+                let found = collector_candidates(&down);
+                // Digits decide it, not length: upside-down, this band holds the *title*,
+                // which reads long and cleanly and would win any "more text" comparison while
+                // containing nothing that could ever resolve.
+                let digits = |t: &str| t.chars().filter(|c| c.is_ascii_digit()).count();
+                if !found.is_empty() || digits(&down) > digits(&raw) {
+                    rotated = true;
+                    candidates = found;
+                    raw = down;
+                }
             }
-            let raw = if rotated { b } else { a };
+
+            // Wider, then higher — only in the orientation already chosen.
+            if candidates.is_empty() {
+                let source = if rotated { flipped } else { upright };
+                for at in COLLECTOR_FALLBACKS {
+                    let text = self.read_band(&band(source, at, 4)).unwrap_or_default();
+                    let found = collector_candidates(&text);
+                    if !found.is_empty() {
+                        candidates = found;
+                        raw = text;
+                        break;
+                    }
+                }
+            }
+
             CollectorRead {
                 raw: raw.split_whitespace().collect::<Vec<_>>().join(" "),
                 candidates,
