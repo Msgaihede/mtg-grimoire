@@ -635,42 +635,10 @@ pub fn detect(
         corners: best.quad.corners.map(|(x, y)| (x * scale, y * scale)),
     };
     let t_rectify = std::time::Instant::now();
-    let warped = source_quad.scaled(opts.inset);
-    let (Some(rectified), Some(rectified_180)) = (
-        rectify(&rgb, &warped),
-        rectify(&rgb, &warped.flipped()),
-    ) else {
+    let Some(views) = rectify_views(&rgb, &source_quad, opts) else {
         return (Err(DetectError::Degenerate), Some(trace));
     };
-    // Measured once, on the upright image, and applied to both — see `Margin::rotated_180`.
-    let margin = if opts.trim_margin {
-        crate::trim::margin(&rectified)
-    } else {
-        crate::trim::Margin::default()
-    };
-    let rectified_180 =
-        crate::trim::apply(&rectified_180, margin.rotated_180()).unwrap_or(rectified_180);
-    let rectified = crate::trim::apply(&rectified, margin).unwrap_or(rectified);
-
-    // The other framings. Each is a fresh warp from the source rather than a crop of the one
-    // above: a crop would resample an already-resampled image, and going *outward* from it is
-    // not possible at all, since those pixels were never in it.
-    //
-    // The trim is applied at the same measured margin rather than re-measured per framing.
-    // Re-measuring would let each view cut a different amount, and the matcher would then be
-    // choosing between framings that differ by two things at once.
-    let alternates = opts
-        .query_insets
-        .iter()
-        .filter_map(|f| {
-            let q = source_quad.scaled(opts.inset * f);
-            let (a, b) = (rectify(&rgb, &q)?, rectify(&rgb, &q.flipped())?);
-            Some((
-                crate::trim::apply(&a, margin).unwrap_or(a),
-                crate::trim::apply(&b, margin.rotated_180()).unwrap_or(b),
-            ))
-        })
-        .collect();
+    let Views { rectified, rectified_180, margin, alternates } = views;
 
     let mut trace = trace;
     trace.timings.rectify_ms = ms(t_rectify);
@@ -913,6 +881,61 @@ fn score_quad(
 /// The size is a parameter because card-likeness is judged on a 96x134 profile, and warping
 /// to that directly costs about a twenty-fifth of a full rectification — which is what makes
 /// it affordable to score several candidates rather than only the geometric winner.
+/// Every image a match needs, warped from one quad.
+///
+/// Separated from [`detect`] because **the quad worth rectifying is not always the one this
+/// frame found.** A tracked card's smoothed quad is steadier than any single frame's, and on a
+/// frame where the detector returns something degenerate — a sliver down one edge, which does
+/// happen — the held quad is simply correct where the fresh one is not. A caller with a lock
+/// can hand that quad here and get a usable card out of a frame that would otherwise
+/// contribute noise.
+#[derive(Debug)]
+pub struct Views {
+    pub rectified: RgbImage,
+    pub rectified_180: RgbImage,
+    pub margin: crate::trim::Margin,
+    pub alternates: Vec<(RgbImage, RgbImage)>,
+}
+
+/// Warp `source_quad` — in **source** coordinates — into the canonical card, both ways up,
+/// at every framing `opts.query_insets` asks for.
+pub fn rectify_views(rgb: &RgbImage, source_quad: &Quad, opts: &DetectOptions) -> Option<Views> {
+    let warped = source_quad.scaled(opts.inset);
+    let (rectified, rectified_180) = (rectify(rgb, &warped)?, rectify(rgb, &warped.flipped())?);
+
+    // Measured once, on the upright image, and applied to both — see `Margin::rotated_180`.
+    let margin = if opts.trim_margin {
+        crate::trim::margin(&rectified)
+    } else {
+        crate::trim::Margin::default()
+    };
+    let rectified_180 =
+        crate::trim::apply(&rectified_180, margin.rotated_180()).unwrap_or(rectified_180);
+    let rectified = crate::trim::apply(&rectified, margin).unwrap_or(rectified);
+
+    // The other framings. Each is a fresh warp from the source rather than a crop of the one
+    // above: a crop would resample an already-resampled image, and going *outward* from it is
+    // not possible at all, since those pixels were never in it.
+    //
+    // The trim is applied at the same measured margin rather than re-measured per framing.
+    // Re-measuring would let each view cut a different amount, and the matcher would then be
+    // choosing between framings that differ by two things at once.
+    let alternates = opts
+        .query_insets
+        .iter()
+        .filter_map(|f| {
+            let q = source_quad.scaled(opts.inset * f);
+            let (a, b) = (rectify(rgb, &q)?, rectify(rgb, &q.flipped())?);
+            Some((
+                crate::trim::apply(&a, margin).unwrap_or(a),
+                crate::trim::apply(&b, margin.rotated_180()).unwrap_or(b),
+            ))
+        })
+        .collect();
+
+    Some(Views { rectified, rectified_180, margin, alternates })
+}
+
 pub fn rectify_to(source: &RgbImage, quad: &Quad, w: u32, h: u32) -> Option<RgbImage> {
     let dst = [(0.0, 0.0), (w as f32, 0.0), (w as f32, h as f32), (0.0, h as f32)];
     let projection = Projection::from_control_points(quad.corners, dst)?;
@@ -1042,6 +1065,62 @@ mod tests {
             }
         }
         DynamicImage::ImageRgb8(img)
+    }
+
+    #[test]
+    fn a_held_quad_rectifies_the_card_a_degenerate_one_misses() {
+        // **The live failure this exists for.** On a frame where the detector returned a
+        // sliver down one edge of the card, the lock rejected it and kept drawing a correct
+        // box — while the rectification was warped from the sliver, so the card being hashed
+        // was a strip of border. Handing the held quad to `rectify_views` has to recover the
+        // card, and the sliver has to be visibly not one.
+        //
+        // The fixture carries a border ring, and that is not decoration. Against `synth`,
+        // whose card is horizontal bands edge to edge, a vertical sliver scores *higher* on
+        // card-likeness than the card does — the bands are exactly the full-width transitions
+        // it counts. Which is worth knowing on its own: appearance cannot separate these two,
+        // so persistence across frames is the only thing that can, and the lock is the right
+        // mechanism rather than a gate.
+        let (w, h) = (800u32, 600u32);
+        let mut img = RgbImage::from_pixel(w, h, Rgb([20, 20, 24]));
+        let (cx, cy) = (400.0f32, 300.0);
+        let (hw, hh) = (150.0f32, 150.0 / CARD_ASPECT);
+        let border = 14.0;
+        for y in 0..h {
+            for x in 0..w {
+                let (dx, dy) = (x as f32 - cx, y as f32 - cy);
+                if dx.abs() > hw || dy.abs() > hh {
+                    continue;
+                }
+                // A black border ring, and the banded face inside it.
+                let inside = dx.abs() <= hw - border && dy.abs() <= hh - border;
+                let v = if inside { card_band(dy, hh * 2.0) } else { 18 };
+                img.put_pixel(x, y, Rgb([v; 3]));
+            }
+        }
+        let quad = |x0: f32, x1: f32| Quad {
+            corners: [(x0, cy - hh), (x1, cy - hh), (x1, cy + hh), (x0, cy + hh)],
+        };
+        let card = quad(cx - hw, cx + hw);
+        // The same height, hard against the left edge and only as wide as the border.
+        let sliver = quad(cx - hw, cx - hw + border);
+
+        let opts = DetectOptions::default();
+        let good = rectify_views(&img, &card, &opts).expect("the card quad warps");
+        let bad = rectify_views(&img, &sliver, &opts).expect("the sliver warps too");
+
+        assert_eq!(good.rectified.dimensions(), (RECTIFIED_W, RECTIFIED_H));
+        let score = |i: &RgbImage| crate::cardness::cardness(i).score;
+        assert!(
+            score(&good.rectified) > score(&bad.rectified) + 0.2,
+            "the held quad scored {:.2} and the sliver {:.2} — too close to tell apart",
+            score(&good.rectified),
+            score(&bad.rectified)
+        );
+        // And the alternates come with it: a caller swapping in the held quad must get the
+        // whole set, or the framing search silently drops to one view on exactly the frames
+        // that needed it most.
+        assert_eq!(good.alternates.len(), opts.query_insets.len());
     }
 
     #[test]

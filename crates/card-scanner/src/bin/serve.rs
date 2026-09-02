@@ -231,7 +231,8 @@ fn handle_frame(
         None => vec![EdgeMethod::Canny, EdgeMethod::Otsu],
     };
 
-    // Asked once, before the loop, so both detectors see the same decision.
+    // Asked once, before the loop, so both detectors and the re-rectify below all see the
+    // same decision.
     let settled = tracker.lock().map(|t| t.last_committed()).unwrap_or(false);
 
     let mut best: Option<(EdgeMethod, Detection, Option<DetectTrace>)> = None;
@@ -290,14 +291,48 @@ fn handle_frame(
         }
     }
     let trusted = lock_state.as_ref().is_some_and(|s| s.is_trusted());
+
+    // **Rectify from the quad the lock is holding, not the one this frame found.**
+    //
+    // The two are usually within a few pixels, and the few pixels were already worth removing:
+    // the descriptor is sensitive enough to framing that a jittering quad hands the matcher a
+    // slightly different card every frame. But the case that matters is the other one. The
+    // detector sometimes returns something degenerate on an otherwise fine frame — a sliver
+    // down one edge of the card — and the lock rejects it, keeps its own quad, and draws a
+    // perfectly good box, while the rectification came from the sliver. The card being matched
+    // was then a strip of the left border, and that noise went into the tracker with the full
+    // weight of a real observation.
+    //
+    // Only once locked: while acquiring, the quad has not proved it is anything yet, and
+    // rectifying from it would be believing it early.
+    let relocked = match (&lock_state, &best) {
+        (Some(st), Some((method, d, _))) if st.is_trusted() => st
+            .quad
+            .filter(|q| q.corners != d.quad.corners)
+            .and_then(|q| {
+                card_scanner::detect::rectify_views(
+                    &source.to_rgb8(),
+                    &q,
+                    &opts.detect_options(*method, settled),
+                )
+            }),
+        _ => None,
+    };
     // Grabbed before the match consumes `best`, and only when dumping is on — a 488x680
     // clone is a megabyte and there is no reason to pay it otherwise.
     let dumped = dump.and(best.as_ref().map(|(_, d, _)| d.rectified.clone()));
 
     match best {
         Some((method, d, trace)) => {
+            // The locked rectification when there is one, otherwise this frame's own.
+            let view = relocked.as_ref();
+            let rectified = view.map_or(&d.rectified, |v| &v.rectified);
+            let rectified_180 = view.map_or(&d.rectified_180, |v| &v.rectified_180);
+            let alternates = view.map_or(&d.alternates, |v| &v.alternates);
+            let margin = view.map_or(d.margin, |v| v.margin);
+
             let descriptor = hash(
-                &image::DynamicImage::ImageRgb8(d.rectified.clone()).to_luma8(),
+                &image::DynamicImage::ImageRgb8(rectified.clone()).to_luma8(),
                 HashKind::DHash,
                 256,
             );
@@ -315,7 +350,11 @@ fn handle_frame(
             // Background cut off the rectification, per side. Worth showing rather than
             // silently applying: a trim that fires every frame means the quad is running wide,
             // which is a detector problem this only papers over.
-            out["trim"] = serde_json::to_value(d.margin).unwrap_or_default();
+            out["trim"] = serde_json::to_value(margin).unwrap_or_default();
+            // Whether this frame's card came from the lock's quad or its own. A stream that
+            // says `true` constantly is a detector failing behind a lock that is covering
+            // for it, which is worth seeing rather than being rescued from silently.
+            out["from_lock"] = relocked.is_some().into();
             out["score"] = serde_json::to_value(d.score).unwrap_or_default();
             out["hash"] = descriptor.to_hex().into();
             if let Some(t) = &trace {
@@ -324,7 +363,7 @@ fn handle_frame(
             // The rectified card is the payload a reader actually wants to see, so it is
             // always returned — it is one small JPEG and it is the proof the homography is
             // right.
-            if let Some(uri) = preview_uri(&d.rectified, 320, 78) {
+            if let Some(uri) = preview_uri(rectified, 320, 78) {
                 out["rectified"] = uri.into();
             }
             if opts.stages {
@@ -343,8 +382,8 @@ fn handle_frame(
                 // The primary framing first, then the alternates — see
                 // `DetectOptions::query_insets`. Order matters only for the reported `view`.
                 let mut views: Vec<(&image::RgbImage, &image::RgbImage)> =
-                    vec![(&d.rectified, &d.rectified_180)];
-                views.extend(d.alternates.iter().map(|(a, b)| (a, b)));
+                    vec![(rectified, rectified_180)];
+                views.extend(alternates.iter().map(|(a, b)| (a, b)));
                 let report = r.match_views(&views, top, &Mask::all());
 
                 // Accumulate across frames. A per-frame top-1 flickers between near-ties
@@ -377,7 +416,7 @@ fn handle_frame(
                     static SEQ: std::sync::atomic::AtomicU64 =
                         std::sync::atomic::AtomicU64::new(0);
                     if SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % OCR_EVERY == 0 {
-                        let read = reader.read_title(&d.rectified, &d.rectified_180);
+                        let read = reader.read_title(rectified, rectified_180);
                         let hit = read
                             .is_usable()
                             .then(|| r.lookup_by_name(&read.normalized))
