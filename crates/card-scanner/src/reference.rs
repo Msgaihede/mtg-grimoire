@@ -78,11 +78,19 @@ pub struct Reference {
     /// `illustration_id` → every printing that shares it. Populated only when a corpus is
     /// loaded; its size is the measured fact that half of all artworks are shared.
     art_printings: HashMap<[u8; ID_LEN], Vec<Label>>,
+    /// Printing id → oracle id. The key the tracker pools evidence on, so a card's reprints
+    /// do not split their own vote.
+    oracle: HashMap<[u8; ID_LEN], [u8; ID_LEN]>,
 }
 
 impl Reference {
     pub fn new(bundle: Bundle) -> Self {
-        Reference { bundle, labels: HashMap::new(), art_printings: HashMap::new() }
+        Reference {
+            bundle,
+            labels: HashMap::new(),
+            art_printings: HashMap::new(),
+            oracle: HashMap::new(),
+        }
     }
 
     pub fn label_count(&self) -> usize {
@@ -94,7 +102,8 @@ impl Reference {
     #[cfg(feature = "corpus")]
     pub fn load_labels(&mut self, corpus: &rusqlite::Connection) -> rusqlite::Result<usize> {
         let mut stmt = corpus.prepare(
-            "SELECT id, illustration_id, name, set_code, collector_number, lang, released_at
+            "SELECT id, illustration_id, name, set_code, collector_number, lang, released_at,
+                    oracle_id
              FROM cards",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -108,13 +117,17 @@ impl Reference {
                     lang: r.get(5)?,
                     released: r.get::<_, Option<String>>(6)?.unwrap_or_default(),
                 },
+                r.get::<_, Option<String>>(7)?,
             ))
         })?;
 
         let mut n = 0;
         for row in rows.flatten() {
-            let (id, illustration_id, label) = row;
+            let (id, illustration_id, label, oracle_id) = row;
             if let Some(raw) = crate::index::parse_uuid(&id) {
+                if let Some(o) = oracle_id.as_deref().and_then(crate::index::parse_uuid) {
+                    self.oracle.insert(raw, o);
+                }
                 if let Some(ill) = illustration_id.as_deref().and_then(crate::index::parse_uuid) {
                     self.art_printings.entry(ill).or_default().push(label.clone());
                 }
@@ -123,6 +136,20 @@ impl Reference {
             }
         }
         Ok(n)
+    }
+
+    /// The oracle id for a printing — the identity a card keeps across every reprint.
+    ///
+    /// Falls back to the printing's own id when no corpus is loaded, which degrades to
+    /// per-printing accumulation rather than to nothing.
+    pub fn oracle_for(&self, printing: &[u8; ID_LEN]) -> [u8; ID_LEN] {
+        self.oracle.get(printing).copied().unwrap_or(*printing)
+    }
+
+    /// The label for a raw id, for callers holding ids rather than matches — the tracker
+    /// accumulates over ids and needs names only at the point of display.
+    pub fn label_for(&self, id: &[u8; ID_LEN]) -> Option<Label> {
+        self.labels.get(id).cloned()
     }
 
     fn candidate(&self, section: Section, m: &Match) -> Candidate {

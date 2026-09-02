@@ -29,9 +29,10 @@ use card_scanner::detect::{detect, DetectOptions, DetectTrace, Detection, EdgeMe
 use card_scanner::hash::{hash, HashKind};
 use card_scanner::index::{Bundle, Mask};
 use card_scanner::reference::Reference;
+use card_scanner::track::Tracker;
 use clap::Parser;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tiny_http::{Header, Response, Server};
 
 #[derive(Parser, Debug)]
@@ -56,6 +57,11 @@ struct Args {
     #[arg(long, default_value_t = 5)]
     top: usize,
 }
+
+/// The tracker is shared rather than per-request, because it is the one deliberately stateful
+/// piece of this server: a stable answer is a property of the *stream*, not of any one frame.
+/// One camera, one page, one tracker. The app will own one per scanning session instead.
+type Shared = Arc<Mutex<Tracker>>;
 
 /// Everything the page can change between frames, parsed from the query string.
 struct FrameOptions {
@@ -157,6 +163,7 @@ fn handle_frame(
     opts: &FrameOptions,
     reference: Option<&Reference>,
     top: usize,
+    tracker: &Shared,
 ) -> serde_json::Value {
     let decode_started = std::time::Instant::now();
     let source = match image::load_from_memory(body) {
@@ -238,10 +245,33 @@ fn handle_frame(
                 let flipped =
                     image::DynamicImage::ImageRgb8(d.rectified_180.clone()).to_luma8();
                 let report = r.match_card(&upright, &flipped, top, &Mask::all());
+
+                // Accumulate across frames. A per-frame top-1 flickers between near-ties
+                // several times a second; the stable answer is the one that keeps recurring.
+                // Grouped by oracle id: a card's reprints pool their evidence instead of
+                // splitting it, and the printing reported is the best-scoring member.
+                let observations: Vec<_> = report
+                    .candidates
+                    .iter()
+                    .filter_map(|c| {
+                        card_scanner::index::parse_uuid(&c.id)
+                            .map(|id| (r.oracle_for(&id), id, c.normalized))
+                    })
+                    .collect();
+                if let Ok(mut t) = tracker.lock() {
+                    out["tracked"] = tracked_json(&t.observe(&observations), Some(r));
+                }
                 out["match"] = serde_json::to_value(&report).unwrap_or_default();
             }
         }
         None => {
+            // A frame with no card is still an observation: it is how the tracker learns the
+            // card has been taken away. Dropping it would leave stale evidence standing.
+            if reference.is_some() {
+                if let Ok(mut t) = tracker.lock() {
+                    out["tracked"] = tracked_json(&t.observe(&[]), reference);
+                }
+            }
             out["error"] = error.unwrap_or_else(|| "no card".into()).into();
             if let Some(t) = &fallback_trace {
                 out["timings"] = serde_json::to_value(t.timings).unwrap_or_default();
@@ -304,6 +334,35 @@ fn load_reference(args: &Args) -> Option<Reference> {
     Some(reference)
 }
 
+/// The tracker deals in ids; the page needs names. Resolved here rather than inside
+/// `track`, which is deliberately independent of the corpus.
+fn tracked_json(
+    tracked: &card_scanner::track::Tracked,
+    reference: Option<&Reference>,
+) -> serde_json::Value {
+    let standings: Vec<_> = tracked
+        .standings
+        .iter()
+        .map(|s| {
+            serde_json::json!({
+                "id": card_scanner::index::format_uuid(&s.id),
+                "evidence": s.evidence,
+                "share": s.share,
+                "seen": s.seen,
+                "label": reference.and_then(|r| r.label_for(&s.best_member)),
+                "best_distance": s.best_normalized,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "committed": tracked.committed,
+        "streak": tracked.streak,
+        "frames": tracked.frames,
+        "misses": tracked.misses,
+        "standings": standings,
+    })
+}
+
 fn main() {
     let args = Args::parse();
     let addr = format!("127.0.0.1:{}", args.port);
@@ -316,6 +375,7 @@ fn main() {
     };
 
     let reference = Arc::new(load_reference(&args));
+    let tracker: Shared = Arc::new(Mutex::new(Tracker::default()));
     let top = args.top.clamp(1, 25);
 
     println!("card-scanner live view: http://{addr}");
@@ -329,6 +389,7 @@ fn main() {
     for _ in 0..args.workers.max(1) {
         let server = Arc::clone(&server);
         let reference = Arc::clone(&reference);
+        let tracker = Arc::clone(&tracker);
         handles.push(std::thread::spawn(move || loop {
             let Ok(mut request) = server.recv() else { return };
             let url = request.url().to_string();
@@ -352,7 +413,13 @@ fn main() {
                     Ok(_) => {
                         let opts = FrameOptions::from_query(&url);
                         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            handle_frame(&body, &opts, reference.as_ref().as_ref(), top)
+                            handle_frame(
+                                &body,
+                                &opts,
+                                reference.as_ref().as_ref(),
+                                top,
+                                &tracker,
+                            )
                         }))
                         .unwrap_or_else(|_| {
                             serde_json::json!({
@@ -365,6 +432,13 @@ fn main() {
                     Err(e) => serde_json::json!({ "ok": false, "error": format!("read: {e}") }),
                 };
                 Response::from_string(value.to_string()).with_header(json_header())
+            } else if path == "/reset" {
+                // So a reader can start on a new card immediately instead of waiting for the
+                // previous one's evidence to decay.
+                if let Ok(mut t) = tracker.lock() {
+                    t.reset();
+                }
+                Response::from_string(r#"{"ok":true}"#).with_header(json_header())
             } else {
                 Response::from_string("not found").with_status_code(404)
             };

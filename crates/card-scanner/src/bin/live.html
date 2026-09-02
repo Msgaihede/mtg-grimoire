@@ -98,6 +98,25 @@
   .cands li span:last-child { text-align:right; font-variant-numeric:tabular-nums; }
   .cands li.best { color:var(--ink-2); }
 
+  /* The evidence bar. The share is the number that decides, so it is drawn rather than
+     printed — a bar crossing a marked threshold is readable at a glance while a card is being
+     held still, and a percentage is not. */
+  .ev { position:relative; height:8px; border-radius:4px; background:var(--sunk); margin:10px 0 8px; overflow:hidden; }
+  .ev i { display:block; height:100%; width:0; background:var(--doubt); transition:width .12s linear; }
+  .ev.on i { background:var(--hit); }
+  .ev::after {
+    content:""; position:absolute; top:-2px; bottom:-2px; width:1px;
+    background:var(--ink-3); left:45%;
+  }
+  .frames { font-family:var(--mono); font-size:10.5px; color:var(--ink-3); }
+  /* The per-frame guess, kept visible but demoted — it is the thing that flickers, and
+     watching it flicker while the answer above stays put is how you see the tracker work. */
+  .live-guess {
+    font-family:var(--mono); font-size:11px; color:var(--ink-3); margin:9px 0 0;
+    padding-top:8px; border-top:1px solid var(--line);
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-height:19px;
+  }
+
   label.row { display:grid; grid-template-columns:76px 1fr 46px; gap:9px; align-items:center; margin-bottom:9px; font-size:12px; color:var(--ink-2); }
   label.row output { font-family:var(--mono); text-align:right; color:var(--ink); font-variant-numeric:tabular-nums; }
   input[type=range] { width:100%; accent-color:var(--accent); }
@@ -160,13 +179,18 @@
         <span class="match-name" id="mt-name">&mdash;</span>
         <span class="match-conf" id="mt-conf">no bundle</span>
       </div>
+      <div class="ev" id="ev"><i id="ev-fill"></i></div>
       <dl class="metrics">
+        <dt>evidence</dt><dd id="mt-share">&mdash;</dd>
         <dt>distance</dt><dd id="mt-dist">&mdash;</dd>
         <dt>margin</dt><dd id="mt-margin">&mdash;</dd>
         <dt>orientation</dt><dd id="mt-rot">&mdash;</dd>
-        <dt>search</dt><dd id="mt-ms">&mdash;</dd>
       </dl>
       <ol class="cands" id="mt-list"></ol>
+      <p class="live-guess" id="mt-guess">&mdash;</p>
+      <div class="seg" style="margin:10px 0 0">
+        <button id="mt-reset" type="button">reset evidence</button>
+      </div>
     </div>
 
     <div class="card">
@@ -264,6 +288,7 @@ function segment(container, onChange) {
 }
 segment($('method'));
 segment($('stages-toggle'), (v) => { $('stages-card').hidden = v !== '1'; });
+$('mt-reset').addEventListener('click', () => { fetch('/reset', { method: 'POST' }); });
 for (const [id, fmt] of [['edge', String], ['lo', String], ['hi', String], ['send', String],
                          ['aspect', (v) => (v / 100).toFixed(2)]]) {
   const el = $(id), out = $(id + '-o');
@@ -329,10 +354,9 @@ function render(j) {
   const aspectOk = j.ok && Math.abs(j.score.aspect - CARD_ASPECT) / CARD_ASPECT < 0.08;
   const state = !j.ok ? '' : aspectOk ? 'hit' : 'doubt';
   $('dot').className = 'dot ' + state;
-  const named = j.match?.candidates?.[0];
-  const namedWell = named && named.normalized <= PLAUSIBLE_DISTANCE && named.label;
-  $('verdict').textContent = !j.ok ? 'no card'
-    : namedWell ? named.label.name
+  const lead = j.tracked?.standings?.[0];
+  $('verdict').textContent = j.tracked?.committed && lead?.label ? lead.label.name
+    : !j.ok ? 'no card'
     : aspectOk ? 'card located' : 'suspect shape';
 
   // Emptied rather than hidden: the element keeps its reserved two lines either way, so a
@@ -356,7 +380,7 @@ function render(j) {
   $('rect').hidden = !rect;
   $('rect-empty').hidden = !!rect;
 
-  renderMatch(j.match, j.ok, j.matcher);
+  renderMatch(j, j.ok, j.matcher);
 
   if (j.stages) {
     for (const [k, id] of [['binary', 's-binary'], ['contours', 's-contours'], ['quad', 's-quad']])
@@ -401,47 +425,61 @@ function render(j) {
 // wrong answer sits at 35.9% and is rejected.
 const SURE_DISTANCE = 0.26, SURE_MARGIN = 10, PLAUSIBLE_DISTANCE = 0.30;
 
-function renderMatch(m, detected, hasBundle) {
+function renderMatch(j, detected, hasBundle) {
+  const m = j.match, tr = j.tracked;
   const name = $('mt-name'), conf = $('mt-conf'), list = $('mt-list');
-  const rows = (m?.candidates ?? []);
 
-  if (!m) {
-    // Two distinct states that used to look identical: no bundle is loaded at all, versus a
-    // bundle is loaded and this frame simply held no card.
+  // **The headline is the tracker's committed leader, never this frame's top-1.** The
+  // per-frame answer flips between near-ties several times a second — which is the whole
+  // reason the tracker exists — so showing it here would reintroduce the flicker the
+  // accumulation removes. This frame's guess is still shown, demoted, at the bottom.
+  const lead = tr?.standings?.[0];
+  const share = lead?.share ?? 0;
+
+  if (!hasBundle) {
     name.textContent = '—';
-    conf.textContent = hasBundle === false ? 'no bundle' : 'no card';
+    conf.textContent = 'no bundle';
     conf.className = 'match-conf';
-    for (const [id, v] of [['mt-dist','—'],['mt-margin','—'],['mt-rot','—'],['mt-ms','—']])
-      $(id).textContent = v;
-    list.innerHTML = '';
-    return;
+  } else if (lead) {
+    name.textContent = lead.label
+      ? `${lead.label.name} — ${lead.label.set.toUpperCase()} ${lead.label.number}`
+      : lead.id.slice(0, 8);
+    conf.textContent = tr.committed ? 'confirmed' : 'gathering';
+    conf.className = 'match-conf' + (tr.committed ? ' sure' : ' maybe');
+  } else {
+    name.textContent = '—';
+    conf.textContent = detected ? 'no match' : 'no card';
+    conf.className = 'match-conf';
   }
 
-  const best = rows[0];
-  const sure = best && best.normalized <= SURE_DISTANCE && (m.margin ?? 0) >= SURE_MARGIN;
-  const plausible = best && best.normalized <= PLAUSIBLE_DISTANCE;
+  $('ev').className = 'ev' + (tr?.committed ? ' on' : '');
+  $('ev-fill').style.width = `${Math.min(100, share * 100).toFixed(0)}%`;
 
-  name.textContent = !detected ? '—'
-    : !best ? 'nothing in the bundle'
-    : (best.label ? `${best.label.name} — ${best.label.set.toUpperCase()} ${best.label.number}`
-                  : best.id.slice(0, 8));
-  conf.textContent = !detected ? 'no card' : sure ? 'confident' : plausible ? 'provisional' : 'too far';
-  conf.className = 'match-conf' + (!detected ? '' : sure ? ' sure' : plausible ? ' maybe' : '');
+  const set = (id, v, warn) => { const el = $(id); el.textContent = v; el.classList.toggle('warn', !!warn); };
+  set('mt-share', tr ? `${(share * 100).toFixed(0)}% of ${tr.frames}f` : '—');
 
-  $('mt-dist').textContent = best ? `${best.distance} (${(best.normalized * 100).toFixed(1)}%)` : '—';
-  $('mt-margin').textContent = m.margin != null ? `${m.margin} bits` : '—';
-  // Worth surfacing: a scan that always reports `rotated` is a card being held upside-down,
-  // which is invisible in the overlay because both orientations rectify perfectly.
-  $('mt-rot').textContent = m.rotated ? 'rotated 180°' : 'upright';
-  $('mt-ms').textContent = `${(m.search_ms ?? 0).toFixed(2)} ms`;
+  const best = m?.candidates?.[0];
+  const aspectOk = best && best.normalized <= SURE_DISTANCE;
+  set('mt-dist', best ? `${best.distance} (${(best.normalized * 100).toFixed(1)}%)` : '—', best && !aspectOk);
+  set('mt-margin', m?.margin != null ? `${m.margin} bits` : '—');
+  // A run that always reports "rotated" is a card being held upside-down, which is invisible
+  // in the overlay because both orientations rectify perfectly.
+  set('mt-rot', m ? (m.rotated ? 'rotated 180°' : 'upright') : '—');
 
-  list.innerHTML = rows.map((c, i) => {
-    const label = c.label
-      ? `${c.label.name} · ${c.label.set.toUpperCase()} ${c.label.number}` + (c.printings > 1 ? ` (${c.printings}×)` : '')
-      : c.id.slice(0, 13);
-    return `<li class="${i === 0 ? 'best' : ''}"><span>${label.replace(/[<&]/g, ch => ch === '<' ? '&lt;' : '&amp;')}</span><span>${c.distance}</span></li>`;
+  // The standings are the accumulated evidence, not this frame's ranking — so the list is
+  // stable too, and a contender climbing it is visible.
+  list.innerHTML = (tr?.standings ?? []).map((c, i) => {
+    const label = c.label ? `${c.label.name} · ${c.label.set.toUpperCase()} ${c.label.number}`
+                          : c.id.slice(0, 13);
+    return `<li class="${i === 0 ? 'best' : ''}"><span>${esc(label)}</span><span>${(c.share * 100).toFixed(0)}%</span></li>`;
   }).join('');
+
+  $('mt-guess').textContent = best
+    ? `this frame: ${best.label ? best.label.name : best.id.slice(0, 8)} · d=${best.distance}`
+    : (detected ? 'this frame: no match' : 'this frame: no card');
 }
+
+function esc(s) { return s.replace(/[<&]/g, (c) => (c === '<' ? '&lt;' : '&amp;')); }
 
 // Redraws every animation frame from the most recent detection, so the box is smooth and
 // correctly placed even though it only updates when a detection lands.
