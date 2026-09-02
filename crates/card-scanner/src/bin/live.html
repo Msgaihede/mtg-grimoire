@@ -1,4 +1,13 @@
 <!doctype html>
+<!--
+  The live camera view. Served by `serve.rs`, which `include_str!`s this file — so nothing at
+  compile time reads it as JavaScript and `cargo build` cannot catch a mistake in it.
+
+  **After editing the script below, run `node scripts/check-live-page.mjs`.** A syntax error
+  here does not present as a syntax error: the whole script fails to parse, `start()` never
+  runs, and the only symptom is "the camera doesn't start" — which reads as a permissions or
+  hardware problem and sends you looking somewhere else entirely.
+-->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -443,7 +452,7 @@ function renderMatch(j, detected, hasBundle) {
   // **Confidence, not share.** A share is the leader's fraction of everything accumulated,
   // and every one-off runner-up inflates that denominator — a card correctly first on every
   // frame still read as 40-60%. Confidence is the leader against its single best rival.
-  const conf = tr?.confidence ?? 0;
+  const confidence = tr?.confidence ?? 0;
 
   if (!hasBundle) {
     name.textContent = '—';
@@ -462,10 +471,10 @@ function renderMatch(j, detected, hasBundle) {
   }
 
   $('ev').className = 'ev' + (tr?.committed ? ' on' : '');
-  $('ev-fill').style.width = `${Math.min(100, conf * 100).toFixed(0)}%`;
+  $('ev-fill').style.width = `${Math.min(100, confidence * 100).toFixed(0)}%`;
 
   const set = (id, v, warn) => { const el = $(id); el.textContent = v; el.classList.toggle('warn', !!warn); };
-  set('mt-share', tr ? `${(conf * 100).toFixed(0)}% over ${tr.frames}f` : '—');
+  set('mt-share', tr ? `${(confidence * 100).toFixed(0)}% over ${tr.frames}f` : '—');
 
   const best = m?.candidates?.[0];
   const aspectOk = best && best.normalized <= SURE_DISTANCE;
