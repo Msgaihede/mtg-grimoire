@@ -81,6 +81,11 @@ pub struct Reference {
     /// Printing id → oracle id. The key the tracker pools evidence on, so a card's reprints
     /// do not split their own vote.
     oracle: HashMap<[u8; ID_LEN], [u8; ID_LEN]>,
+    /// Normalized card name → one representative printing per distinct name.
+    ///
+    /// Names, not printings: OCR reads the name, and every printing of a card shares it. One
+    /// representative is enough because the tracker pools by oracle id anyway.
+    by_name: HashMap<String, [u8; ID_LEN]>,
 }
 
 impl Reference {
@@ -90,6 +95,7 @@ impl Reference {
             labels: HashMap::new(),
             art_printings: HashMap::new(),
             oracle: HashMap::new(),
+            by_name: HashMap::new(),
         }
     }
 
@@ -131,6 +137,7 @@ impl Reference {
                 if let Some(ill) = illustration_id.as_deref().and_then(crate::index::parse_uuid) {
                     self.art_printings.entry(ill).or_default().push(label.clone());
                 }
+                self.by_name.entry(crate::ocr::normalize(&label.name)).or_insert(raw);
                 self.labels.insert(raw, label);
                 n += 1;
             }
@@ -150,6 +157,52 @@ impl Reference {
     /// accumulates over ids and needs names only at the point of display.
     pub fn label_for(&self, id: &[u8; ID_LEN]) -> Option<Label> {
         self.labels.get(id).cloned()
+    }
+
+    pub fn name_count(&self) -> usize {
+        self.by_name.len()
+    }
+
+    /// Find the card whose name best matches some OCR output.
+    ///
+    /// **This searches every name, not just the hash tier's candidates**, and that is the
+    /// point of the tier. On a foil under a lamp the hash's top five do not contain the right
+    /// card at all, so a step that could only re-rank them would be useless exactly where it
+    /// is needed.
+    ///
+    /// An exact hit on the normalized name is the common case and costs one hash lookup. The
+    /// fallback is a bounded edit distance, and it is bounded twice over: only names within
+    /// three characters of the read's length are considered, and the distance itself gives up
+    /// once it exceeds the budget. Searching 30,000 names unbounded, per frame, at twelve
+    /// frames a second, is not a thing that can be done.
+    pub fn lookup_by_name(&self, read: &str) -> Option<([u8; ID_LEN], u32)> {
+        if read.len() < 4 {
+            return None;
+        }
+        if let Some(id) = self.by_name.get(read) {
+            return Some((*id, 0));
+        }
+
+        // One edit per four characters, so a long name tolerates more misreads than a short
+        // one — a two-character slip in "Strider Ranger of the North" is a good read, and the
+        // same slip in "Shock" is a different card.
+        let budget = (read.len() / 4).clamp(1, 6) as u32;
+        let mut best: Option<([u8; ID_LEN], u32)> = None;
+        for (name, id) in &self.by_name {
+            if name.len().abs_diff(read.len()) > 3 {
+                continue;
+            }
+            let cap = best.map(|(_, d)| d).unwrap_or(budget + 1);
+            if let Some(d) = bounded_edit_distance(name, read, cap.min(budget)) {
+                if best.is_none_or(|(_, b)| d < b) {
+                    best = Some((*id, d));
+                    if d == 0 {
+                        break;
+                    }
+                }
+            }
+        }
+        best
     }
 
     fn candidate(&self, section: Section, m: &Match) -> Candidate {
@@ -218,6 +271,34 @@ impl Reference {
             search_ms: started.elapsed().as_secs_f32() * 1000.0,
         }
     }
+}
+
+/// Levenshtein distance, abandoned as soon as it cannot come in under `max`.
+///
+/// The early exit is what makes this affordable: a full matrix over 30,000 names per frame is
+/// not, and almost every name differs from the read in its first few characters.
+fn bounded_edit_distance(a: &str, b: &str, max: u32) -> Option<u32> {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len().abs_diff(b.len()) as u32 > max {
+        return None;
+    }
+    let mut prev: Vec<u32> = (0..=b.len() as u32).collect();
+    let mut cur = vec![0u32; b.len() + 1];
+    for (i, &ca) in a.iter().enumerate() {
+        cur[0] = i as u32 + 1;
+        let mut row_min = cur[0];
+        for (j, &cb) in b.iter().enumerate() {
+            let cost = u32::from(ca != cb);
+            cur[j + 1] = (prev[j] + cost).min(prev[j + 1] + 1).min(cur[j] + 1);
+            row_min = row_min.min(cur[j + 1]);
+        }
+        if row_min > max {
+            return None; // no completion of this row can finish under budget
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    let d = prev[b.len()];
+    (d <= max).then_some(d)
 }
 
 #[cfg(test)]
@@ -302,6 +383,15 @@ mod tests {
         assert_eq!(report.candidates.len(), 3);
         assert!(report.candidates.iter().all(|c| c.id != format_uuid(&id(5))));
         assert!(report.candidates[0].distance > 0, "the excluded exact match leaked in");
+    }
+
+    #[test]
+    fn edit_distance_is_bounded_and_correct() {
+        assert_eq!(bounded_edit_distance("kitten", "sitting", 5), Some(3));
+        assert_eq!(bounded_edit_distance("same", "same", 0), Some(0));
+        // Gives up rather than computing a distance it would only discard.
+        assert_eq!(bounded_edit_distance("kitten", "sitting", 2), None);
+        assert_eq!(bounded_edit_distance("short", "a much longer string", 3), None);
     }
 
     #[test]

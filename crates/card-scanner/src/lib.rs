@@ -13,6 +13,7 @@ pub mod debug;
 pub mod detect;
 pub mod index;
 pub mod lock;
+pub mod ocr;
 pub mod reference;
 pub mod track;
 pub mod hash;

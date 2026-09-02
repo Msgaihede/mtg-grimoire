@@ -231,6 +231,14 @@ impl Tracker {
         &self.opts
     }
 
+    /// Was the last frame's verdict a commit?
+    ///
+    /// Lets an expensive tier stand down once the cheap one has settled the answer, without
+    /// that tier having to keep its own copy of the commit rule.
+    pub fn last_committed(&self) -> bool {
+        self.snapshot().committed
+    }
+
     /// Forget everything. The card was put down, or the reader asked for a fresh start.
     pub fn reset(&mut self) {
         self.scores.clear();

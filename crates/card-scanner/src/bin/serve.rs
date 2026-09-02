@@ -29,6 +29,7 @@ use card_scanner::detect::{detect, DetectOptions, DetectTrace, Detection, EdgeMe
 use card_scanner::hash::{hash, HashKind};
 use card_scanner::index::{Bundle, Mask};
 use card_scanner::lock::QuadLock;
+use card_scanner::ocr::TitleReader;
 use card_scanner::reference::Reference;
 use card_scanner::track::Tracker;
 use clap::Parser;
@@ -74,6 +75,12 @@ struct Args {
     /// the failure; the image is the failure.
     #[arg(long)]
     dump_dir: Option<PathBuf>,
+
+    /// Directory holding the ocrs models. Enables the OCR tier.
+    ///
+    /// Fetch them with `scripts/fetch-ocr-models.mjs`.
+    #[arg(long)]
+    ocr_models: Option<PathBuf>,
 }
 
 /// The tracker is shared rather than per-request, because it is the one deliberately stateful
@@ -83,6 +90,14 @@ type Shared = Arc<Mutex<Tracker>>;
 /// The quad lock is per-stream for the same reason the tracker is: staying still is a
 /// property of the sequence, not of a frame.
 type SharedLock = Arc<Mutex<QuadLock>>;
+
+/// **OCR runs only while the hash tier is still unsure, and never more than every few
+/// frames.** Reading a title costs ~250 ms against a ~80 ms frame, so running it on every
+/// frame would cut the rate by two thirds to answer a question that is usually already
+/// answered. It is a tie-breaker: it earns its cost exactly when appearance has failed — a
+/// foil under a lamp, where the hash's top five do not contain the card at all and the title
+/// is still perfectly legible.
+const OCR_EVERY: u64 = 4;
 
 /// Everything the page can change between frames, parsed from the query string.
 struct FrameOptions {
@@ -191,6 +206,7 @@ fn handle_frame(
     quad_lock: &SharedLock,
     log: bool,
     dump: Option<&std::path::Path>,
+    reader: Option<&TitleReader>,
 ) -> serde_json::Value {
     let decode_started = std::time::Instant::now();
     let source = match image::load_from_memory(body) {
@@ -315,6 +331,40 @@ fn handle_frame(
                             .map(|id| (r.oracle_for(&id), id, c.normalized))
                     })
                     .collect();
+                // The OCR tier, when the hash tier has not settled it. A resolved name is
+                // much stronger evidence than a nearest neighbour — it is a reading of what
+                // the card says rather than a guess at what it looks like — so it enters the
+                // accumulator at a distance the hash tier can rarely reach.
+                let mut observations = observations;
+                let uncommitted = tracker
+                    .lock()
+                    .map(|t| !t.last_committed())
+                    .unwrap_or(true);
+                if let Some(reader) = reader.filter(|_| uncommitted) {
+                    static SEQ: std::sync::atomic::AtomicU64 =
+                        std::sync::atomic::AtomicU64::new(0);
+                    if SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % OCR_EVERY == 0 {
+                        let read = reader.read_title(&d.rectified, &d.rectified_180);
+                        let hit = read
+                            .is_usable()
+                            .then(|| r.lookup_by_name(&read.normalized))
+                            .flatten();
+                        out["ocr"] = serde_json::json!({
+                            "raw": read.raw,
+                            "rotated": read.rotated,
+                            "elapsed_ms": read.elapsed_ms,
+                            "matched": hit.and_then(|(id, _)| r.label_for(&id)).map(|l| l.name),
+                            "edits": hit.map(|(_, d)| d),
+                        });
+                        if let Some((id, edits)) = hit {
+                            // A clean read enters at zero; a read that needed correcting enters
+                            // a little behind, so a misread cannot outrank a confident hash.
+                            let n = if edits == 0 { 0.0 } else { 0.06 };
+                            observations.insert(0, (r.oracle_for(&id), id, n));
+                        }
+                    }
+                }
+
                 if let Ok(mut t) = tracker.lock() {
                     out["tracked"] = tracked_json(&t.observe(&observations), Some(r));
                 }
@@ -403,6 +453,12 @@ fn handle_frame(
                 cands.join("  |  ")
             }
         );
+        if let Some(name) = out["ocr"]["matched"].as_str() {
+            eprintln!(
+                "      ocr [{}] -> {name}",
+                out["ocr"]["raw"].as_str().unwrap_or("")
+            );
+        }
     }
 
     out
@@ -497,6 +553,21 @@ fn main() {
     let reference = Arc::new(load_reference(&args));
     let tracker: Shared = Arc::new(Mutex::new(Tracker::default()));
     let quad_lock: SharedLock = Arc::new(Mutex::new(QuadLock::default()));
+    let reader = Arc::new(args.ocr_models.as_ref().and_then(|dir| {
+        match TitleReader::load(
+            &dir.join("text-detection.rten"),
+            &dir.join("text-recognition.rten"),
+        ) {
+            Ok(r) => {
+                eprintln!("  ocr: models loaded from {}", dir.display());
+                Some(r)
+            }
+            Err(e) => {
+                eprintln!("  ocr: {e} — continuing without it");
+                None
+            }
+        }
+    }));
     let top = args.top.clamp(1, 25);
 
     println!("card-scanner live view: http://{addr}");
@@ -514,6 +585,7 @@ fn main() {
         let quad_lock = Arc::clone(&quad_lock);
         let log_frames = args.log_frames;
         let dump_dir = args.dump_dir.clone();
+        let reader = Arc::clone(&reader);
         handles.push(std::thread::spawn(move || loop {
             let Ok(mut request) = server.recv() else { return };
             let url = request.url().to_string();
@@ -546,6 +618,7 @@ fn main() {
                                 &quad_lock,
                                 log_frames,
                                 dump_dir.as_deref(),
+                                reader.as_ref().as_ref(),
                             )
                         }))
                         .unwrap_or_else(|_| {

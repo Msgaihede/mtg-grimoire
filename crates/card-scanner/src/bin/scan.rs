@@ -93,6 +93,12 @@ struct Args {
     #[arg(long)]
     rectified: bool,
 
+    /// Directory holding the ocrs models. Enables the OCR tier.
+    ///
+    /// Fetch them with `scripts/fetch-ocr-models.mjs`.
+    #[arg(long)]
+    ocr_models: Option<PathBuf>,
+
     /// Print one JSON object per scan instead of the table.
     #[arg(long)]
     json: bool,
@@ -181,6 +187,24 @@ fn main() -> std::process::ExitCode {
         Some(reference)
     });
 
+    // The OCR tier is optional and load-once: ~12 MB of model, and a scanner without it is
+    // still a scanner.
+    let reader = args.ocr_models.as_ref().and_then(|dir| {
+        match card_scanner::ocr::TitleReader::load(
+            &dir.join("text-detection.rten"),
+            &dir.join("text-recognition.rten"),
+        ) {
+            Ok(r) => {
+                eprintln!("ocr: models loaded from {}", dir.display());
+                Some(r)
+            }
+            Err(e) => {
+                eprintln!("ocr: {e} — continuing without it");
+                None
+            }
+        }
+    });
+
     let mut entries: Vec<SheetEntry> = Vec::new();
     let mut found = 0usize;
     let mut failed_to_open = 0usize;
@@ -232,6 +256,27 @@ fn main() -> std::process::ExitCode {
             let m = r.match_card(&rgb, &flipped, args.top.clamp(1, 25), &Mask::all());
             // Counted, so the process does not exit 1 on a run that worked.
             found += 1;
+
+            if let Some(reader) = &reader {
+                let read = reader.read_title(&rgb, &flipped);
+                let hit = read
+                    .is_usable()
+                    .then(|| r.lookup_by_name(&read.normalized))
+                    .flatten();
+                println!(
+                    "      OCR {:.0}ms {}[{}] -> {}",
+                    read.elapsed_ms,
+                    if read.rotated { "(180) " } else { "" },
+                    read.raw,
+                    match hit {
+                        Some((id, d)) => format!(
+                            "{} (edit {d})",
+                            r.label_for(&id).map(|l| l.display()).unwrap_or_default()
+                        ),
+                        None => "no name matched".into(),
+                    }
+                );
+            }
             let card = card_scanner::cardness::cardness(&rgb);
             println!(
                 "{name:<28} cardness={:.2} rotated={} margin={:?}",

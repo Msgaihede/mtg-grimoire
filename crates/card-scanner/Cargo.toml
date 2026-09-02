@@ -22,7 +22,11 @@ default = []
 # a card name. Separate from `cli` because the library can match without it, and a bundle
 # with no corpus beside it still answers, just with ids.
 corpus = ["dep:rusqlite"]
-cli = ["dep:clap", "dep:tiny_http", "corpus"]
+# OCR. Pure Rust: `ocrs` on `rten`, whose whole dependency closure was walked for `cc`,
+# `cmake`, `bindgen` and `*-sys` and has none — so it cross-compiles for Android the way
+# the rest of this crate does.
+ocr = ["dep:ocrs", "dep:rten"]
+cli = ["dep:clap", "dep:tiny_http", "corpus", "ocr"]
 builder = ["dep:clap", "dep:ureq", "dep:rayon", "corpus"]
 
 [dependencies]
@@ -51,6 +55,9 @@ tiny_http = { version = "0.12", optional = true }
 rusqlite = { version = "0.40", features = ["bundled"], optional = true }
 ureq = { version = "3", optional = true }
 rayon = { version = "1", optional = true }
+
+ocrs = { version = "0.13", optional = true }
+rten = { version = "0.26", optional = true }
 
 [[bin]]
 name = "scan"
