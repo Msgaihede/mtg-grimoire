@@ -67,6 +67,11 @@ const COLLECTOR_FALLBACKS: [(f32, f32, f32, f32); 2] = [
 /// What one attempt at reading the title produced.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TitleRead {
+    /// The crop the recogniser actually saw — the orientation that won.
+    ///
+    /// Skipped by serde: the JSON carries a rendered preview of this, not the pixels.
+    #[serde(skip)]
+    pub band: Option<RgbImage>,
     /// The text as OCR returned it, whitespace-collapsed.
     pub raw: String,
     /// Lowercased and stripped to letters, digits and single spaces — the form a name lookup
@@ -149,6 +154,13 @@ pub struct CollectorRead {
     pub candidates: Vec<(String, String)>,
     pub rotated: bool,
     pub elapsed_ms: f32,
+    /// The crop the recogniser actually saw, for the debug view.
+    ///
+    /// **Carried rather than re-derived.** The read walks several crops in two orientations
+    /// and stops at the first that parses, so a viewer re-cropping "the" collector band would
+    /// often be shown a different image than the one the text came from — which is worse than
+    /// showing nothing, because it looks like an answer.
+    pub band: Option<RgbImage>,
 }
 
 /// Every plausible (set code, collector number) pairing in a collector-line read.
@@ -292,14 +304,16 @@ mod engine {
         /// because a name is longer than a set code and a collector number.
         pub fn read_title(&self, upright: &RgbImage, flipped: &RgbImage) -> TitleRead {
             let started = std::time::Instant::now();
-            let a = self.read_band(&title_band(upright)).unwrap_or_default();
-            let b = self.read_band(&title_band(flipped)).unwrap_or_default();
+            let (ba, bb) = (title_band(upright), title_band(flipped));
+            let a = self.read_band(&ba).unwrap_or_default();
+            let b = self.read_band(&bb).unwrap_or_default();
 
             let letters = |s: &str| s.chars().filter(|c| c.is_ascii_alphabetic()).count();
             let rotated = letters(&b) > letters(&a);
             let raw = if rotated { b } else { a };
 
             TitleRead {
+                band: Some(if rotated { bb } else { ba }),
                 normalized: normalize(&raw),
                 raw: raw.split_whitespace().collect::<Vec<_>>().join(" "),
                 rotated,
@@ -321,13 +335,15 @@ mod engine {
             // cost lands exactly the wrong way round: a card that reads resolves on the first
             // attempt, while a card that cannot be read pays for all six. Deciding the
             // orientation once takes the worst case from 785 ms to roughly half that.
-            let up = self.read_band(&band(upright, COLLECTOR_BAND, 4)).unwrap_or_default();
+            let mut shown = band(upright, COLLECTOR_BAND, 4);
+            let up = self.read_band(&shown).unwrap_or_default();
             let mut candidates = collector_candidates(&up);
             let mut raw = up;
             let mut rotated = false;
 
             if candidates.is_empty() {
-                let down = self.read_band(&band(flipped, COLLECTOR_BAND, 4)).unwrap_or_default();
+                let flip = band(flipped, COLLECTOR_BAND, 4);
+                let down = self.read_band(&flip).unwrap_or_default();
                 let found = collector_candidates(&down);
                 // Digits decide it, not length: upside-down, this band holds the *title*,
                 // which reads long and cleanly and would win any "more text" comparison while
@@ -337,6 +353,7 @@ mod engine {
                     rotated = true;
                     candidates = found;
                     raw = down;
+                    shown = flip;
                 }
             }
 
@@ -344,11 +361,13 @@ mod engine {
             if candidates.is_empty() {
                 let source = if rotated { flipped } else { upright };
                 for at in COLLECTOR_FALLBACKS {
-                    let text = self.read_band(&band(source, at, 4)).unwrap_or_default();
+                    let crop = band(source, at, 4);
+                    let text = self.read_band(&crop).unwrap_or_default();
                     let found = collector_candidates(&text);
                     if !found.is_empty() {
                         candidates = found;
                         raw = text;
+                        shown = crop;
                         break;
                     }
                 }
@@ -357,6 +376,7 @@ mod engine {
             CollectorRead {
                 raw: raw.split_whitespace().collect::<Vec<_>>().join(" "),
                 candidates,
+                band: Some(shown),
                 rotated,
                 elapsed_ms: started.elapsed().as_secs_f32() * 1000.0,
             }
@@ -457,6 +477,7 @@ mod tests {
     #[test]
     fn usability_rejects_noise_but_accepts_a_name() {
         let mk = |s: &str| TitleRead {
+            band: None,
             raw: s.into(),
             normalized: normalize(s),
             rotated: false,

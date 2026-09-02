@@ -186,6 +186,13 @@ impl Reference {
             .copied()
     }
 
+    /// Resolve one (set, number) pairing. The debug view uses this to show what each
+    /// candidate the parse produced actually matched, which is the difference between "it
+    /// failed" and "it read HOBEN instead of HOB".
+    pub fn lookup_pair(&self, set: &str, number: &str) -> Option<[u8; ID_LEN]> {
+        self.by_set_number.get(&(set.to_string(), number.to_string())).copied()
+    }
+
     /// How many (set, number) pairs are indexed.
     pub fn printing_count(&self) -> usize {
         self.by_set_number.len()

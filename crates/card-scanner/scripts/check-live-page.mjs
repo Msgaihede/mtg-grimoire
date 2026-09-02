@@ -45,6 +45,59 @@ if (!script) {
     }
   }
 
+  // Every function called must be one that exists.
+  //
+  // **`new Function` above only proves the script parses.** A call to a name that was never
+  // declared is perfectly good syntax and throws at run time, inside a callback, where the
+  // only symptom is the same one a syntax error gives: the page stops rendering and the
+  // camera appears not to start. Caught in the act — an edit added `renderOcr(j)` to the
+  // render loop while the function itself failed to land, and every other check here passed.
+  //
+  // Deliberately crude. Declarations are collected by pattern rather than by parsing, so the
+  // rule is "flag a call to a bare name this file never declares", anything reached through a
+  // `.` is somebody else's business, and the bias is firmly towards missing a problem rather
+  // than inventing one — a checker that cries wolf stops being run.
+  //
+  // Strings and comments come out first: without that, a CSS colour in a style string reads
+  // as a call to `rgba`, which is exactly the kind of noise that gets a check deleted.
+  const code = script[1]
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/(^|[^:])\/\/[^\n]*/g, '$1 ')
+    .replace(/`(?:[^`\\]|\\.)*`/g, '``')
+    .replace(/'(?:[^'\\\n]|\\.)*'/g, "''")
+    .replace(/"(?:[^"\\\n]|\\.)*"/g, '""');
+
+  const declared = new Set([
+    ...[...code.matchAll(/\bfunction\s+([A-Za-z_$][\w$]*)/g)].map((m) => m[1]),
+    ...[...code.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)/g)].map((m) => m[1]),
+    // Every binding position that is not a plain declaration: destructuring, parameters,
+    // catch clauses. Coarse on purpose — it can only ever add false negatives.
+    ...[...code.matchAll(/[({[,]\s*([A-Za-z_$][\w$]*)\s*(?=[,)\]}=])/g)].map((m) => m[1]),
+  ]);
+  // Keywords that are followed by a parenthesis, plus the globals this page uses. Anything
+  // missing here shows up as a false alarm rather than a miss, which is the right way round.
+  const builtins = new Set([
+    'if', 'for', 'while', 'switch', 'catch', 'return', 'typeof', 'await', 'async', 'function',
+    'new', 'delete', 'void', 'in', 'of', 'do', 'else', 'yield',
+    'fetch', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'alert',
+    'requestAnimationFrame', 'cancelAnimationFrame', 'queueMicrotask', 'structuredClone',
+    'parseInt', 'parseFloat', 'isNaN', 'isFinite', 'encodeURIComponent', 'decodeURIComponent',
+    'String', 'Number', 'Boolean', 'Array', 'Object', 'Math', 'JSON', 'Promise', 'Error',
+    'Date', 'Map', 'Set', 'WeakMap', 'RegExp', 'Symbol', 'BigInt', 'URLSearchParams', 'URL',
+    'Blob', 'File', 'FormData', 'Image', 'FileReader', 'AbortController', 'Intl',
+    'console', 'navigator', 'document', 'window', 'performance', 'localStorage',
+  ]);
+  const called = new Set(
+    [...code.matchAll(/(?<![.\w$])([A-Za-z_$][\w$]*)\s*\(/g)].map((m) => m[1]),
+  );
+  const undeclared = [...called].filter((n) => !declared.has(n) && !builtins.has(n));
+  for (const n of undeclared) {
+    fail(`the script calls ${n}(), which nothing in it declares`);
+  }
+  if (undeclared.length === 0) {
+    console.log(`ok    ${called.size} function calls all resolve`);
+  }
+
   // Every `$('id')` must name an element the markup actually has. A typo here is silent:
   // `$(...)` returns null and the first property access throws at run time, in a callback,
   // where nothing surfaces it.

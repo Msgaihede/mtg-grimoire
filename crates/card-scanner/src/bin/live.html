@@ -53,10 +53,27 @@
 
   aside { display:flex; flex-direction:column; gap:12px; min-width:0; }
   .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px 14px; }
+  /* The heading is the control. A separate toggle would be another thing to aim at in a
+     column that is already dense, and the whole heading is a large target. */
   .card h2 {
     margin:0 0 10px; font-family:var(--mono); font-size:10.5px; font-weight:600;
     letter-spacing:.12em; text-transform:uppercase; color:var(--accent);
+    display:flex; align-items:center; gap:7px; cursor:pointer; user-select:none;
+    background:none; border:0; padding:0; width:100%; text-align:left;
   }
+  .card h2:hover { color:var(--ink); }
+  .card h2:focus-visible { outline:2px solid var(--accent); outline-offset:3px; border-radius:3px; }
+  /* A caret rather than a plus or minus: it points at where the content will appear, which
+     needs no legend. */
+  .card h2::before {
+    content:''; width:0; height:0; flex:0 0 auto;
+    border-left:4px solid currentColor; border-top:3.5px solid transparent;
+    border-bottom:3.5px solid transparent; transition:transform .12s ease;
+    transform:rotate(90deg);
+  }
+  .card[data-collapsed] h2::before { transform:rotate(0deg); }
+  .card[data-collapsed] h2 { margin-bottom:0; }
+  .card[data-collapsed] > :not(h2) { display:none; }
 
   /* Stage timings as a stacked bar: the point is which stage owns the frame budget. */
   .bar { display:flex; height:9px; border-radius:5px; overflow:hidden; background:var(--sunk); margin-bottom:9px; }
@@ -153,6 +170,29 @@
   .rect .slot span { font-size:11px; color:var(--ink-3); text-align:center; padding:0 10px; }
   .rect .slot span[hidden] { display:none; }
 
+  /* The OCR panel. Fixed heights throughout: this fills in only every few frames, and a
+     block that collapses to nothing between reads would shove the whole column around —
+     the same reason every other panel here is pinned to its maximum size. */
+  .ocr h3 { margin:10px 0 4px; font-size:11px; text-transform:uppercase; letter-spacing:.08em;
+            color:var(--ink-2); font-weight:600; }
+  .ocr img { width:100%; display:block; border-radius:3px; background:#000; min-height:34px; }
+  .ocr .raw { font-family:ui-monospace,Menlo,Consolas,monospace; font-size:11px;
+              word-break:break-all; margin:4px 0 0; min-height:2.6em; }
+  .ocr .verdict { margin:3px 0 0; min-height:1.3em; }
+  .ocr .hit { color:var(--hit); }
+  .ocr .miss { color:var(--doubt); }
+  /* The pairings the parse produced. Scrolls rather than growing, so a noisy read cannot
+     push the panels below it off the screen. */
+  .pairs { list-style:none; margin:4px 0 0; padding:0; max-height:132px; overflow-y:auto;
+           font-size:11px; }
+  .pairs li { display:flex; justify-content:space-between; gap:8px; padding:1px 0;
+              border-bottom:1px solid var(--line); }
+  .pairs li:last-child { border-bottom:0; }
+  .pairs .tok { font-family:ui-monospace,Menlo,Consolas,monospace; color:var(--ink-2);
+                white-space:nowrap; }
+  .pairs .to { text-align:right; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .pairs li.hit .to { color:var(--hit); }
+  .pairs li.hit .tok { color:var(--ink); }
   .stages { display:grid; grid-template-columns:repeat(3,1fr); gap:7px; }
   .stages figure { margin:0; }
   /* A fixed box with `contain`, so a portrait mask and a landscape one occupy the same
@@ -183,7 +223,7 @@
 
   <aside>
     <div class="card">
-      <h2>Match</h2>
+      <h2 tabindex="0" role="button" aria-expanded="true">Match</h2>
       <div class="match-head">
         <span class="match-name" id="mt-name">&mdash;</span>
         <span class="match-conf" id="mt-conf">no bundle</span>
@@ -224,7 +264,7 @@
     </div>
 
     <div class="card">
-      <h2>Detection</h2>
+      <h2 tabindex="0" role="button" aria-expanded="true">Detection</h2>
       <dl class="metrics" id="metrics">
         <dt>aspect</dt><dd id="m-aspect">—</dd>
         <dt>frame area</dt><dd id="m-area">—</dd>
@@ -237,13 +277,13 @@
     </div>
 
     <div class="card">
-      <h2>Frame budget</h2>
+      <h2 tabindex="0" role="button" aria-expanded="true">Frame budget</h2>
       <div class="bar" id="bar"></div>
       <div class="legend" id="legend"></div>
     </div>
 
     <div class="card">
-      <h2>Rectified</h2>
+      <h2 tabindex="0" role="button" aria-expanded="true">Rectified</h2>
       <div class="rect">
         <div class="slot">
           <img id="rect" alt="rectified card" hidden>
@@ -254,8 +294,26 @@
       </div>
     </div>
 
+    <div class="card ocr">
+      <h2 tabindex="0" role="button" aria-expanded="true">OCR</h2>
+      <p class="muted" id="ocr-when">&mdash;</p>
+
+      <h3>title band</h3>
+      <img id="ocr-title-img" alt="the crop the recogniser read the title from">
+      <p class="raw" id="ocr-title-raw">&mdash;</p>
+      <p class="verdict" id="ocr-title-hit">&mdash;</p>
+
+      <h3>collector band</h3>
+      <img id="ocr-col-img" alt="the crop the recogniser read the collector line from">
+      <p class="raw" id="ocr-col-raw">&mdash;</p>
+      <p class="verdict" id="ocr-col-hit">&mdash;</p>
+      <!-- Every (set, number) the parse produced and what it resolved to. A verdict alone
+           cannot distinguish a bad crop from a misread character; this can. -->
+      <ol class="pairs" id="ocr-pairs"></ol>
+    </div>
+
     <div class="card">
-      <h2>Controls</h2>
+      <h2 tabindex="0" role="button" aria-expanded="true">Controls</h2>
       <div class="seg" id="method">
         <button data-v="canny" aria-pressed="true">canny</button>
         <button data-v="otsu" aria-pressed="false">otsu</button>
@@ -275,7 +333,7 @@
     </div>
 
     <div class="card" id="stages-card" hidden>
-      <h2>Pipeline</h2>
+      <h2 tabindex="0" role="button" aria-expanded="true">Pipeline</h2>
       <div class="stages">
         <figure><img id="s-binary" alt="mask"><figcaption>02 mask</figcaption></figure>
         <figure><img id="s-contours" alt="contours"><figcaption>03 contours</figcaption></figure>
@@ -502,6 +560,100 @@ function render(j) {
 // wrong answer sits at 35.9% and is rejected.
 const SURE_DISTANCE = 0.26, SURE_MARGIN = 10, PLAUSIBLE_DISTANCE = 0.30;
 
+// Panels fold away on a click of their heading.
+//
+// **The state is remembered, and that is the point rather than a flourish.** Reading this
+// page means holding a card steady with one hand, so anything that has to be re-arranged on
+// every reload is something that will not be arranged at all. `localStorage` can throw
+// outright in a private window, so every touch of it is guarded and a failure simply means
+// the panels start open.
+for (const card of document.querySelectorAll('.card')) {
+  const h = card.querySelector('h2');
+  if (!h) continue;
+  const key = 'panel:' + h.textContent.trim();
+  const apply = (collapsed) => {
+    if (collapsed) card.setAttribute('data-collapsed', '');
+    else card.removeAttribute('data-collapsed');
+    h.setAttribute('aria-expanded', String(!collapsed));
+  };
+  try { apply(localStorage.getItem(key) === '1'); } catch { apply(false); }
+  const toggle = () => {
+    const now = !card.hasAttribute('data-collapsed');
+    apply(now);
+    try { localStorage.setItem(key, now ? '1' : '0'); } catch { /* private window */ }
+  };
+  h.addEventListener('click', toggle);
+  // A div with role=button is only a button if it answers the keyboard too.
+  h.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
+  });
+}
+
+// **Held, not cleared.** OCR runs on one frame in a few and only while the answer is
+// unsettled, so blanking this on every frame without a read would leave it empty almost
+// always — and the last read is exactly what a reader wants to look at.
+let lastOcr = null;
+
+function renderOcr(j) {
+  if (j?.ocr || j?.collector) lastOcr = j;
+  const o = lastOcr?.ocr, c = lastOcr?.collector;
+  if (!o && !c) return;
+  const fresh = !!(j?.ocr || j?.collector);
+
+  const ms = Math.round((o?.elapsed_ms ?? 0) + (c?.elapsed_ms ?? 0));
+  const flips = [o?.rotated && 'title 180', c?.rotated && 'collector 180'].filter(Boolean);
+  $('ocr-when').textContent = `${ms} ms` +
+    (flips.length ? ' \u00b7 ' + flips.join(', ') : '') +
+    (fresh ? '' : ' \u00b7 held from an earlier frame');
+
+  const img = (id, uri) => {
+    const el = $(id);
+    if (uri) { el.src = uri; el.style.visibility = 'visible'; }
+    else { el.removeAttribute('src'); el.style.visibility = 'hidden'; }
+  };
+  const verdict = (id, text, hit) => {
+    const el = $(id);
+    el.textContent = text;
+    el.className = 'verdict ' + (hit ? 'hit' : 'miss');
+  };
+
+  img('ocr-title-img', o?.band);
+  // The normalized form too when it differs: a read that looks right and matches nothing is
+  // usually a character the normalizer dropped, and that is invisible from the raw text.
+  $('ocr-title-raw').textContent = o
+    ? (o.raw || '(nothing read)') +
+      (o.normalized && o.normalized !== o.raw.toLowerCase() ? `\n\u2192 ${o.normalized}` : '')
+    : '\u2014';
+  verdict('ocr-title-hit',
+    o?.matched ? `${o.matched}${o.edits ? ` (${o.edits} edits)` : ''}` : 'no name matched',
+    !!o?.matched);
+
+  img('ocr-col-img', c?.band);
+  $('ocr-col-raw').textContent = c ? (c.raw || '(nothing read)') : '\u2014';
+  verdict('ocr-col-hit', c?.matched ?? 'no printing resolved', !!c?.matched);
+
+  const list = $('ocr-pairs');
+  list.textContent = '';
+  for (const p of c?.tried ?? []) {
+    const li = document.createElement('li');
+    if (p.matched) li.className = 'hit';
+    const tok = document.createElement('span');
+    tok.className = 'tok';
+    tok.textContent = `${p.set} ${p.number}`;
+    const to = document.createElement('span');
+    to.className = 'to';
+    to.textContent = p.matched ?? '\u2014';
+    li.append(tok, to);
+    list.append(li);
+  }
+  if (c?.more > 0) {
+    const li = document.createElement('li');
+    li.className = 'muted';
+    li.textContent = `+${c.more} more pairings not shown`;
+    list.append(li);
+  }
+}
+
 function renderMatch(j, detected, hasBundle) {
   const m = j.match, tr = j.tracked;
   const name = $('mt-name'), conf = $('mt-conf'), list = $('mt-list');
@@ -560,6 +712,7 @@ function renderMatch(j, detected, hasBundle) {
   const col = j.collector;
   set('mt-col', col ? (col.matched ?? `[${col.raw || '\u2014'}] no printing`) : '\u2014',
       !!col && !col.matched);
+  renderOcr(j);
   const tm = j.trim;
   const cut = tm && (tm.left || tm.top || tm.right || tm.bottom);
   set('mt-trim', cut ? `${tm.left}/${tm.top}/${tm.right}/${tm.bottom}` : '—', !!cut);

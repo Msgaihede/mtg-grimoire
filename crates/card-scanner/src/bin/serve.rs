@@ -528,11 +528,36 @@ fn handle_frame(
                         // printing outright and the title can only agree less specifically.
                         let col = reader.read_collector(rectified, rectified_180);
                         let printing = r.lookup_collector(&col.candidates);
+                        // **Every pairing the parse produced, and what each resolved to.**
+                        // "It failed" and "it read HOBEN where the card says HOB" look
+                        // identical from a verdict and are completely different problems —
+                        // one is a bad crop, the other a misread character, and only the list
+                        // of attempts tells them apart. Capped, because a noisy read can
+                        // produce dozens and the panel is for reading.
+                        const SHOWN: usize = 14;
+                        let tried: Vec<serde_json::Value> = col
+                            .candidates
+                            .iter()
+                            .take(SHOWN)
+                            .map(|(set, number)| {
+                                serde_json::json!({
+                                    "set": set,
+                                    "number": number,
+                                    "matched": r
+                                        .lookup_pair(set, number)
+                                        .and_then(|id| r.label_for(&id))
+                                        .map(|l| l.display()),
+                                })
+                            })
+                            .collect();
                         out["collector"] = serde_json::json!({
                             "raw": col.raw,
                             "rotated": col.rotated,
                             "elapsed_ms": col.elapsed_ms,
                             "pairings": col.candidates.len(),
+                            "tried": tried,
+                            "more": col.candidates.len().saturating_sub(SHOWN),
+                            "band": col.band.as_ref().and_then(|b| preview_uri(b, 360, 70)),
                             "matched": printing
                                 .and_then(|id| r.label_for(&id))
                                 .map(|l| l.display()),
@@ -554,8 +579,14 @@ fn handle_frame(
                             .flatten();
                         out["ocr"] = serde_json::json!({
                             "raw": read.raw,
+                            // The form the name lookup actually compares, which is not what
+                            // the recogniser returned — punctuation and case are stripped from
+                            // both sides. A read that looks right and matches nothing is
+                            // usually a character this dropped.
+                            "normalized": read.normalized,
                             "rotated": read.rotated,
                             "elapsed_ms": read.elapsed_ms,
+                            "band": read.band.as_ref().and_then(|b| preview_uri(b, 360, 70)),
                             "matched": hit.and_then(|(id, _)| r.label_for(&id)).map(|l| l.name),
                             "edits": hit.map(|(_, d)| d),
                         });
