@@ -68,9 +68,13 @@ use std::collections::HashMap;
 pub struct TrackerOptions {
     /// Per-frame multiplier applied to all accumulated evidence.
     ///
-    /// 0.85 gives an effective memory of ~1/(1-0.85) ≈ 7 frames, which at the measured ~12
-    /// detections a second is a little over half a second — long enough to average out a
-    /// glare, short enough that swapping cards feels immediate.
+    /// 0.93 gives an effective memory of ~1/(1-0.93) ≈ 14 frames, a little over a second at
+    /// the measured ~12 detections a second.
+    ///
+    /// It was 0.85 (~7 frames) and that was too short. The hash tier on a difficult card
+    /// offers a *different* near-random neighbour every frame, so a short memory lets whatever
+    /// happened to win the last few frames dominate. What is wanted is the card seen most
+    /// consistently over a while, and "a while" is tens of frames, not a handful.
     pub decay: f32,
     /// Candidates worse than this contribute nothing.
     ///
@@ -111,33 +115,89 @@ pub struct TrackerOptions {
     pub reset_after_misses: u32,
     /// How many of each frame's candidates contribute.
     pub top_k: usize,
+    /// How far ahead a challenger must be before it takes the lead from the incumbent.
+    ///
+    /// **Without this the reported card changes on a tie, and a tie happens constantly.** On a
+    /// difficult card the top two are often within a bit or two of each other, so the leader
+    /// swapped on a single frame of noise and the readout flickered even though the
+    /// accumulated evidence had barely moved. 1.3 means a challenger needs 30% more evidence
+    /// than the incumbent — enough that one or two odd frames cannot do it, little enough that
+    /// genuinely putting down a different card still switches within a second.
+    ///
+    /// This is hysteresis on the *reported* leader only. The accumulator underneath is
+    /// untouched, so nothing is being hidden: a challenger that is really winning keeps
+    /// gaining and takes the lead shortly after it deserves it.
+    pub switch_margin: f32,
     /// How fast a candidate's weight falls off with its distance behind the frame's best, in
     /// normalized units.
     ///
-    /// 0.02 is about five bits at 256. A five-bit gap roughly thirds a candidate's weight; the
-    /// ten-bit gaps seen in practice cut it to a seventh. Larger values dilute a clear winner
-    /// among its runners-up, which is the failure this exists to fix; much smaller ones make a
-    /// genuine near-tie look decided and reintroduce the flicker one tier up.
+    /// 0.015 is about four bits at 256. A four-bit gap roughly thirds a candidate's weight and
+    /// the ten-bit gaps seen in practice cut it to a fortieth, so the frame's best candidate
+    /// carries most of that frame's evidence. Larger values dilute a clear winner among its
+    /// runners-up; much smaller ones make a genuine near-tie look decided and reintroduce the
+    /// flicker one tier up.
     pub relative_falloff: f32,
 }
 
 impl Default for TrackerOptions {
     fn default() -> Self {
         TrackerOptions {
-            decay: 0.85,
+            decay: 0.93,
             max_normalized: 0.30,
             commit_confidence: 0.70,
             commit_seen: 5,
             commit_streak: 3,
             reset_after_misses: 10,
             top_k: 5,
-            relative_falloff: 0.02,
+            relative_falloff: 0.015,
+            switch_margin: 1.3,
         }
     }
 }
 
-/// One observation from a frame: what to accumulate on, what it names, and how good it was.
-pub type Observation = ([u8; ID_LEN], [u8; ID_LEN], f32);
+/// One observation from a frame.
+#[derive(Debug, Clone, Copy)]
+pub struct Observation {
+    /// What evidence pools on — an oracle id, when the caller groups by card.
+    pub key: [u8; ID_LEN],
+    /// What it actually names: the printing to report.
+    pub member: [u8; ID_LEN],
+    /// Normalized distance, 0 = perfect.
+    pub normalized: f32,
+    /// How much this *kind* of observation is worth against the others in the frame.
+    ///
+    /// **Not every signal is equal evidence, and treating them as equal was a real bug.** A
+    /// nearest-neighbour hash is a guess about appearance; a name read off the card is close
+    /// to proof. Measured live on a foil, the hash offered a different near-random neighbour
+    /// every frame at 55-66 bits while OCR read the title correctly every single time — but
+    /// OCR ran on one frame in five and counted the same as a guess, so the guesses
+    /// out-accumulated it and the tracker committed to `Suplex`.
+    ///
+    /// 1.0 is an appearance match. See [`Observation::from_ocr`] for what a read is worth.
+    pub weight: f32,
+}
+
+impl Observation {
+    /// An appearance match: a hash neighbour, worth one vote.
+    pub fn appearance(key: [u8; ID_LEN], member: [u8; ID_LEN], normalized: f32) -> Observation {
+        Observation { key, member, normalized, weight: 1.0 }
+    }
+
+    /// A name read off the card.
+    ///
+    /// Worth several frames of appearance evidence, because it nearly is proof — and because
+    /// it is expensive, so it runs rarely and has to carry its share when it does. A read that
+    /// needed correcting is worth less than a clean one, so a misread cannot outrank a
+    /// confident hash on its own.
+    pub fn from_ocr(key: [u8; ID_LEN], member: [u8; ID_LEN], edits: u32) -> Observation {
+        Observation {
+            key,
+            member,
+            normalized: if edits == 0 { 0.0 } else { 0.06 },
+            weight: if edits == 0 { 6.0 } else { 3.0 },
+        }
+    }
+}
 
 /// One accumulated candidate.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -254,7 +314,10 @@ impl Tracker {
     ///
     /// Convenience for callers with no corpus to resolve an oracle id from.
     pub fn observe_ids(&mut self, candidates: &[([u8; ID_LEN], f32)]) -> Tracked {
-        let obs: Vec<Observation> = candidates.iter().map(|(id, n)| (*id, *id, *n)).collect();
+        let obs: Vec<Observation> = candidates
+            .iter()
+            .map(|(id, n)| Observation::appearance(*id, *id, *n))
+            .collect();
         self.observe(&obs)
     }
 
@@ -267,7 +330,7 @@ impl Tracker {
         let usable: Vec<_> = candidates
             .iter()
             .take(self.opts.top_k)
-            .filter(|(_, _, n)| *n < self.opts.max_normalized)
+            .filter(|o| o.normalized < self.opts.max_normalized)
             .collect();
 
         // **Only an informative frame decays the accumulator.** Decay models "older evidence
@@ -295,9 +358,10 @@ impl Tracker {
             // The frame's best distance is the reference every candidate is weighed against.
             let best_n = usable
                 .iter()
-                .map(|(_, _, n)| *n)
+                .map(|o| o.normalized)
                 .fold(f32::INFINITY, f32::min);
-            for (key, member, normalized) in usable {
+            for o in usable {
+                let (key, member, normalized) = (&o.key, &o.member, o.normalized);
                 // Two factors. **Quality** is the candidate's own distance across the usable
                 // range, so a frame where everything is mediocre contributes less than a frame
                 // with a good match in it. **Relative** is how far behind the frame's best it
@@ -308,29 +372,43 @@ impl Tracker {
                     .clamp(0.0, 1.0);
                 let behind = (normalized - best_n).max(0.0);
                 let relative = (-behind / self.opts.relative_falloff.max(1e-4)).exp();
-                let w = quality * relative;
+                let w = quality * relative * o.weight.max(0.0);
                 *self.scores.entry(*key).or_insert(0.0) += w;
                 *self.seen.entry(*key).or_insert(0) += 1;
                 // The printing to report for this card is its single best frame, not its most
                 // recent — a card held still gets many looks and one of them is the sharpest.
-                let slot = self.best.entry(*key).or_insert((*member, *normalized));
-                if *normalized < slot.1 {
-                    *slot = (*member, *normalized);
+                let slot = self.best.entry(*key).or_insert((*member, normalized));
+                if normalized < slot.1 {
+                    *slot = (*member, normalized);
                 }
             }
         }
 
-        // Leader streak, computed before the snapshot so the snapshot can report it.
+        // The raw best, and then the *sticky* leader: an incumbent keeps the lead until a
+        // challenger is clearly ahead, so one or two odd frames cannot swap the answer.
         let top = self
             .scores
             .iter()
             .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
             .map(|(id, _)| *id);
-        if top.is_some() && top == self.leader {
+        let held = self.leader.filter(|cur| self.scores.contains_key(cur));
+        let next = match (held, top) {
+            (Some(cur), Some(t)) if t != cur => {
+                let (cur_ev, t_ev) = (self.scores[&cur], self.scores[&t]);
+                if t_ev > cur_ev * self.opts.switch_margin.max(1.0) {
+                    Some(t)
+                } else {
+                    Some(cur)
+                }
+            }
+            (Some(cur), _) => Some(cur),
+            (None, t) => t,
+        };
+        if next.is_some() && next == self.leader {
             self.streak += 1;
         } else {
-            self.leader = top;
-            self.streak = u32::from(top.is_some());
+            self.leader = next;
+            self.streak = u32::from(next.is_some());
         }
 
         self.snapshot()
@@ -356,6 +434,14 @@ impl Tracker {
         standings.sort_by(|a, b| {
             b.evidence.partial_cmp(&a.evidence).unwrap_or(std::cmp::Ordering::Equal)
         });
+        // The held leader goes first even when it is fractionally behind on raw evidence —
+        // otherwise the reported card and the top of the list would disagree, which is the
+        // flicker showing through in a different place.
+        if let Some(lead) = self.leader {
+            if let Some(i) = standings.iter().position(|s| s.id == lead) {
+                standings.swap(0, i);
+            }
+        }
         standings.truncate(6);
 
         // Leader against its single best rival. With no rival at all the leader is
@@ -506,11 +592,11 @@ mod tests {
         // card held still.
         let mut t = Tracker::default();
         let frame = [
-            (id(1), id(1), 0.215),
-            (id(2), id(2), 0.250),
-            (id(3), id(3), 0.254),
-            (id(4), id(4), 0.258),
-            (id(5), id(5), 0.262),
+            Observation::appearance(id(1), id(1), 0.215),
+            Observation::appearance(id(2), id(2), 0.250),
+            Observation::appearance(id(3), id(3), 0.254),
+            Observation::appearance(id(4), id(4), 0.258),
+            Observation::appearance(id(5), id(5), 0.262),
         ];
         let mut r = None;
         for _ in 0..20 {
@@ -608,7 +694,7 @@ mod tests {
         let mut r = None;
         for i in 0..12u8 {
             let member = id(20 + (i % 3));
-            r = Some(t.observe(&[(id(1), member, 0.16)]));
+            r = Some(t.observe(&[Observation::appearance(id(1), member, 0.16)]));
         }
         let r = r.expect("frames were observed");
         assert!(r.committed, "reprints of one card must pool their evidence");
@@ -618,9 +704,9 @@ mod tests {
 
         // And the printing reported is the best-scoring one, not the most recent.
         let mut t = Tracker::default();
-        t.observe(&[(id(1), id(20), 0.25)]);
-        t.observe(&[(id(1), id(21), 0.08)]);
-        let r = t.observe(&[(id(1), id(22), 0.22)]);
+        t.observe(&[Observation::appearance(id(1), id(20), 0.25)]);
+        t.observe(&[Observation::appearance(id(1), id(21), 0.08)]);
+        let r = t.observe(&[Observation::appearance(id(1), id(22), 0.22)]);
         assert_eq!(r.leader().expect("leader").best_member, id(21));
     }
 
@@ -694,6 +780,79 @@ mod tests {
         let r = r.expect("frames");
         assert_eq!(r.confidence, 1.0);
         assert!(r.committed);
+    }
+
+    #[test]
+    fn a_stray_frame_or_two_does_not_take_the_lead() {
+        // **"Do not flip between cards if there is just one or two frames of a different
+        // card."** The top two on a difficult card are routinely a bit or two apart, so
+        // without hysteresis the reported answer changed on a single noisy frame while the
+        // accumulated evidence had barely moved.
+        let mut t = Tracker::default();
+        for _ in 0..14 {
+            t.observe_ids(&[(id(1), 0.17)]);
+        }
+        assert_eq!(t.observe_ids(&[(id(1), 0.17)]).leader().expect("leader").id, id(1));
+
+        // Two frames where an impostor is the only candidate, and better than the incumbent
+        // ever was. It must not take the lead on that alone.
+        t.observe_ids(&[(id(2), 0.05)]);
+        let r = t.observe_ids(&[(id(2), 0.05)]);
+        assert_eq!(
+            r.leader().expect("leader").id,
+            id(1),
+            "two frames of another card took the lead"
+        );
+
+        // Sustained, it should — hysteresis delays a switch, it does not prevent one.
+        let mut took = None;
+        for f in 1..=30 {
+            if t.observe_ids(&[(id(2), 0.05)]).leader().expect("leader").id == id(2) {
+                took = Some(f);
+                break;
+            }
+        }
+        assert!(took.is_some_and(|f| f <= 20), "a real change never took over: {took:?}");
+    }
+
+    #[test]
+    fn a_read_name_outweighs_a_parade_of_appearance_guesses() {
+        // **The measured live failure.** On a foil the hash offered a different near-random
+        // neighbour every frame at 55-66 bits, while OCR read the title correctly every time
+        // it ran — but it ran on one frame in five and counted the same as a guess, so the
+        // guesses out-accumulated it and the tracker committed to the wrong card.
+        let mut t = Tracker::default();
+        let mut r = None;
+        for f in 0..30u8 {
+            let mut obs = vec![
+                // A persistent wrong neighbour, plus churn, on every frame.
+                Observation::appearance(id(2), id(2), 0.23),
+                Observation::appearance(id(60 + f), id(60 + f), 0.24),
+            ];
+            // The read lands on one frame in five and is the only thing that is ever right.
+            if f % 5 == 0 {
+                obs.insert(0, Observation::from_ocr(id(1), id(1), 0));
+            }
+            r = Some(t.observe(&obs));
+        }
+        let r = r.expect("frames");
+        assert_eq!(
+            r.leader().expect("leader").id,
+            id(1),
+            "a name read off the card lost to appearance guesses"
+        );
+        assert!(r.committed, "the read should carry it to a commit");
+    }
+
+    #[test]
+    fn a_misread_does_not_outrank_a_confident_hash() {
+        // The other side: a read that needed correcting is worth less, so OCR guessing wrong
+        // cannot bulldoze a hash that is sure.
+        let clean = Observation::from_ocr(id(1), id(1), 0);
+        let corrected = Observation::from_ocr(id(1), id(1), 2);
+        assert!(corrected.weight < clean.weight);
+        assert!(corrected.normalized > clean.normalized);
+        assert!(corrected.weight > Observation::appearance(id(2), id(2), 0.2).weight);
     }
 
     #[test]

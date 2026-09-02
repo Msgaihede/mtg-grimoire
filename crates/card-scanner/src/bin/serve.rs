@@ -327,8 +327,13 @@ fn handle_frame(
                     .candidates
                     .iter()
                     .filter_map(|c| {
-                        card_scanner::index::parse_uuid(&c.id)
-                            .map(|id| (r.oracle_for(&id), id, c.normalized))
+                        card_scanner::index::parse_uuid(&c.id).map(|id| {
+                            card_scanner::track::Observation::appearance(
+                                r.oracle_for(&id),
+                                id,
+                                c.normalized,
+                            )
+                        })
                     })
                     .collect();
                 // The OCR tier, when the hash tier has not settled it. A resolved name is
@@ -357,10 +362,14 @@ fn handle_frame(
                             "edits": hit.map(|(_, d)| d),
                         });
                         if let Some((id, edits)) = hit {
-                            // A clean read enters at zero; a read that needed correcting enters
-                            // a little behind, so a misread cannot outrank a confident hash.
-                            let n = if edits == 0 { 0.0 } else { 0.06 };
-                            observations.insert(0, (r.oracle_for(&id), id, n));
+                            observations.insert(
+                                0,
+                                card_scanner::track::Observation::from_ocr(
+                                    r.oracle_for(&id),
+                                    id,
+                                    edits,
+                                ),
+                            );
                         }
                     }
                 }
