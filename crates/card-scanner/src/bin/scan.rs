@@ -55,6 +55,13 @@ struct Args {
     /// Keep any background margin the rectification picked up. See the `trim` module.
     #[arg(long)]
     no_trim: bool,
+    /// Extra framings to hand the matcher, as multipliers on --inset. Empty for one framing.
+    /// See DetectOptions::query_insets.
+    #[arg(long, default_value = "0.96,1.04", value_delimiter = ',')]
+    query_insets: Vec<f32>,
+    /// Hash one framing only, at --inset exactly. The A/B against --query-insets.
+    #[arg(long)]
+    single_framing: bool,
 
     /// Downscale each source image to this long edge before doing anything else.
     ///
@@ -316,6 +323,11 @@ fn main() -> std::process::ExitCode {
                 max_angle_error_deg: args.max_angle_error_deg,
                 inset: args.inset,
                 trim_margin: !args.no_trim,
+                query_insets: if args.single_framing {
+                    Vec::new()
+                } else {
+                    args.query_insets.clone()
+                },
                 min_cardness: args.min_cardness,
                 ..Default::default()
             };
@@ -354,9 +366,12 @@ fn main() -> std::process::ExitCode {
                 // Both orientations, because a card is 180°-symmetric and the quad cannot
                 // say which end is the top.
                 let matched = reference.as_ref().map(|r| {
-                    let upright = &d.rectified;
-                    let flipped = &d.rectified_180;
-                    r.match_card(upright, flipped, args.top.clamp(1, 25), &Mask::all())
+                // The primary framing first, then the alternates — see
+                // `DetectOptions::query_insets`. Order matters only for the reported `view`.
+                let mut views: Vec<(&image::RgbImage, &image::RgbImage)> =
+                    vec![(&d.rectified, &d.rectified_180)];
+                views.extend(d.alternates.iter().map(|(a, b)| (a, b)));
+                    r.match_views(&views, args.top.clamp(1, 25), &Mask::all())
                 });
 
                 let detail = format!(
@@ -418,6 +433,19 @@ fn main() -> std::process::ExitCode {
                     // The trim is printed as one number per side rather than a total, because
                     // an asymmetric margin and a symmetric one mean different things: the
                     // first is a quad that was offset, the second one that was simply too big.
+                    // Where the match's own time went, separately from detection's. Without
+                    // this "matching got slower" cannot be attributed to the warps, the
+                    // descriptors or the search, and each has a different fix.
+                    if let Some(m) = &matched {
+                        eprintln!(
+                            "      match {} view{}/{}  hash {:.1}ms  search {:.1}ms",
+                            if m.rotated { "(180)" } else { "     " },
+                            m.view,
+                            m.views,
+                            m.hash_ms,
+                            m.search_ms
+                        );
+                    }
                     let t = d.margin;
                     println!(
                         "{name:<28} {elapsed:>7.0} {:>6} {:>7.3} {:>6.3} {:>6.1} {:>13}  {tail}",

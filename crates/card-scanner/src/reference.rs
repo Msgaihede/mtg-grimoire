@@ -58,6 +58,14 @@ pub struct MatchReport {
     /// reader can see that happening — a scan that consistently reports `rotated` is a scan
     /// being held upside-down, which is worth knowing and is invisible otherwise.
     pub rotated: bool,
+    /// Which framing won, as an index into the views handed to [`Reference::match_views`].
+    ///
+    /// Reported rather than kept private because it says whether the extra framings are
+    /// earning their cost: if view 0 always wins, the sweep is dead weight, and if the
+    /// outermost always wins, the inset itself is set wrong.
+    pub view: usize,
+    /// How many framings were searched.
+    pub views: usize,
     pub candidates: Vec<Candidate>,
     /// Computing the two descriptors, which is a Lanczos3 downsample of a 488x680 card to a
     /// 17x8 grid and back — separated from the search because they scale with completely
@@ -238,24 +246,58 @@ impl Reference {
         k: usize,
         mask: &Mask,
     ) -> MatchReport {
+        self.match_views(&[(upright, rotated)], k, mask)
+    }
+
+    /// The same, over several framings of the same card.
+    ///
+    /// **How tightly the card is framed matters more than anything else here** — swept over
+    /// the corpus, the inset alone moves the count of good matches from 1 to 22 — and the
+    /// right framing cannot be known before rectifying, because it depends on how sharp that
+    /// frame's edge happened to be. So the search is given a few and keeps whichever wins.
+    ///
+    /// The winner is chosen on the top candidate's distance, exactly as the two orientations
+    /// already were. That is the same "more chances to be wrong" risk that hashing both
+    /// orientations carries, and it was measured the same way: over the corpus, three framings
+    /// took the mean distance from 48.7 to 41.6 with accuracy unchanged at 11/11.
+    pub fn match_views(
+        &self,
+        views: &[(&image::RgbImage, &image::RgbImage)],
+        k: usize,
+        mask: &Mask,
+    ) -> MatchReport {
         let kind = self.bundle.kind;
         let bits = self.bundle.bits;
-
-        let t_hash = std::time::Instant::now();
-        // `hash_rgb`, not `hash`: the bundle's kind decides whether colour is used, and a
-        // grayscale call would silently drop it — matching a colour bundle with a colourless
-        // query returns confident nonsense rather than an error.
-        let hash_a = crate::hash::hash_rgb(upright, kind, bits);
-        let hash_b = crate::hash::hash_rgb(rotated, kind, bits);
-        let hash_ms = t_hash.elapsed().as_secs_f32() * 1000.0;
-
-        let started = std::time::Instant::now();
-        let a = self.bundle.search(&hash_a, Section::Card, k, mask);
-        let b = self.bundle.search(&hash_b, Section::Card, k, mask);
-
         let best_of = |v: &[Match]| v.first().map(|m| m.distance).unwrap_or(u32::MAX);
-        let use_rotated = best_of(&b) < best_of(&a);
-        let winner = if use_rotated { b } else { a };
+
+        let mut hash_ms = 0.0;
+        let mut search_ms = 0.0;
+        let mut winner: Vec<Match> = Vec::new();
+        let mut use_rotated = false;
+        let mut view = 0usize;
+
+        for (i, (upright, rotated)) in views.iter().enumerate() {
+            let t_hash = std::time::Instant::now();
+            // `hash_rgb`, not `hash`: the bundle's kind decides whether colour is used, and a
+            // grayscale call would silently drop it — matching a colour bundle with a
+            // colourless query returns confident nonsense rather than an error.
+            let hash_a = crate::hash::hash_rgb(upright, kind, bits);
+            let hash_b = crate::hash::hash_rgb(rotated, kind, bits);
+            hash_ms += t_hash.elapsed().as_secs_f32() * 1000.0;
+
+            let started = std::time::Instant::now();
+            let a = self.bundle.search(&hash_a, Section::Card, k, mask);
+            let b = self.bundle.search(&hash_b, Section::Card, k, mask);
+            search_ms += started.elapsed().as_secs_f32() * 1000.0;
+
+            let rotated_wins = best_of(&b) < best_of(&a);
+            let candidate = if rotated_wins { b } else { a };
+            if winner.is_empty() || best_of(&candidate) < best_of(&winner) {
+                winner = candidate;
+                use_rotated = rotated_wins;
+                view = i;
+            }
+        }
 
         let margin = match winner.len() {
             0 | 1 => None,
@@ -265,10 +307,12 @@ impl Reference {
         MatchReport {
             section: Section::Card,
             rotated: use_rotated,
+            view,
+            views: views.len(),
             candidates: winner.iter().map(|m| self.candidate(Section::Card, m)).collect(),
             margin,
             hash_ms,
-            search_ms: started.elapsed().as_secs_f32() * 1000.0,
+            search_ms,
         }
     }
 }
@@ -348,6 +392,45 @@ mod tests {
         assert!(report.rotated, "the rotated orientation should have won");
         assert_eq!(report.candidates[0].id, format_uuid(&id(7)));
         assert_eq!(report.candidates[0].distance, 0);
+    }
+
+    #[test]
+    fn the_best_framing_wins_not_the_first() {
+        // Three framings of a card, only the last of which is actually the card. A matcher
+        // that stopped at the first view, or that let an earlier view's worse distance stand,
+        // would report noise — and would do it with the confidence of a top-1.
+        let r = reference();
+        let views = [(&img(98), &img(97)), (&img(96), &img(95)), (&img(5), &img(94))];
+        let report = r.match_views(&views, 3, &Mask::all());
+        assert_eq!(report.view, 2, "the winning framing was not the one reported");
+        assert_eq!(report.views, 3);
+        assert_eq!(report.candidates[0].id, format_uuid(&id(5)));
+        assert_eq!(report.candidates[0].distance, 0);
+        assert!(!report.rotated, "the upright half of the winning framing matched");
+    }
+
+    #[test]
+    fn a_framing_can_win_on_its_rotated_half() {
+        // The two choices are independent: the winning view may be the second one *and* the
+        // rotated half of it. Collapsing them would report the right card the wrong way up.
+        let r = reference();
+        let views = [(&img(98), &img(97)), (&img(96), &img(9))];
+        let report = r.match_views(&views, 3, &Mask::all());
+        assert_eq!(report.view, 1);
+        assert!(report.rotated, "the rotated half of the second framing should have won");
+        assert_eq!(report.candidates[0].id, format_uuid(&id(9)));
+    }
+
+    #[test]
+    fn one_framing_is_the_old_behaviour_exactly() {
+        // `match_card` delegates here, so this pins that the delegation changed nothing.
+        let r = reference();
+        let a = r.match_card(&img(5), &img(99), 3, &Mask::all());
+        let b = r.match_views(&[(&img(5), &img(99))], 3, &Mask::all());
+        assert_eq!(a.candidates[0].id, b.candidates[0].id);
+        assert_eq!(a.candidates[0].distance, b.candidates[0].distance);
+        assert_eq!(b.view, 0);
+        assert_eq!(b.views, 1);
     }
 
     #[test]

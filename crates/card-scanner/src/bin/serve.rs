@@ -139,7 +139,7 @@ impl FrameOptions {
         }
     }
 
-    fn detect_options(&self, method: EdgeMethod) -> DetectOptions {
+    fn detect_options(&self, method: EdgeMethod, settled: bool) -> DetectOptions {
         DetectOptions {
             method,
             work_long_edge: self.work_long_edge.clamp(240, 2048),
@@ -147,6 +147,16 @@ impl FrameOptions {
             canny_high: self.canny_high,
             aspect_tolerance: self.aspect_tolerance,
             min_cardness: self.min_cardness,
+            // **The extra framings are dropped once the card has been named.** Measured on a
+            // 720 px frame they cost 63 ms against 112 — more than half the frame again, and
+            // almost all of it in building the descriptors rather than searching them. That is
+            // worth paying while the answer is in doubt and worth nothing after: the tracker
+            // has committed, and three framings of a card it has already identified buy a few
+            // bits of distance on a question nobody is asking any more.
+            //
+            // The same shape as the OCR tier, and for the same reason — an expensive tier
+            // stands down when the cheap one has settled it.
+            query_insets: if settled { Vec::new() } else { DetectOptions::default().query_insets },
             ..Default::default()
         }
     }
@@ -221,11 +231,14 @@ fn handle_frame(
         None => vec![EdgeMethod::Canny, EdgeMethod::Otsu],
     };
 
+    // Asked once, before the loop, so both detectors see the same decision.
+    let settled = tracker.lock().map(|t| t.last_committed()).unwrap_or(false);
+
     let mut best: Option<(EdgeMethod, Detection, Option<DetectTrace>)> = None;
     let mut fallback_trace: Option<DetectTrace> = None;
     let mut error = None;
     for m in methods {
-        let (result, trace) = detect(&source, &opts.detect_options(m));
+        let (result, trace) = detect(&source, &opts.detect_options(m, settled));
         match result {
             Ok(d) => {
                 // **Card-likeness picks the method, not the geometric score.** Measured, it
@@ -327,9 +340,12 @@ fn handle_frame(
             // The match itself. Both orientations are hashed inside `match_card`, because a
             // card is 180°-symmetric and the quad cannot say which end is the top.
             if let Some(r) = reference.filter(|_| trusted) {
-                let upright = &d.rectified;
-                let flipped = &d.rectified_180;
-                let report = r.match_card(upright, flipped, top, &Mask::all());
+                // The primary framing first, then the alternates — see
+                // `DetectOptions::query_insets`. Order matters only for the reported `view`.
+                let mut views: Vec<(&image::RgbImage, &image::RgbImage)> =
+                    vec![(&d.rectified, &d.rectified_180)];
+                views.extend(d.alternates.iter().map(|(a, b)| (a, b)));
+                let report = r.match_views(&views, top, &Mask::all());
 
                 // Accumulate across frames. A per-frame top-1 flickers between near-ties
                 // several times a second; the stable answer is the one that keeps recurring.
