@@ -94,6 +94,11 @@ pub struct Reference {
     /// Names, not printings: OCR reads the name, and every printing of a card shares it. One
     /// representative is enough because the tracker pools by oracle id anyway.
     by_name: HashMap<String, [u8; ID_LEN]>,
+    /// `(set, collector number)` to printing — the index the collector line resolves against.
+    ///
+    /// Lower-cased and with leading zeros stripped on both sides, because the card prints
+    /// `0232` and Scryfall stores `232`.
+    by_set_number: HashMap<(String, String), [u8; ID_LEN]>,
 }
 
 impl Reference {
@@ -104,6 +109,7 @@ impl Reference {
             art_printings: HashMap::new(),
             oracle: HashMap::new(),
             by_name: HashMap::new(),
+            by_set_number: HashMap::new(),
         }
     }
 
@@ -146,11 +152,43 @@ impl Reference {
                     self.art_printings.entry(ill).or_default().push(label.clone());
                 }
                 self.by_name.entry(crate::ocr::normalize(&label.name)).or_insert(raw);
+                // English first: a non-English printing shares the set and number with its
+                // English counterpart, and `or_insert` would otherwise hand back whichever
+                // language the corpus happened to list first.
+                let key = set_number_key(&label.set, &label.number);
+                if label.lang == "en" {
+                    self.by_set_number.insert(key, raw);
+                } else {
+                    self.by_set_number.entry(key).or_insert(raw);
+                }
                 self.labels.insert(raw, label);
                 n += 1;
             }
         }
         Ok(n)
+    }
+
+    /// Resolve a collector-line read to the exact printing it names.
+    ///
+    /// **This is the only tier that can answer which *printing* is in front of the camera.**
+    /// The descriptor says which card it looks like and reads a reprint as readily as the
+    /// right one; the title says what it is called and every reprint shares that. A set code
+    /// and a collector number are an identity, and nothing else the scanner sees is.
+    ///
+    /// Takes the whole candidate list rather than a parsed pair, because the parse cannot be
+    /// done reliably in isolation — see [`crate::ocr::collector_candidates`]. The first
+    /// pairing that names a real printing wins, which is what turns a wide guess into a
+    /// checked answer.
+    pub fn lookup_collector(&self, candidates: &[(String, String)]) -> Option<[u8; ID_LEN]> {
+        candidates
+            .iter()
+            .find_map(|(set, number)| self.by_set_number.get(&(set.clone(), number.clone())))
+            .copied()
+    }
+
+    /// How many (set, number) pairs are indexed.
+    pub fn printing_count(&self) -> usize {
+        self.by_set_number.len()
     }
 
     /// The oracle id for a printing — the identity a card keeps across every reprint.
@@ -348,6 +386,16 @@ impl Reference {
             search_ms,
         }
     }
+}
+
+
+/// The key both sides of the collector lookup are normalized to.
+fn set_number_key(set: &str, number: &str) -> (String, String) {
+    let n = number.trim_start_matches('0');
+    (
+        set.to_ascii_lowercase(),
+        if n.is_empty() { "0".to_string() } else { n.to_ascii_lowercase() },
+    )
 }
 
 /// Levenshtein distance, abandoned as soon as it cannot come in under `max`.

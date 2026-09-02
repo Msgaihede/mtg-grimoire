@@ -524,6 +524,29 @@ fn handle_frame(
                     static SEQ: std::sync::atomic::AtomicU64 =
                         std::sync::atomic::AtomicU64::new(0);
                     if SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % OCR_EVERY == 0 {
+                        // The collector line first: when it resolves, it has named the
+                        // printing outright and the title can only agree less specifically.
+                        let col = reader.read_collector(rectified, rectified_180);
+                        let printing = r.lookup_collector(&col.candidates);
+                        out["collector"] = serde_json::json!({
+                            "raw": col.raw,
+                            "rotated": col.rotated,
+                            "elapsed_ms": col.elapsed_ms,
+                            "pairings": col.candidates.len(),
+                            "matched": printing
+                                .and_then(|id| r.label_for(&id))
+                                .map(|l| l.display()),
+                        });
+                        if let Some(id) = printing {
+                            observations.insert(
+                                0,
+                                card_scanner::track::Observation::from_collector(
+                                    r.oracle_for(&id),
+                                    id,
+                                ),
+                            );
+                        }
+
                         let read = reader.read_title(rectified, rectified_180);
                         let hit = read
                             .is_usable()
@@ -637,6 +660,12 @@ fn handle_frame(
                 cands.join("  |  ")
             }
         );
+        if let Some(name) = out["collector"]["matched"].as_str() {
+            eprintln!(
+                "      col [{}] -> {name}",
+                out["collector"]["raw"].as_str().unwrap_or("")
+            );
+        }
         if let Some(name) = out["ocr"]["matched"].as_str() {
             eprintln!(
                 "      ocr [{}] -> {name}",

@@ -198,6 +198,10 @@
         <!-- Deliberately not "margin": that row above is the gap between the top two
              candidates. This one is background pixels cut off the rectification. -->
         <dt>trim l/t/r/b</dt><dd id="mt-trim">&mdash;</dd>
+        <!-- The set code and collector number, which name the *printing* rather than the
+             card. Shown raw as well as resolved: when it fails it is almost always visible
+             in the raw text why, and that is not recoverable after the fact. -->
+        <dt>collector</dt><dd id="mt-col">&mdash;</dd>
         <dt>lock</dt><dd id="mt-lock">&mdash;</dd>
       </dl>
       <ol class="cands" id="mt-list"></ol>
@@ -553,6 +557,9 @@ function renderMatch(j, detected, hasBundle) {
       ck && ck.score < 0.45);
   // Flagged when it fires: a trim on most frames means the quad is running wide, and the
   // detector wants fixing rather than the rectification patching.
+  const col = j.collector;
+  set('mt-col', col ? (col.matched ?? `[${col.raw || '\u2014'}] no printing`) : '\u2014',
+      !!col && !col.matched);
   const tm = j.trim;
   const cut = tm && (tm.left || tm.top || tm.right || tm.bottom);
   set('mt-trim', cut ? `${tm.left}/${tm.top}/${tm.right}/${tm.bottom}` : '—', !!cut);

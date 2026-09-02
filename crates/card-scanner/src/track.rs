@@ -183,6 +183,23 @@ impl Observation {
         Observation { key, member, normalized, weight: 1.0 }
     }
 
+    /// A set code and collector number read off the card's bottom-left corner.
+    ///
+    /// **The only tier that identifies a printing rather than a card.** The descriptor says
+    /// what this looks like and reads a reprint as readily as the right one; the title says
+    /// what it is called and every reprint shares that name. `LTR 232` is an identity, and
+    /// nothing else the scanner sees is — which is why the member it names can be trusted
+    /// where a hash's cannot.
+    ///
+    /// Weighted above a clean title read but not beyond argument. Measured over the corpus it
+    /// resolves 12 of 39 rectifications and 11 of those are right, so roughly one resolve in
+    /// twelve is a confident wrong answer — a misread digit, which no amount of parsing fixes.
+    /// A single frame must not be able to carry that on its own; several agreeing frames
+    /// should walk away with it, and at 8.0 against appearance's 1.0 they do.
+    pub fn from_collector(key: [u8; ID_LEN], member: [u8; ID_LEN]) -> Observation {
+        Observation { key, member, normalized: 0.0, weight: 8.0 }
+    }
+
     /// A name read off the card.
     ///
     /// Worth several frames of appearance evidence, because it nearly is proof — and because

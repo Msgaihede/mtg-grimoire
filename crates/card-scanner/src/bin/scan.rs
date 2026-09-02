@@ -292,6 +292,20 @@ fn main() -> std::process::ExitCode {
             found += 1;
 
             if let Some(reader) = &reader {
+                let c = reader.read_collector(&rgb, &flipped);
+                println!(
+                    "      COL {:.0}ms {}[{}] -> {}",
+                    c.elapsed_ms,
+                    if c.rotated { "(180) " } else { "" },
+                    c.raw,
+                    match r.lookup_collector(&c.candidates) {
+                        Some(id) => r
+                            .label_for(&id)
+                            .map(|l| l.display())
+                            .unwrap_or_else(|| "resolved, unlabelled".into()),
+                        None => format!("no printing ({} pairings tried)", c.candidates.len()),
+                    }
+                );
                 let read = reader.read_title(&rgb, &flipped);
                 let hit = read
                     .is_usable()
