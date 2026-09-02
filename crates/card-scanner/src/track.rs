@@ -155,6 +155,25 @@ impl Default for TrackerOptions {
     }
 }
 
+/// Where an observation came from.
+///
+/// **Candidates are only ever ranked against others of their own kind.** The relative falloff
+/// below asks "how far behind this frame's best is this candidate", and that question only
+/// means anything among answers to the same question. A read name enters at distance zero, so
+/// comparing a hash neighbour at 0.15 against it put every appearance candidate ten falloff
+/// widths behind and multiplied it by e^-10 — measured, thirty frames of a consistent hash
+/// match accumulated 0.0000 against a read's 101.33. The hash was not outvoted, it was
+/// annihilated, and on a card the reader had misread there was nothing left to correct it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Evidence {
+    /// A nearest neighbour in the bundle — what the card looks like.
+    Appearance,
+    /// A name read off the title band.
+    Name,
+    /// A set code and collector number read off the bottom-left corner.
+    Collector,
+}
+
 /// One observation from a frame.
 #[derive(Debug, Clone, Copy)]
 pub struct Observation {
@@ -175,12 +194,38 @@ pub struct Observation {
     ///
     /// 1.0 is an appearance match. See [`Observation::from_ocr`] for what a read is worth.
     pub weight: f32,
+    /// How much this observation is worth for choosing the *printing*, separately from the
+    /// card.
+    ///
+    /// **These are different questions and one number cannot answer both.** A collector number
+    /// pins a printing exactly and is the only thing that can — but a single misread digit
+    /// names a real, valid, entirely different card, so it is weak evidence about *which card*
+    /// and decisive evidence about *which printing of it*. A read name is the mirror image: it
+    /// identifies the card well and says nothing whatever about the printing, since every
+    /// reprint shares the name and the one it resolves to is simply whichever the index
+    /// happened to store.
+    ///
+    /// So the art decides the card and the number narrows it down within that card, which is
+    /// what each is actually good for.
+    pub member_weight: f32,
+    /// Which tier produced this. Candidates are ranked only against others of the same kind —
+    /// see [`Evidence`].
+    pub kind: Evidence,
 }
 
 impl Observation {
     /// An appearance match: a hash neighbour, worth one vote.
     pub fn appearance(key: [u8; ID_LEN], member: [u8; ID_LEN], normalized: f32) -> Observation {
-        Observation { key, member, normalized, weight: 1.0 }
+        Observation {
+            key,
+            member,
+            normalized,
+            weight: 1.0,
+            // A hash match names a specific printing and is genuinely evidence for it — a
+            // borderless and a retro frame of one card do not look alike.
+            member_weight: 1.0,
+            kind: Evidence::Appearance,
+        }
     }
 
     /// A set code and collector number read off the card's bottom-left corner.
@@ -197,7 +242,21 @@ impl Observation {
     /// A single frame must not be able to carry that on its own; several agreeing frames
     /// should walk away with it, and at 8.0 against appearance's 1.0 they do.
     pub fn from_collector(key: [u8; ID_LEN], member: [u8; ID_LEN]) -> Observation {
-        Observation { key, member, normalized: 0.0, weight: 8.0 }
+        Observation {
+            key,
+            member,
+            normalized: 0.0,
+            // **Deliberately modest as evidence about which card.** A misread digit does not
+            // produce nonsense, it produces a different real printing of a different real
+            // card — `0047` read as `0017` resolved confidently to the wrong one over the
+            // corpus, and roughly one resolve in twelve is wrong that way. Appearance is the
+            // better judge of *what card this is* and has to be able to outweigh a bad read.
+            weight: 2.0,
+            // And decisive about which printing of it. This is the only signal that can tell
+            // one printing from another at all, so within a card it should simply win.
+            member_weight: 20.0,
+            kind: Evidence::Collector,
+        }
     }
 
     /// A name read off the card.
@@ -212,6 +271,12 @@ impl Observation {
             member,
             normalized: if edits == 0 { 0.0 } else { 0.06 },
             weight: if edits == 0 { 6.0 } else { 3.0 },
+            // **Zero, and that is a fix rather than an omission.** Every printing of a card
+            // shares its name, so the printing a name resolves to is whichever one the index
+            // stored for it — an arbitrary choice being cast as a vote, and one strong enough
+            // to fight the collector line, which actually knows.
+            member_weight: 0.0,
+            kind: Evidence::Name,
         }
     }
 }
@@ -399,12 +464,26 @@ impl Tracker {
             }
         } else {
             self.misses = 0;
-            // The frame's best distance is the reference every candidate is weighed against.
-            let best_n = usable
-                .iter()
-                .map(|o| o.normalized)
-                .fold(f32::INFINITY, f32::min);
+            // The reference each candidate is weighed against: the best of *its own kind*
+            // in this frame. See `Evidence` for what comparing across kinds did.
+            let best_of_kind = |k: Evidence| {
+                usable
+                    .iter()
+                    .filter(|o| o.kind == k)
+                    .map(|o| o.normalized)
+                    .fold(f32::INFINITY, f32::min)
+            };
+            let (best_app, best_name, best_col) = (
+                best_of_kind(Evidence::Appearance),
+                best_of_kind(Evidence::Name),
+                best_of_kind(Evidence::Collector),
+            );
             for o in usable {
+                let best_n = match o.kind {
+                    Evidence::Appearance => best_app,
+                    Evidence::Name => best_name,
+                    Evidence::Collector => best_col,
+                };
                 let (key, member, normalized) = (&o.key, &o.member, o.normalized);
                 // Two factors. **Quality** is the candidate's own distance across the usable
                 // range, so a frame where everything is mediocre contributes less than a frame
@@ -416,12 +495,15 @@ impl Tracker {
                     .clamp(0.0, 1.0);
                 let behind = (normalized - best_n).max(0.0);
                 let relative = (-behind / self.opts.relative_falloff.max(1e-4)).exp();
-                let w = quality * relative * o.weight.max(0.0);
-                *self.scores.entry(*key).or_insert(0.0) += w;
+                let base = quality * relative;
+                *self.scores.entry(*key).or_insert(0.0) += base * o.weight.max(0.0);
                 *self.seen.entry(*key).or_insert(0) += 1;
-                // The printing accumulates on exactly the weight its card does, so the one
-                // reported is the one the frames have actually kept choosing.
-                *self.members.entry(*key).or_default().entry(*member).or_insert(0.0) += w;
+                // The printing accumulates separately, on its own weight — see
+                // `Observation::member_weight` for why one number cannot serve both.
+                let mw = base * o.member_weight.max(0.0);
+                if mw > 0.0 {
+                    *self.members.entry(*key).or_default().entry(*member).or_insert(0.0) += mw;
+                }
                 let seen_best = self.best_n.entry(*key).or_insert(normalized);
                 *seen_best = seen_best.min(normalized);
             }
@@ -763,6 +845,113 @@ mod tests {
         t.observe(&[Observation::appearance(id(1), id(20), 0.10)]);
         let r = t.observe(&[Observation::appearance(id(1), id(20), 0.10)]);
         assert_eq!(r.leader().expect("leader").best_member, id(20));
+    }
+
+    #[test]
+    fn appearance_still_counts_on_a_frame_that_also_read_the_card() {
+        // The reported worry, made checkable: does a hash match still add to the vote when an
+        // OCR tier fires on the same frame, or is it annihilated?
+        //
+        // Card 1 is what the collector line says. Card 2 is what the hash says, at a perfectly
+        // ordinary 0.15. Nothing here is asking the hash to *win* — the read is much stronger
+        // evidence and should lead — only that thirty frames of a consistent appearance match
+        // leave a mark at all.
+        let mut t = Tracker::default();
+        let mut r = None;
+        for _ in 0..30 {
+            r = Some(t.observe(&[
+                Observation::from_collector(id(1), id(1)),
+                Observation::appearance(id(2), id(2), 0.15),
+            ]));
+        }
+        let r = r.expect("frames were observed");
+        let ev = |n: u8| {
+            r.standings.iter().find(|s| s.id == id(n)).map(|s| s.evidence).unwrap_or(0.0)
+        };
+        assert!(ev(1) > ev(2), "the read should still lead: {} vs {}", ev(1), ev(2));
+        assert!(
+            ev(2) > ev(1) * 0.01,
+            "thirty frames of appearance came to {:.4} against the read's {:.2} — the hash is \
+             not contributing to the vote at all",
+            ev(2),
+            ev(1)
+        );
+    }
+
+    #[test]
+    fn a_misread_number_does_not_overrule_what_the_card_looks_like() {
+        // **A digit read wrong does not produce nonsense — it produces a different real
+        // card.** `0047` came back as `0017` over the corpus and resolved, confidently, to a
+        // card that exists and was not the one in frame. Roughly one collector resolve in
+        // twelve is wrong that way, so the art has to be able to outweigh it.
+        //
+        // Here the hash says card 1 on every frame and the collector line says card 2 on every
+        // fourth. The art should still win.
+        let mut t = Tracker::default();
+        let mut r = None;
+        for i in 0..24u32 {
+            let mut obs = vec![Observation::appearance(id(1), id(1), 0.12)];
+            if i % 4 == 0 {
+                obs.insert(0, Observation::from_collector(id(2), id(2)));
+            }
+            r = Some(t.observe(&obs));
+        }
+        let r = r.expect("frames were observed");
+        assert_eq!(
+            r.leader().expect("leader").id,
+            id(1),
+            "a number misread on one frame in four overruled a consistent appearance match"
+        );
+    }
+
+    #[test]
+    fn the_number_settles_the_printing_the_art_settles_the_card() {
+        // The division of labour the two tiers are actually good for. Appearance sees card 1
+        // and guesses printing 10 for it; the collector line agrees on the card and names
+        // printing 11. The card is never in doubt, and the printing should be the one the
+        // number gave, not the one the hash guessed — nothing else can tell two printings of
+        // one card apart.
+        let mut t = Tracker::default();
+        let mut r = None;
+        for i in 0..24u32 {
+            let mut obs = vec![Observation::appearance(id(1), id(10), 0.12)];
+            if i % 4 == 0 {
+                obs.insert(0, Observation::from_collector(id(1), id(11)));
+            }
+            r = Some(t.observe(&obs));
+        }
+        let r = r.expect("frames were observed");
+        let lead = r.leader().expect("leader");
+        assert_eq!(lead.id, id(1), "the card was never in question");
+        assert_eq!(
+            lead.best_member,
+            id(11),
+            "the printing came from the hash's guess rather than from the number that knows"
+        );
+    }
+
+    #[test]
+    fn a_read_name_does_not_vote_for_an_arbitrary_printing() {
+        // Every printing of a card shares its name, so the one a name resolves to is whichever
+        // the index happened to store. Letting that cast a vote put an arbitrary choice up
+        // against the collector line, which actually knows — so a name carries the card and
+        // abstains on the printing.
+        let mut t = Tracker::default();
+        let mut r = None;
+        for _ in 0..12 {
+            r = Some(t.observe(&[
+                Observation::from_ocr(id(1), id(10), 0),
+                Observation::appearance(id(1), id(11), 0.12),
+            ]));
+        }
+        let lead = r.expect("frames were observed");
+        let lead = lead.leader().expect("leader");
+        assert_eq!(lead.id, id(1));
+        assert_eq!(
+            lead.best_member,
+            id(11),
+            "the name's representative printing outvoted the one the hash actually matched"
+        );
     }
 
     #[test]
