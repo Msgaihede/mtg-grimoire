@@ -78,8 +78,19 @@ pub struct TrackerOptions {
     /// is not weak evidence, it is noise, and letting noise accumulate is how a tracker
     /// commits confidently to nothing.
     pub max_normalized: f32,
-    /// How much of the total accumulated evidence the leader must hold.
-    pub commit_share: f32,
+    /// How much of the *two-way contest with its best rival* the leader must hold.
+    ///
+    /// **Not its share of all accumulated evidence, and the difference is the whole point.**
+    /// A share is a fraction of a denominator that grows every time a new candidate appears
+    /// once and is never seen again — so a card that was correctly first on every frame for a
+    /// minute still read as 40-60% certain, because dozens of one-off runners-up had each
+    /// added a little to the total. The churn was being counted as competition.
+    ///
+    /// A candidate that appears once and never returns is not a competing hypothesis, and the
+    /// alternatives *changing* is itself evidence the leader is right. So confidence is
+    /// `leader / (leader + best rival)`: 0.5 is a dead heat, 1.0 is unopposed, and it is
+    /// unaffected by however much noise drifts through behind them.
+    pub commit_confidence: f32,
     /// Informative frames the leader must have appeared in, so one lucky frame cannot commit
     /// alone.
     ///
@@ -115,7 +126,7 @@ impl Default for TrackerOptions {
         TrackerOptions {
             decay: 0.85,
             max_normalized: 0.30,
-            commit_share: 0.45,
+            commit_confidence: 0.70,
             commit_seen: 5,
             commit_streak: 3,
             reset_after_misses: 10,
@@ -162,6 +173,11 @@ pub struct Tracked {
     pub committed: bool,
     /// Consecutive frames the current leader has led for.
     pub streak: u32,
+    /// The leader's share of the two-way contest with its best rival, 0.5..1.0.
+    ///
+    /// This is the number to show and the number the commit turns on. [`Standing::share`] is
+    /// still there for the standings list, where a fraction-of-total reads naturally.
+    pub confidence: f32,
     /// Frames observed since the last reset.
     pub frames: u32,
     /// Consecutive frames with nothing usable in them.
@@ -334,8 +350,23 @@ impl Tracker {
         });
         standings.truncate(6);
 
+        // Leader against its single best rival. With no rival at all the leader is
+        // unopposed, which is a confidence of 1 rather than an undefined ratio.
+        let confidence = match (standings.first(), standings.get(1)) {
+            (Some(first), Some(second)) => {
+                let denom = first.evidence + second.evidence;
+                if denom > 0.0 {
+                    first.evidence / denom
+                } else {
+                    0.0
+                }
+            }
+            (Some(_), None) => 1.0,
+            _ => 0.0,
+        };
+
         let committed = standings.first().is_some_and(|s| {
-            s.share >= self.opts.commit_share
+            confidence >= self.opts.commit_confidence
                 && s.seen >= self.opts.commit_seen
                 && self.streak >= self.opts.commit_streak
         });
@@ -343,6 +374,7 @@ impl Tracker {
         Tracked {
             standings,
             committed,
+            confidence,
             streak: self.streak,
             frames: self.frames,
             misses: self.misses,
@@ -596,6 +628,64 @@ mod tests {
         let r = r.expect("frames");
         assert_eq!(r.standings.len(), 2);
         assert!((r.standings[0].share - 0.5).abs() < 0.05, "evidence should be even");
+    }
+
+    #[test]
+    fn churning_runners_up_do_not_dilute_a_consistent_leader() {
+        // **The reported problem.** A Mountain was correctly first on every frame and still
+        // read as 40-60% certain: each frame brought a *different* set of weak runners-up, and
+        // every one of them added to the denominator of a fraction-of-total share. The
+        // alternatives changing is evidence the leader is right, and it was being counted as
+        // though it were evidence against.
+        let mut t = Tracker::default();
+        let mut r = None;
+        for f in 0..24u8 {
+            // The same leader every frame; three rivals that are never seen twice.
+            r = Some(t.observe_ids(&[
+                (id(1), 0.17),
+                (id(50 + f * 3), 0.25),
+                (id(51 + f * 3), 0.26),
+                (id(52 + f * 3), 0.27),
+            ]));
+        }
+        let r = r.expect("frames were observed");
+        assert_eq!(r.leader().expect("leader").id, id(1));
+        assert!(
+            r.confidence > 0.85,
+            "a leader with only transient rivals read as {:.0}% confident",
+            r.confidence * 100.0
+        );
+        assert!(r.committed, "a consistently first card with churning rivals must commit");
+    }
+
+    #[test]
+    fn a_genuine_two_way_contest_still_refuses_to_commit() {
+        // The other side of the same coin: two cards that are both consistently strong are a
+        // real ambiguity, and no amount of holding still should resolve it into a claim.
+        let mut t = Tracker::default();
+        let mut r = None;
+        for _ in 0..24 {
+            r = Some(t.observe_ids(&[(id(1), 0.180), (id(2), 0.181)]));
+        }
+        let r = r.expect("frames were observed");
+        assert!(
+            r.confidence < 0.70,
+            "two near-identical candidates read as {:.0}% confident",
+            r.confidence * 100.0
+        );
+        assert!(!r.committed, "a real tie must not commit");
+    }
+
+    #[test]
+    fn an_unopposed_leader_is_fully_confident() {
+        let mut t = Tracker::default();
+        let mut r = None;
+        for _ in 0..8 {
+            r = Some(t.observe_ids(&[(id(1), 0.15)]));
+        }
+        let r = r.expect("frames");
+        assert_eq!(r.confidence, 1.0);
+        assert!(r.committed);
     }
 
     #[test]

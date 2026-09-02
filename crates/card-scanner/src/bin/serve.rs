@@ -403,6 +403,7 @@ fn tracked_json(
         .collect();
     serde_json::json!({
         "committed": tracked.committed,
+        "confidence": tracked.confidence,
         "streak": tracked.streak,
         "frames": tracked.frames,
         "misses": tracked.misses,

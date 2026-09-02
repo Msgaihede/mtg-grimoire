@@ -106,7 +106,7 @@
   .ev.on i { background:var(--hit); }
   .ev::after {
     content:""; position:absolute; top:-2px; bottom:-2px; width:1px;
-    background:var(--ink-3); left:45%;
+    background:var(--ink-3); left:70%;
   }
   .frames { font-family:var(--mono); font-size:10.5px; color:var(--ink-3); }
   /* The per-frame guess, kept visible but demoted — it is the thing that flickers, and
@@ -181,8 +181,8 @@
       </div>
       <div class="ev" id="ev"><i id="ev-fill"></i></div>
       <dl class="metrics">
-        <dt>evidence</dt><dd id="mt-share">&mdash;</dd>
-        <dt>distance</dt><dd id="mt-dist">&mdash;</dd>
+        <dt>confidence</dt><dd id="mt-share">&mdash;</dd>
+        <dt>distance &darr;</dt><dd id="mt-dist">&mdash;</dd>
         <dt>margin</dt><dd id="mt-margin">&mdash;</dd>
         <dt>orientation</dt><dd id="mt-rot">&mdash;</dd>
         <dt>cardness</dt><dd id="mt-cardness">&mdash;</dd>
@@ -440,7 +440,10 @@ function renderMatch(j, detected, hasBundle) {
   // reason the tracker exists — so showing it here would reintroduce the flicker the
   // accumulation removes. This frame's guess is still shown, demoted, at the bottom.
   const lead = tr?.standings?.[0];
-  const share = lead?.share ?? 0;
+  // **Confidence, not share.** A share is the leader's fraction of everything accumulated,
+  // and every one-off runner-up inflates that denominator — a card correctly first on every
+  // frame still read as 40-60%. Confidence is the leader against its single best rival.
+  const conf = tr?.confidence ?? 0;
 
   if (!hasBundle) {
     name.textContent = '—';
@@ -459,14 +462,19 @@ function renderMatch(j, detected, hasBundle) {
   }
 
   $('ev').className = 'ev' + (tr?.committed ? ' on' : '');
-  $('ev-fill').style.width = `${Math.min(100, share * 100).toFixed(0)}%`;
+  $('ev-fill').style.width = `${Math.min(100, conf * 100).toFixed(0)}%`;
 
   const set = (id, v, warn) => { const el = $(id); el.textContent = v; el.classList.toggle('warn', !!warn); };
-  set('mt-share', tr ? `${(share * 100).toFixed(0)}% of ${tr.frames}f` : '—');
+  set('mt-share', tr ? `${(conf * 100).toFixed(0)}% over ${tr.frames}f` : '—');
 
   const best = m?.candidates?.[0];
   const aspectOk = best && best.normalized <= SURE_DISTANCE;
-  set('mt-dist', best ? `${best.distance} (${(best.normalized * 100).toFixed(1)}%)` : '—', best && !aspectOk);
+  // **Bits, never a percentage.** This is a *distance* — lower is better — and rendering it
+  // as "17.6%" next to a card's name reads as "a 17.6% match", which is the opposite of what
+  // it means. Tidings of War at 45 bits is one of the strongest matches in the corpus and was
+  // reported as terrible. Confidence above is the only percentage on this panel, and it is the
+  // one where higher is better.
+  set('mt-dist', best ? `${best.distance} / ${256} bits` : '—', best && !aspectOk);
   set('mt-margin', m?.margin != null ? `${m.margin} bits` : '—');
   // A run that always reports "rotated" is a card being held upside-down, which is invisible
   // in the overlay because both orientations rectify perfectly.
