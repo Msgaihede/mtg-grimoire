@@ -438,10 +438,15 @@ fn main() -> std::process::ExitCode {
                     // descriptors or the search, and each has a different fix.
                     if let Some(m) = &matched {
                         eprintln!(
-                            "      match {} view{}/{}  hash {:.1}ms  search {:.1}ms",
+                            "      match {} view{}/{}  margin {:>3}  hash {:.1}ms  search {:.1}ms",
                             if m.rotated { "(180)" } else { "     " },
                             m.view,
                             m.views,
+                            // How far clear the winner is of the runner-up. Distance alone
+                            // says how close the match looked; this says whether anything
+                            // else looked nearly as close, which is the question confidence
+                            // is actually built on.
+                            m.margin.map(|v| v.to_string()).unwrap_or_else(|| "-".into()),
                             m.hash_ms,
                             m.search_ms
                         );

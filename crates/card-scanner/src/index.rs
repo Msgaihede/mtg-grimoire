@@ -32,7 +32,27 @@ use std::collections::HashSet;
 /// `MTGSCAN\x01`. Deliberately 8 bytes with a trailing version byte, so a future format can
 /// be told apart at the first read rather than at the first wrong answer.
 pub const MAGIC: [u8; 8] = *b"MTGSCAN\x01";
-pub const FORMAT_VERSION: u16 = 1;
+/// **This covers how the bits were computed, not only how they are laid out.**
+///
+/// A bundle whose layout this build understands but whose descriptors were produced by a
+/// different algorithm is the worst thing that can be loaded: every read succeeds, every
+/// search returns candidates, and every answer is wrong by a few bits in a way that looks
+/// exactly like a difficult card. There is no way to detect that after the fact, so any change
+/// to the hashing has to land here too.
+///
+/// **A version is never reused, including for a change that was abandoned.** The build cache
+/// keys on this number, so re-using 2 for different descriptors would hand back the *earlier*
+/// version 2 hashes and rebuild the exact silent mismatch this constant exists to prevent.
+/// Burning a number costs nothing; the alternative costs a wrong bundle that looks right.
+///
+/// * 1 — Lanczos3 straight from the full rectification.
+/// * 2 — a 122x170 box pre-scale. Tried and dropped: 3.4x faster to hash, and it cost real
+///   discrimination — mean distance 42.1 to 46.0 over the labelled corpus.
+/// * 3 — a 244x340 box pre-scale. Measured against 1 over all 39 corpus detections, this is a
+///   wash: separation better on 12 and worse on 12 with 15 unchanged, distance better on 10
+///   and worse on 10 with 19 unchanged, and accuracy 11/11 either way. Hashing goes 32 ms to
+///   22 ms a frame for it.
+pub const FORMAT_VERSION: u16 = 3;
 /// Bytes before the first entry. Fixed so a section can be memory-mapped later without the
 /// header parse moving.
 pub const HEADER_LEN: usize = 32;

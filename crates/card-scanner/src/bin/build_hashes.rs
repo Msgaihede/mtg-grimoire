@@ -11,6 +11,16 @@
 //! filesystem can round away. A newly released set costs a few hundred fetches; a full build
 //! from empty costs 168,582.
 //!
+//! **The URI versions the image; it does not version the descriptor.** Those are two separate
+//! questions and conflating them produced a wrong bundle in three seconds: after the hashing
+//! changed, every row's URI still matched, the builder reported "113375 already current", and
+//! it wrote a bundle stamped with the new format version and filled with descriptors computed
+//! by the old one. Nothing downstream could have detected that — every read succeeds and every
+//! answer is quietly a few bits wrong. So the hash cache is keyed on
+//! `<kind>@<FORMAT_VERSION>`, and changing how the bits are computed invalidates the hashes
+//! while leaving the cached *images* alone. That is what makes a descriptor change a four
+//! minute local re-hash instead of another 4.5 GB download.
+//!
 //! ```text
 //! # what a re-run would do, without doing it
 //! build-hashes --corpus <corpus.db> --dry-run
@@ -270,7 +280,18 @@ fn main() -> std::process::ExitCode {
         return std::process::ExitCode::from(2);
     }
     let kind: HashKind = args.hash.into();
-    let algo = kind.as_str();
+    // **The cache key carries the descriptor version, not just the kind's name.**
+    //
+    // Without it, changing how the bits are computed produces a bundle of *stale* descriptors
+    // in three seconds flat and says "113375 already current" while doing it — the URI has not
+    // changed, so every row still looks fresh, and the result is a bundle stamped with the new
+    // version and filled with the old bits. That is the one failure the format version exists
+    // to prevent, and keying the cache on anything less lets it through the back door.
+    //
+    // Sharing `FORMAT_VERSION` rather than inventing a second number means there is exactly
+    // one thing to remember when the hashing changes.
+    let algo = format!("{}@{}", kind.as_str(), card_scanner::index::FORMAT_VERSION);
+    let algo = algo.as_str();
 
     if !args.corpus.exists() {
         eprintln!("no corpus at {}", args.corpus.display());

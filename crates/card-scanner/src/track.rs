@@ -259,8 +259,24 @@ pub struct Tracker {
     opts: TrackerOptions,
     scores: HashMap<[u8; ID_LEN], f32>,
     seen: HashMap<[u8; ID_LEN], u32>,
-    /// Per key, the best member seen and its distance.
-    best: HashMap<[u8; ID_LEN], ([u8; ID_LEN], f32)>,
+    /// Per key, accumulated evidence per member — which *printing* of the card to report.
+    ///
+    /// **This used to be the single best frame each member ever had, and that was a ratchet.**
+    /// It never decayed and never reverted, so one lucky frame for the wrong printing captured
+    /// the slot permanently: `Gandalf, Spark Starter` came up correctly as HOB 203, one frame
+    /// happened to favour HOB 97 by a bit or two, and it stayed on HOB 97 however many frames
+    /// afterwards preferred the right one.
+    ///
+    /// The card's identity had already been given decay and hysteresis for exactly this
+    /// reason; the printing had neither, and reprints of one card differ by far less than two
+    /// different cards do, so it needed them more rather than less.
+    members: HashMap<[u8; ID_LEN], HashMap<[u8; ID_LEN], f32>>,
+    /// Per key, the closest this card has ever come in a single frame.
+    ///
+    /// Reported, never decided on: it is what the panel shows as `best_distance`, and it
+    /// answers "how good did this ever look", which is a question about the whole session
+    /// rather than about the last second of it. Nothing in the commit rule reads it.
+    best_n: HashMap<[u8; ID_LEN], f32>,
     leader: Option<[u8; ID_LEN]>,
     streak: u32,
     frames: u32,
@@ -279,7 +295,8 @@ impl Tracker {
             opts,
             scores: HashMap::new(),
             seen: HashMap::new(),
-            best: HashMap::new(),
+            members: HashMap::new(),
+            best_n: HashMap::new(),
             leader: None,
             streak: 0,
             frames: 0,
@@ -303,7 +320,8 @@ impl Tracker {
     pub fn reset(&mut self) {
         self.scores.clear();
         self.seen.clear();
-        self.best.clear();
+        self.members.clear();
+        self.best_n.clear();
         self.leader = None;
         self.streak = 0;
         self.frames = 0;
@@ -345,6 +363,15 @@ impl Tracker {
                 *v *= self.opts.decay;
             }
             self.scores.retain(|_, v| *v > 0.001);
+            // In lockstep with the card scores above: decaying one and not the other would
+            // leave the printing weighted by history the card is no longer weighted by.
+            for members in self.members.values_mut() {
+                for v in members.values_mut() {
+                    *v *= self.opts.decay;
+                }
+                members.retain(|_, v| *v > 0.001);
+            }
+            self.members.retain(|_, m| !m.is_empty());
         }
 
         if usable.is_empty() {
@@ -375,12 +402,11 @@ impl Tracker {
                 let w = quality * relative * o.weight.max(0.0);
                 *self.scores.entry(*key).or_insert(0.0) += w;
                 *self.seen.entry(*key).or_insert(0) += 1;
-                // The printing to report for this card is its single best frame, not its most
-                // recent — a card held still gets many looks and one of them is the sharpest.
-                let slot = self.best.entry(*key).or_insert((*member, normalized));
-                if normalized < slot.1 {
-                    *slot = (*member, normalized);
-                }
+                // The printing accumulates on exactly the weight its card does, so the one
+                // reported is the one the frames have actually kept choosing.
+                *self.members.entry(*key).or_default().entry(*member).or_insert(0.0) += w;
+                let seen_best = self.best_n.entry(*key).or_insert(normalized);
+                *seen_best = seen_best.min(normalized);
             }
         }
 
@@ -420,7 +446,18 @@ impl Tracker {
             .scores
             .iter()
             .map(|(id, evidence)| {
-                let (member, best_n) = self.best.get(id).copied().unwrap_or((*id, 1.0));
+                let member = self
+                    .members
+                    .get(id)
+                    .and_then(|m| {
+                        m.iter()
+                            .max_by(|a, b| {
+                                a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal)
+                            })
+                            .map(|(k, _)| *k)
+                    })
+                    .unwrap_or(*id);
+                let best_n = self.best_n.get(id).copied().unwrap_or(1.0);
                 Standing {
                     id: *id,
                     best_member: member,
@@ -702,12 +739,45 @@ mod tests {
         assert_eq!(lead.id, id(1));
         assert!(lead.share > 0.9, "share was {} across one card's reprints", lead.share);
 
-        // And the printing reported is the best-scoring one, not the most recent.
+        // And the printing reported is the one the frames keep choosing, not the most recent.
         let mut t = Tracker::default();
-        t.observe(&[Observation::appearance(id(1), id(20), 0.25)]);
-        t.observe(&[Observation::appearance(id(1), id(21), 0.08)]);
-        let r = t.observe(&[Observation::appearance(id(1), id(22), 0.22)]);
-        assert_eq!(r.leader().expect("leader").best_member, id(21));
+        t.observe(&[Observation::appearance(id(1), id(20), 0.10)]);
+        t.observe(&[Observation::appearance(id(1), id(21), 0.10)]);
+        t.observe(&[Observation::appearance(id(1), id(20), 0.10)]);
+        let r = t.observe(&[Observation::appearance(id(1), id(20), 0.10)]);
+        assert_eq!(r.leader().expect("leader").best_member, id(20));
+    }
+
+    #[test]
+    fn one_lucky_frame_does_not_capture_the_printing() {
+        // **Reported live: `Gandalf, Spark Starter` came up as HOB 203, correctly, and then
+        // switched to HOB 97 and stayed there.** The printing was whichever member had ever
+        // had the single lowest-distance frame, which never decayed and never reverted — so a
+        // single frame favouring the wrong reprint by a bit or two captured it for good.
+        //
+        // Here member 21 gets one excellent frame and member 20 gets fifteen ordinary ones.
+        // The card is the same either way; the printing reported must be the one the evidence
+        // actually supports.
+        let mut t = Tracker::default();
+        t.observe(&[Observation::appearance(id(1), id(21), 0.02)]);
+        let mut r = None;
+        for _ in 0..15 {
+            r = Some(t.observe(&[Observation::appearance(id(1), id(20), 0.12)]));
+        }
+        let r = r.expect("frames were observed");
+        let lead = r.leader().expect("leader");
+        assert_eq!(lead.id, id(1), "the card itself was never in doubt");
+        assert_eq!(
+            lead.best_member,
+            id(20),
+            "one lucky frame held the printing against fifteen that disagreed"
+        );
+        // And the distance shown is still the best ever seen, which is what it claims to be.
+        assert!(
+            (lead.best_normalized - 0.02).abs() < 1e-6,
+            "best_normalized was {}, not the best frame's 0.02",
+            lead.best_normalized
+        );
     }
 
     #[test]
