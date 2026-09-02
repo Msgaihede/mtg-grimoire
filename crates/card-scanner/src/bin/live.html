@@ -384,11 +384,22 @@ function render(j) {
     + `<span class="k total" style="--sw:transparent">round trip</span><span class="v total">${total.toFixed(1)} ms</span>`;
 }
 
-// A dHash distance is only meaningful as a fraction of the descriptor's width, which is why
-// the server sends `normalized` alongside. These two thresholds are provisional: they were
-// chosen to be obviously-right rather than measured, and the corpus is what should set them
-// once the full bundle exists.
-const SURE_DISTANCE = 0.12, SURE_MARGIN = 12, PLAUSIBLE_DISTANCE = 0.22;
+// **Measured against the full 113,375-printing bundle over the 43 sample scans, not guessed.**
+// The first version of these numbers was a guess (0.12 / 12 / 0.22) and it was badly wrong:
+// 0.12 would have accepted 2 of 39 matches and called the other 37 failures.
+//
+// With the rectification corrected, the distance distribution is genuinely bimodal — a
+// cluster from 12.5% to 25%, a trough at 25-28%, and a second cluster from 30% up. Splitting
+// at the trough gives two groups whose margins barely overlap:
+//
+//   distance <= 26%   24 scans   margin 8..38, median 21
+//   distance >  26%   15 scans   margin 0..8,  median 2
+//
+// So distance and margin are near-independent confirmations of the same thing, and requiring
+// both is what makes "confident" mean something. Of the eight scans with ground truth read
+// off the rectified image, seven are correct and all seven land in the accepted band; the one
+// wrong answer sits at 35.9% and is rejected.
+const SURE_DISTANCE = 0.26, SURE_MARGIN = 10, PLAUSIBLE_DISTANCE = 0.30;
 
 function renderMatch(m, detected, hasBundle) {
   const name = $('mt-name'), conf = $('mt-conf'), list = $('mt-list');

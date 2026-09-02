@@ -49,6 +49,9 @@ struct Args {
     aspect_tolerance: f32,
     #[arg(long, default_value_t = 22.0)]
     max_angle_error_deg: f32,
+    /// Scale the quad about its centre before warping. See DetectOptions::inset.
+    #[arg(long, default_value_t = 1.07)]
+    inset: f32,
 
     /// Descriptor to compute for the rectified card. Reported even with no bundle to search,
     /// so two scans of the same card can be compared by hand.
@@ -207,6 +210,7 @@ fn main() -> std::process::ExitCode {
                 min_area_frac: args.min_area_frac,
                 aspect_tolerance: args.aspect_tolerance,
                 max_angle_error_deg: args.max_angle_error_deg,
+                inset: args.inset,
                 ..Default::default()
             };
             let (result, trace) = detect(&source, &opts);
