@@ -205,6 +205,18 @@
       <div class="seg" style="margin:10px 0 0">
         <button id="mt-reset" type="button">reset evidence</button>
       </div>
+      <!-- Capturing a frame the scanner gets *wrong* is the point. Every accuracy figure in
+           this crate rests on 11 labelled photographs, so one bad frame with the right name
+           typed beside it is worth more than a good frame. The name field is optional: an
+           unlabelled capture is still a useful image, just not a scoreable one. -->
+      <div style="margin:10px 0 0">
+        <input id="cap-name" type="text" placeholder="what it actually is (optional)"
+               style="width:100%;box-sizing:border-box;margin-bottom:6px">
+        <div class="seg">
+          <button id="cap-add" type="button">add frame to dataset</button>
+        </div>
+        <p id="cap-status" class="live-guess" style="min-height:1.2em">&mdash;</p>
+      </div>
     </div>
 
     <div class="card">
@@ -305,6 +317,49 @@ function segment(container, onChange) {
 segment($('method'));
 segment($('stages-toggle'), (v) => { $('stages-card').hidden = v !== '1'; });
 $('mt-reset').addEventListener('click', () => { fetch('/reset', { method: 'POST' }); });
+
+// **Captured at the camera's full resolution, not the size being sent for detection.** The
+// live path downscales every frame to keep the round trip under control; a dataset image
+// saved at that size would bake this session's `send` slider into the corpus for good, and
+// the corpus is the one thing that has to outlive the settings it was captured under.
+$('cap-add').addEventListener('click', async () => {
+  const status = (t, warn) => {
+    const el = $('cap-status');
+    el.textContent = t;
+    el.classList.toggle('warn', !!warn);
+  };
+  if (!video.videoWidth) { status('no video yet', true); return; }
+  const full = document.createElement('canvas');
+  full.width = video.videoWidth;
+  full.height = video.videoHeight;
+  full.getContext('2d').drawImage(video, 0, 0);
+  const blob = await new Promise(r => full.toBlob(r, 'image/jpeg', 0.92));
+  if (!blob) { status('could not read the frame', true); return; }
+
+  // What the panel says right now, saved alongside — so a later reader can see what the
+  // scanner believed at the moment of capture, not only what it believes today.
+  const t = latest?.tracked;
+  const lead = t?.standings?.[0];
+  const q = new URLSearchParams({
+    expected: $('cap-name').value.trim(),
+    reported: lead?.label?.name ?? '',
+    confidence: t?.confidence != null ? t.confidence.toFixed(3) : '',
+    distance: latest?.match?.candidates?.[0]?.distance ?? '',
+  });
+  status('saving…');
+  try {
+    const res = await fetch('/capture?' + q, { method: 'POST', body: blob });
+    const j = await res.json();
+    if (j.ok) {
+      status(`saved ${j.saved} (${Math.round(blob.size / 1024)} KB)`);
+      $('cap-name').value = '';
+    } else {
+      status(j.error ?? 'capture failed', true);
+    }
+  } catch (e) {
+    status(String(e), true);
+  }
+});
 for (const [id, fmt] of [['edge', String], ['lo', String], ['hi', String], ['send', String],
                          ['aspect', (v) => (v / 100).toFixed(2)],
                          ['cardness', (v) => (v / 100).toFixed(2)]]) {

@@ -76,6 +76,17 @@ struct Args {
     #[arg(long)]
     dump_dir: Option<PathBuf>,
 
+    /// Where the Add-to-dataset button writes captured frames.
+    ///
+    /// **The corpus is the instrument every measurement in this crate is read off, and it is
+    /// 43 photographs taken once.** Worse, only 14 of them yield a name the OCR tier can read
+    /// cleanly, so every accuracy figure quoted here rests on n=11 — where one card is nine
+    /// percentage points, and three separate times a change has looked good on distance and
+    /// wrong on names. A frame captured at the moment a match is visibly bad is worth more
+    /// than any amount of re-tuning against the frames that already work.
+    #[arg(long, default_value = "docs/scanner/scans")]
+    dataset_dir: PathBuf,
+
     /// Directory holding the ocrs models. Enables the OCR tier.
     ///
     /// Fetch them with `scripts/fetch-ocr-models.mjs`.
@@ -160,6 +171,103 @@ impl FrameOptions {
             ..Default::default()
         }
     }
+}
+
+/// Write one captured frame, and what the scanner made of it, into the dataset.
+///
+/// **The sidecar matters as much as the image.** A frame saved with no record of what was on
+/// screen is a photograph of a card; a frame saved with the name the reader typed is a
+/// *labelled* one, and that difference is whether it can ever be scored automatically. The
+/// scanner's own answer goes beside it, so a later reader can see what it said at the time
+/// rather than only what it says now — which is the whole point of capturing a bad match.
+fn save_capture(dir: &std::path::Path, url: &str, body: &[u8]) -> serde_json::Value {
+    if body.is_empty() {
+        return serde_json::json!({ "ok": false, "error": "empty frame" });
+    }
+    if let Err(e) = std::fs::create_dir_all(dir) {
+        return serde_json::json!({ "ok": false, "error": format!("{}: {e}", dir.display()) });
+    }
+    let q = query_pairs(url);
+
+    // Epoch seconds rather than a formatted date, to avoid a dependency for a filename: it
+    // sorts chronologically as text and a reader cannot press the button twice in one second.
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let stem = dir.join(format!("live-{stamp}"));
+    let jpg = stem.with_extension("jpg");
+    if let Err(e) = std::fs::write(&jpg, body) {
+        return serde_json::json!({ "ok": false, "error": format!("{}: {e}", jpg.display()) });
+    }
+
+    let get = |k: &str| q.get(k).cloned().unwrap_or_default();
+    let expected = get("expected");
+    let sidecar = serde_json::json!({
+        "captured_at_epoch": stamp,
+        "image": jpg.file_name().and_then(|n| n.to_str()),
+        // What the reader says it actually is. Empty when they did not say — still a useful
+        // frame, just not a scoreable one.
+        "expected": expected,
+        // What the scanner believed at the moment of capture, verbatim from the panel.
+        "reported": get("reported"),
+        "confidence": get("confidence"),
+        "distance": get("distance"),
+    });
+    let json = stem.with_extension("json");
+    let written = serde_json::to_vec_pretty(&sidecar).unwrap_or_default();
+    if let Err(e) = std::fs::write(&json, written) {
+        return serde_json::json!({ "ok": false, "error": format!("{}: {e}", json.display()) });
+    }
+    eprintln!(
+        "  captured {} ({} KB){}",
+        jpg.display(),
+        body.len() / 1024,
+        if expected.is_empty() { String::new() } else { format!(" — expected {expected}") }
+    );
+    serde_json::json!({ "ok": true, "saved": jpg.file_name().and_then(|n| n.to_str()) })
+}
+
+/// The query string as a map, percent-decoded.
+fn query_pairs(url: &str) -> std::collections::HashMap<String, String> {
+    url.split_once('?')
+        .map(|(_, q)| {
+            q.split('&')
+                .filter_map(|kv| kv.split_once('='))
+                .map(|(k, v)| (k.to_string(), decode_component(v)))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Percent-decoding, enough for one query value: `+` is a space and `%NN` is a byte.
+fn decode_component(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' if i + 2 < b.len() => match u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                Ok(v) => {
+                    out.push(v);
+                    i += 3;
+                }
+                Err(_) => {
+                    out.push(b[i]);
+                    i += 1;
+                }
+            },
+            c => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn json_header() -> Header {
@@ -661,6 +769,7 @@ fn main() {
         let quad_lock = Arc::clone(&quad_lock);
         let log_frames = args.log_frames;
         let dump_dir = args.dump_dir.clone();
+        let dataset_dir = args.dataset_dir.clone();
         let reader = Arc::clone(&reader);
         handles.push(std::thread::spawn(move || loop {
             let Ok(mut request) = server.recv() else { return };
@@ -708,6 +817,13 @@ fn main() {
                     Err(e) => serde_json::json!({ "ok": false, "error": format!("read: {e}") }),
                 };
                 Response::from_string(value.to_string()).with_header(json_header())
+            } else if path == "/capture" {
+                let mut body = Vec::new();
+                let value = match request.as_reader().read_to_end(&mut body) {
+                    Ok(_) => save_capture(&dataset_dir, &url, &body),
+                    Err(e) => serde_json::json!({ "ok": false, "error": format!("read: {e}") }),
+                };
+                Response::from_string(value.to_string()).with_header(json_header())
             } else if path == "/reset" {
                 // So a reader can start on a new card immediately instead of waiting for the
                 // previous one's evidence to decay.
@@ -726,5 +842,59 @@ fn main() {
     }
     for h in handles {
         let _ = h.join();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_card_name_survives_the_query_string() {
+        // Magic names are full of the characters a query string encodes: commas, apostrophes,
+        // spaces, en dashes, and `//` on every split card. A capture whose label comes back
+        // mangled is a mislabelled row in the corpus, which is worse than an unlabelled one —
+        // it would be scored against, and it would be wrong.
+        for name in [
+            "Strider, Ranger of the North",
+            "Bilbo Baggins, Burglar // Take a Glance",
+            "Ashnod's Intervention",
+            "Fear, Fire, Foes!",
+            "Djeru, With Eyes Open",
+        ] {
+            let encoded: String = name
+                .bytes()
+                .map(|b| match b {
+                    b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                        (b as char).to_string()
+                    }
+                    b' ' => "+".to_string(),
+                    other => format!("%{other:02X}"),
+                })
+                .collect();
+            assert_eq!(decode_component(&encoded), name, "round trip failed for {name}");
+        }
+    }
+
+    #[test]
+    fn a_truncated_escape_is_kept_rather_than_swallowed() {
+        // A cut-off `%` at the end must not eat the rest of the value or panic on a slice
+        // past the end. Keeping it verbatim is wrong-looking and safe; dropping it silently
+        // shortens a name into a different one.
+        assert_eq!(decode_component("abc%"), "abc%");
+        assert_eq!(decode_component("abc%2"), "abc%2");
+        assert_eq!(decode_component("%41bc"), "Abc");
+    }
+
+    #[test]
+    fn query_pairs_reads_the_fields_the_capture_writes() {
+        let q = query_pairs("/capture?expected=Prey+Upon&reported=&confidence=0.41");
+        assert_eq!(q.get("expected").map(String::as_str), Some("Prey Upon"));
+        // Present but empty is not the same as absent, and the sidecar records it as empty.
+        assert_eq!(q.get("reported").map(String::as_str), Some(""));
+        assert_eq!(q.get("confidence").map(String::as_str), Some("0.41"));
+        assert!(q.get("nothing").is_none());
+        // No query string at all must not panic.
+        assert!(query_pairs("/capture").is_empty());
     }
 }
