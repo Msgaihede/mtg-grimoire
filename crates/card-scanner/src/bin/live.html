@@ -526,6 +526,19 @@ function draw() {
       // still long enough to trust. A box that never turns green never convinced anything.
       const locked = j.lock?.phase === 'locked';
       ctx.lineWidth = Math.max(2, overlay.width / 300);
+      // The raw per-frame detection, faint and thin, behind the smoothed box. The gap between
+      // the two is the jitter the lock is absorbing, and seeing it is the only way to tell a
+      // detector that is genuinely tracking from one whose box merely looks calm.
+      if (j.quad_raw) {
+        ctx.save();
+        ctx.lineWidth = Math.max(1, overlay.width / 700);
+        ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+        ctx.setLineDash([4, 6]);
+        ctx.beginPath();
+        j.quad_raw.forEach(([x, y], i) => i ? ctx.lineTo(x * sx, y * sy) : ctx.moveTo(x * sx, y * sy));
+        ctx.closePath(); ctx.stroke();
+        ctx.restore();
+      }
       ctx.setLineDash(locked ? [] : [10, 8]);
       ctx.strokeStyle = locked ? '#5ed69a' : '#e8b45c';
       ctx.beginPath();
