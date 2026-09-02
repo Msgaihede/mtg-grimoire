@@ -19,12 +19,8 @@
 //! * **pHash** keeps the low-frequency DCT coefficients. Blur and sensor noise live in the
 //!   high frequencies it discards, so it degrades more gracefully on a soft or noisy frame.
 //!
-//! Both are computed on **grayscale**, which deliberately throws away the strongest global
-//! signal an MTG card has: its colour identity. A frame's red/blue/green/white/black/gold is
-//! enormously discriminative — and it is also the least reliable thing under a desk lamp, a
-//! phone flash, or a foil's rainbow. A colour term is the first refinement to reach for if
-//! the measured accuracy needs one; it is not in the first pass because nothing has been
-//! measured yet, and this is precisely the place a guess would be expensive to unpick.
+//! Both of those are computed on **grayscale**, and that turned out to be the descriptor's
+//! one real weakness — see [`HashKind::DHashChroma`], which fixes it.
 
 use image::imageops::FilterType;
 use image::GrayImage;
@@ -43,6 +39,26 @@ pub enum HashKind {
     DHash,
     /// Low-frequency DCT-II coefficients against their median.
     PHash,
+    /// **192 bits of luminance gradient plus 64 bits of chroma.**
+    ///
+    /// Grayscale descriptors cannot tell basic lands apart, and that is not a tuning problem.
+    /// Measured over the shipped bundle: arbitrary printings sit **101 bits** apart, the
+    /// confidence threshold is 67, and basics within one set land at **44 to 73** — a HOB
+    /// Plains and a HOB Forest are 44 bits apart, which is a *confident* match for the wrong
+    /// card. Reported from the camera as a Mountain flipping to an Island.
+    ///
+    /// The reason is that nothing else about two basics differs. Same frame, same title bar,
+    /// same type line, same text box, both landscape art with a horizon — and a red rock and a
+    /// blue sea at similar brightness are identical to a luminance gradient. Colour is the
+    /// only thing that separates them, and it separates them completely.
+    ///
+    /// The chroma half is encoded the same way the luminance half is: **each cell against the
+    /// median of all cells**, never against an absolute colour. A warm lamp, a phone's white
+    /// balance or a foil's sheen shifts every cell together and flips no bits, which is what
+    /// makes colour usable here at all — it is the least reliable thing about a photograph
+    /// until you stop asking what colour something is and start asking which parts are redder
+    /// than the rest of the same card.
+    DHashChroma,
 }
 
 impl HashKind {
@@ -50,6 +66,7 @@ impl HashKind {
         match self {
             HashKind::DHash => "dhash",
             HashKind::PHash => "phash",
+            HashKind::DHashChroma => "dhash-chroma",
         }
     }
 }
@@ -158,7 +175,103 @@ pub fn hash(img: &GrayImage, kind: HashKind, bits: u16) -> Descriptor {
     match kind {
         HashKind::DHash => dhash(img, bits),
         HashKind::PHash => phash(img, bits),
+        HashKind::DHashChroma => unreachable!("DHashChroma needs colour; call `hash_rgb`"),
     }
+}
+
+/// Compute a descriptor that may use colour.
+///
+/// Separate from [`hash`] because the grayscale kinds cannot use an [`image::RgbImage`]'s
+/// extra channels and the colour kind cannot work without them — making the caller pass the
+/// right thing is better than silently dropping the colour on the floor.
+pub fn hash_rgb(img: &image::RgbImage, kind: HashKind, bits: u16) -> Descriptor {
+    assert!(matches!(bits, 128 | 256), "unsupported hash width {bits}");
+    match kind {
+        HashKind::DHashChroma => dhash_chroma(img, bits),
+        other => hash(&image::DynamicImage::ImageRgb8(img.clone()).to_luma8(), other, bits),
+    }
+}
+
+/// How the bits of a [`HashKind::DHashChroma`] descriptor are divided.
+///
+/// Three quarters luminance, one quarter chroma. Luminance still carries the card's structure
+/// and most of its art; chroma only has to answer "which parts of this card are redder or
+/// bluer than the rest of it", and 64 bits is a generous budget for that.
+fn chroma_split(bits: u16) -> (u16, u16) {
+    match bits {
+        256 => (192, 64),
+        128 => (96, 32),
+        _ => unreachable!("width validated by the caller"),
+    }
+}
+
+/// The grid a chroma field of `bits` is built on: two channels per cell.
+fn chroma_grid(bits: u16) -> (u32, u32) {
+    match bits {
+        64 => (4, 8),
+        32 => (4, 4),
+        _ => unreachable!("width from `chroma_split`"),
+    }
+}
+
+/// The grid the luminance half of a chroma descriptor uses.
+fn luma_grid(bits: u16) -> (u32, u32) {
+    match bits {
+        192 => (12, 8), // 96 horizontal + 96 vertical
+        96 => (6, 8),   // 48 + 48
+        _ => unreachable!("width from `chroma_split`"),
+    }
+}
+
+fn dhash_chroma(img: &image::RgbImage, bits: u16) -> Descriptor {
+    let (luma_bits, chroma_bits) = chroma_split(bits);
+    let mut bw = BitWriter::new();
+
+    // ── Luminance, exactly as `dhash` does it, at a coarser grid ──────────────────
+    let gray = image::DynamicImage::ImageRgb8(img.clone()).to_luma8();
+    let (w, h) = luma_grid(luma_bits);
+    let horiz = image::imageops::resize(&gray, w + 1, h, FilterType::Lanczos3);
+    for y in 0..h {
+        for x in 0..w {
+            bw.push(horiz.get_pixel(x, y)[0] < horiz.get_pixel(x + 1, y)[0]);
+        }
+    }
+    let vert = image::imageops::resize(&gray, h, w + 1, FilterType::Lanczos3);
+    for y in 0..w {
+        for x in 0..h {
+            bw.push(vert.get_pixel(x, y)[0] < vert.get_pixel(x, y + 1)[0]);
+        }
+    }
+
+    // ── Chroma ───────────────────────────────────────────────────────────────────
+    let (cw, ch) = chroma_grid(chroma_bits);
+    let small = image::imageops::resize(img, cw, ch, FilterType::Lanczos3);
+
+    // Two opponent channels, each divided by the cell's own total intensity. Dividing is what
+    // makes this a *chromaticity* rather than a colour: a cell in shadow and the same cell in
+    // light give the same pair, so uneven lighting across a card does not register as a
+    // different card.
+    let mut rg = Vec::with_capacity((cw * ch) as usize);
+    let mut by = Vec::with_capacity((cw * ch) as usize);
+    for p in small.pixels() {
+        let (r, g, b) = (p[0] as f32, p[1] as f32, p[2] as f32);
+        let sum = (r + g + b).max(1.0);
+        rg.push((r - g) / sum);
+        by.push((b - (r + g) / 2.0) / sum);
+    }
+
+    // Each cell against the median of all cells — never against an absolute colour. A warm
+    // lamp or a camera's white balance shifts every cell together and flips no bits.
+    for channel in [&rg, &by] {
+        let mut sorted = channel.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let median = sorted[sorted.len() / 2];
+        for v in channel.iter() {
+            bw.push(*v > median);
+        }
+    }
+
+    bw.finish(bits)
 }
 
 fn dhash(img: &GrayImage, bits: u16) -> Descriptor {
@@ -280,6 +393,83 @@ mod tests {
         ImageBuffer::from_fn(w, h, |_, _| Luma([v]))
     }
 
+    /// A synthetic "basic land": identical structure, one dominant hue. This is the case
+    /// grayscale cannot solve — the luminance is deliberately the same for every colour.
+    fn basic_land(hue: [f32; 3]) -> image::RgbImage {
+        image::RgbImage::from_fn(200, 280, |x, y| {
+            // Structure shared by every basic: a bright title band, a landscape with a
+            // horizon, a type line, a text box.
+            let ty = y as f32 / 280.0;
+            let lum = if ty < 0.10 || (0.55..0.62).contains(&ty) {
+                220.0
+            } else if ty < 0.55 {
+                90.0 + (x as f32 / 200.0) * 40.0 + if ty < 0.32 { 55.0 } else { 0.0 }
+            } else {
+                190.0
+            };
+            // Scale the shared luminance by a hue whose channels sum to 3, so every colour
+            // has the *same* grey value and only the chroma differs.
+            image::Rgb([
+                (lum * hue[0]).clamp(0.0, 255.0) as u8,
+                (lum * hue[1]).clamp(0.0, 255.0) as u8,
+                (lum * hue[2]).clamp(0.0, 255.0) as u8,
+            ])
+        })
+    }
+
+    #[test]
+    fn chroma_separates_what_grayscale_cannot() {
+        // **The measured failure this kind exists for.** In the shipped grayscale bundle,
+        // basics within one set sit 44-73 bits apart against a 67-bit confidence threshold and
+        // a 101-bit mean for unrelated cards — so a Mountain matches an Island.
+        let mountain = basic_land([1.45, 0.85, 0.70]); // red
+        let island = basic_land([0.70, 0.95, 1.35]); // blue
+
+        let g_m = hash_rgb(&mountain, HashKind::DHash, 256);
+        let g_i = hash_rgb(&island, HashKind::DHash, 256);
+        let grey_gap = g_m.distance(&g_i).expect("same width");
+
+        let c_m = hash_rgb(&mountain, HashKind::DHashChroma, 256);
+        let c_i = hash_rgb(&island, HashKind::DHashChroma, 256);
+        let colour_gap = c_m.distance(&c_i).expect("same width");
+
+        assert!(
+            grey_gap < 20,
+            "the fixture is not exercising the problem: grayscale already separates them by              {grey_gap} bits"
+        );
+        assert!(
+            colour_gap > 40,
+            "chroma only separated a red and a blue land by {colour_gap} bits (grayscale:              {grey_gap})"
+        );
+    }
+
+    #[test]
+    fn chroma_ignores_a_global_colour_cast() {
+        // The property that makes colour usable on a photograph at all: a warm lamp shifts
+        // every cell together, and cells are only ever compared to each other.
+        let land = basic_land([1.45, 0.85, 0.70]);
+        let warm = image::RgbImage::from_fn(200, 280, |x, y| {
+            let p = land.get_pixel(x, y);
+            image::Rgb([
+                (p[0] as f32 * 1.18).min(255.0) as u8,
+                p[1],
+                (p[2] as f32 * 0.82) as u8,
+            ])
+        });
+        let d = hash_rgb(&land, HashKind::DHashChroma, 256)
+            .distance(&hash_rgb(&warm, HashKind::DHashChroma, 256))
+            .expect("same width");
+        assert!(d < 24, "a warm cast moved {d} bits; chroma should be near-immune");
+    }
+
+    #[test]
+    fn the_same_land_still_matches_itself() {
+        let land = basic_land([0.80, 1.40, 0.80]);
+        let a = hash_rgb(&land, HashKind::DHashChroma, 256);
+        let b = hash_rgb(&land, HashKind::DHashChroma, 256);
+        assert_eq!(a.distance(&b), Some(0));
+    }
+
     #[test]
     fn widths_are_exact() {
         let img = gradient(200, 280);
@@ -349,6 +539,19 @@ mod tests {
         let a = hash(&img, HashKind::DHash, 128);
         let b = hash(&img, HashKind::DHash, 256);
         assert_eq!(a.distance(&b), None, "a 128-bit and a 256-bit hash must not compare");
+    }
+
+    #[test]
+    fn chroma_widths_are_exact() {
+        let land = basic_land([1.2, 1.0, 0.8]);
+        for bits in [128u16, 256] {
+            let d = hash_rgb(&land, HashKind::DHashChroma, bits);
+            assert_eq!(d.bits, bits);
+            assert_eq!(d.to_bytes().len(), bits as usize / 8);
+            for w in &d.words[d.words_used()..] {
+                assert_eq!(*w, 0, "DHashChroma/{bits} wrote past its declared width");
+            }
+        }
     }
 
     #[test]

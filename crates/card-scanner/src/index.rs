@@ -237,6 +237,7 @@ impl Bundle {
         out.push(match self.kind {
             HashKind::DHash => 0,
             HashKind::PHash => 1,
+            HashKind::DHashChroma => 2,
         });
         out.extend_from_slice(&self.bits.to_le_bytes());
         out.push(0); // reserved, keeps `built_at` 8-byte aligned within the header
@@ -276,6 +277,7 @@ impl Bundle {
         let kind = match bytes[10] {
             0 => HashKind::DHash,
             1 => HashKind::PHash,
+            2 => HashKind::DHashChroma,
             other => return Err(BundleError::BadHashKind(other)),
         };
         let bits = u16::from_le_bytes([bytes[11], bytes[12]]);

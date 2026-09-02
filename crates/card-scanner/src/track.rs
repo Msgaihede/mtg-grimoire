@@ -550,8 +550,8 @@ mod tests {
         let mut t = Tracker::default();
         let mut r = None;
         for _ in 0..12 {
-            r = Some(t.observe_ids(&good(1)));
-            r = Some(t.observe_ids(&[]));
+            t.observe_ids(&good(1));
+            t.observe_ids(&[]);
             r = Some(t.observe_ids(&[]));
         }
         assert!(r.expect("frames").committed, "an intermittent feed never committed");

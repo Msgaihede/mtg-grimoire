@@ -277,10 +277,9 @@ fn handle_frame(
             // The match itself. Both orientations are hashed inside `match_card`, because a
             // card is 180°-symmetric and the quad cannot say which end is the top.
             if let Some(r) = reference.filter(|_| trusted) {
-                let upright = image::DynamicImage::ImageRgb8(d.rectified.clone()).to_luma8();
-                let flipped =
-                    image::DynamicImage::ImageRgb8(d.rectified_180.clone()).to_luma8();
-                let report = r.match_card(&upright, &flipped, top, &Mask::all());
+                let upright = &d.rectified;
+                let flipped = &d.rectified_180;
+                let report = r.match_card(upright, flipped, top, &Mask::all());
 
                 // Accumulate across frames. A per-frame top-1 flickers between near-ties
                 // several times a second; the stable answer is the one that keeps recurring.

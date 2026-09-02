@@ -26,7 +26,7 @@
 //! one — measured 2026-09-01 — and a 400 does not read like a policy refusal, so a build that
 //! omitted it would look like 168,582 corrupt images rather than one missing header.
 
-use card_scanner::hash::{hash, Descriptor, HashKind};
+use card_scanner::hash::{hash_rgb, Descriptor, HashKind};
 use card_scanner::index::{BundleBuilder, Section, ID_LEN};
 use clap::Parser;
 use rusqlite::{Connection, OpenFlags};
@@ -52,7 +52,7 @@ struct Args {
     #[arg(long, default_value = "card-hashes-v1.bin")]
     out: PathBuf,
 
-    #[arg(long, default_value = "dhash")]
+    #[arg(long, default_value = "dhash-chroma")]
     hash: HashArg,
     #[arg(long, default_value_t = 256)]
     bits: u16,
@@ -81,6 +81,7 @@ struct Args {
 enum HashArg {
     Dhash,
     Phash,
+    DhashChroma,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, clap::ValueEnum)]
@@ -95,6 +96,7 @@ impl From<HashArg> for HashKind {
         match h {
             HashArg::Dhash => HashKind::DHash,
             HashArg::Phash => HashKind::PHash,
+            HashArg::DhashChroma => HashKind::DHashChroma,
         }
     }
 }
@@ -176,6 +178,18 @@ fn open_cache(path: &PathBuf) -> rusqlite::Result<Connection> {
          ) WITHOUT ROWID;
          -- Rows that failed, so a re-run does not retry a permanent 404 every time. A
          -- transient failure is simply absent and will be retried.
+         -- **The fetched bytes, keyed independently of the descriptor.** Changing the
+         -- descriptor invalidates every hash but none of the images, and without this a
+         -- descriptor experiment costs another 4.5 GB and half an hour. With it, a rebuild
+         -- is a local re-hash. This is the whole reason the colour rebuild is the last full
+         -- download rather than the second of many.
+         CREATE TABLE IF NOT EXISTS images (
+             section TEXT NOT NULL,
+             id BLOB NOT NULL,
+             image_uri TEXT NOT NULL,
+             bytes BLOB NOT NULL,
+             PRIMARY KEY (section, id)
+         ) WITHOUT ROWID;
          CREATE TABLE IF NOT EXISTS gone (
              section TEXT NOT NULL, id BLOB NOT NULL, status INTEGER NOT NULL,
              PRIMARY KEY (section, id)
@@ -185,11 +199,17 @@ fn open_cache(path: &PathBuf) -> rusqlite::Result<Connection> {
 }
 
 enum Fetched {
-    Ok { job: Job, descriptor: Descriptor },
+    Ok { job: Job, descriptor: Descriptor, bytes: Option<Vec<u8>> },
     /// A definitive answer that there is no image — recorded so it is not retried.
     Gone { job: Job, status: u16 },
     /// Anything that might succeed later. Not recorded; simply absent.
     Transient { url: String, why: String },
+}
+
+/// Hash bytes that are already in hand — from the cache, or freshly fetched.
+fn hash_bytes(_job: &Job, bytes: &[u8], kind: HashKind, bits: u16) -> Option<Descriptor> {
+    let img = image::load_from_memory(bytes).ok()?;
+    Some(hash_rgb(&img.to_rgb8(), kind, bits))
 }
 
 fn fetch_and_hash(job: &Job, kind: HashKind, bits: u16) -> Fetched {
@@ -215,7 +235,8 @@ fn fetch_and_hash(job: &Job, kind: HashKind, bits: u16) -> Fetched {
                         Ok(img) => {
                             return Fetched::Ok {
                                 job: job.clone(),
-                                descriptor: hash(&img.to_luma8(), kind, bits),
+                                descriptor: hash_rgb(&img.to_rgb8(), kind, bits),
+                                bytes: Some(bytes),
                             }
                         }
                         Err(e) => {
@@ -278,7 +299,7 @@ fn main() -> std::process::ExitCode {
     let n_art = jobs.len() - n_card;
     eprintln!("  {n_card} printings, {n_art} artworks — {} images in the bundle", jobs.len());
 
-    let cache = match open_cache(&args.cache) {
+    let mut cache = match open_cache(&args.cache) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("cannot open cache {}: {e}", args.cache.display());
@@ -314,6 +335,25 @@ fn main() -> std::process::ExitCode {
         }
     }
 
+    // Images already in hand for the current URI. Changing the descriptor invalidates every
+    // hash and none of these, so a descriptor experiment costs a local re-hash rather than
+    // another 4.5 GB.
+    let mut cached_images: std::collections::HashMap<(String, Vec<u8>), String> =
+        std::collections::HashMap::new();
+    {
+        let mut stmt = cache
+            .prepare("SELECT section, id, image_uri FROM images")
+            .expect("cache schema");
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, Vec<u8>>(1)?, r.get::<_, String>(2)?))
+            })
+            .expect("cache read");
+        for row in rows.flatten() {
+            cached_images.insert((row.0, row.1), row.2);
+        }
+    }
+
     let mut todo: Vec<Job> = jobs
         .iter()
         .filter(|j| {
@@ -326,16 +366,70 @@ fn main() -> std::process::ExitCode {
         .cloned()
         .collect();
 
+    // Anything whose bytes are cached at the current URI can be hashed without the network.
+    let (local, remote): (Vec<Job>, Vec<Job>) = todo.into_iter().partition(|j| {
+        cached_images
+            .get(&(j.section.as_str().to_string(), j.id.to_vec()))
+            .is_some_and(|uri| uri == &j.url)
+    });
+    todo = remote;
+
     eprintln!(
-        "  {} already current, {} known missing, {} to fetch",
+        "  {} already current, {} known missing, {} re-hashed from cached images, {} to fetch",
         have.len(),
         gone.len(),
+        local.len(),
         todo.len()
     );
 
     if let Some(limit) = args.limit {
         todo.truncate(limit);
         eprintln!("  --limit {limit}: fetching {} of them", todo.len());
+    }
+
+    // ── Re-hash whatever is already on disk ───────────────────────────────────────
+    if !local.is_empty() && !args.dry_run {
+        let started_local = Instant::now();
+        let mut done_local = 0usize;
+        let total_local = local.len();
+        for chunk in local.chunks(2000) {
+            let mut rows = Vec::with_capacity(chunk.len());
+            for job in chunk {
+                let bytes: Option<Vec<u8>> = cache
+                    .query_row(
+                        "SELECT bytes FROM images WHERE section = ?1 AND id = ?2",
+                        rusqlite::params![job.section.as_str(), &job.id[..]],
+                        |r| r.get(0),
+                    )
+                    .ok();
+                if let Some(b) = bytes {
+                    if let Some(d) = hash_bytes(job, &b, kind, args.bits) {
+                        rows.push((job.clone(), d));
+                    }
+                }
+            }
+            let tx = cache.transaction().expect("begin");
+            for (job, d) in &rows {
+                let _ = tx.execute(
+                    "INSERT OR REPLACE INTO hashes (section, id, algo, bits, image_uri, hash)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    rusqlite::params![
+                        job.section.as_str(),
+                        &job.id[..],
+                        algo,
+                        args.bits,
+                        job.url,
+                        d.to_bytes()
+                    ],
+                );
+            }
+            let _ = tx.commit();
+            done_local += chunk.len();
+            eprintln!(
+                "  re-hashed {done_local}/{total_local} from cache ({:.0}/s)",
+                done_local as f64 / started_local.elapsed().as_secs_f64().max(0.001)
+            );
+        }
     }
 
     if args.dry_run {
@@ -375,7 +469,19 @@ fn main() -> std::process::ExitCode {
             let tx = guard.transaction().expect("begin");
             for r in &batch {
                 match r {
-                    Fetched::Ok { job, descriptor } => {
+                    Fetched::Ok { job, descriptor, bytes } => {
+                        if let Some(raw) = bytes {
+                            let _ = tx.execute(
+                                "INSERT OR REPLACE INTO images (section, id, image_uri, bytes)
+                                 VALUES (?1, ?2, ?3, ?4)",
+                                rusqlite::params![
+                                    job.section.as_str(),
+                                    &job.id[..],
+                                    job.url,
+                                    raw
+                                ],
+                            );
+                        }
                         let _ = tx.execute(
                             "INSERT OR REPLACE INTO hashes (section, id, algo, bits, image_uri, hash)
                              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",

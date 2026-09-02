@@ -180,8 +180,8 @@ impl Reference {
     /// the time.
     pub fn match_card(
         &self,
-        upright: &image::GrayImage,
-        rotated: &image::GrayImage,
+        upright: &image::RgbImage,
+        rotated: &image::RgbImage,
         k: usize,
         mask: &Mask,
     ) -> MatchReport {
@@ -189,8 +189,11 @@ impl Reference {
         let bits = self.bundle.bits;
 
         let t_hash = std::time::Instant::now();
-        let hash_a = crate::hash::hash(upright, kind, bits);
-        let hash_b = crate::hash::hash(rotated, kind, bits);
+        // `hash_rgb`, not `hash`: the bundle's kind decides whether colour is used, and a
+        // grayscale call would silently drop it — matching a colour bundle with a colourless
+        // query returns confident nonsense rather than an error.
+        let hash_a = crate::hash::hash_rgb(upright, kind, bits);
+        let hash_b = crate::hash::hash_rgb(rotated, kind, bits);
         let hash_ms = t_hash.elapsed().as_secs_f32() * 1000.0;
 
         let started = std::time::Instant::now();
@@ -220,13 +223,14 @@ impl Reference {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hash::{hash, HashKind};
+    use crate::hash::{hash_rgb, HashKind};
     use crate::index::BundleBuilder;
-    use image::{ImageBuffer, Luma};
+    use image::{ImageBuffer, Rgb};
 
-    fn img(seed: u32) -> image::GrayImage {
+    fn img(seed: u32) -> image::RgbImage {
         ImageBuffer::from_fn(200, 280, |x, y| {
-            Luma([(((x * seed + y * (seed + 3)) / 2) % 256) as u8])
+            let v = (((x * seed + y * (seed + 3)) / 2) % 256) as u8;
+            Rgb([v, v, v])
         })
     }
 
@@ -240,7 +244,7 @@ mod tests {
     fn reference() -> Reference {
         let mut b = BundleBuilder::new(HashKind::DHash, 256);
         for n in 1..=12u8 {
-            b.push(Section::Card, id(n), &hash(&img(n as u32), HashKind::DHash, 256));
+            b.push(Section::Card, id(n), &hash_rgb(&img(n as u32), HashKind::DHash, 256));
         }
         Reference::new(b.finish(0))
     }
