@@ -41,6 +41,11 @@ pub struct LockOptions {
     /// Frames with no quad before the lock is dropped.
     pub reset_after_misses: u32,
     /// Corner blending, 0 = no smoothing, 1 = frozen. Applied only once locked.
+    ///
+    /// 0.6 rather than 0.45: with the quad also squared when it is nearly rectangular, what is
+    /// left to damp is the box drifting a few pixels a frame on a card that is not moving.
+    /// Higher than this starts to lag a card being moved deliberately, which reads as the
+    /// detector losing track.
     pub smoothing: f32,
 }
 
@@ -51,7 +56,7 @@ impl Default for LockOptions {
             max_drift: 0.35,
             max_area_ratio: 1.6,
             reset_after_misses: 5,
-            smoothing: 0.45,
+            smoothing: 0.6,
         }
     }
 }

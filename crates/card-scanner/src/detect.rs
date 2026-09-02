@@ -201,6 +201,27 @@ impl Quad {
         s.abs() / 2.0
     }
 
+    /// How far this quad is from a parallelogram, 0 for face-on.
+    ///
+    /// **Perspective is the thing that makes a card's opposite sides unequal.** Held flat to
+    /// the lens, top and bottom are the same length and so are the sides; tilt it and the near
+    /// edge grows. Nothing in the scoring measured that, so a lopsided quad — a corner pulled
+    /// onto a shadow, an edge that ran along a table seam — ranked the same as a true
+    /// rectangle from the same card.
+    pub fn skew(&self) -> f32 {
+        let ratio = |a: f32, b: f32| {
+            let (hi, lo) = if a > b { (a, b) } else { (b, a) };
+            if hi <= f32::EPSILON {
+                0.0
+            } else {
+                (hi - lo) / hi
+            }
+        };
+        (ratio(self.edge_len(0, 1), self.edge_len(2, 3))
+            + ratio(self.edge_len(1, 2), self.edge_len(3, 0)))
+            / 2.0
+    }
+
     /// Is `p` inside this quad? Convex-only, which every quad here is by construction — they
     /// all come from a convex hull.
     fn holds_point(&self, p: (f32, f32)) -> bool {
@@ -266,6 +287,8 @@ impl QuadSource {
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct QuadScore {
     pub via: QuadSource,
+    /// How far from a parallelogram — see [`Quad::skew`]. 0 is face-on.
+    pub skew: f32,
     pub aspect: f32,
     pub area_frac: f32,
     /// Worst deviation from 90° at any corner, in degrees.
@@ -544,8 +567,9 @@ pub fn detect(
         // Warping one against the other rectifies a small corner of the photograph, which
         // scores as featureless and rejects every real card — measured, it took the sample
         // corpus from 39 detections to 2 while looking like a threshold problem.
-        let warped = Quad { corners: c.quad.corners.map(|(x, y)| (x * scale, y * scale)) }
-            .scaled(opts.inset);
+        let warped =
+            Quad { corners: c.quad.corners.map(|(x, y)| (x * scale, y * scale)) }
+                .scaled(opts.inset);
         let small = rectify_to(&rgb, &warped, crate::cardness::W, crate::cardness::H);
         let flipped =
             rectify_to(&rgb, &warped.flipped(), crate::cardness::W, crate::cardness::H);
@@ -586,7 +610,6 @@ pub fn detect(
         corners: best.quad.corners.map(|(x, y)| (x * scale, y * scale)),
     };
     let t_rectify = std::time::Instant::now();
-    let rgb = source.to_rgb8();
     let warped = source_quad.scaled(opts.inset);
     let (Some(rectified), Some(rectified_180)) = (
         rectify(&rgb, &warped),
@@ -810,15 +833,23 @@ fn score_quad(
     // actually is, where area only says "big" and the angle term only says "not a sliver".
     let aspect_score = 1.0 - (aspect_err / opts.aspect_tolerance);
     let angle_score = 1.0 - (max_angle_error / opts.max_angle_error_deg);
+    // **A preference, never a gate.** A card genuinely held at an angle has real skew and must
+    // still be found; this only says that when two candidates are otherwise comparable, the
+    // one that looks like a rectangle is the better bet. Making it a threshold is the mistake
+    // that card-likeness already taught — a hard cutoff on a signal that varies with how
+    // somebody is holding something rejects the honest cases along with the bad ones.
+    let skew = quad.skew();
+    let skew_score = (1.0 - skew / 0.35).clamp(0.0, 1.0);
     // **Deliberately a weak, saturating preference rather than "bigger is better".** The
     // first version scored area linearly, which is precisely what ranked a frame-sized quad
     // above the actual card. Area's real job is only to break ties between a card and some
     // small artefact inside it, so it saturates at a quarter of the frame and carries the
     // least weight of the three.
     let area_score = (area_frac / 0.25).min(1.0);
-    let total = aspect_score * 0.60 + angle_score * 0.25 + area_score * 0.15;
+    let total =
+        aspect_score * 0.45 + angle_score * 0.20 + skew_score * 0.20 + area_score * 0.15;
 
-    Some(QuadScore { aspect, area_frac, max_angle_error, total, via })
+    Some(QuadScore { aspect, area_frac, max_angle_error, total, via, skew })
 }
 
 /// Flatten `quad` out of `source` at an arbitrary output size.
@@ -1001,6 +1032,29 @@ mod tests {
         let side = ((c[2].0 - c[1].0).powi(2) + (c[2].1 - c[1].1).powi(2)).sqrt();
         assert!(top < side, "corner 0->1 should be a short edge; got {top} vs {side}");
     }
+
+    #[test]
+    fn skew_measures_perspective_and_nothing_else() {
+        let w = 200.0;
+        let h = w / CARD_ASPECT;
+        let flat = Quad { corners: [(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)] };
+        assert!(flat.skew() < 1e-4, "a rectangle has no skew, got {}", flat.skew());
+
+        // Rotating a rectangle is not perspective and must not register as skew.
+        let t: f32 = 0.4;
+        let rot = Quad {
+            corners: flat.corners.map(|(x, y)| (x * t.cos() - y * t.sin(), x * t.sin() + y * t.cos())),
+        };
+        assert!(rot.skew() < 1e-3, "rotation registered as skew: {}", rot.skew());
+
+        // A card tilted away from the lens: the far edge is shorter. A 40 px inset on a 200 px
+        // top edge is a 20% difference across one pair of sides, so half that overall.
+        let tilted = Quad { corners: [(40.0, 0.0), (w - 40.0, 0.0), (w, h), (0.0, h)] };
+        let sk = tilted.skew();
+        assert!((sk - 0.20).abs() < 0.02, "expected ~0.20 of skew, got {sk}");
+    }
+
+
 
     #[test]
     fn flipped_is_the_same_rectangle() {

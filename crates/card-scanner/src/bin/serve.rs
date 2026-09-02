@@ -289,7 +289,15 @@ fn handle_frame(
                 256,
             );
             out["method"] = method.as_str().into();
-            out["quad"] = serde_json::json!(d.quad.corners);
+            // **Deliberately not `d.quad`.** The lock's smoothed quad was written above and
+            // overwriting it here is what made the box wobble: raw detection moves several
+            // pixels a frame on a perfectly still card, the smoothing existed to damp exactly
+            // that, and this line threw it away one branch later. The raw quad is still
+            // reported, under its own key, so the debug view can show both.
+            out["quad_raw"] = serde_json::json!(d.quad.corners);
+            if out["quad"].is_null() {
+                out["quad"] = serde_json::json!(d.quad.corners);
+            }
             out["cardness"] = serde_json::to_value(d.cardness).unwrap_or_default();
             out["score"] = serde_json::to_value(d.score).unwrap_or_default();
             out["hash"] = descriptor.to_hex().into();
