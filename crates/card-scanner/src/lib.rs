@@ -8,6 +8,7 @@
 //! The design, every measurement behind it, and what is deliberately left out:
 //! `docs/superpowers/specs/2026-09-01-card-scanner-design.md`.
 
+pub mod cardness;
 pub mod debug;
 pub mod detect;
 pub mod index;

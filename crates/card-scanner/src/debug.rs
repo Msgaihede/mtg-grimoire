@@ -511,10 +511,20 @@ mod tests {
     fn writes_every_stage_for_a_successful_detection() {
         let dir = tmp("ok");
         let w = DebugWriter::new(&dir).expect("mkdir");
+        // Card-like bands, because the detector now rejects a rectification without them.
         let mut img = image::RgbImage::from_pixel(600, 800, image::Rgb([15, 15, 20]));
-        for y in 200..640 {
+        let (y0, y1) = (200u32, 640u32);
+        for y in y0..y1 {
+            let ty = (y - y0) as f32 / (y1 - y0) as f32;
+            let v: u8 = match ty {
+                t if t < 0.10 => 235,
+                t if t < 0.55 => 105,
+                t if t < 0.62 => 235,
+                t if t < 0.92 => 195,
+                _ => 120,
+            };
             for x in 180..495 {
-                img.put_pixel(x, y, image::Rgb([210, 210, 205]));
+                img.put_pixel(x, y, image::Rgb([v, v, v]));
             }
         }
         let src = image::DynamicImage::ImageRgb8(img);
