@@ -52,6 +52,9 @@ struct Args {
     /// Scale the quad about its centre before warping. See DetectOptions::inset.
     #[arg(long, default_value_t = 1.07)]
     inset: f32,
+    /// Keep any background margin the rectification picked up. See the `trim` module.
+    #[arg(long)]
+    no_trim: bool,
 
     /// Downscale each source image to this long edge before doing anything else.
     ///
@@ -212,8 +215,8 @@ fn main() -> std::process::ExitCode {
 
     if !args.json {
         println!(
-            "{:<28} {:>7} {:>6} {:>7} {:>6} {:>6}  {}",
-            "file", "ms", "method", "aspect", "area", "angle",
+            "{:<28} {:>7} {:>6} {:>7} {:>6} {:>6} {:>13}  {}",
+            "file", "ms", "method", "aspect", "area", "angle", "trim l t r b",
             if reference.is_some() { "match" } else { "hash" }
         );
     }
@@ -312,6 +315,7 @@ fn main() -> std::process::ExitCode {
                 aspect_tolerance: args.aspect_tolerance,
                 max_angle_error_deg: args.max_angle_error_deg,
                 inset: args.inset,
+                trim_margin: !args.no_trim,
                 min_cardness: args.min_cardness,
                 ..Default::default()
             };
@@ -411,12 +415,21 @@ fn main() -> std::process::ExitCode {
                         },
                         None => descriptor.to_hex()[..16].to_string(),
                     };
+                    // The trim is printed as one number per side rather than a total, because
+                    // an asymmetric margin and a symmetric one mean different things: the
+                    // first is a quad that was offset, the second one that was simply too big.
+                    let t = d.margin;
                     println!(
-                        "{name:<28} {elapsed:>7.0} {:>6} {:>7.3} {:>6.3} {:>6.1}  {tail}",
+                        "{name:<28} {elapsed:>7.0} {:>6} {:>7.3} {:>6.3} {:>6.1} {:>13}  {tail}",
                         method.as_str(),
                         d.score.aspect,
                         d.score.area_frac,
                         d.score.max_angle_error,
+                        if t.is_empty() {
+                            "-".to_string()
+                        } else {
+                            format!("{} {} {} {}", t.left, t.top, t.right, t.bottom)
+                        },
                     );
                 }
 

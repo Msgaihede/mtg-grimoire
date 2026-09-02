@@ -123,6 +123,8 @@ pub struct DetectOptions {
     /// See [`crate::cardness`]: an art window turned 90° is *geometrically* a card, so no
     /// amount of shape checking can reject it and the pixels have to be consulted.
     pub min_cardness: f32,
+    /// Cut any background margin off the rectification. See [`crate::trim`].
+    pub trim_margin: bool,
     /// Scale the winning quad about its centre before warping.
     ///
     /// **1.07, and it is worth more than any other single number here.** The detected quad is
@@ -160,6 +162,7 @@ impl Default for DetectOptions {
             aspect_tolerance: 0.18,
             max_angle_error_deg: 22.0,
             max_candidates: 8,
+            trim_margin: true,
             cardness_candidates: 4,
             min_cardness: crate::cardness::MIN_SCORE,
             inset: 1.07,
@@ -316,6 +319,8 @@ pub struct Detection {
     pub rectified: RgbImage,
     /// The same card rotated 180°. See the module note: the caller matches both.
     pub rectified_180: RgbImage,
+    /// The background that was cut off the rectification, if any. See [`crate::trim`].
+    pub margin: crate::trim::Margin,
 }
 
 /// Hand-written rather than derived, and the reason is a failing test's output: a derived
@@ -328,6 +333,7 @@ impl std::fmt::Debug for Detection {
             .field("score", &self.score)
             .field("cardness", &self.cardness)
             .field("rectified", &format_args!("{}x{}", RECTIFIED_W, RECTIFIED_H))
+            .field("margin", &self.margin)
             .finish()
     }
 }
@@ -617,6 +623,15 @@ pub fn detect(
     ) else {
         return (Err(DetectError::Degenerate), Some(trace));
     };
+    // Measured once, on the upright image, and applied to both — see `Margin::rotated_180`.
+    let margin = if opts.trim_margin {
+        crate::trim::margin(&rectified)
+    } else {
+        crate::trim::Margin::default()
+    };
+    let rectified_180 =
+        crate::trim::apply(&rectified_180, margin.rotated_180()).unwrap_or(rectified_180);
+    let rectified = crate::trim::apply(&rectified, margin).unwrap_or(rectified);
 
     let mut trace = trace;
     trace.timings.rectify_ms = ms(t_rectify);
@@ -634,6 +649,7 @@ pub fn detect(
             }),
             rectified,
             rectified_180,
+            margin,
         }),
         Some(trace),
     )

@@ -49,11 +49,20 @@ if (!script) {
   // `$(...)` returns null and the first property access throws at run time, in a callback,
   // where nothing surfaces it.
   const ids = new Set([...html.matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]));
-  const used = new Set([...script[1].matchAll(/\$\('([^']+)'\)/g)].map((m) => m[1]));
-  for (const u of used) {
-    if (!ids.has(u)) fail(`the script reaches for #${u}, which the markup does not define`);
+  // `set('mt-foo', …)` calls `$` internally, so a wrong id there throws exactly as a direct
+  // lookup does — and the only symptom of a throw in this script is "the camera doesn't
+  // start", which has already cost one session. Both spellings are checked.
+  const used = new Set([
+    ...[...script[1].matchAll(/\$\('([^']+)'\)/g)].map((m) => m[1]),
+    ...[...script[1].matchAll(/\bset\('([^']+)'/g)].map((m) => m[1]),
+  ]);
+  const missing = [...used].filter((u) => !ids.has(u));
+  for (const u of missing) {
+    fail(`the script reaches for #${u}, which the markup does not define`);
   }
-  console.log(`ok    ${used.size} element lookups all resolve`);
+  // Only claimed when it is true. Printing "all resolve" directly under a FAIL is how a real
+  // failure gets read as noise.
+  if (missing.length === 0) console.log(`ok    ${used.size} element lookups all resolve`);
 }
 
 // A fragment-level sanity check: the page is a full document and must stay one.

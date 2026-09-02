@@ -16,6 +16,7 @@ pub mod lock;
 pub mod ocr;
 pub mod reference;
 pub mod track;
+pub mod trim;
 pub mod hash;
 
 /// A Magic card's aspect ratio: 63 mm × 88 mm.

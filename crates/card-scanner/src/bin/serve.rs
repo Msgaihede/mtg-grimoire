@@ -299,6 +299,10 @@ fn handle_frame(
                 out["quad"] = serde_json::json!(d.quad.corners);
             }
             out["cardness"] = serde_json::to_value(d.cardness).unwrap_or_default();
+            // Background cut off the rectification, per side. Worth showing rather than
+            // silently applying: a trim that fires every frame means the quad is running wide,
+            // which is a detector problem this only papers over.
+            out["trim"] = serde_json::to_value(d.margin).unwrap_or_default();
             out["score"] = serde_json::to_value(d.score).unwrap_or_default();
             out["hash"] = descriptor.to_hex().into();
             if let Some(t) = &trace {

@@ -195,6 +195,9 @@
         <dt>margin</dt><dd id="mt-margin">&mdash;</dd>
         <dt>orientation</dt><dd id="mt-rot">&mdash;</dd>
         <dt>cardness</dt><dd id="mt-cardness">&mdash;</dd>
+        <!-- Deliberately not "margin": that row above is the gap between the top two
+             candidates. This one is background pixels cut off the rectification. -->
+        <dt>trim l/t/r/b</dt><dd id="mt-trim">&mdash;</dd>
         <dt>lock</dt><dd id="mt-lock">&mdash;</dd>
       </dl>
       <ol class="cands" id="mt-list"></ol>
@@ -493,6 +496,11 @@ function renderMatch(j, detected, hasBundle) {
   const ck = j.cardness ?? j.rejected_cardness;
   set('mt-cardness', ck ? `${ck.score.toFixed(2)} (t${ck.title.toFixed(2)}/y${ck.type_line.toFixed(2)})` : '—',
       ck && ck.score < 0.45);
+  // Flagged when it fires: a trim on most frames means the quad is running wide, and the
+  // detector wants fixing rather than the rectification patching.
+  const tm = j.trim;
+  const cut = tm && (tm.left || tm.top || tm.right || tm.bottom);
+  set('mt-trim', cut ? `${tm.left}/${tm.top}/${tm.right}/${tm.bottom}` : '—', !!cut);
 
   // The standings are the accumulated evidence, not this frame's ranking — so the list is
   // stable too, and a contender climbing it is visible.
