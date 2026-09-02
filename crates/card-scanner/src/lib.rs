@@ -12,6 +12,7 @@ pub mod cardness;
 pub mod debug;
 pub mod detect;
 pub mod index;
+pub mod lock;
 pub mod reference;
 pub mod track;
 pub mod hash;

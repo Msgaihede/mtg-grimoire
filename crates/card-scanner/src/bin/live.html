@@ -186,6 +186,7 @@
         <dt>margin</dt><dd id="mt-margin">&mdash;</dd>
         <dt>orientation</dt><dd id="mt-rot">&mdash;</dd>
         <dt>cardness</dt><dd id="mt-cardness">&mdash;</dd>
+        <dt>lock</dt><dd id="mt-lock">&mdash;</dd>
       </dl>
       <ol class="cands" id="mt-list"></ol>
       <p class="live-guess" id="mt-guess">&mdash;</p>
@@ -470,6 +471,8 @@ function renderMatch(j, detected, hasBundle) {
   // A run that always reports "rotated" is a card being held upside-down, which is invisible
   // in the overlay because both orientations rectify perfectly.
   set('mt-rot', m ? (m.rotated ? 'rotated 180°' : 'upright') : '—');
+  const lk = j.lock;
+  set('mt-lock', lk ? `${lk.phase} ${lk.agree}/3` : '—', lk && lk.phase !== 'locked');
   const ck = j.cardness ?? j.rejected_cardness;
   set('mt-cardness', ck ? `${ck.score.toFixed(2)} (t${ck.title.toFixed(2)}/y${ck.type_line.toFixed(2)})` : '—',
       ck && ck.score < 0.45);
@@ -496,18 +499,23 @@ function draw() {
     if (overlay.width !== video.videoWidth) { overlay.width = video.videoWidth; overlay.height = video.videoHeight; }
     ctx.clearRect(0, 0, overlay.width, overlay.height);
     const j = latest;
-    if (j?.ok && j.quad) {
+    if (j?.quad) {
       // The quad is in the coordinates of the frame that was *sent*, which is smaller than
       // the video. Scaling here rather than server-side keeps the wire payload independent
       // of the preview size.
       const sx = overlay.width / j.frame.w, sy = overlay.height / j.frame.h;
-      const ok = Math.abs(j.score.aspect - CARD_ASPECT) / CARD_ASPECT < 0.08;
+      if (!j.score) { /* quad from the lock's memory, not this frame's detection */ }
+      // Amber and dashed while a quad is still proving itself, solid green once it has held
+      // still long enough to trust. A box that never turns green never convinced anything.
+      const locked = j.lock?.phase === 'locked';
       ctx.lineWidth = Math.max(2, overlay.width / 300);
-      ctx.strokeStyle = ok ? '#5ed69a' : '#e8b45c';
+      ctx.setLineDash(locked ? [] : [10, 8]);
+      ctx.strokeStyle = locked ? '#5ed69a' : '#e8b45c';
       ctx.beginPath();
       j.quad.forEach(([x, y], i) => i ? ctx.lineTo(x * sx, y * sy) : ctx.moveTo(x * sx, y * sy));
       ctx.closePath(); ctx.stroke();
       // Mark the corner the rectifier treats as top-left, so a 180° flip is visible live.
+      ctx.setLineDash([]);
       ctx.fillStyle = '#e05ad0';
       ctx.beginPath();
       ctx.arc(j.quad[0][0] * sx, j.quad[0][1] * sy, ctx.lineWidth * 2.2, 0, Math.PI * 2);
