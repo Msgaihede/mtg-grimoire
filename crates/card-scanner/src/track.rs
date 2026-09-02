@@ -18,10 +18,29 @@
 //! the top two are one bit apart, calling that a win for the first is nearly a coin toss, and
 //! recording it as a whole vote records the coin toss rather than the evidence.
 //!
-//! So every candidate in a frame's top-K contributes weight according to *its own* distance,
-//! and the weights accumulate with exponential decay. A card that is consistently second at a
-//! good distance beats one that is occasionally first at a bad one — which is exactly the
-//! flicker case, and exactly what rank-counting gets wrong.
+//! So every candidate in a frame's top-K contributes weight, and the weights accumulate with
+//! exponential decay. A card that is consistently second at a good distance beats one that is
+//! occasionally first at a bad one — which is exactly the flicker case, and exactly what
+//! rank-counting gets wrong.
+//!
+//! ## Weight is relative to the frame's best, not absolute
+//!
+//! Weighting purely by a candidate's own distance was wrong, and wrong in a way that only
+//! shows up on a card held still. The premise was that wrong answers are *random* frame to
+//! frame and wash out. They are not: with a stable card in front of the lens the top-K is
+//! nearly the same list every frame, so the runners-up accumulate exactly as consistently as
+//! the winner does.
+//!
+//! Measured live on a Took Reaper held in frame: it was top on every frame at 21.5%, the lock
+//! was solid, and after 53 frames it held **30% of the evidence** against a 45% bar. Its four
+//! runners-up sat at 25-26% and together outweighed it, so the tracker could never commit —
+//! the right answer was being outvoted by the same losers over and over.
+//!
+//! The candidates in a frame are competing hypotheses about one card, so what a candidate
+//! deserves depends on how much better it is *than the alternatives in that frame*. An
+//! exponential falloff in the gap to the frame's best does that, and it has the property the
+//! flicker case needs: sharp when there is a clear winner, soft when the top two are genuinely
+//! a bit apart. On the same measured frame the winner's share goes from 30% to about 78%.
 //!
 //! Decay rather than a fixed window because it needs no ring buffer, it degrades smoothly
 //! when frames are dropped (which the live view does constantly, by design), and a card
@@ -81,6 +100,14 @@ pub struct TrackerOptions {
     pub reset_after_misses: u32,
     /// How many of each frame's candidates contribute.
     pub top_k: usize,
+    /// How fast a candidate's weight falls off with its distance behind the frame's best, in
+    /// normalized units.
+    ///
+    /// 0.02 is about five bits at 256. A five-bit gap roughly thirds a candidate's weight; the
+    /// ten-bit gaps seen in practice cut it to a seventh. Larger values dilute a clear winner
+    /// among its runners-up, which is the failure this exists to fix; much smaller ones make a
+    /// genuine near-tie look decided and reintroduce the flicker one tier up.
+    pub relative_falloff: f32,
 }
 
 impl Default for TrackerOptions {
@@ -93,6 +120,7 @@ impl Default for TrackerOptions {
             commit_streak: 3,
             reset_after_misses: 10,
             top_k: 5,
+            relative_falloff: 0.02,
         }
     }
 }
@@ -240,12 +268,23 @@ impl Tracker {
             }
         } else {
             self.misses = 0;
+            // The frame's best distance is the reference every candidate is weighed against.
+            let best_n = usable
+                .iter()
+                .map(|(_, _, n)| *n)
+                .fold(f32::INFINITY, f32::min);
             for (key, member, normalized) in usable {
-                // Weight by the candidate's own distance, scaled to 0..1 across the usable
-                // range. A candidate that is consistently second at a good distance therefore
-                // outscores one that is occasionally first at a poor one.
-                let w = ((self.opts.max_normalized - normalized) / self.opts.max_normalized)
+                // Two factors. **Quality** is the candidate's own distance across the usable
+                // range, so a frame where everything is mediocre contributes less than a frame
+                // with a good match in it. **Relative** is how far behind the frame's best it
+                // is, which is what stops a stable list of runners-up out-accumulating the
+                // winner they consistently lose to.
+                let quality = ((self.opts.max_normalized - normalized)
+                    / self.opts.max_normalized)
                     .clamp(0.0, 1.0);
+                let behind = (normalized - best_n).max(0.0);
+                let relative = (-behind / self.opts.relative_falloff.max(1e-4)).exp();
+                let w = quality * relative;
                 *self.scores.entry(*key).or_insert(0.0) += w;
                 *self.seen.entry(*key).or_insert(0) += 1;
                 // The printing to report for this card is its single best frame, not its most
@@ -396,23 +435,56 @@ mod tests {
     }
 
     #[test]
-    fn a_consistent_runner_up_beats_an_occasional_winner() {
-        // The reason weight comes from distance rather than from rank. Card 1 is *never*
-        // first, but it is always a close second; card 2..6 each win once at a worse
-        // distance. Rank-counting would make card 1 lose 0-5.
+    fn a_consistent_runner_up_beats_a_parade_of_one_off_winners() {
+        // The reason weight comes from distance rather than from rank.
+        //
+        // **The previous fixture here did not test its own name.** It gave card 1 a distance
+        // of 0.10 against the impostor's 0.27, which made card 1 the frame's *best* candidate
+        // every time — so it proved only that the best candidate wins. Card 1 is now a genuine
+        // close second, losing every single frame to a different impostor, and still has to
+        // win on consistency.
         let mut t = Tracker::default();
         let mut r = None;
-        for k in 2..=6u8 {
-            for _ in 0..3 {
-                r = Some(t.observe_ids(&[(id(k), 0.27), (id(1), 0.10)]));
-            }
+        for k in 0..20u8 {
+            r = Some(t.observe_ids(&[(id(20 + k), 0.10), (id(1), 0.12)]));
         }
         let r = r.expect("frames were observed");
         assert_eq!(
             r.leader().expect("leader").id,
             id(1),
-            "a consistent close second must beat five one-off winners"
+            "a card that is second on every frame must beat twenty one-off winners"
         );
+    }
+
+    #[test]
+    fn a_stable_list_of_runners_up_does_not_outvote_the_winner() {
+        // **The measured failure.** A Took Reaper held in frame was top on every frame at
+        // 21.5%, with four runners-up at 25-26% that were the *same* four every frame. Under
+        // purely absolute weighting they accumulated as consistently as the winner did and
+        // together outweighed it: 30% share after 53 frames, against a 45% bar, so it could
+        // never commit. The premise that wrong answers are random and wash out is false for a
+        // card held still.
+        let mut t = Tracker::default();
+        let frame = [
+            (id(1), id(1), 0.215),
+            (id(2), id(2), 0.250),
+            (id(3), id(3), 0.254),
+            (id(4), id(4), 0.258),
+            (id(5), id(5), 0.262),
+        ];
+        let mut r = None;
+        for _ in 0..20 {
+            r = Some(t.observe(&frame));
+        }
+        let r = r.expect("frames were observed");
+        let lead = r.leader().expect("leader");
+        assert_eq!(lead.id, id(1));
+        assert!(
+            lead.share > 0.6,
+            "the winner held only {:.0}% against its four stable runners-up",
+            lead.share * 100.0
+        );
+        assert!(r.committed, "a card that is top on every frame must commit");
     }
 
     #[test]
