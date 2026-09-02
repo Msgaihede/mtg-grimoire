@@ -356,7 +356,7 @@ function render(j) {
   $('rect').hidden = !rect;
   $('rect-empty').hidden = !!rect;
 
-  renderMatch(j.match, j.ok);
+  renderMatch(j.match, j.ok, j.matcher);
 
   if (j.stages) {
     for (const [k, id] of [['binary', 's-binary'], ['contours', 's-contours'], ['quad', 's-quad']])
@@ -390,15 +390,15 @@ function render(j) {
 // once the full bundle exists.
 const SURE_DISTANCE = 0.12, SURE_MARGIN = 12, PLAUSIBLE_DISTANCE = 0.22;
 
-function renderMatch(m, detected) {
+function renderMatch(m, detected, hasBundle) {
   const name = $('mt-name'), conf = $('mt-conf'), list = $('mt-list');
   const rows = (m?.candidates ?? []);
 
   if (!m) {
-    // No bundle loaded at all — say so once rather than showing dashes that look like a
-    // failed match.
+    // Two distinct states that used to look identical: no bundle is loaded at all, versus a
+    // bundle is loaded and this frame simply held no card.
     name.textContent = '—';
-    conf.textContent = 'no bundle';
+    conf.textContent = hasBundle === false ? 'no bundle' : 'no card';
     conf.className = 'match-conf';
     for (const [id, v] of [['mt-dist','—'],['mt-margin','—'],['mt-rot','—'],['mt-ms','—']])
       $(id).textContent = v;

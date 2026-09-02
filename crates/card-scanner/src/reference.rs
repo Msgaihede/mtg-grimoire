@@ -59,6 +59,10 @@ pub struct MatchReport {
     /// being held upside-down, which is worth knowing and is invisible otherwise.
     pub rotated: bool,
     pub candidates: Vec<Candidate>,
+    /// Computing the two descriptors, which is a Lanczos3 downsample of a 488x680 card to a
+    /// 17x8 grid and back — separated from the search because they scale with completely
+    /// different things. Hashing is fixed per frame; searching grows with the bundle.
+    pub hash_ms: f32,
     /// Bits between the best and second-best answer.
     ///
     /// The number that decides whether a fast-mode match is confident or provisional: a small
@@ -154,22 +158,17 @@ impl Reference {
         k: usize,
         mask: &Mask,
     ) -> MatchReport {
-        let started = std::time::Instant::now();
         let kind = self.bundle.kind;
         let bits = self.bundle.bits;
 
-        let a = self.bundle.search(
-            &crate::hash::hash(upright, kind, bits),
-            Section::Card,
-            k,
-            mask,
-        );
-        let b = self.bundle.search(
-            &crate::hash::hash(rotated, kind, bits),
-            Section::Card,
-            k,
-            mask,
-        );
+        let t_hash = std::time::Instant::now();
+        let hash_a = crate::hash::hash(upright, kind, bits);
+        let hash_b = crate::hash::hash(rotated, kind, bits);
+        let hash_ms = t_hash.elapsed().as_secs_f32() * 1000.0;
+
+        let started = std::time::Instant::now();
+        let a = self.bundle.search(&hash_a, Section::Card, k, mask);
+        let b = self.bundle.search(&hash_b, Section::Card, k, mask);
 
         let best_of = |v: &[Match]| v.first().map(|m| m.distance).unwrap_or(u32::MAX);
         let use_rotated = best_of(&b) < best_of(&a);
@@ -185,6 +184,7 @@ impl Reference {
             rotated: use_rotated,
             candidates: winner.iter().map(|m| self.candidate(Section::Card, m)).collect(),
             margin,
+            hash_ms,
             search_ms: started.elapsed().as_secs_f32() * 1000.0,
         }
     }

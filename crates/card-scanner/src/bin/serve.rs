@@ -195,6 +195,10 @@ fn handle_frame(
         "ok": best.is_some(),
         "frame": { "w": w, "h": h },
         "decode_ms": decode_ms,
+        // Reported on every response, and separately from `match`. "No bundle is loaded" and
+        // "a bundle is loaded but this frame held no card" are different states, and the
+        // page said the former for both until this existed.
+        "matcher": reference.is_some(),
     });
 
     match best {
