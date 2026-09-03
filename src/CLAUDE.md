@@ -91,6 +91,14 @@ Every one of these has its measurement and its story in
   directions were read off the printed images and the frame's geometry was measured in the
   shipped window — including the half-pixel a `translate(-50%, -50%)` centring put under **every**
   card in that frame: [frontend-design.md](../docs/reference/frontend-design.md).
+- **One foil icon, everywhere, and the glyph is the _finish_** — `Sparkles` for foil, `Gem` for
+  etched, `Aperture` only for a **nonfoil** copy that is unusual cardboard anyway (Serialized,
+  Poster), which is the one case with no finish glyph to draw. A treatment renames the mark and
+  must never redraw it: a Surge Foil is foil, so it is that same `Sparkles` with a longer word
+  behind it. Anything that says "this copy is foil" takes its glyph from `FinishMark`'s table —
+  a card face's chip, a table cell, a menu row, the card pane's foil toggle — because half of
+  those surfaces never see a promo type, and a glyph that only some of them can draw is one fact
+  in two pictures. That was issue #353; `docs/reference/frontend-design.md` has the record.
 - **A card's marks share one chip in the art's top-right corner** — `FoilOverlay` draws the
   finish glyph and `GameChangerMark`'s gold crown side by side, because a card fact and a
   printing fact in two boxes start a row of stickers. The crown is `GameChangerBanner`'s glyph

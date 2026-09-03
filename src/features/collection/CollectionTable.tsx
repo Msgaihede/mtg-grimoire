@@ -110,25 +110,31 @@ function columnsFor(
               copied at write time for exactly this. */}
             <span className="truncate">{row.name ?? "—"}</span>
             <ManaText source={row.manaCost} className="shrink-0 text-xs" />
-            {/* **What this copy is called**, where the cardboard has a name of its own — a
-              Surge Foil, a Halo Foil, a serialized card. Here rather than in the
-              `Finish · condition` column beside it, which is 5.5rem and truncates
-              "Nonfoil · NM" as it is: that column answers *which finish*, which is a word this
-              table sorts on and must keep spelling the same way, and "Step-and-Compleat Foil"
-              would leave it showing three letters. The glyph carries the name as its accessible
-              name and its tooltip, exactly as the search table's does one screen over.
+            {/* **The finish this copy is, and what it is called** — a foil, an etched, a Surge
+              Foil, a serialized card. Here rather than in the `Finish · condition` column
+              beside it, which is 5.5rem and truncates "Nonfoil · NM" as it is: that column
+              answers *which finish*, which is a word this table sorts on and must keep
+              spelling the same way, and "Step-and-Compleat Foil" would leave it showing three
+              letters. The glyph carries the name as its accessible name and its tooltip,
+              exactly as the search table's does one screen over.
+
+              **Ungated, because the glyph is the finish** (issue #353). It used to be drawn
+              only where a treatment named the copy, which was right while a treatment had a
+              glyph of its own — but now that a Surge Foil is the same `Sparkles` as any other
+              foil, gating on the name would draw the foil icon on the Surge Foil row and
+              nothing on the plain foil row above it, which is the same one-fact-two-pictures
+              defect the issue is about, inside one table. `FinishMark` returns `null` for a
+              plain copy, so the unmarked case is still unmarked.
 
               The entry's own `finish` decides what applies: this reader owns *this* copy, so
               the plain half of a Surge Foil printing is not marked. An unrecognised finish —
               the column is TEXT with a CHECK, and `finishLabel` prints whatever it holds —
               names no treatment rather than guessing at one. */}
-            {treatmentsOf(row).length > 0 && (
-              <FinishMark
-                finish={isFinish(row.finish) ? row.finish : "nonfoil"}
-                treatments={treatmentsOf(row)}
-                className="self-center"
-              />
-            )}
+            <FinishMark
+              finish={isFinish(row.finish) ? row.finish : "nonfoil"}
+              treatments={treatmentsOf(row)}
+              className="self-center"
+            />
           </span>
           {row.needsReview && (
             // Inside the name's cell rather than beside it, so a screen reader reads it with
