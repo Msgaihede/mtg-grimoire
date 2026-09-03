@@ -61,6 +61,23 @@ export type Allocation = NonNullable<CollectionQuery["allocation"]>;
 export const DEFAULT_ALLOCATION: Allocation = "unallocated";
 
 /**
+ * Whether the drawers the reader has **set aside** are left out — always, on this tab
+ * ([#365](https://github.com/Msgaihede/mtg-grimoire/issues/365)).
+ *
+ * **A named constant rather than a `true` inside the query object, because it is half of a
+ * coupling and the other half is in another function.** `copySource` has no arm for a locked
+ * copy: one would fall through to `desk` and move with nothing asked, which is the wrong answer
+ * by that module's own rule and is safe only because a locked row cannot get that far. This is
+ * what stops it. A literal buried in an object literal is a thing somebody deletes while tidying
+ * a payload; a named export with this paragraph on it is one they have to read first.
+ *
+ * It is `DEFAULT_ALLOCATION`'s neighbour in every sense except that there is **no press that
+ * turns it off** — the allocation toggle widens to the copies a *deck* is holding, which says
+ * nothing about a drawer the reader took off the table themselves.
+ */
+export const DEFAULT_EXCLUDE_LOCKED = true;
+
+/**
  * Where one copy is filed, said in the terms the Add button needs.
  *
  * Three answers rather than a boolean, because the three lead to three different presses: a copy
@@ -95,6 +112,24 @@ const HERE: CopySource = { kind: "here", deckName: null };
  * dismisses. The row's own `folderName` is the best name available in that state and is what the
  * question quotes — for a deck's group it *is* the deck's name, since `create_deck_group` names
  * the folder after the deck.
+ *
+ * **A locked folder has no arm here, and the absence is load-bearing rather than an oversight**
+ * ([#365](https://github.com/Msgaihede/mtg-grimoire/issues/365)). A locked drawer is
+ * `kind: "user"`, so it falls through the line below and a copy in one would be called `desk` —
+ * *freely movable, no question asked*. **That is not a considered answer; it is the absence of
+ * one**, and the only reason it is safe is one line in {@link useCollectionSearch}: the tab sends
+ * `excludeLocked: true`, unconditionally and with no control to turn it off, so such a row never
+ * reaches this function. `a locked copy cannot reach copySource, which is why it has no arm for
+ * one` is what holds the two together.
+ *
+ * **So this is the function to change first if a locked row is ever put back on this tab** — a
+ * filter, an "include what I set aside" toggle, a second caller with its own query. Read the
+ * paragraph above before choosing: this module's rule is that an unclassifiable copy is treated
+ * as *spoken for* rather than as free, because guessing "desk" lets an add slip past exactly the
+ * copies a confirmation exists for, and a drawer the reader deliberately set aside is that copy.
+ * A fourth arm is a fourth **press** (#358's rule, argued under {@link deckPlaysCard} below), so
+ * it is not a one-line addition here: `pickCopy` ranks `CopySource` and
+ * `CollectionSearchTab` branches on it exactly once, and both would owe the new answer.
  */
 export function copySource(
   row: Pick<CollectionRow, "folderId" | "folderName">,
@@ -371,7 +406,7 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
     // shopping list's *spare* count already drops a copy filed in a deck's group, and a locked
     // one is no more a copy a plan can count on. **Keep the two in step**: this panel offering a
     // copy the diff beside it has already written off is one question answered two ways.
-    excludeLocked: true,
+    excludeLocked: DEFAULT_EXCLUDE_LOCKED,
     marketplace: marketplace.id,
     // `undefined` rather than `[]`: an empty array is a sort the backend would have to test for,
     // and the absent field is what already means "your name order".
