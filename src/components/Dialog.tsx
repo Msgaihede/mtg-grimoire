@@ -2,6 +2,16 @@ import { useEffect, useId, useRef, type JSX, type ReactNode } from "react";
 import { X } from "lucide-react";
 import { AnimatePresence, motion, useIsPresent } from "motion/react";
 import { FOCUS } from "@/lib/focus";
+
+/**
+ * How long a re-take waits for the caret to settle after a layer above closes.
+ *
+ * Longer than the top of this app's motion scale (`src/index.css` has 120 / 180 / 260ms), so a
+ * panel's exit tween is always finished inside it, and short enough that a reader who has clicked
+ * somewhere in the meantime is never overruled a beat later. It is a ceiling rather than a delay:
+ * the ordinary case takes the caret on the first frame after the closing node is removed.
+ */
+const CARET_SETTLE_MS = 500;
 import { LAYER } from "@/lib/layers";
 import { dialog as dialogMotion, scrim } from "@/lib/motion";
 import { trapTab } from "@/lib/trapTab";
@@ -182,6 +192,34 @@ export interface DialogProps {
    */
   onPanelKeyDown?: (e: React.KeyboardEvent<HTMLElement>) => void;
   /**
+   * **True while another layer stands over this dialog.** On the fall back to `false` this
+   * dialog takes the caret back, if and only if it has been left on `<body>`.
+   *
+   * **The caret rule had only a first half until 2026-09-03**, and nothing needed the second
+   * until a panel grew a key of its own. A dialog focuses its panel on mount; a layer stacked
+   * over it then takes the caret, and on closing hands back only what it owes — the printings
+   * modal hands back a deck row it swapped, and the three card overlays hand back nothing at
+   * all. Measured in the shipped window, all four leave the caret on `<body>`. That cost nothing
+   * while the layer underneath answered no keys; `CardDetailModal` walks its list on
+   * ArrowLeft/ArrowRight **on the panel**, so from that moment the reader's arrows were silently
+   * dead until they clicked the panel again — and a caret on `<body>` also means the next Tab
+   * restarts the tab order from the top of the app, which is the failure landing pads exist to
+   * prevent.
+   *
+   * **Why this cannot be read synchronously.** The layer above is unmounted through
+   * `AnimatePresence`: its host sets the state to closed, this effect runs, and the closing panel
+   * is *still in the document and still holding the caret* for the length of its exit tween. The
+   * caret only reaches `<body>` when that node is finally removed, and nothing fires when it
+   * does — Chromium moves focus to the body on removal without a `blur` or a `focusout`. So the
+   * re-take waits for the caret to settle, on animation frames, and gives up after
+   * {@link CARET_SETTLE_MS}.
+   *
+   * **Only from `<body>`.** A caret that has landed anywhere real belongs where it landed, and
+   * pulling it here would be this dialog arguing with the reader or with the layer above it.
+   * `undefined` — every other call site — leaves the mount-only behaviour exactly as it was.
+   */
+  stackedOver?: boolean;
+  /**
    * Escape, and the close control: hand focus back to whatever opened the dialog, then close.
    *
    * **Stability is a courtesy here now, not a requirement**, and the reason it used to be one is
@@ -272,6 +310,7 @@ export function Dialog({
   layer,
   flanks,
   onPanelKeyDown,
+  stackedOver,
   onDismiss,
   onClose,
   children,
@@ -308,6 +347,7 @@ export function Dialog({
           layer={layer}
           flanks={flanks}
           onPanelKeyDown={onPanelKeyDown}
+          stackedOver={stackedOver}
           onDismiss={onDismiss}
           onClose={onClose}
         >
@@ -346,6 +386,7 @@ function Panel({
   layer,
   flanks,
   onPanelKeyDown,
+  stackedOver,
   onDismiss,
   onClose,
   children,
@@ -374,6 +415,29 @@ function Panel({
     if (!panel || panel.contains(document.activeElement)) return;
     panel.focus({ preventScroll: true });
   }, []);
+
+  // **The second half of the caret rule** — see {@link DialogProps.stackedOver}, which carries
+  // the whole of why this waits instead of reading `document.activeElement` once.
+  useEffect(() => {
+    if (stackedOver !== false) return;
+    const panel = panelRef.current;
+    if (!panel) return;
+    let frame = 0;
+    const deadline = performance.now() + CARET_SETTLE_MS;
+    const settle = () => {
+      // Landed back inside on its own — a layer that *did* hand the caret back. Nothing owed.
+      if (panel.contains(document.activeElement)) return;
+      if (document.activeElement === document.body) {
+        panel.focus({ preventScroll: true });
+        return;
+      }
+      // Somewhere real, or a closing panel still mid-tween. Keep looking until the deadline;
+      // give up rather than fight for a caret that has settled somewhere it belongs.
+      if (performance.now() < deadline) frame = requestAnimationFrame(settle);
+    };
+    frame = requestAnimationFrame(settle);
+    return () => cancelAnimationFrame(frame);
+  }, [stackedOver]);
 
   return (
     // Scrim and panel in one presence: the ground fades first and the panel scales up over it,

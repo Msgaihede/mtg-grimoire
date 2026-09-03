@@ -117,6 +117,7 @@ import {
 } from "./printingFilters";
 import { buildPrintingGroups, cheapestPrice, printingTarget } from "./printings";
 import { PrintingsFilterBar } from "./PrintingsFilterBar";
+import { ownsArrowKeys } from "./arrowKeys";
 import { StepChevron } from "./StepChevron";
 import { useCardMenuDeps } from "./useCardMenuDeps";
 import { usePrintingGroupBy } from "./usePrintingGroupBy";
@@ -249,39 +250,6 @@ function LanguageMark({ lang }: { lang: string }) {
       {lang}
     </span>
   );
-}
-
-/**
- * What a keypress inside this dialog belongs to before it belongs to the walk.
- *
- * `PrintingsFilterBar` is a row of `<select>`s and a search box, and **ArrowLeft on a focused
- * `<select>` changes its value** in Chromium and in WebView2 with it — so a reader narrowing the
- * wall by set would step to the next card instead, or step *and* re-sort, depending on the engine.
- * `<input>`, `<textarea>` and a `contenteditable` are here for the same reason one rung along: the
- * arrows move a caret, and a caret's owner has the better claim.
- *
- * **A third predicate rather than a widening of one of the two that exist**, which is
- * `src/CLAUDE.md`'s standing rule about `isTextField` and `isTextEntry`: those answer *does the
- * browser's own context menu survive here* and *does an open menu panel yield its keys to a
- * caret*, and this answers *does this control own the arrow keys*. `<select>` is the one element
- * where the three genuinely disagree, and it is the one this exists for.
- *
- * `closest` rather than a tag test, because the press lands on whatever is under the caret and a
- * `contenteditable` region is a tree.
- *
- * **`select` was the original clause and is now the dead one.** `PrintingsFilterBar`'s controls
- * became `Dropdown`s on 2026-08-26, so what has to be exempted is a dropdown's two shapes instead:
- * the **trigger** while its panel is open — ArrowLeft/ArrowRight there belong to the control the
- * reader is inside, not to the walk — and anything **inside the panel**, which is where the caret
- * actually sits. `select` stays in the list because the app may grow one back, and a stale clause
- * that matches nothing costs nothing.
- */
-const ARROW_OWNERS =
-  "input, textarea, select, [contenteditable=''], [contenteditable='true']," +
-  '[aria-haspopup="listbox"][aria-expanded="true"], [role="listbox"]';
-
-function ownsArrowKeys(target: EventTarget | null): boolean {
-  return target instanceof Element && target.closest(ARROW_OWNERS) !== null;
 }
 
 export function AllPrintingsDialog() {

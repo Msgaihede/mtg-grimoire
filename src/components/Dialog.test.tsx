@@ -511,4 +511,90 @@ describe("Dialog", () => {
     expect(screen.getByRole("button", { name: "A control inside the body" })).toHaveFocus();
     expect(onPanelKeyDown.mock.calls.map(([e]) => e.key)).toEqual(["ArrowRight", "Shift", "Tab"]);
   });
+
+  /**
+   * **The second half of the caret rule**, and it exists because of a failure measured in the
+   * shipped window on 2026-09-03.
+   *
+   * Every layer that stacks over the card modal — the printings modal and the three card
+   * overlays — leaves the caret on `<body>` when it closes: the printings one hands back a deck
+   * row it swapped and otherwise nothing, and the three overlays hand back nothing at all. That
+   * cost nothing until a panel underneath grew keys of its own; from that moment the reader's
+   * ArrowLeft/ArrowRight were silently dead until they clicked the panel again, and the next Tab
+   * restarted the tab order from the top of the app.
+   *
+   * The wait is the part worth pinning. The layer above unmounts through `AnimatePresence`, so
+   * when its host flips the flag the closing panel is **still in the document and still holding
+   * the caret**; the caret reaches `<body>` only when that node is removed, and Chromium fires
+   * no `blur` or `focusout` when it does. Reading `document.activeElement` once, synchronously,
+   * is the version of this that looks right and never fires — which is exactly what the first
+   * attempt did.
+   */
+  it("takes the caret back when the layer above it closes", async () => {
+    const view = open({ stackedOver: true });
+    const dialog = await panel();
+
+    // What the layer above leaves behind: the caret on `<body>`, which is where a panel that
+    // unmounts holding it drops it.
+    (document.activeElement as HTMLElement | null)?.blur();
+    expect(document.body).toHaveFocus();
+
+    view.rerender(
+      <Dialog
+        open
+        title="Deck settings"
+        closeLabel="Close deck settings"
+        size="w-[55rem]"
+        stackedOver={false}
+        onDismiss={vi.fn()}
+        onClose={vi.fn()}
+      >
+        <div className="min-h-0 flex-1 overflow-y-auto p-5">
+          <button type="button">A control inside the body</button>
+        </div>
+      </Dialog>,
+    );
+
+    await waitFor(() => expect(dialog).toHaveFocus());
+  });
+
+  /**
+   * **Only from `<body>`.** A caret that has landed anywhere real belongs where it landed —
+   * pulling it here would be this dialog arguing with the reader, or with a layer above it that
+   * did hand the caret back properly. This is the guard that keeps the re-take from being a
+   * focus thief, and without it the ordinary case above still passes.
+   */
+  it("leaves a caret that has landed somewhere real", async () => {
+    const view = open({ stackedOver: true });
+    await panel();
+    // **Outside the panel**, which is the whole of what makes this an assertion. A control
+    // *inside* it is caught by the first guard — the panel already contains the caret — so a
+    // version of this test written against the body button passes with the guard deleted.
+    const elsewhere = document.createElement("button");
+    elsewhere.textContent = "A control the reader moved to";
+    document.body.append(elsewhere);
+    elsewhere.focus();
+
+    view.rerender(
+      <Dialog
+        open
+        title="Deck settings"
+        closeLabel="Close deck settings"
+        size="w-[55rem]"
+        stackedOver={false}
+        onDismiss={vi.fn()}
+        onClose={vi.fn()}
+      >
+        <div className="min-h-0 flex-1 overflow-y-auto p-5">
+          <button type="button">A control inside the body</button>
+        </div>
+      </Dialog>,
+    );
+
+    // Given long enough for every frame the re-take would have polled.
+    await new Promise((r) => setTimeout(r, 60));
+    expect(elsewhere).toHaveFocus();
+
+    elsewhere.remove();
+  });
 });

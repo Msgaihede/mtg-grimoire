@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, expect, it, vi } from "vitest";
@@ -264,6 +264,120 @@ it("draws a chevron pair when the walk holds a stop for the open card", async ()
   expect(screen.getByRole("button", { name: /next card in search results/i })).toBeInTheDocument();
 });
 
+/** The three-stop walk both arrow tests below step along, with the open card in the middle. */
+function walkOfThree() {
+  useAppStore.setState({
+    cardWalk: {
+      label: "Search results",
+      stops: [
+        { cardId: "c0", oracleId: "o0", name: "Ancestral Recall", deck: null },
+        { cardId: "c1", oracleId: "o1", name: "Lightning Bolt", deck: null },
+        { cardId: "c2", oracleId: "o2", name: "Black Lotus", deck: null },
+      ],
+    },
+  });
+}
+
+/**
+ * **The arrows are the chevrons' keyboard twin**, and the reader asked for them by naming the
+ * surface that already had them: *"exactly the same way as in the 'View all printings' modal"*.
+ * So this is `AllPrintingsDialog`'s handler, on this panel, sharing one `ownsArrowKeys` — a
+ * second copy of that exempt-control list would be two lists to keep in agreement, and a control
+ * quietly falling off one of them is the whole failure it guards.
+ */
+it("steps to the next card on ArrowRight and the previous one on ArrowLeft", async () => {
+  walkOfThree();
+  renderModal("c1");
+  await screen.findByRole("dialog");
+  await screen.findByRole("button", { name: /next card in search results/i });
+
+  // No `focus()` call: `Dialog` puts the caret on its panel when it opens, which is the entry
+  // point a reader actually has. Focusing the panel by hand here would test a caret nobody can
+  // reach and would pass over a handler wired to the wrong node.
+  await userEvent.keyboard("{ArrowRight}");
+  expect(useAppStore.getState().selectedCardId).toBe("c2");
+
+  await userEvent.keyboard("{ArrowLeft}");
+  expect(useAppStore.getState().selectedCardId).toBe("c1");
+});
+
+/**
+ * **The half of "one card at a time" that jsdom can see.**
+ *
+ * The reader's requirement is that the card modal and the printings modal open together still
+ * move one card per press. That is structural rather than guarded: both are siblings in `App`,
+ * `Dialog` mounts no portal, and the handler is on the **panel** — so a press inside the other
+ * dialog reaches neither this panel's DOM node nor its React parent, and whoever holds the caret
+ * answers. Nothing in the modal asks whether the other one is open, because nothing in it can be
+ * reached while it is.
+ *
+ * What a suite can pin is the property that makes that true: this is not a `window` listener. A
+ * press outside the panel must do nothing — and a `window` handler, which is how this would most
+ * naturally have been written and would have stepped twice, fails right here.
+ */
+it("does not step on an arrow press outside its panel", async () => {
+  walkOfThree();
+  renderModal("c1");
+  await screen.findByRole("dialog");
+  await screen.findByRole("button", { name: /next card in search results/i });
+
+  fireEvent.keyDown(document.body, { key: "ArrowRight" });
+  expect(useAppStore.getState().selectedCardId).toBe("c1");
+});
+
+/**
+ * `<select>` is the case the exemption exists for — ArrowLeft on a focused one changes its value
+ * in Chromium and in WebView2 with it — but the controls column has no `<select>`: it is
+ * `Dropdown`s, whose two arrow-owning shapes are the trigger while its panel is open and
+ * anything inside the panel. This modal has more of them than the printings dialog does (the
+ * quantity stepper, the printing picker, the category and label pickers), so the exemption
+ * matters more here than at the surface it was written for.
+ */
+it("leaves the arrows to an open dropdown rather than stepping the walk", async () => {
+  walkOfThree();
+  renderModal("c1");
+  await screen.findByRole("dialog");
+  await screen.findByRole("button", { name: /next card in search results/i });
+
+  // The shape `ownsArrowKeys` matches, built here rather than by driving a real dropdown open:
+  // the predicate is about the *element under the caret*, and a test that opened a picker would
+  // be asserting that picker's markup as much as this guard.
+  const trigger = document.createElement("button");
+  trigger.setAttribute("aria-haspopup", "listbox");
+  trigger.setAttribute("aria-expanded", "true");
+  screen.getByRole("dialog").append(trigger);
+
+  fireEvent.keyDown(trigger, { key: "ArrowRight", bubbles: true });
+  expect(useAppStore.getState().selectedCardId).toBe("c1");
+
+  trigger.remove();
+});
+
+/**
+ * A modifier held means the press was aimed at the browser or at a shortcut, never at a chevron
+ * — and at either end of the walk the matching stop is `null` and the press falls through
+ * **without** a `preventDefault`, so the key does whatever it would have done. Both are the
+ * absence of a claim rather than a swallowed press, which is why they are asserted together.
+ */
+it("ignores a modified arrow, and both ends of the walk", async () => {
+  walkOfThree();
+  renderModal("c1");
+  await screen.findByRole("dialog");
+  const panel = screen.getByRole("dialog");
+  await screen.findByRole("button", { name: /next card in search results/i });
+
+  const modified = fireEvent.keyDown(panel, { key: "ArrowRight", ctrlKey: true });
+  expect(useAppStore.getState().selectedCardId).toBe("c1");
+  expect(modified, "a modified press is left for whatever else wanted it").toBe(true);
+
+  // Walk to the last stop, then press past it.
+  await userEvent.keyboard("{ArrowRight}");
+  expect(useAppStore.getState().selectedCardId).toBe("c2");
+  const pastTheEnd = fireEvent.keyDown(panel, { key: "ArrowRight" });
+  expect(useAppStore.getState().selectedCardId).toBe("c2");
+  expect(pastTheEnd, "the end of the walk swallows nothing").toBe(true);
+});
+
 it("draws the grimoire counts twice, so exactly one is visible at every rung", async () => {
   // **All four artboards show the counts.** `CardModalRail` draws them `hidden` below
   // `@min-[1200px]/card`, so at the three narrower rungs they *move* rather than vanish — and the
@@ -432,6 +546,25 @@ it("says nothing about the age of prices it is not drawing", async () => {
   // so the footnote block being present is what makes the missing line an assertion.
   expect(await screen.findByText(/card images © wizards of the coast/i)).toBeInTheDocument();
   expect(screen.queryByText(pricesAsOf(MARKETPLACES.tcgplayer))).not.toBeInTheDocument();
+});
+
+/**
+ * **The other half of the same condition, and it did not exist until the printings list did.**
+ *
+ * The sentence used to be gated on the open card's own `finishes`, because the art column's
+ * price cells were the only prices on the panel. The list below the controls prices every *other*
+ * printing, so a card with no known finishes of its own now draws a column of figures with the
+ * old gate saying nothing about them. The test above is what makes this one an assertion rather
+ * than a pair of coincidences: same card, same null `finishes`, and the only difference is
+ * whether the list has rows.
+ */
+it("dates the list's prices for a card that has no finishes of its own", async () => {
+  cardDetail.mockResolvedValue({ ...detail, finishes: null });
+  cardPrintings.mockResolvedValue(printings);
+  renderModal("c1");
+  await screen.findByRole("dialog");
+
+  expect(await screen.findByText(pricesAsOf(MARKETPLACES.tcgplayer))).toBeInTheDocument();
 });
 
 it("keeps both footnotes in the action row rather than under it", async () => {
@@ -837,8 +970,18 @@ it("makes a label with a colour from the app's own palette, and puts it on the c
 });
 
 /**
- * The two printings the picker offers in the tests below — the open card's own and one other,
+ * The two printings the list offers in the tests below — the open card's own and one other,
  * which is the smallest list on which a pick can mean anything.
+ *
+ * **Every field of `Printing` is spelled out, and that is not ceremony.** This was four keys per
+ * row while the control was a combobox, which read only `id`, `setName`, `setCode` and
+ * `collectorNumber`. `CardModalPrintings` draws the whole row, and the first thing it did with
+ * the short fixture was throw out of `LangBadge`: `lang` was `undefined`, `undefined !== "en"`
+ * is true, and `languageName` calls `.toLowerCase()` on it. That is a **fixture** fault rather
+ * than a product one — `lang` is `String` in the crate (`card.rs`) and `string` in `ipc.ts`, so
+ * no real row can be missing it — but a partial object behind a cast is exactly how a suite comes
+ * to encode a state the app cannot be in, and the fix is the row, not a guard for an impossible
+ * value.
  */
 const printings = {
   items: [
@@ -847,26 +990,58 @@ const printings = {
       setCode: "lea",
       setName: "Limited Edition Alpha",
       collectorNumber: "161",
+      releasedAt: "1993-08-05",
+      rarity: "rare",
+      illustrationId: null,
+      artist: "Christopher Rush",
+      lang: "en",
+      finishes: "nonfoil",
       finishPrices: { nonfoil: 620, foil: null, etched: null },
+      promo: false,
+      promoTypes: null,
+      fullArt: false,
     },
     {
       id: "c2",
       setCode: "leb",
       setName: "Limited Edition Beta",
       collectorNumber: "161",
+      releasedAt: "1993-10-04",
+      rarity: "rare",
+      illustrationId: null,
+      artist: "Christopher Rush",
+      lang: "en",
+      finishes: "nonfoil",
       finishPrices: { nonfoil: 410, foil: null, etched: null },
+      promo: false,
+      promoTypes: null,
+      fullArt: false,
     },
   ],
   total: 2,
 };
 
-/** Open the Printing picker and take the other printing out of it. */
+/**
+ * Press the Beta row in the printings list.
+ *
+ * **The control moved and its meaning did not**, which is the whole point of leaving these three
+ * tests pointed at the same `pickPrinting`: the combobox in the controls column became a list in
+ * the main content area on 2026-09-03, and a press on a row is still a *swap* behind a deck row
+ * and a *browse* without one. If that ever stops being true these three go red, which is what
+ * they are for.
+ *
+ * Two names rather than one, because the row says what the press will do: from a deck row it
+ * names the pile it will rewrite, and from a wall it only offers to show the printing.
+ */
 async function pickBeta() {
-  await userEvent.click(screen.getByRole("button", { name: /^printing$/i }));
-  await userEvent.click(await screen.findByRole("option", { name: /Limited Edition Beta/ }));
+  await userEvent.click(
+    await screen.findByRole("button", {
+      name: /^(Use this printing \(LEB 161\) in |Show LEB · 161)/,
+    }),
+  );
 }
 
-it("swaps the deck's printing when one is picked out of the dropdown", async () => {
+it("swaps the deck's printing when one is picked out of the printings list", async () => {
   // **The picker used to browse**, which left `paneDeckContext.cardId` on the printing the deck
   // still played while the panel drew another one — half of what a reader reports as the modal
   // going out of sync. It is the swap now, and it is `useDeck.swapPrinting`: the same command

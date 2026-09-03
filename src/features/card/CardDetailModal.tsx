@@ -82,10 +82,12 @@ import { pricesAsOf } from "@/lib/prices";
 import { useAppStore, type CardWalkStop } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
+import { ownsArrowKeys } from "./arrowKeys";
 import { useOptionalAddCardToDeck } from "./cardMenu";
 import { cardDetailKey } from "./cardDetailKey";
 import { CardModalArt } from "./CardModalArt";
 import { CardModalControls } from "./CardModalControls";
+import { CardModalPrintings } from "./CardModalPrintings";
 import { CardModalRail, type RailAction, type RailCounts } from "./CardModalRail";
 import { useCardModalScope, type CardModalScope } from "./cardModalScope";
 import { StepChevron } from "./StepChevron";
@@ -324,6 +326,13 @@ export function CardDetailModal() {
   const setSelectedCardId = useAppStore((s) => s.setSelectedCardId);
   const openCardFromDeck = useAppStore((s) => s.openCardFromDeck);
   const walk = useAppStore((s) => s.cardWalk);
+  // **What stacks over this panel**, and the only thing the shell needs to know to take its
+  // caret back: the three rail overlays and the printings modal are every layer that can stand
+  // on top of the card modal. A boolean rather than the values, so a *change between two
+  // overlays* — Legality to Card text, where the caret never reaches `<body>` — is not a re-take.
+  const stackedOverlay = useAppStore((s) => s.cardOverlay);
+  const stackedPrintings = useAppStore((s) => s.printingsRequest);
+  const stacked = stackedOverlay !== null || stackedPrintings !== null;
   const scope = useCardModalScope();
   const { marketplace } = useMarketplace();
 
@@ -473,6 +482,48 @@ export function CardDetailModal() {
       </div>
     ) : null;
 
+  /**
+   * ArrowLeft and ArrowRight, on the **panel** — the chevrons' keyboard twin, and the same
+   * handler `AllPrintingsDialog` has had since it grew a walk.
+   *
+   * **On the panel rather than on `window`, which is what makes "one card per press" structural
+   * rather than a rule two files agree to follow.** Both surfaces read the same `cardWalk` and
+   * both step it, so a `window` listener on each would move the reader two cards whenever the
+   * printings modal is open over this one. They are siblings in `App` and `Dialog` mounts no
+   * portal, so a press inside the printings panel reaches neither this panel's DOM node nor its
+   * React parent — whoever holds the caret answers, and `aria-modal` plus `trapTab` is what says
+   * that is the topmost dialog. Nothing here tests for the other modal being open, because
+   * nothing here can be reached while it is.
+   *
+   * **ArrowUp and ArrowDown are not handled at all** — no branch, no `preventDefault`, nothing.
+   * The main content area scrolls at `@min-[900px]/card` and native scrolling is what a reader
+   * wants from those two keys; "up does nothing" would be a claim, and leaving them alone is the
+   * absence of one.
+   *
+   * Three guards, each closing a real press. `defaultPrevented` yields to anything inside the
+   * panel that has already answered. A modifier held means the press was aimed at the browser or
+   * at a shortcut, never at a chevron. And {@link ownsArrowKeys} keeps the controls column's
+   * dropdowns usable — the quantity stepper, the printing picker, the category and label pickers
+   * are all in here, which is more arrow-owning controls than the printings dialog has.
+   *
+   * At either end of the walk the matching side is `null` and the press falls through **without**
+   * a `preventDefault`, so the key does whatever it would have done — which is nothing, and is
+   * still the honest answer rather than a swallowed press. `pair === null` (a card reached by a
+   * meld relation or a printing swap, which is in no list) is that same case at both ends.
+   */
+  const onPanelKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLElement>) => {
+      if (e.defaultPrevented) return;
+      if (e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+      if (ownsArrowKeys(e.target)) return;
+      const stop = e.key === "ArrowLeft" ? previous : e.key === "ArrowRight" ? next : null;
+      if (stop === null) return;
+      e.preventDefault();
+      step(stop);
+    },
+    [previous, next, step],
+  );
+
   return (
     <Dialog
       open={cardId !== null}
@@ -485,6 +536,10 @@ export function CardDetailModal() {
       title={<Title card={card.data ?? null} pending={card.isPending} />}
       closeLabel="Close card details"
       flanks={flanks}
+      onPanelKeyDown={onPanelKeyDown}
+      // The arrows below live on the panel, so the panel has to be holding the caret for them to
+      // exist — see `DialogProps.stackedOver`, where the failure this closes is written out.
+      stackedOver={stacked}
       // **Two different functions, and the difference is the caret.** Escape and the ✕ are the
       // reader saying "put me back", so they go through the body's own close and whatever opened
       // the card gets the caret. A press on the **scrim** is not: they have already moved the
@@ -946,16 +1001,6 @@ function Body({
     else setWished.mutate({ id, quantity: next });
   };
 
-  const printingOptions: DropdownOption[] = useMemo(
-    () =>
-      (printings.data?.items ?? []).map((p) => ({
-        value: p.id,
-        label: p.setName ?? p.setCode.toUpperCase(),
-        hint: `#${p.collectorNumber}`,
-      })),
-    [printings.data],
-  );
-
   const categoryOptions: DropdownOption[] = useMemo(
     () => deck.categories.map((c) => ({ value: String(c.id), label: c.name })),
     [deck.categories],
@@ -1226,7 +1271,15 @@ function Body({
    * priced. `parseFinishes` is the one reader of that column, so the two conditions cannot drift
    * into a footer dating prices that are not on screen.
    */
-  const priced = card !== null && parseFinishes(card.finishes).length > 0;
+  const priced =
+    card !== null &&
+    // **Two sources of prices on this panel, and the sentence dates both.** The art column's own
+    // cells are the first, one per finish of the *open* printing; the printings list below the
+    // controls is the second, and it prices every other printing of the card. A card whose own
+    // `finishes` column is null draws no cells of its own and still shows a column of figures in
+    // that list — so gating this on the open card alone left those figures undated, which is
+    // spec §5's one requirement about them.
+    (parseFinishes(card.finishes).length > 0 || (printings.data?.items.length ?? 0) > 0);
 
   return (
     <>
@@ -1330,7 +1383,14 @@ function Body({
 
             <div
               className={cn(
-                "flex min-w-0 flex-col gap-5",
+                // **`relative` because this box scrolls**, which is `src/CLAUDE.md`'s
+                // phantom-scrollbar rule: an `sr-only` span is `position: absolute`, and an
+                // absolutely positioned descendant of a scroll container with no positioned
+                // ancestor is laid out against the *viewport* — so it lands outside the box and
+                // the box grows a scrollbar for a caption nobody can see. The column held
+                // nothing absolute until the printings list arrived; it draws a rarity gem and a
+                // language badge per row and each of those carries one.
+                "relative flex min-w-0 flex-col gap-5",
                 "@min-[640px]/card:col-start-2 @min-[640px]/card:row-start-1",
                 "@min-[640px]/card:min-h-0 @min-[640px]/card:overflow-y-auto",
               )}
@@ -1352,8 +1412,6 @@ function Body({
                     wish: null,
                   });
                 }}
-                printings={printingOptions}
-                onPickPrinting={pickPrinting}
                 quantity={quantity}
                 onQuantityChange={changeQuantity}
                 categories={categoryOptions}
@@ -1366,6 +1424,28 @@ function Body({
               />
 
               <InlineCounts counts={counts} scope={scope} />
+
+              <CardModalPrintings
+                card={card}
+                scope={scope}
+                items={printings.data?.items ?? []}
+                total={printings.data?.total ?? 0}
+                // **`card.oracleId !== null` is load-bearing.** The printings query is
+                // `skipToken` for a card with no oracle id, and a skipped query reports
+                // `isPending` forever — so without this the list would say "Loading printings…"
+                // for the rest of the session on exactly the cards that have none.
+                loading={printings.isPending && card.oracleId !== null}
+                error={printings.isError ? ipcError(printings.error) : null}
+                marketplace={marketplace}
+                // One write at a time: every row sends the same `from` printing, and the write
+                // in flight is in the middle of moving it.
+                busy={deck.swapPrinting.isPending}
+                // **The same callback the combobox had, unchanged** — and its meaning is the
+                // load-bearing part: with a deck row behind the modal this *swaps the deck's
+                // printing* (`useDeck.swapPrinting`), with no deck row it browses
+                // (`viewPrinting`). Moving the control must not move that.
+                onPick={pickPrinting}
+              />
             </div>
 
             <div
