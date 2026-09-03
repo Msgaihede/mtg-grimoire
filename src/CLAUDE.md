@@ -640,6 +640,24 @@ Every one of these has its measurement and its story in
   meant to agree with, which is what a reader reported as highlights that do not line up. A card
   that already has a border wears `DROP_EDGE` (its dash goes gold) instead of growing a second
   outline. `src/lib/dropMarks.ts` carries all of it.
+- **A focus outline is gated on `data-kbd`, and a `tabIndex={-1}` landing pad carries none at
+  all.** Two separate rules, both from 2026-09-03. **The gate**: `:focus-visible` is
+  modality-based rather than navigation-based — Chromium arms it on *any* `keydown` and whatever
+  already holds focus starts matching, with the focus never moving, so pressing `w` ringed a modal
+  the reader had opened with the mouse. `src/lib/keyboardModality.ts` publishes the attribute when
+  focus *moved* and the last input was a key, and `src/index.css` redefines Tailwind's own
+  `focus-visible` variant to require it — so **every `focus-visible:` utility is already gated and
+  a new one needs nothing**. Do not add a key to a list; there is no list, and that is the design.
+  **The landing pads**: eleven `tabIndex={-1}` containers exist only so focus can be *put*
+  somewhere rather than dropped on `<body>`, and a reader can neither Tab nor arrow onto one, so
+  they carry no focus class in any modality — `Dialog`'s panel, `CardDetailPane`, the editor root,
+  `AnchoredPopup`, `DeckBracket`, `ValidationPanel`, `MoveToFolder`, `PickCopies`, and the three
+  delete confirmations. **Do not "restore" one by resemblance to a sibling that has one.** The line
+  is "can the caret move *from* here", not `tabIndex`: a deck pile's section and a printing row are
+  `tabIndex={-1}` and keep their marks, as do menu rows, table rows, cards and tiles — stripping
+  those is the WCAG 2.4.7 failure the rule above guards. The suite compiles the variant against
+  real Tailwind, because a `@custom-variant` this version mis-parses emits **nothing**, silently.
+  [frontend-design.md](../docs/reference/frontend-design.md) has both measurements.
 - **Anything `fixed` positioned from a measured rect takes its viewport width from
   `document.documentElement.clientWidth`, never `window.innerWidth`.** `innerWidth` includes the
   classic vertical scrollbar; the initial containing block a `fixed` box is laid out against
