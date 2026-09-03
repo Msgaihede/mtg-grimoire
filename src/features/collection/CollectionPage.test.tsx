@@ -442,6 +442,33 @@ const standUp = (label: string): HTMLElement => {
 };
 
 /**
+ * Whether a card on the wall is wearing either drop mark.
+ *
+ * **Both marks moved onto the card's own `<button>` face on 2026-09-03**, off the `<li>` around
+ * it — `lib/dropMarks.ts` carries the reason (a ring is a box shadow painted *outside* the border
+ * box, so on the wrapper it stood 2px proud of the dashed edge it was meant to agree with, which
+ * is the misalignment a reader reported). The drop *registrations* did not move and could not;
+ * only the `className` did.
+ *
+ * **This helper exists because the assertions it replaces would otherwise have gone quietly
+ * vacuous.** They read `classList.contains("ring-2")` on the `<li>`, and every one of them that
+ * matters asserts `false` — a target that lights up and then refuses the drop is a promise this
+ * page cannot keep. Nothing on this page draws a `ring-2` any more, so left alone they would pass
+ * for every card in every state and prove nothing.
+ *
+ * It asks the whole subtree rather than the face alone, so it goes on answering if a card ever
+ * carries its edge somewhere else. The two marks are checked separately because `tailwind-merge`
+ * replaces one with the other rather than stacking them: an armed card reads `DROP_EDGE`'s
+ * `border-accent/45`, and the one actually under the pointer reads a solid `border-accent` beside
+ * `DROP_OVER`'s `bg-accent/15`.
+ */
+const wearsDropMark = (card: HTMLElement): boolean =>
+  [card, ...card.querySelectorAll("*")].some(
+    (box) =>
+      box.classList.contains("border-accent/45") || box.classList.contains("bg-accent/15"),
+  );
+
+/**
  * Two boxes and three landings, because dnd-kit hit-tests by **coordinate** and jsdom measures
  * every rectangle as zero.
  *
@@ -2895,7 +2922,7 @@ describe("the collection's folders", () => {
     stand("Trade binder");
     const row = cardSources(container)[0];
     const held = await holdCopy(row, { pressOn: screen.getByText("Lightning Bolt") });
-    expect(card.classList.contains("ring-2")).toBe(false);
+    expect(wearsDropMark(card)).toBe(false);
 
     await held.over(card);
     await held.drop();
@@ -2980,7 +3007,7 @@ describe("the collection's folders", () => {
     group.getBoundingClientRect = () => CARD_BOX;
     const row = cardSources(container)[0];
     const held = await holdCopy(row, { pressOn: screen.getByText("Lightning Bolt") });
-    expect(group.classList.contains("ring-2")).toBe(false);
+    expect(wearsDropMark(group)).toBe(false);
 
     await held.over(group);
     await held.drop();
@@ -3012,7 +3039,7 @@ describe("the collection's folders", () => {
     stand("Trade binder");
     const row = cardSources(container)[0];
     const held = await holdCopy(row, { pressOn: screen.getByText("Lightning Bolt") });
-    expect(binder.classList.contains("ring-2")).toBe(false);
+    expect(wearsDropMark(binder)).toBe(false);
 
     await held.over(binder);
     await held.drop();
@@ -3241,7 +3268,7 @@ describe("the collection's folders", () => {
       pressOn: screen.getByRole("button", { name: "Lightning Bolt" }),
     });
     await held.over(binder);
-    expect(binder.classList.contains("ring-2")).toBe(true);
+    expect(wearsDropMark(binder)).toBe(true);
     await held.drop();
 
     await screen.findByRole("dialog");
@@ -3982,7 +4009,7 @@ describe("rearranging the collection's cabinet", () => {
     stand("Trade binder");
     const held = await startPointerDrag(source);
     // Not even armed: no drawer on the wall would take it at any landing.
-    expect(folderCard("Trade binder").classList.contains("ring-2")).toBe(false);
+    expect(wearsDropMark(folderCard("Trade binder"))).toBe(false);
 
     await held.over(folderSlot("Trade binder"), AT_MIDDLE);
     await held.drop();
@@ -4003,7 +4030,7 @@ describe("rearranging the collection's cabinet", () => {
     expect(group.getAttribute("draggable")).toBeNull();
 
     const held = await holdCard("Sealed");
-    expect(group.classList.contains("ring-2")).toBe(false);
+    expect(wearsDropMark(group)).toBe(false);
     await held.cancel();
   });
 
@@ -4046,7 +4073,7 @@ describe("rearranging the collection's cabinet", () => {
     for (const at of [AT_START, AT_MIDDLE, AT_END]) {
       stand("Foils");
       const held = await startPointerDrag(source);
-      expect(folderCard("Foils").classList.contains("ring-2")).toBe(false);
+      expect(wearsDropMark(folderCard("Foils"))).toBe(false);
       await held.over(folderSlot("Foils"), at);
       await held.drop();
     }
@@ -4123,7 +4150,7 @@ describe("rearranging the collection's cabinet", () => {
     standUp("Collection");
 
     const held = await holdCard("Trade binder");
-    expect(upTile("Collection").classList.contains("ring-2")).toBe(false);
+    expect(wearsDropMark(upTile("Collection"))).toBe(false);
     await held.over(upTile("Collection"), AT_MIDDLE);
     await held.drop();
 

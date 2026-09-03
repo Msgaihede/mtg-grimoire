@@ -2261,11 +2261,15 @@ export function CollectionPage() {
           // twenty drawers must not lose the wall to them, so the row of cards is bounded and
           // scrolls inside itself.
           //
-          // `DROP_MARK_ROOM` is what that costs: `overflow` clips at the padding box, a
-          // `DROP_RING` is a box shadow painted *outside* the border box, so a folder card flush
-          // against the content edge would lose the outer 2px of its ring for the whole length of
-          // a drag — and the `FOCUS` outline 4px proud of it, which is a WCAG 2.4.7 failure rather
-          // than a cosmetic one. It goes on the box carrying the `overflow`; one level in is not
+          // `DROP_MARK_ROOM` is what that costs — and since 2026-09-03 it is bought for `FOCUS`
+          // alone. `overflow` clips at the padding box and the `FOCUS` outline stands 4px proud of
+          // the border box, so a folder card flush against the content edge would lose half its
+          // focus indicator: a WCAG 2.4.7 failure rather than a cosmetic one. **The drop mark is
+          // no longer part of this.** It used to be `DROP_RING`, a box shadow painted *outside*
+          // the border box and clipped the same way; it is now the card's own dashed edge going
+          // gold (`DROP_EDGE`), which is inside the border box and cannot be clipped at all. The
+          // padding does not change, because 6px was always `FOCUS`'s number rather than the
+          // ring's. It goes on the box carrying the `overflow`; one level in is not
           // the same fix. `relative` for the rule beside it: a scroll container has to be the
           // containing block for its own absolutely positioned content, or an `sr-only` label
           // inside stretches the document. jsdom has no layout engine and can see none of this.

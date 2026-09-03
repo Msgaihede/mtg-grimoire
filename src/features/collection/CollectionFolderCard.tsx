@@ -19,9 +19,20 @@
  * attaches to pictures, and there are none here.
  *
  * **Drawn as an `<li>`, so a caller draws a wall of these inside a `<ul>`** — `FolderCard`'s
- * shape, and a row of folders genuinely is a list. The ring lives on that `<li>`, which means the
- * scroller around the wall has to carry `DROP_MARK_ROOM`; that is the wall's business rather than
- * the card's, and `dropMarks.ts` explains why padding one level in is not the same fix.
+ * shape, and a row of folders genuinely is a list. That `<li>` is a positioning box and a drop
+ * registration and nothing else: it draws no mark of its own. The scroller around the wall still
+ * carries `DROP_MARK_ROOM`, but no longer for the drop affordance — `FOCUS` stands 4px proud of
+ * this card's button and `overflow` clips at the padding box, which is a WCAG 2.4.7 matter rather
+ * than a cosmetic one. That constant's own note carries the whole reading.
+ *
+ * **Both drag marks are drawn on the `<button>`, because that is the element carrying this card's
+ * own edge** (2026-09-03). They were not: the eligible ring went on the `<li>` while the dashed
+ * border and the wash went on the face inside it — and a ring is a box shadow painted *outside*
+ * the border box, so what shipped was a gold rectangle standing 2px proud of a dashed rectangle it
+ * never touched. Two concentric outlines for one landing, which is the reader's report that the
+ * affordances are bulky, overlap their neighbours and "don't align with the dotted outline".
+ * Nothing about the drop *registrations* moved to fix it and nothing could — see {@link slot} —
+ * so only the `className` did.
  *
  * **Two drags reach this card and they are deliberately two.** A *copy* dropped on it is filed
  * into the drawer (`collectionDrag.ts`'s payload); a *folder* dropped on it is nested inside it
@@ -29,9 +40,12 @@
  * because the two marks live under different keys — so a card carried over a folder can never be
  * mistaken for a folder being re-filed, and neither target needs to know the other exists. Only
  * one thing is ever in the air, so the pair share the two marks `dropMarks.ts` publishes rather
- * than inventing a second vocabulary: {@link DROP_RING} on the `<li>` for "this drawer would take
- * what you are holding" and {@link DROP_OVER} on the face for "and this is where it lands". The
- * third landing is the one a copy has no equivalent of, and it is `FolderDropLine`.
+ * than inventing a second vocabulary — and because the face owns a dash all day, the eligible one
+ * is {@link DROP_EDGE} rather than the ring a borderless target wears: the card's own outline goes
+ * faintly gold for "this drawer would take what you are holding", {@link DROP_OVER} takes it to
+ * full strength beside its wash for "and this is where it lands", and at no point are there two
+ * edges to fail to line up. The third landing is the one a copy has no equivalent of, and it is
+ * `FolderDropLine`.
  */
 import {
   useEffect,
@@ -45,7 +59,7 @@ import { FolderDropLine } from "@/components/FolderDropLine";
 import { ParentFolderCard } from "@/components/ParentFolderCard";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { count } from "@/lib/counts";
-import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
+import { DROP_EDGE, DROP_OVER } from "@/lib/dropMarks";
 import {
   folderDraggable,
   useFolderDropTarget,
@@ -168,7 +182,8 @@ export function CollectionFolderCard({
   };
   /**
    * Whether *this* folder would take what is currently in the air — the folder a card is already
-   * filed in refuses it, and draws no ring rather than a ring that does nothing.
+   * filed in refuses it, and leaves its dash plain rather than lighting an edge that leads
+   * nowhere.
    *
    * **Either shape of collection drop**, a table row's single entry or a wall tile's whole shelf
    * of copies, and the card stays dumb about the difference: it hands the drop straight through
@@ -228,8 +243,12 @@ export function CollectionFolderCard({
   });
   const { shown, spoken } = folderFace(summary, currency);
 
+  // No mark on the `<li>`, and that is the whole of the 2026-09-03 fix: it is where the copy drop
+  // is registered and what `FolderDropLine` is positioned against, and it sits *outside* the
+  // dashed edge the reader actually sees. Anything drawn on it is a second outline around the
+  // first. See the file header.
   return (
-    <li ref={ref} className={cn("relative rounded-xl", (armed || folderArmed) && DROP_RING)}>
+    <li ref={ref} className="relative rounded-xl">
       <div ref={slot}>
         <button
           type="button"
@@ -249,10 +268,20 @@ export function CollectionFolderCard({
             // child, because a button inside a button is not markup a browser will build.
             "block w-full rounded-xl border border-dashed border-border p-2.5 pr-9 text-left",
             "transition-colors duration-150 hover:border-accent motion-reduce:transition-none",
+            // The card's own dash, gone faintly gold — one mark for both drags, because either
+            // one being in the air means the same thing about this drawer: it would take what you
+            // are holding. The eligible mark for a surface that already has an edge, so nothing is
+            // drawn around this one to disagree with it.
+            (armed || folderArmed) && DROP_EDGE,
             // One wash for both drags, because only one thing is ever in the air: a copy over this
             // drawer and a folder over its middle are the same claim — what you are holding lands
             // *in here*. The other two landings are a line rather than a wash, which is what keeps
             // "inside this folder" and "beside this folder" from wearing one mark.
+            //
+            // **After the line above on purpose.** `tailwind-merge` resolves a border colour by
+            // argument order, so this is what takes `border-accent/45` up to full strength on the
+            // one card the pointer is actually on — swap the two and every eligible drawer on the
+            // wall would out-shout it.
             (over || edge === "inside") && cn("border-accent", DROP_OVER),
             FOCUS,
           )}

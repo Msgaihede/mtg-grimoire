@@ -25,19 +25,43 @@
  * list's read as one sentence rather than as two conventions.
  *
  * **Drawn as an `<li>`, so a caller draws a wall of these inside a `<ul>`** — `FolderCard`'s
- * shape, and a row of folders genuinely is a list. The ring lives on that `<li>`, which means the
- * scroller around the wall has to carry `DROP_MARK_ROOM`; that is the wall's business rather than
- * the card's, and `dropMarks.ts` explains why padding one level in is not the same fix.
+ * shape, and a row of folders genuinely is a list. **Nothing is drawn on that `<li>` any more**:
+ * it registers the wish drop target and it is what `FolderDropLine` is positioned against, and
+ * both drag marks sit on the `<button>` inside it. The scroller around the wall still carries
+ * `DROP_MARK_ROOM`, for the half of that constant's job the drop marks were never the whole of —
+ * `FOCUS` stands 4px proud of this card's border box, and half a focus indicator is a WCAG 2.4.7
+ * failure rather than a cosmetic one. That is the wall's business rather than the card's, and
+ * `dropMarks.ts` explains why padding one level in is not the same fix.
  *
  * **Two drags reach this card and they are deliberately two.** A *wish* dropped on it is filed
  * into the drawer (`wishDrag.ts`'s payload); a *folder* dropped on it is nested inside it or
  * placed beside it (`lib/folderDrag.ts`'s). Each reader refuses the other's payload outright,
  * because the two marks live under different keys — so neither target needs to know the other
- * exists. Only one thing is ever in the air, so the pair share the two marks `dropMarks.ts`
- * publishes rather than inventing a second vocabulary: {@link DROP_RING} on the `<li>` for "this
- * drawer would take what you are holding" and {@link DROP_OVER} on the face for "and this is
- * where it lands". The third landing is the one a wish has no equivalent of, and it is
- * `FolderDropLine`.
+ * exists. Only one thing is ever in the air, so the pair share the marks `dropMarks.ts` publishes
+ * rather than inventing a second vocabulary: {@link DROP_EDGE} for "this drawer would take what
+ * you are holding" and {@link DROP_OVER} for "and this is where it lands". The third landing is
+ * the one a wish has no equivalent of, and it is `FolderDropLine`.
+ *
+ * **Both of those go on the `<button>`, because that is the element carrying this card's own
+ * edge** (2026-09-03). They did not: the eligible mark was a `DROP_RING` on the outer `<li>` while
+ * the dash and the wash were on the face inside it — and a ring is a box shadow painted *outside*
+ * the border box, so what shipped was a gold rectangle standing 2px proud of a dashed rectangle it
+ * never touched. Two concentric outlines for one landing, which is the whole of the reader's
+ * report that the affordances are bulky, overlap what is beside them and "don't align with the
+ * dotted outline". The eligible mark is {@link DROP_EDGE} rather than the ring for the same reason
+ * a second outline was wrong in the first place: this face already owns a dash all day, so it says
+ * *this drawer would take it* by turning that dash faintly gold rather than by growing an outline
+ * of its own — and then there is no second edge to fail to line up with the first.
+ *
+ * **The two are written in that order and the order is load-bearing.** Both spell a border colour,
+ * `cn` is `tailwind-merge`, and the later argument wins its group — so `DROP_EDGE` first and the
+ * over mark's `border-accent` second is what keeps the drawer under the pointer reading
+ * differently from the eleven beside it. Reversed, every eligible drawer would wear the colour
+ * that is supposed to mean *this one*.
+ *
+ * **Nothing about the drop *registrations* moved to fix it and nothing could.** dnd-kit keeps one
+ * target per element: `ref` is the `<li>` the wish target sits on and `slot` is the box
+ * {@link useFolderDropTarget} measures the three landings against. Only the `className` moved.
  */
 import {
   useEffect,
@@ -51,7 +75,7 @@ import { FolderDropLine } from "@/components/FolderDropLine";
 import { ParentFolderCard } from "@/components/ParentFolderCard";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { plural } from "@/lib/counts";
-import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
+import { DROP_EDGE, DROP_OVER } from "@/lib/dropMarks";
 import {
   folderDraggable,
   useFolderDropTarget,
@@ -159,7 +183,7 @@ export function WishFolderCard({
     onClick: MouseEventHandler<HTMLButtonElement>;
   };
   /** Whether *this* folder would take the wish currently in the air — spec §9: the folder a wish
-   *  is already filed in refuses it, and draws no ring rather than a ring that does nothing. */
+   *  is already filed in refuses it, and draws no mark rather than one that does nothing. */
   canDrop: (drag: WishDrag) => boolean;
   onDropWish: (drag: WishDrag) => void;
   /**
@@ -214,7 +238,10 @@ export function WishFolderCard({
   const { shown, spoken } = face(summary, currency);
 
   return (
-    <li ref={ref} className={cn("relative rounded-xl", (armed || folderArmed) && DROP_RING)}>
+    // No mark of its own: this box registers the wish drop target and is what `FolderDropLine` is
+    // absolutely positioned against. Both drag marks are on the face inside it — see this file's
+    // own doc for why an outline around an outline was the reported bug.
+    <li ref={ref} className="relative rounded-xl">
       <div ref={slot}>
         <button
           type="button"
@@ -234,6 +261,13 @@ export function WishFolderCard({
             // child, because a button inside a button is not markup a browser will build.
             "block w-full rounded-xl border border-dashed border-border p-2.5 pr-9 text-left",
             "transition-colors duration-150 hover:border-accent motion-reduce:transition-none",
+            // The card's own dash going faintly gold — one mark for both drags, raised the moment
+            // either payload leaves its tile and on every drawer that would take it, which is what
+            // tells a reader where a drag can end before they have aimed anywhere. It sits *above*
+            // the wash below it because `cn` is `tailwind-merge` and both spell a border colour:
+            // the later argument wins the group, so "the one you are on" outranks "one of the ones
+            // you could be on" rather than the two fighting over argument order.
+            (armed || folderArmed) && DROP_EDGE,
             // One wash for both drags, because only one thing is ever in the air: a wish over this
             // drawer and a folder over its middle are the same claim — what you are holding lands
             // *in here*. The other two landings are a line rather than a wash, which is what keeps
@@ -336,7 +370,7 @@ export function WishParentFolderCard({
   label: string;
   onOpen: () => void;
   /** Whether the level above would take the wish in the air — the page's own `canFile` bound to
-   *  the destination, so a wish already filed there draws no ring rather than a ring that does
+   *  the destination, so a wish already filed there draws no mark rather than one that does
    *  nothing. */
   canDrop: (drag: WishDrag) => boolean;
   onDropWish: (drag: WishDrag) => void;

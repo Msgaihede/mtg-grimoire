@@ -3,7 +3,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FOLDER_DROP_LINE_ATTR } from "@/components/FolderDropLine";
-import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
+import { DROP_EDGE, DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import {
   folderDraggable,
   readFolderDrag,
@@ -40,9 +40,20 @@ import {
  * and every target here is handed a `getBoundingClientRect` of its own. A drag that skipped one
  * lands nowhere and says nothing about it.
  *
- * What is still out of reach and stays the live pass's to prove: that a ring drawn *outside* a
- * card's border box survives the wall's own `overflow` (that is `DROP_MARK_ROOM`, and jsdom has no
- * layout engine and therefore no clip), and where a pointer really is over a real layout.
+ * **The two marks moved onto the card's own `<button>` on 2026-09-03 and the tokens changed with
+ * them**, which is what every mark assertion below now addresses. A folder card wears `DROP_EDGE`
+ * — its dashed border gone faintly gold — where a borderless target wears `DROP_RING`, and both
+ * that and `DROP_OVER` are drawn on the face rather than on the `<li>` around it. The `<li>` is
+ * still where the copy drop is *registered*, so the two are deliberately different questions here
+ * and `carries no mark on the box the drop is registered on` is the one that would go red if
+ * anything put the eligible mark back on a wrapper. `CollectionBreadcrumb` below is untouched by
+ * any of it: a segment is a plain button with no border of its own, so `DROP_RING` is still its
+ * mark and still drawn on the element it is asserted against.
+ *
+ * What is still out of reach and stays the live pass's to prove: that `FOCUS` — which stands 4px
+ * proud of that same button — survives the wall's own `overflow` (that is `DROP_MARK_ROOM`, and
+ * jsdom has no layout engine and therefore no clip), that the dash and the wash really do arrive
+ * on one rectangle, and where a pointer really is over a real layout.
  */
 
 const ENTRY: CollectionDrag = { entryId: 7, name: "Lightning Bolt", folderId: null };
@@ -91,6 +102,29 @@ function marked(element: Element | null | undefined, mark: string): boolean {
   expect(element).toBeTruthy();
   return mark.split(" ").every((one) => element!.classList.contains(one));
 }
+
+/**
+ * Every class the three drop marks can paint with, as a flat set — the vocabulary a wrapper must
+ * wear **none** of.
+ *
+ * **Not `marked(element, MARK)` three times, because that helper asks for *all* of a mark's
+ * classes and the failure this guards is a mark applied at all.** A wrapper carrying
+ * `border-accent/45` on its own would satisfy neither `DROP_EDGE` (whose other half is
+ * `transition-none`) nor anything else, so three `marked(…)` calls returning `false` would leave a
+ * second gold outline on screen and the suite green. Asking per class is what makes the assertion
+ * about the defect rather than about the token.
+ *
+ * Derived from the constants rather than typed out, so a change to the vocabulary reaches here
+ * without anyone remembering to update a list — with `transition-none` dropped, which is a
+ * statement about *timing* that two of the three share and paints nothing.
+ */
+const MARK_CLASSES = [DROP_RING, DROP_EDGE, DROP_OVER]
+  .flatMap((mark) => mark.split(" "))
+  .filter((one) => one !== "transition-none");
+
+/** Which of {@link MARK_CLASSES} an element is actually wearing — a list rather than a boolean, so
+ *  a failure names the class that came back rather than printing `true !== false`. */
+const marks = (element: Element) => MARK_CLASSES.filter((one) => element.classList.contains(one));
 
 /**
  * Something to pick up.
@@ -251,14 +285,23 @@ describe("CollectionFolderCard", () => {
     );
   }
 
-  /** The card's own box — the element the ring is drawn on, the one registered as a drop target,
-   *  and the one a reader picks the folder up by. */
+  /**
+   * The card's own box — the element the copy drop is registered on and the one a reader picks
+   * the folder up by.
+   *
+   * **It is no longer where any mark is drawn**, and that is worth the sentence rather than a
+   * silent edit: until 2026-09-03 the eligible ring went here while the dash and the wash went on
+   * the face inside, which put a box shadow 2px outside a dashed rectangle it never touched. So a
+   * mark assertion pointed at this element is now asking about a *bug*, not about a drawing — see
+   * `carries no mark on the box the drop is registered on` below.
+   */
   function card(name = "Trade binder"): HTMLElement {
     return screen.getByRole("button", { name: new RegExp(`^${name} folder`) }).closest("li")!;
   }
 
-  /** The face inside it, which is what wears the wash — and the element a real pointer is over
-   *  for all but the `⋯`'s corner, so it is where the folder drags below are aimed. */
+  /** The face inside it, which is what carries the card's own dashed edge and therefore **both**
+   *  marks — and the element a real pointer is over for all but the `⋯`'s corner, so it is where
+   *  the folder drags below are aimed. */
   const face = (name?: string) => card(name).querySelector("button")!;
 
   /**
@@ -393,7 +436,7 @@ describe("CollectionFolderCard", () => {
     expect(onKeyDown).toHaveBeenCalled();
   });
 
-  it("raises a ring for a copy it can take, and a wash under the pointer", async () => {
+  it("golds its own dash for a copy it can take, and washes under the pointer", async () => {
     mount({ withSource: true });
     stand();
     const held = await startPointerDrag(screen.getByText("the copy"));
@@ -401,22 +444,62 @@ describe("CollectionFolderCard", () => {
     // operation rather than a remembered one, so after a drop or a cancel it is false for every
     // drag there has ever been.
     expect(held.started).toBe(true);
-    expect(marked(card(), DROP_RING)).toBe(true);
-    expect(marked(card().querySelector("button"), DROP_OVER)).toBe(false);
+    expect(marked(face(), DROP_EDGE)).toBe(true);
+    expect(marked(face(), DROP_OVER)).toBe(false);
 
     await held.over(card());
-    expect(marked(card().querySelector("button"), DROP_OVER)).toBe(true);
+    expect(marked(face(), DROP_OVER)).toBe(true);
+    // **The two marks supersede rather than stack, and that is `cn`'s doing rather than the
+    // card's**: `DROP_EDGE`'s `border-accent/45` and the over branch's `border-accent` are one
+    // `tailwind-merge` group, so the later argument wins outright and the eligible spelling is
+    // gone from the class list. The escalation is therefore visible as a *swap* here, which is
+    // exactly the property the argument order in the component buys.
+    expect(marked(face(), DROP_EDGE)).toBe(false);
+    expect(face().classList.contains("border-accent")).toBe(true);
 
     await held.cancel();
   });
 
-  /** The folder a copy is already filed in draws no ring at all, rather than a ring leading to a
-   *  write that moves nothing and bumps `updated_at`. */
-  it("draws no ring at all for a copy it refuses", async () => {
+  /**
+   * **The `<li>` wears nothing, and this is the fence for the bug that made it worth saying.**
+   * Until 2026-09-03 the eligible mark went on this box while the card's dashed border and its
+   * wash went on the face inside — and a ring is a box shadow painted *outside* the border box, so
+   * the gold rectangle stood 2px proud of a dashed one it never touched. Two concentric outlines
+   * for one landing, which is what a reader reported as bulky affordances that overlap their
+   * neighbours and do not line up with the dotted outline.
+   *
+   * Asserted through {@link marks} rather than against one token, because the failure mode is a
+   * mark on this element at all rather than a particular one: putting `DROP_EDGE` back here would
+   * draw a second gold border around the first and read as exactly the same defect. Asked in both
+   * states, since `armed` and `over` are two different branches and either could put it back.
+   *
+   * The registration is untouched — the drop at the end still lands — so this cannot be satisfied
+   * by quietly moving the drop target off the box the marks were taken from.
+   */
+  it("carries no mark on the box the drop is registered on", async () => {
+    mount({ withSource: true });
+    stand();
+    const held = await startPointerDrag(screen.getByText("the copy"));
+    expect(marks(card())).toEqual([]);
+    // …while the face it wraps is already saying the drawer would take the copy, so this is a
+    // statement about *where* the mark is rather than about a wall with no affordance at all.
+    expect(marked(face(), DROP_EDGE)).toBe(true);
+
+    await held.over(card());
+    expect(marks(card())).toEqual([]);
+    expect(marked(face(), DROP_OVER)).toBe(true);
+
+    await held.drop();
+    expect(onDropCard).toHaveBeenCalledWith(ENTRY_DROP);
+  });
+
+  /** The folder a copy is already filed in leaves its dash plain, rather than golding an edge that
+   *  leads to a write that moves nothing and bumps `updated_at`. */
+  it("draws no mark at all for a copy it refuses", async () => {
     mount({ withSource: true, canDrop: () => false });
     stand();
     const held = await startPointerDrag(screen.getByText("the copy"));
-    expect(marked(card(), DROP_RING)).toBe(false);
+    expect(marked(face(), DROP_EDGE)).toBe(false);
 
     // And refusing means refusing the drop too, not merely declining to advertise it.
     await held.over(card());
@@ -442,7 +525,7 @@ describe("CollectionFolderCard", () => {
     mount({ withTile: true });
     stand();
     const held = await startPointerDrag(screen.getByText("the tile"));
-    expect(marked(card(), DROP_RING)).toBe(true);
+    expect(marked(face(), DROP_EDGE)).toBe(true);
 
     await held.over(card());
     await held.drop();
@@ -463,7 +546,7 @@ describe("CollectionFolderCard", () => {
     stand();
     const held = await startPointerDrag(screen.getByText("the copy"));
     await held.over(card());
-    expect(marked(card().querySelector("button"), DROP_OVER)).toBe(true);
+    expect(marked(face(), DROP_OVER)).toBe(true);
 
     takes = false;
     await held.drop();
@@ -471,12 +554,13 @@ describe("CollectionFolderCard", () => {
   });
 
   /** The card is dumb about the difference and the *page* is not: a policy that answers only for
-   *  rows leaves a tile with no ring at all, which is the discriminant doing its job. */
+   *  rows leaves a tile with a plain dash and no mark at all, which is the discriminant doing its
+   *  job. */
   it("lets the page refuse one shape and take the other", async () => {
     mount({ withTile: true, canDrop: (drop) => drop.kind === "entry" });
     stand();
     const held = await startPointerDrag(screen.getByText("the tile"));
-    expect(marked(card(), DROP_RING)).toBe(false);
+    expect(marked(face(), DROP_EDGE)).toBe(false);
 
     await held.over(card());
     await held.drop();
@@ -532,13 +616,19 @@ describe("CollectionFolderCard", () => {
     await again.cancel();
   });
 
-  /** The middle of a drawer means *into* it, and it wears the same wash a copy over it does —
-   *  only one thing is ever in the air, so the two claims are one mark rather than two. */
-  it("rings for a folder it can take, and washes over the middle it would nest in", async () => {
+  /**
+   * The middle of a drawer means *into* it, and it wears the same wash a copy over it does — only
+   * one thing is ever in the air, so the two claims are one mark rather than two.
+   *
+   * **And the eligible mark is the same one a copy raises, on the same element**, which is what
+   * says the two drags share `dropMarks.ts`'s vocabulary rather than each inventing one: the
+   * assertion here is identical to the copy drag's above and only the payload differs.
+   */
+  it("golds its dash for a folder it can take, and washes over the middle it would nest in", async () => {
     mount({ withFolder: true });
     stand();
     const held = await startPointerDrag(screen.getByText("the folder"));
-    expect(marked(card(), DROP_RING)).toBe(true);
+    expect(marked(face(), DROP_EDGE)).toBe(true);
     expect(marked(face(), DROP_OVER)).toBe(false);
 
     await held.over(slot(), INSIDE);
@@ -575,28 +665,32 @@ describe("CollectionFolderCard", () => {
    * **No mark means no drop.** `useFolderDropTarget` reports `edge: null` over a part of the card
    * the page refuses, deliberately keeping the whole element in the library's hierarchy so the
    * reported edge keeps following the pointer — so the card has to draw nothing there rather than
-   * a line leading to a write that never happens. The ring stays up, because this drawer *would*
-   * take the folder beside it.
+   * a line leading to a write that never happens. The gold dash stays up, because this drawer
+   * *would* take the folder beside it.
    */
   it("draws nothing at all over a landing the page refuses, and refuses the drop too", async () => {
     mount({ withFolder: true, canDropFolder: (_drag, edge) => edge !== "inside" });
     stand();
     const held = await startPointerDrag(screen.getByText("the folder"));
-    expect(marked(card(), DROP_RING)).toBe(true);
+    expect(marked(face(), DROP_EDGE)).toBe(true);
 
     await held.over(slot(), INSIDE);
     expect(marked(face(), DROP_OVER)).toBe(false);
     expect(line()).toBeNull();
+    // Still eligible over the refused middle, and it has to be *this* spelling rather than merely
+    // "some mark on the face": with the over branch off, nothing else raises `border-accent/45`,
+    // so the assertion cannot be satisfied by the wash the line above has just denied.
+    expect(marked(face(), DROP_EDGE)).toBe(true);
 
     await held.drop();
     expect(onDropFolder).not.toHaveBeenCalled();
   });
 
-  it("draws no ring at all for a folder the page refuses outright", async () => {
+  it("draws no mark at all for a folder the page refuses outright", async () => {
     mount({ withFolder: true, canDropFolder: () => false });
     stand();
     const held = await startPointerDrag(screen.getByText("the folder"));
-    expect(marked(card(), DROP_RING)).toBe(false);
+    expect(marked(face(), DROP_EDGE)).toBe(false);
 
     await held.over(slot(), INSIDE);
     await held.drop();
@@ -625,7 +719,7 @@ describe("CollectionFolderCard", () => {
     });
     stand();
     const held = await startPointerDrag(screen.getByText("the folder"));
-    expect(marked(card(), DROP_RING)).toBe(false);
+    expect(marked(face(), DROP_EDGE)).toBe(false);
 
     await held.over(slot(), INSIDE);
     await held.drop();

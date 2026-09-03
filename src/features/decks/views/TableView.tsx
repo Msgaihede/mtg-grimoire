@@ -493,10 +493,15 @@ function DeckTableRow({
         props.onKeyDown?.(e);
         menu?.onKeyDown(e);
       }}
-      // The shared pair, as in the other three views. `ring-inset` on top of it because a row
-      // here is absolutely positioned inside a scroller and an outset ring is drawn over its
-      // neighbours; the colour and the weight are `AppShell`'s.
-      className={cn(props.className, eligible && DROP_RING, "ring-inset", over && DROP_OVER)}
+      // The shared pair, as in the other three views.
+      //
+      // **This view carried `ring-inset` of its own until 2026-09-03, and it was right first.**
+      // Its reason — a row here is absolutely positioned inside a scroller, and an outset ring is
+      // drawn over its neighbours — turned out to be the general case rather than this table's
+      // special one: a reader reported exactly that overlap across the whole app, and `DROP_RING`
+      // is inset for everybody now. So the extra class is gone as a duplicate of what the token
+      // already says, and nothing about what this row draws changed.
+      className={cn(props.className, eligible && DROP_RING, over && DROP_OVER)}
     >
       {props.children}
       {/* The table's own drop mark, which it alone was missing — the same line the other three

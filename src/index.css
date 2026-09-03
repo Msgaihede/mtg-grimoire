@@ -531,3 +531,33 @@ html[data-dragging] * {
   user-select: none !important;
   -webkit-user-select: none !important;
 }
+
+/* ---------------------------------------------------------------------------------------
+   And this one is the app's, not the library's — the only rule in this region that dnd-kit does
+   not also write. Added 2026-09-03.
+
+   **The preview is a clone of the element the pointer went down on, drawn at full size and,
+   until now, at full opacity.** On a deck a card tile is ~293px of opaque art, and the thing it
+   covers is the thing the reader is aiming at: the heading they are filing into, the marks
+   saying which piles would take it, the tray at the foot of the window. An affordance the app
+   draws and then hides under the payload is one it may as well not draw.
+
+   **0.75, chosen against the two failures either side of it.** Much above it and a full card
+   tile still occludes what is under it, which is the defect; much below and dark card art goes
+   muddy against a dark window and the reader loses track of what they are carrying. At 0.75 the
+   structure underneath reads through and the card stays unambiguously itself.
+
+   **On the preview and nothing on the source.** The library already leaves a
+   `[data-dnd-placeholder]` behind in the flow, so where the card came *from* is answered; this
+   is only about what the pointer is carrying over everything else.
+
+   It deliberately keeps its own rule rather than joining the `[data-dnd-dragging]` block above,
+   which is a verbatim copy the fence in `lib/dndManager.test.ts` checks the library against. That
+   fence runs one way — every selector and declaration the library injects must appear here — so
+   an extra rule of the app's own is legal, and this is one the app can edit without it reading
+   as drift in a copy it does not own.
+   --------------------------------------------------------------------------------------- */
+
+[data-dnd-dragging] {
+  opacity: 0.75;
+}

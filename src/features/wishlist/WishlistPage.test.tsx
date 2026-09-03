@@ -339,6 +339,32 @@ const upTile = (label: string): HTMLElement =>
   screen.getByRole("button", { name: `Up one level to ${label}` }).closest("li")!;
 
 /**
+ * Whether a card on the wall is wearing either drop mark.
+ *
+ * **Both marks moved onto the card's own `<button>` face on 2026-09-03**, off the `<li>` around
+ * it — `lib/dropMarks.ts` carries the reason (a ring is a box shadow painted *outside* the border
+ * box, so on the wrapper it stood 2px proud of the dashed edge it was meant to agree with, which
+ * is the misalignment a reader reported). The drop *registrations* did not move and could not;
+ * only the `className` did.
+ *
+ * **This helper exists because the assertion it replaces would otherwise have gone quietly
+ * vacuous.** It read `classList.contains("ring-2")` on the `<li>` and asserts `false` — a target
+ * that lights up and then refuses the drop is a promise this page cannot keep. Nothing on this
+ * page draws a `ring-2` any more, so left alone it would pass in every state and prove nothing.
+ *
+ * It asks the whole subtree rather than the face alone, so it goes on answering if a card ever
+ * carries its edge somewhere else. The two marks are checked separately because `tailwind-merge`
+ * replaces one with the other rather than stacking them: an armed card reads `DROP_EDGE`'s
+ * `border-accent/45`, and the one actually under the pointer reads a solid `border-accent` beside
+ * `DROP_OVER`'s `bg-accent/15`.
+ */
+const wearsDropMark = (card: HTMLElement): boolean =>
+  [card, ...card.querySelectorAll("*")].some(
+    (box) =>
+      box.classList.contains("border-accent/45") || box.classList.contains("bg-accent/15"),
+  );
+
+/**
  * A wish carried out of the list and onto one of the two places it can be filed — a folder card,
  * or a segment of the breadcrumb.
  *
@@ -2644,7 +2670,7 @@ describe("rearranging the wishlist's cabinet", () => {
     for (const at of [AT_START, AT_MIDDLE, AT_END]) {
       stand("Backordered");
       const held = await startPointerDrag(source);
-      expect(folderCard("Backordered").classList.contains("ring-2")).toBe(false);
+      expect(wearsDropMark(folderCard("Backordered"))).toBe(false);
       await held.over(folderSlot("Backordered"), at);
       await held.drop();
     }

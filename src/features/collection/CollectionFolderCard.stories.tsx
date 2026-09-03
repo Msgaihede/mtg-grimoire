@@ -4,7 +4,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import type { MenuItem } from "@/components/menu/types";
-import { DROP_MARK_ROOM, DROP_OVER, DROP_RING } from "@/lib/dropMarks";
+import { DROP_EDGE, DROP_MARK_ROOM, DROP_OVER } from "@/lib/dropMarks";
 import { folderDraggable, type FolderDrag } from "@/lib/folderDrag";
 import type { FolderNode } from "@/lib/folderTree";
 import type { CollectionFolder } from "@/lib/ipc";
@@ -21,7 +21,7 @@ import {
 /**
  * How long a `waitFor` will wait for a state a drag has to travel to reach.
  *
- * The library schedules its `onDragStart` on `requestAnimationFrame` and every ring here is a
+ * The library schedules its `onDragStart` on `requestAnimationFrame` and every mark here is a
  * `useState` behind that, so one frame is necessary and never sufficient — seconds rather than
  * milliseconds because these plays run under a hundred-odd parallel jsdom files.
  * **Not exported**: CSF indexes every named export of a story file as a story.
@@ -53,10 +53,13 @@ function node(
  * canvas would put a list item outside a list and document markup the page does not build.
  *
  * **`DROP_MARK_ROOM` is on the scroller for the reason it exists**, even though nothing in jsdom
- * can go red for it: `overflow` clips at the padding box and a `DROP_RING` is a box shadow painted
- * *outside* the border box, so a card flush against the content edge loses the outer 2px of its
- * ring for the whole length of a drag. The wall in the workbench has to be the wall on the page,
- * or {@link DropTarget} would draw a ring the app clips.
+ * can go red for it: `overflow` clips at the padding box, so anything a card paints *outside* its
+ * own border box is lost on the card flush against the content edge. **The drop marks are no
+ * longer that thing** — since 2026-09-03 both are drawn on the card's `<button>`, one recolouring
+ * a border it already had and one washing the surface inside it, and neither leaves the box. What
+ * still needs the room is `FOCUS`, which stands 4px proud of that same button and is a WCAG 2.4.7
+ * matter rather than a cosmetic one. The wall in the workbench has to be the wall on the page
+ * either way, or a story would document a card in a scroller the app does not build.
  *
  * The menu is the real `useContextMenu`, off the provider `.storybook/preview.tsx` mounts for
  * every story — so the `⋯`, a right-click and Shift+F10 all open the page's three rows here, and
@@ -497,24 +500,32 @@ function TileSource({ tile }: { tile: CollectionTileDrag }) {
 }
 
 /**
- * The two rings, and the folder that draws neither.
+ * The two marks, and the folder that draws neither.
  *
- * **`DROP_RING` is raised on every folder that would take the copy, not only the one under the
+ * **`DROP_EDGE` is raised on every folder that would take the copy, not only the one under the
  * pointer**, from the moment it leaves the row — that is what tells a reader where a drag can end
  * before they have aimed anywhere. `DROP_OVER` is the second, narrower fact only the target the
- * pointer is actually over can answer, and it comes with `border-accent` so the dashed edge itself
- * says which drawer is about to take it.
+ * pointer is actually over can answer, and it takes the same edge to full strength beside a wash.
  *
- * **The folder a copy is already filed in refuses it and draws no ring at all** — the same rule as
- * a deck card dropped back into its own column: a ring that led to a write which moved nothing and
- * bumped `updated_at` would be worse than no ring. `CollectionDrag.folderId` is the whole of what
+ * **Both are drawn on the card's own `<button>` (2026-09-03), which is why this play addresses the
+ * face for both.** They were split — the eligible ring on the `<li>`, the dash and the wash on the
+ * face — and a ring is a box shadow painted *outside* the border box, so a gold rectangle stood
+ * 2px proud of a dashed one it never touched. Two concentric outlines for one landing, reported as
+ * affordances that are bulky, overlap their neighbours and do not align with the dotted outline.
+ * A folder card already owns an edge all day, so the eligible mark recolours *that* rather than
+ * adding one: there is no second outline to line up, which is the whole of the fix.
+ *
+ * **The folder a copy is already filed in refuses it and leaves its dash plain** — the same rule as
+ * a deck card dropped back into its own column: an edge that led to a write which moved nothing and
+ * bumped `updated_at` would be worse than no mark. `CollectionDrag.folderId` is the whole of what
  * lets a target answer that before the drop, which is why the payload carries it.
  *
  * The drag runs over the library's own code path. What it cannot reach is what `test-drag.ts`
  * records and what {@link Wall}'s scroller is about: the platform's drag preview, the pointer
  * hit-testing that decides which card a `dragover` lands on, and the clip that `DROP_MARK_ROOM`
- * buys room against — all three measure rectangles, and jsdom has no layout engine. Those stay the
- * live pass's to prove.
+ * buys room against — all three measure rectangles, and jsdom has no layout engine. **Whether the
+ * two marks really do land on one rectangle is now on that list too**: it is the point of the
+ * change and the one thing no class assertion can witness.
  */
 export const DropTarget: Story = {
   render: (args) => (
@@ -526,25 +537,35 @@ export const DropTarget: Story = {
   play: async ({ args, canvasElement }) => {
     const canvas = within(canvasElement);
     const tile = canvas.getByRole("button", { name: /^Trade binder folder/ });
-    // The ring lives on the `<li>`, which is where the page's scroller has to leave room for it.
+    // Both marks are the face's; the `<li>` is only where the drop is registered, so it is what a
+    // pointer is aimed at here and never what a mark is read off.
     const item = tile.closest("li")!;
 
-    await expect(marked(item, DROP_RING)).toBe(false);
+    await expect(marked(tile, DROP_EDGE)).toBe(false);
 
     const held = await pickUp(canvas.getByText("Sol Ring"));
     try {
-      await waitFor(() => expect(marked(item, DROP_RING)).toBe(true), { timeout: DRAG_WAIT });
+      await waitFor(() => expect(marked(tile, DROP_EDGE)).toBe(true), { timeout: DRAG_WAIT });
       await expect(marked(tile, DROP_OVER)).toBe(false);
+      // Nothing painted on the wrapper, asked **per class** rather than through `marked`: that
+      // helper wants all of a mark's classes, so a wrapper wearing only `border-accent/45` — the
+      // half that draws — would come back `false` and leave a second gold outline on screen with
+      // the play green. `CollectionFolderCard.test.tsx` sweeps the whole vocabulary this way.
+      await expect(item).not.toHaveClass("border-accent/45");
+      await expect(item).not.toHaveClass("ring-1");
 
       await held.over(item);
       await waitFor(() => expect(marked(tile, DROP_OVER)).toBe(true), { timeout: DRAG_WAIT });
+      // Full strength on the one card the pointer is on, and `tailwind-merge` resolving the pair
+      // by argument order is what makes the escalation a swap rather than a stack.
       await expect(tile).toHaveClass("border-accent");
+      await expect(item).not.toHaveClass("bg-accent/15");
     } finally {
       await held.cancel();
     }
-    // Cancelled, not dropped — the platform ends both the same way, so the ring stands down
+    // Cancelled, not dropped — the platform ends both the same way, so the edge stands down
     // without the hook ever hearing a keypress, and nothing was filed.
-    await waitFor(() => expect(marked(item, DROP_RING)).toBe(false), { timeout: DRAG_WAIT });
+    await waitFor(() => expect(marked(tile, DROP_EDGE)).toBe(false), { timeout: DRAG_WAIT });
     await expect(args.onDropCard).not.toHaveBeenCalled();
   },
 };
@@ -561,7 +582,7 @@ export const DropTarget: Story = {
  * **`Sol Ring` has copies in two places and `Arcane Signet` is entirely in this drawer**, which is
  * what makes the page's rule visible rather than merely stated: a folder takes a tile when **at
  * least one** copy behind it is somewhere else, and the tile whose every copy is already filed here
- * draws no ring at all — the same refusal a row already gets, one grain finer. Refusing the first
+ * keeps its plain dash — the same refusal a row already gets, one grain finer. Refusing the first
  * of those instead would leave the two loose copies unreachable by the gesture, which is the whole
  * failure the `some` prevents.
  */
@@ -582,7 +603,7 @@ export const TileDropTarget: Story = {
 
     const loose = await pickUp(canvas.getByText("Sol Ring"));
     try {
-      await waitFor(() => expect(marked(item, DROP_RING)).toBe(true), { timeout: DRAG_WAIT });
+      await waitFor(() => expect(marked(tile, DROP_EDGE)).toBe(true), { timeout: DRAG_WAIT });
       await loose.over(item);
       await waitFor(() => expect(marked(tile, DROP_OVER)).toBe(true), { timeout: DRAG_WAIT });
       await loose.drop(item);
@@ -598,11 +619,11 @@ export const TileDropTarget: Story = {
     await expect(args.onDropCard).toHaveBeenCalledWith({ kind: "tile", tile: LOOSE_TILE });
 
     // …and the printing this drawer already holds every copy of raises nothing, and is refused on
-    // the drop as well rather than merely going unadvertised. A ring leading to a write that moved
-    // no row and bumped `updated_at` would be worse than no ring.
+    // the drop as well rather than merely going unadvertised. A gold edge leading to a write that
+    // moved no row and bumped `updated_at` would be worse than a plain dash.
     const filed = await pickUp(canvas.getByText("Arcane Signet"));
     try {
-      await waitFor(() => expect(marked(item, DROP_RING)).toBe(false), { timeout: DRAG_WAIT });
+      await waitFor(() => expect(marked(tile, DROP_EDGE)).toBe(false), { timeout: DRAG_WAIT });
       await filed.over(item);
       await filed.drop(item);
     } finally {
@@ -668,6 +689,11 @@ const OTHER_FOLDER: FolderDrag = {
  * before anything is measured. The two boxes stay for the geometry and for every test and story
  * that addresses them by name. The copy's is the `<li>`; the folder's is an inner wrapper that
  * covers every pixel of the card.
+ *
+ * **Neither of them draws anything.** Since 2026-09-03 both marks are on the card's own
+ * `<button>` — the element carrying the dashed edge a reader actually sees — so "where a drop is
+ * registered" and "where a drop is drawn" are two different questions with two different answers,
+ * and a mark on a wrapper is the concentric-outline bug this replaced.
  */
 export const FolderTarget: Story = {
   render: (args) => (

@@ -1658,7 +1658,15 @@ price | type`). An **inactive category stays its own group in all three grouping
   shorthand before the `padding-bottom` longhand (`.p-1\.5` at 29 557 against `.pb-2` at 31 795 in
   the built sheet), whatever order the two classes are written in. **`TableView` needs none of it**
   — its rows are absolutely positioned inside a virtualiser, so it draws `ring-inset` and always
-  has. Photographed before and after against the built stylesheet; the sweep that keeps it is
+  has.
+  **`TableView` was right first, and on 2026-09-03 its answer became everybody's**: `DROP_RING` is
+  `ring-1 ring-inset ring-accent/45` now, so the ring is painted *within* the border box and the
+  clip described above cannot reach it on any of the three roots either. `DROP_MARK_ROOM` stays on
+  all three regardless — the paragraph's own arithmetic says why, and it is `FOCUS`'s 4px rather
+  than the ring's 2 that set the number. What prompted the change was a reader reporting the marks
+  as bulky and as overlapping neighbouring content, which is this same defect seen from the other
+  side: a ring painted outside its box intrudes on whatever is next to it whether or not a scroller
+  clips it. `src/lib/dropMarks.ts` carries it in full. Photographed before and after against the built stylesheet; the sweep that keeps it is
   `views.test.tsx`'s `leaves its drop marks room inside the box that clips them`, written as a
   class assertion because **jsdom has no layout engine and therefore no clip at all**.
   **`TableView` is the exception and is a difference in kind, not a case to tidy away.**
