@@ -45,6 +45,33 @@ These apply to **every** task. They are the house rules that a fresh implementer
   `args` object and was missed by exactly that search in wave 1. Grep the prop name too.
 - **`Dialog` gained a `layer` prop in wave 1** — see Task 3, which is the first host to pass it.
 
+### Corrections found during wave 2
+
+- **`CardTags` has `slugs: string[]`, not `tags`.** An earlier draft's fixture did not compile.
+- **`cardDetailKey` is now spelled out in four places** — the pane and the three new overlays — each
+  having copied it rather than importing from the doomed `CardDetailPane.tsx`. **Task 11 must hoist
+  it to a shared module** as part of deleting that file, or the key drifts and each overlay
+  silently pays its own round trip instead of sharing one cache entry.
+- **`StepChevron` does not return null on a null stop** and must not be made to — see Task 10.
+- **`CardDetail` carries no `power`, `toughness` or `loyalty`**, so the card text dialog ships
+  without them. Decided 2026-09-03; spec §3.2 records the gap. Do not add a substitute.
+- **`App.test.tsx` mocks `oracleTagsStatus` and `oracleTagsForPrintings` but not
+  `oracleTagsForCards`.** Task 11's Escape-ladder test opens **Legality**, which needs neither — but
+  if it is ever rewritten to open Oracle tags instead, that mock has to be added first.
+- **Story `play` functions were deliberately not written during the fan-out.** `stories.test.tsx`
+  globs the whole tree, so it cannot be run mid-wave and an unverifiable `play` is a live risk to
+  the coordinator's `verify`. The new stories are visual states only.
+- **Container queries are spelled `@min-[640px]/name:` in this repo, not `@[640px]/name:`.**
+  Every rung in this plan was written the second way; `FilterBar` and `FilterChips` — the only
+  existing named containers — use the first. Wave 2 compiled **both** against this build (Tailwind
+  4.3.3) with the CLI and they emit identical CSS, so this is a house-style choice rather than a
+  correctness fix. **Use `@min-[…]` anyway**, so `src/` has one spelling and a grep for either rung
+  finds every site.
+- **Format display names do not come from `FORMAT_ORDER`** — it is 23 bare keys and nothing else.
+  `format_specs` looks like the right source and was tried and backed out in wave 2: the Storybook
+  fake serves 12 of its 25 rows by design, so a 23-row grid through it renders half its rows as raw
+  slugs. `LegalityDialog` carries a local label map; reuse that rather than re-deriving one.
+
 ---
 
 ## File Structure
@@ -903,6 +930,26 @@ it("hides the step chevrons when the walk holds no stop for the open card", asyn
 });
 ```
 
+**Satisfy that third test with `flanks: undefined`, never by making a chevron vanish.** An earlier
+draft of this plan claimed `StepChevron` returns null on a null stop. **It does not, and it must
+not** — wave 2 checked. It renders the chevron `disabled`, and its own doc argues for that: both
+chevrons are drawn whenever either is, one greyed, because the pair is positioned against the
+panel's edges and a chevron that came and went would make the first step of a walk the moment a
+second control appeared under the reader's pointer.
+
+So the "no stop at all" case is a decision about the **pair**, and it is made where the pair
+exists — exactly as `AllPrintingsDialog` already does it (`AllPrintingsDialog.tsx:404`):
+
+```tsx
+// No walk, no flanks — and `undefined` rather than a pair of nulls, because that is what tells
+// `Dialog` not to reserve the flank columns at all.
+const flanks: DialogFlanks | undefined =
+  at === -1 ? undefined : { left: <StepChevron … />, right: <StepChevron … /> };
+```
+
+Copy that shape. Teaching one chevron to hide would delete the greyed end-of-walk state from the
+printings modal too.
+
 - [ ] **Step 2: Run them to verify they fail.**
 
 - [ ] **Step 3: Implement**
@@ -1014,6 +1061,18 @@ In `DeckEditor.tsx` remove `paneFrameRef`, `PANE_OVER_ATTR`, the `dockWidth` sta
 **`deskWidth` stays.** It reads as the pane's and is not: `wideHeader`, `settingsIcon`,
 `tightHeader`, `roomForPanel` and `maxPanelWidth` all depend on it. Deleting it is the mistake this
 step exists to prevent.
+
+- [ ] **Step 3a: Hoist `cardDetailKey` before deleting anything**
+
+Wave 2 left four copies of `["card", cardId, marketplace]` — one in the pane and one in each of the
+three overlays, each having copied it rather than import from a file that was about to be deleted.
+That was the right call at the time and is the wrong end state: **four spellings of one query key
+means the day one of them drifts, that surface silently stops sharing the cache entry and pays its
+own round trip**, with nothing going red.
+
+Create `src/features/card/cardDetailKey.ts` exporting the one function, and point all four at it —
+plus `CardDetailModal` from Task 10, which is a fifth. Do this *first*, so the deletion in step 3
+cannot take a definition with it.
 
 - [ ] **Step 3: Move what is left of the pane, then delete it**
 

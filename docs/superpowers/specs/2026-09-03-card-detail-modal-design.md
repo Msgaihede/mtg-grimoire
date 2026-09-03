@@ -211,8 +211,21 @@ is not text: it is unreachable by a screen reader, unselectable, un-searchable, 
 on a printing whose picture has not cached. So `Facts`' content survives, one click away, in the
 rail beside Legality and Oracle tags.
 
-It carries the type line, the oracle text per face, P/T or loyalty, and the rarity gem with its
-label. It does **not** carry the prices — those move to the panel's left column, per §4.
+It carries the type line, the oracle text per face, and the rarity gem with its label. It does
+**not** carry the prices — those move to the panel's left column, per §4.
+
+**It carries no power/toughness and no loyalty, and that is a known gap rather than an oversight**
+(decided 2026-09-03). This section asked for them until wave 2 found they cannot be built:
+`CardDetail` and `CardFace` stop at name, type line, oracle text, mana cost and artist, and
+`power`/`toughness` exist only on `CardSummary` and `DeckCardRow` — the search and deck DTOs, which
+are not what this dialog is handed. The `cards` table *does* hold `power` and `toughness`, so
+exposing them is a `card.rs` select list plus two `ipc.ts` fields and needs no migration; `loyalty`
+has no column at all and would need one.
+
+Neither was taken. So a creature's P/T and a planeswalker's loyalty are readable only off the art,
+which is the one place this dialog exists to be an alternative to — the gap is therefore exactly
+where it hurts most, and it is recorded here so the next reader meets it as a decision rather than
+as a bug.
 
 ## 4. The price block keeps one row per finish
 
