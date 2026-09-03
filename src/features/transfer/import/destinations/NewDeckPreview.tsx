@@ -37,7 +37,7 @@ import { ANY_GAME, useFormatSpecs } from "@/features/decks/useFormatSpecs";
 import type { DestinationPreviewProps } from "../destination";
 import { useImport } from "../useImport";
 import { CommitBar } from "../shared/CommitBar";
-import { ImportTags, useTagChoice } from "../shared/ImportTags";
+import { ImportLabels, useLabelChoice } from "../shared/ImportLabels";
 import { planCollectionImport } from "./collection";
 import { buildImportPlan, tallyOf, toImportItems } from "./deck";
 import {
@@ -116,9 +116,9 @@ export function NewDeckPreview({
     [list, resolved, spec, tags],
   );
   const commanderIds = commanderIdsOf(plan, picked);
-  /** `DeckPreview`'s, verbatim and for its reason — a tag is app-wide, so bringing one across
+  /** `DeckPreview`'s, verbatim and for its reason — a label is app-wide, so bringing one across
    *  into a brand-new deck is the same act with the same consequences. */
-  const { dropped, chosen, toggle } = useTagChoice(plan.tags);
+  const { dropped, chosen, toggle } = useLabelChoice(plan.labels);
   const items = useMemo(
     () => toImportItems(plan, commanderIds, chosen),
     [plan, commanderIds, chosen],
@@ -203,7 +203,7 @@ export function NewDeckPreview({
 
         <Tally categories={categories} />
         <Commander plan={plan} picked={picked} onPick={setPicked} labelId={`${id}-commander`} />
-        <ImportTags tags={plan.tags} dropped={dropped} onToggle={toggle} />
+        <ImportLabels labels={plan.labels} dropped={dropped} onToggle={toggle} />
         <Problems plan={plan} blameSync={blameSync} />
         {/* No mode radios: `merge` into a deck made one line ago is the only sensible mode —
             there is nothing to replace, and `merge` is the one that cannot clear anything if

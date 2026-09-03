@@ -571,7 +571,7 @@ beforeEach(() => {
   // refetched on mount and the command is what the picker ends up drawing either way.
   deckList.mockReset().mockResolvedValue([BURN]);
   deckFolderList.mockReset().mockResolvedValue([]);
-  deckGet.mockReset().mockResolvedValue({ deck: BURN, cards: [], categories: [], tags: [] });
+  deckGet.mockReset().mockResolvedValue({ deck: BURN, cards: [], categories: [], labels: [] });
   deckAddCard.mockReset().mockResolvedValue(undefined);
   // No taxonomy downloaded is the floor rather than an error: `autoCategoryFor` then files by
   // type line, which is exactly what the case below is about.

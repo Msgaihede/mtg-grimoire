@@ -131,7 +131,7 @@ const meta = {
           "**The shell is `Dialog`** (2026-08-14), and the exception list is the thing worth " +
           "carrying rather than the count: the scrim, the centring, `aria-modal`, the tab trap, " +
           "the ✕ and the Escape rung are written once and every host passes a title, a close " +
-          "label and a width, so Categories, Tags, History, Deck settings, the export dialog, " +
+          "label and a width, so Categories, Labels, History, Deck settings, the export dialog, " +
           "the quick zones' New category and both destructive confirmations are one behaviour. " +
           "**Import cards and the theory difference are the two still off it**: each carries its " +
           "own copy of that chrome, deliberately out of scope rather than exempt, so until they " +
@@ -141,7 +141,7 @@ const meta = {
           "are drag sources into the deck's own columns, and a scrim would end that path and " +
           "cover the card pane a reader flips printings in. It stays docked, and collapsed " +
           "until pressed.\n\n" +
-          "**Categories and tags are two dialogs, not two sections of one drawer.** They shared " +
+          "**Categories and labels are two dialogs, not two sections of one drawer.** They shared " +
           "a panel and a scroll; each is one press now, and each is sized for what it draws — " +
           "`w-[48rem]` for the piles and their reordering, `w-[36rem]` for the labels.\n\n" +
           "**The first three toolbar controls are remembered on the deck row.** Which list, " +
@@ -216,12 +216,12 @@ const meta = {
           "({@link EmptyDeck}) and grows the rest by name. **Deck 4 " +
           "`Rhystic Testbed`** is that second shape filled in: three `main` piles — two the " +
           "reader named, one of them switched off, and `Ramp`, which the add path made and " +
-          "which therefore carries `origin: auto` — plus two game changers, a tagged card, a " +
+          "which therefore carries `origin: auto` — plus two game changers, a labelled card, a " +
           "copy limit broken on purpose and a theory list that differs from the deck. Its " +
           "`Ramp` is the pile whose *name* proves nothing: the two beside it are the reader's " +
-          "and one of them is called `Card advantage`. The categories, tags, history " +
+          "and one of them is called `Card advantage`. The categories, labels, history " +
           "and theory commands the dialogs read are all the fake's now, so those surfaces are " +
-          "driven rather than degraded — see `Decks/CategoriesDialog`, `Decks/TagsDialog`, " +
+          "driven rather than degraded — see `Decks/CategoriesDialog`, `Decks/LabelsDialog`, " +
           "`Decks/DeckHistoryDialog` and `Decks/TheoryDiffDialog` for what each of them draws, " +
           "and `Decks/Dialog shell` for the shell they share.",
       },
@@ -726,14 +726,14 @@ export const FilterAndStats: Story = {
  * two focus traps over one screen. A union cannot say it, and the failure is invisible to any
  * test that opens one layer at a time.
  *
- * **Categories and Tags are the pair worth pressing in a row**, because until 2026-08-14 they
- * were one drawer called "Categories & tags" and a reader reaching for the second still reaches
+ * **Categories and Labels are the pair worth pressing in a row**, because until 2026-08-14 they
+ * were one drawer called "Categories & labels" and a reader reaching for the second still reaches
  * for it next. Two dialogs, one slot: the second press replaces the first rather than stacking
  * on it.
  *
  * What this story asserts is the *arrangement* rather than any layer's contents: each press
  * leaves exactly one dialog on screen, and it is the one just pressed. Their own contents are
- * `Decks/CategoriesDialog`'s and `Decks/TagsDialog`'s.
+ * `Decks/CategoriesDialog`'s and `Decks/LabelsDialog`'s.
  */
 export const NeverTwoLayers: Story = {
   args: { deckId: 2 },
@@ -755,8 +755,8 @@ export const NeverTwoLayers: Story = {
 
     // The half the split makes worth showing: the button beside it, pressed while the first is
     // still up, and no second panel behind it.
-    await userEvent.click(canvas.getByRole("button", { name: "Tags" }));
-    await only("Tags");
+    await userEvent.click(canvas.getByRole("button", { name: "Labels" }));
+    await only("Labels");
 
     // Escape closes the one that is up and hands the caret back to the control that opened it —
     // the editor is a *view*, so the deck is still on screen afterwards.
@@ -764,7 +764,7 @@ export const NeverTwoLayers: Story = {
     await waitFor(async () => {
       await expect(canvas.queryByRole("dialog")).toBeNull();
     });
-    await expect(canvas.getByRole("button", { name: "Tags" })).toHaveFocus();
+    await expect(canvas.getByRole("button", { name: "Labels" })).toHaveFocus();
   },
 };
 

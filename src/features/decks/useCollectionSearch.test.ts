@@ -8,6 +8,11 @@ import type { CollectionFolder, CollectionRow } from "@/lib/ipc";
 const collectionList = vi.hoisted(() => vi.fn());
 const collectionToDeck = vi.hoisted(() => vi.fn());
 const collectionFolderList = vi.hoisted(() => vi.fn());
+// The deck's live census, which `useDeckPlays` reads and this hook fences every tile on
+// (issue #358). The real hook is mounted rather than mocked — what is faked is the one command
+// under it — so the key this file asserts on is `playKey`'s own `coalesce(oracle_id, card_id)`
+// rather than a second copy of that rule written here.
+const deckPlayedKeys = vi.hoisted(() => vi.fn());
 // `useMarketplace` is the real hook here rather than a fake — the marketplace is part of both
 // the payload and the key — so its own two queries need answers or it sits rejected for the
 // life of the file.
@@ -19,12 +24,13 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     collectionList,
     collectionToDeck,
     collectionFolderList,
+    deckPlayedKeys,
     getMarketplace,
     marketplaceFeedStatus,
   },
 }));
 
-import { copySource, useCollectionSearch } from "./useCollectionSearch";
+import { copySource, playStateFor, useCollectionSearch } from "./useCollectionSearch";
 
 /** The deck this panel is docked beside — the one a move files *into*. */
 const DECK_ID = 4;
@@ -116,6 +122,13 @@ function row(over: Partial<CollectionRow> = {}): CollectionRow {
 
 const BOLT = row();
 
+/**
+ * The Bolt as the **wall** hands it to the fence — `CopyTile.id` is the printing, which is
+ * `CollectionRow.cardId` under the wall's own name, and `PlayableTile` is written down precisely
+ * so that a row's numeric `id` cannot be passed where a printing is wanted.
+ */
+const BOLT_TILE = { id: BOLT.cardId, oracleId: BOLT.oracleId };
+
 let client: QueryClient;
 function wrapper({ children }: { children: ReactNode }) {
   return createElement(QueryClientProvider, { client }, children);
@@ -132,6 +145,9 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue({ entryId: 5, fromDeck: null, deckCardId: 41, quantity: 1 });
   collectionFolderList.mockReset().mockResolvedValue(FOLDERS);
+  // The deck plays the Bolt, so every case in this file that is not about the fence sees the
+  // pressable answer. The key is the **oracle** id, which is what `played_keys` selects.
+  deckPlayedKeys.mockReset().mockResolvedValue([BOLT.oracleId]);
   getMarketplace.mockReset().mockResolvedValue("tcgplayer");
   marketplaceFeedStatus.mockReset().mockResolvedValue([]);
 });
@@ -410,6 +426,53 @@ describe("useCollectionSearch", () => {
   });
 
   /**
+   * **The census is read here rather than threaded down from the editor**, and this is the whole
+   * of why: `collection_to_deck` hardcodes `LIVE`, so the list the fence has to be built from is
+   * the deck's live one whatever variant the editor happens to be drawing. The assertion is that
+   * the hook asks for it at all — a fence built from a prop would ask nothing.
+   */
+  it("reads the deck's own live census", async () => {
+    mount();
+
+    await waitFor(() => expect(deckPlayedKeys).toHaveBeenCalled());
+    expect(deckPlayedKeys.mock.calls[0][0]).toBe(DECK_ID);
+  });
+
+  /**
+   * **Fail closed while the census is in flight** — `CollectionPage.tsx`'s `stepperByTile` argues
+   * this direction in full, and the failure it names is exactly this one: a control that is live
+   * for the length of one query and greys afterwards is worse than one that was never live,
+   * because the reader has already reached for it.
+   *
+   * The two ends are both asserted, because only the pair can fail: a hook that answered `unread`
+   * for ever would pass the first half and grey the whole wall.
+   */
+  it("greys every tile until the census answers, then opens", async () => {
+    let answer: (keys: string[]) => void = () => undefined;
+    deckPlayedKeys.mockReturnValue(new Promise<string[]>((resolve) => (answer = resolve)));
+    const { result } = mount();
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+
+    expect(result.current.playStateOf(BOLT_TILE)).toBe("unread");
+
+    act(() => answer([BOLT.oracleId!]));
+
+    await waitFor(() => expect(result.current.playStateOf(BOLT_TILE)).toBe("plays"));
+  });
+
+  /**
+   * And a census that **failed** is a separate word rather than the same one, because the two
+   * sentences differ: a wall that is waiting is about to fix itself and a wall that could not find
+   * out is not. Both are closed.
+   */
+  it("greys the wall when the census cannot be read", async () => {
+    deckPlayedKeys.mockRejectedValue(new Error("no such deck"));
+    const { result } = mount();
+
+    await waitFor(() => expect(result.current.playStateOf(BOLT_TILE)).toBe("unreadable"));
+  });
+
+  /**
    * And on a **refusal** too, for `useCollectionFolders`' reason: the usual refusal is a row
    * something else has already moved or deleted, so the list on screen is the thing that is
    * wrong. Leaving it alone after `GONE` is how a panel comes to offer a copy that is not there.
@@ -468,5 +531,62 @@ describe("copySource", () => {
   it("treats a folder it cannot place as spoken for", () => {
     const source = copySource(row({ folderId: 99, folderName: "Somewhere" }), [], DECK_ID);
     expect(source).toEqual({ kind: "otherDeck", deckName: "Somewhere" });
+  });
+});
+
+/**
+ * Whether the deck's live list plays a card at all — **the second axis of what a press does**, and
+ * the one issue #358 added (this tab is assign-only).
+ *
+ * Pure over the census, so it is a truth table rather than a mounted panel: two inputs, four
+ * answers, no DOM and no query behind it. `PlayState`'s doc comment carries the argument for why
+ * this is not a fourth `CopySource` arm.
+ */
+describe("playStateFor", () => {
+  const ANSWERED = { isSuccess: true, isError: false };
+  const IN_FLIGHT = { isSuccess: false, isError: false };
+  const FAILED = { isSuccess: false, isError: true };
+
+  /** The 2XM Bolt in the deck, the Alpha Bolt in the binder — **one oracle card**, and this is the
+   *  case the whole `coalesce` exists for. A printing-exact test greys exactly the tile this tab
+   *  is for: a copy the reader owns of a card their deck plays. */
+  it("matches on the oracle card rather than on the printing", () => {
+    const plays = new Set(["o-bolt"]);
+    expect(playStateFor({ id: "bolt-2xm", oracleId: "o-bolt" }, plays, ANSWERED)).toBe("plays");
+    expect(playStateFor({ id: "bolt-lea", oracleId: "o-bolt" }, plays, ANSWERED)).toBe("plays");
+  });
+
+  /** A card the list does not name — the refusal that sends the reader to the Card search tab. */
+  it("refuses a card the deck does not play", () => {
+    expect(playStateFor({ id: "sol", oracleId: "o-sol" }, new Set(["o-bolt"]), ANSWERED)).toBe(
+      "notPlayed",
+    );
+  });
+
+  /**
+   * An **orphan** — a copy whose printing has left `cards`, so it carries no oracle id on either
+   * side of the comparison. `coalesce(oracle_id, card_id)` falls back to the printing on *both*
+   * sides, so the two still meet; this is that fallback, and it is why `playKey` takes the pair
+   * rather than an oracle id.
+   */
+  it("falls back to the printing for a copy with no oracle id", () => {
+    expect(playStateFor({ id: "ghost", oracleId: null }, new Set(["ghost"]), ANSWERED)).toBe(
+      "plays",
+    );
+    expect(playStateFor({ id: "ghost", oracleId: null }, new Set(["o-bolt"]), ANSWERED)).toBe(
+      "notPlayed",
+    );
+  });
+
+  /**
+   * **Fail closed on both of the two states that are not an answer**, and note the fixture: the
+   * census here *contains* the key, so a permissive reading would say `plays` and the assertion is
+   * genuinely about the gate rather than about an empty set. `CollectionPage.tsx`'s
+   * `stepperByTile` argues the direction.
+   */
+  it("greys a card the census has not answered for, even one it would allow", () => {
+    const plays = new Set(["o-bolt"]);
+    expect(playStateFor({ id: "bolt", oracleId: "o-bolt" }, plays, IN_FLIGHT)).toBe("unread");
+    expect(playStateFor({ id: "bolt", oracleId: "o-bolt" }, plays, FAILED)).toBe("unreadable");
   });
 });

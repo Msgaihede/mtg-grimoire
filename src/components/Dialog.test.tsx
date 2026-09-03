@@ -138,7 +138,7 @@ describe("Dialog", () => {
   });
 
   /** The ✕ is the other half of the dismiss, and it is named by the host rather than by the
-   *  title — "Close Categories & tags" is not a sentence. */
+   *  title — "Close Categories & labels" is not a sentence. */
   it("dismisses on the close control, which carries the host's own label", async () => {
     const { onDismiss, onClose } = open({ closeLabel: "Close the deck's history" });
     await panel();
@@ -155,11 +155,11 @@ describe("Dialog", () => {
    * half true, and the heading that names the thing being claimed.
    */
   it("is a modal dialog labelled by its own heading", async () => {
-    const { container } = open({ title: "Categories & tags" });
-    const dialog = await screen.findByRole("dialog", { name: "Categories & tags" });
+    const { container } = open({ title: "Categories & labels" });
+    const dialog = await screen.findByRole("dialog", { name: "Categories & labels" });
 
     expect(dialog).toHaveAttribute("aria-modal", "true");
-    const heading = screen.getByRole("heading", { level: 2, name: "Categories & tags" });
+    const heading = screen.getByRole("heading", { level: 2, name: "Categories & labels" });
     expect(dialog.getAttribute("aria-labelledby")).toBe(heading.id);
     // Two dialogs on one screen would otherwise share an id: `useId` is per instance.
     expect(heading.id).not.toBe("");

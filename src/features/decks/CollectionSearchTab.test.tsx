@@ -10,6 +10,15 @@ import { pricesAsOf } from "@/lib/prices";
 const collectionList = vi.hoisted(() => vi.fn());
 const collectionToDeck = vi.hoisted(() => vi.fn());
 const collectionFolderList = vi.hoisted(() => vi.fn());
+/**
+ * The deck's **live** census — `deck_played_keys`, which `useDeckPlays` reads and every tile on
+ * this wall is fenced on since issue #358 made the tab assign-only.
+ *
+ * **The one command is faked and the hook above it is real**, so what these cases exercise is
+ * `playKey`'s own `coalesce(oracle_id, card_id)` rather than a second copy of that rule written in
+ * this file — which is what lets the printing-different case below mean anything at all.
+ */
+const deckPlayedKeys = vi.hoisted(() => vi.fn());
 // `useMarketplace` is the real hook — the marketplace is in the payload and in the key — so its
 // two queries need answers or they sit rejected for the life of the file.
 const getMarketplace = vi.hoisted(() => vi.fn());
@@ -20,6 +29,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     collectionList,
     collectionToDeck,
     collectionFolderList,
+    deckPlayedKeys,
     getMarketplace,
     marketplaceFeedStatus,
   },
@@ -161,6 +171,67 @@ const SPOKEN_FOR_PLAIN = row({
 });
 
 /**
+ * The keys this deck's **live** list plays — the census every case below is fenced on since issue
+ * #358, and `PLAYS_BOLT` is what the rest of this file assumes.
+ *
+ * The Bolt's **oracle** id rather than its printing, because that is what `played_keys` selects
+ * (`coalesce(oracle_id, card_id)`).
+ */
+const PLAYS_BOLT = [LOOSE.oracleId];
+
+/**
+ * A card in the reader's binder that **this deck does not play** — the tile issue #358 greys.
+ *
+ * Loose on the desk, so nothing but the fence can be refusing it: every other reason this wall has
+ * for greying a tile (`ALREADY_HERE`, no pile) is untrue of this row, which is what makes the
+ * assertion about the fence rather than about a coincidence.
+ */
+const UNPLAYED = row({
+  id: 5,
+  cardId: "sol",
+  oracleId: "o-sol",
+  name: "Sol Ring",
+  setCode: "c21",
+  collectorNumber: "263",
+  typeLine: "Artifact",
+});
+
+/**
+ * **A different printing of a card the deck does play** — and the whole reason the match is on the
+ * oracle card.
+ *
+ * The deck sleeves the 2XM Bolt; this is the Alpha one sitting in the binder. It is the same card,
+ * so filing it is exactly the press this tab exists for — and a printing-exact fence would grey it,
+ * silently, on the case a reader meets most.
+ */
+const OTHER_PRINTING = row({
+  id: 6,
+  cardId: "bolt-sta",
+  setCode: "sta",
+  collectorNumber: "105",
+  lang: "ja",
+  quantity: 1,
+});
+
+/**
+ * A card the deck holds **only in its plan** — in the theory list and not on the live one.
+ *
+ * `collection_to_deck` hardcodes `LIVE` and a plan holds no cards, so this is the same refusal as
+ * {@link UNPLAYED} arrived at from the other direction: the census is the live list's, and nothing
+ * on this wall may widen it. The row is a fixture of the *collection*; which list the deck holds it
+ * in is a fact about the census, so the two are stated together at the case.
+ */
+const IN_THE_PLAN = row({
+  id: 7,
+  cardId: "reanimate",
+  oracleId: "o-reanimate",
+  name: "Reanimate",
+  setCode: "tmp",
+  collectorNumber: "137",
+  typeLine: "Sorcery",
+});
+
+/**
  * jsdom lays nothing out, so the virtualiser measures a scroll container of zero height and
  * renders an empty window — one number is the whole of what it is missing. `scrollTo` is the
  * other thing it reaches for that jsdom does not implement.
@@ -205,6 +276,9 @@ beforeEach(() => {
     // happen.
     .mockResolvedValue({ entryId: 9, fromDeck: null, deckCardId: 41, quantity: 1 });
   collectionFolderList.mockReset().mockResolvedValue([THIS_GROUP, OTHER_GROUP, BINDER]);
+  // The deck plays the Bolt, so every case that is not about the assign-only fence sees a
+  // pressable wall — which is what this file's other thirty assertions were written against.
+  deckPlayedKeys.mockReset().mockResolvedValue(PLAYS_BOLT);
   getMarketplace.mockReset().mockResolvedValue("tcgplayer");
   marketplaceFeedStatus.mockReset().mockResolvedValue([]);
 });
@@ -595,6 +669,131 @@ describe("CollectionSearchTab", () => {
   });
 
   /**
+   * **The tab is assign-only** ([#358](https://github.com/Msgaihede/mtg-grimoire/issues/358)): it
+   * answers *which copies I own back this deck's list*, so a card the deck has never played cannot
+   * be filed into that deck's collection group from here — the group is the ledger of where the
+   * reader's cardboard **is**, and a card in a deck folder that the deck does not play is that
+   * ledger recording a place the deck never put it.
+   *
+   * Three things are the case rather than one, and each fails on its own: the tile is **still
+   * drawn** (a tile that vanished under a search that found it reads as the search losing rows),
+   * the button **greys with the reason in its accessible name** (`aria-disabled`, so the tab stop
+   * and therefore the sentence survive for a keyboard reader), and the sentence **names the route**
+   * — this refusal is the only one on the wall a reader can act on, and only if it says where to
+   * go.
+   *
+   * The row is loose on the desk, so no other fence on this wall could be the one refusing it.
+   */
+  it("greys a card this deck does not play, and names the tab that adds it", async () => {
+    collectionList.mockResolvedValue({ items: [UNPLAYED], total: 1 });
+    tab();
+
+    // The tile itself is drawn — `CardGrid` names a tile's own button after the card.
+    expect(await screen.findByRole("button", { name: "Sol Ring" })).toBeInTheDocument();
+    const add = screen.getByRole("button", {
+      name: "Sol Ring is not in this deck — add it from the Card search tab first",
+    });
+    expect(add).toHaveAttribute("aria-disabled", "true");
+
+    await userEvent.click(add);
+
+    expect(collectionToDeck).not.toHaveBeenCalled();
+    // And it is refused outright rather than asked about: the fence is not a confirmation.
+    expect(screen.queryByRole("group", { name: /^Move / })).not.toBeInTheDocument();
+  });
+
+  /**
+   * **And the match is on the oracle card, which is the half that keeps the fence from swallowing
+   * the feature.** A reader sleeves the 2XM Bolt and keeps an Alpha one in the binder; filing that
+   * copy is precisely the press this tab exists for, and a printing-exact test would grey it.
+   *
+   * `played_keys` selects `coalesce(oracle_id, card_id)` and `playKey` mirrors it, so the census
+   * carries the **oracle** id here while the row carries a card id no deck row names.
+   */
+  it("adds a copy of a card the deck plays in another printing", async () => {
+    collectionList.mockResolvedValue({ items: [OTHER_PRINTING], total: 1 });
+    tab();
+
+    await userEvent.click(await screen.findByRole("button", { name: /^Add Lightning Bolt/ }));
+
+    await waitFor(() =>
+      expect(collectionToDeck).toHaveBeenCalledWith(
+        OTHER_PRINTING.id,
+        DECK_ID,
+        { id: MAIN.id },
+        1,
+      ),
+    );
+  });
+
+  /**
+   * **A plan holds no cards, so the theory list buys a copy nothing.** `collection_to_deck`
+   * hardcodes `LIVE` — the backend refuses a theory move outright — so the census this wall is
+   * fenced on is the live list's and nothing here may widen it to the other one.
+   *
+   * The fixture is the census rather than the row: `deck_played_keys` answers the live keys, and a
+   * card the deck holds only in its plan is simply not among them. This is {@link UNPLAYED}'s
+   * refusal reached from the other direction, and it must be the **same sentence** — "you have a
+   * plan for this card" is not a different thing to do about it.
+   */
+  it("greys a card the deck holds only in its plan", async () => {
+    collectionList.mockResolvedValue({ items: [IN_THE_PLAN], total: 1 });
+    // The live census. The deck's *theory* list names `o-reanimate`; this read does not, which is
+    // the whole of what "a plan holds no cards" means to this wall.
+    deckPlayedKeys.mockResolvedValue(PLAYS_BOLT);
+    tab();
+
+    expect(
+      await screen.findByRole("button", {
+        name: "Reanimate is not in this deck — add it from the Card search tab first",
+      }),
+    ).toHaveAttribute("aria-disabled", "true");
+  });
+
+  /**
+   * **Fail closed while the census is loading** — an unanswered `deck_played_keys` is not "plays
+   * nothing", and a tile that is pressable for one frame and then greys is the failure this arm
+   * exists to prevent. `CollectionPage.tsx`'s `stepperByTile` argues the direction in full: a
+   * control that is live for the length of one query and greys afterwards is worse than one that
+   * was never live, because the reader has already reached for it.
+   *
+   * **The fixture is a card the deck _does_ play**, which is what makes this able to fail: with an
+   * unplayed row the wall would grey for the other reason and the test would pass against a
+   * permissive gate.
+   */
+  it("greys every tile until the census has answered", async () => {
+    // Never resolves — the state a slow read leaves the wall in, held still.
+    deckPlayedKeys.mockReturnValue(new Promise<string[]>(() => undefined));
+    tab();
+
+    const add = await screen.findByRole("button", {
+      name: "Lightning Bolt — reading what this deck plays",
+    });
+    expect(add).toHaveAttribute("aria-disabled", "true");
+
+    await userEvent.click(add);
+
+    expect(collectionToDeck).not.toHaveBeenCalled();
+  });
+
+  /**
+   * And a census that **failed** says so instead, because the two sentences are about different
+   * futures: one is about to fix itself and the other is not. Both are closed, which is the half
+   * that matters — a wall that opened on a failed read would offer every press the backend is
+   * about to refuse.
+   */
+  it("greys every tile when the census cannot be read", async () => {
+    deckPlayedKeys.mockRejectedValue(new Error("That deck is gone"));
+    tab();
+
+    expect(
+      await screen.findByRole("button", {
+        name: "Lightning Bolt — could not read what this deck plays",
+      }),
+    ).toHaveAttribute("aria-disabled", "true");
+  });
+
+  /**
    * **Under `Auto` the pile is per card, and the button names it before the press** — the same
    * promise `OpenPanel`'s Add button makes, kept by the same rule (`autoCategoryFor`) over the
    * one fact a collection row carries: its type line. An Instant with no oracle tags files by
@@ -703,6 +902,11 @@ describe("CollectionSearchTab", () => {
       condition: undefined,
     } as unknown as CollectionRow;
     collectionList.mockResolvedValue({ items: [bare, half], total: 2 });
+    // **The orphan is in the census under its printing**, which is `coalesce(oracle_id, card_id)`
+    // read from the deck's side: a `deck_cards` row for a printing `cards` has forgotten has no
+    // oracle id either, so the two still meet. Without it this row would grey for the assign-only
+    // fence and the case would stop being about a partial row at all.
+    deckPlayedKeys.mockResolvedValue([...PLAYS_BOLT, "ghost"]);
 
     tab();
 

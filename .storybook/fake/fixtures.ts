@@ -201,10 +201,10 @@ export function deckCard(card: FakeCard, over: Partial<DeckCard> = {}): DeckCard
     // The deck as it is sleeved. A `theory` row is a plan: it counts on no tile and reserves
     // no copy, which is a different story from this one.
     variant: "live",
-    // All three together — a row is untagged, or it wears one tag with a name and a colour.
-    tagId: null,
-    tagName: null,
-    tagColor: null,
+    // All three together — a row is unlabelled, or it wears one label with a name and a colour.
+    labelId: null,
+    labelName: null,
+    labelColor: null,
     quantity: 1,
     // Denormalised on the row, like the collection's — the one name an orphaned row still has.
     name: card.name,
@@ -300,9 +300,9 @@ export function orphanDeckCard(over: Partial<DeckCard> = {}): DeckCard {
     // The row's own, and among the four that survive an orphaning for the same reason: a finish
     // is what the reader said they play, not something read back off a card that has gone.
     finish: null,
-    tagId: null,
-    tagName: null,
-    tagColor: null,
+    labelId: null,
+    labelName: null,
+    labelColor: null,
     quantity: 1,
     name: "Sword of the Meek",
     setCode: "dst",
@@ -435,9 +435,9 @@ export function deckGroups(
       ramp,
       deckCard(printing("mh2", "138"), {
         ownedQuantity: 1,
-        tagId: 1,
-        tagName: "Wincon",
-        tagColor: "gold",
+        labelId: 1,
+        labelName: "Wincon",
+        labelColor: "gold",
       }),
     ),
     inPile(ramp, deckCard(printing("lea", "161"), { ownedQuantity: 1, gameChanger: true })),
@@ -455,9 +455,9 @@ export function deckGroups(
       removal,
       deckCard(printing("isd", "51"), {
         ownedQuantity: 1,
-        tagId: 2,
-        tagName: "Cut candidate",
-        tagColor: "ember",
+        labelId: 2,
+        labelName: "Cut candidate",
+        labelColor: "ember",
       }),
     ),
     inPile(removal, deckCard(printing("gtc", "148"), { quantity: 2, ownedQuantity: 2 })),
@@ -507,7 +507,7 @@ export function deckViolations(): Map<string, ValidationIssue[]> {
  *   the rule break down to get.
  * * `lea 161` (Lightning Bolt) is the **game changer**, so the mark sits under the crown chip on
  *   the Grid tile and at the other end of the gold ribbon on the stacked card.
- * * `mh2 138` (Ragavan) carries a **tag**, so the stack's quantity tag is drawn in a colour and
+ * * `mh2 138` (Ragavan) carries a **label**, so the stack's quantity tag is drawn in a colour and
  *   the mark at the far end of the same strip has to hold its own against it.
  * * `gtc 148` (Boros Charm) is a plain 2-of no other mark touches — the control.
  *
@@ -533,7 +533,7 @@ export function deckTheoryMatches(): ReadonlyMap<string, number> {
     { card: printing("lea", "288"), quantity: 4 },
     // Exactly what the plan asks for — the tick, beside the gold crown chip.
     { card: printing("lea", "161"), quantity: 1 },
-    // The tick again, at the far end of a strip whose other mark is a coloured tag.
+    // The tick again, at the far end of a strip whose other mark is a coloured quantity tag.
     { card: printing("mh2", "138"), quantity: 1 },
     // **A surplus**, on the one card in the plan that no other mark touches, so `+1` is read
     // against a bare card face. A 2-of the plan wants one of is a cut the reader has not made.

@@ -19,7 +19,7 @@ const FRAME_WAIT = 5_000;
  * the read it makes with those ids — one call for the whole press, and the fake answers it like
  * any other command.
  *
- * The deck's *labels* are `Decks/TagsDialog`, which is the other half of the drawer these two
+ * The deck's *labels* are `Decks/LabelsDialog`, which is the other half of the drawer these two
  * were split out of. Nothing is shared between them but a `useDeckMeta` and `metaRows.tsx`.
  *
  * **Two seeded decks are two shapes of deck**, and which one a story opens is the story's whole
@@ -168,7 +168,7 @@ export const DeletingACategory: Story = {
 
     const dialog = await canvas.findByRole("group", { name: "Delete Ramp" });
     await expect(within(dialog).getByText(/Nothing is lost/)).toHaveTextContent(
-      "both the live and theory lists",
+      "both the theory and actual lists",
     );
     await expect(
       within(dialog).getByRole("button", { name: "Move 7 cards and delete" }),
@@ -244,10 +244,10 @@ export const RefusedByName: Story = {
  * The categories refused, in the backend's own words.
  *
  * `deckMeta` is the fault for the reads a deck screen makes *beside* the deck, and it refuses
- * the category list and the tag list **independently**. This dialog says so about its own read
+ * the category list and the label list **independently**. This dialog says so about its own read
  * and only its own — which is what splitting the drawer bought: which pile a card is in and
  * which label it wears are different facts, and a screen reporting one failure for both would be
- * claiming they came from one read. `Decks/TagsDialog`'s `Refused` is the other sentence.
+ * claiming they came from one read. `Decks/LabelsDialog`'s `Refused` is the other sentence.
  */
 export const Refused: Story = {
   parameters: { fake: { fault: "deckMeta" } },

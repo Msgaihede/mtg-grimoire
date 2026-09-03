@@ -391,12 +391,12 @@ function Settings({ deckId }: { deckId: number }) {
 
               **It is deliberately not in `DeckSettingsForm`, and that fence is structural
               rather than tidy.** `CreateDeckDialog` draws the same form over a deck that does
-              not exist yet, where "empty the live list" is a question about nothing — the form
+              not exist yet, where "empty the actual list" is a question about nothing — the form
               owns no mutation and reaches no backend precisely so that it can be drawn there,
               and a destructive control is the one thing that cannot follow it.
 
-              **The live button is unconditional and the theory one is not**, because the two
-              lists are not peers. Every deck has a live list. A deck with `theoryEnabled` off
+              **The actual button is unconditional and the theory one is not**, because the two
+              lists are not peers. Every deck has an actual list. A deck with `theoryEnabled` off
               has no plan at all, so a greyed `Clear theory list…` under it would be a control
               about a feature the reader has not turned on — which reads as something broken
               rather than as something absent, on a screen whose own switch is the way to turn
@@ -420,7 +420,7 @@ function Settings({ deckId }: { deckId: number }) {
                   disabled={liveCount === 0 || deck.clearDeck.isPending}
                   onClick={() => setConfirming("live")}
                 >
-                  {liveCount === 0 ? "Clear live list… (already empty)" : "Clear live list…"}
+                  {liveCount === 0 ? "Clear actual list… (already empty)" : "Clear actual list…"}
                 </RowAction>
 
                 {row.theoryEnabled && (

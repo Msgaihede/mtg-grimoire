@@ -11,7 +11,7 @@
  * That one empties **one pile of one list**; this one empties **every pile of one list**. That is
  * the whole of the difference in what is destroyed, and the half worth stating out loud is the
  * half they share: **neither of them ever reaches the other list**. So the sentences are
- * deliberately the same grammar with one word moved — the cards "leave the live list" there and
+ * deliberately the same grammar with one word moved — the cards "leave the actual list" there and
  * "leave the deck" here — because a reader meeting the second question has already read the
  * first, and a confirmation that reworded itself for a wider scope would read as a different kind
  * of act. What says which scope is *where the press was*: a heading's menu asks about that
@@ -39,8 +39,8 @@
  *
  * ## Where the cards go, which is not "nowhere"
  *
- * Since schema v25 a Live row is backed by a collection row sitting in that deck's group, so
- * emptying the live list files every copy the reader owns into `Recently removed` — the cardboard
+ * Since schema v25 an Actual row is backed by a collection row sitting in that deck's group, so
+ * emptying the actual list files every copy the reader owns into `Recently removed` — the cardboard
  * is still theirs, and a confirmation saying only that this cannot be undone would be the
  * destructive half of a sentence whose other half is reassuring. A **Theory** list is a plan and
  * holds no copies, so it says so instead of promising a folder nothing will arrive in. The two are

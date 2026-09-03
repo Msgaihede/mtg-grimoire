@@ -363,7 +363,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 - **The printing count is the deck editor's quantity tag now, and it dropped its `×`**
   (2026-08-14). It was `×N` in the wall's own `bg-bg/85` chip; it is `components/CountTag` — the
   filled banner cut off at a slant that the deck stack has drawn copies-in-a-pile with since
-  2026-08-13 — in the neutral grey, because a printing count has no tag to take a colour from.
+  2026-08-13 — in the neutral grey, because a printing count has no label to take a colour from.
   One object for both statements: a mark the eye finds before it reads the card only works if the
   two are the same shape, and a number laid on a card had been drawn two ways in one app. The
   `×` went with the chip — a banner in a corner already says "this many", and the sign was a
@@ -372,8 +372,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   tells a count from a set number. `CardGrid`'s `topLeft` is consequently the one corner with no
   backing under it — a chip behind a banner frames a frame — while `badge` (bottom-left) keeps
   the wall's felt, so the wall still owns the _corner_ and owns nothing about the paint.
-  **`UNTAGGED_COLOR` moved with the shape**, from `features/decks/tagColors.ts` to `CountTag`'s
-  own `NEUTRAL_COUNT_PAINT`: the search wall draws this over cards that have no tags at all, so
+  **`UNTAGGED_COLOR` moved with the shape**, from `features/decks/labelColors.ts` to `CountTag`'s
+  own `NEUTRAL_COUNT_PAINT`: the search wall draws this over cards that have no labels at all, so
   the neutral fill is a fact about the mark rather than about that palette.
   **Driven in the shipped window 2026-08-14** (`npm run tauri dev`, a **debug** build at
   1280×800, against the real 116 703-card corpus): a tile's corner computed `background-color:
@@ -381,19 +381,19 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   `clip-path: polygon(0px 0px, 100% 0px, calc(100% - 10px) 100%, 0px 100%)`,
   `aria-hidden="true"`, and text `2` / `4` with **no `×`**. It measures **25 × 22** inset **4px**
   top and left of a **170 × 238** tile, overflowing neither edge, and its wrapper computed
-  `background-color: rgba(0, 0, 0, 0)` with `pointer-events: auto`. The deck editor's own tags on
-  the same build measured **25 × 22**, the same fill and the same clip, `position: relative` and
+  `background-color: rgba(0, 0, 0, 0)` with `pointer-events: auto`. The deck editor's own labels
+  on the same build measured **25 × 22**, the same fill and the same clip, `position: relative` and
   `z-index: 1` — the two surfaces are one box, which is the claim the whole change rests on and
   the only one a screenshot could not settle. **The name coverage did not move**: 25px plus the
   4px inset against the old chip's ~28px for `×2`, so the tile's printed name loses what it
-  always lost. **One arm was not driven** — the _coloured_ tag, since the deck to hand carried no
-  tagged cards; `CardStack.test.tsx` and `CountTag`'s `Painted` story are what hold that path.
+  always lost. **One arm was not driven** — the _coloured_ label, since the deck to hand carried
+  no labelled cards; `CardStack.test.tsx` and `CountTag`'s `Painted` story are what hold that path.
 - **And the printing count stopped being that tag the next day — it says the word now**
   (2026-08-15). `132 printings`, in the wall's own `bg-bg/85` chip, at `text-[10px]`. The bullet
   above is the record of the shape it replaced and every figure in it was true of that shape; what
   it got wrong is the half it argued hardest for. "One object for both statements" is right about
   the _drawing_ and wrong about the _statement_: the deck stack's bare number is printed **on a
-  tag**, so the thing beside it says which quantity is being counted, and the search wall's bare
+  label**, so the thing beside it says which quantity is being counted, and the search wall's bare
   number had nothing beside it at all. Both earlier shapes put the meaning somewhere the eye is
   not — `×132` in a tooltip, `132` in a silhouette shared with "copies in this pile" and told
   apart only by which surface you were looking at. A search tile has room for the word, so it
@@ -455,7 +455,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
     is remembered across restarts by the machinery that was already there.
 - **What is drawn _on_ a card scales with it, through two inherited custom properties**
   (2026-08-17). Until then the zoom sized the tile and nothing else: the finish chip, the crown, the
-  owned badge, the printings count, the rarity gem, the caption, the deck's copy count and tag dot,
+  owned badge, the printings count, the rarity gem, the caption, the deck's copy count and label dot,
   the quantity tag, the Game Changer banner, the rule break, the printed no-picture frame and the
   quick-add and stepper controls were all fixed Tailwind literals, so a doubled card carried
   hundred-percent chrome. `SearchPage`'s own comment had already recorded the consequence — its
@@ -466,7 +466,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
     table's stepper has. Both live in `src/lib/cardZoom.ts` and are published by `cardScaleVars()`.
   - **Three elements set them and nothing else has to be touched**: `CardGrid`'s tile, `GridView`'s
     tile and `CardStack`'s card. **A variable rather than a prop because the marks are shared.**
-    `RarityGem`, `OwnedBadge`, `FinishMark`, `TagDot`, `CountTag` and `QuantityStepper` are each
+    `RarityGem`, `OwnedBadge`, `FinishMark`, `LabelDot`, `CountTag` and `QuantityStepper` are each
     drawn on a card face _and_ in one of the three tables or the card pane, so a prop would have to
     be threaded to every one and defaulted at the ones that must hold still — "does this scale?"
     answered fifteen times by whoever adds the newest call site. Every mark reads
@@ -1139,7 +1139,7 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   buttons are the app's only anchors on the window's top edge, and `placeTooltip` already flips
   those downward, so their panels are drawn below the row and never inside it. **`overlay` is one rung for every full-window
   surface, deliberately, where two looks more careful**: the deck editor's **six** — Import,
-  Categories, Tags, History, Theory diff, Deck settings — are held in **one** piece of
+  Categories, Labels, History, Theory diff, Deck settings — are held in **one** piece of
   state (`DeckEditor`'s `Layer` union) because `useDismissOnEscape` orders exactly two rungs, and
   two `"inner"` peers open at once are not ordered at all. At most one of the six is ever
   mounted,
@@ -1153,7 +1153,7 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
 - **A surface opened from a view is a centred modal, not a docked column, unless the reader works
   out of it while editing beside it** (2026-08-14). The deck editor's two right-hand drawers
   became dialogs: `AuditDrawer` → `DeckHistoryDialog`, and `CategoriesPanel` split into
-  `CategoriesDialog` and `TagsDialog` — two sections of one drawer that each cost a press and a
+  `CategoriesDialog` and `LabelsDialog` — two sections of one drawer that each cost a press and a
   scroll are two dialogs one press apart, each sized for what it draws. All of them and
   `DeckSettingsDialog` are now built on **one shell, `src/components/Dialog.tsx`**, so
   "the style of Deck settings" is a component rather than a resemblance: `LAYER.overlay`, the
@@ -1810,7 +1810,7 @@ figure in it that came from a run of text is exposed and should be re-read befor
   gold marks in one 27px strip meaning two unrelated things. `--color-ok`, the green the format
   check draws its clean-deck `CircleCheck` in, is legible and says the one sentence a tick must
   not ("nothing is wrong here"). The neutral count paint was no distinction at all — a grey chip
-  at each end of the strip. Azure is none of those. It **is** one of the six tag colours, which is
+  at each end of the strip. Azure is none of those. It **is** one of the six label colours, which is
   the accepted cost: the quantity tag at the other end draws a *number*, so the two are still told
   apart by content and position.
 - **The slant is mirrored** — `COUNT_TAG_SLANT_MIRRORED`. `CountTag`'s cut takes its bite out of
