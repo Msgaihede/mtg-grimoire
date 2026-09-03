@@ -67,6 +67,60 @@ These apply to **every** task. They are the house rules that a fresh implementer
   4.3.3) with the CLI and they emit identical CSS, so this is a house-style choice rather than a
   correctness fix. **Use `@min-[…]` anyway**, so `src/` has one spelling and a grep for either rung
   finds every site.
+### Corrections found during wave 3 — Task 10 must act on all of these
+
+- **THE GRIMOIRE COUNTS ARE SHOWN AT EVERY RUNG. This plan said otherwise and was wrong.**
+  Task 9 was told the counts are `hidden @min-[1200px]/card:flex`, which deletes them at three
+  rungs out of four. Re-read against the artboards: **all four show them**, and §2.1's "no grimoire
+  counts in the rail" at `@[900px]` means they *move*, not that they vanish.
+
+  | rung | where the counts sit |
+  | --- | --- |
+  | `≥1200` | in the rail, vertical, under an "In your grimoire" heading |
+  | `900–1200` | an inline row in the **centre** column, after the Tag control |
+  | `640–900` | an inline row in the **left** column, under the prices |
+  | `<640` | an inline row in the single-column stack |
+
+  `CardModalRail`'s own class is therefore **correct and stays**. What is missing is the other half:
+  **Task 10 draws an inline counts row, `@min-[1200px]/card:hidden`**, so exactly one of the two is
+  visible at every width. Drawing it once in the controls column satisfies three rungs at once (at
+  `<640` the stack is one column anyway); the 640–900 artboard puts it under the prices instead,
+  which is a placement refinement rather than a content difference.
+
+  **Without this the counts silently disappear below 1200px with every test green.**
+
+- **`CardModalArt`'s props are not what this plan named.** `deckFinish: DeckFinish | null` cannot
+  be written: `DeckFinish` is already `Exclude<Finish,"nonfoil"> | null`, so the union collapses and
+  cannot distinguish "no deck row" from "a deck row playing a regular copy" — which is exactly the
+  distinction the `Set as …` / `View as …` label turns on. The prop is **`deckRow: { finish:
+  DeckFinish } | null`**, which a `PaneDeckContext` satisfies structurally, so pass `scope.deck`
+  unchanged. And **`onToggleFoil` takes the next finish** (`(next: DeckFinish) => void`), because a
+  zero-arg handler cannot tell the host whether to write `foil`/`etched` or `null` to the deck row.
+
+- **`CardModalArt` does not read the store, by design.** The docked pane seeded its foil view from
+  `paneFinish` as well as from the deck row — a card opened from a collection tile that *is* foil.
+  This component is presentational and has no seat for that. **If that behaviour is wanted, Task 10
+  passes a seed prop**; otherwise it is a deliberate regression and should be recorded as one.
+
+- **`RailCounts` needs `deck: number | null`.** The `4×` in the deck line is on neither `counts` nor
+  `CardModalScope`, and `PaneDeckContext` holds a *slot*, not a quantity. Task 10 has the deck in
+  hand and passes it.
+
+- **The deck line reads `4× in Burn spells · Actual`, not `4× in Burn · mainboard`.** This app has
+  no mainboard/sideboard concept — `DeckVariant` is `"live" | "theory"` and the words on screen are
+  **Actual / Theory**. `PaneDeckContext` also carries no deck *name*, only `categoryName`. To name
+  the deck, Task 10 must pass it.
+
+- **`CardModalControls` takes nine props this plan's interface never listed, and Task 10 must wire
+  every one of them.** The Task 8 sketch named only `card`, `scope`, `printingCount` and
+  `onViewAllPrintings` — nothing to populate the printing, category or tag dropdowns, nothing to
+  give the stepper a value, and nothing to call. Wave 3 added them **optional with inert
+  defaults**, so the component renders bare for its own test: `printings` / `onPickPrinting`,
+  `quantity` / `onQuantityChange`, `categories` / `onPickCategory`, `tags` / `tagId` / `onPickTag`.
+  **An unwired handler is silently inert** — the control draws, the reader presses it, and nothing
+  happens, with nothing going red. Task 10's review must check all nine.
+- **The tag picker is single-select.** `DeckCard.tagId` is `number | null`, so a deck row wears at
+  most one tag: a `Dropdown` with `""` for none, never a multi-select.
 - **Format display names do not come from `FORMAT_ORDER`** — it is 23 bare keys and nothing else.
   `format_specs` looks like the right source and was tried and backed out in wave 2: the Storybook
   fake serves 12 of its 25 rows by design, so a 23-row grid through it renders half its rows as raw
