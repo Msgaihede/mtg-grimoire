@@ -254,6 +254,28 @@ export interface SearchRequest {
    */
   owned?: boolean;
   /**
+   * The deck this search is being run **for** — the deck builder's card search tab and nothing
+   * else. Absent everywhere else, and absent means "every copy, wherever it is filed", which is
+   * what this command answered before the field existed.
+   *
+   * **Not a filter over cards.** It changes no row's presence and no row's order; it decides
+   * which of the reader's copies count as *available to this deck*, for {@link owned} and
+   * {@link CardSummary.ownedQuantity} together. A copy sleeved into another deck's group, or
+   * set aside in a locked drawer, stops counting; a copy in this deck's own group, on the desk,
+   * in a binder or in `Recently removed` still does.
+   *
+   * Why the deck builder is the one asker
+   * ([#349](https://github.com/Msgaihede/mtg-grimoire/issues/349)): a badge reading `×4` over a
+   * card whose four copies are all in other decks told the reader they had something they could
+   * not use, while the Collection tab in the same panel — which has sent
+   * `allocation: "unallocated"` since folders landed — showed none of them.
+   *
+   * **The two halves move together.** Narrowing the count and leaving the filter alone would
+   * put a card under the Owned chip wearing `×0`. `Availability` in
+   * `src-tauri/src/collection_source.rs` is the one place the arms are written.
+   */
+  availableForDeck?: number;
+  /**
    * How to order the page: columns in priority order, the first deciding and the rest
    * breaking its ties. Empty or absent is the default — relevance when `text` is set, name
    * order when it is not.

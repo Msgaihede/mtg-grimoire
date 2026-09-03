@@ -1364,6 +1364,28 @@ describe("DeckSearchPanel tabs", () => {
   });
 
   /**
+   * **The card search tab is addressed by the same deck**, and the categories belong to another
+   * one here for the reason one test up: a list of piles is a different fact from which deck
+   * this is.
+   *
+   * What it buys is a *number* rather than a write — issue #349. Every tile's `×N` and the
+   * Owned/Missing chip count the copies **this deck can use**, so a playset sleeved into another
+   * deck stops being an offer this column makes. Until it rode, the two tabs of one panel
+   * disagreed about the same card: the Collection tab has sent `allocation: "unallocated"` since
+   * folders landed and this one counted every copy in the cabinet.
+   */
+  it("counts the card search's owned badges for the deck it was given", async () => {
+    panel({ categories: [category({ deckId: 99 })], deckId: 4 });
+
+    await userEvent.click(tab(ALL_CARDS));
+    await screen.findByRole("searchbox", { name: "Search cards" });
+
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    const calls = searchCards.mock.calls;
+    expect(calls[calls.length - 1][0].availableForDeck).toBe(4);
+  });
+
+  /**
    * The other direction of the switch, from the collection body's side.
    *
    * The existing pair above proves the card search is not asked for while the collection is up;

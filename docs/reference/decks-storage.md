@@ -409,6 +409,59 @@ preferred_finish`'s nullability one table over.
   [collection-folders.md](collection-folders.md#the-copies-control-belongs-to-a-normal-folder-in-both-views).
   **No deck write changes what a deck owns as a side effect any more**, which is the debugging
   property the old run list was trying to give and could not.
+
+  **The card search tab beside the deck answers the same question, and until 2026-09-03 it did
+  not** ([issue #349](https://github.com/Msgaihede/mtg-grimoire/issues/349)). `owned_by_oracle`
+  has been the deck's own group since v25, so the row's `2/4` was already right — but the `×N` a
+  tile in the search column wears came from `collection_source::copies_of_oracle` with no scope at
+  all, so a card whose whole playset was sleeved into other decks read `×4` in the one place the
+  reader was deciding what to add. The **Collection** tab two components over had answered the
+  narrower question since folders landed (`Allocation::Unallocated`), which is what made it a
+  disagreement between two tabs of one panel rather than a missing feature.
+
+  What rides now is `SearchRequest::available_for_deck` — `availableForDeck` on the wire, the open
+  deck's id, sent by `DeckSearchPanel` and by nothing else. It is **not a filter**: it narrows no
+  rows and reorders nothing, it chooses which of the reader's copies count as theirs, through
+  `collection_source::Availability`. Three arms, and each lets a row through on its own: the root;
+  **the asking deck's own group**; and anywhere else that is neither another deck's group nor an
+  effectively locked drawer. `Recently removed` therefore still counts, exactly as it does in
+  `Allocation::Unallocated`.
+
+  - **The asking deck's own group is the whole difference from `deck_theory::OWNED_SPARE_SQL`**,
+    which drops every deck group including its own. Both statements mean *what can be counted on*
+    and they disagree about one arm because they are asked from different chairs: a plan cannot
+    count on the sleeved deck's cards, and the deck builder's search can, because they are that
+    deck's. Folding the two into one helper would take a flag saying which — the same two
+    functions with the difference hidden.
+  - **The `owned` filter takes the same scope, and had to.** Narrowing the count while leaving the
+    Owned/Missing chip alone would put a card under Owned wearing `×0`, which is the one refusal a
+    reader cannot act on. `the_owned_filter_follows_the_same_scope_as_the_badge` is the pin.
+  - **The facets deliberately do not follow.** `CardIndex` has one global `owned` bitset and no
+    deck-relative dimension, so those two counts in the deck builder's filter row are taken as if
+    every copy were reachable and read **high**. They reach a `title` and never a greying, and
+    over-reading only ever leaves a control live — the direction that whole row is built to fail
+    in. The fix is a per-deck bitset rebuilt on every folder lock, move and deck-group write, and
+    what it buys is a tooltip. `useCardFacets` carries the argument from the frontend side, and
+    `FacetRequest` omits the field so no builder can send it by accident.
+  - **`Availability::Everything` emits no SQL**, so `import::match_columns`' `MATCH_ORDER` and
+    every unscoped wall run byte-for-byte the statements they ran before, and the `owned: true`
+    plan table in `search.rs` still describes what it was measured on.
+  - **Driven in the shipped window on 2026-09-03**, debug build, against the real database
+    (117,621 cards; a collection filed entirely into three deck groups and nothing at the root).
+    The reader owns **three** Sol Rings, one in each of Bruna's, Serah's and Azula's group. With
+    Azula open, `search_cards` answered `Sol Ring = 3` unscoped and `= 1` at
+    `availableForDeck: 3`, and the tile on the wall drew **×1**. Aerith Gainsborough — four
+    copies, all in Serah's group — answered `4` unscoped, `0` for Azula and `4` for Serah, and
+    the tile drew **no badge at all**, which is `OwnedBadge`'s own "nothing to say" rule rather
+    than a `×0`. The Owned chip agreed on the same three requests: it returned the card unscoped
+    and for Serah, and did not return it for Azula.
+  - **The scoped shape is unmeasured, and is written down as unmeasured.** It adds two correlated
+    probes of `collection_folders` per surviving entry — both by indexed key, `id` being the
+    primary key and `deck_id` carrying a partial unique index — plus `LOCKED_FOLDER_IDS`' walk
+    over a table holding a handful of rows. It runs in one 384px column where the reader has
+    almost always typed something, which is the state the `owned` filter costs 0.1 ms in. Nobody
+    has taken the numbers against the real 116 k-row database; `search.rs`'s existing plan table
+    is where they belong if it ever bites.
 - Deck cards ride **`images::prewarm_keys`' UNION** (one arm, `grid` only, like the collection
   and wishlist arms) and the reconciler's **three-table sweep**
   (`collection_entries`, `wishlist_entries`, `deck_cards`).

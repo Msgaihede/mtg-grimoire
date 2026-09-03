@@ -469,8 +469,17 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
    * this one, because a copy taken out of another deck's group is one card off **that** deck's
    * live list.
    *
-   * A refusal takes the same pair for `useCollectionFolders`' reason: the usual refusal is a row
+   * A refusal takes the same trio for `useCollectionFolders`' reason: the usual refusal is a row
    * something else has already moved or deleted, so the list on screen is the thing that is wrong.
+   *
+   * **`["cards", "search"]` is the third, and it joined on 2026-09-03 with issue #349.** A move
+   * used to change no figure on the card search beside this tab: that wall counted every copy the
+   * reader owned, wherever it was filed, so a copy crossing a folder boundary was invisible to
+   * it. It is not any more — the tab one press away counts *what this deck can use*
+   * (`SearchRequest.availableForDeck`), and the move whose whole point is a confirmation naming
+   * another deck is exactly the one that changes the answer: a copy that was spoken for is now
+   * this deck's. Without this the reader presses Add, switches tab and reads the badge from
+   * before the press, for the 30 s `lib/query.ts` caches.
    */
   const move = useMutation<MoveOutcome, unknown, MoveRequest>({
     mutationFn: ({ row, categoryId, quantity }) => {
@@ -482,6 +491,7 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: ["collection"] });
       void queryClient.invalidateQueries({ queryKey: ["decks"] });
+      void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
     },
   });
 
