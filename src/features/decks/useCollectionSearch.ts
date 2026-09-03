@@ -250,6 +250,21 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
     // one of them — `useCollection`'s "a value the backend would infer anyway is not put on the
     // wire" is the rule for a filter that is *off*, and neither of these two is off.
     allocation,
+    // **Sent on every request and never a control**, which is where this parts company with the
+    // field above it: `allocation` is a chip the reader can press, and this is a fact about what
+    // the tab is for. `DEFAULT_ALLOCATION` already hides the copies a deck is holding because
+    // this list answers *what can I build with today* rather than *what do I own* — and a drawer
+    // the reader has set aside for a trade or a display case is not something this deck can be
+    // built out of either, so it belongs on the same side of the same question. **`false` by
+    // omission is what makes that safe to ask for**: the mirror and the export sweep page through
+    // this same query for a whole-collection backup and must go on seeing every row, so the
+    // narrowing is the caller's to request rather than the backend's to assume.
+    //
+    // Spec §4.2 gives `deck_theory::OWNED_SPARE_SQL` the same arm for the same reason — the
+    // shopping list's *spare* count already drops a copy filed in a deck's group, and a locked
+    // one is no more a copy a plan can count on. **Keep the two in step**: this panel offering a
+    // copy the diff beside it has already written off is one question answered two ways.
+    excludeLocked: true,
     marketplace: marketplace.id,
     // `undefined` rather than `[]`: an empty array is a sort the backend would have to test for,
     // and the absent field is what already means "your name order".
@@ -265,6 +280,11 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
    * Under `["collection", …]` like every other read of this table, so the one
    * `invalidateQueries({ queryKey: ["collection"] })` every collection write in the app already
    * fires reaches this column too.
+   *
+   * **`excludeLocked` is deliberately not a segment**, and that is not the same omission: it is
+   * a constant this tab sends on every request, so it narrows the one answer rather than telling
+   * two of them apart. A key term for it would be the same string in every entry. What *can*
+   * change under it is a folder being locked, and that is a write — `["collection"]` above.
    */
   const listKey = [
     "collection",

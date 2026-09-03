@@ -90,9 +90,9 @@ const wishFolder = (
 /**
  * One collection folder, the reader's own unless a test says otherwise.
  *
- * `kind` last and defaulted, because it is the field this cabinet has that the other two do not
- * and only the filter tests care what it is — every other test here is about a drawer somebody
- * made and named.
+ * `kind` and `locked` last and defaulted, because they are the two fields this cabinet has that
+ * the other two do not and only the filter tests care what either is — every other test here is
+ * about a drawer somebody made and named, and an unlocked one.
  */
 const binder = (
   id: number,
@@ -100,7 +100,8 @@ const binder = (
   parentId: number | null = null,
   sortOrder = 0,
   kind = "user",
-): CollectionFolder => ({ id, parentId, name, kind, deckId: null, sortOrder });
+  locked = false,
+): CollectionFolder => ({ id, parentId, name, kind, deckId: null, sortOrder, locked });
 
 /**
  * One deck's group — the app's own folder, carrying the deck it stands for.
@@ -114,7 +115,17 @@ const deckGroup = (
   name: string,
   deckId: number,
   sortOrder = 0,
-): CollectionFolder => ({ id, parentId: null, name, kind: "deck", deckId, sortOrder });
+): CollectionFolder => ({
+  id,
+  parentId: null,
+  name,
+  kind: "deck",
+  deckId,
+  sortOrder,
+  // A deck's group is the app's own and can never be set aside — `set_folder_locked` refuses it
+  // in words, so `false` here is the only row this helper could honestly build.
+  locked: false,
+});
 
 /** Everything the menu needs that is not the card, with every write a spy. A surface's real
  *  deps are its own; this is the shape, so a test can name the one it is about. */

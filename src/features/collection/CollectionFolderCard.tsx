@@ -56,7 +56,7 @@ import {
   type MouseEventHandler,
   type RefObject,
 } from "react";
-import { Folder, MoreHorizontal } from "lucide-react";
+import { Folder, Lock, MoreHorizontal } from "lucide-react";
 import { FolderDropLine } from "@/components/FolderDropLine";
 import { FolderNameField, useFolderFieldReturn } from "@/components/FolderNameField";
 import { ParentFolderCard } from "@/components/ParentFolderCard";
@@ -130,14 +130,38 @@ export interface CollectionFolderTotals {
  * are not part of the nestable tree — but they answer the *same* two questions about themselves,
  * and a second spelling of "12 cards · $340.00" is a second chance for one wall to disagree with
  * the wall under it.
+ *
+ * **The lock is a *word* here and not only a glyph, and that is why it joins this pair rather than
+ * being drawn beside it** (issue #365). The card says a drawer is set aside twice — the leading
+ * `Folder` glyph becomes a `Lock`, and this line leads with `Locked` — because a glyph is not an
+ * accessible name and a mark with nothing said in words is one a screen reader never hears. Built
+ * here, with the count and the money, so the screen text and the `aria-label` cannot drift: the
+ * `·` is the app's separator on screen and the comma is what a sentence reads aloud with, which is
+ * the same rule the em dash and "not priced" already follow one field down.
+ *
+ * **It leads rather than trails, and it is drawn across every branch including "still counting".**
+ * The lock is known from the folder *list*, which is what the wall is gated on; the figures come
+ * from a `GROUP BY` that answers later. So `Locked · —` is the honest face of a drawer that is set
+ * aside and not yet counted, and a lock that waited for the summary would flicker on for no reason
+ * a reader could see.
+ *
+ * `locked` is the **effective** lock — the folder's own flag or any ancestor's, which is
+ * `lockedFolderIds`' answer and never `CollectionFolder.locked`. It defaults to `false` for
+ * `PinnedFolders`, whose two kinds cannot be locked at all: the write refuses anything that is not
+ * `kind = 'user'` in words.
  */
 export function folderFace(
   summary: CollectionFolderTotals | null,
   currency: Currency,
+  locked = false,
 ): { shown: string; spoken: string } {
-  if (summary === null) return { shown: "—", spoken: "still counting" };
+  // One wrapper around all three returns rather than a fourth branch, so a face that grows a
+  // fifth shape cannot be the one that forgets to say the drawer is set aside.
+  const face = (shown: string, spoken: string) =>
+    locked ? { shown: `Locked · ${shown}`, spoken: `locked, ${spoken}` } : { shown, spoken };
+  if (summary === null) return face("—", "still counting");
   const cards = `${count(summary.cards)} ${summary.cards === 1 ? "card" : "cards"}`;
-  if (summary.cards === 0) return { shown: cards, spoken: cards };
+  if (summary.cards === 0) return face(cards, cards);
   // The two spellings differ on exactly one field, and only where the marketplace priced nothing
   // in the drawer: the em dash is the right mark on screen and the wrong word in a sentence —
   // the same rule the "still counting" branch above applies one field earlier.
@@ -145,16 +169,14 @@ export function folderFace(
     summary.value === null
       ? { shown: "—", spoken: "not priced" }
       : { shown: formatPrice(summary.value, currency), spoken: formatPrice(summary.value, currency) };
-  return {
-    shown: `${cards} · ${money.shown}`,
-    spoken: `${cards}, ${money.spoken}`,
-  };
+  return face(`${cards} · ${money.shown}`, `${cards}, ${money.spoken}`);
 }
 
 export function CollectionFolderCard({
   node,
   summary,
   currency,
+  locked = false,
   onOpen,
   rowMenu,
   rename,
@@ -168,6 +190,27 @@ export function CollectionFolderCard({
    *  which is not the same answer as an empty drawer. See {@link folderFace}. */
   summary: CollectionFolderTotals | null;
   currency: Currency;
+  /**
+   * Whether this drawer is **effectively** locked — its own flag, or any ancestor's (issue #365).
+   *
+   * **The page's answer and never `node.folder.locked`, which is why it is a prop at all.** The
+   * lock inherits down the tree, so the honest answer is a walk over the whole cabinet
+   * (`lockedFolderIds` in `lib/folderTree.ts`) and this card holds one node. **A folder locked by
+   * an ancestor draws the badge too**: it *is* locked, and a mark that appeared only on the drawer
+   * the reader pressed Lock on would make the inheritance invisible exactly where it matters —
+   * standing inside the locked drawer, looking at the sub-folders it took with it.
+   *
+   * It is drawn twice, in the two slots this card has: the leading glyph becomes a `Lock` — the
+   * device `PinnedFolder` already uses to say what *kind* of folder it is — and the word joins
+   * {@link folderFace}'s pair, because the `⋯` corner is taken and a glyph alone is not an
+   * accessible name.
+   *
+   * **Optional and `false` by default**, where {@link rename} is deliberately required. A required
+   * flag is right for an arm whose absence would leave a menu row opening nothing; this one is a
+   * *derived* fact about a cabinet, and a harness with no cabinet behind it has nothing to derive
+   * it from — "not locked" is the honest face of a card drawn outside one.
+   */
+  locked?: boolean;
   onOpen: () => void;
   /**
    * The page's own menu — Rename / Move to folder… / Delete — reached from three gestures here
@@ -266,7 +309,17 @@ export function CollectionFolderCard({
     canDrop: canDropFolder,
     onDrop: onDropFolder,
   });
-  const { shown, spoken } = folderFace(summary, currency);
+  const { shown, spoken } = folderFace(summary, currency, locked);
+  /**
+   * The card's one badge, in the only slot it has.
+   *
+   * The `⋯` owns the top-right corner and the second line is the figures, so the leading glyph is
+   * where a folder card can say what *kind* of drawer this is — which is exactly what
+   * `PinnedFolder` does with `Layers` and `Inbox`, passed as an `Icon` prop one component over.
+   * The size and the colour do not move with it: a badge that also changed weight would read as a
+   * different card rather than as the same card set aside.
+   */
+  const Glyph = locked ? Lock : Folder;
   // The caret's way back out of the field, and it has to be a ref taken here rather than the
   // element the page remembered when the menu was opened: the `⋯` this restores to is a *new*
   // element, built by the render that closed the field, so the one the page is holding is a
@@ -367,7 +420,7 @@ export function CollectionFolderCard({
               )}
             >
               <span className="flex items-center gap-2">
-                <Folder className="size-3.5 flex-none text-dim" aria-hidden="true" />
+                <Glyph className="size-3.5 flex-none text-dim" aria-hidden="true" />
                 <span
                   className="min-w-0 flex-1 truncate text-sm"
                   {...tip(node.folder.name, { whenClipped: true })}

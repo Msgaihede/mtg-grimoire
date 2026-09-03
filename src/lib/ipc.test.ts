@@ -10,6 +10,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen }));
 // reads `tauri.conf.json` the same way, for the same reason — Rust owns the fact and
 // TypeScript only quotes it, so the quote is what can rot.
 import collectionRs from "../../src-tauri/src/collection.rs?raw";
+import collectionFoldersRs from "../../src-tauri/src/collection_folders.rs?raw";
 import deckRs from "../../src-tauri/src/deck.rs?raw";
 import deckTheoryRs from "../../src-tauri/src/deck_theory.rs?raw";
 import resetRs from "../../src-tauri/src/reset.rs?raw";
@@ -1664,15 +1665,16 @@ describe("the Settings clears name the commands `reset.rs` registers", () => {
 });
 
 /**
- * The collection's seven folder commands.
+ * The collection's eight folder commands.
  *
  * **Every one of them is a name and a set of argument spellings that nothing type-checks.**
  * `invoke` matches by name against the Rust parameter list, and `collection_folders.rs` renames
  * to camelCase — so a wrapper reaching for a plausible `collection_folder_set` or spelling
  * `parent_id` is a runtime rejection, or worse a bound `None` that files at the root, with no
- * type error anywhere. The seven names below are the seven entries in `lib.rs`'s
- * `generate_handler!`, and the `null`s are load-bearing: `null` is how a folder is made at the
- * top level, moved back out of one, and how a card is filed back at the root of the collection.
+ * type error anywhere. The eight names below are eight of the `collection_folders::` entries in
+ * `desktop.rs`'s `generate_handler!`, and the `null`s are load-bearing: `null` is how a folder is
+ * made at the top level, moved back out of one, and how a card is filed back at the root of the
+ * collection.
  */
 describe("the collection folder wrappers name the commands `collection_folders.rs` registers", () => {
   it("asks for the folder list with no arguments at all", async () => {
@@ -1712,6 +1714,37 @@ describe("the collection folder wrappers name the commands `collection_folders.r
     invoke.mockResolvedValue(undefined);
     await ipc.collectionFolderDelete(3);
     expect(invoke).toHaveBeenCalledWith("collection_folder_delete", { id: 3 });
+  });
+
+  /**
+   * The eighth, and the newest — setting a drawer aside.
+   *
+   * **`collection_folder_set_locked`, not the `collection_folder_set` this family's own doc names
+   * as the plausible wrong guess**, and `locked` is sent on both presses rather than one: it is a
+   * flag the caller states, never a toggle the backend works out, so the write is idempotent and
+   * two surfaces pressing at once cannot leave the folder in whichever state the second press
+   * flipped it to.
+   */
+  it("spells the lock write and sends the flag both ways round", async () => {
+    invoke.mockResolvedValue({
+      id: 2,
+      parentId: null,
+      name: "Binder",
+      kind: "user",
+      deckId: null,
+      sortOrder: 0,
+      locked: true,
+    });
+
+    await ipc.collectionFolderSetLocked(2, true);
+    expect(invoke).toHaveBeenCalledWith("collection_folder_set_locked", { id: 2, locked: true });
+
+    // `false` is a value the wire carries, not an omission — an unlock has to reach the column.
+    await ipc.collectionFolderSetLocked(2, false);
+    expect(invoke).toHaveBeenLastCalledWith("collection_folder_set_locked", {
+      id: 2,
+      locked: false,
+    });
   });
 
   /**
@@ -2254,6 +2287,13 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     ["CollectionCleared", resetRs, "CollectionCleared"],
     ["DecksCleared", resetRs, "DecksCleared"],
     ["CacheCleared", resetRs, "CacheCleared"],
+    // **Added with `locked` (2026-09-03), which is the field that showed why it was missing.**
+    // A folder row is small, unpictured and had been on neither list since folders shipped — so
+    // a boolean added to the Rust struct and forgotten here would be `undefined` on every
+    // folder, and `if (folder.locked)` takes the other branch for ever: no badge, no greyed
+    // Delete, and nothing red anywhere. That is `DecksCleared::covers`' failure exactly, in a
+    // field the reader presses a menu row to set.
+    ["CollectionFolder", collectionFoldersRs, "CollectionFolder"],
   ];
 
   it.each(plainMirrors)(

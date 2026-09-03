@@ -1,6 +1,8 @@
 # The collection's folders, and the eleventh term of its grain
 
-Schema **v24 and v25**, [issue #215](https://github.com/Msgaihede/mtg-grimoire/issues/215). The
+Schema **v24 and v25**, [issue #215](https://github.com/Msgaihede/mtg-grimoire/issues/215) — and
+**v33**, which gave a folder a property that changes what the app *offers* rather than where a
+card sits, under [issue #365](https://github.com/Msgaihede/mtg-grimoire/issues/365). The
 design is
 [2026-08-23-collection-folders-design.md](../superpowers/specs/2026-08-23-collection-folders-design.md);
 this page is the record of what shipped, with the reason at each site. Every figure keeps the date
@@ -19,6 +21,14 @@ rung. Exclusivity stopped being a sum somebody has to remember to recompute and 
 reader can see and drag: two decks cannot both hold a copy, because one row cannot sit in two
 folders. Everything in [the deck groups](#the-deck-groups-recently-removed-and-what-v25-converted)
 is a consequence of that sentence the way everything above it is a consequence of the grain.
+
+**And since v33 a drawer can be set aside.** A locked folder is one the app stops *offering* what
+is in — out of the collection's own lists, and out of the spare count a bracket estimate plans
+with — while the reader goes on reaching it exactly as before: they can open it, drag into it,
+drag out of it, rename it, move it, back it up and export it. It is one column, no index and no
+new grain term, because whether a drawer is set aside is not part of what makes two rows the same
+row. [The lock](#the-lock-stops-the-app-offering-and-never-stops-the-reader-reaching) is the whole
+of it.
 
 **This is the wishlist's cabinet one table over** — [wishlist-folders.md](wishlist-folders.md) is
 the page it is a port of, and where a rule here is that page's rule, it is named rather than
@@ -107,7 +117,12 @@ Nesting was ported rather than flattened for a cost reason, not an aspirational 
 arithmetic, the cycle refusal and both cascade rules were already written and tested one table
 over, so nesting was cheaper than writing a flat version would have been. `src/lib/folderTree.ts`
 is reused **unchanged** — a `CollectionFolder` already answers `FolderLike` and a `CollectionRow`
-already answers `Filed`. Nothing new is named `folderTree.ts`: a case-insensitive filesystem
+already answers `Filed`. **That held until v33**, and the correction belongs here rather than in a
+footnote: the module now carries one function that is this cabinet's alone, `lockedFolderIds`,
+because `locked` is a column no other folder table has — see
+[the lock](#the-lock-stops-the-app-offering-and-never-stops-the-reader-reaching). Everything the
+tree arithmetic does is still generic and still shared. Nothing new is named `folderTree.ts`: a
+case-insensitive filesystem
 resolves a second one against `FolderTree.tsx`, and `tsc` stays green while every test fails with
 "not a function" (`src/features/decks/folders.ts:17-30`).
 
@@ -299,6 +314,271 @@ exactly as they are from `add_entry`'s `DO UPDATE` — merging two curated sets 
 statement should decide, and `condition_original` is the provenance of *this* row's condition and
 cannot describe a condition it was never written beside.
 
+## The lock stops the app offering, and never stops the reader reaching
+
+**Schema v33, [issue #365](https://github.com/Msgaihede/mtg-grimoire/issues/365), raised from
+Discord.** The design is
+[2026-09-03-locked-collection-folders-design.md](../superpowers/specs/2026-09-03-locked-collection-folders-design.md);
+this section is the record of what shipped. `locked` is the first column this cabinet has gained
+that changes **nothing** about where a card sits — every other one of them files something.
+
+**A locked folder is a drawer the reader has set aside, so the app stops *offering* what is in it
+without ever stopping them reaching it.** Every decision below is a consequence of that split:
+*offering* is what a search result, an availability figure and a shopping list do, and *reaching*
+is what a drag, a click into the drawer, a backup and an export do. The two piles the issue
+describes are the same shape — cards held for a trade, and cards in a display case — and until v33
+this cabinet could not tell either apart from a binder.
+
+### The column, and why the upgrade is invisible
+
+```sql
+ALTER TABLE collection_folders ADD COLUMN locked INTEGER NOT NULL DEFAULT 0;
+```
+
+**`NOT NULL DEFAULT 0`, and the default is the answer rather than a placeholder** — which is
+[v24's third trap](#the-v24-steps-four-traps) read the same way round. Every folder that already
+exists is unlocked, so a reader who never presses Lock cannot tell the rung ran, and there is no
+state a repair or a seed has to reach afterwards. The unset value is not a lie a `DEFAULT` is
+telling; it is the answer.
+
+**`ADD COLUMN` and never a rebuild**, which is worth checking rather than assuming on a table that
+ends in a `CHECK`: SQLite splices the new text in **before** that `CHECK`, on the `updated_at`
+line, exactly where v29's `sync_uid` and `needs_review` landed. Read back out of a migrated
+database with `node:sqlite` on 2026-09-03: `updated_at INTEGER NOT NULL, sync_uid TEXT,
+needs_review TEXT, locked INTEGER NOT NULL DEFAULT 0,`. `USER_SCHEMA_SQL` wears that exact shape
+because `the_user_schema_is_byte_identical_to_what_the_ladder_builds` compares string for string,
+and a retyped DDL is a fresh install disagreeing with an upgraded one.
+
+**No index, and the absence is the decision.** `locked` is in no grain, in no unique index and in
+no sort — it is read once per folder and *interpreted*, never searched on — so the schema's index
+count does not move and the eleven-term grain does not either. **Whether a drawer is set aside is
+not part of what makes two rows the same row**, which is the whole reason this feature could be
+one column: a lock changes what the app says about a card, never which row that card is.
+
+**`INTEGER` in the table, `bool` on the struct, and the read is `!= 0` rather than rusqlite's
+`bool`.** The four booleans on `EntryGrain` are deliberately read as `i64` because that struct
+hands its values straight back to a collision probe, and a probe compares what is *stored*. This
+one is interpreted rather than handed back, so `CollectionFolder.locked` is a `bool` and
+`folder_row` asks `r.get::<_, i64>(…)? != 0`. The column carries no `CHECK`, so a hand-edited
+database can hold a `2` — and **a `2` is locked**, which is the only reading of a non-zero that is
+not a refusal, and the one that fails safe: the failure worth foreclosing is a set-aside drawer
+quietly rejoining what the app offers. `set_folder_locked` can never be the source of such a
+value, because rusqlite binds a `bool` as 0 or 1.
+
+### The lock inherits down the tree, and is never stored twice
+
+**A folder inside a locked folder is locked.** The reader locks a drawer and gets the drawer,
+including whatever they have nested in it. It is computed over ancestry and never stored per row,
+for the reason a stored copy always gives: it would be a second copy of a fact the parent already
+holds, and the two disagree the first time a folder moves.
+
+In SQLite that is a recursive CTE, spelled **once** — `collection_folders`' `LOCKED_FOLDER_IDS`, a
+self-contained `SELECT` that drops straight into an `IN (…)` and binds nothing:
+
+```sql
+WITH RECURSIVE locked_folders(id) AS (
+    SELECT id FROM collection_folders WHERE locked <> 0
+    UNION
+    SELECT f.id FROM collection_folders f
+      JOIN locked_folders l ON f.parent_id = l.id
+)
+SELECT id FROM locked_folders
+```
+
+Both readers — `collection::scope` and `deck_theory::OWNED_SPARE_SQL` — interpolate that fragment
+rather than carrying a copy, and `effectively_locked` asks it of one id in the same `?1 IN (…)`
+shape, so **the fence a press meets is literally the same SQL as the term that drops a folder's
+copies out of a list**. A second copy in either module is how the page's list and the spare count
+would come to disagree about which drawers are set aside.
+
+**`UNION` and never `UNION ALL`**, which is [`delete_folder`'s sub-tree
+walk](#delete_folder-re-files-one-row-at-a-time)'s reason rather than a new one: `move_folder`
+refuses to write a cycle, so only a hand-edited database or a restored backup can hold one, and the
+duplicate-row check is what makes the walk converge where `UNION ALL` would run forever.
+`locked <> 0` rather than `locked = 1`, `folder_row`'s reading of the same column. Folder counts
+are tens, so none of this was worth measuring against the grain — and none of it has been.
+
+**On the TypeScript side it is `lockedFolderIds` in `src/lib/folderTree.ts`, and no call site may
+re-derive it.** `CollectionFolder.locked` is the folder's *own* flag and is never the answer: the
+badge, the greyed Lock/Unlock row, the greyed Delete and the drag confirmation are four surfaces
+about the **effective** lock, and one reading the raw field would draw an unmarked drawer inside a
+locked one — making the inheritance invisible exactly where it matters. It floods **downward** from
+the locked rows rather than walking each folder's ancestors upward, `folderDescendants`' reason:
+one breadth-first pass with a visited set costs one sweep per level instead of one per folder, and
+the visited set terminates on a corrupt cycle the same way the `UNION` does.
+
+**That helper is what makes `folderTree.ts` no longer "reused unchanged", and
+[the sentence above](#the-table-and-the-three-on-delete-actions) has been corrected rather than left
+standing.** It is deliberately *not* generic — `readonly CollectionFolder[]`, no type parameter —
+because neither `DeckFolder` nor `WishlistFolder` carries a `locked` column, there is no wishlist
+equivalent of this feature and none planned, and a generic would invite exactly the widening the
+design refused.
+
+### What locking changes, in four lists
+
+**The organising rule, and it is the whole design in one line: a statement that says what the
+reader *has* is untouched; a statement that says what is *available* excludes.**
+
+**Excluded, first — the collection's own lists, and only when asked.** One term in
+`collection::scope`, the `WHERE` shared by the page, its count and its header, pushed in the same
+correlated shape the `Unallocated` arm uses:
+
+```sql
+(e.folder_id IS NULL OR e.folder_id NOT IN (WITH RECURSIVE … SELECT id FROM locked_folders))
+```
+
+`e.folder_id IS NULL` comes first for `scope`'s existing reason: the root is where most copies are
+and is not a folder to look up, and a `NOT IN` over a NULL is NULL rather than true, so the root
+would drop out of the list that is mostly root. The term is pushed only when `folder_id.is_none()`,
+and **that guard is what makes "except inside the folder" true** — standing in a locked drawer, or
+in a subfolder of one, *names* it, and a named folder is served whole. That is
+[`root_only`'s own rule](#the-wire-was-widened-not-flipped-and-that-was-the-whole-design) applied to
+a second field, so the three-state convention gains no fourth state. **Who asks**: the collection
+page, and the deck builder's Collection Search tab. **Who does not**: the mirror, the export sweep
+and the web route's passthrough — which is
+[the default](#the-default-is-false-and-the-default-is-the-whole-of-the-safety) below, and the
+most important paragraph in this whole section.
+
+**And the `IS NULL` arm carries no weight until a locked folder exists, which is a trap rather
+than a nicety.** `x NOT IN (<empty set>)` is **TRUE** in SQLite even where `x` is NULL — the
+NULL-propagating behaviour everyone reaches for that arm to guard against only appears once the
+subquery returns a row. So a test that locks nothing, or that counts a root copy while nothing is
+locked, passes **whether the arm is there or not**. It was caught on the way in: the mutation that
+deleted the arm from `OWNED_SPARE_SQL` stayed *green* against the obvious test, and the shape that
+actually fails is a root copy added **after** the lock. `a_locked_folders_copies_are_not_spare`
+is written that way and says so; a future arm on either statement owes the same shape, or the
+guard is decoration with a test agreeing that it works.
+
+**Excluded, second — "what can I build with".** `deck_theory::OWNED_SPARE_SQL` already excluded a
+deck's group by exactly this device, and its doc already argued the point this feature needed: *a
+deck on a table has its cards, so a copy filed in a deck's group is not one this plan can count
+on.* A card in a display case is not one a plan can count on either. It gains a locked arm beside
+the deck arm, with an `IS NULL` half of its own, because the two conditions are ANDed and each has
+to let the root through on its own.
+
+**That arm is unconditional, unlike `exclude_locked` one module over, and the asymmetry is
+deliberate rather than an oversight.** No backup and no export reads this figure. `owned_spare` is
+a **display** field — "for a reader, beside a price", forbidden by its own doc from being a term in
+any arithmetic — so widening it cannot move a number anywhere else, where widening a *list* read is
+precisely how a whole-collection backup silently loses rows. It is the one ownership-shaped
+statement in the crate that changed, and it could change because it was never an ownership
+statement.
+
+**Refused — one folder write, in words.** `delete_folder` refuses a folder that is **effectively**
+locked, with `FOLDER_IS_LOCKED` — *"That folder is locked. Unlock it before deleting it."* — a
+sentence in this module's existing grammar rather than a `CHECK` or a constraint failure. The reason
+is what that press does: it
+[re-files every card in the sub-tree to the root](#delete_folder-re-files-one-row-at-a-time), which
+silently undoes exactly the filing the lock was protecting. A subfolder of a locked parent is
+refused for the same reason, because it scatters the same cards. The check is the **first** thing
+the function does, before its own transaction, and `effectively_locked` answers `false` for an id
+nothing answers to — so "a folder that is not there is a success" survives being asked second.
+
+**Rename and move do not refuse, and that is a decision rather than an omission.** Neither disturbs
+a card. A drawer the reader could not re-title or re-file would be a lock on the *folder*, where
+this one is a lock on what the folder offers. **Nor is there any fence on filing cards in and out**:
+the issue is explicit that moving copies must always be possible, `set_entry_folder` gains nothing,
+and a locked folder is a `user` folder on both of the counts that command already checks. The
+warning is the UI's and it is a confirmation rather than a refusal — a drag onto a locked folder, or
+out of one, confirms and names it, because a drop target is a rectangle a pointer can land on by
+mistake; an explicit menu pick does not, because the reader has just named the folder in the press
+they made. And the UI greys Delete with its reason in the row's accessible name rather than letting
+the press reach the sentence at all, which is `PinnedFolders.tsx`'s standing rule: a control whose
+only outcome is a sentence explaining that it does not work teaches nothing its absence would not
+have.
+
+**Untouched — every statement that says what the reader HAS.** Eight of them, named one at a time,
+because "excluded from search" can be read onto any of them and each is a deliberate no. This table
+is worth more than the two exclusions above it: every row in it is untouched *by design*, so nothing
+goes red if somebody later "tidies" the exclusion into `collection_source`, and
+`a_locked_folders_copies_are_still_owned` is the fence for the whole of it.
+
+| Site | Why it does not change |
+| --- | --- |
+| `collection_source::owns_printing` / `copies_of_printing` / `copies_of_oracle` | The card search's owned pip and both owned badges. A graded card is a card you own; a search that stopped saying so would be the app lying about cardboard on the reader's shelf. |
+| `index::CardIndex.owned`, through `collection_source::owned_rowids` | The Owned/Missing facet pair. Same reason, and it has to agree with the pip beside it or the greying contradicts the badge. |
+| `wishlist::OWNED_SQL` | How much of a wish is already filled. A locked copy fills a want — the reader has it, and buying a second is the mistake that figure exists to prevent. |
+| `deck::owned_by_oracle` | Structurally cannot see one of these folders at all — the paragraph below. |
+| `import::match_columns` / `MATCH_ORDER` | Which printing a pasted line resolves to. Ranking by owned copies is a guess about *which cardboard the reader means*, and a locked copy is still their cardboard. |
+| `collection_folders::folder_summary` | The per-folder tile. A locked folder's own tile must count its own contents, or the badge sits above a lie. |
+| `images::prewarm_keys` | Cache warming. Excluding would make the drawer slow to open, for nothing. |
+| `reconcile.rs` | Repoints rows onto new printings and never writes `folder_id`. A locked folder's card that Scryfall has renumbered still needs repointing — the lock is about *offering*, and upkeep is not an offer. |
+
+**`deck::owned_by_oracle` is the row that earns its own sentence, because it is the first question a
+reader of this page will ask.** It counts only rows filed in *that deck's own group* — `JOIN
+collection_folders f ON f.id = e.folder_id … WHERE f.deck_id = ?1` — and a locked folder is a
+`kind = 'user'` folder, so its copies have never been in any deck's group and have never counted
+toward a deck's owned or missing. **Locking a folder therefore cannot move a deck's owned or missing
+figures in either direction**, and no part of this feature touches that statement. It is also why
+locking needed no thought about `attribute_owned` or the deck editor's counts: they are all sums
+over a group a locked folder is not.
+
+### The default is `false`, and the default is the whole of the safety
+
+**`exclude_locked` is a new `CollectionQuery` field defaulting to `false`, and this is the failure
+the entire feature is shaped around.** It is
+[`root_only`'s argument](#the-wire-was-widened-not-flipped-and-that-was-the-whole-design) verbatim,
+one field along: an unasked question keeps today's answer, so a caller nobody updated cannot
+silently lose rows.
+
+**The callers whose silence must go on meaning "everything" are not hypothetical.** The plain-text
+mirror and the export sweep both page through `list_entries`, and `mirror/read.rs` already says in
+words that a whole-collection backup is "the one read that must never ask" the narrowing question.
+An unconditional term in `scope` would have made **every backup and every CSV export silently omit
+the reader's locked cards**: no error, no empty page, no `error_log` row — just a file on disk
+missing exactly the cards its reader was most careful about, discovered at the moment the app will
+not open and the mirror is all there is. That is the worst failure available in this feature, and a
+field that has to be *asked for* is what forecloses it.
+`a_query_that_never_asks_still_sees_a_locked_folders_copies` is the fence around that silence, and
+it is worth more than either exclusion test beside it.
+
+The web route's passthrough is on the same list for the same reason, and the two surfaces named
+above are the only senders there are.
+
+### The automated action the issue named had already been deleted
+
+**The issue asked for exclusion "from all automated actions, such as moving cards into a deck folder
+when they are added to a deck" — and the code it names had been deleted before the issue was
+answered.** `addOwnedCopies` hunted the binder for a free copy when a card was added to a deck; it
+went on **2026-08-25** with the own/need pair that was its only way in, and
+`src/features/decks/useDeck.ts` carries its tombstone — the record is under
+[Collection Search](#collection-search-and-the-first-caller-collection_to_deck-ever-had). Today
+`deck::add_card` writes a `deck_cards` row and moves **no** `collection_entries` row at all, and
+there is no path left that files a copy into a deck's group without the reader pointing at that copy
+on screen.
+
+**So the clause landed on `owned_spare` rather than on a fence, and it is written down here because
+the next reader of this page will otherwise go looking for the fence that is not there.** The
+general form of what the example was reaching for is *do not offer a set-aside copy*, and the one
+statement that offers copies without anybody asking is the spare count behind the bracket estimate.
+A guard on `deck::add_card` would have been a fence around a gesture nobody can make.
+
+### The other `locked` in this cabinet, and which one changed its word
+
+**`PinnedFolders.tsx` used *locked* first, and it means very nearly the opposite.** Its doc said the
+app's own folders were *"pinned, flat and locked"*, where locked meant no rename, no delete, no move
+and no `⋯` at all — because every write in `collection_folders.rs` refuses a folder that is not
+`kind = 'user'`. A folder locked under #365 is still the reader's own drawer: still theirs to
+rename, to move, to file cards into and out of, still dashed, still a drop target both ways, and
+still carrying its full menu.
+
+**The doc comment is what changed, not the feature's name.** A reader's menu says *Lock* and the
+issue reporter said *locked*, so the column, the field and the UI keep the word; that paragraph's
+third word became **fixed**, and it gained a sentence naming the difference.
+[The pinned strip's own section](#the-apps-own-folders-in-the-card-menu) below carries the corrected
+word. The reason is worth stating plainly rather than leaving to the rename: two meanings of one
+word inside one cabinet is how a later reader concludes the pinned band is what #365 shipped — and
+the folders that would then look set-aside are the app's own, which are the two kinds a reader may
+not lock at all.
+
+**Nor can they be locked, and that is the same fence rather than a new one.** `set_folder_locked`
+opens with `user_folder`, so a deck's group and `Recently removed` refuse with `FOLDER_NOT_YOURS`
+like every other folder write: a deck group is already fixed, `Recently removed` is a holding area,
+and a lock on either would be a control with nothing to say. **Unlocking is likewise not always
+visible**, and the menu is where that is answered: the write touches the folder's own flag only, so
+clearing the flag on a child of a locked parent changes what the row says and not what the reader
+sees — that row is greyed with its reason rather than reporting a success the badge contradicts.
+
 ## The deck groups, `Recently removed`, and what v25 converted
 
 Two kinds of folder belong to the app rather than to the reader, and v25 is the rung that creates
@@ -488,7 +768,8 @@ table at all. Three things follow:
   from the keyboard. What changed is that `collection_to_deck` — the write that restores **both**
   halves in one press — now has a caller: the deck builder's **Collection Search** tab. A deck
   group is still deliberately not a drop target (see
-  [the fence](#a-deck-group-is-not-a-drop-target)), so the recovery is not a drag; it is a press.
+  [the fence](#the-two-writes-and-why-a-deck-group-is-not-a-drop-target)), so the recovery is not a
+  drag; it is a press.
   **What it costs now**, spelled out because "one press" is only true if you know where the press
   is: open the search column on the deck you cut from, stay on the Collection tab, clear the
   **only unallocated** default or leave it — `Recently removed` is on the *unallocated* side, so
@@ -747,7 +1028,14 @@ depends on `PRAGMA foreign_keys` being ON**, which is per-connection; `db::open`
 connection the app hands out, and a test that opens its own has to say so itself.
 
 An id that resolves to nothing is a **success**, `deck_meta::delete_folder`'s rule: the caller
-wanted that folder gone, and it is gone. The one id that is not is a folder the app owns.
+wanted that folder gone, and it is gone. **Two ids are not**: a folder the app owns
+(`FOLDER_NOT_YOURS`), and — since v33 — one the reader has set aside (`FOLDER_IS_LOCKED`, on the
+*effective* lock, asked before this function's own transaction opens). The second is this whole
+section read as a refusal: what a delete does to a locked folder is scatter its sub-tree to the
+root, which is exactly the filing the lock was protecting. See
+[the lock](#the-lock-stops-the-app-offering-and-never-stops-the-reader-reaching); the "not there is
+a success" rule survives being asked second because `effectively_locked` answers `false` for an id
+nothing answers to.
 
 ## Zero quantity deletes the row, and what that costs
 
@@ -1005,18 +1293,25 @@ only while that pragma happens to be on.
 | The move writes a loop | `A folder cannot be moved inside itself.` (`deck_meta::FOLDER_CYCLE`) | `move_folder` |
 | The folder is the app's | `That folder is the app's own and is not yours to change.` (`FOLDER_NOT_YOURS`) | Every write, both ends |
 | The card is in a deck | `Those copies are in a deck. Cut the card from the deck to get them back.` (`ENTRY_IN_A_DECK`) | `set_entry_folder`, on the row it was given |
+| The folder is set aside | `That folder is locked. Unlock it before deleting it.` (`FOLDER_IS_LOCKED`) | `delete_folder` only, on the **effective** lock |
 
 The first two are borrowed from `deck_meta` rather than re-spelled — a reader who has met "That
 folder is not there any more." in the deck gallery and on the wishlist must meet the same sentence
 here, and `deck_meta::CATEGORY_WRONG_DECK`'s doc is the standing rule that a second copy of a
 refusal is a second thing to drift.
 
-**The last two are local, because they are a fact this cabinet has and the other two do not.**
-`deck_folders` and `wishlist_folders` carry no `kind` column at all, so there is no sentence in
-either module to reach for. And the schema could not say it anyway: the DDL CHECKs that a `deck`
-folder names a deck and that the kind is one of three, but nothing in it says who may *edit* a row,
-or whose copies a row is holding, and a CHECK that could would fire as
-`CHECK constraint failed: collection_folders`.
+**The last three are local, because each is a fact this cabinet has and the other two do not.**
+`deck_folders` and `wishlist_folders` carry no `kind` column at all and no `locked` one either, so
+there is no sentence in either module to reach for. And the schema could not say any of it anyway:
+the DDL CHECKs that a `deck` folder names a deck and that the kind is one of three, but nothing in
+it says who may *edit* a row, or whose copies a row is holding, or which drawer the reader has set
+aside — and a CHECK that could would fire as `CHECK constraint failed: collection_folders`.
+
+**`FOLDER_IS_LOCKED` is on exactly one write, and the narrowness is the decision**
+([the lock](#the-lock-stops-the-app-offering-and-never-stops-the-reader-reaching)): a delete
+scatters the sub-tree to the root and undoes the filing the lock was protecting, where rename and
+move disturb no card at all and `set_entry_folder` must go on filing copies in and out — the issue
+asked for that in as many words.
 
 Each property of that fence is a decision, and they read in pairs — the folder end, then the row
 end:
@@ -1375,17 +1670,26 @@ an optimistic insert would have to guess the destination's sort position and pag
 re-read — and invalidate the **list itself**, not only its root: `src/lib/query.ts` caches 30 s, so
 a mounted query that is merely marked stale never refetches.
 
-**The app's own folders are a pinned, flat, locked section, and every one of those three words is
+**The app's own folders are a pinned, flat, fixed section, and every one of those three words is
 a decision** (`PinnedFolders.tsx`). *Pinned*, because it is drawn at every level rather than only
 at the root — that is how a reader reaches `Recently removed` from three drawers down without
 walking back out, and a section that moved as you navigated is not one anybody can learn the
 position of. *Flat*, because `parent_id` is `NULL` on every row v25 creates and no command can nest
 anything under one, so there is no tree to build and the summary's **direct** count is the whole
 count: asking `subtotalsOf` to add up children here would be an answer computed from a tree these
-rows are deliberately not in. *Locked*, because every write in `collection_folders.rs` refuses a
+rows are deliberately not in. *Fixed*, because every write in `collection_folders.rs` refuses a
 folder that is not `kind = 'user'` — a `⋯` menu here would be three rows that each end in
 `FOLDER_NOT_YOURS`, and a control whose only outcome is a sentence explaining that it does not work
-teaches nothing its absence would not have. Both kinds nevertheless answer their two questions
+teaches nothing its absence would not have.
+
+**That third word was *locked* until v33, and it was renamed rather than kept.** #365 gave the
+reader a lock of their own, and the two are very nearly opposites: a folder locked by a reader is
+still theirs to rename, to move, to file cards into and out of, and still carries its full `⋯`
+menu — what it loses is being *offered*, not being touched. Two meanings of one word inside one
+cabinet is how a later reader concludes this pinned band is what #365 shipped, so the band's word
+moved and the feature kept the one the menu and the issue both say. See
+[the lock](#the-lock-stops-the-app-offering-and-never-stops-the-reader-reaching). Both kinds
+nevertheless answer their two questions
 through **`folderFace`**, exported from `CollectionFolderCard.tsx` rather than re-spelled, because a
 second spelling of "12 cards · $340.00" is a second chance for one wall to disagree with the wall
 under it.
@@ -1494,6 +1798,16 @@ What it owes an answer to, at least:
   moves into a deck's group from the search column.
 - **The import box ticked**, and where the copies land — see the note below the checkbox, which
   says the root and not the deck's group.
+- **The lock** (v33, §"The lock stops the app offering"), which owes a whole pass and has had
+  none — **no figure anywhere in that section was measured in a running window, and none is
+  quoted**. What it owes: the badge on a folder locked by an *ancestor* rather than by its own
+  press, since that is where the inheritance is either visible or invisible; the greyed Delete
+  and the greyed Unlock reading their reasons out of their accessible names; the drag
+  confirmation in both directions, found by its text because this app's confirmations carry no
+  `dialog` role; a locked drawer's copies gone from the page and still there when the reader
+  stands *inside* it; and the one that matters most — an export and a mirror pass over a
+  collection with a locked folder in it, which is the failure the whole design is shaped around
+  and the one no screenshot shows.
 - **The naming tiles** (2026-09-03, §"The wall names its own folders"), which are a separate
   change and owe a pass of their own — but only for the half a headless page cannot reach. The
   footprint, the corner pair and the two border styles were measured in headless Edge over the
@@ -1571,19 +1885,26 @@ build, not a description of this one.
 - **Per-folder price summaries beyond `folder_summary`'s two numbers**, and any change to the
   wishlist's own folders. Both are spec §2's "out", and neither is a thing this cabinet needs to
   work.
+- **A wishlist lock, a per-card lock, and a password on the folder lock.** The wishlist is a
+  shopping list and nothing on it is "set aside"; the folder is the unit
+  [#365](https://github.com/Msgaihede/mtg-grimoire/issues/365) asked for and a per-card flag would
+  be a twelfth grain term nobody has asked for; and locking is reversible in one press, so it
+  protects against an accident rather than against a person — which is also why the lock press
+  itself asks nothing.
 
 ## Where the code is
 
 | Path | What is in it |
 | --- | --- |
-| `src-tauri/src/schema.rs` | The v24 and v25 steps, `COLLECTION_GRAIN`, `COLLECTION_FOLDER_KINDS`, `UNDO_V24`, `UNDO_V25`, `schema_at_23`, `v24_database`, and the whole-schema `ON DELETE` inventory |
-| `src-tauri/src/collection_folders.rs` | The seven commands, `set_entry_folder` and its two fences, `refile_entry`, `take_copies` (the split), `merge_entry`, `folder_summary`, `FOLDER_NOT_YOURS`, `ENTRY_IN_A_DECK` |
+| `src-tauri/src/schema.rs` | The v24 and v25 steps, the v33 rung that adds `locked`, `COLLECTION_GRAIN`, `COLLECTION_FOLDER_KINDS`, `UNDO_V24`, `UNDO_V25`, `UNDO_V33`, `schema_at_23`, `v24_database`, and the whole-schema `ON DELETE` inventory |
+| `src-tauri/src/collection_folders.rs` | The folder commands, `set_entry_folder` and its two fences, `refile_entry`, `take_copies` (the split), `merge_entry`, `folder_summary`, `set_folder_locked`, `LOCKED_FOLDER_IDS` and `effectively_locked` (the lock's inheritance, spelled once), `FOLDER_NOT_YOURS`, `ENTRY_IN_A_DECK`, `FOLDER_IS_LOCKED` |
 | `src-tauri/src/collection_alloc.rs` | `collection_to_deck` and `deck_to_collection` — the only pair that moves a row across the deck boundary — `take_from_deck_list`, `MoveOutcome`, the cut's history row and the argument for its missing undo step, and the seven refusal sentences |
-| `src-tauri/src/collection.rs` | The grain's other ten terms, `set_quantity`'s zero-delete, `update_entry`'s merge, `fold_entry`, `EntryChange`, `ENTRY_FINISH`, `Allocation` |
+| `src-tauri/src/collection.rs` | The grain's other ten terms, `set_quantity`'s zero-delete, `update_entry`'s merge, `fold_entry`, `EntryChange`, `ENTRY_FINISH`, `Allocation`, and `CollectionQuery::exclude_locked` with `scope`'s term for it |
+| `src-tauri/src/deck_theory.rs` | `OWNED_SPARE_SQL` — "what can I build with", and the one ownership-shaped statement the lock changed, unconditionally |
 | `src-tauri/src/deck.rs` | `owned_by_oracle` and `attribute_owned` — owned/missing as a sum over the group — `delete_deck`, which re-files into `Recently removed`, and `release_group_copies`, the crate's one walk over a group's rows — oracle-matched, exact printing first — which `deck_to_collection` calls for its one row and `release_live_copies` loops for the four bulk sites (`clear_category`, `clear_variant`, `deck_meta::delete_category`'s cascade arm, `import::commit_import`'s `replace` arm), carrying the `live` fence for all of them |
 | `src-tauri/src/reset.rs` | `clear_collection` — entries, then folders |
 | `src-tauri/src/reconcile.rs` | `fold_into_existing`, which calls `fold_entry` as `merge_entry` does, and `collision_target`, the crate's other eleven-term probe |
-| `src/lib/folderTree.ts` | `buildFolderTree` and friends, shared with the deck gallery and the wishlist, **unchanged** |
+| `src/lib/folderTree.ts` | `buildFolderTree` and friends, shared with the deck gallery and the wishlist, and `lockedFolderIds` — the one function there that is this cabinet's alone |
 | `src/features/collection/collectionDrag.ts` | Both payloads under their own keys, the row and the tile that offer them, the targets that take either |
 | `src/features/collection/PickCopies.tsx` | The question a drop asks when the art stands for more than one row |
 | `src/lib/tileKey.ts` | `tileKeyOf` — **the one place** `` `${cardId}:${finish}` `` is spelled, and the `?? "nonfoil"` the ring composite meets a tile's key on. Both folds and both walls call it |
@@ -1594,7 +1915,7 @@ build, not a description of this one.
 | `src/components/FolderNameField.tsx` | The one naming field, both shapes, `FOLDER_CARD_HEIGHT` and `useFolderFieldReturn` |
 | `src/components/NewFolderCard.tsx` | The tile that makes a folder, and the field it becomes |
 | `src/components/ParentFolderCard.tsx` | The up-one-level tile all three cabinets draw, and its stories |
-| `src/features/collection/PinnedFolders.tsx` | The app's own folders — pinned, flat and locked — `DECK_KIND`, `REMOVED_KIND`, and neither one a drop target |
+| `src/features/collection/PinnedFolders.tsx` | The app's own folders — pinned, flat and **fixed**, the word that used to be *locked* — `DECK_KIND`, `REMOVED_KIND`, and neither one a drop target |
 | `src/features/card/cardMenu.tsx` | `buildCollectionTargetItems` — `Add to → Collection`, and `Move to → folder` |
 | `src/features/transfer/import/destinations/collection.ts` | `grainKey` — the importer's fold, now every grain term it can vary |
 | `src/lib/ipc.ts` | `MoveOutcome`, `collectionToDeck` and `deckToCollection`, and `CollectionQuery.allocation` — whose two words nothing sent until Collection Search |

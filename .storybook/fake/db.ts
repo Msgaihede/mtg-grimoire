@@ -368,6 +368,25 @@ export interface FakeCollectionFolder {
    *  pair, so the two can never be read apart. */
   deckId: number | null;
   sortOrder: number;
+  /**
+   * User schema v33's column — whether the reader has **set this drawer aside**.
+   *
+   * `INTEGER NOT NULL DEFAULT 0` in the crate and a `bool` here, `CollectionFolder.locked`'s
+   * own split: a column this fake *interprets* is a boolean, where the ones it hands back to a
+   * probe stay numbers. Every non-zero is locked, which is the only reading of a hand-edited
+   * `2` that is not a refusal.
+   *
+   * **Stored on the folder the reader pressed Lock on, and computed over ancestry** — a
+   * folder inside a locked folder is locked, and nothing writes that fact down twice. Storing
+   * the inherited copy would be a second copy of what the parent already holds, and the two
+   * disagree the first time a folder is moved. {@link collectionFolderLocked} is the walk, and
+   * every reader of the *effective* lock goes through it rather than reading this flag.
+   *
+   * Required rather than {@link FakeDeck.gameKey}'s optional-with-a-default, though the column
+   * has one: this flag decides whether a folder's copies are **offered**, so a fixture that
+   * says nothing about it is a fixture whose author has not decided.
+   */
+  locked: boolean;
   /** User schema v29's column — see {@link FakeDeckFolder.needsReview}. */
   needsReview?: string | null;
 }
@@ -4086,6 +4105,27 @@ function collectionScope(db: FakeDb, q: CollectionQuery): FakeEntry[] {
     } else if (q.rootOnly === true && e.folderId !== null) {
       return false;
     }
+    // Schema v33's term, and each of its three clauses is load-bearing.
+    //
+    // **Absent or `false` is every folder there is**, which is `rootOnly`'s argument verbatim:
+    // an unasked question keeps today's answer, so the two reads that must never narrow — the
+    // plain-text mirror and the export sweep — go on seeing a locked folder's copies by saying
+    // nothing. A term that was not asked for would make every backup silently omit the reader's
+    // set-aside cards and raise nothing, which is the worst failure this feature has available.
+    //
+    // **Ignored entirely when `folderId` names a folder**, which is `rootOnly`'s own rule
+    // applied to a second field rather than a fourth state: standing in a locked drawer — or
+    // in a sub-folder of one — names it, and a named folder is served whole.
+    //
+    // **The root is asked about first**, `scope`'s existing reason read from the fake's end:
+    // the crate's `e.folder_id IS NULL OR e.folder_id NOT IN (…)` needs its first arm because
+    // a `NOT IN` over a NULL is NULL rather than true, and the root is where most copies are.
+    //
+    // The lock asked about is the **effective** one, so a folder inside a locked folder drops
+    // out too — {@link collectionFolderLocked}.
+    if (q.excludeLocked === true && named === null) {
+      if (e.folderId !== null && collectionFolderLocked(db, e.folderId)) return false;
+    }
     // `"unallocated"` drops the copies a **deck** is holding and nothing else: the root, a
     // folder the reader made and `Recently removed` are all cards on their desk. Since schema
     // v25 every deck has a group and `collection_to_deck` files copies into it, so this is a
@@ -4234,7 +4274,15 @@ function toWishlistFolder(f: FakeWishlistFolder): WishlistFolder {
 /** `collection_folders::folder_row`, and a **copy** for {@link toWishlistFolder}'s reason.
  *  `kind` and `deckId` are on the wire because the page has to draw a deck's folder and the
  *  removed-cards folder differently from a binder the reader named — and because a row it may
- *  not rename is a row whose menu should say so before the refusal does. */
+ *  not rename is a row whose menu should say so before the refusal does.
+ *
+ *  **`locked` is on it for that reason one step further along**, and this is the one function
+ *  that decides whether the flag crosses the fake's wire at all: a projection that dropped it
+ *  would leave every story reading `undefined` — a folder neither locked nor unlocked, which
+ *  is a state the column cannot hold. The folder's **own** flag and not the effective one: the
+ *  badge, the greyed menu rows and the drag confirmation each walk the ancestry themselves off
+ *  a tree they already have, and a DTO carrying the inherited answer would be exactly the
+ *  second copy {@link FakeCollectionFolder.locked} exists not to store. */
 function toCollectionFolder(f: FakeCollectionFolder): CollectionFolder {
   return {
     id: f.id,
@@ -4243,6 +4291,7 @@ function toCollectionFolder(f: FakeCollectionFolder): CollectionFolder {
     kind: f.kind,
     deckId: f.deckId,
     sortOrder: f.sortOrder,
+    locked: f.locked,
   };
 }
 
@@ -6865,6 +6914,25 @@ const FOLDER_CYCLE = "A folder cannot be moved inside itself.";
  */
 const FOLDER_NOT_YOURS = "That folder is the app's own and is not yours to change.";
 /**
+ * `collection_folders::FOLDER_IS_LOCKED` (user schema v33) — what
+ * {@link writeHandlers.collection_folder_delete} says about a drawer the reader has set aside.
+ *
+ * **Delete alone, and the split is the whole feature.** Deleting re-files every card in the
+ * sub-tree to the root, which silently undoes exactly the filing the lock was protecting;
+ * renaming and moving disturb no card at all, so neither refuses. A lock stops the app
+ * *offering* what is in a folder — it is not a padlock on the drawer, and the reader can still
+ * reach every copy in it.
+ *
+ * It refuses on the **effective** lock ({@link collectionFolderLocked}), so a sub-folder of a
+ * locked parent is refused too: that press scatters its cards the same way.
+ *
+ * A sentence rather than a constraint failure, in this module's existing grammar — and one the
+ * menu says *before* the press, greyed into the row's accessible name. `PinnedFolders`' rule: a
+ * control whose only outcome is a sentence explaining that it does not work teaches the reader
+ * nothing they could not have been shown by its absence.
+ */
+const FOLDER_IS_LOCKED = "That folder is locked. Unlock it before deleting it.";
+/**
  * `collection_folders::ENTRY_IN_A_DECK` — what {@link collection_set_folder} says about the row
  * it was **given**, when that row is sitting in a deck's group.
  *
@@ -7702,6 +7770,35 @@ function userCollectionFolder(db: FakeDb, id: number): FakeCollectionFolder {
 }
 
 /**
+ * The **effective** lock — the crate's `WITH RECURSIVE locked_folders` walked from the other
+ * end, one row at a time up the `parentId` chain.
+ *
+ * **A folder inside a locked folder is locked**, and only the folder the reader pressed Lock on
+ * carries the flag: {@link FakeCollectionFolder.locked} says why the inherited answer is
+ * computed rather than stored. Everything that reads the lock and is not the toggle itself asks
+ * this — the delete refusal, and {@link collectionScope}'s `excludeLocked` term.
+ *
+ * **`null` is the root and is never locked.** The root is not a folder and has no row to carry a
+ * flag, and a `null` that answered `true` would empty the list that is mostly root.
+ *
+ * The climb is bounded by {@link MAX_FOLDER_DEPTH}, for `collection_folder_move`'s reason rather
+ * than out of caution about depth: the crate's `UNION` terminates over a cycle a hand-edited
+ * database holds, and an unbounded walk here would hang the story's tab instead — the same bug
+ * drawn smaller.
+ */
+function collectionFolderLocked(db: FakeDb, id: number | null): boolean {
+  let cursor: number | null = id;
+  for (let hops = 0; cursor !== null && hops < MAX_FOLDER_DEPTH; hops += 1) {
+    const folder: FakeCollectionFolder | undefined = collectionFolderById(db, cursor);
+    // A parent that is not there is the root reached the hard way, not a lock.
+    if (!folder) return false;
+    if (folder.locked) return true;
+    cursor = folder.parentId;
+  }
+  return false;
+}
+
+/**
  * `collection::folder_named` — the folder an **add** names, refused in words unless it is there
  * **and is the reader's own**. `null` is the root and is always a destination: there is no row to
  * look up, so the fence must not reach it.
@@ -8082,6 +8179,9 @@ function createDeckGroup(db: FakeDb, deckId: number, name: string): FakeCollecti
     kind: COLLECTION_DECK_KIND,
     deckId,
     sortOrder: 0,
+    // Never locked, and nothing can lock it: a deck's group is already fixed, so the toggle
+    // refuses it with {@link FOLDER_NOT_YOURS} like every other write in that module.
+    locked: false,
   };
   db.collectionFolders.push(folder);
   return folder;
@@ -8157,13 +8257,22 @@ function theoryCopies(db: FakeDb, deckId: number): number {
 
 /**
  * `deck_theory::OWNED_SPARE_SQL` — copies of one **printing in one finish** the collection holds
- * that **no deck is holding**.
+ * that **no deck is holding and the reader has not set aside**.
  *
  * Where the row *sits* is the whole of the test since schema v25, and there is no subtraction
- * left in it: the root, a folder the reader made and `Recently removed` are all spare, and only
- * a `deck` folder is not. `Recently removed` is on the spare side deliberately — a card that
+ * left in it: the root, a folder the reader made and `Recently removed` are all spare, and a
+ * `deck` folder is not. `Recently removed` is on the spare side deliberately — a card that
  * left a deck without leaving the database is back on the reader's desk, and the folder exists
  * so they can put it somewhere else.
+ *
+ * **A locked folder is the second arm, added beside the deck one in user schema v33**, and this
+ * function's own sentence is the argument for it: a deck on a table has its cards, so a copy in
+ * its group is not one a plan can count on — and a card in a display case is not one a plan can
+ * count on either. It is the **only** ownership-shaped figure a lock moves, because `ownedSpare`
+ * means *spare* rather than *owned*: every count of what the reader **has** — the search's owned
+ * pip, both owned badges, the Owned/Missing facet, a wish's filled quantity — counts a locked
+ * copy, and must, or the app would be denying cardboard on the reader's shelf. The effective
+ * lock, so a sub-folder of a set-aside drawer goes with it.
  *
  * This used to be `held − what every built deck had claimed`, floored at zero because a stored
  * claim could outlive the copies under it. Nothing can be stale any more, so nothing has to be
@@ -8181,7 +8290,8 @@ function ownedSpare(db: FakeDb, cardId: string, finish: DeckFinish): number {
     .filter((e) => {
       if (e.cardId !== cardId || e.finish !== want) return false;
       if (e.folderId === null) return true;
-      return collectionFolderById(db, e.folderId)?.kind !== COLLECTION_DECK_KIND;
+      if (collectionFolderById(db, e.folderId)?.kind === COLLECTION_DECK_KIND) return false;
+      return !collectionFolderLocked(db, e.folderId);
     })
     .reduce((n, e) => n + e.quantity, 0);
 }
@@ -8792,6 +8902,12 @@ export function writeHandlers(db: FakeDb) {
         kind: COLLECTION_USER_KIND,
         deckId: null,
         sortOrder: nextCollectionFolderOrder(db, args.parentId),
+        // Unlocked, written rather than left to the column's `DEFAULT 0` for `kind`'s reason:
+        // a default is a decision nobody can see at the call site. **Even inside a locked
+        // parent** — the new drawer is effectively locked by its ancestry the moment it
+        // exists, and writing `true` here would be the stored second copy the walk exists to
+        // avoid, unlockable to a folder whose badge would not go away.
+        locked: false,
       };
       db.collectionFolders.push(folder);
       return toCollectionFolder(folder);
@@ -8893,11 +9009,43 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
+     * `collection_folders::set_folder_locked` (user schema v33) — set a drawer aside, or put it
+     * back. {@link collection_folder_rename}'s exact shape, which is the one other write in this
+     * cabinet whose whole body is a fence, one scalar and a re-read.
+     *
+     * **The fence first**, so the app's own folders answer {@link FOLDER_NOT_YOURS} as they do
+     * to every other folder write: a deck's group is already fixed and `Recently removed` is a
+     * holding area, and a lock on either would be a control with no meaning.
+     *
+     * **It writes the folder's *own* flag and never an ancestor's**, and a folder inside a
+     * locked parent is *not* refused here — the flag it sets is real and stored, while the
+     * effective lock stays {@link collectionFolderLocked}'s answer. Unlocking a child of a
+     * locked parent therefore changes nothing the reader can see, which is why the menu greys
+     * that row with its reason rather than letting the press report a success the badge
+     * contradicts.
+     *
+     * **No refusal on the toggle itself and no confirmation**, which is the design's decision
+     * rather than an omission: locking is reversible in one press and protects against accident
+     * rather than against a person.
+     */
+    collection_folder_set_locked: (args: { id: number; locked: boolean }): CollectionFolder => {
+      refuseIfBusy(db);
+      const folder = userCollectionFolder(db, args.id);
+      folder.locked = args.locked;
+      return toCollectionFolder(folder);
+    },
+
+    /**
      * `collection_folders::delete_folder`. **Its cards are not deleted** —
      * `collection_entries.folder_id` is `ON DELETE SET NULL`, so they surface at the root, filed
      * nowhere and otherwise exactly as they were. **Sub-folders do go with it**, `parent_id`
      * being `ON DELETE CASCADE` on itself. An id that resolves to nothing is a success; a folder
-     * the **app** owns is the one id that is not.
+     * the **app** owns and a folder the reader has **locked** are the two ids that are not.
+     *
+     * **The lock refusal is on the *effective* lock**, so a sub-folder of a locked parent is
+     * refused too — the un-filing pass below is precisely what a lock is protecting the reader
+     * from, and it scatters a sub-tree's cards whichever folder in it was named. This is the
+     * only folder write that refuses for it: rename and move disturb no card, so neither does.
      *
      * **The un-filing goes through {@link refileEntry} and that is not a nicety** — it is the
      * whole reason the crate stopped leaving this press to the `SET NULL`. `folderId` is the
@@ -8920,6 +9068,10 @@ export function writeHandlers(db: FakeDb) {
       // two halves of that helper come apart. Only a folder that exists and is the app's is
       // refused.
       if (folder && folder.kind !== COLLECTION_USER_KIND) throw refuse(FOLDER_NOT_YOURS);
+      // {@link FOLDER_IS_LOCKED} after it, and inside the same `folder &&` for that check's
+      // reason: an id nothing answers to is still a success, and a lock cannot be read off a
+      // row that is not there.
+      if (folder && collectionFolderLocked(db, folder.id)) throw refuse(FOLDER_IS_LOCKED);
       const doomed = new Set<number>([args.id]);
       // The cascade is recursive, so it is walked to a fixed point rather than one level deep.
       // Nothing filters on `kind`: the CASCADE does not, so a walk that did would leave those
@@ -11358,6 +11510,9 @@ export function writeHandlers(db: FakeDb) {
         kind: COLLECTION_REMOVED_KIND,
         deckId: null,
         sortOrder: 0,
+        // {@link createDeckGroup}'s reason: the holding area is the app's, so nothing can set
+        // it aside — and a sweep that rebuilt it locked would be a folder nobody could unlock.
+        locked: false,
       });
       for (const deck of db.decks) createDeckGroup(db, deck.id, deck.name);
       return { entries };

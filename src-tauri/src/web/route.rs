@@ -102,6 +102,7 @@ pub const COMMANDS: &[&str] = &[
     "collection_folder_summary",
     "collection_folder_create",
     "collection_folder_rename",
+    "collection_folder_set_locked",
     "collection_folder_move",
     "collection_folder_reorder",
     "collection_folder_delete",
@@ -1038,6 +1039,18 @@ pub fn call(
                 command,
                 crate::sync::with_write(state, |c| {
                     crate::collection_folders::rename_folder(c, id, &name)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "collection_folder_set_locked" => {
+            let id: i64 = field(command, args, "id")?;
+            let locked: bool = field(command, args, "locked")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::collection_folders::set_folder_locked(c, id, locked)
                 })
                 .map_err(RouteError::Failed)?,
             )
@@ -2405,7 +2418,7 @@ mod tests {
         }
         assert_eq!(
             COMMANDS.len(),
-            121,
+            122,
             "update this number when a command is added"
         );
     }

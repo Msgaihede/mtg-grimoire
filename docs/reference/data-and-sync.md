@@ -503,7 +503,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   answers the question the switch was asking — the decks *are* where the cards are now.
 - **The single-file ladder is frozen at v26**, and `schema::LEGACY_SINGLE_FILE_VERSION` is the
   answer; schema 27 splits the file in two and the halves number themselves separately
-  (`USER_SCHEMA_VERSION` **32** on the reader's file, `CORPUS_SCHEMA_VERSION` 1 on the
+  (`USER_SCHEMA_VERSION` **33** on the reader's file, `CORPUS_SCHEMA_VERSION` 1 on the
   rebuildable one). This line read **v18** for two
   whole rungs, because a prose-only edit routes to neither CI job and nothing goes red when a
   ladder entry rots. **It then read 30 for two more**, through v31 and v32, and so did
@@ -583,6 +583,18 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `cover_image_path` stays on the `decks` spec is not danger.** It is that removing it buys one
   dead key out of a deck op that is sent regardless, which is not worth a second change to the
   sync surface in the week the relay work is moving.
+  **v33 adds `collection_folders.locked` and is a shape rung again**, so it owes the two things
+  v32 was the first to owe neither of: a line in `USER_SCHEMA_SQL` and an `UNDO_V33` beside it.
+  One statement — `ALTER TABLE collection_folders ADD COLUMN locked INTEGER NOT NULL DEFAULT 0`
+  — landed 2026-09-03 for [issue #365](https://github.com/Msgaihede/mtg-grimoire/issues/365).
+  **`NOT NULL DEFAULT 0` is what makes the upgrade invisible**, v24's third trap answered the
+  same way round: every folder that already exists is unlocked, which is the state it was in,
+  so the unset value is not a lie a `DEFAULT` is telling — it is the answer. No index, so the
+  62 `sqlite_master` rows that fence names do not move. It is on
+  `sync_engine::capture`'s `collection_folders` `Spec` as a plain field, which makes it
+  last-writer-wins per field and needs no `apply::META` entry — it is in no grain, is no
+  counter and is not the tree column. The lock's whole design is
+  [collection-folders.md](collection-folders.md).
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every

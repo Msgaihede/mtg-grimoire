@@ -31,7 +31,11 @@ const DRAG_WAIT = 5_000;
 function folder(
   over: Partial<CollectionFolder> & { id: number; name: string },
 ): CollectionFolder {
-  return { parentId: null, kind: "user", deckId: null, sortOrder: over.id, ...over };
+  // `locked: false` is what schema v33's `NOT NULL DEFAULT 0` writes on every folder that already
+  // existed. A drawer set aside says so through the card's `locked` **prop** — the *effective*
+  // answer the page computes over the whole cabinet — rather than through this flag, which is the
+  // folder's own and which the card deliberately never reads.
+  return { parentId: null, kind: "user", deckId: null, sortOrder: over.id, locked: false, ...over };
 }
 
 /** The drawer every story below draws, and the one a copy is dropped into. */
@@ -315,6 +319,41 @@ export const Thousands: Story = {
     await expect(canvas.getByRole("button", { name: /^Trade binder folder/ })).toHaveTextContent(
       "1,204 cards · $12,000.00",
     );
+  },
+};
+
+/**
+ * **A drawer the reader has set aside** — issue #365, and the card's second visual claim after the
+ * dash.
+ *
+ * A locked folder is one the app stops *offering*: its copies drop out of the flattened list and
+ * stop counting as spare, and nothing else about it moves. It is still the reader's own drawer —
+ * still dashed, still a drop target in both directions, still renameable and still movable — which
+ * is why the badge is a change of *glyph* rather than a change of edge. The dash means
+ * *container*, and a locked container is still a container.
+ *
+ * **The card has exactly two slots and the `⋯` owns one of them**, so the badge is the leading
+ * glyph: `Folder` becomes `Lock`, at the same size and in the same `text-dim`, which is the device
+ * `PinnedFolder` already uses to say what kind of folder it is. **And a glyph is not an accessible
+ * name**, so the word joins the figures line in both spellings — `Locked · 12 cards · $340.25` on
+ * screen, `locked, 12 cards, $340.25` in the sentence — built in one function with the count and
+ * the money, so the two can never come to disagree.
+ *
+ * **`locked` is the *effective* lock and never the folder's own column.** The lock inherits down
+ * the tree, so a drawer inside a locked one is locked and draws this same badge; the page walks
+ * the cabinet once (`lockedFolderIds`) and hands each card its answer. The folder behind this
+ * story carries `locked: false` on purpose, which is what makes the point: the card is drawing the
+ * page's word.
+ */
+export const Locked: Story = {
+  args: { locked: true },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const tile = canvas.getByRole("button", { name: /^Trade binder folder/ });
+    await expect(tile.querySelector(".lucide-lock")).toBeInTheDocument();
+    await expect(tile.querySelector(".lucide-folder")).toBeNull();
+    await expect(tile).toHaveTextContent("Locked · 12 cards · $340.25");
+    await expect(tile).toHaveAccessibleName("Trade binder folder, locked, 12 cards, $340.25");
   },
 };
 

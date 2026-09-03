@@ -116,7 +116,7 @@ both plus the frontend.
   every upgraded one, and a fresh worktree is a fresh install, so nothing else here can see it.
   The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
-  numbers from there (`USER_SCHEMA_VERSION` **32** since custom deck covers went,
+  numbers from there (`USER_SCHEMA_VERSION` **33** since collection folders learned to lock,
   `CORPUS_SCHEMA_VERSION` 1, deliberately
   incomparable). This line read **v25** while that was head, and
   [the ladder's history](../docs/reference/data-and-sync.md) is the story. (This line read
@@ -129,7 +129,9 @@ both plus the frontend.
   above, in the one place a `grep USER_SCHEMA_VERSION src-tauri/src/schema.rs` settles it. v31
   added `device_names`, the twelfth synced table; v32 flips every `decks.cover_kind` still
   reading `'custom'` to `'card_art'` and is the first rung on either ladder that changes no
-  shape at all.)
+  shape at all; v33 adds `collection_folders.locked`, the flag behind
+  [issue #365](https://github.com/Msgaihede/mtg-grimoire/issues/365), and is a shape rung again
+  — so it owes its `USER_SCHEMA_SQL` line and its `UNDO_V33`, where v32 owed neither.)
 - **v24 and v25 are one spec's rung split in two, and the split is deliberate.** v24 creates
   `collection_folders` in its **final** shape — `kind` and `deck_id` columns and both partial
   unique indexes included — and files nothing into it. **v25 inserts the single `removed` folder

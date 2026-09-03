@@ -502,6 +502,28 @@ function starterEntries(): FakeEntry[] {
  * that built its tree from the summary rather than from `collection_folder_list` would draw two
  * folders here and never notice, and the empty-folder sentence would be unreachable.
  *
+ * # And one of the three is locked
+ *
+ * **`Someday` is the folder this seed sets aside** (user schema v33) — the drawer with nothing in
+ * it, which is the second job that row now has and the reason it is the right one to carry the
+ * lock. **It is `Trade binder` that reads as issue #365's own example** (cards held for a trade:
+ * owned, not available, today indistinguishable from a binder), and locking *it* was tried and
+ * backed out: it holds the only Black Lotus anywhere in this seed, which `deck_theory_diff`
+ * leans on for "wanted 1, and one spare in the box" — and a locked copy is not spare (spec
+ * §4.2). A seed lock that quietly rewrote another fixture's meaning would be paying for one
+ * story with another.
+ *
+ * **So the lock costs this seed nothing at all**, and that is the property being bought:
+ * `Someday` holds no copies, so no list loses a row, no tile loses a number and no plan loses a
+ * spare, whatever a caller asks. What a story gets is the badge — **at the root, beside an
+ * unlocked sibling**, which is one screen showing both states rather than a level a reader has
+ * to navigate into. A story that wants the *exclusion* presses Lock on `Binder`, and that press
+ * is also what draws the inheritance, since `Trade binder` sits underneath it.
+ *
+ * **Nothing else here is locked**, and nothing that never asks loses anything either way: an
+ * absent `excludeLocked` is every folder there is, so a caller that says nothing sees exactly
+ * the collection it always saw.
+ *
  * `sortOrder` is what `collection_folder_create` writes — `max + 1` **among siblings** — so the
  * two at the root are 0 and 1 while the child starts at 0 again rather than continuing their run.
  *
@@ -525,9 +547,13 @@ function starterEntries(): FakeEntry[] {
  */
 function starterCollectionFolders(decks: FakeDeck[]): FakeCollectionFolder[] {
   return [
-    { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0 },
-    { id: 2, parentId: 1, name: "Trade binder", kind: "user", deckId: null, sortOrder: 0 },
-    { id: 3, parentId: null, name: "Someday", kind: "user", deckId: null, sortOrder: 1 },
+    { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0,
+      locked: false },
+    { id: 2, parentId: 1, name: "Trade binder", kind: "user", deckId: null, sortOrder: 0,
+      locked: false },
+    // The one folder in this seed the reader has set aside — see the note above.
+    { id: 3, parentId: null, name: "Someday", kind: "user", deckId: null, sortOrder: 1,
+      locked: true },
     // Ids 4 through 7, in deck order, which is what {@link DECK_1_GROUP} names.
     ...decks.map((d, i) => ({
       id: 4 + i,
@@ -536,6 +562,8 @@ function starterCollectionFolders(decks: FakeDeck[]): FakeCollectionFolder[] {
       kind: "deck",
       deckId: d.id,
       sortOrder: 0,
+      // The app's own, so the toggle refuses it: a deck's group is already fixed.
+      locked: false,
     })),
     {
       id: 4 + decks.length,
@@ -544,6 +572,8 @@ function starterCollectionFolders(decks: FakeDeck[]): FakeCollectionFolder[] {
       kind: "removed",
       deckId: null,
       sortOrder: 0,
+      // The app's own too, and a holding area is the last thing a lock would mean anything on.
+      locked: false,
     },
   ];
 }
@@ -1723,6 +1753,7 @@ function bracketMismatchSeed(): FakeDb {
     kind: "deck",
     deckId: BRACKET_DECK,
     sortOrder: 0,
+    locked: false,
   });
   const main = categoryNamed(db.deckCategories, BRACKET_DECK, "Main deck");
   const commander = categoryOf(db.deckCategories, BRACKET_DECK, "commander");

@@ -375,6 +375,7 @@ pub fn run() {
             collection_folders::collection_folder_list,
             collection_folders::collection_folder_create,
             collection_folders::collection_folder_rename,
+            collection_folders::collection_folder_set_locked,
             collection_folders::collection_folder_move,
             collection_folders::collection_folder_reorder,
             collection_folders::collection_folder_delete,
