@@ -3,14 +3,27 @@
 //!
 //! Schema v25 made `collection_folders` the ledger: a card is in a deck because its
 //! `collection_entries` row sits in that deck's `kind = 'deck'` folder, not because a claim
-//! table says so. Nothing else in the crate moves a row across that boundary, and these two
-//! are deliberately the only pair that can — which is what makes exclusivity a *fact about
+//! table says so. These two are the only pair that moves a row across that boundary **and
+//! changes the deck's list in the same breath** — which is what makes exclusivity a *fact about
 //! where the row sits* rather than a sum somebody has to remember to compute.
 //!
 //! ```text
 //!            collection_to_deck                 deck_to_collection
 //!   binder / another deck ─────────▶ deck group ─────────────────▶ Recently removed
 //! ```
+//!
+//! **[`crate::deck_pull`] is the third crossing, and it is a different kind of write.** This
+//! line said the pair above were "deliberately the only pair that can" cross, and a third route
+//! was the thing nothing in the crate might grow; that was right about *these* two and wrong as
+//! a rule, because it described the boundary when what it was really about is the `deck_cards`
+//! write. A pull fills holes a list **already has**: it moves custody and writes **no
+//! `deck_cards` row at all** — not the quantity, not the category, not the `updated_at`. So it
+//! is not a third way to add or cut a card, which is what that sentence was fencing; it is the
+//! one write that changes only where the cardboard sits. Reusing [`collection_to_deck`] for it
+//! is the mistake that module exists to avoid: the `ON CONFLICT` arm below **adds** the moved
+//! quantity to the line, so filling a 3-copy hole in a 4-copy line would leave the deck asking
+//! for 7. Everything else it does is borrowed from here — [`take_copies`] for the move,
+//! `with_write_owned` for the lock, a history row with no undo step beside it.
 //!
 //! Four rules hold this together, and each has a test below:
 //!

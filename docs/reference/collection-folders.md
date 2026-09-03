@@ -364,20 +364,29 @@ nothing writes any more would have sat in that table forever.
 
 ### The two writes, and why a deck group is not a drop target
 
-`collection_alloc.rs` holds the only pair in the crate that moves a row across the deck boundary:
+`collection_alloc.rs` holds the pair in the crate that moves a row across the deck boundary:
 
 ```text
          collection_to_deck                 deck_to_collection
 binder / another deck ─────────▶ deck group ─────────────────▶ Recently removed
 ```
 
-**A card reaches a deck's group only through `collection_to_deck`, which also writes the
-`deck_cards` row.** That is why `set_entry_folder` refuses a `deck` destination and the page offers
-no ring on a deck group: a bare drag would file copies into the group and leave the deck's list
-saying nothing about them — a placement with no deck card behind it, which reads to the reader as
-cards that vanished into a deck that does not play them. The refusal is the command's, not
-`refile_entry`'s; the write underneath carries no kind fence at all, which is exactly what lets
-these two file into the two folders a reader may not point at.
+**A third write joined them on 2026-09-03 and is deliberately not a member of the pair** —
+`deck_pull.rs`'s `deck_pull_from_collection`, [issue #351](https://github.com/Msgaihede/mtg-grimoire/issues/351),
+whose whole record is in [decks-storage.md](decks-storage.md#the-pull-filling-a-hole-the-list-already-has).
+It travels the same left-hand arrow and writes **no** `deck_cards` row, which is exactly what
+makes it a third thing rather than a bulk `collection_to_deck`: it only ever fills a hole a
+`deck_cards` row **already declares**, so the number of copies the group holds rises to meet a
+list that was already asking for them.
+
+**A card reaches a deck's group only through those three, and every one of them answers for the
+deck card behind the copies.** `collection_to_deck` writes that row; `deck_pull_from_collection`
+refuses any pick the list is not already short of. That is why `set_entry_folder` refuses a
+`deck` destination and the page offers no ring on a deck group: a bare drag would file copies into
+the group and leave the deck's list saying nothing about them — a placement with no deck card
+behind it, which reads to the reader as cards that vanished into a deck that does not play them.
+The refusal is the command's, not `refile_entry`'s; the write underneath carries no kind fence at
+all, which is exactly what lets these file into the two folders a reader may not point at.
 
 **Taking a copy out of another deck's group decrements that deck's live list too.** The copies are
 custody rather than a reservation, so a deck that loses them loses the card. `MoveOutcome.fromDeck`
@@ -1325,10 +1334,11 @@ second spelling of "12 cards · $340.00" is a second chance for one wall to disa
 under it.
 
 **Neither kind is a drop target, and the two refusals are not the same refusal.** A **deck group**
-is refused up here, on the page, because a copy reaches one only through `collection_to_deck`,
-which writes the `deck_cards` row in the same transaction — a bare drag would call
-`collection_set_folder`, which knows nothing about decks, and file the copy into the group with no
-deck card behind it. **`Recently removed`** is refused a layer lower: `set_entry_folder` calls
+is refused up here, on the page, because a copy reaches one only through the three writes that
+answer for the deck card behind it — `collection_to_deck`, which writes that row in the same
+transaction, and `deck_pull_from_collection`, which refuses any pick the list is not already short
+of. A bare drag would call `collection_set_folder`, which knows nothing about decks, and file the
+copy into the group with no deck card behind it. **`Recently removed`** is refused a layer lower: `set_entry_folder` calls
 `user_folder` on its destination, so that write is refused whatever the page draws. A ring is a
 promise, and a ring over a target the backend always says no to is a promise the next press breaks.
 
@@ -1498,7 +1508,8 @@ React never sees** — go through
 | --- | --- |
 | `src-tauri/src/schema.rs` | The v24 and v25 steps, `COLLECTION_GRAIN`, `COLLECTION_FOLDER_KINDS`, `UNDO_V24`, `UNDO_V25`, `schema_at_23`, `v24_database`, and the whole-schema `ON DELETE` inventory |
 | `src-tauri/src/collection_folders.rs` | The seven commands, `set_entry_folder` and its two fences, `refile_entry`, `take_copies` (the split), `merge_entry`, `folder_summary`, `FOLDER_NOT_YOURS`, `ENTRY_IN_A_DECK` |
-| `src-tauri/src/collection_alloc.rs` | `collection_to_deck` and `deck_to_collection` — the only pair that moves a row across the deck boundary — `take_from_deck_list`, `MoveOutcome`, the cut's history row and the argument for its missing undo step, and the seven refusal sentences |
+| `src-tauri/src/collection_alloc.rs` | `collection_to_deck` and `deck_to_collection` — the pair that moves a row across the deck boundary and back — `take_from_deck_list`, `MoveOutcome`, the cut's history row and the argument for its missing undo step, and the seven refusal sentences |
+| `src-tauri/src/deck_pull.rs` | The third crossing (2026-09-03, issue #351): `deck_pull_plan` and `deck_pull_from_collection` — filling a hole the list already declares, writing no `deck_cards` row. Candidate eligibility, the pre-pick order, the all-or-nothing batch, and the `move` history row. Recorded in [decks-storage.md](decks-storage.md#the-pull-filling-a-hole-the-list-already-has) |
 | `src-tauri/src/collection.rs` | The grain's other ten terms, `set_quantity`'s zero-delete, `update_entry`'s merge, `fold_entry`, `EntryChange`, `ENTRY_FINISH`, `Allocation` |
 | `src-tauri/src/deck.rs` | `owned_by_oracle` and `attribute_owned` — owned/missing as a sum over the group — `delete_deck`, which re-files into `Recently removed`, and `release_group_copies`, the crate's one walk over a group's rows — oracle-matched, exact printing first — which `deck_to_collection` calls for its one row and `release_live_copies` loops for the four bulk sites (`clear_category`, `clear_variant`, `deck_meta::delete_category`'s cascade arm, `import::commit_import`'s `replace` arm), carrying the `live` fence for all of them |
 | `src-tauri/src/reset.rs` | `clear_collection` — entries, then folders |

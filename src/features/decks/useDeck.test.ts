@@ -19,6 +19,8 @@ const deckCategoryClear = vi.hoisted(() => vi.fn());
 const deckClear = vi.hoisted(() => vi.fn());
 const deckMoveCard = vi.hoisted(() => vi.fn());
 const deckMissingToWishlist = vi.hoisted(() => vi.fn());
+const deckPullPlan = vi.hoisted(() => vi.fn());
+const deckPullFromCollection = vi.hoisted(() => vi.fn());
 const deckSwapPrinting = vi.hoisted(() => vi.fn());
 const deckCardSetTag = vi.hoisted(() => vi.fn());
 const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
@@ -40,6 +42,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckClear,
     deckMoveCard,
     deckMissingToWishlist,
+    deckPullPlan,
+    deckPullFromCollection,
     deckSwapPrinting,
     deckCardSetTag,
     oracleTagsForPrintings,
@@ -48,7 +52,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   },
 }));
 
-import { useDeck, useSwapFromPane } from "./useDeck";
+import { useDeck, usePullPlan, useSwapFromPane } from "./useDeck";
 
 const DECK: DeckRow = {
   gameKey: "any",
@@ -201,6 +205,12 @@ beforeEach(() => {
   deckClear.mockReset().mockResolvedValue(12);
   deckMoveCard.mockReset().mockResolvedValue(undefined);
   deckMissingToWishlist.mockReset().mockResolvedValue(2);
+  // A plan with one hole in it and one copy on the desk that fills it. The rows are the
+  // dialog's to draw; what this file is about is the query being asked at all.
+  deckPullPlan.mockReset().mockResolvedValue([]);
+  // What a pull moved, which is the shape the command answers and never the picks that
+  // went in: it is all-or-nothing, so a resolved promise means every pick landed.
+  deckPullFromCollection.mockReset().mockResolvedValue({ copies: 3, cards: 1 });
   deckSwapPrinting.mockReset().mockResolvedValue({ folded: false, quantity: 4 });
   deckCardSetTag.mockReset().mockResolvedValue(undefined);
   // A database that has never fetched the taxonomy — every card answers "no tags", which is
@@ -1193,6 +1203,117 @@ describe("useDeck", () => {
     await result.current.setTag.mutateAsync({ cardId: "p1", categoryId: MAIN.id, finish: null, tagId: null });
     expect(deckCardSetTag).toHaveBeenCalledWith(4, "p1", MAIN.id, "live", null, null);
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
+  });
+
+  /**
+   * **The pull is `missingToWishlist` read in the other direction, and its three roots say so.**
+   *
+   * `["decks"]` because every `ownedQuantity` in the deck is a sum over the collection rows
+   * sitting in its group, and this just moved some in. `["collection"]` because those rows
+   * changed folder — through the merge, so a source row can have been folded away and deleted
+   * outright, which the collection's list, its summary, both folder cards and the folder tree
+   * are all wrong about. `["cards", "search"]` because the backend runs the write through
+   * `collection_source::with_write_owned`, which rebuilds the facet index's `owned` dimension:
+   * a search wall left on screen behind the dialog is drawing a stale facet rather than a stale
+   * field nothing draws.
+   *
+   * **And not `["wishlist"]`**, which is the absence that makes this a claim rather than a
+   * shotgun: this command writes no wish, and the one write in this hook that does is the one
+   * next to it. `staleRoots` covers all four roots, so the exact array is the whole assertion.
+   */
+  it("refreshes the deck, the collection and the search after a pull — and not the wishlist", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    seedOwned(client);
+    expect(staleRoots(client)).toEqual([]);
+
+    const moved = await result.current.pullFromCollection.mutateAsync([
+      { entryId: 21, quantity: 3 },
+    ]);
+
+    expect(deckPullFromCollection).toHaveBeenCalledWith(4, [{ entryId: 21, quantity: 3 }]);
+    // What actually moved, which is what a sentence quotes — never the picks that went in.
+    expect(moved).toEqual({ copies: 3, cards: 1 });
+    await waitFor(() =>
+      expect(staleRoots(client)).toEqual(["cards", "collection", "decks"]),
+    );
+  });
+
+  /**
+   * **It writes no `deck_cards` row, and this is the assertion that says so.** The command that
+   * looks like it — `collection_to_deck` — folds the quantity into the list as well as moving
+   * the cardboard, so pointing it at a 4-copy line the reader is 3 short of would make the line
+   * 7. This one changes only where the copies sit, which is the only half a shortfall is about.
+   *
+   * There is no field on the answer to check for it, so the claim is made where it can be: the
+   * absolute quantity write and the deck-to-collection cut are the two commands in this hook
+   * that touch `deck_cards`, and a pull calls neither.
+   */
+  it("moves copies without touching the deck's own list", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.pullFromCollection.mutateAsync([{ entryId: 21, quantity: 3 }]);
+
+    expect(deckSetCardQuantity).not.toHaveBeenCalled();
+    expect(deckToCollection).not.toHaveBeenCalled();
+    expect(deckAddCard).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The read half of the pull — its own hook, because it is the one read here nobody wants by
+ * default: a plan over every unallocated collection row that could fill a hole, asked by one
+ * dialog when one button is pressed.
+ */
+describe("usePullPlan", () => {
+  /**
+   * **The gate is the whole point of the hook's second argument.** `DeckEditor`'s `Layer` doc is
+   * explicit that a dialog nobody opened has no business asking for anything, and this is the
+   * widest read that surface makes — ungated it would be a `deck_pull_plan` behind every deck
+   * anybody merely opened.
+   */
+  it("asks for nothing until the dialog that wants it is open", () => {
+    renderHook(() => usePullPlan(4, false), { wrapper });
+
+    expect(deckPullPlan).not.toHaveBeenCalled();
+  });
+
+  it("reads the plan once it is", async () => {
+    const rows = [{ cardId: "p1", name: "Lightning Bolt", short: 3 }];
+    deckPullPlan.mockResolvedValue(rows);
+
+    const { result } = renderHook(() => usePullPlan(4, true), { wrapper });
+
+    await waitFor(() => expect(result.current.data).toBe(rows));
+    expect(deckPullPlan).toHaveBeenCalledWith(4);
+  });
+
+  /** A caller with no deck open mounts an idle query rather than branching around one —
+   *  `useDeck(null)`'s rule, and a `null` id can never satisfy the gate however it is set. */
+  it("asks for nothing when there is no deck, open dialog or not", () => {
+    renderHook(() => usePullPlan(null, true), { wrapper });
+
+    expect(deckPullPlan).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **Under the `["decks"]` root**, which is what makes every write in {@link useDeck} refresh
+   * it — the pull itself most of all: a plan left in the cache afterwards offers copies that
+   * are now in the deck's own group and are therefore excluded from it by definition.
+   *
+   * Asserted through the invalidation rather than by reading the key back, because the key is
+   * only ever right *relative to* that root: `invalidateQueries({ queryKey: ["decks"] })` is
+   * what the hook next door fires, and a plan keyed anywhere else would survive it.
+   */
+  it("is invalidated by the deck root every write in this file fires", async () => {
+    const { result } = renderHook(() => usePullPlan(4, true), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(deckPullPlan).toHaveBeenCalledTimes(1);
+
+    await client.invalidateQueries({ queryKey: ["decks"] });
+
+    await waitFor(() => expect(deckPullPlan).toHaveBeenCalledTimes(2));
   });
 });
 

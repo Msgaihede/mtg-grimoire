@@ -4158,6 +4158,410 @@ describe("moving copies across the deck boundary", () => {
 });
 
 /**
+ * `deck_pull_plan` and `deck_pull_from_collection` — the third write that moves copies across
+ * the deck boundary, and the only one that changes no `deck_cards` cell at all.
+ *
+ * **The feature is one sentence**: a deck lists four Bolts and physically holds one, so it reads
+ * three missing, and the reader owns three more sitting in a binder. Everything below is a way
+ * of getting that wrong — offering a copy another deck is holding, offering a different
+ * printing, filling a hole a switched-off pile invented, or filling the hole *and* raising the
+ * line so a 4-copy deck claims 7.
+ */
+describe("pulling owned copies into a deck", () => {
+  /**
+   * The issue's own arithmetic: `Burn` lists four Bolts on its main pile, holds one of them in
+   * its group, and three more sit at the root of the collection. The line reads 1 of 4 and the
+   * missing three are on the reader's desk.
+   */
+  const shortOfThree = (over: Partial<FakeDb> = {}) =>
+    makeDeckDb({
+      decks: [deck({ id: 1, name: "Burn" })],
+      deckCards: [deckCard({ id: 1, cardId: BOLT.id, categoryKind: "main", quantity: 4 })],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT.id, quantity: 1, folderId: groupId(1) }),
+        entry({ id: 2, cardId: BOLT.id, quantity: 3 }),
+      ],
+      ...over,
+    });
+  const plan = (db: FakeDb, deckId = 1) => readHandlers(db).deck_pull_plan({ deckId });
+  const copiesIn = (db: FakeDb, folderId: number | null) =>
+    db.collectionEntries
+      .filter((e) => e.folderId === folderId)
+      .reduce((n, e) => n + e.quantity, 0);
+
+  /**
+   * **The assertion the whole feature turns on**, and it is a pair rather than one number:
+   * `ownedQuantity` rises to meet a `quantity` nobody touched.
+   *
+   * A handler that folded the copies into `deck_cards` the way `collection_to_deck` does — the
+   * one line of difference between the two commands — would answer `7` for the line here and
+   * pass every other test in this block. The reader's decklist would then be wrong everywhere
+   * they export it, silently, and only this pair catches it.
+   */
+  it("raises what the deck owns to meet a quantity it does not touch", () => {
+    const db = shortOfThree();
+    const before = liveDeck(db)!.cards[0];
+    expect([before.quantity, before.ownedQuantity]).toEqual([4, 1]);
+
+    const out = writeHandlers(db).deck_pull_from_collection({
+      deckId: 1,
+      picks: [{ entryId: 2, quantity: 3 }],
+    });
+
+    expect(out).toEqual({ copies: 3, cards: 1 });
+    const after = liveDeck(db)!.cards[0];
+    expect([after.quantity, after.ownedQuantity]).toEqual([4, 4]);
+    // One `deck_cards` row, holding what it held. Both halves: a second row would read as four
+    // plus whatever it carried, and the first alone cannot tell that from a row that grew.
+    expect(db.deckCards).toHaveLength(1);
+    expect(db.deckCards[0].quantity).toBe(4);
+    // And the copies really moved: the group holds one row of four, folded rather than a second
+    // row beside the one that was there — `folderId` is the eleventh term of the grain.
+    expect(db.collectionEntries.filter((e) => e.folderId === groupId(1))).toHaveLength(1);
+    expect(copiesIn(db, groupId(1))).toBe(4);
+    expect(copiesIn(db, null)).toBe(0);
+    // Filled, so there is nothing left to offer.
+    expect(plan(db)).toEqual([]);
+  });
+
+  /** The plan's own shape, once, so the rest of this block can assert one field at a time. */
+  it("answers the printing, the pile that wants it and the copy that could fill it", () => {
+    expect(plan(shortOfThree())).toEqual([
+      {
+        cardId: BOLT.id,
+        name: BOLT.name,
+        setCode: BOLT.setCode,
+        collectorNumber: BOLT.collectorNumber,
+        finish: null,
+        short: 3,
+        categories: ["Main deck"],
+        candidates: [
+          {
+            entryId: 2,
+            quantity: 3,
+            folderId: null,
+            folderName: null,
+            folderKind: null,
+            condition: "NM",
+            lang: "en",
+            altered: false,
+            signed: false,
+            proxy: false,
+            misprint: false,
+            grading: null,
+            serialNumber: null,
+          },
+        ],
+      },
+    ]);
+  });
+
+  /**
+   * **Another deck's custody is not the reader's desk** — the issue's "only pull cards that are
+   * not already in another deck folder", which is `Allocation::Unallocated`'s rule rather than a
+   * second spelling of it.
+   *
+   * Both ends are asserted, because either alone passes against a real bug: a plan that offered
+   * the copy would be caught by the first, and a write that trusted its picks rather than
+   * re-reading the plan would be caught by the second. The sentence tells the reader what to do
+   * about it, which is why it is `collection_set_folder`'s and not a fourth wording.
+   */
+  it("never offers a copy another deck is holding, and refuses one picked anyway", () => {
+    const db = shortOfThree({
+      decks: [deck({ id: 1, name: "Burn" }), deck({ id: 2, name: "Storm" })],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT.id, quantity: 1, folderId: groupId(1) }),
+        entry({ id: 2, cardId: BOLT.id, quantity: 3, folderId: groupId(2) }),
+      ],
+    });
+    expect(plan(db)).toEqual([]);
+    expect(() =>
+      writeHandlers(db).deck_pull_from_collection({
+        deckId: 1,
+        picks: [{ entryId: 2, quantity: 1 }],
+      }),
+    ).toThrow(/copies are in a deck/);
+    expect(copiesIn(db, groupId(2))).toBe(3);
+  });
+
+  /**
+   * **This deck's own group is excluded by the same clause, and has to be.** Those copies are
+   * already counted in `ownedQuantity`, so offering them would be offering to fill a hole with
+   * the thing that is already in it — and pulling them would be a press that moved nothing while
+   * reporting a copy.
+   */
+  it("does not offer the copies it already holds, and refuses one picked anyway", () => {
+    const db = shortOfThree();
+    expect(plan(db)[0].candidates.map((c) => c.entryId)).toEqual([2]);
+    // **`ENTRY_IN_A_DECK` and not `ALREADY_HERE`**, which is the sentence a fake is tempted to
+    // improve on: `why_not_offered` gives this deck's own group the same words as any other
+    // deck's, because it is the same fact and already says what to do about it. A story renders
+    // the refusal the window would, or it is not a fake.
+    expect(() =>
+      writeHandlers(db).deck_pull_from_collection({
+        deckId: 1,
+        picks: [{ entryId: 1, quantity: 1 }],
+      }),
+    ).toThrow(/copies are in a deck/);
+  });
+
+  /**
+   * **The order is the pre-pick**: the root, then `Recently removed`, then the reader's own
+   * folders in their `sortOrder`. It ranks by how little of the reader's filing a pull disturbs
+   * — the root is a decision nobody has made and the holding area is the app's own transient
+   * bin, where a named binder is a decision somebody made on purpose.
+   *
+   * The ids run the other way on purpose, so a handler that answered in row order rather than in
+   * this one fails rather than coinciding.
+   */
+  it("offers the root first, then Recently removed, then the reader's folders in their order", () => {
+    const db = shortOfThree({
+      collectionFolders: [
+        ...groupsOf([deck({ id: 1, name: "Burn" })]),
+        { id: 1, parentId: null, name: "Shoebox", kind: "user", deckId: null, sortOrder: 1 },
+        { id: 2, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0 },
+      ],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT.id, quantity: 1, folderId: 1 }),
+        entry({ id: 2, cardId: BOLT.id, quantity: 1, folderId: 2 }),
+        entry({ id: 3, cardId: BOLT.id, quantity: 1, folderId: REMOVED_FOLDER }),
+        entry({ id: 4, cardId: BOLT.id, quantity: 1 }),
+      ],
+    });
+    const candidates = plan(db)[0].candidates;
+    expect(candidates.map((c) => c.entryId)).toEqual([4, 3, 2, 1]);
+    // And each says where it is, for the dialog to draw — `null` at the root, which the UI words
+    // rather than the backend.
+    expect(candidates.map((c) => [c.folderName, c.folderKind])).toEqual([
+      [null, null],
+      ["Recently removed", "removed"],
+      ["Binder", "user"],
+      ["Shoebox", "user"],
+    ]);
+  });
+
+  /**
+   * **A different printing of the same oracle card is not a candidate, and neither is a different
+   * finish.** That is a deliberate narrowing rather than an oversight, and it is narrower than
+   * the app's own owned count: `ownedByOracle` keys on `oracle_id`, so a `2x2` Bolt filed in the
+   * group makes the `lea` line read as owned, while this fills only with the exact piece of
+   * cardboard the list names. Pin it rather than fixing it.
+   *
+   * The seed is one of each with the eligible copy **last**, so a handler matching on the oracle
+   * card or ignoring the finish answers three candidates rather than one.
+   */
+  it("matches the printing and the finish exactly, and nothing looser", () => {
+    const db = shortOfThree({
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT_2X2.id, quantity: 2 }),
+        entry({ id: 2, cardId: BOLT.id, finish: "foil", quantity: 2 }),
+        entry({ id: 3, cardId: BOLT.id, quantity: 2 }),
+      ],
+    });
+    // Nothing is in the group, so the line is short of all four.
+    expect(plan(db)).toHaveLength(1);
+    expect(plan(db)[0]).toMatchObject({ cardId: BOLT.id, finish: null, short: 4 });
+    expect(plan(db)[0].candidates.map((c) => c.entryId)).toEqual([3]);
+    // And the write is fenced by the same plan, so a caller that knew the id anyway is refused.
+    const w = writeHandlers(db);
+    for (const entryId of [1, 2]) {
+      expect(() =>
+        w.deck_pull_from_collection({ deckId: 1, picks: [{ entryId, quantity: 1 }] }),
+      ).toThrow(/not short of that printing/);
+    }
+  });
+
+  /**
+   * **A switched-off pile is short of nothing**, because it counts toward nothing anywhere else
+   * in the app either. `attributeOwned` already answers `0` for every row in one, which is
+   * exactly what would read as a hole the size of the whole pile if this test were missing —
+   * so the Maybeboard would offer to swallow the reader's binder.
+   */
+  it("finds no shortfall in a category the reader switched off", () => {
+    const db = shortOfThree({
+      deckCards: [deckCard({ id: 1, cardId: BOLT.id, categoryKind: "maybe", quantity: 4 })],
+    });
+    expect(plan(db)).toEqual([]);
+  });
+
+  /**
+   * **The shortfall folds to the printing, never to the pile**: what a reader is short of is
+   * cardboard, and custody is a fact about the deck rather than about a column. So one printing
+   * short in two categories is one row for the sum, and `categories` names both for the reader
+   * to read — never as a term in the arithmetic.
+   *
+   * The group's one copy goes to the main pile, which is `attributeOwned` walking the deck's own
+   * read order: 2 − 1 in `Main deck` and 2 − 0 in `Sideboard` is a shortfall of 3.
+   */
+  it("folds one printing short in two piles into one row that names both", () => {
+    const db = shortOfThree({
+      deckCards: [
+        deckCard({ id: 1, cardId: BOLT.id, categoryKind: "main", quantity: 2 }),
+        deckCard({ id: 2, cardId: BOLT.id, categoryKind: "side", quantity: 2 }),
+      ],
+    });
+    expect(plan(db)).toHaveLength(1);
+    expect(plan(db)[0]).toMatchObject({ short: 3, categories: ["Main deck", "Sideboard"] });
+  });
+
+  /** **A row with no candidate is left out entirely**, so an empty plan is the ordinary answer
+   *  rather than an error: not every card in a deck has a collection option. */
+  it("leaves out a card the reader owns none of", () => {
+    expect(plan(shortOfThree({ collectionEntries: [] }))).toEqual([]);
+  });
+
+  /** A plan holds no cards, so it is short of nothing there is anywhere to put — and every
+   *  theory row already reads `ownedQuantity` 0, which is what would read as one enormous hole
+   *  if this walked both variants. */
+  it("plans nothing for a deck whose only list is the theory one", () => {
+    const db = shortOfThree({
+      deckCards: [deckCard({ id: 1, cardId: BOLT.id, variant: "theory", quantity: 4 })],
+      collectionEntries: [entry({ id: 2, cardId: BOLT.id, quantity: 3 })],
+    });
+    expect(plan(db)).toEqual([]);
+  });
+
+  /**
+   * **One bad pick refuses the whole batch and moves nothing** — the crate's transaction reached
+   * from here, and the reason every pick is judged before the first copy moves. The editor sends
+   * a dialog's worth of picks in one press, and a partial pull would leave the reader unable to
+   * say what happened without counting rows.
+   *
+   * The good pick is **first**, so a handler that validated and moved in one pass has already
+   * written before it refuses.
+   */
+  it("refuses the whole batch for one bad pick, and leaves every other row where it was", () => {
+    const db = shortOfThree({
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT.id, quantity: 1, folderId: groupId(1) }),
+        entry({ id: 2, cardId: BOLT.id, quantity: 2 }),
+        entry({ id: 3, cardId: BOLT.id, quantity: 1, condition: "LP" }),
+      ],
+    });
+    const audit = db.deckAudit.length;
+
+    expect(() =>
+      writeHandlers(db).deck_pull_from_collection({
+        deckId: 1,
+        picks: [
+          { entryId: 2, quantity: 2 },
+          { entryId: 3, quantity: 9 },
+        ],
+      }),
+    ).toThrow(/not that many copies/i);
+
+    expect(copiesIn(db, groupId(1))).toBe(1);
+    expect(copiesIn(db, null)).toBe(3);
+    expect(db.collectionEntries.map((e) => e.id)).toEqual([1, 2, 3]);
+    expect(db.deckAudit).toHaveLength(audit);
+  });
+
+  /**
+   * **Past the shortfall is refused**, and the sum of the batch is what is judged rather than
+   * each pick alone: two rows of one printing are two picks against one hole, and each is small
+   * enough on its own. A deck that could be pulled past its own line would hold more copies than
+   * it lists, which is the state `ownedQuantity`'s `min` clamp then hides.
+   */
+  it("refuses more copies than the deck is missing, one pick or several", () => {
+    const db = shortOfThree({
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT.id, quantity: 1, folderId: groupId(1) }),
+        entry({ id: 2, cardId: BOLT.id, quantity: 5 }),
+        entry({ id: 3, cardId: BOLT.id, quantity: 5, condition: "LP" }),
+      ],
+    });
+    const w = writeHandlers(db);
+    expect(plan(db)[0].short).toBe(3);
+    expect(() =>
+      w.deck_pull_from_collection({ deckId: 1, picks: [{ entryId: 2, quantity: 4 }] }),
+    ).toThrow(/more copies than this deck is short of/);
+    expect(() =>
+      w.deck_pull_from_collection({
+        deckId: 1,
+        picks: [
+          { entryId: 2, quantity: 2 },
+          { entryId: 3, quantity: 2 },
+        ],
+      }),
+    ).toThrow(/more copies than this deck is short of/);
+    // Exactly the hole is fine, and it is what proves the two above refused on the sum rather
+    // than on being pointed at two rows at all.
+    expect(
+      w.deck_pull_from_collection({
+        deckId: 1,
+        picks: [
+          { entryId: 2, quantity: 2 },
+          { entryId: 3, quantity: 1 },
+        ],
+      }),
+    ).toEqual({ copies: 3, cards: 1 });
+  });
+
+  /** The four refusals that are about the press rather than about the arithmetic. `picks: []`
+   *  is a dialog confirmed with nothing ticked, which is `ZERO_ADD`'s rule one command over. */
+  it("refuses an empty batch, a quantity of none, a row that is gone and a deck with no group", () => {
+    const db = shortOfThree();
+    const w = writeHandlers(db);
+    expect(() => w.deck_pull_from_collection({ deckId: 1, picks: [] })).toThrow(
+      /Pick at least one copy/,
+    );
+    expect(() =>
+      w.deck_pull_from_collection({ deckId: 1, picks: [{ entryId: 2, quantity: 0 }] }),
+    ).toThrow(/quantity of at least one/);
+    expect(() =>
+      w.deck_pull_from_collection({ deckId: 1, picks: [{ entryId: 404, quantity: 1 }] }),
+    ).toThrow(/not there any more/);
+    expect(() =>
+      w.deck_pull_from_collection({ deckId: 404, picks: [{ entryId: 2, quantity: 1 }] }),
+    ).toThrow(/deck is not there/);
+    // And the read refuses the same id rather than answering `[]`, which is the one place this
+    // plan parts company with `deck_get` beside it: an empty plan already means "nothing here
+    // can be filled", and a dialog cannot tell that from a deck that has been deleted.
+    expect(() => plan(db, 404)).toThrow(/deck is not there/);
+
+    db.collectionFolders = db.collectionFolders.filter((f) => f.deckId !== 1);
+    expect(() =>
+      w.deck_pull_from_collection({ deckId: 1, picks: [{ entryId: 2, quantity: 1 }] }),
+    ).toThrow(/no folder to hold its cards/);
+  });
+
+  /**
+   * **One history row, and `delta` is 0 because the deck's *list* did not change.** `delta` is
+   * what `auditText.ts`'s day header adds up, so a pull that contributed to it would make a day
+   * of filing look like a day of deckbuilding. No card id or name either: a batch can span
+   * several printings, and a row naming one of them would read as a claim about that card alone.
+   *
+   * **And no undo step**, read through `allHandlers` because {@link journalled} is what would
+   * file one — `writeHandlers` alone could not tell a decision from an omission. This write
+   * changes no `deck_cards` cell at all, so `deck_undo`'s four primitives have nothing to put
+   * back: a step here would spend the reader's Ctrl+Z on a press that appeared to do nothing
+   * while the copies stayed where the pull put them.
+   */
+  it("records one move row with a zero delta, and files no undo step", () => {
+    const db = shortOfThree();
+    const h = allHandlers(db);
+    h.deck_update({ id: 1, patch: { name: "Renamed" } });
+    const steps = db.deckUndo.length;
+    const cursor = h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id;
+
+    h.deck_pull_from_collection({ deckId: 1, picks: [{ entryId: 2, quantity: 3 }] });
+
+    const row = db.deckAudit[db.deckAudit.length - 1];
+    expect(row).toMatchObject({
+      deckId: 1,
+      variant: "live",
+      kind: "move",
+      cardId: null,
+      cardName: null,
+      delta: 0,
+    });
+    expect(JSON.parse(row.payload)).toEqual({ pull: { copies: 3, cards: 1 } });
+    expect(db.deckUndo).toHaveLength(steps);
+    expect(h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id).toBe(cursor);
+  });
+});
+
+/**
  * `deck_clear` — the pile clear above with one filter dropped, so these are the same questions
  * asked of the whole list.
  *
@@ -5633,6 +6037,12 @@ describe("the busy fault", () => {
       // "not there any more" instead of BUSY.
       entryId: 1,
       deckCardId: 1,
+      // The pull's own argument, and the **third** write here to be named on this record without
+      // ever being read on this path: `refuseIfBusy` comes first, as it does for every write in
+      // the loop. Valid all the same, for `root`'s reason below — an empty list is this
+      // command's own refusal, so a handler that counted the picks before taking the lock would
+      // fail the loop by answering "There is nothing to pull" instead of BUSY.
+      picks: [{ entryId: 1, quantity: 1 }],
       // The mirror's pair. `enabled` is the **fourth** one-line boolean write here and is never
       // read on this path — `refuseIfBusy` comes first, as it does for every write in the loop
       // — while `root` *is* validated, and is absolute here on purpose: a relative one would
@@ -5859,7 +6269,15 @@ describe("the busy fault", () => {
     // than in `unlocked`. Its command is a *widening* of one already counted here and the count
     // still moved by one, for the reason the bulk-import pair moved it by two: the narrow
     // command did not go away. Re-counted by running the sweep.
-    expect(names).toHaveLength(87);
+    //
+    // Pulling owned copies then added **one**, 87 → 88: `deck_pull_from_collection` is the third
+    // write that moves a collection row across the deck boundary, so it takes the same
+    // `collection_source::with_write_owned` its two neighbours do — a move can *delete* a row by
+    // folding it, and the facet index's `owned` dimension is built by counting rows. The same
+    // lock from this loop's point of view. Its read half (`deck_pull_plan`) goes through
+    // `db_read` and is not in this table at all, exactly as the folder branches' reads were not.
+    // Re-counted by running the sweep, not by adding one on paper.
+    expect(names).toHaveLength(88);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,

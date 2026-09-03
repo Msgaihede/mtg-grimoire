@@ -108,6 +108,11 @@ pub const COMMANDS: &[&str] = &[
     "collection_set_folder",
     "collection_to_deck",
     "deck_to_collection",
+    // The third crossing: the read that finds a deck's fillable holes, and the write that
+    // moves custody without touching the list. Beside the pair above rather than with the deck
+    // commands, because what they have in common is the boundary and not the table.
+    "deck_pull_plan",
+    "deck_pull_from_collection",
     // The Wishlist destination.
     "wishlist_list",
     "wishlist_add",
@@ -1125,6 +1130,31 @@ pub fn call(
                 command,
                 crate::collection_source::with_write_owned(state, |c| {
                     crate::collection_alloc::deck_to_collection(c, deck_card_id, quantity)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        // The third crossing. **The read is `lock_db_read` and the write is
+        // `with_write_owned`**, which is the same split the pair above draws for the same
+        // reason: a pull moves rows between folders and can delete one by folding it, and the
+        // facet index's `owned` dimension counts rows.
+        "deck_pull_plan" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::deck_pull::plan(&conn, deck_id).map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_pull_from_collection" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let picks: Vec<crate::deck_pull::Pick> = field(command, args, "picks")?;
+            encode(
+                command,
+                crate::collection_source::with_write_owned(state, |c| {
+                    crate::deck_pull::from_collection(c, deck_id, &picks)
                 })
                 .map_err(RouteError::Failed)?,
             )
@@ -2405,7 +2435,7 @@ mod tests {
         }
         assert_eq!(
             COMMANDS.len(),
-            121,
+            123,
             "update this number when a command is added"
         );
     }

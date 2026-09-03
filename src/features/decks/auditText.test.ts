@@ -208,6 +208,85 @@ describe("auditSentence", () => {
   });
 
   /**
+   * **A pull wears the `move` kind and names no card**, exactly as an import wears `add` and a
+   * cleared pile wears `remove` — the payload is what tells it apart, because
+   * `deck_audit.kind`'s CHECK cannot be altered and a tenth word would rebuild every reader's
+   * whole history for a spelling.
+   *
+   * `move` is the honest word for it: nothing was added to the list and nothing taken off it,
+   * only *where the copies sit* changed — which is also why `delta` is `0` on the row and why
+   * the fixture says so rather than leaving the default to carry the claim.
+   */
+  it("words a pull rather than reading it as a card move", () => {
+    const pulled = auditSentence(
+      entry(
+        "move",
+        { pull: { copies: 12, cards: 5 } },
+        { cardId: null, cardName: null, delta: 0 },
+      ),
+    );
+
+    expect(pulled).toEqual({
+      text: "Pulled 12 copies from your collection",
+      detail: "across 5 cards",
+    });
+    // The wrong-but-plausible answer, asserted the way the cleared pile's is: every `default`
+    // arm in this file is a true-sounding sentence, so a drift here fails nothing on its own.
+    expect(pulled.text).not.toContain("Moved");
+    expect(pulled.text).not.toContain("a card");
+  });
+
+  /** One copy of one card is the count a reader meets on the smallest useful press, and the
+   *  one both halves of this sentence have to get right. */
+  it("says one copy and one card, not 1 copys and 1 cards", () => {
+    expect(
+      auditSentence(entry("move", { pull: { copies: 1, cards: 1 } }, { cardId: null })),
+    ).toEqual({
+      text: "Pulled 1 copy from your collection",
+      detail: "across 1 card",
+    });
+  });
+
+  /**
+   * **The regression that matters: an ordinary move must stay a move.** The branch is keyed on
+   * the payload, so a `move` row carrying no `pull` key is untouched by it — a pull sentence
+   * claiming every card a reader ever dragged between piles would rewrite their whole history
+   * rather than add a line to it.
+   */
+  it("leaves an ordinary card move to its own branch", () => {
+    expect(auditSentence(entry("move", { from: "Ramp", to: "Land" }))).toEqual({
+      text: "Moved Sol Ring",
+      detail: "Ramp → Land",
+    });
+    // Including the payload-less move, which is the shape a truncated or older row takes.
+    expect(auditSentence(entry("move", {}))).toEqual({ text: "Moved Sol Ring", detail: null });
+  });
+
+  /** A card count the row does not carry reads as `0` through `numberField`, and "across 0
+   *  cards" beside "Pulled 3 copies" is arithmetic that cannot be true — so there is no detail
+   *  at all. `importLine`'s `tagsCreated` rule, one payload over. */
+  it("draws no detail for a pull row that carries no card count", () => {
+    expect(
+      auditSentence(entry("move", { pull: { copies: 3 } }, { cardId: null })).detail,
+    ).toBeNull();
+  });
+
+  /** A `pull` payload on a kind this build has no pull sentence for falls through to that
+   *  kind's own branch rather than being claimed here — `importLine`'s defensive rule, which
+   *  exists because a payload shape is something a newer build is free to put anywhere. */
+  it("leaves a kind it has no pull sentence for to its own branch", () => {
+    expect(
+      auditSentence(
+        entry(
+          "add",
+          { category: "Ramp", quantity: 2, pull: { copies: 12, cards: 5 } },
+          { cardId: "c-1" },
+        ),
+      ),
+    ).toEqual({ text: "Added 2 × Sol Ring", detail: "to Ramp" });
+  });
+
+  /**
    * A swap that folds is the one that has to say so: two rows became one, and a deck list
    * that silently loses a line reads like a bug.
    */

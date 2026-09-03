@@ -133,6 +133,10 @@ import type {
   DeckGame,
   DeckInput,
   DeckPatch,
+  DeckPullCandidate,
+  DeckPullOutcome,
+  DeckPullPick,
+  DeckPullRow,
   DeckRow,
   DecksCleared,
   DeckTag,
@@ -4091,10 +4095,9 @@ function collectionScope(db: FakeDb, q: CollectionQuery): FakeEntry[] {
     // v25 every deck has a group and `collection_to_deck` files copies into it, so this is a
     // fact about **where the row sits** rather than a sum somebody has to remember to compute —
     // `collection_alloc::tests::a_copy_in_a_deck_group_is_not_available_to_another_deck` read
-    // from the collection's end.
-    if (q.allocation === "unallocated" && e.folderId !== null) {
-      if (collectionFolderById(db, e.folderId)?.kind === "deck") return false;
-    }
+    // from the collection's end. {@link inADeckFolder} is the predicate itself, shared with
+    // {@link pullCandidates} since 2026-09-03 rather than spelled twice.
+    if (q.allocation === "unallocated" && inADeckFolder(db, e.folderId)) return false;
     return true;
   });
 }
@@ -4627,6 +4630,117 @@ function attributeOwned(
     owned.set(row.id, take);
   }
   return owned;
+}
+
+/**
+ * `deck_pull::candidate_order` — where one candidate sorts, as the pair of numbers the compare
+ * below reads in order.
+ *
+ * **The order is the pre-pick, and it is chosen rather than incidental**: the root first, then
+ * `Recently removed`, then the reader's own folders in their `sortOrder`. It ranks by **how
+ * little of the reader's filing a pull disturbs** — the root is a decision nobody has made and
+ * the holding area is the app's own transient bin, where a named binder is a decision somebody
+ * made on purpose and taking a card out of it is undoing that decision. A dialog that offered
+ * the binder first would make the tidy reader pay for being tidy.
+ *
+ * **The third arm is `CASE`'s `ELSE`, not "a user folder"**, which is `CANDIDATE_SQL`'s shape
+ * read off rather than reasoned about: everything that is neither the root nor `removed` sorts
+ * at 2 on `coalesce(f.sort_order, 0)`. A `deck` folder never reaches here at all —
+ * {@link inADeckFolder} has already dropped it — so the only thing the `ELSE` covers besides the
+ * reader's own drawers is a `folder_id` nothing answers to, which `ON DELETE SET NULL` means the
+ * app cannot produce.
+ */
+function pullOrder(db: FakeDb, e: FakeEntry): [number, number] {
+  if (e.folderId === null) return [0, 0];
+  const folder = collectionFolderById(db, e.folderId);
+  if (folder?.kind === COLLECTION_REMOVED_KIND) return [1, 0];
+  return [2, folder?.sortOrder ?? 0];
+}
+
+/**
+ * `deck_pull::candidates_for` — every copy on the reader's desk that could fill one hole, best
+ * first.
+ *
+ * **The printing *and* the finish match exactly, and that is the deliberate narrowing this
+ * feature took** (2026-09-03), spelled out because it looks like a bug from either side. A
+ * deck's owned count is attributed at the **oracle** grain — {@link ownedByOracle} keys on
+ * `oracle_id`, so a LEA Bolt filed in the group makes an M10 line read as owned — and this
+ * fills strictly fewer holes than that count would allow. The trade is that nothing is ever
+ * pulled that is not the exact piece of cardboard the list names, which is the whole of what a
+ * reader is agreeing to when they press. Pin it rather than fixing it.
+ *
+ * **Eligibility is {@link inADeckFolder} and nothing of its own**, which is what makes the
+ * dialog and the Collection page's own switch answer the same question: the root, a folder the
+ * reader made and `Recently removed` are all cards on their desk, and this deck's own group is
+ * excluded by the same clause because those copies are already counted as owned.
+ *
+ * `quantity > 0` is the one extra term, and it is not the fence's business: a row stepped to
+ * zero is paperwork rather than a copy, exactly as it is to
+ * {@link collection_folder_summary}'s `sum(quantity)`.
+ */
+function pullCandidates(db: FakeDb, cardId: string, finish: DeckFinish): DeckPullCandidate[] {
+  return db.collectionEntries
+    .filter(
+      (e) =>
+        e.cardId === cardId &&
+        // {@link normaliseFinish} is the one place `"nonfoil"` becomes the `null` a deck row
+        // stores, so the two spellings are compared through it rather than beside it.
+        normaliseFinish(e.finish) === finish &&
+        e.quantity > 0 &&
+        !inADeckFolder(db, e.folderId),
+    )
+    .sort((a, b) => {
+      const [aRank, aOrder] = pullOrder(db, a);
+      const [bRank, bOrder] = pullOrder(db, b);
+      // Oldest row first inside a place, which is `moveCopies`' own tiebreak read from the
+      // other end: a reader with two rows of one printing in one folder gets the one they
+      // have had longest.
+      return aRank - bRank || aOrder - bOrder || a.id - b.id;
+    })
+    .map((e) => {
+      const folder = e.folderId === null ? undefined : collectionFolderById(db, e.folderId);
+      return {
+        entryId: e.id,
+        quantity: e.quantity,
+        folderId: e.folderId,
+        // `null` at the root, which the UI words — the backend has no row to read a name off
+        // and must not invent one.
+        folderName: folder?.name ?? null,
+        folderKind: folder?.kind ?? null,
+        // The copy's own facts, which are what tell two candidates of one printing apart: a
+        // reader choosing between them is choosing between a played English one and a NM
+        // Japanese one, and the row is the only place that is said.
+        condition: e.condition,
+        lang: e.lang,
+        altered: e.altered,
+        signed: e.signed,
+        proxy: e.proxy,
+        misprint: e.misprint,
+        grading: e.grading,
+        serialNumber: e.serialNumber,
+      };
+    });
+}
+
+/**
+ * `deck_pull::why_not_offered` — which of three things to tell a caller whose pick is not in the
+ * plan.
+ *
+ * Asked only on the refusal path, so the happy path pays nothing for it, and the three arms are
+ * three different things to tell a stale dialog: the row has gone, the row is spoken for, or the
+ * row is fine and the *deck* has stopped wanting it. One sentence covering all three would tell
+ * a reader nothing they could act on.
+ *
+ * **The `deck` arm is {@link ENTRY_IN_A_DECK} for this deck's own group too**, which the crate
+ * argues at its own definition and which is the one thing a fake is tempted to improve on:
+ * {@link ALREADY_HERE} reads better for that case and is the wrong sentence, because the fake's
+ * whole contract is that a story renders the refusal the window would.
+ */
+function whyNotOffered(db: FakeDb, entryId: number): string {
+  const row = db.collectionEntries.find((e) => e.id === entryId);
+  if (!row) return ENTRY_GONE;
+  if (inADeckFolder(db, row.folderId)) return ENTRY_IN_A_DECK;
+  return NOT_SHORT_OF_THAT;
 }
 
 /**
@@ -6128,6 +6242,89 @@ export function readHandlers(db: FakeDb) {
     },
 
     /**
+     * `deck_pull::plan` — every printing the **live** list is short of that the reader can fill
+     * off their own desk, and every copy that could fill it.
+     *
+     * **The `live` list only, because a plan holds no cards** ({@link THEORY_HOLDS_NOTHING}'s
+     * reasoning without the refusal): a theory row reserves nothing, so it is short of nothing
+     * there is anywhere to put. That is not a second rule to remember — {@link attributeOwned}
+     * already answers `0` for every theory row, so a plan walking both variants would read the
+     * whole theory list as one enormous hole.
+     *
+     * **The shortfall is folded to the printing, never to the pile.** The same card short in two
+     * categories is one row here for the sum, because what a reader is short of is *cardboard*
+     * and custody is a fact about the deck rather than about a column; {@link DeckPullRow}'s
+     * `categories` names the piles for them to read and is never a term in the arithmetic. That
+     * is {@link deck_missing_to_wishlist}'s fold one grain narrower — that one folds to the
+     * **oracle** card because a shopping list is not a printing preference, and this one folds
+     * to the printing and the finish because a pull moves the exact piece of cardboard.
+     *
+     * **The owned side is `deck_get`'s and not a second attribution**, which is the whole reason
+     * this reads the DTO rather than the rows. `ownedQuantity` is oracle-grained, skips an
+     * inactive pile and skips the theory list, and every one of those is a decision with a
+     * paragraph behind it — a plan that summed `collection_entries` itself would be a fourth
+     * answer to a question that already has three, and it would be plausible every time.
+     *
+     * **A row with no candidate is left out entirely**, so `candidates` is never empty and a
+     * plan of zero rows means "nothing here can be filled". That is the ordinary answer rather
+     * than an error: the issue this came from says in as many words that not every card in a
+     * deck will have a collection option.
+     *
+     * **A deck that is not there is refused rather than answered `[]`**, which is the one place
+     * this read parts company with `deck_get` beside it: that command answers `null` for a deck
+     * the gallery may simply have deleted, and `plan` turns the same `None` into
+     * {@link DECK_GONE} because an empty plan already means something else here — "nothing in
+     * this deck can be filled" — and a dialog cannot tell those two apart from a bare `[]`.
+     *
+     * `imageUris` is omitted, as it is from every DTO this fake builds: under Storybook a card
+     * picture comes from the `@/lib/images` alias rather than from a URL on the row, so a
+     * hand-minted one here would be a URL nobody ever fetches.
+     */
+    deck_pull_plan: (args: { deckId: number }): DeckPullRow[] => {
+      const detail = readHandlers(db).deck_get({ id: args.deckId, variant: LIVE });
+      if (!detail) throw refuse(DECK_GONE);
+      // The crate's `(card_id, finish)` tuple key, spelled as `deck_theory::group_key`'s string
+      // because a JS `Map` has no tuple key — and **insertion-ordered rather than sorted**,
+      // which is why it is a `Map` and not the `BTreeMap` the fold's neighbour uses: the
+      // detail's cards are already in {@link deckReadOrder}, so the folded rows come out in the
+      // deck's own order and the categories inside one come out in it too. A key that sorted
+      // would answer in card-id order, which is neither the deck's nor any order a reader chose.
+      const folded = new Map<string, DeckPullRow>();
+      for (const row of detail.cards) {
+        // A switched-off pile counts toward nothing anywhere in the app, so it is short of
+        // nothing either — `attributeOwned` has already given it an `ownedQuantity` of 0, which
+        // is exactly what would read as a hole if this test were missing.
+        if (!row.categoryActive) continue;
+        const short = row.quantity - row.ownedQuantity;
+        if (short <= 0) continue;
+        const key = `${row.cardId}|${row.finish ?? ""}`;
+        const found = folded.get(key);
+        if (found) {
+          found.short += short;
+          // Distinct, because one pile can hold two rows of one printing — a swap or a finish
+          // change leaves them side by side — and a reader reading `Main deck, Main deck`
+          // learns nothing from the second.
+          if (!found.categories.includes(row.categoryName)) found.categories.push(row.categoryName);
+          continue;
+        }
+        folded.set(key, {
+          // The deck **row's** name, set and number rather than the card's: they are
+          // denormalised onto `deck_cards` precisely so an orphan is still listed, and this is
+          // the one name such a row still has.
+          cardId: row.cardId,
+          name: row.name,
+          setCode: row.setCode,
+          collectorNumber: row.collectorNumber,
+          finish: row.finish,
+          short,
+          categories: [row.categoryName],
+          candidates: pullCandidates(db, row.cardId, row.finish),
+        });
+      }
+      return [...folded.values()].filter((row) => row.candidates.length > 0);
+    },
+
+    /**
      * `import::resolve_lines` — every name in a parsed decklist, resolved to a printing
      * this app has. **Read-only**, and one call for the whole list.
      *
@@ -6894,6 +7091,28 @@ const NO_REMOVED_FOLDER = "There is no Recently removed folder to file these int
  *  from deck A's folder onto deck A would otherwise write a second `deck_cards` row against
  *  copies the group already holds, and the list would say two where the folder says one. */
 const ALREADY_HERE = "Those copies are already in this deck.";
+/**
+ * `deck_pull`'s three, verbatim, and every one of them is a sentence because there is nothing
+ * else to say it with — the fake has no foreign keys and no CHECKs to raise a refusal, which is
+ * {@link collection_to_deck}'s stated reason one command over and holds here for a second one:
+ * a pull is judged against a *plan*, and no schema can express "the deck is short of this".
+ *
+ * {@link NOT_SHORT_OF_THAT} and {@link MORE_THAN_MISSING} are two sentences rather than one
+ * because they are two different things to tell a reader holding a dialog that has gone stale.
+ * The first is a printing that has stopped being short at all — somebody filed the copies from
+ * another window, or switched the pile off — and there is nothing to press. The second is a hole
+ * that is still there and smaller than it was, where lowering the number is the fix. A single
+ * "cannot pull that" would leave the reader unable to tell which.
+ *
+ * **`deck_pull` writes no fourth sentence for the deck's own group**, and that is worth naming
+ * because it looks like an omission: a pick pointing at a copy already in *this* deck's folder
+ * gets {@link ENTRY_IN_A_DECK} like any other deck folder's. `why_not_offered`'s doc argues it —
+ * it is the same fact and already says what to do about it — and it means the fake must not
+ * reach for {@link ALREADY_HERE} here, however well that sentence reads.
+ */
+const NOTHING_PICKED = "Pick at least one copy to pull into this deck.";
+const NOT_SHORT_OF_THAT = "This deck is not short of that printing any more.";
+const MORE_THAN_MISSING = "That is more copies than this deck is short of.";
 /** `collection_alloc::BOTH_PILES`. The id and the name are alternatives there rather than a
  *  preference — `deck_add_card` lets the id win because a drag carries both, and nothing sends
  *  both to this write, so both arriving means a caller has lost track of which it meant. In Rust
@@ -7660,6 +7879,31 @@ function deckGroup(db: FakeDb, deckId: number): FakeCollectionFolder | undefined
   return db.collectionFolders.find(
     (f) => f.deckId === deckId && f.kind === COLLECTION_DECK_KIND,
   );
+}
+
+/**
+ * `collection::Allocation::Unallocated`, asked about **one row**: is this copy in a deck's
+ * custody?
+ *
+ * **One function because it is one rule, and it grew its second reader three releases after its
+ * first.** {@link collectionScope} answers the Collection page's own switch with it, and
+ * {@link pullCandidates} decides what may fill a deck's hole with it. A pull that spelled the
+ * rule out again would be a second place for "a deck's folder is not the reader's desk" to be
+ * true, and the two would come to disagree the day a fourth folder kind is added — quietly, and
+ * each right on its own screen.
+ *
+ * **This deck's own group is not carved out, and must not be.** The copies in it are already
+ * counted in {@link attributeOwned}'s `ownedQuantity`, so offering them to a pull would be
+ * offering to fill a hole with the thing that is already in it.
+ *
+ * **The root answers `false` without a lookup**, because `null` there is a real place rather
+ * than an absence — it is where every copy starts and the only place an unfiled one can be, so
+ * a reading of it as "unknown" would hide the reader's whole unfiled collection from both
+ * callers.
+ */
+function inADeckFolder(db: FakeDb, folderId: number | null): boolean {
+  if (folderId === null) return false;
+  return collectionFolderById(db, folderId)?.kind === COLLECTION_DECK_KIND;
 }
 
 /** `collection_alloc::removed_folder` — the one holding area, or {@link NO_REMOVED_FOLDER}. A
@@ -9206,6 +9450,112 @@ export function writeHandlers(db: FakeDb) {
       // `deckCardId` is `null`: the caller handed the id in and still holds it, and a whole cut
       // has deleted the row it named.
       return { entryId: landed, fromDeck: null, deckCardId: null, quantity: moved };
+    },
+
+    /**
+     * `deck_pull::pull_from_collection` — move copies the reader already owns into this deck's
+     * group, filling holes the list has been carrying.
+     *
+     * **It writes no `deck_cards` row, and that is the entire difference from
+     * {@link collection_to_deck}.** That command is an *add*: a card the deck did not list is
+     * now listed and held, so the quantity goes up. This one is a *filling*: the line already
+     * says four and the reader has one, so what changes is which folder three pieces of
+     * cardboard sit in — the deck's `ownedQuantity` rises to meet a `quantity` nobody touched.
+     * Getting it wrong turns a 4-copy line into a 7-copy line, silently, and the reader's
+     * decklist is then wrong everywhere it is exported.
+     *
+     * **All-or-nothing, which is the crate's transaction reached from here.** Every pick is
+     * judged before the first copy moves, so a batch with one bad row moves nothing at all
+     * rather than half of what was asked — the deck editor sends a dialog's worth of picks in
+     * one press, and a partial pull would leave the reader unable to say what happened without
+     * counting rows. This handler needs no {@link collection_to_deck}-style rollback, because
+     * by construction it writes nothing before the last refusal it can hit.
+     *
+     * **The plan is the fence.** What may be pulled is exactly what {@link deck_pull_plan}
+     * offered, re-read here rather than trusted from the caller: a dialog can be minutes old,
+     * and every refusal below is a way that has stopped being true. Re-deriving the shortfall
+     * inline instead would be a second implementation of the fold to disagree with, on the one
+     * arithmetic this feature turns on.
+     *
+     * **The copies move through {@link moveCopies}**, so a pulled row that matches one already
+     * in the group folds into it rather than making a second — the same merge a filing and a cut
+     * get, and for the same reason: `folderId` is the eleventh term of {@link collectionGrain},
+     * so two rows of one grain in one folder is a state no other write here can produce.
+     *
+     * **One history row, `delta: 0`.** A `move` kind because copies moved, no card id or name
+     * because a batch can span several printings and a row naming one of them would read as a
+     * claim about that card alone, and a zero delta because the deck's **list** did not change —
+     * `delta` is what `auditText.ts`'s day header adds up, and a pull that contributed to it
+     * would make a day of filing look like a day of deckbuilding.
+     */
+    deck_pull_from_collection: (args: {
+      deckId: number;
+      picks: DeckPullPick[];
+    }): DeckPullOutcome => {
+      refuseIfBusy(db);
+      // A write that writes nothing is not a write — {@link ZERO_ADD}'s rule one command over,
+      // and the press that produces it is a dialog confirmed with nothing ticked.
+      const picks = args.picks ?? [];
+      if (picks.length === 0) throw refuse(NOTHING_PICKED);
+      // The deck fence first — `touch_deck` doubles as it in the crate, one statement before
+      // there is an orphan to worry about. The **stamp** it also performs there waits until the
+      // end here, which is this fake's rule for every write: a rolled-back transaction takes the
+      // bump with it, and a refused pull must not resort the gallery.
+      const deck = requireDeck(db, args.deckId);
+      const group = deckGroup(db, args.deckId);
+      if (!group) throw refuse(NO_DECK_GROUP);
+
+      const rows = readHandlers(db).deck_pull_plan({ deckId: args.deckId });
+      // **Every entry the plan is willing to be pointed at**, and the two numbers a pick is
+      // measured against: which folded row it fills, and how many copies its own row holds. An
+      // id that is not in here is refused by {@link whyNotOffered}, which asks the store *which*
+      // of the three mistakes it is — so eligibility is never spelled a second time on this
+      // path.
+      const offered = new Map<number, { row: number; held: number }>();
+      rows.forEach((row, index) => {
+        for (const candidate of row.candidates) {
+          offered.set(candidate.entryId, { row: index, held: candidate.quantity });
+        }
+      });
+
+      // **Picks naming one row twice are merged rather than refused**, in first-appearance order.
+      // They have to be: {@link moveCopies} splits the source, so a second take would be pointed
+      // at a row that has moved or folded away and the caller would be told its own row was
+      // gone. Merging makes the batch mean what it plainly says and keeps every check below
+      // about the **total**.
+      const merged = new Map<number, number>();
+      // …and one running total per folded row, one grain up, for the same reason: two collection
+      // rows of one printing are two picks against one hole, and each is small enough on its own.
+      const wanted = new Map<number, number>();
+      for (const pick of picks) {
+        if (pick.quantity <= 0) throw refuse(ZERO_MOVE);
+        const found = offered.get(pick.entryId);
+        if (!found) throw refuse(whyNotOffered(db, pick.entryId));
+        const taken = (merged.get(pick.entryId) ?? 0) + pick.quantity;
+        if (taken > found.held) throw refuse(NOT_THAT_MANY);
+        merged.set(pick.entryId, taken);
+        const asked = (wanted.get(found.row) ?? 0) + pick.quantity;
+        if (asked > rows[found.row].short) throw refuse(MORE_THAN_MISSING);
+        wanted.set(found.row, asked);
+      }
+
+      let copies = 0;
+      for (const [entryId, quantity] of merged) {
+        moveCopies(db, entryId, quantity, group.id);
+        copies += quantity;
+      }
+
+      // **Distinct folded rows touched**, which is printings-and-**finishes** and is what a
+      // sentence means by "cards": two picks against one hole are one card, and `wanted` is
+      // already exactly that set. A foil and a nonfoil of one printing are two rows in the
+      // dialog and therefore two here — the narrowing this feature took, counted consistently.
+      const outcome: DeckPullOutcome = { copies, cards: wanted.size };
+      // `live` rather than {@link DECK_LEVEL}'s filler: the plan walks the live list and this is
+      // a statement about it, even though the row it changed nothing about is the reason `delta`
+      // is 0.
+      record(db, args.deckId, LIVE, "move", null, { pull: outcome }, 0);
+      deck.updatedAt = stamp(db);
+      return outcome;
     },
 
     /**
@@ -13020,15 +13370,15 @@ export function allHandlers(db: FakeDb) {
  * `deck_set_view_state` is not here because it writes no history row either: looking at a deck
  * is not editing it, so the wrapper below files nothing for it without being told.
  *
- * **The two `collection_alloc` writes are the newest pair, and they are on this list by
- * argument rather than by accident.** Each moves copies across the deck boundary, so a step
- * could put the `deck_cards` half back and would leave the copies where they went — a deck
- * claiming cards its own group no longer holds, told to a reader who pressed Ctrl+Z and watched
- * the row reappear. `deck_undo`'s four primitives touch no collection table, so the half-step is
- * the only step available and it is worse than none. `deck_to_collection` would also slip
- * through the wrapper on its own — it carries a `deckCardId` rather than a `deckId`, so
- * {@link deckOf} answers `undefined` for it — and naming it here is what stops that being the
- * reason.
+ * **The three writes that move copies across the deck boundary are here by argument rather than
+ * by accident.** A step could put the `deck_cards` half back and would leave the copies where
+ * they went — a deck claiming cards its own group no longer holds, told to a reader who pressed
+ * Ctrl+Z and watched the row reappear. `deck_undo`'s four primitives touch no collection table,
+ * so the half-step is the only step available and it is worse than none. `deck_to_collection`
+ * would also slip through the wrapper on its own — it carries a `deckCardId` rather than a
+ * `deckId`, so {@link deckOf} answers `undefined` for it — and naming it here is what stops that
+ * being the reason. **It said "the two" until `deck_pull_from_collection` joined them on
+ * 2026-09-03**, which is the drift this file keeps naming: the count is in the list below.
  */
 const NO_UNDO_STEP: ReadonlySet<string> = new Set([
   "deck_create",
@@ -13043,6 +13393,12 @@ const NO_UNDO_STEP: ReadonlySet<string> = new Set([
   "deck_folder_delete",
   "collection_to_deck",
   "deck_to_collection",
+  // The third write that moves copies across the deck boundary, and the one with the strongest
+  // claim to the list: it changes **no** `deck_cards` cell at all, so `deck_undo`'s four
+  // primitives have nothing to put back — a step here would snapshot a deck, restore it
+  // unchanged, and spend the reader's one Ctrl+Z on a press that appeared to do nothing while
+  // the copies stayed exactly where the pull put them.
+  "deck_pull_from_collection",
 ]);
 
 /**

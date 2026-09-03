@@ -1867,6 +1867,115 @@ export interface MoveOutcome {
 }
 
 /**
+ * One printing the live list is short of, and every copy on the reader's desk that could fill
+ * it — `deck_pull::PullRow`, the read half of {@link ipc.deckPullPlan}.
+ *
+ * **The shortfall is folded to the printing, never to the pile.** The same card short in two
+ * categories is one row here for the sum, because what a reader is short of is *cardboard* and
+ * custody is a fact about the deck rather than about a column — {@link categories} names the
+ * piles for them to read and is never a term in the arithmetic. That is
+ * `deck_missing_to_wishlist`'s fold, one grain narrower.
+ *
+ * **A row with no candidate is left out entirely**, so {@link candidates} is never empty and a
+ * plan of zero rows means "nothing here can be filled". That is the ordinary answer rather than
+ * an error: the issue this feature came from says in as many words that not every card in a deck
+ * will have a collection option.
+ */
+export interface DeckPullRow {
+  /** The printing the deck lists. Every candidate matches it exactly — see {@link finish}. */
+  cardId: string;
+  /** The deck row's stored name, which is the one name an orphan still has. */
+  name: string;
+  setCode: string;
+  collectorNumber: string;
+  /**
+   * The deck row's finish, where `null` is nonfoil — `deck::normalise_finish`'s translation, so
+   * this reads exactly as {@link DeckCard.finish} does.
+   *
+   * **Candidates match it exactly, and that is the deliberate narrowing this feature took**
+   * (2026-09-03). A deck's owned count is attributed at the *oracle* grain — a LEA Bolt filed in
+   * the group makes an M10 line read as owned — so matching on the printing and the finish fills
+   * strictly fewer holes than the app itself would count. The trade is that nothing is ever
+   * pulled that is not the exact piece of cardboard the list names, and the dialog says so.
+   */
+  finish: DeckFinish;
+  /** Copies of this printing and finish the live list still wants, over its **active** piles. */
+  short: number;
+  /** The piles that are short, in the deck's own order. For the reader; never for the write. */
+  categories: string[];
+  /**
+   * The printing's picture, front face, exactly as {@link CardSummary.imageUris} — one per row
+   * rather than per candidate, because every candidate for a row *is* the same printing.
+   */
+  imageUris?: Partial<Record<ImageVariant, string>> | null;
+  /** Every copy that could fill it, best first — see {@link DeckPullCandidate}. Never empty. */
+  candidates: DeckPullCandidate[];
+}
+
+/**
+ * One collection row that could fill a hole — `deck_pull::PullCandidate`.
+ *
+ * **Nothing filed in a deck's group is ever a candidate**, which is the issue's "only pull cards
+ * that are not already in another deck folder" and is `collection::Allocation::Unallocated`'s
+ * rule verbatim rather than a second spelling of it: the root, a folder the reader made and
+ * `Recently removed` are all cards on their desk. This deck's own group is excluded by the same
+ * clause, and has to be — those copies are already counted in {@link DeckCard.ownedQuantity},
+ * so offering them would be offering to fill a hole with the thing already in it.
+ *
+ * **The order is the pre-pick, and it is chosen rather than incidental**: the root first, then
+ * `Recently removed`, then the reader's own folders in their `sortOrder`, and oldest row first
+ * inside each. It ranks by how little of the reader's filing a pull disturbs — the root is a
+ * decision nobody has made and the holding area is the app's own transient bin, where a named
+ * binder is a decision somebody made on purpose. The tiebreak is `take_copies`' own rule.
+ */
+export interface DeckPullCandidate {
+  /** The `collection_entries` row. What a {@link DeckPullPick} points at. */
+  entryId: number;
+  /** Copies this row holds, whole. A pick may take fewer, never more. */
+  quantity: number;
+  /** Where it sits, or `null` at the root. */
+  folderId: number | null;
+  /** What to call that place, or `null` at the root — which the UI words, not the backend. */
+  folderName: string | null;
+  /** `"user"` or `"removed"`; `null` at the root. Never `"deck"` — see this type's own doc. */
+  folderKind: string | null;
+  /** The copy's own facts, which are what tell two candidates of one printing apart. */
+  condition: string;
+  lang: string;
+  altered: boolean;
+  signed: boolean;
+  proxy: boolean;
+  misprint: boolean;
+  grading: string | null;
+  serialNumber: string | null;
+}
+
+/** Copies to take out of one collection row — `deck_pull::Pick`, the write's whole input. */
+export interface DeckPullPick {
+  entryId: number;
+  /** At least one, and never more than the row holds or the deck is short of. */
+  quantity: number;
+}
+
+/** What a pull moved — `deck_pull::PullOutcome`. */
+export interface DeckPullOutcome {
+  /** Copies that changed folder. */
+  copies: number;
+  /**
+   * Rows of the plan that got at least one copy — so **printings *and* finishes**, at
+   * {@link DeckPullRow}'s own grain, and not distinct printings.
+   *
+   * The distinction is only ever visible for a deck short of one printing in two finishes, which
+   * is two rows in the dialog and counts two here. It is spelled out because the three places
+   * that count this have to agree: the crate's own `wanted.len()`, the Storybook fake's handler,
+   * and `pullPlan.ts`'s `cards` — which is what the dialog's footer previews *before* the press.
+   * A grain mismatch between the preview and this outcome would show up only on that one deck,
+   * as a sentence quoting a number the reader had just been shown a different version of.
+   */
+  cards: number;
+}
+
+/**
  * One card the plan asks for — {@link ipc.deckTheorySlots}' row, and the whole input to the deck
  * editor's theory tick.
  *
@@ -5217,6 +5326,44 @@ export const ipc = {
    * would be worse than no button.
    */
   deckMissingToWishlist: (deckId: number) => invoke<number>("deck_missing_to_wishlist", { deckId }),
+  /**
+   * What this deck is short of that the reader **already owns** — the read half of the pull, and
+   * the mirror of {@link ipc.deckMissingToWishlist}'s question one grain narrower.
+   *
+   * The two are the same idea read in two directions: what you have not got goes on a shopping
+   * list, what you have got is sitting in a binder and can be moved. Read-only, so it may be
+   * asked whenever a dialog is open and re-asked after any write; it takes no variant and reads
+   * the `live` list only, for that command's reason — a plan holds no cards.
+   *
+   * **An empty array is the ordinary answer**, not an error: a deck that is short of nothing, and
+   * a deck whose shortfall is all cards the reader has never owned, are both zero rows.
+   */
+  deckPullPlan: (deckId: number) => invoke<DeckPullRow[]>("deck_pull_plan", { deckId }),
+  /**
+   * Move owned copies into this deck's group, filling holes the list already has.
+   *
+   * **It writes no `deck_cards` row, and that is the whole difference from
+   * {@link ipc.collectionToDeck}.** That command is "add this card to the deck", so it folds the
+   * quantity into the list (`quantity = quantity + excluded.quantity`) as well as moving the
+   * cardboard — pointing it at a 4-copy line the reader is 3 short of would make the line 7.
+   * This one changes only *where the copies sit*, which is the only half a shortfall is about.
+   *
+   * **All-or-nothing.** One pick the backend re-reads and disagrees with — an entry that has
+   * since moved into a deck, been folded away, or a hole another window has already filled —
+   * refuses the whole batch in words and moves nothing. A half-applied pull is the state worth
+   * refusing over: the copies would be somewhere other than either place the reader was looking
+   * at, and this write files no undo step (see below), so there is no press that takes it back.
+   *
+   * **No undo step, for {@link ipc.deckToCollection}'s reason exactly.** `take_copies` files the
+   * copies *through the merge*, so a source row may have been folded into whatever the group
+   * already held and no longer exists to restore. The way back is the deck editor's Collection
+   * Search tab, a card at a time — and the deck's history says the pull happened, which is what
+   * makes the absence visible rather than silent.
+   *
+   * Answers what actually moved, which is what a sentence should quote.
+   */
+  deckPullFromCollection: (deckId: number, picks: DeckPullPick[]) =>
+    invoke<DeckPullOutcome>("deck_pull_from_collection", { deckId, picks }),
   /**
    * Every name in a decklist, resolved to a printing this app has. **Read-only**, and one call
    * for the whole list rather than one per line — ~100 names is six prepared statements and a

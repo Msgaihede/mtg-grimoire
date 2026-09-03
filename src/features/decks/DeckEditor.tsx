@@ -96,13 +96,14 @@ import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import { RenameField } from "./metaRows";
 import { AddTagDialog } from "./AddTagDialog";
 import { PriceStrip } from "./PriceStrip";
+import { PullFromCollectionDialog } from "./PullFromCollectionDialog";
 import { QuickAdd } from "./QuickAdd";
 import { QuickCategoryDialog, QuickZones } from "./QuickZones";
 import { asSortBy, DEFAULT_SORT_BY, SORT_OPTIONS, type SortBy } from "./sorting";
 import { TagsDialog } from "./TagsDialog";
 import { TheoryDiffDialog } from "./TheoryDiffDialog";
 import { theoryMatchPlan } from "./theoryMatch";
-import { useDeck } from "./useDeck";
+import { useDeck, usePullPlan } from "./useDeck";
 import { useDeckMeta } from "./useDeckMeta";
 import { useFormatSpecs } from "./useFormatSpecs";
 import { useRecentAdds } from "./useRecentAdds";
@@ -604,6 +605,26 @@ type Layer =
   | { kind: "bracket" }
   | { kind: "categories" }
   | { kind: "tags" }
+  /**
+   * The pull: what this deck is short of that the reader **already owns**, and which copies to
+   * move into its group.
+   *
+   * **A full-window overlay like its neighbours, by the rule that decides every one of them**
+   * (`src/CLAUDE.md`): a surface the reader *consults* is a centred modal, and only a surface
+   * they work *out of* while editing beside it earns a place in the layout. This is consulted —
+   * a plan is read, a few numbers are set, and it is shut — and it is consulted at the widest
+   * grain anything in this editor asks about: every hole in the list, and every unallocated copy
+   * on the reader's desk that could fill one. A docked column of that would take its width from
+   * the deck for the whole session; the desk row measures 602px at the app's own 1280×800 with
+   * the card pane docked, and the deck's own floor is what runs out first.
+   *
+   * **No payload, and that is a fact about the command rather than a simplification.**
+   * `deck_pull_plan` takes the deck and no variant — it reads the live list, because a plan holds
+   * no cards to be short of — so there is nothing for an arm to carry that the editor does not
+   * already know. It is also why the opener is `null` on the theory tab rather than disabled:
+   * there is no question to ask there, not a question with an empty answer.
+   */
+  | { kind: "pull" }
   | { kind: "history" }
   | { kind: "theoryDiff" }
   | { kind: "settings" }
@@ -1944,6 +1965,47 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     () => openLayer({ kind: "bracket" }, () => bracketRef.current?.focus()),
     [openLayer],
   );
+  /**
+   * **Pull from collection** — the one layer opened from the stats band at the foot of the page.
+   *
+   * **The hand-back is read off `document.activeElement`**, which is `openAddTag`'s answer rather
+   * than the two above it, and for its reason: those two hold a ref to the control they are
+   * drawn on, and this button is `DeckStats`' own. A ref threaded down through that component
+   * would be a second `sendRef` — one prop, one `RefObject`, one more thing a strip rendered in
+   * a test has to be handed — to name an element the browser has already focused by the time
+   * this runs. A press focuses what it presses, so the caret is on the button and reading it is
+   * exact.
+   *
+   * `null` if the caret is somewhere else by then, which is `handBackRef`'s documented floor:
+   * the dialog focuses its own panel either way, and the reader who moved on owns where they are.
+   */
+  const openPull = useCallback(() => {
+    const opener = document.activeElement;
+    openLayer({ kind: "pull" }, () => {
+      if (opener instanceof HTMLElement) opener.focus();
+    });
+  }, [openLayer]);
+
+  /**
+   * The plan behind that layer — **gated on the layer being up**, which is the whole of what
+   * `enabled` is here for.
+   *
+   * A `deck_pull_plan` is the widest read this editor makes: every hole in the live list, and
+   * every unallocated collection row that could fill one, joined and ordered. Nothing on the
+   * screen behind the dialog draws a word of it, so an ungated query would be that read on every
+   * deck anybody merely opened — the `Layer` union's own doc states the rule, and this is the
+   * first member with a query to spend.
+   *
+   * **`layerMatches` rather than `layer?.kind === "pull"`**, which for an arm with no payload is
+   * the same question asked the way this file asks it everywhere else. It costs nothing and it
+   * cannot be the thing that is wrong on the day this arm grows a field.
+   *
+   * The answer survives the dialog closing — the key is the deck's, and TanStack keeps a
+   * disabled query's cache — so reopening it in the same minute redraws immediately and
+   * refetches behind the rows. Anything invalidating `["decks"]` in between, the pull included,
+   * refills it: see {@link usePullPlan} for why the key is shaped to sit under that root.
+   */
+  const pullPlan = usePullPlan(deckId, layerMatches(layer, { kind: "pull" }));
 
   /**
    * **Tag card ▸ New tag…** — the one layer opened from a *card's* menu rather than a pile's or
@@ -4187,9 +4249,18 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               two ways. It is drawn here whichever grouping is up, unlike the chip that sets it —
               the deck's answer does not stop being true because the reader went back to looking
               at their categories. */}
+          {/* **`onPull` is `null` on the plan, and that is the list rather than the feature.**
+              A theory list is what the deck is being built *toward*, and since schema v25 a deck
+              holds a card because a collection row sits in its group — so a theory row holds no
+              cards at all and there is nothing on that tab to pull into. The backend agrees at
+              the same seam: `deck_pull_plan` takes no variant and reads the live list, exactly as
+              `deck_missing_to_wishlist` does one command over. Absent rather than greyed, for the
+              editor's own rule about a control that cannot act: a button that spends the whole
+              Theory tab refusing teaches the reader to stop looking at the line it is in. */}
           <DeckStats
             cards={deck.cards}
             send={deck.missingToWishlist}
+            onPull={variant === "live" ? openPull : null}
             separateXGroup={separateX}
           />
         </section>
@@ -4414,6 +4485,35 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         suggestedFileName={exported.fileName}
         onDismiss={dismiss}
         onClose={close}
+      />
+
+      {/* The pull, beside the transfer pair because it is the third way cards reach this deck —
+          and the one that moves cardboard the reader already has rather than writing a list.
+
+          **Fed rather than fetching**, which is `ExportDialog`'s arrangement one overlay up and
+          for a sharper version of its reason: the read is gated on this layer being open, and a
+          query mounted inside a component that only exists while the dialog is up would make
+          "does a closed dialog cost a round trip" a question about `AnimatePresence`'s teardown
+          instead of about one `enabled` flag. See {@link pullPlan}.
+
+          **The mutation goes down whole and narrowed by the dialog's own type**, exactly as
+          `DeckStats`' `send` does — so the write is `useDeck`'s single definition (with its three
+          invalidations) and the dialog owns the sentence it words about the answer.
+
+          **`dismiss` rather than `close`**, and the dialog takes one callback rather than the two
+          `Dialog` splits: every way out of this one is the reader saying "put me back" — its ✕,
+          its Cancel, Escape — and the caret's destination is a button in the stats band two
+          screens down the page, which is precisely where a reader who has just shut this expects
+          to be. `close` exists for the click-away, and a scrim press here is not one this surface
+          distinguishes. */}
+      <PullFromCollectionDialog
+        open={layer?.kind === "pull"}
+        deckName={row?.name ?? ""}
+        rows={pullPlan.data ?? null}
+        loading={pullPlan.isLoading}
+        readError={pullPlan.isError ? ipcError(pullPlan.error) : null}
+        pull={deck.pullFromCollection}
+        onClose={dismiss}
       />
 
       {/* The quick zones' New category, which is the third overlay in this view with no control
