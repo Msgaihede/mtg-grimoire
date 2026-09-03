@@ -379,6 +379,61 @@ cards that vanished into a deck that does not play them. The refusal is the comm
 `refile_entry`'s; the write underneath carries no kind fence at all, which is exactly what lets
 these two file into the two folders a reader may not point at.
 
+### And since 2026-09-03 the deck has to already play the card — issue #358
+
+**`collection_to_deck` used to write the `deck_cards` row it needed, and now it refuses instead**
+(`collection_alloc::NOT_IN_DECK`, *"That deck does not play this card. Add it to the deck first,
+then file your copies."*). Filing is **assigning copies to a list**, not joining a card to a deck.
+[Issue #358](https://github.com/Msgaihede/mtg-grimoire/issues/358) asked for it in the reader's own
+terms — *"do not allow cards to be added to a deck folder in collection management if the card does
+not exist in the deck itself"* — and the reason it is worth a fence rather than a habit is the
+paragraph above read backwards: the invariant that makes a group meaningful is *every copy in a
+deck's group is backed by a row in that deck's list*, and the one write that could create a placement
+had been allowed to satisfy it by writing the other half itself. That is not wrong in the way a
+bare drag is wrong — nothing was ever left dangling — but it made a **filing gesture** into a
+**deck-building gesture**, and the reader who pointed at a drawer got a card added to a deck they
+were not looking at.
+
+**The match is on the oracle card, and that is the same rule `release_group_copies` already
+holds** — `deck::PLAYED_KEY`, `coalesce(c.oracle_id, dc.card_id)` over
+`deck_cards dc LEFT JOIN cards c`. A deck that lists the Commander 2021 *Sol Ring* plays Sol Ring,
+so an Alpha copy in the reader's binder is a copy of something that deck plays; a printing-exact
+fence would refuse the filing for a reason nothing on screen could explain. **The printing is the
+fallback and not the other way round**: `cards.oracle_id` is nullable and a `deck_cards` row
+outlives its printing leaving the corpus, so an orphan is matched by its own id — and a fallback
+that reached for the printing *first* would silently make every match printing-exact, which is a
+rule that looks correct on the one card anybody tests it with.
+
+**Live only.** A plan holds no cards (`THEORY_HOLDS_NOTHING`), so a card the deck merely *plans* to
+play is refused exactly as one it has never heard of is.
+
+**The fence sits after `touch_deck` and before the pile resolves, and the order is the rule.**
+A gone deck still answers `deck::GONE` — *"that deck is gone"* and *"that deck does not play this"*
+are different things to tell a stale editor — and the fence has to come before the `Pile::Name` arm
+because that arm **writes**: a category nobody has made yet is created there, and a refusal landing
+after it is the empty-column-after-a-failed-press defect the rollback exists for. Being asked first
+means there is nothing to roll back rather than something rolled back correctly.
+`a_filing_refused_by_the_folder_rule_leaves_no_pile_behind` is the pin, a sibling of the one that
+was already there.
+
+**One error-ordering change came with it and is deliberate**: `source_of` was hoisted up beside the
+fence, so a caller sending a dead **entry** id *and* a dead **category** id now hears
+`collection::GONE` where it used to hear `deck_meta::CATEGORY_GONE`. The entry is what the reader
+pointed at, so it is the better sentence — and the only alternative is splitting the source read
+from the fence, which puts the fence back after the writing arm.
+
+**Two surfaces say it early, and both fail closed.** The deck editor's Collection tab greys a tile
+whose card the open deck does not play, naming the Card search tab as the route; the card menu's
+`Decks ▸` rows grey a deck that does not play it. Both read the census through
+`useDeckPlays`/`useDecksPlaying`, and **an unanswered census greys everything** — `stepperByTile`'s
+direction one page over, for its reason: "the answer has not arrived" and "the deck plays nothing"
+are the same empty set, and only one of them may make a card pressable.
+
+**What this does not reach is the drag.** A tile dragged from that tab into a deck column goes
+through `deck_add_card`, which writes a `deck_cards` row and moves no copies at all — so it cannot
+put a card in a deck folder and #358's invariant does not apply to it. It is the two-press route to
+the same place: add the card to the deck, then file the copies, which is now the only order there is.
+
 **Taking a copy out of another deck's group decrements that deck's live list too.** The copies are
 custody rather than a reservation, so a deck that loses them loses the card. `MoveOutcome.fromDeck`
 carries the name because that side effect lands on a deck the reader is not looking at, and the UI
@@ -552,6 +607,26 @@ piece to get right:
 | The root, a binder, `Recently removed` | Moves silently. One press. |
 | This deck's own group | Cannot move — `ALREADY_HERE` refuses it in words. |
 | **Another deck's group** | **Confirms first, naming that deck.** |
+
+**Since 2026-09-03 there is a question asked _before_ that one, and it is about the card rather
+than the copy** — issue #358. A tile whose card the open deck's live list does not play is greyed
+with *"… is not in this deck — add it from the Card search tab first"*, whichever of the three rows
+above its copies fall under. The two are deliberately **separate axes and not a fourth arm of
+`CopySource`**, which is the shape decision worth recording:
+
+* `CopySource` is a fact about a **copy** and `pickCopy` *ranks* it, so a `notPlayed` arm would
+  have to be filtered like `here` — and a tile whose every candidate is filtered reads as
+  `add === null`, which this tab already words as *"already in this deck"*. That sentence over a
+  card the deck has never held is the one refusal a reader cannot act on.
+* Both can be true at once and they say different things. *"Taking it from Mono-Red Aggro"* is the
+  **cost**; *"add it from the Card search tab first"* is the **route**. One enum would force a rank
+  between two unrelated facts.
+* One is decided by a rule over rows, the other by the card's identity.
+
+So `PlayState` (`plays | notPlayed | unread | unreadable`) sits beside `sourceOf` on the hook's
+return, and the Add button's existing refusal ladder asks the census first, the fence second and
+the copy third. **The tab is assign-only now**: it answers *which copies I own back this deck's
+list*, and adding a card the deck does not play is the Card search tab beside it.
 
 The third row is the one that needs a sentence: the side effect lands on a deck the reader is not
 looking at. Taking the copies decrements that deck's live list as well as emptying its group,
@@ -1331,11 +1406,29 @@ never appeared as destinations. They appear now under **Add to → Collection**,
 
 **`Decks ▸ <deck>` routes to the deck's own add, never to a folder write.** `set_entry_folder`
 refuses a `deck` destination in words, and the refusal is right: filing into a group by hand would
-claim the deck holds those copies without writing the `deck_cards` row that makes it true. The
-deck's add does both halves in one transaction, so the row calls that — which makes it the write
-`Add to → Deck` already makes, reached from the cabinet the reader was looking at. It files into
-the **live** list without asking, because this row is filing rather than deck-building; a reader
-who means the plan has the deck picker one row up, which still asks.
+claim the deck holds those copies without writing the `deck_cards` row that makes it true. So the
+row hands over a **deck id** and the caller owes it the sanctioned command — which makes it the
+write `Add to → Deck` already makes, reached from the cabinet the reader was looking at. It files
+into the **live** list without asking, because this row is filing rather than deck-building; a
+reader who means the plan has the deck picker one row up, which still asks.
+
+⚠️ **This paragraph said "the deck's add does both halves in one transaction" until 2026-09-03,
+and that was simply false.** `deck_add_card` writes `deck_cards` and **files no copies** —
+`useDeck.ts`'s own `addCard` says so at its site, *"this write touches `deck_cards` and nothing
+else"* — so the row records an *intention* and moves no `collection_entries` row anywhere. It never
+produced a dangling placement, because it produced no placement at all; what it did produce was a
+card added to a deck from a menu whose subject was the collection's cabinet. The same sentence was
+in `useCardMenuDeps.ts` and is corrected there too.
+
+**Since #358 the row greys for a deck that does not play the card**, with the reason
+`"not in this deck"`, and the submenu became **`kind: "lazy"`** to afford it. That is the file's own
+rule rather than a new one: `useDecksPlaying` is a backend read, and a right-click on a wall of
+forty tiles must fire no query — so the census runs when the reader expands `Decks` and never when
+the menu merely opens. **For a picked set, a deck must play _every_ target**, not any: a press makes
+one write per target, and a row that half-works is a failure the reader cannot see. While the census
+is in flight the body draws a note rather than pressable rows, for
+[the fail-closed reason above](#and-since-2026-09-03-the-deck-has-to-already-play-the-card--issue-358).
+`Recently removed` and the "omit `Decks` where there are no groups" rule are untouched.
 
 **It is drawn only under `Add to`, and only where the reader already has folders.** Not under
 `Move to`, because that row is labelled *Move* while the write adds a copy, and a destination

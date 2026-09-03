@@ -3473,6 +3473,202 @@ describe("the collection's folders", () => {
 });
 
 /**
+ * **The two reads a folder rule is answered from** — `deck::played_keys` and
+ * `deck::decks_playing`, issue #358's pair.
+ *
+ * The read side of the fence `collection_to_deck` keeps: one says what a deck plays, the other
+ * which decks play a given hand. Both key a card by
+ * `coalesce(cards.oracle_id, deck_cards.card_id)`, so a rule is about the **card** and never the
+ * printing the reader happens to own — and the fence is written over the first of them, which is
+ * what stops a control offering a filing the write then refuses.
+ */
+describe("the two reads a folder rule is answered from", () => {
+  /** A second card, so a hand can name more than one. **Two printings under one oracle id**,
+   *  which is what makes it useful on both sides of the every-not-any rule below. */
+  const SOL_RING = CARDS.find((c) => c.name === "Sol Ring")!;
+  const SOL_RING_SLD = CARDS.filter((c) => c.name === "Sol Ring")[1];
+
+  /**
+   * `DISTINCT`, over piles and over printings alike.
+   *
+   * Two piles of one deck may name one card and a rule asking "does this deck play it" must not
+   * care how many rows say yes; a second *printing* of that card is the same card again, which
+   * is the whole reason the key is the oracle id rather than `card_id`. And an **inactive** pile
+   * is still the reader's list — the Maybeboard is switched off for the counting, not for the
+   * filing — so a fence that skipped it would refuse a press the app allows.
+   *
+   * **The answer comes back sorted by the key** (`ORDER BY 1`), so the expectation is sorted and
+   * the answer is not: an assertion that sorted both sides could not tell a list from a set.
+   */
+  it("answers the live list's cards once each, whichever pile and whichever printing", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [
+        deckCard({ id: 1, cardId: BOLT.id, categoryKind: "main", quantity: 4 }),
+        deckCard({ id: 2, cardId: BOLT.id, categoryKind: "side", quantity: 1 }),
+        deckCard({ id: 3, cardId: BOLT_2X2.id, categoryKind: "main", quantity: 1 }),
+        deckCard({ id: 4, cardId: SOL_RING.id, categoryKind: "maybe", quantity: 1 }),
+      ],
+    });
+
+    expect(readHandlers(db).deck_played_keys({ deckId: 1 })).toEqual(
+      [BOLT.oracleId, SOL_RING.oracleId].sort(),
+    );
+  });
+
+  /**
+   * **A plan is not a list.** A theory row holds no cards — `THEORY_HOLDS_NOTHING`'s sentence,
+   * read from the other end — so a group filled behind one would be spoken for by a deck nobody
+   * is holding. A deck that is not there answers the same empty list rather than refusing: the
+   * cards a deck with no row plays is nothing, and there is no fence in the statement.
+   */
+  it("answers nothing for a plan, and nothing for a deck that is not there", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [
+        deckCard({ id: 1, cardId: BOLT.id, variant: "theory", categoryKind: "main", quantity: 4 }),
+      ],
+    });
+    const r = readHandlers(db);
+
+    expect(r.deck_played_keys({ deckId: 1 })).toEqual([]);
+    expect(r.deck_played_keys({ deckId: 404 })).toEqual([]);
+  });
+
+  /**
+   * **`coalesce`, and this is the arm that needs it.** `cards` is rebuildable and the deck is
+   * not: an import writes a printing this corpus has not got, and a resync can drop one. The
+   * `LEFT JOIN` keeps the row and the fallback keys it by the id the deck row already holds — a
+   * printing with no `cards` row is still a card, and it is only ever the same card as itself.
+   */
+  it("keys a printing `cards` has never heard of by the deck row's own id", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [
+        deckCard({ id: 1, cardId: BOLT.id, categoryKind: "main", quantity: 1 }),
+        deckCard({ id: 2, cardId: "gone", categoryKind: "main", quantity: 1 }),
+      ],
+    });
+
+    expect(readHandlers(db).deck_played_keys({ deckId: 1 })).toEqual(
+      [BOLT.oracleId, "gone"].sort(),
+    );
+  });
+
+  /**
+   * **Every, never any.** A rule naming two cards asks which decks could hold both, and an `any`
+   * would answer with the union — every deck that plays one of them — which is the failure that
+   * looks most like working: the list is longer, every entry is plausible, and half of them
+   * would refuse the filing they were offered for.
+   *
+   * Deck 3's Sol Ring is the **other** printing, so it is the oracle key that puts it in the
+   * answer rather than the id it stores. Deck 4 plays the Bolt in its *plan* only, which is the
+   * same exclusion `deck_played_keys` makes one deck at a time.
+   */
+  it("answers the decks that play every key, never the ones that play any", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 }), deck({ id: 2 }), deck({ id: 3 }), deck({ id: 4 })],
+      deckCards: [
+        deckCard({ id: 1, deckId: 1, cardId: BOLT.id, quantity: 4 }),
+        deckCard({ id: 2, deckId: 1, cardId: SOL_RING.id, quantity: 1 }),
+        deckCard({ id: 3, deckId: 2, cardId: BOLT.id, quantity: 2 }),
+        deckCard({ id: 4, deckId: 3, cardId: BOLT.id, quantity: 1 }),
+        deckCard({ id: 5, deckId: 3, cardId: SOL_RING_SLD.id, quantity: 1 }),
+        deckCard({ id: 6, deckId: 4, cardId: SOL_RING.id, quantity: 1 }),
+        deckCard({ id: 7, deckId: 4, cardId: BOLT.id, variant: "theory", quantity: 1 }),
+      ],
+    });
+    const playing = (keys: string[]) => readHandlers(db).deck_ids_playing({ keys });
+
+    expect(playing([BOLT.oracleId])).toEqual([1, 2, 3]);
+    expect(playing([SOL_RING.oracleId])).toEqual([1, 3, 4]);
+    // Both: the intersection, and not the union of the two lines above.
+    expect(playing([BOLT.oracleId, SOL_RING.oracleId])).toEqual([1, 3]);
+    // A key nobody plays takes the whole hand with it, which is the same rule said backwards.
+    expect(playing([BOLT.oracleId, "gone"])).toEqual([]);
+    // One card asked for twice is one card: the keys are a set before they are counted, or a
+    // caller that repeated itself would be told no deck plays anything.
+    expect(playing([BOLT.oracleId, BOLT.oracleId])).toEqual([1, 2, 3]);
+  });
+
+  /**
+   * **No keys is no decks, and the vacuous reading is the wrong one.** "Every deck plays all
+   * zero of these" is what a `HAVING count(*) = 0` would say, and it is the wrong answer to the
+   * only question that produces it: a caller with an empty hand has nothing to file, and
+   * offering it the whole gallery is worse than offering it nothing.
+   */
+  it("answers no decks at all for no keys", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [deckCard({ id: 1, cardId: BOLT.id, quantity: 1 })],
+    });
+
+    expect(readHandlers(db).deck_ids_playing({ keys: [] })).toEqual([]);
+  });
+
+  /**
+   * **The `starter` seed measured against the fence**, because a Storybook world is the thing
+   * every play and every hand-driven press runs against and a rule that refuses the seed is a
+   * workbench nobody can use.
+   *
+   * Deck 1 — `Modern Goodstuff`, the deck every editor story opens — plays **18** cards, and its
+   * Collection Search tab can still file five of the reader's twelve rows. The four it now
+   * refuses are the ones the deck genuinely does not play; `mh2 267` and `mh2 138` keep
+   * answering `ALREADY_HERE`, which is the older refusal and still ahead of nothing.
+   *
+   * **The one that matters is `c21 263`** — the Sol Ring in `Kenrith Two-Drops`, the seed's only
+   * copy filed under a deck the reader is not standing in, and therefore the only row the
+   * cross-deck confirmation can be reached from. Deck 1 plays no Sol Ring, so confirming that
+   * press now refuses. No story's `play` presses it (`CrossDeckConfirm` stops at the question),
+   * so nothing goes red — which is exactly why it is measured here instead.
+   */
+  it("still lets the starter seed's deck file five of the reader's twelve rows", () => {
+    const db = seed("starter");
+    const main = db.deckCategories.find((c) => c.deckId === 1 && c.kind === "main")!;
+    // A fresh world per row: a filing that succeeds changes what the next one is asked about.
+    const fileIntoDeckOne = (entryId: number) => {
+      try {
+        writeHandlers(seed("starter")).collection_to_deck({
+          entryId,
+          deckId: 1,
+          categoryId: main.id,
+          quantity: 1,
+        });
+        return "filed";
+      } catch (refusal) {
+        return (refusal as Error).message;
+      }
+    };
+    const outcome = (predicate: (answer: string) => boolean) =>
+      db.collectionEntries
+        .map((e) => ({ e, answer: fileIntoDeckOne(e.id) }))
+        .filter(({ answer }) => predicate(answer))
+        .map(({ e }) => `${e.setCode} ${e.collectorNumber}`);
+
+    expect(readHandlers(db).deck_played_keys({ deckId: 1 })).toHaveLength(18);
+    expect(outcome((a) => a === "filed")).toEqual([
+      "2x2 117",
+      "lea 161",
+      "sta 105",
+      "fut 153",
+      "mh2 259",
+    ]);
+    // Sol Ring twice — the cross-deck row and the reader's other printing of it — plus the two
+    // cards deck 1 has simply never listed.
+    expect(outcome((a) => a.includes("does not play this card"))).toEqual([
+      "c21 263",
+      "sld 913",
+      "mp2 8",
+      "lea 232",
+    ]);
+    // And the two older refusals are untouched: the copies already in this deck's group, and
+    // the row the reader has stepped to zero.
+    expect(outcome((a) => a.includes("already in this deck"))).toEqual(["mh2 267", "mh2 138"]);
+    expect(outcome((a) => a.includes("not that many"))).toEqual(["kld 235"]);
+  });
+});
+
+/**
  * The two writes that move copies across the deck boundary — the only pair in the crate that
  * can, which is what makes exclusivity a fact about **where a row sits** rather than a sum
  * somebody has to remember to compute.
@@ -3481,11 +3677,24 @@ describe("the collection's folders", () => {
  * the fake is wrong.
  */
 describe("moving copies across the deck boundary", () => {
-  /** Two decks with their groups and their categories, and four Bolts at the root. */
+  /**
+   * Two decks with their groups and their categories, four Bolts at the root — **and one Bolt on
+   * each deck's live main pile**.
+   *
+   * That last part is issue #358's, and it is a precondition rather than a convenience:
+   * `collection_to_deck` now refuses a card the destination's live list does not play, so a
+   * fixture whose decks list nothing could exercise exactly one branch of this command and no
+   * other. **Every count below reads over that baseline** — `listed` starts at 1 for both decks,
+   * and a filing into `main` folds into the row that is already there rather than inserting one.
+   */
   const boundary = (init: Partial<FakeDb> = {}) =>
     makeDeckDb({
       decks: [deck({ id: 1, name: "Deck A" }), deck({ id: 2, name: "Deck B" })],
       collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 4 })],
+      deckCards: [
+        deckCard({ id: 1, deckId: 1, categoryKind: "main", quantity: 1 }),
+        deckCard({ id: 2, deckId: 2, categoryKind: "main", quantity: 1 }),
+      ],
       ...init,
     });
   const copiesIn = (db: FakeDb, folderId: number | null) =>
@@ -3508,7 +3717,10 @@ describe("moving copies across the deck boundary", () => {
     expect(out).toMatchObject({ fromDeck: null, quantity: 1 });
     expect(copiesIn(db, null)).toBe(3);
     expect(copiesIn(db, groupId(1))).toBe(1);
-    expect(listed(db, 1)).toBe(1);
+    // Two on the list, one of them backed: the row the deck already had, plus the copy this
+    // press filed into it. The list and the group are separate facts, which is the whole reason
+    // a card can be listed and missing.
+    expect(listed(db, 1)).toBe(2);
     // The answer names the row the copies landed in, which is not always the id it was handed.
     expect(db.collectionEntries.find((e) => e.id === out.entryId)!.folderId).toBe(groupId(1));
   });
@@ -3532,8 +3744,10 @@ describe("moving copies across the deck boundary", () => {
     });
 
     expect(out.fromDeck).toBe("Deck A");
-    expect(listed(db, 1)).toBe(0);
-    expect(listed(db, 2)).toBe(1);
+    // Deck A is back to the one row it started with and Deck B has folded the copy into its own,
+    // which is the move read from both ends over {@link boundary}'s baseline.
+    expect(listed(db, 1)).toBe(1);
+    expect(listed(db, 2)).toBe(2);
     expect(copiesIn(db, groupId(1))).toBe(0);
     expect(copiesIn(db, groupId(2))).toBe(1);
   });
@@ -3588,6 +3802,145 @@ describe("moving copies across the deck boundary", () => {
     ).toThrow(/already in this deck/);
   });
 
+  /**
+   * **Issue #358's fence.** A copy filed into a deck's group that no `deck_cards` row backs is a
+   * phantom: the collection says it is spoken for, every other deck is refused it, and nothing
+   * on the deck screen accounts for it. So the list has to name the card first — `deck_add_card`
+   * is what puts it there, and it writes no collection row at all.
+   *
+   * **And the pile is the other half of the same test.** The name arm *creates* a category, so a
+   * refusal landing after that create leaves an empty column standing after a press that failed
+   * — the state the rollback exists for, and the class of defect this feature has already
+   * shipped once. This refusal is asked *before* the create, which is where the crate puts it,
+   * so there is nothing to roll back rather than something rolled back correctly.
+   */
+  it("refuses a card the deck does not play, and invents no pile on the way", () => {
+    const db = boundary({
+      collectionEntries: [entry({ id: 1, cardId: FOIL_ONLY.id, finish: "foil", quantity: 2 })],
+    });
+    const before = db.deckCategories.length;
+
+    expect(() =>
+      writeHandlers(db).collection_to_deck({
+        entryId: 1,
+        deckId: 1,
+        categoryName: "Ramp",
+        quantity: 1,
+      }),
+    ).toThrow(/does not play this card/);
+
+    expect(db.deckCategories.some((c) => c.name === "Ramp")).toBe(false);
+    expect(db.deckCategories).toHaveLength(before);
+    // And nothing moved: the copies are where the reader left them, and the deck's list is
+    // untouched — a refused press writes to neither cabinet.
+    expect(copiesIn(db, null)).toBe(2);
+    expect(copiesIn(db, groupId(1))).toBe(0);
+    expect(db.deckCards.filter((dc) => dc.deckId === 1)).toHaveLength(1);
+  });
+
+  /**
+   * **A different printing of a card the deck plays is the same card.** The fence keys on
+   * `coalesce(cards.oracle_id, deck_cards.card_id)` — `deck::release_group_copies`' rule and
+   * `owned_by_oracle`'s — so a list naming the pretty Bolt takes the reader's cheap one. Matched
+   * on the printing this would refuse the commonest filing there is.
+   */
+  it("accepts another printing of a card the deck plays", () => {
+    const db = boundary({
+      deckCards: [
+        deckCard({ id: 1, deckId: 1, cardId: BOLT_2X2.id, categoryKind: "main", quantity: 1 }),
+      ],
+    });
+
+    const out = writeHandlers(db).collection_to_deck({
+      entryId: 1,
+      deckId: 1,
+      categoryId: categoryId(1, "main"),
+      quantity: 1,
+    });
+
+    expect(out.quantity).toBe(1);
+    expect(copiesIn(db, groupId(1))).toBe(1);
+    // A second row rather than a fold: the printing is part of the deck-card grain, so the deck
+    // now lists both — which is the state `deck_to_collection`'s oracle arm exists to cut back
+    // through. The fence is about the card; the row is about the printing.
+    expect(
+      db.deckCards
+        .filter((dc) => dc.deckId === 1)
+        .map((dc) => dc.cardId)
+        .sort(),
+    ).toEqual([BOLT.id, BOLT_2X2.id].sort());
+  });
+
+  /**
+   * **A plan is not a list.** A theory row holds no cards — `THEORY_HOLDS_NOTHING`'s sentence
+   * from the other end of this same pair — so copies filed behind one would be spoken for by a
+   * deck nobody is holding, and no other deck could ever have them.
+   */
+  it("refuses a card the deck only plans to play", () => {
+    const db = boundary({
+      deckCards: [
+        deckCard({
+          id: 1,
+          deckId: 1,
+          cardId: BOLT.id,
+          variant: "theory",
+          categoryKind: "main",
+          quantity: 4,
+        }),
+      ],
+    });
+
+    expect(() =>
+      writeHandlers(db).collection_to_deck({
+        entryId: 1,
+        deckId: 1,
+        categoryId: categoryId(1, "main"),
+        quantity: 1,
+      }),
+    ).toThrow(/does not play this card/);
+    expect(copiesIn(db, groupId(1))).toBe(0);
+  });
+
+  /**
+   * **Where the new fence sits among the refusals it joined**, which is the half a sentence
+   * cannot pin. `collection_alloc`'s order since issue #358 is: the deck, the source row, the
+   * fence, the pile, the group, the quantity, `ALREADY_HERE` — so the fence is ahead of the
+   * pile's refusals and of the group's, and behind the two lookups it needs answers from.
+   *
+   * The deck stays first because "that deck is gone" and "that deck does not play this" are
+   * different things to tell a stale editor. **The source row moved up with the fence**, which
+   * is the one precedence this change really did move: a caller sending a dead entry id and a
+   * dead category id now hears about the entry, and the crate argues that is the right order
+   * anyway — the entry is what the reader pointed at, the category only where it was going.
+   */
+  it("comes after the deck and the row, ahead of the pile and the group", () => {
+    const db = boundary({
+      collectionEntries: [entry({ id: 1, cardId: FOIL_ONLY.id, finish: "foil", quantity: 1 })],
+    });
+    const w = writeHandlers(db);
+    const move = (over: { entryId?: number; deckId?: number; categoryId?: number }) =>
+      w.collection_to_deck({
+        entryId: 1,
+        deckId: 1,
+        categoryId: categoryId(1, "main"),
+        quantity: 1,
+        ...over,
+      });
+
+    // A deck that is not there beats everything: the id is stale and there is no list to read.
+    expect(() => move({ deckId: 404 })).toThrow(/deck is not there any more/);
+    // A row that is not there beats the fence, and now the pile too — two dead ids, and the one
+    // the reader pointed at is the one they hear about.
+    expect(() => move({ entryId: 404, categoryId: 909 })).toThrow(/collection entry is not there/);
+    // A pile that is not there does **not** beat the fence: the name arm creates, so nothing
+    // about a category may be decided before the card has been allowed through.
+    expect(() => move({ categoryId: 909 })).toThrow(/does not play this card/);
+    // Nor does a deck with no group — the fence is asked before the group is looked up, so this
+    // press meets the card's sentence rather than the folder's.
+    db.collectionFolders = db.collectionFolders.filter((f) => f.deckId !== 1);
+    expect(() => move({})).toThrow(/does not play this card/);
+  });
+
   it("refuses a quantity larger than the row holds, and a quantity of none", () => {
     const db = boundary();
     const w = writeHandlers(db);
@@ -3616,8 +3969,13 @@ describe("moving copies across the deck boundary", () => {
     });
     const made = db.deckCategories.find((c) => c.deckId === 1 && c.name === "Ramp")!;
     expect(made.origin).toBe("auto");
-    expect(listed(db, 1)).toBe(1);
-    expect(db.deckCards.find((dc) => dc.cardId === BOLT.id)!.categoryId).toBe(made.id);
+    // The deck's own row plus the one this press wrote into the pile it invented — the fence
+    // asks whether the deck **plays** the card and the pile is where the copies are filed, so
+    // the two are different questions and this is what they look like answered separately.
+    expect(listed(db, 1)).toBe(2);
+    expect(db.deckCards.filter((dc) => dc.categoryId === made.id).map((dc) => dc.cardId)).toEqual([
+      BOLT.id,
+    ]);
   });
 
   /** And it finds before it creates, so a pile the reader made keeps `"user"` however many cards
@@ -3633,7 +3991,9 @@ describe("moving copies across the deck boundary", () => {
 
     expect(db.deckCategories.filter((c) => c.deckId === 1 && c.name === "Ramp")).toHaveLength(1);
     expect(db.deckCategories.find((c) => c.id === mine.id)!.origin).toBe("user");
-    expect(db.deckCards.find((dc) => dc.cardId === BOLT.id)!.categoryId).toBe(mine.id);
+    expect(db.deckCards.filter((dc) => dc.categoryId === mine.id).map((dc) => dc.cardId)).toEqual([
+      BOLT.id,
+    ]);
   });
 
   /** The id and the name are alternatives and exactly one must arrive: `deck_add_card` lets the
@@ -3727,7 +4087,9 @@ describe("moving copies across the deck boundary", () => {
     expect(out).toMatchObject({ fromDeck: null, quantity: 2 });
     expect(copiesIn(db, REMOVED_FOLDER)).toBe(2);
     expect(copiesIn(db, groupId(1))).toBe(0);
-    expect(listed(db, 1)).toBe(0);
+    // The row the deck started with survives the cut, holding a copy nobody owns: cutting two
+    // took the two that were filed and the list is what the reader still wants.
+    expect(listed(db, 1)).toBe(1);
   });
 
   /**
@@ -3779,7 +4141,9 @@ describe("moving copies across the deck boundary", () => {
    * group **is** the provenance record.
    */
   it("makes a deck card nobody owned just go away", () => {
-    const db = boundary({ collectionEntries: [] });
+    // Neither cabinet seeded: no copies, and no list row either — the deck's whole list is what
+    // the search add below writes, which is exactly the provenance this test is about.
+    const db = boundary({ collectionEntries: [], deckCards: [] });
     const w = writeHandlers(db);
     w.deck_add_card({
       deckId: 1,
@@ -3810,7 +4174,9 @@ describe("moving copies across the deck boundary", () => {
 
     expect(out.quantity).toBe(1);
     expect(copiesIn(db, REMOVED_FOLDER)).toBe(1);
-    expect(db.deckCards).toHaveLength(0);
+    // Deck A's, not the whole table's: Deck B's own row is {@link boundary}'s baseline and this
+    // press never named it.
+    expect(db.deckCards.filter((row) => row.deckId === 1)).toHaveLength(0);
   });
 
   it("refuses a theory row: a plan holds no cards", () => {
@@ -3837,9 +4203,12 @@ describe("moving copies across the deck boundary", () => {
       /not in this deck any more/,
     );
     w.collection_to_deck({ entryId: 1, deckId: 1, categoryId: categoryId(1, "main"), quantity: 1 });
+    // Two on the row now — the deck's own copy and the one just filed — so three is what asks
+    // for more than the list holds.
     const dc = db.deckCards.find((row) => row.deckId === 1)!;
+    expect(dc.quantity).toBe(2);
     expect(() => w.deck_to_collection({ deckCardId: dc.id, quantity: 0 })).toThrow(/at least one/);
-    expect(() => w.deck_to_collection({ deckCardId: dc.id, quantity: 2 })).toThrow(
+    expect(() => w.deck_to_collection({ deckCardId: dc.id, quantity: 3 })).toThrow(
       /not that many copies/i,
     );
   });
@@ -3868,21 +4237,25 @@ describe("moving copies across the deck boundary", () => {
     expect(add.delta).toBe(2);
     expect(JSON.parse(add.payload)).toEqual({ category: "Main deck", quantity: 2 });
 
-    // Part of the row: the stepper's `quantity` shape, `from` and `to` rather than a count.
+    // Part of the row: the stepper's `quantity` shape, `from` and `to` rather than a count. The
+    // row holds three — {@link boundary}'s baseline copy and the two this press filed — so the
+    // step is 3 → 2 and `delta` is still the one copy that left.
     const dc = db.deckCards.find((row) => row.deckId === 1)!;
     w.deck_to_collection({ deckCardId: dc.id, quantity: 1 });
     const part = db.deckAudit[db.deckAudit.length - 1];
     expect(part).toMatchObject({ kind: "quantity", delta: -1 });
-    expect(JSON.parse(part.payload)).toEqual({ category: "Main deck", from: 2, to: 1 });
+    expect(JSON.parse(part.payload)).toEqual({ category: "Main deck", from: 3, to: 2 });
 
     // The whole of it: a `remove`, and `reason` is null because where the copies went is a
-    // standing fact about every cut on this list rather than something true of this row.
-    w.deck_to_collection({ deckCardId: dc.id, quantity: 1 });
+    // standing fact about every cut on this list rather than something true of this row. The
+    // group has only one copy left to give back, and the row still quotes what the **list**
+    // held — `held` and never `moved`.
+    w.deck_to_collection({ deckCardId: dc.id, quantity: 2 });
     const whole = db.deckAudit[db.deckAudit.length - 1];
-    expect(whole).toMatchObject({ kind: "remove", delta: -1 });
+    expect(whole).toMatchObject({ kind: "remove", delta: -2 });
     expect(JSON.parse(whole.payload)).toEqual({
       category: "Main deck",
-      quantity: 1,
+      quantity: 2,
       reason: null,
     });
   });
@@ -3903,6 +4276,10 @@ describe("moving copies across the deck boundary", () => {
       deckCards: [
         deckCard({ id: 1, cardId: BOLT.id, categoryKind: "main", quantity: 2 }),
         deckCard({ id: 2, cardId: BOLT.id, categoryKind: "side", quantity: 2 }),
+        // The destination has to play the card too — issue #358's fence — and this fixture
+        // replaces {@link boundary}'s whole `deckCards` array, so Deck B's baseline row is
+        // written out here rather than inherited.
+        deckCard({ id: 3, deckId: 2, cardId: BOLT.id, categoryKind: "main", quantity: 1 }),
       ],
     });
 
@@ -3934,6 +4311,12 @@ describe("moving copies across the deck boundary", () => {
    * point at, because an owned add lands a row the editor has never seen and the `ON CONFLICT`
    * arm makes the id underivable from the arguments. The second press is the half worth pinning:
    * it inserts nothing, so a fake reading `nextId` would answer a row that does not exist.
+   *
+   * **Filed into the Sideboard rather than the main pile**, which is what still makes the insert
+   * arm reachable at all under issue #358's fence: the deck has to already play the card, and
+   * {@link boundary} makes it play it on `main` — so a filing into that pile could only ever
+   * fold. The fence is about the **deck**, the pile is about where the copies go, and this is
+   * the press that tells the two apart.
    */
   it("answers the deck card it wrote, through both arms", () => {
     const db = boundary();
@@ -3941,21 +4324,23 @@ describe("moving copies across the deck boundary", () => {
     const first = w.collection_to_deck({
       entryId: 1,
       deckId: 1,
-      categoryId: categoryId(1, "main"),
+      categoryId: categoryId(1, "side"),
       quantity: 1,
     });
-    const written = db.deckCards.find((row) => row.deckId === 1)!;
+    const written = db.deckCards.find((row) => row.categoryId === categoryId(1, "side"))!;
     expect(first.deckCardId).toBe(written.id);
 
     const rootRow = db.collectionEntries.find((e) => e.folderId === null)!;
     const again = w.collection_to_deck({
       entryId: rootRow.id,
       deckId: 1,
-      categoryId: categoryId(1, "main"),
+      categoryId: categoryId(1, "side"),
       quantity: 1,
     });
     expect(again.deckCardId).toBe(first.deckCardId);
-    expect(db.deckCards.filter((row) => row.deckId === 1)).toHaveLength(1);
+    // Two rows on this deck and not three: the one it started with, and the one both presses
+    // landed on.
+    expect(db.deckCards.filter((row) => row.deckId === 1)).toHaveLength(2);
   });
 
   /**
@@ -3964,7 +4349,8 @@ describe("moving copies across the deck boundary", () => {
    * quotes what the list held, not what the group gave back.
    */
   it("records a cut of a card nobody owned, which moved nothing", () => {
-    const db = boundary({ collectionEntries: [] });
+    // Both cabinets empty, for the reason "makes a deck card nobody owned just go away" states.
+    const db = boundary({ collectionEntries: [], deckCards: [] });
     const w = writeHandlers(db);
     w.deck_add_card({
       deckId: 1,
@@ -4055,7 +4441,8 @@ describe("moving copies across the deck boundary", () => {
    * deck could ever have them.
    */
   describe("the pile writes release their copies too", () => {
-    /** One deck, four Bolts already filed into its group and listed on its main pile. */
+    /** One deck, four Bolts filed into its group — folded onto the main-pile row
+     *  {@link boundary} gives it, so the list says **five** where the group holds four. */
     const filled = (over: Partial<FakeDb> = {}) => {
       const db = boundary(over);
       writeHandlers(db).collection_to_deck({
@@ -4078,8 +4465,10 @@ describe("moving copies across the deck boundary", () => {
       });
 
       // The answer is still `deck_cards` copies, never the copies that moved — what the
-      // confirmation quoted is what left the deck.
-      expect(cleared).toBe(4);
+      // confirmation quoted is what left the deck. **Five against four**, which is the whole of
+      // that sentence made visible: the list held one copy nobody owned beside the four the
+      // group did, and only the four came back.
+      expect(cleared).toBe(5);
       expect(copiesIn(db, groupId(1))).toBe(0);
       expect(copiesIn(db, REMOVED_FOLDER)).toBe(4);
     });
