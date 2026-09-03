@@ -2460,7 +2460,7 @@ mod tests {
         }
         assert_eq!(
             COMMANDS.len(),
-            123,
+            125,
             "update this number when a command is added"
         );
     }
