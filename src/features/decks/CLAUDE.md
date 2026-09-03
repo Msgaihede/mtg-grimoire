@@ -462,14 +462,26 @@ reader to configure the deck they had just made; it now asks all of them.
     four rows short by four different amounts has no one number to name, so a plural row could
     only quote a total no card on screen is wearing.
   - **Greyed _with_ a reason, where this menu's other two refusals are silent** — `a plan holds no
-    cards` for a theory row, `nothing missing` for a live one that is not short, both in
-    `QUICK_ADD_REASON` and keyed by `quickAddBlock`'s union so a new arm is a red build rather
-    than a row greyed with `undefined`. The split from `zoneItem` and `finishItem` is a test
-    rather than a drift: those two grey on facts the reader can check against the card in front of
-    them, and *a plan holds no cards* is a rule about the list they are standing in that nothing on
-    the card says. **The three rows grey and the parent stays live**, which is the whole of how a
-    reason gets read — a greyed submenu cannot be opened, so its sentences would be written where
-    nobody can reach them.
+    cards` for a theory row, `this pile is switched off` for a row in an inactive category,
+    `nothing missing` for a live one that is not short, all three in `QUICK_ADD_REASON` and keyed
+    by `quickAddBlock`'s union so a new arm is a red build rather than a row greyed with
+    `undefined`. The split from `zoneItem` and `finishItem` is a test rather than a drift: those
+    two grey on facts the reader can check against the card in front of them, and *a plan holds no
+    cards* is a rule about the list they are standing in that nothing on the card says. **The
+    three rows grey and the parent stays live**, which is the whole of how a reason gets read — a
+    greyed submenu cannot be opened, so its sentences would be written where nobody can reach them.
+  - **The inactive arm is the one a live pass added, and it is the reason this feature owes one**
+    (2026-09-03, debug build, real database). `attribute_owned` hands a switched-off pile nothing
+    out of the deck's group — `category_active` is tested before the oracle total is spent — so
+    **every** row in one reads `0` owned whatever the folder holds. Without the arm that `0` read
+    as a shortfall: the submenu offered *Quick add 1 copy* on a Maybeboard line, the press was
+    legal (the deck plays the card, so `NOT_IN_DECK` passes), the copies were recorded, **and the
+    row still read `0/1`** — a control whose own number never moves is one a reader presses again,
+    and two presses put two copies into one folder. Every suite fixture used an active category,
+    so nothing here could go red for it; `deckCardShort` guards on `categoryActive` for the same
+    reason and is the precedent rather than a coincidence. It greys rather than being made to
+    work, because a shortfall computed against a number the backend refuses to count would put
+    two answers on one screen.
   - **The pure half is `quickCollection.ts` and the name is load-bearing on Windows.** It was
     planned as `quickAdd.ts`, and `QuickAdd.tsx` already sits in this folder: a case-insensitive
     file system resolves `./quickAdd` and `./QuickAdd` to whichever the resolver reaches first, so

@@ -68,17 +68,36 @@ export function quickAddShort(card: DeckCard): number {
  * - `"nothing-missing"` — the group already holds what the row asks for. Nothing to record and
  *   nothing to pull.
  *
- * **An inactive category is deliberately not a third block, and it is the one honest gap here.**
- * A switched-off pile is handed nothing out of the group, so every row in one reads `0` owned
- * and this function calls it short — `deckCardShort`, which guards on exactly that, is the
- * *mark*'s predicate and answers a different question (whether to draw a red figure). The write
- * is legal on such a row: the deck plays the card, so `NOT_IN_DECK` passes and the copies are
- * recorded. What a reader can therefore do is record copies for a Maybeboard line they already
- * own, and the cure is switching the pile on rather than a third greyed sentence explaining a
- * pile they can see is off.
+ * - `"inactive"` — the row is in a switched-off pile, so its `0` owned is a property of the
+ *   *pile* rather than of the reader's shelves and there is no shortfall here to answer.
+ *
+ * **That third arm was not here for the length of one fan-out, and driving the shipped window is
+ * what found it** (2026-09-03, debug build, real database). `attribute_owned` hands a switched-off
+ * pile nothing out of the group — `category_active` is checked before the oracle total is spent —
+ * so **every** row in one reads `0` owned however many copies sit in the deck's folder. Without
+ * this arm {@link quickAddShort} read that `0` as a shortfall and the submenu offered
+ * *Quick add 1 copy* on a Maybeboard line; the press was legal (the deck plays the card, so
+ * `NOT_IN_DECK` passes), the copies were recorded, **and the row still read `0/1` afterwards** —
+ * so the control appeared to do nothing and could be pressed again, and again. Measured: two
+ * presses on one Maybeboard row left `collection_entries` id 276 holding **2** copies in the
+ * deck's group with the row reading `0/1` throughout. A control whose own number never moves is
+ * one a reader presses until something happens, and what happens is cardboard they never bought.
+ *
+ * **Greyed rather than made to work**, because the alternative is a second opinion about a
+ * question the backend has already answered: attributing copies to a switched-off pile is
+ * `attribute_owned`'s decision, and a shortfall computed here against a number the app refuses to
+ * count would put two answers on one screen. The cure a reader has is the pile's own switch, and
+ * `deckCardShort` — the *mark*'s predicate, which guards on `categoryActive` for this very
+ * reason — is the precedent rather than a coincidence.
  */
-export function quickAddBlock(card: DeckCard): "theory" | "nothing-missing" | null {
+export function quickAddBlock(
+  card: DeckCard,
+): "theory" | "inactive" | "nothing-missing" | null {
   if (card.variant === "theory") return "theory";
+  // **Before the shortfall test and not after it**, because on an inactive row the shortfall is
+  // not merely unknown — it is `quantity`, always, for every such row — so a later arm would be
+  // unreachable and the row would read as short whatever the reader owns.
+  if (!card.categoryActive) return "inactive";
   if (quickAddShort(card) === 0) return "nothing-missing";
   return null;
 }

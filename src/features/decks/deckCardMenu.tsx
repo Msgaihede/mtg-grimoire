@@ -418,6 +418,13 @@ function moveItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem {
  */
 const QUICK_ADD_REASON: Record<Exclude<ReturnType<typeof quickAddBlock>, null>, string> = {
   theory: "a plan holds no cards",
+  // **A phrase about the pile, not about the card**, and it is the third of these sentences for
+  // the same reason the first is: nothing on the cardboard says the column it sits in is switched
+  // off, and a switched-off pile is handed nothing out of the deck's folder — so the `0` owned a
+  // row in one wears is a fact about the pile. The arm was added after driving the shipped window
+  // found the submenu offering `Quick add 1 copy` on a Maybeboard line whose number no press could
+  // move; `quickCollection.ts` carries the measurement.
+  inactive: "this pile is switched off",
   "nothing-missing": "nothing missing",
 };
 

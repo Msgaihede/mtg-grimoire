@@ -137,14 +137,39 @@ describe("quickAddBlock", () => {
   });
 
   /**
-   * **The documented gap, pinned so that closing it is a deliberate act.** A switched-off pile is
-   * handed nothing out of the deck's group, so every row in one reads `0` owned — and this
-   * function calls such a row short. `deckCardShort`, which guards on exactly that, answers a
-   * different question (whether to draw a red figure); the *write* is legal here, because the
-   * deck plays the card. If a third block is ever added for it, this test is what fails.
+   * **The defect a live pass found, and the reason it could not be found here first.**
+   * `attribute_owned` hands a switched-off pile nothing out of the deck's group, so a row in one
+   * reads `0` owned however many copies the folder holds — every fixture in this file uses an
+   * active category, which is why `0/4` looked like a shortfall for the length of one fan-out.
+   * The press was legal and the copies were recorded, and the row still read `0/4` afterwards: a
+   * control whose number never moves is one a reader presses again. Driving the shipped window
+   * put two copies into one folder from two presses on a Maybeboard line.
    */
-  it("does not block an inactive pile's row, which is the known gap", () => {
-    expect(quickAddBlock(card({ categoryActive: false, quantity: 4, ownedQuantity: 0 }))).toBeNull();
+  it("blocks a row in a switched-off pile, whose owned count can never move", () => {
+    expect(quickAddBlock(card({ categoryActive: false, quantity: 4, ownedQuantity: 0 }))).toBe(
+      "inactive",
+    );
+  });
+
+  /**
+   * **The arm is ahead of the shortfall test**, and this is what says so. On an inactive row the
+   * shortfall is `quantity` for *every* such row — `ownedQuantity` is zeroed by the read — so an
+   * `inactive` arm placed after `nothing-missing` would be reachable only for a zero-quantity row,
+   * which `deck_cards` has none of. Ordering it the other way passes the case above and still
+   * offers the press on every real Maybeboard line.
+   */
+  it("says inactive rather than nothing-missing for a switched-off pile the group fills", () => {
+    expect(quickAddBlock(card({ categoryActive: false, quantity: 4, ownedQuantity: 4 }))).toBe(
+      "inactive",
+    );
+  });
+
+  /** A theory row in a switched-off pile is still answered as the plan it is: `theory` is the
+   *  stronger statement, and the backend refuses it for that reason rather than for this one. */
+  it("prefers theory over inactive when a row is both", () => {
+    expect(quickAddBlock(card({ variant: "theory", categoryActive: false, quantity: 4 }))).toBe(
+      "theory",
+    );
   });
 });
 

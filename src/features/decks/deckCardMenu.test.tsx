@@ -573,6 +573,45 @@ describe("buildDeckCardMenu", () => {
       }
     });
 
+    /**
+     * **The Maybeboard row, and the defect that reached the shipped window before this test
+     * existed.** A switched-off pile is handed nothing out of the deck's group, so every row in
+     * one reads `0` owned whatever the folder holds — which read as a shortfall, offered
+     * `Quick add 1 copy`, recorded the copies, and **left the row at `0/1`**. The press looked
+     * like a no-op and could be repeated; two of them put two copies in one folder. The reason is
+     * about the *pile* because nothing on the card says the column it sits in is off.
+     */
+    it("greys all three rows in a switched-off pile, and blames the pile", () => {
+      const maybe = bolt({ quantity: 1, ownedQuantity: 0, categoryActive: false });
+      const rows = collection(buildDeckCardMenu(maybe, collectionDeps())).items;
+      const actions = rows.filter((i): i is MenuAction => i.kind === "action");
+
+      expect(actions).toHaveLength(3);
+      for (const row of actions) {
+        expect(row.disabled).toBe(true);
+        expect(row.reason).toBe("this pile is switched off");
+      }
+    });
+
+    /** A switched-off pile whose row the reader really is short of writes nothing when pressed —
+     *  the half `disabled` alone does not promise, asserted here because this is the arm that
+     *  used to be live and whose press accumulated copies. */
+    it("writes nothing when a switched-off pile's row is pressed anyway", () => {
+      const quickAdd = vi.fn();
+      const quickAddAndUnwish = vi.fn();
+      const pullCard = vi.fn();
+      const maybe = bolt({ quantity: 1, ownedQuantity: 0, categoryActive: false });
+      const rows = collection(
+        buildDeckCardMenu(maybe, collectionDeps({ quickAdd, quickAddAndUnwish, pullCard })),
+      ).items;
+
+      for (const row of rows.filter((i): i is MenuAction => i.kind === "action")) row.onSelect();
+
+      expect(quickAdd).not.toHaveBeenCalled();
+      expect(quickAddAndUnwish).not.toHaveBeenCalled();
+      expect(pullCard).not.toHaveBeenCalled();
+    });
+
     /** Nothing to file: the deck plays four and the reader owns four. The label still quotes the
      *  shortfall — `Quick add 0 copies` beside `nothing missing` is the fact and its reason side
      *  by side, rather than a label that changes shape with the state. */
