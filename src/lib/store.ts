@@ -72,8 +72,8 @@ export interface PaneDeckContext {
    * answer.
    *
    * Written by whichever surface opened the card, because that surface is the one that knows
-   * which list it is drawing; read at `CardDetailPane`'s `useSwapFromPane` call, which is the
-   * only place the swap is pressed.
+   * which list it is drawing; read at `AllPrintingsDialog`'s `useSwapFromPane` call, which is the
+   * only place the swap is pressed (it was the docked pane's until 2026-09-03).
    */
   variant: DeckVariant;
   /**

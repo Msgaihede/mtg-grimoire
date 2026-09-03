@@ -191,8 +191,9 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   setting `src` resets `complete` and `naturalWidth` while the old frame stays painted, so
   `naturalWidth === 0` is true in both the healthy and the broken case. What a test can see
   is _element identity_, which is what `CardImage.test.tsx` and the two integration tests
-  assert; what a person can see is a screenshot. `PrintingPreview` reached the same answer
-  independently by keying its whole `Preview` on the printing.
+  assert; what a person can see is a screenshot. `PrintingPreview` had reached the same answer
+  independently, by keying its whole `Preview` on the printing — that file was deleted with the
+  docked card pane on 2026-09-03.
 - **An `art` crop has no printed frame, so wherever one is shown the illustrator must be
   credited.** Scryfall's image policy, quoted in full at
   `docs/superpowers/plans/2026-08-04-02-images-card-browsing.md:55`: use the art crop and the
@@ -1080,8 +1081,9 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   one grid of cards to get bigger. The same `preventDefault` is what suppresses trackpad pinch,
   which arrives with `ctrlKey` set and nobody touching a key.
 - **Escape closes one layer per press, and the protocol is a handshake, not a z-index.** An
-  inner dismissible layer (popup, listbox, menu) listens on `window` in the **capture**
-  phase and calls `preventDefault()`; an outer one (the card detail pane) listens in the
+  inner dismissible layer (popup, listbox, menu, and every `Dialog`) listens on `window` in the
+  **capture** phase and calls `preventDefault()`; an outer one (`KeyMap`'s shortcuts panel —
+  the docked card detail pane until 2026-09-03) listens in the
   bubble phase and returns early on `e.defaultPrevented`. Capture is load-bearing: two
   `window` listeners for one event run in _registration_ order, and the outer layer was
   mounted first, so in the bubble phase it would act before the popup and read
@@ -2449,7 +2451,7 @@ live pass found one defect behind all three, plus one the suite could not see.
 
 ### One cause, three surfaces: the walk was exactly one press long
 
-`CardDetailPane` renders `<Body key={cardId}>` and that body's mount effect focuses the pane —
+`CardDetailPane` rendered `<Body key={cardId}>` and that body's mount effect focused the pane —
 "focus moves in when it opens, and Escape hands it back to whatever opened it", which is the right
 contract for a card a reader *pressed*. The arrow keys make the same store write for a different
 reason, so **every** press re-keyed the body and pulled the caret out of whatever was being walked:
@@ -2466,8 +2468,8 @@ page under the scrim, and the modal's own keydown never fired again.
 
 The fix is `src/lib/caretWalk.ts`: a note saying *this selection was walked to, so the caret is
 already where it belongs*, written by the three walkers immediately before their store write and
-read by the pane's mount effect. The pane still records the opener — during a walk the active
-element **is** the right thing for Escape to hand back to — and skips only the focus.
+read by the pane's mount effect. The pane still recorded the opener — during a walk the active
+element **is** the right thing for Escape to hand back to — and skipped only the focus.
 
 **The first spelling of that note was wrong in a way only a debug build could show.** It cleared
 itself on read, the way `handover` does one screen up in the same file; `main.tsx` wraps the app in
@@ -2477,6 +2479,24 @@ fix looked like a fix. It is idempotent now — the same card answers the same w
 it is asked, and any *other* card discards the note. Worth carrying because the asymmetry runs the
 wrong way: **a release build would have passed a test this could not**, StrictMode's double
 invocation being development-only.
+
+> **The reader went away on 2026-09-03 and the note is now dormant — the defect above is *not*
+> back.** `CardDetailPane.tsx` was deleted when the card became `CardDetailModal`, and the mount
+> effect that asked `consumeCaretNote(cardId)` went with it, so `consumeCaretNote` has no caller
+> outside the suite while `keepCaretForCard` is still written by all three walkers.
+>
+> This paragraph first said the walk was "one press long again". **That was wrong, and it is worth
+> saying why, because the mistake is the kind that gets a guard re-added against a defect that
+> cannot happen.** Two things have to be true for the pane's failure to recur, and neither is:
+> the surface must take the caret *per card* — `Dialog`'s panel-focus effect has `[]` deps, so it
+> fires once when the modal opens, and the body it re-keys focuses nothing — and the walk must be
+> able to run at all, which it cannot, because the panel is `aria-modal` with `trapTab` and the
+> wall behind the scrim never receives the press. Card-to-card movement is the modal's own `‹ ›`
+> flanks now, and they keep the caret on the chevron.
+>
+> So nothing goes red for it and nothing should: the tests assert the note is *written*, which is
+> still true and still correct. A future surface that draws a card **without covering the list**
+> would need the reader back.
 
 ### The wall's tile parked 2px past its own scrollport
 
@@ -2753,9 +2773,11 @@ both traps at once; a panel whose DOM node lives outside the whole tree, at `LAY
 editor's dialogs — and over a nested overlay, which is what moved it off 46 — below
 `gate`'s 50 because `SyncProgress` covers the window and a hint floating over it would describe
 something the reader cannot see), needs neither raised further nor clipped by an
-`overflow-hidden` scroller. `PrintingPreview` is what paying the alternative costs today: it
-places its own preview with `frame.scrollTop`/`clientLeft` arithmetic instead of `fixed`, because
-it has to stay inside its scroller's transform. `TooltipProvider` mounts in `src/App.tsx` and
+`overflow-hidden` scroller. `PrintingPreview` was what paying the alternative cost: it
+placed its own preview with `frame.scrollTop`/`clientLeft` arithmetic instead of `fixed`, because
+it had to stay inside its scroller's transform. That file was deleted with the docked card pane on
+2026-09-03 and **nothing in the app does that arithmetic now**, so the comparison is a record
+rather than a live example. `TooltipProvider` mounts in `src/App.tsx` and
 `.storybook/preview.tsx`, both above `ContextMenuProvider`, for that provider's own reason — its
 panel is a sibling of `children`, so a context nested inside it would wrap every view and none of
 the menu's own rows.
@@ -4379,6 +4401,13 @@ is a proposal — the last paragraph of this section is the point of it.
 Line numbers are a fact about a tree, so every row names the symbol or the string beside the line
 and the line is the convenience rather than the identifier.
 
+**Two of the files named below have since been deleted, recorded 2026-09-03 rather than edited
+out.** `features/card/CardDetailPane.tsx` and `features/card/PrintingPreview.tsx` went when the
+docked card surface became `CardDetailModal`. What that costs the census is stated at each row:
+the hover-only `+` is one site fewer, and the printings dwell preview is **gone with no
+equivalent** — the printings wall is a `CardGrid` of art tiles now, where the art is the tile and
+there is nothing to preview. So the "four dwell timers" below are three.
+
 ### The sweeps, and what each one costs
 
 The plan's own three greps, run first:
@@ -4450,12 +4479,12 @@ is prose about something else.
 | `components/AppShell.tsx:614` — `{...tip(narrow && label, { side: "right", describes: false })}` | The nav entry's word while the rail is collapsed to `w-17`/68px. The label is `sr-only` there, so the button's accessible name is unchanged and a screen reader still has it; the eye has the icon and nothing else. | The expanded rail — `useNavCollapsed` persists the state in `app_meta`. At 390px the expanded rail is 208px of the window. |
 | `components/AppShell.tsx:822` — the same spread over a pinned deck or folder's name | Which deck or folder each pinned art crop is. | The same, and nothing else. |
 | `components/Ribbon.tsx:96` (`dataDir`) and `:97–98` (`imageStoreFailures`), bound at `:176` on the `role="status"` line | Which data folder is live, and how many card images could not be written to the cache. | **Nothing.** Each field reaches the UI at exactly one place, and it is this tooltip: `imageStoreFailures` is drawn in no other string and `dataDir` in no other expression. Settings names neither — `features/settings/SettingsPage.tsx:154` reads "Data folder and import. Coming in a later plan.", and `features/settings/DangerZonePanel.tsx:117` records that the folder is named nowhere on Settings. |
-| `features/collection/AddToCollection.tsx:36–38` — `REVEAL_ON_HOVER`, spread at 11 sites: `features/card/CardDetailPane.tsx:2034`, `features/collection/CollectionTable.tsx:349`, `features/decks/DeckTile.tsx:387`, `features/decks/FolderTree.tsx:581`, `features/search/CardGrid.tsx:1485`, `features/search/SearchPage.tsx:180` and `:637`, `features/tags/TagResults.tsx:301`, `features/wishlist/WishlistGrid.tsx:440`, `features/wishlist/WishlistTable.tsx:180` and `:290` | Where the quick-add `+` is, on every card surface in the app. | **The control is not gone; it is unaimable.** `opacity-0`, never `hidden` — deliberately, so it keeps its tab stop — and `CardGrid.tsx:1474` states in as many words that an `opacity-0` element is still a hit target. A finger that lands on it presses it. Nothing on screen says it is there. |
+| `features/collection/AddToCollection.tsx:36–38` — `REVEAL_ON_HOVER`, spread at 11 sites: `features/card/CardDetailPane.tsx:2034` (**that file was deleted 2026-09-03; the modal that replaced it draws no quick-add**), `features/collection/CollectionTable.tsx:349`, `features/decks/DeckTile.tsx:387`, `features/decks/FolderTree.tsx:581`, `features/search/CardGrid.tsx:1485`, `features/search/SearchPage.tsx:180` and `:637`, `features/tags/TagResults.tsx:301`, `features/wishlist/WishlistGrid.tsx:440`, `features/wishlist/WishlistTable.tsx:180` and `:290` | Where the quick-add `+` is, on every card surface in the app. | **The control is not gone; it is unaimable.** `opacity-0`, never `hidden` — deliberately, so it keeps its tab stop — and `CardGrid.tsx:1474` states in as many words that an `opacity-0` element is still a hit target. A finger that lands on it presses it. Nothing on screen says it is there. |
 | `features/decks/cardControl.tsx:933–936` — `REVEALED_ON_CARD` | The deck card's control bar on the three views that draw a card as a picture. | The same `opacity-0` answer. The stack has a second door: `revealedWhenOpen` (`cardControl.tsx:955–963`) drives the same bar off **which card is open** rather than off the pointer — see the flip-through row. |
 | `components/CardArt.tsx:210–213` — `group-hover:scale-[1.02]`, given `hoverZoom` by `features/search/CardGrid.tsx:1374` and `features/decks/views/GridView.tsx:404`; `features/decks/DeckTile.tsx:531–534` for a deck tile | Which tile the pointer is over. | Nothing equivalent, and nothing is missing: the lift answers a question a finger does not ask. The caret's answer is `FOCUS`, which is a different thing. |
 | `features/decks/DeckSearchPanel.tsx:1072` (`cursor-col-resize`) and `:1082–1086` (an `opacity-0 … group-hover:opacity-100` grip) | That the docked search panel's left edge can be dragged at all. Both signals belong to a pointer: a cursor a touchscreen does not have, and a grip revealed by `group-hover`. | The drag itself is pointer-based and the strip already carries `touch-none` (`:1072`); the keyboard reaches the same resize through arrows, Home and End (`:1055–1061`). Nothing **visible** reaches it without a pointer. |
 | `features/decks/CardStack.tsx:851` — `onPointerEnter={() => onArm(index)}`, `STACK_OPEN_DWELL_MS` 80 (`:271`); released at `:703` after `STACK_CLOSE_DELAY_MS` 180 (`:287`) | The deck builder's signature interaction: running a pointer down a pile to fan it. | **Yes, and by design.** The open card resolves to `openIndex ?? selectedIndex` (`CardStack.tsx:653–655`), so a card that was *pressed* stays lifted after the pointer has gone. A tap therefore fans one card. What a tap cannot do is fan the pile. |
-| `features/card/PrintingPreview.tsx:182–183` — `onMouseEnter`/`onMouseLeave`, `PREVIEW_DWELL_MS` 250 (`:25`) | One printing's art without swapping to that printing. | `onFocus` arms the same dwell when focus arrives in the row (`:185–187`), which is the keyboard's door. On touch, `onPointerDown: cancel` (`:201`) takes down whatever the tap's compatibility `mouseenter` armed. |
+| ~~`features/card/PrintingPreview.tsx:182–183`~~ — `onMouseEnter`/`onMouseLeave`, `PREVIEW_DWELL_MS` 250 (`:25`). **Deleted 2026-09-03 with the docked card pane.** | One printing's art without swapping to that printing. | `onFocus` armed the same dwell when focus arrived in the row (`:185–187`), which was the keyboard's door. On touch, `onPointerDown: cancel` (`:201`) took down whatever the tap's compatibility `mouseenter` armed. **Nothing replaces it**, and nothing needs to: the printings list is `AllPrintingsDialog`'s wall of art tiles now, so the art is the tile and looking at one costs no hover. |
 | `components/menu/ContextMenu.tsx:730` — `onPointerOver`, `SUBMENU_HOVER_MS` 120 (`:48`) | Opening a submenu by resting on its row. | **Yes, at the site**: the submenu row's own `onClick` toggles it (`components/menu/Submenu.tsx:163`). Opening the parent menu is the gestures table's problem, not this one's. |
 | The other **98** `{...tip(…)}` spreads, across 53 shipped files | Everything this app says only in a hint. Two kinds, unequally lost: **11** pass `whenClipped: true`, where the words are the anchor's own truncated text — complete in the DOM and therefore in the accessibility tree, so only the *paint* is cut off; the rest are descriptions, and the ~57 lines passing `describes: false` are the ones whose words are the element's own name or already-visible text, drawn `aria-hidden`. | Nothing generic. Each of the 98 is its own question, and the two kinds have to be told apart before any of them is counted as lost. |
 | The marks on a card face — `components/CardArt.tsx:402`, `components/FinishMark.tsx:104`, `components/GameChangerMark.tsx:68`, `components/CountTag.tsx:212`, `components/OwnedBadge.tsx:55`, `components/RarityGem.tsx:54`, `features/decks/CardMarks.tsx:73`/`:319`/`:424`/`:458`/`:519`/`:578` | What a glyph means. Each binds `describes: false` because the panel carries the mark's *name* and the mark itself is `aria-hidden`. | Nothing on the card. The same facts are set in type in the card pane and in the three tables — a different surface, not the same one reached twice. |
@@ -4469,7 +4498,7 @@ is prose about something else.
 | **Ctrl/⌘-click** | `readModifiers` (`lib/multiSelect.ts:70–79`) sets `toggle` from `ctrlKey \|\| metaKey`; `applySelect` (`:80` onward) toggles that one key in or out of the set. It reaches a surface through `useCardSelection`'s `pick` (`lib/useCardSelection.ts:79`, `:125`), which returns whether the press was a selection. | **Nothing.** There is no "Select all", no checkbox column and no selection mode anywhere in the tree — `grep -rni "select all\|selectAll\|selectRange"` outside tests and stories returns no lines. `CardGrid`'s arrow walk returns early on **any** modifier (`features/search/CardGrid.tsx:969`), so the wall's keyboard path offers no chord either. |
 | **Shift-click** | The same `readModifiers`, setting `range` from `shiftKey`; `applySelect` replaces the set with the run from the anchor, and Ctrl+Shift adds that run instead. Four cases and no others, Shift outranking Ctrl (`lib/multiSelect.ts:80–110`). | As above. |
 | **Right-click** | `useContextMenu`'s `menu(build)` (`components/menu/useContextMenu.ts:151`), spread as `onContextMenu` at 14 shipped attachments over 9 handler factories, above a document-level suppressor at `components/menu/ContextMenuProvider.tsx:67`. It is how a card, a table row, a folder, a deck tile, a pile heading and the card pane are acted on. | **Two doors, and neither belongs to touch.** `menuKey` answers Shift+F10 and the ContextMenu key (`useContextMenu.ts:153–162`) — a keyboard. `menuClick` opens the same menu from a plain click on a `⋯` trigger (`:182–185`) — and it exists at exactly **two** surfaces, the collection's and the wishlist's folder cards (`features/collection/CollectionPage.tsx:1322` and `features/wishlist/WishlistPage.tsx:862`, drawn at `CollectionFolderCard.tsx:244` and `WishFolderCard.tsx:229`). Every other menu in the app has no plain-click door. |
-| **Resting a pointer** | Four dwell timers, each keyed on a pointer that arrives and does not leave: `TOOLTIP_OPEN_MS` 400 (`components/tooltip/TooltipProvider.tsx:17`), `SUBMENU_HOVER_MS` 120 (`components/menu/ContextMenu.tsx:48`), `PREVIEW_DWELL_MS` 250 (`features/card/PrintingPreview.tsx:25`), `STACK_OPEN_DWELL_MS` 80 (`features/decks/CardStack.tsx:271`). | Per site, in the table above. **The tooltip's own mechanics deserve stating precisely, and they were not measured on hardware for this census.** The binding is `onPointerEnter`, not `onMouseEnter` (`components/tooltip/useTooltip.ts:113`), and a touch tap *does* dispatch `pointerenter` — so the 400ms timer is armed. What happens next has three parts: the provider's document-level `pointerdown` handler calls `hideNow` (`TooltipProvider.tsx:190–195`), which clears the *close* timer and hides what is open but does **not** clear the open timer; `pointerleave` at lift-off calls `leave`, which does clear it (`:155–160`); and the `focus` door is fenced on `anchor.matches(":focus-visible")` (`:141`), which a pointer press makes false. Whether a deliberate press-and-hold past 400ms puts a panel up is therefore a **reading somebody owes on a device**, and not a conclusion this census may draw from source. |
+| **Resting a pointer** | Four dwell timers, each keyed on a pointer that arrives and does not leave: `TOOLTIP_OPEN_MS` 400 (`components/tooltip/TooltipProvider.tsx:17`), `SUBMENU_HOVER_MS` 120 (`components/menu/ContextMenu.tsx:48`), ~~`PREVIEW_DWELL_MS` 250 (`features/card/PrintingPreview.tsx:25`)~~ — **deleted 2026-09-03, so three** — and `STACK_OPEN_DWELL_MS` 80 (`features/decks/CardStack.tsx:271`). | Per site, in the table above. **The tooltip's own mechanics deserve stating precisely, and they were not measured on hardware for this census.** The binding is `onPointerEnter`, not `onMouseEnter` (`components/tooltip/useTooltip.ts:113`), and a touch tap *does* dispatch `pointerenter` — so the 400ms timer is armed. What happens next has three parts: the provider's document-level `pointerdown` handler calls `hideNow` (`TooltipProvider.tsx:190–195`), which clears the *close* timer and hides what is open but does **not** clear the open timer; `pointerleave` at lift-off calls `leave`, which does clear it (`:155–160`); and the `focus` door is fenced on `anchor.matches(":focus-visible")` (`:141`), which a pointer press makes false. Whether a deliberate press-and-hold past 400ms puts a panel up is therefore a **reading somebody owes on a device**, and not a conclusion this census may draw from source. |
 
 ### The zoom is the one with no other door
 

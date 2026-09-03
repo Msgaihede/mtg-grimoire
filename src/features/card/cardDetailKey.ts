@@ -9,9 +9,10 @@ import type { MarketplaceId } from "@/lib/marketplace";
  * Four surfaces ask for the same card at the same moment: the card modal itself, and the three
  * overlays a reader opens from its rail — `LegalityDialog`, `CardTextDialog`, `OracleTagsDialog`.
  * Each of the three used to spell `["card", cardId, marketplace]` out for itself, and each did so
- * deliberately: the original lived in `CardDetailPane.tsx`, a file that is deleted once the
- * modal's parts have moved out of it, and an import of something with a demolition date is a
- * worse dependency than a copy. That reasoning was right about each file and wrong about the end
+ * deliberately: the original lived in `CardDetailPane.tsx`, a file that was deleted on
+ * 2026-09-03 once the modal's parts had moved out of it, and an import of something with a
+ * demolition date is a worse dependency than a copy. That reasoning was right about each file
+ * and wrong about the end
  * state, because these are not four keys that happen to look alike — they are **one cache entry
  * that four surfaces are counting on.**
  *

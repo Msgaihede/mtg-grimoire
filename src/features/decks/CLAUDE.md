@@ -2517,10 +2517,12 @@ longer-form record of the two hand-rolled comboboxes and their shared panel is
   `debouncedText`: clearing the field changes the key to `""`, which the query is `enabled: false`
   for, so the last five rows would hang under an empty box for the rest of the session.
 - **The Escape rung is `enabled: listOpen`, never `enabled: open`.** With the caret in a quick add
-  whose list is closed, the press belongs to the card detail pane, which listens on `window` in the
-  bubble phase — a capture-phase listener here would consume it and close nothing at all.
-  `DeckEditor.test.tsx`'s "lets Escape through to the card pane when no layer of its own is open"
-  focuses this very field and asserts the press arrives with `defaultPrevented` false. Escape here
+  whose list is closed, the press belongs to whatever layer is open over the desk — the card
+  modal, and otherwise the editor's own `"navigation"` floor, which closes the deck (it was the
+  docked card pane's, on the `"outer"` rung, until 2026-09-03). A capture-phase listener here would
+  consume it and close nothing at all. `DeckEditor.test.tsx`'s "lets Escape reach the window from
+  every field, where the deck's own floor takes it"
+  focuses this very field and asserts the press reaches `window`. Escape here
   closes the list and hands focus to nobody: the field is not unmounting and is what the caret was
   in the whole time, so the hook's focus-hand-back clause has nothing to do.
 - **The list is one more `"inner"` peer on this screen and deliberately outside the `Layer` union

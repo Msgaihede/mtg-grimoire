@@ -241,7 +241,7 @@ function Body({
  * **One text node, and that is load-bearing rather than tidy.** Testing Library reads an
  * element's *own* text children, so a sentence broken by a `<span>` becomes unfindable by
  * anything that queries it as a sentence — which is how a reader reads it, and how the test for
- * it is written. `CardDetailPane`'s legality caption and the Tags page's never-downloaded notice
+ * it is written. `LegalityDialog`'s two captions and the Tags page's never-downloaded notice
  * both say so at their own sites; this is the third.
  */
 function Note({ children }: { children: ReactNode }) {

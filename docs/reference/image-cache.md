@@ -43,8 +43,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   variant argued from a tile's base width is the wrong measurement**: both constants that moved
   had been justified at 100% zoom on an unscaled display.
 
-  **The +50% per card is the wall-only case and the worst one.** `CardDetailPane` and
-  `PrintingPreview` were already on `display`, so a card the reader opens used to cost two
+  **The +50% per card is the wall-only case and the worst one.** The open card's art and the
+  printings preview were already on `display`, so a card the reader opens used to cost two
   cache keys (~62 KB + ~93 KB) and now costs one. Cards already cached at `grid` are **not
   migrated or deleted** — a variant is its own directory, so the old files simply stop being
   read and stay until the user deletes `data/images`, which is always safe. Every such card

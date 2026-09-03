@@ -15,17 +15,23 @@
  *
  * ## What it does not do, and each is a decision rather than an omission
  *
- * * **No meld controls.** The docked pane could show a melded counterpart's picture in place of
- *   the open card's; `CardModalArt` is presentational and has no seat for it, so the modal never
- *   has a melded face on screen. {@link artistOf} keeps its `melded` parameter anyway — it is
- *   lifted verbatim from the file being deleted, and the day a meld control comes back it is the
- *   credit that has to move with it.
  * * **No printing *swap*.** A card opened out of a deck row could be re-pointed at another
  *   printing from the pane's printings list. The modal's printing picker calls `viewPrinting`,
  *   which browses; `AllPrintingsDialog` is where a swap still lives.
- * * **No foil seed from `paneFinish`.** `CardModalArt` opens on the shiny copy only where a
- *   *deck row* names one, so a foil collection tile now opens plain. Recorded as a regression by
- *   Task 7's own doc; closing it means a seed prop on that component.
+ *
+ * ## The three things this host owns *for* `CardModalArt`, and why each is here
+ *
+ * That column is presentational — no store, no query — so three facts it draws have to arrive as
+ * props, and all three were lost for a wave when the docked pane was deleted:
+ *
+ * * **The foil seed.** `paneFinish` is what a collection tile and the deck editor's search panel
+ *   write when the copy a reader pressed *is* a foil; without it a foil tile opened plain. Read
+ *   here, handed over as `openedAs`.
+ * * **The meld relations**, from `ipc.cardMeldParts` — a query, so it cannot live in that file.
+ * * **Which counterpart's picture is up** ({@link Body}'s `melded`), which has to be *here*
+ *   rather than in the column that draws the picture, because the panel's artist credit names the
+ *   illustrator whose art is on screen and that credit is drawn down in the action row. See
+ *   {@link artistOf}.
  */
 import {
   useCallback,
@@ -36,14 +42,19 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import { skipToken, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  skipToken,
+  useIsMutating,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { ManaText } from "@/components/ManaText";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import { Dialog, type DialogFlanks } from "@/components/Dialog";
 import { DEFAULT_VARIANT, useDeck } from "@/features/decks/useDeck";
 import { useDeckFolders } from "@/features/decks/useDeckFolders";
-import { playKey, useDecksPlaying } from "@/features/decks/useDeckPlays";
 import { useDecks } from "@/features/decks/useDecks";
 import { sameDeckSlot } from "@/features/decks/deckWalk";
 import type { DropdownOption } from "@/components/Dropdown/types";
@@ -149,15 +160,20 @@ function useFlankRoom(): boolean {
 /**
  * Who drew the side on screen, falling back to the card's own credit.
  *
- * **Lifted verbatim from `CardDetailPane`** rather than rewritten, because that file is deleted
- * with the dock and this is the one piece of it the credit depends on. `melded` wins outright
+ * **Lifted verbatim from `CardDetailPane`** rather than rewritten, because that file was deleted
+ * with the dock on 2026-09-03 and this is the one piece of it the credit depends on. `melded`
+ * wins outright
  * rather than falling back to the open card: while a melded card's picture is up, the open card's
  * illustrator is not the one being credited, and a fallback that reached for it would print a
  * name that is wrong rather than missing.
  *
- * **The parameter is always `null` today**, because `CardModalArt` draws no meld control — see
- * this file's own doc. It is kept rather than inlined so that the day the control comes back, the
- * credit is already asking the right question.
+ * **The `melded` argument is wired, and that is a licence condition rather than a nicety.** The
+ * two halves of a meld are not always the same artist — which is the whole reason `MeldRelation`
+ * carries one at all — so while the melded card's picture is up, the open card's illustrator is
+ * the *wrong* name under the right art, and Scryfall's usage rules require the artist to be
+ * identifiable wherever the art is shown. It was passed a literal `null` for the wave the meld
+ * control was missing; `null` — a relation whose printing has left `cards` — still draws no
+ * credit, which is the honest answer for a frame that is also drawing no picture.
  */
 function artistOf(card: CardDetail, face: number, melded: MeldRelation | null): string | null {
   if (melded !== null) return melded.artist;
@@ -190,6 +206,59 @@ const ACTION_PRIMARY =
  *  and the quick-add popup is still there for a played copy. */
 const MODAL_CONDITION = "NM" as const;
 
+/**
+ * The **In your grimoire** figures, under `["card", …]` beside this file's other two card reads.
+ *
+ * **`["card"]` and not one of the three roots the answer is derived from, because no key can be
+ * under all three.** `invalidateQueries` matches by key *prefix*, so a key rooted at
+ * `["collection"]` is refreshed by a collection write and missed by a wish; one rooted at
+ * `["decks"]` is missed by both. The old block sidestepped this by being **three** queries, one
+ * under each root — that is what it cost to have the app's existing invalidation vocabulary
+ * reach it, and folding them into one read gives the property up. {@link useHoldingsFreshness}
+ * is what replaces it.
+ *
+ * The bare prefix is what a caller invalidates: only one oracle card is ever mounted here, and a
+ * key naming the card would have to be rebuilt at every site that settles a write.
+ */
+const HOLDINGS_KEY = ["card", "holdings"] as const;
+
+/**
+ * Refetch the grimoire figures whenever **any** write in the app has finished.
+ *
+ * **This is the price of one read replacing three, and it is a mechanism rather than a
+ * belt-and-braces.** Every writer that can move these three numbers settles its own roots and
+ * only its own: `useCardMenuDeps`' collection add fires all four of `query.ts`'s
+ * `OWNED_WRITE_KEYS`, its wishlist add fires `["wishlist"]` and `["cards", "search"]`,
+ * `AllPrintingsDialog`'s wish fires the same pair, and an ordinary deck write fires `["decks"]`
+ * alone. {@link HOLDINGS_KEY} can sit under exactly one of those, so a key chosen for any one
+ * writer is a figure that silently stops moving for the others — and `query.ts`'s 30 s
+ * `staleTime` is what turns that into *a wrong number on screen* rather than a slow one.
+ *
+ * **The falling edge of `useIsMutating` is the one signal that catches all of them**, including
+ * the three presses this file makes through callbacks it cannot chain: the action row's two adds
+ * go through `CardMenuDeps`, whose `mutate` returns `void`, and `Add to deck` reaches the app's
+ * single `useCardToDeck` through a context that returns `void` too. A mutation's own `onSuccess`
+ * has already run by the time its status leaves `pending`, so by the falling edge every root the
+ * writer meant to settle is settled and the backend row is committed — this read is the last one
+ * to be asked and gets the written answer.
+ *
+ * What it costs is **one extra read per press, and only while a card is open** — the modal is the
+ * only thing that mounts this. A write that cannot have moved a holding (a label, a deck cover)
+ * pays it too; that is the same trade `settle` below already makes by firing four roots for a
+ * write that moves one of them.
+ */
+function useHoldingsFreshness(): void {
+  const queryClient = useQueryClient();
+  const writing = useIsMutating();
+  // A ref rather than state: this is an edge detector and a re-render of its own would be one.
+  const wasWriting = useRef(writing);
+  useEffect(() => {
+    const settled = wasWriting.current > 0 && writing === 0;
+    wasWriting.current = writing;
+    if (settled) void queryClient.invalidateQueries({ queryKey: HOLDINGS_KEY });
+  }, [writing, queryClient]);
+}
+
 export function CardDetailModal() {
   const cardId = useAppStore((s) => s.selectedCardId);
   const setSelectedCardId = useAppStore((s) => s.setSelectedCardId);
@@ -207,8 +276,8 @@ export function CardDetailModal() {
    * which is the entire rule: a close leaves the last card on screen, and an open replaces it.
    *
    * Written during render rather than in an effect, which is React's own answer for state that
-   * follows a prop and is what `CardDetailPane`'s face reset already does one file over — an
-   * effect would paint one frame of the previous card under the new card's name.
+   * follows a prop and is what the docked pane's face reset did before this file inherited it —
+   * an effect would paint one frame of the previous card under the new card's name.
    */
   const [shown, setShown] = useState(cardId);
   if (cardId !== null && cardId !== shown) setShown(cardId);
@@ -417,21 +486,55 @@ function Body({
   const queryClient = useQueryClient();
   const openAllPrintings = useAppStore((s) => s.openAllPrintings);
   const viewPrinting = useAppStore((s) => s.viewPrinting);
+  /**
+   * How the meld controls under the art re-point the modal at the melded card.
+   *
+   * **`setSelectedCardId` and deliberately not `viewPrinting`.** That verb means "another printing
+   * of the card that is already open" and keeps the deck context alive, so the modal's deck
+   * controls survive the click. Brisela is not another printing of Gisela — it is a different
+   * card, and it is not the card the deck row holds — so the context has to go, which is exactly
+   * what this setter does (see the store).
+   */
+  const openCard = useAppStore((s) => s.setSelectedCardId);
+  /**
+   * The finish the surface that opened this card named, or `null` — `CardModalArt`'s foil seed.
+   *
+   * Read here because that column is presentational and reads no store; a collection tile that
+   * *is* a foil and the deck editor's search panel are the two surfaces that write it, and
+   * `setSelectedCardId` clears it, so a step along the walk correctly seeds nothing.
+   */
+  const paneFinish = useAppStore((s) => s.paneFinish);
   const { deps, error: menuFailure } = useCardMenuDeps();
   const addToDeck = useOptionalAddCardToDeck();
 
   /**
    * Which face the picture is of, reset when the card changes.
    *
-   * **Reset during render rather than in an effect**, which is `CardDetailPane`'s answer and for
+   * **Reset during render rather than in an effect**, which was the docked pane's answer and for
    * its reason: a different card is a different card, and the back of the last one is not where
    * a reader wants to arrive. An effect would paint one frame of the previous card's back face.
    */
   const [shownFace, setShownFace] = useState(cardId);
   const [face, setFace] = useState(0);
+  /**
+   * The counterpart whose picture is standing in for this card's own, or `null` for the ordinary
+   * state.
+   *
+   * **State rather than a second `selectedCardId`**, because the two acts under the art are
+   * genuinely different: *Meld* shows the melded card here, on a panel that is still about the
+   * card the reader opened, and *Open* makes it the open card. A reader comparing the two halves
+   * against the whole wants the first; a reader who has decided they want Brisela's prices wants
+   * the second, and collapsing them into one control would take the comparison away.
+   *
+   * Reset beside the face, and for the same reason it cannot be a key: {@link Body} is
+   * deliberately *not* keyed on the card — the opener stashed on the way in has to survive a
+   * whole walk — so per-card state is reset during render here instead.
+   */
+  const [melded, setMelded] = useState<MeldRelation | null>(null);
   if (shownFace !== cardId) {
     setShownFace(cardId);
     setFace(0);
+    setMelded(null);
   }
 
   /** What a write this file makes was refused with, or `null`. Superseded by the next press,
@@ -456,7 +559,7 @@ function Body({
    * effect twice in development (mount, unmount, mount), and `Dialog`'s own focus effect has run
    * in between, so the second pass would record the panel as its own opener. `close` would then
    * focus an element that is unmounting, the caret would land on `<body>`, and the next Tab would
-   * restart from the top of the app. That is `CardDetailPane`'s measured failure, verbatim.
+   * restart from the top of the app. That was the docked pane's measured failure, verbatim.
    *
    * An effect rather than a render-time write, because a ref written during render is a value
    * React may throw away with the render that produced it — and the lint rule that says so is the
@@ -517,16 +620,61 @@ function Body({
   });
 
   /**
+   * The cards this printing melds with — **asked only of a `meld` card**, which is 72 of the
+   * 116 590 live rows.
+   *
+   * `enabled` on the layout rather than a `skipToken`, because the fence is a fact about the card
+   * rather than about whether an argument exists: the command answers `[]` for every other layout
+   * and never rejects, so the gate is a saved round trip rather than a correctness guard. The
+   * other 116 518 cards a reader opens cost neither the call nor the parse.
+   *
+   * **No marketplace in the key**, unlike every other read in this file: a meld relationship is
+   * not priced, so switching marketplace must not refetch a fixed fact.
+   */
+  const meld = useQuery({
+    queryKey: ["card", "meld", cardId],
+    queryFn: () => ipc.cardMeldParts(cardId),
+    enabled: card?.layout === "meld",
+  });
+  const relations = useMemo(() => meld.data ?? [], [meld.data]);
+
+  /**
    * What the reader holds — **read at the oracle grain, which is what "in your grimoire" means.**
    *
-   * A reader who owns the Alpha Bolt and opens the 2X2 one owns *Lightning Bolt*, and the deck
-   * census one field over already resolves the same way (`playKey` is the oracle id with the
-   * printing as a fallback). Counting only this printing would answer `0` beside a rail entry
-   * that says "In your grimoire", which is a different and wrong claim.
+   * A reader who owns the Alpha Bolt and opens the 2X2 one owns *Lightning Bolt*, and Rust's
+   * deck census resolves the same way (`PLAYED_KEY` is the oracle id with the printing as a
+   * fallback). Counting only this printing would answer `0` beside a rail entry that says "In
+   * your grimoire", which is a different and wrong claim.
    *
-   * **The rows come back as well as the count, because the stepper needs one to write to.** There
-   * is no per-card holdings command; `collection_list` and `wishlist_list` both take an
-   * `oracleId` filter and a card is a handful of rows, so one read answers both questions.
+   * **One read where this file made three.** `collectionList`, `wishlistList` and
+   * `deckIdsPlaying` each answered a *page of rows* so that the webview could sum a `quantity`
+   * column and take the size of a set — three round trips and two list payloads to draw three
+   * numbers. `card_holdings` composes the crate's own `copies_of_oracle`, `wished_copies` and
+   * `decks_playing`, so a figure here cannot disagree with the wall it sits beside.
+   *
+   * **No `marketplace` in the key**, like the meld read above and unlike everything else here:
+   * these are counts, and nothing about them moves when the setting does.
+   */
+  const holdings = useQuery({
+    queryKey: [...HOLDINGS_KEY, oracleId],
+    queryFn: oracleId === null ? skipToken : () => ipc.cardHoldings(oracleId),
+  });
+  useHoldingsFreshness();
+
+  /**
+   * The collection rows behind this card — **kept for the stepper alone, and asked for only where
+   * there is one.**
+   *
+   * The figures above no longer come from here, but the collection surface's stepper writes
+   * through `collection_set_quantity`, which is addressed by a **row id** — so deleting this read
+   * with the count it used to feed would leave that control drawing a number it could not move.
+   * That is the silently-inert handler this file's own deck test exists to catch, arrived at from
+   * the other side.
+   *
+   * `enabled` on the **surface** rather than a `skipToken`, which is `meld`'s split one screen up:
+   * `skipToken` is for an argument that does not exist, and `oracleId` exists on every wall. What
+   * is missing on the search, tags and deck surfaces is a *reason* — `scope.quantity` says no
+   * stepper is drawn there, so the rows would be fetched for nothing.
    */
   const owned = useQuery({
     queryKey: ["collection", "card", oracleId],
@@ -534,22 +682,15 @@ function Body({
       oracleId === null
         ? skipToken
         : () => ipc.collectionList({ oracleId, limit: 200, offset: 0 }),
+    enabled: scope.quantity === "owned",
   });
+  /** The same, for the wishlist's own stepper — `wishlist_set_quantity` takes a row id too. */
   const wished = useQuery({
     queryKey: ["wishlist", "card", oracleId],
     queryFn:
       oracleId === null ? skipToken : () => ipc.wishlistList({ oracleId, limit: 200, offset: 0 }),
+    enabled: scope.quantity === "wished",
   });
-
-  /**
-   * How many decks play this card — the census asked from the deck end, which is the only thing
-   * that can answer it. `playKey` is the shared spelling of the join `deck_ids_playing` makes.
-   */
-  const cards = useMemo(
-    () => (oracleId === null ? [] : [playKey({ oracleId, cardId })]),
-    [oracleId, cardId],
-  );
-  const playing = useDecksPlaying(cards);
 
   /**
    * The deck behind the modal, or the idle hook — `useDeck(null)` disables its own query, so this
@@ -582,7 +723,8 @@ function Body({
   const { folders: deckFolders } = useDeckFolders();
 
   /** The rows behind this exact **printing**, which is what a stepper in a modal about one
-   *  printing can honestly address. */
+   *  printing can honestly address. Empty on every surface that draws no stepper, because the
+   *  read behind each is `enabled` on exactly that — see {@link owned}. */
   const ownedRows = useMemo(
     () => (owned.data?.items ?? []).filter((row) => row.cardId === cardId),
     [owned.data, cardId],
@@ -592,10 +734,22 @@ function Body({
     [wished.data, cardId],
   );
 
+  /**
+   * The block's four figures — three from Rust and the fourth from the deck already in hand.
+   *
+   * **Zero is a real answer and `undefined` is the only absence**, so the fallback is what the
+   * panel draws for the length of one read rather than a claim about a card nobody holds. The
+   * block has no pending state of its own by design: three dashes that turn into three zeros is
+   * a flicker on the card a reader opens most often, which is the one they hold none of.
+   *
+   * `deck` stays outside the command, because `card_holdings` answers at the oracle grain and
+   * this is a **row**: the copies in the one pile the card was opened out of, which
+   * `RailCounts.deck` documents as the field nothing else can fill.
+   */
   const counts: RailCounts = {
-    owned: (owned.data?.items ?? []).reduce((sum, row) => sum + row.quantity, 0),
-    wished: (wished.data?.items ?? []).reduce((sum, row) => sum + row.quantity, 0),
-    decks: playing.deckIds.size,
+    owned: holdings.data?.owned ?? 0,
+    wished: holdings.data?.wished ?? 0,
+    decks: holdings.data?.decks ?? 0,
     deck: deckCard?.quantity ?? null,
   };
 
@@ -605,6 +759,12 @@ function Body({
    * summary, every wish for the card (`ownedQuantity` is summed from `collection_entries`), every
    * deck (a claim is clamped to what the entry still holds), and the search results, which draw
    * `ownedQuantity` on every row.
+   *
+   * **{@link HOLDINGS_KEY} is deliberately not among them.** It is not under any of these roots
+   * and could not be under all three, so it is settled by {@link useHoldingsFreshness} instead —
+   * which catches this write and every write made through a callback this file cannot chain. A
+   * key added here would refresh the figures after a stepper press and leave them stale after the
+   * action row's, which is the half-fix that looks like a fix.
    */
   const settle = () => {
     void queryClient.invalidateQueries({ queryKey: ["collection"] });
@@ -779,7 +939,7 @@ function Body({
     }));
   }, [decks, deckFolders]);
 
-  const artist = card === null ? null : artistOf(card, face, null);
+  const artist = card === null ? null : artistOf(card, face, melded);
 
   return (
     <>
@@ -843,6 +1003,10 @@ function Body({
                 // `View as …` label turns on. A `PaneDeckContext` satisfies the shape
                 // structurally, so it goes through unchanged.
                 deckRow={scope.deck}
+                // The other half of that seed, and the half a deck row cannot supply: a
+                // collection tile that *is* a foil, or the deck editor's search panel, writes
+                // `paneFinish` when it opens the card. Without it a foil tile opened plain.
+                openedAs={paneFinish}
                 onToggleFoil={(next: DeckFinish) => {
                   if (scope.deck === null) return;
                   deck.setCardFinish.mutate({
@@ -852,6 +1016,11 @@ function Body({
                     to: next,
                   });
                 }}
+                // **`melded` is this component's state and not the column's**, which is the whole
+                // of why the meld controls are wired this way round: the artist credit at the
+                // foot of the panel has to name the illustrator of the face on screen, and it is
+                // drawn down there. See {@link artistOf}.
+                meld={{ relations, melded, onMeld: setMelded, onOpen: openCard }}
               />
             </div>
 
@@ -1002,7 +1171,10 @@ function Body({
           {/* **Required wherever art is shown**, which is Scryfall's usage rule rather than a
               courtesy — the artist and the source have to be identifiable in the same interface
               that draws the picture. The artist is the one whose art is *on screen*, which is
-              why {@link artistOf} takes the face.
+              why {@link artistOf} takes the face **and the meld view**: the two sides of a
+              double-faced card are not always the same illustrator, and neither are the two
+              halves of a meld, so a credit naming the open card while a counterpart's picture is
+              up would be the wrong illustrator under the right art.
 
               **`pricesAsOf` is not repeated here.** `CardModalArt` draws it under the price cells
               it dates, and a second copy of one sentence in one panel is worse than one — a
@@ -1063,8 +1235,8 @@ function Figure({ label, value }: { label: string; value: number }) {
 }
 
 /**
- * The open card as every card menu describes one — `CardDetailPane`'s `paneTarget`, copied for
- * that file's deletion rather than imported from it.
+ * The open card as every card menu describes one — `CardDetailPane`'s `paneTarget`, copied out
+ * before that file was deleted rather than imported from it.
  */
 function cardTarget(card: CardDetail) {
   return {

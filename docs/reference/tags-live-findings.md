@@ -228,7 +228,10 @@ All of it, and each of these was driven rather than reasoned about:
 - **Shift+F10 on a focused tile** → the same five rows, anchored at the trigger's bottom-left,
   focus moved into the menu. This needed `cdp.mjs` to learn two keys; see below.
 - **Add to → Deck** writes: the deck went 0 → 1 cards.
-- **Click a tile** → the card detail pane (Formats, Printings).
+- **Click a tile** → the card detail surface (Formats, Printings). It was the docked pane on the
+  day this was driven; since 2026-09-03 it is `CardDetailModal`, a centred dialog, and the two
+  sections are surfaces opened over it — `LegalityDialog` from the rail, `AllPrintingsDialog` from
+  *View all printings* beside the printing picker.
 - **Drag a tile to the sidebar** works — the Wishlist entry raised its ring and took the card.
   The **Decks** entry is inert, correctly: it needs an open deck (`useSidebarDrops`, "Open a deck
   to drop cards into it"), and leaving the editor clears `openDeckId`. **Verified identical on

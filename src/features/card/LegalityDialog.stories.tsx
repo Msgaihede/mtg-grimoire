@@ -28,7 +28,7 @@ const ANCESTRAL_RECALL = printing("lea", "47").id;
  * `setSelectedCardId` **clears** `cardOverlay` (an overlay outliving the card under it would be
  * a legality grid for a card nobody has open), so the card goes first and the overlay second.
  * Both are written in a lazy `useState` initializer rather than an effect, which is
- * `CardDetailPane.stories.tsx`'s answer and for its reason: an effect runs after the first
+ * `CardDetailModal.stories.tsx`'s answer and for its reason: an effect runs after the first
  * paint, so the story would draw one frame of a closed dialog before it opened.
  */
 function Host({ cardId, blankLegalities }: { cardId: string; blankLegalities: boolean }) {

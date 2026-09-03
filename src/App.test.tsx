@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, expect, it, vi } from "vitest";
 
@@ -216,6 +216,10 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 
 import App from "./App";
 import { DECK_CARD_VARIANT } from "@/features/decks/cardControl";
+// The attribute the deck's own cards carry, which is both how the printings modal's caret finds
+// its way home and — here — the only way to count the deck's rows on a screen whose modal is a
+// wall of the same card. One spelling, both sides of the lookup.
+import { DECK_CARD_ATTR } from "@/features/decks/dnd";
 import { card } from "@/features/decks/validation/fixtures";
 import type {
   CardDetail,
@@ -333,6 +337,22 @@ const SWAPPED_BOLT: DeckCard = card({
   setCode: "m10",
   collectorNumber: "146",
   quantity: 1,
+});
+/**
+ * The row that makes a swap **fold**: the same category, already holding the printing the reader
+ * is about to move onto.
+ *
+ * A category holds a printing at most once, so the write turns these two rows into one — which is
+ * the outcome `SwapResult.folded` exists to report and the one the fold test below is about. The
+ * fixture is not what decides it (the mocked command answers that), but a deck with only one Bolt
+ * in it would make the sentence a claim about a state the list could not be in.
+ */
+const OTHER_BOLT: DeckCard = card({
+  name: "Lightning Bolt",
+  cardId: "c2",
+  setCode: "m10",
+  collectorNumber: "146",
+  quantity: 2,
 });
 
 const ALPHA: Printing = {
@@ -1146,4 +1166,122 @@ it("stops offering swaps into a deck the read says is gone", async () => {
   await waitFor(() => expect(useAppStore.getState().selectedCardId).toBe("c2"));
   expect(useAppStore.getState().paneDeckContext).toBeNull();
   expect(deckSwapPrinting).not.toHaveBeenCalled();
+});
+
+/**
+ * **The fold, said where it can be read** — restored from the card pane, retargeted at the surface
+ * the swap now lives on.
+ *
+ * A category holds a printing at most once, so a swap onto one it already had merges two rows into
+ * one: the card the reader opened this list from *disappears from the deck* and its copies land on
+ * another row. `ipc.ts`'s `SwapResult` exists to say so, and between the pane's deletion and this
+ * test nothing drew either of its fields.
+ *
+ * **Two things are pinned and they are one decision.** The region is mounted and empty *before* the
+ * press — a live region that first appears with its sentence already inside it announces nothing —
+ * and the modal is still open *after* it, because a plain swap closes this dialog and announcing
+ * into a panel that is unmounting announces nothing either. The pane could hold the sentence
+ * because the pane survived its own write, being re-keyed rather than closed; this modal has to be
+ * held open instead, and that is what the fold branch does.
+ */
+it("announces a fold in the printings modal, and stays open so it can be read", async () => {
+  deckList.mockResolvedValue([BURN]);
+  deckGet
+    .mockResolvedValueOnce(detail([DECK_BOLT, OTHER_BOLT]))
+    .mockResolvedValue(detail([SWAPPED_BOLT]));
+  deckSwapPrinting.mockResolvedValue({ folded: true, quantity: 3 });
+  cardPrintings.mockResolvedValue({ items: [ALPHA, M10], total: 2 });
+  searchCards.mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: "Decks" }));
+  await userEvent.click(await screen.findByRole("button", { name: /^Burn/ }));
+  await screen.findByLabelText("Deck name");
+
+  // Two rows of one card, so `getAll` — the first is the printing the deck is about to swap away.
+  await userEvent.click(screen.getAllByRole("button", { name: /^Lightning Bolt/ })[0]);
+  await screen.findByRole("dialog", { name: /lightning bolt/i });
+  const printings = await openPrintings();
+
+  // The region exists before there is anything to say. That is the half of the shape a text
+  // assertion cannot see, and it is the half that decides whether anything is announced at all.
+  expect(within(printings).getByRole("status")).toBeEmptyDOMElement();
+
+  await userEvent.click(await within(printings).findByRole("button", { name: /M10/ }));
+
+  await waitFor(() =>
+    expect(within(printings).getByRole("status")).toHaveTextContent(
+      "Folded into one row of 3 in Main deck.",
+    ),
+  );
+  // Still on screen — the sentence has somewhere to be read, and the wall behind it is the same
+  // card's. The close control is what tells this dialog from the card modal under it: both are
+  // titled with the card's name, and `closeLabel` is a required prop of `Dialog`.
+  expect(within(printings).getByRole("button", { name: "Close printings" })).toBeInTheDocument();
+  // And the deck really did lose a line: two Bolts went in, one came out. Counted off the deck's
+  // own cards rather than off the screen — the wall behind the sentence is a wall of Lightning
+  // Bolts, so an unscoped query by name is answered three times over by the modal itself.
+  await waitFor(() =>
+    expect(document.querySelectorAll(`[${DECK_CARD_ATTR}]`)).toHaveLength(1),
+  );
+});
+
+/**
+ * **The caret's way home after a swap** — the same hand-back, asked without a fold: what is being
+ * tested is where the caret lands, and the announcement is the other test's subject.
+ *
+ * The modal finds its way there through an attribute on the control that stands for the slot
+ * (`DECK_CARD_ATTR`, stamped by `cardControl.tsx`'s `deckCardProps` and therefore by all four
+ * views). Deleting it from the card left every suite green until a test like this existed, and the
+ * deck builder's rebuild proved that the hard way: for one task no view stamped it, and the pane's
+ * version of this was the only test in the repo that noticed.
+ *
+ * **Driven from the deck card's own menu rather than through the card modal, and that is the
+ * behaviour rather than a convenience.** A caret handed into the deck while another `aria-modal`
+ * panel is still on screen is a caret outside the modality — the exact defect `caretWalk.ts` was
+ * written for — so the hand-back refuses while any dialog is standing. Opened this way the
+ * printings wall is the only surface up, which is the case it exists for.
+ *
+ * The wait is the whole difference between this and the pane's one-liner: the pane handed the
+ * caret back when the reader pressed Escape, long after the refetch; this modal closes inside the
+ * mutation's own `onSuccess`, while the deck below it is still the row the swap replaced.
+ */
+it("hands the caret back to the deck's card after a swap", async () => {
+  deckList.mockResolvedValue([BURN]);
+  deckGet.mockResolvedValueOnce(detail([DECK_BOLT])).mockResolvedValue(detail([SWAPPED_BOLT]));
+  cardPrintings.mockResolvedValue({ items: [ALPHA, M10], total: 2 });
+  // The editor's docked search panel finds nothing: a result named after the card already in the
+  // deck would be a second button by that name, and the deck's card is addressed by it.
+  searchCards.mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: "Decks" }));
+  await userEvent.click(await screen.findByRole("button", { name: /^Burn/ }));
+  await screen.findByLabelText("Deck name");
+
+  fireEvent.contextMenu(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+  await screen.findByRole("menu");
+  await userEvent.click(screen.getByRole("menuitem", { name: "View all printings" }));
+  const printings = await screen.findByRole("dialog", { name: /lightning bolt/i });
+
+  await userEvent.click(await within(printings).findByRole("button", { name: /M10/ }));
+
+  await waitFor(() =>
+    expect(deckSwapPrinting).toHaveBeenCalledWith(4, "c1", "c2", MAIN.id, "live", null),
+  );
+  // The row the swap rebuilt, on the printing the deck now holds — read off the picture rather
+  // than off a caption, which is what the sibling test above already pins.
+  await waitFor(() =>
+    expect(
+      screen
+        .getByRole("button", { name: /^Lightning Bolt/ })
+        .closest("li")
+        ?.querySelector("img"),
+    ).toHaveAttribute("src", expect.stringContaining(`/${DECK_CARD_VARIANT}/c2/0`)),
+  );
+  expect(screen.queryByRole("dialog")).toBeNull();
+
+  // Not `<body>`, and not the element the press was made from — the swap deleted that along with
+  // its row.
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: /^Lightning Bolt/ })).toHaveFocus(),
+  );
 });

@@ -109,14 +109,14 @@ export function columnsFor(
       cellClassName: "font-mono text-dim",
       // `setName` is nullable and the code is not, so the code is what is shown; the full name
       // rides along as the tooltip when there is one. Mono because a collector number is data
-      // — the same rule as the grid caption and the pane.
+      // — the same rule as the grid caption and `CardChin`'s printing line.
       //
       // **No `whenClipped` here — the tooltip says the set's *name* and the span shows its
       // *code*, so gating the panel on whether the code happens to be clipped would gate it on
       // something unrelated to the words it carries.** At the search table's 8rem column,
-      // `MH3 · 234` never clips, so `whenClipped` never opened at all: the rule and the four
-      // sites it applied to wrongly are in `CardDetailPane.tsx`, beside the printings-row span
-      // this one matches. `block truncate` stays for the visual clip alone — an inline span
+      // `MH3 · 234` never clips, so `whenClipped` never opened at all: the rule is stated at
+      // `CardChin`'s `printingTitle`, which inherited it from the docked pane's printings row
+      // that this one matches. `block truncate` stays for the visual clip alone — an inline span
       // ignores the grid cell's width and `truncate` needs a real layout box to act on.
       cell: (card) => (
         <span className="block truncate" {...tip(card.setName)}>

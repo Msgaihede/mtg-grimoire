@@ -63,9 +63,10 @@
  * `create(...)` call whose initializer the module does not export, so a second instance of it
  * cannot be built from outside — and its actions close over the one store's `set`, so
  * patching the hook cannot redirect them either. Scoping it needs an edit to component
- * source. The four story files that write it during render (`AppShell`, `CardDetailPane`,
- * `SearchPage`, `CollectionPage`) therefore give each of their docs stories its own frame
- * instead; see `preview.tsx`.
+ * source. The story files that write it during render therefore give each of their docs stories
+ * its own frame instead; see `preview.tsx`, which carries the grep that names them — this
+ * sentence used to list four, one of which (`CardDetailPane`) was deleted on 2026-09-03 while the
+ * real set had already grown past a dozen.
  */
 
 /**

@@ -919,9 +919,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   /**
    * **Escape's floor on this screen: the deck closes.**
    *
-   * `"navigation"` is the bottom rung, so this fires only on a press nothing nearer wanted — the
-   * card pane docked beside the desk is `"outer"` and outranks it, every dialog and popup here is
-   * `"inner"` and outranks both, and a filter box with text in it spends the press before any of
+   * `"navigation"` is the bottom rung, so this fires only on a press nothing nearer wanted —
+   * every dialog and popup here is `"inner"` and outranks it (the card is one of them since
+   * 2026-09-03, when the docked pane that held the `"outer"` rung beside this desk was deleted),
+   * and a filter box with text in it spends the press before any of
    * them (see {@link clearFieldOnEscape} on the toolbar's field below). One press closes one
    * thing, all the way down.
    *
@@ -4110,9 +4111,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         // drop that takes it out.
         //
         // **A `section`, not an `aside`** — the same call `DeckSearchPanel` makes and for the
-        // same measured reason: the card detail pane is the app's one complementary landmark,
-        // and a second one answers `getByRole("complementary")` too. Drawn as an aside, this
-        // block broke five of `App.test.tsx`'s pane assertions without touching the pane.
+        // same measured reason: the docked card detail pane was the app's one complementary
+        // landmark, and a second one answered `getByRole("complementary")` too. Drawn as an
+        // aside, this block broke five of `App.test.tsx`'s pane assertions without touching the
+        // pane. The pane is a modal since 2026-09-03 and no longer claims that role, but the
+        // call stands: a landmark is a promise about the page and this block is not a
+        // complementary one.
         //
         // Named by its `aria-label` and by nothing drawn: every figure in it carries its own
         // label and every chart its own caption, so a heading over the top would be a fifth

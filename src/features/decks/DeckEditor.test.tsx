@@ -357,9 +357,9 @@ function found(name: string): CardSummary {
  * The same printing as {@link found}, as `card_detail` answers it.
  *
  * **Complete rather than shaped for its caller**, and that is the point: an owned add reads this
- * command for the card's oracle id, and `CardDetailPane` reads it for a dozen fields it indexes
+ * command for the card's oracle id, and `CardDetailModal` reads it for a dozen fields it indexes
  * without a fence (`card.setCode.toUpperCase()`, `card.faces[face]`). A partial stub therefore
- * takes the pane down as an *unhandled* error the moment a test leaves a card open, and vitest
+ * takes the modal down as an *unhandled* error the moment a test leaves a card open, and vitest
  * reports it against whichever test ran next.
  */
 function detailOf(name: string): CardDetail {
@@ -740,8 +740,8 @@ beforeEach(() => {
   /**
    * **Refused by default, which is what this command did here before it was stubbed at all** —
    * the whole `ipc` object is replaced above, so `cardDetail` was `undefined` and every caller
-   * of it threw. `CardDetailPane` is the other caller and reads a dozen fields off the answer
-   * without a fence, so a stub shaped for the add path takes the pane down as an *unhandled*
+   * of it threw. `CardDetailModal` is the other caller and reads a dozen fields off the answer
+   * without a fence, so a stub shaped for the add path takes the modal down as an *unhandled*
    * error that vitest then reports against whichever test happened to be running. The four tests
    * that drive an owned add state their own answer.
    */

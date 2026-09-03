@@ -1348,7 +1348,9 @@ describe("useSwapFromPane", () => {
           categoryName: SIDE.name,
           cardId: "p1",
           // The list the pane was opened from. `live` here, so these keep addressing the list they
-          // always did; the theory case is `CardDetailPane.test.tsx`'s, where the pane writes it.
+          // always did. The theory case was `CardDetailPane.test.tsx`'s and went with that file
+          // on 2026-09-03: `AllPrintingsDialog` passes `request.deck?.variant` straight through,
+          // and nothing covers `theory` here any more.
           variant: "live",
           // The regular copy, for that same reason: the foil case is a different row, and the
           // point of these is the deck and the category rather than the object.
@@ -1390,7 +1392,9 @@ describe("useSwapFromPane", () => {
           categoryName: MAIN.name,
           cardId: "p1",
           // The list the pane was opened from. `live` here, so these keep addressing the list they
-          // always did; the theory case is `CardDetailPane.test.tsx`'s, where the pane writes it.
+          // always did. The theory case was `CardDetailPane.test.tsx`'s and went with that file
+          // on 2026-09-03: `AllPrintingsDialog` passes `request.deck?.variant` straight through,
+          // and nothing covers `theory` here any more.
           variant: "live",
           // The regular copy, for that same reason: the foil case is a different row, and the
           // point of these is the deck and the category rather than the object.
@@ -1432,7 +1436,9 @@ describe("useSwapFromPane", () => {
           categoryName: MAIN.name,
           cardId: "p1",
           // The list the pane was opened from. `live` here, so these keep addressing the list they
-          // always did; the theory case is `CardDetailPane.test.tsx`'s, where the pane writes it.
+          // always did. The theory case was `CardDetailPane.test.tsx`'s and went with that file
+          // on 2026-09-03: `AllPrintingsDialog` passes `request.deck?.variant` straight through,
+          // and nothing covers `theory` here any more.
           variant: "live",
           // The regular copy, for that same reason: the foil case is a different row, and the
           // point of these is the deck and the category rather than the object.

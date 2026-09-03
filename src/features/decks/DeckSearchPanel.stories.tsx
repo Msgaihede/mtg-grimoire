@@ -148,8 +148,10 @@ const meta = {
           "`Any card`, and a card the " +
           "format does not allow is the validation panel's `RULE BREAK` to draw rather than " +
           "something this search hides.\n\n" +
-          "**A fixture of the editor, not a dismissible layer.** Escape pressed in here belongs " +
-          "to the card detail pane; the way to put the panel away — and the way to get it out " +
+          "**A fixture of the editor, not a dismissible layer.** This panel registers no Escape " +
+          "rung, so a press in here falls past it — to whatever card or dialog is open over the " +
+          "desk, and otherwise to the editor's own floor, which closes the deck. The way to put " +
+          "the panel away — and the way to get it out " +
           "in the first place — is the disclosure it names itself by ({@link Collapsed}), and " +
           "the one state where that control refuses is {@link NoRoom} — measured width, not a " +
           "guess.\n\n" +
@@ -158,7 +160,8 @@ const meta = {
           "**press** and never on the drawn state. It opened collapsed for eight days on a width " +
           "argument that has since gone: 384px plus the desk's 16px gap out of a row measured at " +
           "**602px** at 1280×800 *with the card pane docked beside the editor* left the deck " +
-          "202px, and that pane is an overlay now and takes width from neither column. " +
+          "202px, and the card is a centred modal since 2026-09-03 and takes width from " +
+          "neither column. " +
           "{@link Collapsed} is where the other state is the subject rather than the setup.\n\n" +
           "**Which tab is remembered too, and only for the session** — the query cache under " +
           "`DECK_SEARCH_TAB_KEY`, which is app-scoped, so it survives the remount that opening a " +

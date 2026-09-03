@@ -226,7 +226,7 @@ export interface DialogProps {
  *   `open` by the length of its fade, and a rung that came up with the *element* would go on
  *   acting for that whole window — spending a press on a dialog that is already closing, and
  *   starving whatever sits behind it, since an `"inner"` rung `preventDefault()`s and an
- *   `"outer"` one (the card detail pane) returns early on `defaultPrevented`. `enabled: open`
+ *   `"outer"` one (`KeyMap`'s shortcuts panel) returns early on `defaultPrevented`. `enabled: open`
  *   kills it on the render that starts the exit. This used to name a different failure — "two
  *   `"inner"` peers, which {@link useDismissOnEscape} explicitly does not order" — and that hook
  *   keeps a stack of capture-phase registrations now, where only the token on top acts, so peers

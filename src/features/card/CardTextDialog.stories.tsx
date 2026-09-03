@@ -33,7 +33,7 @@ const DELVER_ISD = printingId("isd", "51");
  * card the store moved on to — so the card has to be selected first and the overlay opened
  * second. Reversed, every story on this page would render a closed dialog.
  *
- * `useState`'s lazy initializer rather than an effect, which is `CardDetailPane.stories.tsx`'s
+ * `useState`'s lazy initializer rather than an effect, which is `CardDetailModal.stories.tsx`'s
  * answer and for its reason: an effect runs after the first paint, so the dialog would render one
  * frame closed.
  */

@@ -10,9 +10,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 - **`drawerRight` was deleted on 2026-08-14**, when the deck editor's two right-hand drawers
   (Categories & labels, History) became centred modals and it lost its last consumer. It slid a
   right-docked panel in from `x: "100%"` on `slow`, out on `base`. `CardDetailPane` had already
-  refused it in writing — the pane is right-docked, but it lives inside `AppShell`'s
+  refused it in writing — the pane was right-docked, but it lived inside `AppShell`'s
   `overflow-auto` main region, so 384px of travel is 384px of scrollable overflow and a
-  horizontal scrollbar on every card opened; it scales from `origin-right` on `dialog` instead. A
+  horizontal scrollbar on every card opened; it scaled from `origin-right` on `dialog` instead.
+  (That pane was itself deleted on 2026-09-03, when the card became a centred `Dialog`; the
+  argument survives it, because the region it was drawn in has not changed.) A
   dead preset in the module whose whole discipline is "timings live here and nowhere else" is the
   drift this file's first rule exists against, so it went rather than waiting for a consumer. The
   cost if that was wrong is one: a future right-hand drawer re-derives 260 ms/`enter` from git

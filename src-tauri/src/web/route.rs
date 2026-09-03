@@ -137,6 +137,7 @@ pub const COMMANDS: &[&str] = &[
     "card_detail",
     "card_printings",
     "card_meld_parts",
+    "card_holdings",
     "card_image_uri",
     "printing_group_by",
     "set_printing_group_by",
@@ -1402,6 +1403,21 @@ pub fn call(
             )
         }
 
+        // **Routed with the pane rather than after it**, because it *replaces* three arms this
+        // table already answers — `collection_list`, `wishlist_list` and `deck_ids_playing`
+        // above. A card pane that asked for its holdings the new way on the desktop and the old
+        // way in a browser would be two implementations of one block; one that asked the new way
+        // everywhere and was routed nowhere would be `card_detail`'s own bug report again,
+        // *"unknown command"*, on the surface that reported it.
+        "card_holdings" => {
+            let oracle_id: String = field(command, args, "oracleId")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::card::holdings(&conn, &oracle_id).map_err(RouteError::Failed)?,
+            )
+        }
+
         // **Answers an `mtgimg://` URI the browser cannot fetch**, and routing it anyway is
         // deliberate: the command's job is to resolve *which* picture a printing has, and the
         // page decides what to do with the answer. On web `src/lib/images.ts` builds a
@@ -2473,7 +2489,7 @@ mod tests {
         }
         assert_eq!(
             COMMANDS.len(),
-            126,
+            127,
             "update this number when a command is added"
         );
     }

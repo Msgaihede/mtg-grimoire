@@ -43,14 +43,17 @@
  *   row rather than by a deck card's five-part grain. A repoint that collides with another wish in
  *   the same folder **merges** rather than failing, which is the backend's rule and not something
  *   this surface can see or has to.
- * * **From a deck row** — the press *is* the swap, through the same `useSwapFromPane` the card
- *   pane presses, and the modal closes on success. Click-commits rather than select-then-confirm
- *   for `PrintingRow`'s reason: the tile is the thing the reader is pointing at. The cost the
- *   pane pays for that gesture — no way to look at a printing without committing to it — is not
- *   paid here, because the whole wall is art and looking is what a wall is for. A mis-press is
+ * * **From a deck row** — the press *is* the swap, through `useSwapFromPane` — named for the
+ *   docked pane that used to press it and this file's only caller since that pane was deleted on
+ *   2026-09-03 — and the modal closes on success **unless the swap folded**, which is the one
+ *   outcome that owes the reader a sentence and therefore a surface to read it on (see the live
+ *   region in {@link Body}). Click-commits rather than select-then-confirm, which is what the
+ *   pane's own printing rows did: the tile is the thing the reader is pointing at. The cost that
+ *   gesture carried there — no way to look at a printing without committing to it — is not paid
+ *   here, because the whole wall is art and looking is what a wall is for. A mis-press is
  *   covered by the deck's undo.
- * * **From anywhere else** — the press opens the card detail pane on that printing and closes
- *   the modal, which is the "go and look at this one" the reader who is not building a deck
+ * * **From anywhere else** — the press opens the card detail modal on that printing and closes
+ *   this one, which is the "go and look at this one" the reader who is not building a deck
  *   asked for.
  *
  * ## Stepping along the list
@@ -77,7 +80,7 @@
  * courtesy** — see `step`. Closing the modal after walking six cards must leave the reader on the
  * sixth, with the wall's ring, the card pane and this modal all naming one card.
  */
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import { useTooltip } from "@/components/tooltip/useTooltip";
@@ -92,10 +95,16 @@ import { finishTreatments } from "@/lib/treatment";
 import { ipc, ipcError, type Printing } from "@/lib/ipc";
 import { languageHint } from "@/lib/languages";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
-import { useAppStore, type CardWalkStop, type PrintingsRequest } from "@/lib/store";
+import {
+  useAppStore,
+  type CardWalkStop,
+  type PaneDeckContext,
+  type PrintingsRequest,
+} from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
 import { buildCardMenu, type CardMenuDeps } from "./cardMenu";
+import { handBackToDeckCard } from "./deckControl";
 import { CardMenuRefusal } from "./CardMenuRefusal";
 import {
   EMPTY_PRINTING_FILTER,
@@ -277,11 +286,49 @@ function ownsArrowKeys(target: EventTarget | null): boolean {
 
 export function AllPrintingsDialog() {
   const request = useAppStore((s) => s.printingsRequest);
-  const close = useAppStore((s) => s.closeAllPrintings);
+  const closeRequest = useAppStore((s) => s.closeAllPrintings);
   const walk = useAppStore((s) => s.cardWalk);
   const openAllPrintings = useAppStore((s) => s.openAllPrintings);
   const openCardFromDeck = useAppStore((s) => s.openCardFromDeck);
   const selectCard = useAppStore((s) => s.setSelectedCardId);
+
+  /**
+   * The deck row a swap made, held for the caret — `null` whenever this modal has written nothing.
+   *
+   * **A ref rather than state**, because nothing on screen depends on it: it is a note from the
+   * press to the close, exactly the shape the docked pane's `handover` was, and a `set` would
+   * re-render the whole wall to record something no tile draws.
+   *
+   * It names the row the deck holds **now** — the old slot with the printing that was pressed in
+   * it — because that is the control the caret is owed and the swap has just rebuilt it under a
+   * different address. See `deckControl.ts`.
+   */
+  const swapped = useRef<PaneDeckContext | null>(null);
+
+  /**
+   * Escape and the ✕: close, then walk the caret home if a swap left it nowhere to stand.
+   *
+   * `Dialog` hands a host two closes and this is the one that owes the reader a caret — see the
+   * shell's own doc, and {@link closeQuietly} for the other. `handBackToDeckCard` decides whether
+   * the press is even entitled to one; all this knows is which row to name.
+   *
+   * **The note is cleared before the close rather than after the focus**, so a hand-back that
+   * cannot be made (another modal still standing, a reader who has moved on) cannot be made twice
+   * by the next press either.
+   */
+  const close = useCallback(() => {
+    const home = swapped.current;
+    swapped.current = null;
+    closeRequest();
+    handBackToDeckCard(home);
+  }, [closeRequest]);
+
+  /** A press on the scrim: close and move nothing. The reader pointed somewhere else, which is
+   *  this app's standing rule that an outside click hands no caret back. */
+  const closeQuietly = useCallback(() => {
+    swapped.current = null;
+    closeRequest();
+  }, [closeRequest]);
 
   /**
    * Where the open modal sits on the walk, or `-1` — see this file's doc for everything that
@@ -347,6 +394,10 @@ export function AllPrintingsDialog() {
        * `caretWalk.ts`.
        */
       keepCaretForCard(stop.cardId);
+      // A step is a new session — that is what the `key` below says about the body's filter, and
+      // it is as true of the note a swap left. The caret is owed to the card the reader was
+      // standing on when they wrote something, and after a step they are standing on another one.
+      swapped.current = null;
       /**
        * **`wish: null` is the step's own decision, not a shape mismatch to be papered over.**
        *
@@ -487,7 +538,7 @@ export function AllPrintingsDialog() {
       flanks={flanks}
       onPanelKeyDown={onPanelKeyDown}
       onDismiss={close}
-      onClose={close}
+      onClose={closeQuietly}
     >
       {/* The `request &&` is not redundant with `open` above: `Dialog` keeps the panel mounted
           for the length of its fade, and the flag is already false on the render that starts it —
@@ -507,11 +558,20 @@ export function AllPrintingsDialog() {
           same card keeps the filter — it is the same wall, and the same question about it.
 
           What this does *not* reset is the sort, and that is right rather than an omission: it is
-          not `Body`'s state at all but `usePrintingGroupBy`'s `app_meta` row, shared with the card
-          pane, so it survives a step exactly as it survives a close and a restart. Remounting
-          re-reads a resolved query, which is a read of the cache and not a round trip — the card
-          pane's body is keyed on its card id for the same reason and gets the same answer. */}
-      {request && <Body key={request.oracleId} request={request} onDone={close} />}
+          not `Body`'s state at all but `usePrintingGroupBy`'s `app_meta` row, which outlives this
+          component, so it survives a step exactly as it survives a close and a restart. Remounting
+          re-reads a resolved query, which is a read of the cache and not a round trip —
+          `CardModalArt` is keyed on its card id for the same reason and gets the same answer. */}
+      {request && (
+        <Body
+          key={request.oracleId}
+          request={request}
+          onDone={close}
+          onSwapped={(row) => {
+            swapped.current = row;
+          }}
+        />
+      )}
     </Dialog>
   );
 }
@@ -525,26 +585,41 @@ export function AllPrintingsDialog() {
 function Body({
   request,
   onDone,
+  onSwapped,
 }: {
   request: PrintingsRequest;
   /** Close the modal — pressed on a successful swap or repoint, and on a press that opens the
-   *  card pane. */
+   *  card detail modal. */
   onDone: () => void;
+  /** The deck row a swap just made, so the shell can hand the caret to it when this closes. The
+   *  row **after** the write: the old slot with the printing that was pressed in it. */
+  onSwapped: (row: PaneDeckContext) => void;
 }) {
   const [filter, setFilter] = useState<PrintingFilter>(EMPTY_PRINTING_FILTER);
   /**
-   * The ordering, which is **the card pane's preference and not this modal's**.
+   * The ordering, which is **a stored preference and not this modal's own state**.
    *
    * `usePrintingGroupBy` is an `app_meta` row behind a query, so a reader who sorts by price here
-   * finds the pane sorted by price too — the same question asked twice, answered once. The
-   * control is labelled *Sort* rather than *Group by* only because this wall draws no headings;
-   * see `sorted` below for why it cannot.
+   * finds this wall sorted by price at the next open and after a restart. It was the docked
+   * pane's preference too — the same question asked twice, answered once — until that pane was
+   * deleted on 2026-09-03; this file is its only reader now. The control is labelled *Sort*
+   * rather than *Group by* only because this wall draws no headings; see `sorted` below for why
+   * it cannot.
    */
   const { mode, setMode } = usePrintingGroupBy();
   // Which marketplace every price on this wall is quoted at. In the query key, like every priced
   // read in this app, so switching refetches rather than re-labelling numbers from another feed.
   const { marketplace } = useMarketplace();
   const viewCard = useAppStore((s) => s.setSelectedCardId);
+  /**
+   * How a fold re-points the modal at the row the deck now holds — see {@link onSelect}.
+   *
+   * The same action the chevrons step with, spent on the same card rather than the next one: a
+   * fold leaves `request.deck` naming a row the write has just deleted, so without this the wall
+   * would go on offering to swap *from* a slot the backend can only refuse, and the "you are here"
+   * ring would stay on a printing the deck no longer plays.
+   */
+  const openAllPrintings = useAppStore((s) => s.openAllPrintings);
   const queryClient = useQueryClient();
   /**
    * The wishlist row a press repoints, or `null` on every surface that names none — which is
@@ -642,6 +717,15 @@ function Body({
   const startSwap = swap.mutate;
   const startRepoint = repoint.mutate;
 
+  /**
+   * What the last successful swap **did**, or `null` — the sentence the live region below draws.
+   *
+   * Only ever a fold. A plain swap needs no words: the reader picked a printing, the deck redraws
+   * on it under the modal, and the wall closes onto the answer. A fold is the outcome nothing on
+   * screen explains — see the region for the whole of it.
+   */
+  const [report, setReport] = useState<string | null>(null);
+
   const onSelect = useCallback(
     (cardId: string) => {
       // One write at a time. This is the *only* fence available on a tile: `CardGrid` exposes no
@@ -650,6 +734,9 @@ function Body({
       // reach. Not a double-click guard alone: every tile sends the same `from` printing, and the
       // write in flight is in the middle of moving it.
       if (writing) return;
+      // Whatever the last press did is not what this one did. Cleared here rather than in each
+      // branch, so a refusal cannot be read under a fold's sentence from the press before it.
+      setReport(null);
       /**
        * **A wish, and it is read before the deck slot and before the fall-through.**
        *
@@ -688,22 +775,90 @@ function Body({
         onDone();
         return;
       }
+      // Named once, before the write, because the `onSuccess` below is a closure: TypeScript's
+      // narrowing of `request.deck` does not survive into it, and the row this is about is the one
+      // the press was made against rather than whatever the store holds when the answer lands.
+      const from = request.deck;
       startSwap(
         {
-          fromCardId: request.deck.cardId,
+          fromCardId: from.cardId,
           toCardId: cardId,
-          categoryId: request.deck.categoryId,
+          categoryId: from.categoryId,
           // Carried across rather than cleared: the reader is choosing a printing, not an object,
           // so the foil copy of the old printing becomes the foil copy of the new one.
-          finish: request.deck.finish,
+          finish: from.finish,
         },
         // **No `deckId` in that object, and it is not an omission.** `useSwapFromPane` mounted
         // `useDeck(context.deckId, variant)`, so the mutation closes over both; its `mutationFn`
         // takes exactly these four fields and passing a fifth would not type-check.
-        { onSuccess: () => onDone() },
+        {
+          onSuccess: (result) => {
+            /**
+             * The row the deck holds now: the same slot, with the printing that was pressed in
+             * it. Handed up before either branch below, because it is what the caret is owed
+             * whichever way this press ends — see `deckControl.ts`.
+             */
+            const moved: PaneDeckContext = { ...from, cardId };
+            onSwapped(moved);
+            /**
+             * **Nothing folded, so nothing to say — and this is the close every swap made until
+             * now.** The deck redraws on the printing the reader picked, which is the answer to
+             * the question they asked, and a wall that stayed up over it would be a modal nobody
+             * dismissed.
+             */
+            if (!result.folded) {
+              onDone();
+              return;
+            }
+            /**
+             * **A fold, so the modal stays open — and that is where the sentence can be read.**
+             *
+             * A category holds a printing at most once, so a swap onto one it already had turns
+             * two rows into one: the card the reader was looking at *disappears from the deck*
+             * and its copies land on another row. That is the one outcome of this press nothing
+             * on screen explains, and closing on it would leave a reader watching a line vanish
+             * with no account of where it went.
+             *
+             * It cannot be said on the way out. A live region has to be **mounted before its
+             * text arrives** or nothing announces it, and a region inside a panel that is
+             * unmounting has no second commit to change on — so a sentence written into a
+             * closing dialog is a sentence nobody hears and nobody reads. Holding the modal open
+             * is what gives it both: the region below has been mounted and empty since the wall
+             * opened, and this write is the change that fills it.
+             *
+             * It is also the shape this dialog already uses for the two things it has to
+             * explain — a refused swap and a refused repoint both keep it open and put the
+             * sentence beside the wall — so a fold is a third of those rather than a new idea.
+             *
+             * The re-point is what keeps the open modal honest: `request.deck` names a row this
+             * write has just deleted, and a wall left addressing it would refuse the reader's
+             * next press for a reason they could not see. The oracle id does not move, so the
+             * body is not re-keyed and this sentence survives the re-render.
+             */
+            openAllPrintings({ ...request, cardId, deck: moved });
+            /**
+             * The server's arithmetic, never a guess: `quantity` is what the surviving row holds
+             * (`ipc.ts`'s `SwapResult`). The category's name is the context's own rather than a
+             * lookup — a category is a row the user named, so there is no table to translate an
+             * id through and this modal has no category list of its own.
+             */
+            setReport(`Folded into one row of ${result.quantity} in ${from.categoryName}.`);
+          },
+        },
       );
     },
-    [writing, wish, startRepoint, request.deck, deckGone, startSwap, viewCard, onDone],
+    [
+      writing,
+      wish,
+      startRepoint,
+      request,
+      deckGone,
+      startSwap,
+      viewCard,
+      onDone,
+      onSwapped,
+      openAllPrintings,
+    ],
   );
 
   const { menu, menuKey } = useContextMenu();
@@ -791,6 +946,32 @@ function Body({
           Could not read the printings — {ipcError(query.error)}
         </p>
       )}
+
+      {/* **What a successful swap did** — the live region, and the one sentence on this surface
+          that is not about a failure.
+
+          It says a **fold**: the target category already held the printing, so two rows became one
+          and the line the reader opened this modal from is no longer in the deck. `SwapResult`
+          exists to answer that question and nothing was drawing it.
+
+          **Mounted for the whole life of the open modal, empty until there is something to say.**
+          A live region that first appears with its text already inside it announces nothing, which
+          is this app's standing rule — the ribbon's status line, `SearchPage`, `WishlistPage` and
+          `AddToCollection` all keep the same shape. So this is outside every gate the body has:
+          not behind `query.data`, not behind the swap's state, not behind a fold. It exists on the
+          first commit of every wall and changes on the commit after the write.
+
+          **And the modal is held open on a fold precisely so that this can be read** — see the
+          swap's `onSuccess`. Announcing into a panel that is unmounting announces nothing, and a
+          sentence drawn for one frame of a fade is not one either.
+
+          `sr-only` while empty rather than hidden: `display: none` takes a region out of the
+          accessibility tree, and a region that has to be put back is a region that was never
+          mounted. Tailwind's `.sr-only` is absolutely positioned, so an empty one is not a flex
+          item and costs neither a row nor a gap in this column. */}
+      <p role="status" className={cn("shrink-0 text-xs text-dim", !report && "sr-only")}>
+        {report}
+      </p>
 
       {/* A refused swap, said beside the wall — and the modal stays open behind it. The card pane
           had nowhere good to put this sentence, which is half of why the list moved here.

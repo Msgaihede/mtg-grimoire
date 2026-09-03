@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, expect, it, vi } from "vitest";
@@ -7,8 +7,14 @@ import type { MarketplaceId } from "@/lib/marketplace";
 
 const cardDetail = vi.fn();
 const cardPrintings = vi.fn();
+const cardMeldParts = vi.fn();
+const cardHoldings = vi.fn();
 const collectionList = vi.fn();
 const wishlistList = vi.fn();
+const collectionAdd = vi.fn();
+const collectionSetQuantity = vi.fn();
+const wishlistAdd = vi.fn();
+const wishlistSetQuantity = vi.fn();
 const collectionFolderList = vi.fn();
 const wishlistFolderList = vi.fn();
 const deckIdsPlaying = vi.fn();
@@ -35,8 +41,14 @@ vi.mock("@/lib/ipc", async (original) => ({
     cardDetail: (id: string, marketplace: MarketplaceId) => cardDetail(id, marketplace),
     cardPrintings: (oracleId: string, marketplace: MarketplaceId) =>
       cardPrintings(oracleId, marketplace),
+    cardMeldParts: (id: string) => cardMeldParts(id),
+    cardHoldings: (oracleId: string) => cardHoldings(oracleId),
     collectionList: (query: unknown) => collectionList(query),
     wishlistList: (query: unknown) => wishlistList(query),
+    collectionAdd: (entry: unknown) => collectionAdd(entry),
+    collectionSetQuantity: (id: number, quantity: number) => collectionSetQuantity(id, quantity),
+    wishlistAdd: (wish: unknown) => wishlistAdd(wish),
+    wishlistSetQuantity: (id: number, quantity: number) => wishlistSetQuantity(id, quantity),
     collectionFolderList: () => collectionFolderList(),
     wishlistFolderList: () => wishlistFolderList(),
     deckIdsPlaying: (keys: readonly string[]) => deckIdsPlaying(keys),
@@ -131,8 +143,17 @@ beforeEach(() => {
   useAppStore.setState(useAppStore.getInitialState());
   cardDetail.mockReset().mockResolvedValue(detail);
   cardPrintings.mockReset().mockResolvedValue({ items: [], total: 0 });
+  // `[]` is the answer for 116 518 of the 116 590 live rows, and the command never rejects.
+  cardMeldParts.mockReset().mockResolvedValue([]);
+  // Three zeros is the honest answer about a card nobody holds, and `card_holdings` never
+  // rejects — so this is what almost every test in this file wants behind the block.
+  cardHoldings.mockReset().mockResolvedValue({ owned: 0, wished: 0, decks: 0 });
   collectionList.mockReset().mockResolvedValue({ items: [], total: 0 });
   wishlistList.mockReset().mockResolvedValue({ items: [], total: 0 });
+  collectionAdd.mockReset().mockResolvedValue({ id: 1, quantity: 1 });
+  collectionSetQuantity.mockReset().mockResolvedValue({ id: 1, quantity: 2 });
+  wishlistAdd.mockReset().mockResolvedValue({ id: 1, quantity: 1 });
+  wishlistSetQuantity.mockReset().mockResolvedValue({ id: 1, quantity: 2 });
   collectionFolderList.mockReset().mockResolvedValue([]);
   wishlistFolderList.mockReset().mockResolvedValue([]);
   deckIdsPlaying.mockReset().mockResolvedValue([]);
@@ -279,4 +300,170 @@ it("wires every control a card opened out of a deck draws", async () => {
   await userEvent.click(await screen.findByRole("option", { name: "Needs testing" }));
   await waitFor(() => expect(deckCardSetLabel).toHaveBeenCalled());
   expect(deckCardSetLabel).toHaveBeenCalledWith(1, "c1", 2, "live", null, 7);
+});
+
+it("seeds the foil view from the finish the surface that opened the card named", async () => {
+  // **`CardModalArt` reads no store**, so the seed is this host's to supply: `openCardAsFinish` is
+  // what a collection tile that *is* a foil calls, and without the prop the reader who pressed
+  // their foil copy was shown the plain photograph of it. The toggle's visible words are its
+  // accessible name, so a seeded one already says the way back.
+  cardDetail.mockResolvedValue({ ...detail, finishes: '["nonfoil","foil"]' });
+  useAppStore.getState().openCardAsFinish("c1", "foil");
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={qc}>
+      <CardDetailModal />
+    </QueryClientProvider>,
+  );
+
+  const toggle = await screen.findByRole("button", { name: "View as nonfoil" });
+  expect(toggle).toHaveAttribute("aria-pressed", "true");
+});
+
+it("asks for meld relations only for a meld card", async () => {
+  // The gate is a saved round trip rather than a correctness guard — `card_meld_parts` answers
+  // `[]` for every other layout and never rejects — but it is 116 518 cards a reader can open
+  // without paying for the call, and an `enabled` that drifted to `true` would be invisible.
+  renderModal("c1");
+  await screen.findByRole("dialog");
+  await waitFor(() => expect(cardPrintings).toHaveBeenCalled());
+
+  expect(cardMeldParts).not.toHaveBeenCalled();
+});
+
+it("credits the illustrator of the face on screen, meld view included", async () => {
+  // **A licensing requirement rather than a cosmetic one.** Scryfall's usage rules want the artist
+  // identifiable wherever the art is shown, and the two halves of a meld are not always the same
+  // illustrator — which is the whole reason `MeldRelation` carries an artist. While the melded
+  // card's picture is up, the open card's illustrator is the wrong name under the right art.
+  //
+  // This is also the wiring test for the control itself: `ipc.cardMeldParts` had **zero callers
+  // in the app** for a wave, so the query, the button and the credit are asserted in one pass.
+  cardDetail.mockResolvedValue({
+    ...detail,
+    layout: "meld",
+    name: "Bruna, the Fading Light",
+    artist: "Christopher Rush",
+  });
+  cardMeldParts.mockResolvedValue([
+    {
+      id: "r1",
+      name: "Brisela, Voice of Nightmares",
+      component: "meld_result",
+      artist: "Clint Cearley",
+    },
+  ]);
+  renderModal("c1");
+  await screen.findByRole("dialog");
+
+  expect(await screen.findByText(/illustrated by christopher rush\./i)).toBeInTheDocument();
+
+  const meld = await screen.findByRole("button", {
+    name: "Meld — Brisela, Voice of Nightmares",
+  });
+  await userEvent.click(meld);
+
+  expect(await screen.findByText(/illustrated by clint cearley\./i)).toBeInTheDocument();
+  expect(screen.queryByText(/illustrated by christopher rush\./i)).not.toBeInTheDocument();
+  // The frame is a picture of that card too — the alt text is what a screen reader announces.
+  expect(screen.getByAltText("Brisela, Voice of Nightmares")).toBeInTheDocument();
+});
+
+/**
+ * What both copies of the **In your grimoire** block state for one word.
+ *
+ * Two of them at every rung by construction — the rail's and the inline one, complementary
+ * container queries — so an assertion that read only the first would pass while the copy a reader
+ * actually sees said something else. The `<dt>`'s next element is its `<dd>`: the two are siblings
+ * in a `<dl>` rather than nested, which is also why a bare `getByText` on the number could not
+ * say which figure it had found.
+ */
+function figures(label: string): string[] {
+  return screen
+    .getAllByRole("heading", { name: /in your grimoire/i })
+    .map((heading) => heading.parentElement as HTMLElement)
+    .map((box) => within(box).getByText(label).nextElementSibling?.textContent ?? "");
+}
+
+it("draws the grimoire figures from one read, and asks for no list to do it", async () => {
+  // **The reason this task existed.** The block used to cost `collection_list`, `wishlist_list`
+  // and `deck_ids_playing` on every card open — three round trips answering two pages of rows so
+  // that the webview could sum a `quantity` column and take the size of a set. `card_holdings`
+  // answers all three numbers, at the oracle grain, in one. The three `not.toHaveBeenCalled`
+  // lines are the fence: a re-added list read costs a round trip and shows on no screen.
+  cardHoldings.mockResolvedValue({ owned: 3, wished: 1, decks: 2 });
+  renderModal("c1");
+  await screen.findByRole("dialog");
+
+  await waitFor(() => expect(figures("Owned")).toEqual(["3", "3"]));
+  expect(figures("Wished")).toEqual(["1", "1"]);
+  expect(figures("In decks")).toEqual(["2", "2"]);
+  // The oracle id and never the printing — a reader who owns the Alpha Bolt and opens the 2X2 one
+  // owns *Lightning Bolt*.
+  expect(cardHoldings).toHaveBeenCalledWith("o1");
+
+  expect(collectionList).not.toHaveBeenCalled();
+  expect(wishlistList).not.toHaveBeenCalled();
+  expect(deckIdsPlaying).not.toHaveBeenCalled();
+});
+
+it("keeps the collection rows on the collection surface, where the stepper writes to one", async () => {
+  // **The judgement call this task turned on.** The figures moved to `card_holdings`, but
+  // `collection_set_quantity` is addressed by a **row id** — so deleting the list read along with
+  // the count it used to feed would leave the collection surface's stepper drawing a number it
+  // could not move: the control draws, the reader presses it, nothing happens, nothing goes red.
+  collectionList.mockResolvedValue({ items: [{ id: 42, cardId: "c1", quantity: 2 }], total: 1 });
+  useAppStore.setState({ activeView: "collection" });
+  renderModal("c1");
+  await screen.findByRole("dialog");
+
+  await waitFor(() =>
+    expect(collectionList).toHaveBeenCalledWith({ oracleId: "o1", limit: 200, offset: 0 }),
+  );
+  // …and the *other* list is still not asked for. The gate is per surface, not "keep both".
+  expect(wishlistList).not.toHaveBeenCalled();
+
+  const up = await screen.findByRole("button", {
+    name: /increase copies of lightning bolt you own/i,
+  });
+  await userEvent.click(up);
+  await waitFor(() => expect(collectionSetQuantity).toHaveBeenCalledWith(42, 3));
+});
+
+it("keeps the wishlist rows on the wishlist surface, where its own stepper writes to one", async () => {
+  wishlistList.mockResolvedValue({ items: [{ id: 7, cardId: "c1", quantity: 1 }], total: 1 });
+  useAppStore.setState({ activeView: "wishlist" });
+  renderModal("c1");
+  await screen.findByRole("dialog");
+
+  await waitFor(() =>
+    expect(wishlistList).toHaveBeenCalledWith({ oracleId: "o1", limit: 200, offset: 0 }),
+  );
+  expect(collectionList).not.toHaveBeenCalled();
+
+  const up = await screen.findByRole("button", {
+    name: /increase copies of lightning bolt on your wishlist/i,
+  });
+  await userEvent.click(up);
+  await waitFor(() => expect(wishlistSetQuantity).toHaveBeenCalledWith(7, 2));
+});
+
+it("re-reads the figures after a write it has no callback to hang off", async () => {
+  // **The cost of one read replacing three, paid back.** The old block was three queries, one
+  // under each of `["collection"]`, `["wishlist"]` and `["decks"]`, so every writer in the app
+  // refreshed it through the invalidation vocabulary it already used. One query can be under only
+  // one of those roots — and `Add to wishlist` here goes through `CardMenuDeps`, whose `mutate`
+  // returns `void`, so there is nothing to chain an invalidation onto either. The falling edge of
+  // `useIsMutating` is what catches it; without that the figure goes on saying what it said
+  // before the press, which is the failure `query.ts`'s 30 s `staleTime` makes look deliberate.
+  renderModal("c1");
+  await screen.findByRole("dialog");
+  await waitFor(() => expect(cardHoldings).toHaveBeenCalledTimes(1));
+  expect(figures("Wished")).toEqual(["0", "0"]);
+
+  cardHoldings.mockResolvedValue({ owned: 0, wished: 1, decks: 0 });
+  await userEvent.click(screen.getByRole("button", { name: "Add to wishlist" }));
+  await waitFor(() => expect(wishlistAdd).toHaveBeenCalled());
+
+  await waitFor(() => expect(figures("Wished")).toEqual(["1", "1"]));
 });

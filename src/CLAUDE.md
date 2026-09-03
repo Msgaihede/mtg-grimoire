@@ -61,7 +61,7 @@ Every one of these has its measurement and its story in
   uncompleted forever. So a visible frame that has heard nothing for **5 s** asks again with a
   `?stall=N` mark, twice, and then dispatches `error` on the element so the hook's ordinary
   failure path takes it. **In `CardImage` rather than in `useImageRetry`, because two frames that
-  draw a card use no hook at all** — `CardDetailPane`'s printing rows and `TheoryDiffDialog`'s —
+  draw a card use no hook at all** — `AllPrintingsDialog`'s printing tiles and `TheoryDiffDialog`'s —
   which is the `draggable` paragraph above happening a second time. **It is gated on the frame
   having a layout box**, which is both the right semantics (nothing to heal where nobody is
   looking) and what keeps it out of the suite's way: jsdom reports `width: 0` and
@@ -77,16 +77,20 @@ Every one of these has its measurement and its story in
   fallback, no hover lift), so the deck and the wall docked beside it drew one card two ways on
   one screen. A surface that draws its own frame instead says why at its own site, and each
   reason is that it is not a 5:7 box with an aspect-driven height — the stack's card (a computed
-  pixel height its whole geometry rests on), the pane's main art (a flip fade, and since
-  2026-08-22 a **turn**: a quarter-turned card is a landscape box, so that frame is the one
-  `CARD_ASPECT` is not always true of), `PrintingPreview` (672×936), the two cover pickers
-  (`ART_ASPECT`).
+  pixel height its whole geometry rests on), the open card's main art in `CardModalArt` (a flip
+  fade, and since 2026-08-22 a **turn**: a quarter-turned card is a landscape box, so that frame
+  is the one `CARD_ASPECT` is not always true of), the two cover pickers (`ART_ASPECT`).
+  `PrintingPreview` (672×936) was a fifth until it was deleted with the docked pane on
+  2026-09-03; the printings wall it drew is `AllPrintingsDialog`'s `CardGrid` now, so it goes
+  through `CardArt` like every other wall.
 - **Four layouts are not printed the way up they are stored, and turning one to read it is not
   "distorting a card image"** — it is the card at its own proportions, which is what a reader
   does with the cardboard and what Scryfall's own card pages offer. `split` (347 live printings,
   96 of them Aftermath and turned the *other* way), `planar` (330), `flip` (45). The rule lives
-  in `features/card/orientation.ts`; the control is the card detail pane's, and **only** that
-  pane's — a wall of tiles is for finding a card, not reading one. What must not follow from
+  in `features/card/orientation.ts`; the control is the card detail **modal**'s, and **only** that
+  modal's — a wall of tiles is for finding a card, not reading one. (It was the docked pane's
+  until 2026-09-03, and moved with everything else when that pane became `CardDetailModal`; the
+  module spent one commit imported by nothing but its own test.) What must not follow from
   this is a crop, a filter or a recolour, which the image policy still forbids outright. The
   directions were read off the printed images and the frame's geometry was measured in the
   shipped window — including the half-pixel a `translate(-50%, -50%)` centring put under **every**
@@ -456,19 +460,28 @@ Every one of these has its measurement and its story in
     `userEvent.click`/`userEvent.keyboard` helpers each open a session of their own, so a modifier
     held by one is released before the next runs and the press lands as a plain click — the test
     then passes while asserting about a gesture it never made. It did, for one run of this suite.
-- **A surface that walks its selection with the arrow keys says so, or the card pane takes the
-  caret on the first press.** `CardDetailPane` renders its body keyed on the open card and that
-  body focuses the pane as it mounts — the right contract for a card a reader *pressed*, and the
+- **A surface that walks its selection with the arrow keys says so, or the card surface takes the
+  caret on the first press.** `CardDetailModal` renders its body keyed on the open card and that
+  body focuses the panel as it mounts — the right contract for a card a reader *pressed*, and the
   wrong one for one they arrowed onto, because the caret has to stay on the thing being walked for
   the second press to have anywhere to come from. `src/lib/caretWalk.ts` is the note that tells the
   two apart: `keepCaretForCard(id)` immediately **before** the store write, since the write is what
-  re-keys the pane. Three surfaces call it — the search and collection walls, the deck's piles, the
-  printings modal — and it shipped broken on all three at once, the modal's press putting the caret
-  *outside an `aria-modal` dialog* where `trapTab` could not get it back.
+  re-keys the card surface. Three surfaces call it — the search and collection walls, the deck's
+  piles, the printings modal — and it shipped broken on all three at once, the modal's press
+  putting the caret *outside an `aria-modal` dialog* where `trapTab` could not get it back.
+  **Nothing reads the note as of 2026-09-03, and it is dormant rather than broken.**
+  `consumeCaretNote` was asked by `CardDetailPane`'s mount effect and that file was deleted with
+  the dock, so the three writers write to nobody. It was first recorded here as a live gap — "each
+  walk is one press long again" — and that was wrong on both halves: `Dialog`'s panel-focus effect
+  has `[]` deps so it fires once per *open* rather than per card, and the panel is `aria-modal`
+  with `trapTab`, so a wall behind the scrim never receives the arrow press in the first place.
+  Card-to-card movement is the modal's `‹ ›` flanks. The rule above still holds for any future
+  surface that draws a card **without covering the list**; `caretWalk.ts` has the full reading.
   **The note goes where every selection the surface makes passes through it — a press as well as
   an arrow — and never on the arrow handler alone.** Written on the arrows only (2026-08-18) the
   walk worked and *a click did not*: a reader clicks a card to start, a click is a deliberate
-  open, so the pane took the caret and their first arrow moved nothing. Every test and every live
+  open, so the card surface took the caret and their first arrow moved nothing. Every test and
+  every live
   check had driven the walk from a **programmatically** focused card, which is the one caret a
   reader cannot produce — so nothing caught it and it was reported the next day. A third way to
   select a card must go through the same wrapper, because the failure is silent: the selection is

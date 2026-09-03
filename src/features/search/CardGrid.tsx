@@ -681,12 +681,13 @@ export function CardGrid<T extends GridCard>({
   dragRecord?: (card: T) => Record<string, unknown> | null;
   /**
    * Whether the arrow keys walk the wall — left and right one tile, up and down one row — and
-   * **move the selection with them**, so the card the detail pane is showing follows the caret.
+   * **move the selection with them**, so the card the detail surface is showing follows the
+   * caret.
    *
    * That last part is what makes this a prop rather than a behaviour. Every press calls
    * {@link onSelect}, which on the two walls that pass this *is* the store's `selectedCardId` and
-   * therefore what the docked 384px `CardDetailPane` reads — the reader asked for the next card
-   * to be *selected*, not merely outlined, and a focus ring that moved while the pane held still
+   * therefore what `CardDetailModal` reads — the reader asked for the next card
+   * to be *selected*, not merely outlined, and a focus ring that moved while the card held still
    * would be a wall with two carets on it. So a caller who passes this is signing up for the
    * arrow keys to open cards.
    *
@@ -1003,12 +1004,21 @@ export function CardGrid<T extends GridCard>({
       // it answers `false`, which is what keeps the ring and the pane agreeing.
       if (selectionScope !== undefined && event && picked.pick(key, event)) return;
       // **The note is stamped with the *card*, and it is the one thing here that is not the tile.**
-      // Its only reader is `CardDetailPane`'s mount effect, which asks `consumeCaretNote(cardId)`
-      // with the card it is opening — so a note filed under `bolt:foil` is a note the pane asking
-      // about `bolt` discards, and it then takes the caret anyway. That is the exact failure this
-      // note exists to prevent, arriving on the one wall that will have keys *and* `arrowNav`: the
-      // collection's. The note is about "is the caret already where this selection belongs", the
-      // pane is keyed on the printing, so the printing is what it is stamped with.
+      // Its reader was `CardDetailPane`'s mount effect, which asked `consumeCaretNote(cardId)`
+      // with the card it was opening — so a note filed under `bolt:foil` is a note the surface
+      // asking about `bolt` discards, and it then takes the caret anyway. That is the exact
+      // failure this note exists to prevent, arriving on the one wall that will have keys *and*
+      // `arrowNav`: the collection's. The note is about "is the caret already where this
+      // selection belongs", the card surface is keyed on the printing, so the printing is what it
+      // is stamped with.
+      //
+      // **It has had no reader since that pane was deleted on 2026-09-03, and needs none.**
+      // `consumeCaretNote` has no caller outside the suite, so this write is a note nobody opens
+      // — but the walk is *not* one press long again, which is how this comment first read.
+      // `Dialog`'s panel-focus effect has `[]` deps, so it fires once when the modal opens rather
+      // than per card, and the modal is `aria-modal` with `trapTab`: while a card is open this
+      // wall is not reachable by keyboard at all, so its arrow handler never runs. See
+      // `caretWalk.ts`, which carries the whole argument.
       if (arrowNav) keepCaretForCard(cardId);
       onSelect(cardId, card);
     },

@@ -14,7 +14,7 @@ const marketplaceFeedStatus = vi.fn();
  * The arrows are not decoration: `vi.mock` is hoisted above the `const`s above it and the mocked
  * module is pulled in by the component's own imports, so the factory is *evaluated* before those
  * bindings are initialised. Deferring the reference into a call that happens later is what makes
- * that legal — `AllPrintingsDialog.test.tsx` and `CardDetailPane.test.tsx` mock the same module
+ * that legal — `AllPrintingsDialog.test.tsx` and `CardDetailModal.test.tsx` mock the same module
  * the same way and for the same reason.
  *
  * The two marketplace reads are here because `useMarketplace` is mounted for the key rather than

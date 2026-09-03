@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import type { CardDetail, CardFace } from "@/lib/ipc";
+import type { CardDetail, CardFace, MeldRelation } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { CardModalArt } from "./CardModalArt";
 
@@ -47,13 +48,26 @@ const face = (over: Partial<CardFace>): CardFace => ({
   ...over,
 });
 
+const relation = (over: Partial<MeldRelation>): MeldRelation => ({
+  id: "r1",
+  name: "Brisela, Voice of Nightmares",
+  component: "meld_result",
+  artist: "Clint Cearley",
+  ...over,
+});
+
 /** Everything the column needs that is not the card. Overridden per test. */
 const rest = {
   face: 0,
   onFlip: vi.fn(),
   marketplace: MARKETPLACES.tcgplayer,
   deckRow: null,
+  // Nobody named a finish — the state a card opened from a search wall, from Tags or from a
+  // printings row is in.
+  openedAs: null,
   onToggleFoil: vi.fn(),
+  // `[]` is the answer for every card that is not a meld, which is 116 518 of 116 590 rows.
+  meld: { relations: [], melded: null, onMeld: vi.fn(), onOpen: vi.fn() },
 };
 
 describe("CardModalArt", () => {
@@ -113,7 +127,8 @@ describe("CardModalArt", () => {
   });
 
   it("says `Set as` behind a deck row and `View as` without one", () => {
-    // The split already at `CardDetailPane.tsx:1300`, and the words are load-bearing rather
+    // The split the docked pane already drew before this file inherited it, and the words are
+    // load-bearing rather
     // than a nicety: outside a deck the toggle changes a **picture**, and a control labelled
     // "Set as foil" there would read as editing something stored.
     const { unmount } = render(<CardModalArt card={card({})} {...rest} />);
@@ -138,5 +153,176 @@ describe("CardModalArt", () => {
 
     render(<CardModalArt card={card({ layout: "adventure", faces: twoFaces })} {...rest} />);
     expect(screen.queryByRole("button", { name: "Flip card" })).not.toBeInTheDocument();
+  });
+
+  it("opens on the shiny copy when the surface that opened the card named one", () => {
+    // **The foil seed, and the whole of what it is for.** A collection tile that *is* a foil, and
+    // the deck editor's search panel, write `paneFinish`; the host reads it and hands it over,
+    // because this file reads no store. Without the prop a reader who pressed their foil copy was
+    // shown the plain photograph of it — the regression this closes.
+    //
+    // The toggle is pressed *and* its words have already flipped: the visible label is the
+    // accessible name here, so a seeded toggle that still said "View as foil" would be a control
+    // offering to do the thing it had already done.
+    render(<CardModalArt card={card({})} {...rest} openedAs="foil" />);
+
+    const toggle = screen.getByRole("button", { name: "View as nonfoil" });
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("seeds nothing from a plain copy, which is not the same as nobody knowing", () => {
+    // `nonfoil` is a real answer and a *different* one from `null`: a surface saying "the copy
+    // they pressed is the plain one". Both seed nothing, which is right — regular is the finish a
+    // card is assumed to be — and asserting it keeps the seed a two-value test rather than a
+    // truthiness one, which `"nonfoil"` would silently pass.
+    render(<CardModalArt card={card({})} {...rest} openedAs="nonfoil" />);
+
+    expect(screen.getByRole("button", { name: "View as foil" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+
+  it("offers a quarter turn for a split card, and none for an upright one", async () => {
+    // `orientation.ts`'s second axis, and the one `faceCount` says nothing about: a classic split
+    // prints both halves with their titles reading down the left edge, so the whole card is
+    // turned clockwise to read either one. `data-card-turn` is the handle — jsdom has no layout
+    // engine and no opinion about a `transform`, so the only thing a suite can assert is that the
+    // component decided on an angle.
+    const halves = [
+      face({ name: "Assault" }),
+      face({ name: "Battery", oracleText: "Create a 3/3 green Elephant creature token." }),
+    ];
+    const { unmount } = render(
+      <CardModalArt card={card({ layout: "split", faces: halves })} {...rest} />,
+    );
+
+    expect(document.querySelector("[data-card-turn]")).toHaveAttribute("data-card-turn", "0");
+    const turn = screen.getByRole("button", { name: "Turn to read" });
+    expect(turn).toHaveAttribute("aria-pressed", "false");
+
+    await userEvent.click(turn);
+    expect(document.querySelector("[data-card-turn]")).toHaveAttribute("data-card-turn", "90");
+    expect(screen.getByRole("button", { name: "Turn back" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    unmount();
+
+    // Every other layout is already upright — a `transform` has a second *side* and is served by
+    // the flip control, and turning it would rotate a face that is the right way up.
+    render(<CardModalArt card={card({})} {...rest} />);
+    expect(screen.queryByRole("button", { name: /^turn/i })).not.toBeInTheDocument();
+  });
+
+  it("turns an Aftermath split the other way, and a flip card the whole way", async () => {
+    // Two answers `cardTurn` gives that the plain split does not, and both are visible only
+    // through the angle. Aftermath prints its top half upright and its bottom half reading
+    // bottom-to-top up the right edge, so that half is reached counter-clockwise — told from the
+    // second face's rules text, which is the one place in the app licensed to branch on that.
+    const aftermath = [
+      face({ name: "Dusk" }),
+      face({ name: "Dawn", oracleText: "Aftermath (Cast this spell only from your graveyard.)" }),
+    ];
+    const { unmount } = render(
+      <CardModalArt card={card({ layout: "split", faces: aftermath })} {...rest} />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Turn to read" }));
+    expect(document.querySelector("[data-card-turn]")).toHaveAttribute("data-card-turn", "-90");
+    unmount();
+
+    // **The layout the control exists for.** `faceCount` answers `1` for `flip`, so there is no
+    // flip control, and with no turn the second half stays upside down forever — the only card in
+    // the app a reader cannot read at all. The label names the half it brings up, because a
+    // `flip` card's two halves have two different names and a reader wants Tok-Tok.
+    const halves = [face({ name: "Akki Lavarunner" }), face({ name: "Tok-Tok, Volcano Born" })];
+    render(<CardModalArt card={card({ layout: "flip", faces: halves })} {...rest} />);
+    expect(screen.queryByRole("button", { name: "Flip card" })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Turn to Tok-Tok, Volcano Born" }));
+    expect(document.querySelector("[data-card-turn]")).toHaveAttribute("data-card-turn", "180");
+    expect(screen.getByRole("button", { name: "Turn to Akki Lavarunner" })).toBeInTheDocument();
+  });
+
+  it("gives a meld half both verbs, and shows the counterpart's picture in place of its own", async () => {
+    // The two acts are genuinely different: **Meld** puts the melded card's picture in this
+    // frame, on a panel still about the card the reader opened, and **Open** makes it the open
+    // card. Collapsing them into one control would take the comparison away.
+    const onMeld = vi.fn();
+    const onOpen = vi.fn();
+    const brisela = relation({});
+    // **Bruna's real answer, measured on 2026-08-21**: `[Brisela (meld_result), Gisela
+    // (meld_part)]`. The sibling half is in the list and must draw nothing — from Bruna the
+    // reader wants Brisela, not Gisela — and it is only there that `meldPartsOf`'s guard does any
+    // work. A fixture holding the result alone passes against a naive `component === "meld_part"`
+    // filter, which is what this line stops.
+    const gisela = relation({ id: "g", name: "Gisela, the Broken Blade", component: "meld_part" });
+    const relations = [brisela, gisela];
+    const { rerender } = render(
+      <CardModalArt
+        card={card({ layout: "meld", name: "Bruna, the Fading Light" })}
+        {...rest}
+        meld={{ relations, melded: null, onMeld, onOpen }}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /^meld part —/i })).not.toBeInTheDocument();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Meld — Brisela, Voice of Nightmares" }),
+    );
+    expect(onMeld).toHaveBeenCalledWith(brisela);
+
+    await userEvent.click(screen.getByRole("button", { name: "Open melded card" }));
+    expect(onOpen).toHaveBeenCalledWith("r1");
+
+    // With the view up the frame is a picture of *that* card — the alt text is what a screen
+    // reader announces and what shows if the fetch fails, and both readers want the card in the
+    // frame. The foil toggle goes with it: the sheen is a statement about this printing's
+    // cardboard, and the picture is another card's.
+    rerender(
+      <CardModalArt
+        card={card({ layout: "meld", name: "Bruna, the Fading Light" })}
+        {...rest}
+        meld={{ relations, melded: brisela, onMeld, onOpen }}
+      />,
+    );
+    const art = screen.getByAltText("Brisela, Voice of Nightmares");
+    // The **counterpart's** picture and not the open card's: a different printing, so a different
+    // id, and always its only side. Asserted on the URL as well as the alt text, because the two
+    // are separate branches and an alt that followed the meld over a picture that did not would
+    // be a screen reader announcing a card nobody can see.
+    expect(art).toHaveAttribute("src", expect.stringContaining("/display/r1/0"));
+    expect(screen.queryByRole("button", { name: /^view as/i })).not.toBeInTheDocument();
+  });
+
+  it("offers a melded card its halves, and never a half its sibling", () => {
+    // `orientation.ts`'s asymmetry, which is the reason `meldPartsOf` and `meldResultOf` are two
+    // functions: the same `meld_part` component means "your sibling" from one end and "your
+    // halves" from the other, told apart only by whether a `meld_result` is present. From Bruna
+    // the reader wants Brisela, not Gisela — so the half above draws no `Meld part` row, and the
+    // melded card below draws two and no `Meld —` toggle.
+    render(
+      <CardModalArt
+        card={card({ layout: "meld", name: "Brisela, Voice of Nightmares" })}
+        {...rest}
+        meld={{
+          ...rest.meld,
+          relations: [
+            relation({ id: "b", name: "Bruna, the Fading Light", component: "meld_part" }),
+            relation({ id: "g", name: "Gisela, the Broken Blade", component: "meld_part" }),
+          ],
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "Meld part — Bruna, the Fading Light" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Meld part — Gisela, the Broken Blade" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^meld —/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open melded card" })).not.toBeInTheDocument();
   });
 });

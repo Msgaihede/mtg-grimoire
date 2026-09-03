@@ -817,6 +817,45 @@ pub fn set_wish_printing(
     })
 }
 
+/// How many copies of one oracle card the wishlist asks for, every wish for it together. `0`
+/// when there are none.
+///
+/// [`crate::collection_source::copies_of_oracle`]'s question over this table, and the wishlist
+/// third of [`crate::card::holdings`]. **It lives here rather than in the card pane's module
+/// because "which wishes are about this card" is this table's own rule**: [`WISHLIST_GRAIN`]
+/// makes a foil wish, a nonfoil wish and the same wish filed in a folder three rows for one
+/// card, so the answer is a `sum` across rows and can never be a lookup. A fourth spelling of
+/// that in a module about printings is a spelling that drifts.
+///
+/// **The key is the wish's own `oracle_id`, with the pinned printing's as the fallback.** That
+/// is [`add_wish`]'s precedence read back out (`sent_oracle_id.or_else(printing)`), and the
+/// fallback is not decoration: `wishlist_entries.oracle_id` is nullable and the table's CHECK
+/// allows a row that names a printing and nothing else, so such a wish is reachable only
+/// through `cards`.
+///
+/// **`coalesce` rather than two comparisons**, which is `deck.rs`'s `PLAYED_KEY` trap on this
+/// table: a wish pinned to a printing the corpus has since lost makes the sub-select NULL, and
+/// `NULL = <anything>` is NULL rather than false. One key per row, compared once, against an
+/// `oracle_id` the caller holds and which is therefore never NULL.
+///
+/// **It narrows by nothing else — not by finish, not by folder.** "How many are wished for" is
+/// a fact about the card. [`OWNED_SQL`] is where the finish matters, because that one is asking
+/// whether a *particular* wish is filled, and a foil wish is not filled by a nonfoil copy.
+///
+/// `sum(quantity)` over a `CHECK (quantity > 0)` column, so there is no zero row to think about
+/// and no floor to apply: a wish for none of something is not a wish, and this table has said
+/// so since v1.
+pub fn wished_copies(conn: &Connection, oracle_id: &str) -> Result<i64, String> {
+    conn.query_row(
+        "SELECT coalesce(sum(w.quantity), 0) FROM wishlist_entries w
+          WHERE coalesce(w.oracle_id,
+                         (SELECT k.oracle_id FROM cards k WHERE k.id = w.card_id)) = ?1",
+        params![oracle_id],
+        |r| r.get(0),
+    )
+    .map_err(|e| e.to_string())
+}
+
 pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage, String> {
     let limit = if q.limit == 0 {
         DEFAULT_LIMIT

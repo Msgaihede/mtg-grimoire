@@ -170,7 +170,7 @@ function CardTextBody({
  * face or the panel draws nothing at all for most of the game. Getting *that* branch wrong
  * renders a card, just an empty one.
  *
- * **The change: no `face` index.** `Facts` sits under the pane's flip control and asks
+ * **The change: no `face` index.** `Facts` sat under the pane's flip control and asked
  * `faceCount(layout, faces.length) === 2 ? [faces[face]] : faces` — one side for a `transform`
  * or a `modal_dfc`, because the picture beside it is of one side and the two have to agree, and
  * *both* halves for a `split`, an `adventure` or a `flip`, which are two faces printed on one

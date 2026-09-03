@@ -94,14 +94,15 @@ interface Slot {
 }
 
 /**
- * Move the card pane's context onto the finish a row has just been set to.
+ * Move the open card's deck context onto the finish a row has just been set to.
  *
  * **A deck row is addressed by `(deck, category, card, variant, finish)`**, and `set_card_finish`
  * changes the fifth part — so a context left pointing at the finish that was *left* names a row
  * that no longer exists. Three things break at once when it does, and all three were reported as
- * one on 2026-08-18: the editor's `selectedSlot` matches nothing, so the picked card is silently
- * unpicked while the pane stays open beside it; `CardDetailPane`'s `deckControlFor` finds no
- * control to hand the caret back to on close; and the pane's own foil button sends
+ * one on 2026-08-18, when the card was still a docked pane: the editor's `selectedSlot` matches
+ * nothing, so the picked card is silently unpicked while the card surface stays open;
+ * `deckControlFor` — the pane's, now `deckControl.ts`'s — finds no
+ * control to hand the caret back to on close; and the card's own foil button sends
  * `null → null` on its next press, which the backend refuses as `SAME_FINISH` — a toggle that
  * could be pressed once and never pressed back.
  *
