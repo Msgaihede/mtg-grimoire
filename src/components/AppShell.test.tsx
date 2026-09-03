@@ -259,7 +259,14 @@ function stubWindowWidth(narrow: boolean) {
 beforeEach(() => {
   // The open deck decides whether the Decks entry can take a card, so it is reset with the
   // view — a deck left open by one test would make the next one's inert case a lie.
-  useAppStore.setState({ activeView: "search", openDeckId: null });
+  //
+  // `keyMapOpen` joins them for a sharper version of the same reason: the flag is what draws
+  // `TitleBar`'s shortcut panel, every case in this file mounts `TitleBar`, and the cases below
+  // that press `F1` leave the flag wherever the last press put it. A leaked `true` would put a
+  // popover full of rows and captions into the tree of whatever ran next — where the queries are
+  // `screen`-wide rather than scoped — and the red would land on that test rather than on the
+  // one that pressed the key.
+  useAppStore.setState({ activeView: "search", openDeckId: null, keyMapOpen: false });
   queryClient.clear();
   invalidate.mockClear();
   syncStatus.mockReset().mockResolvedValue(status());
@@ -1602,5 +1609,217 @@ describe("the shell's choice of navigation", () => {
     expect(await screen.findByRole("button", { name: /refresh/i })).toHaveTextContent(
       "Refresh data",
     );
+  });
+});
+
+/**
+ * The two chords the shell itself binds — the only keyboard bindings in this app that are live
+ * whatever is on screen.
+ *
+ * Both are asserted through the **store** rather than only through what is drawn, and that is
+ * deliberate on either side: `activeView` is what the six destinations, the ribbon's title and
+ * `App`'s view swap all read, so it is the fact the binding is actually for; and `keyMapOpen`'s
+ * panel is drawn by `TitleBar`, whose own file tests it — a shell test that went looking for the
+ * panel would be asserting somebody else's component through this one. The first case checks the
+ * heading as well, because a view that changed in the store and nowhere on screen is the failure
+ * a store-only assertion cannot see.
+ */
+describe("the shell's keyboard bindings", () => {
+  it("switches view on Ctrl+3", async () => {
+    const user = userEvent.setup();
+    render(
+      <AppShell update={noUpdate}>
+        <div>content</div>
+      </AppShell>,
+    );
+
+    await user.keyboard("{Control>}3{/Control}");
+
+    // Decks and not something else, which is the whole of what "by index" buys: the third chord
+    // activates the third entry in `NAV`, so the rail's order is the binding rather than a list
+    // of six ids restated in the handler. Written out as the word a reader would say rather
+    // than as `NAV[2].id`, per the rule that an assertion must not read its own constant.
+    expect(useAppStore.getState().activeView).toBe("decks");
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Decks");
+  });
+
+  it("does not switch view while a modal is open", async () => {
+    const user = userEvent.setup();
+    render(
+      <AppShell update={noUpdate}>
+        {/* `Dialog` is the one modal chrome in this app and always sets this attribute; what the
+            shell's guard actually asks is the document, so standing one in is the honest fixture
+            and needs none of `Dialog`'s scrim, focus trap or portal. */}
+        <div role="dialog" aria-modal="true">
+          content
+        </div>
+      </AppShell>,
+    );
+
+    await user.keyboard("{Control>}3{/Control}");
+
+    // Still where it started. A dialog is drawn over whatever asked for it, so a view that
+    // switched underneath would leave it sitting on a page it has no relationship to.
+    expect(useAppStore.getState().activeView).toBe("search");
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Search");
+  });
+
+  it("opens the keyboard map on F1", async () => {
+    const user = userEvent.setup();
+    render(
+      <AppShell update={noUpdate}>
+        <div>content</div>
+      </AppShell>,
+    );
+
+    await user.keyboard("{F1}");
+
+    expect(useAppStore.getState().keyMapOpen).toBe(true);
+  });
+
+  it("closes the keyboard map on a second F1", async () => {
+    const user = userEvent.setup();
+    render(
+      <AppShell update={noUpdate}>
+        <div>content</div>
+      </AppShell>,
+    );
+
+    // The first press is asserted here as well as in the case above, and it is not a duplicate:
+    // it is what stops this test passing on a binding that does nothing at all. What only this
+    // case can catch is a handler that *sets* rather than toggles — the flag would arrive at
+    // `true` on both presses, and every assertion but the last would still be green.
+    await user.keyboard("{F1}");
+    expect(useAppStore.getState().keyMapOpen).toBe(true);
+
+    await user.keyboard("{F1}");
+    expect(useAppStore.getState().keyMapOpen).toBe(false);
+  });
+
+  /**
+   * **Holding `F1` does not strobe the panel**, which is the one thing about a toggle bound to a
+   * key that auto-repeat gets wrong: the OS fires `keydown` at its repeat rate for as long as the
+   * finger is down, and a toggle on that opens and closes the panel over and over, landing on
+   * whichever side the reader let go on.
+   *
+   * **Fired by hand, and there is no alternative**: `userEvent` cannot express auto-repeat at all
+   * — `{F1>3/}` dispatches three presses with `repeat` false on every one of them, which is three
+   * genuine presses and not a held key. Dispatched at `document.body` rather than at `window`, so
+   * the press takes the ordinary propagation path up to the shell's listener.
+   *
+   * **One repeat, not two.** Two of them toggle back to where they started, so the case would
+   * pass against the very handler it is written to catch.
+   */
+  it("does not toggle the keyboard map while F1 auto-repeats", async () => {
+    const user = userEvent.setup();
+    render(
+      <AppShell update={noUpdate}>
+        <div>content</div>
+      </AppShell>,
+    );
+
+    await user.keyboard("{F1}");
+    expect(useAppStore.getState().keyMapOpen).toBe(true);
+
+    fireEvent.keyDown(document.body, { key: "F1", repeat: true });
+    expect(useAppStore.getState().keyMapOpen).toBe(true);
+
+    fireEvent.keyDown(document.body, { key: "F1", repeat: true });
+    expect(useAppStore.getState().keyMapOpen).toBe(true);
+  });
+
+  /**
+   * And the guard is `F1`'s alone — a held `Ctrl+3` goes on arriving.
+   *
+   * Selecting the view you are already on is idempotent, so there is no failure to guard against
+   * here, and hoisting the check to the top of the handler would decide the question for every
+   * chord this shell ever binds — including one that means to repeat. This case is what makes
+   * that placement a decision rather than an accident: it goes red on a handler that drops every
+   * repeated press.
+   */
+  it("keeps switching view while Ctrl+3 auto-repeats", () => {
+    render(
+      <AppShell update={noUpdate}>
+        <div>content</div>
+      </AppShell>,
+    );
+
+    fireEvent.keyDown(document.body, { key: "3", ctrlKey: true, repeat: true });
+
+    expect(useAppStore.getState().activeView).toBe("decks");
+  });
+
+  /**
+   * The listener goes on once and stays on — which none of the cases above can see.
+   *
+   * **The obvious wrong implementation passes every one of them.** Closing over `keyMapOpen` and
+   * listing it as a dependency tears the listener down and puts a new one up each time the flag
+   * turns over, and `user.keyboard` flushes React between two presses, so the second press reads
+   * a perfectly fresh closure and the toggle looks correct. What that costs is not correctness on
+   * these inputs but a `window` listener churning under every press of the key, and a stale
+   * closure the moment anything dispatches two presses without a flush between them.
+   *
+   * **Asserted as "nothing that was here at mount is ever removed", and the shape is forced.** A
+   * rebind is a cleanup followed by a fresh registration, and the fresh one is a *new* function —
+   * so the add side cannot tell a rebind from a component legitimately registering a listener of
+   * its own. The remove side can: the only reason a handler present at mount comes off `window`
+   * while the shell is still standing is that its effect re-ran. Identity is also why this is
+   * about the whole set rather than about one member of it — nothing here can pick this
+   * component's handler out of its neighbours', and it does not need to, because none of them
+   * should be coming off either.
+   */
+  it("binds its keydown listener once for the life of the shell", async () => {
+    const user = userEvent.setup();
+    const add = vi.spyOn(window, "addEventListener");
+    const remove = vi.spyOn(window, "removeEventListener");
+    /**
+     * The handlers a spy saw registered or torn down for `keydown`, in call order.
+     *
+     * `String(...)` rather than a bare comparison, and it is the type-checker rather than the
+     * runtime that asks for it: `addEventListener` is overloaded, `vi.spyOn` resolves the
+     * overload keyed on `DedicatedWorkerGlobalScopeEventMap`, and TS then reads `"keydown"` as
+     * having no overlap with a worker's event names. The value arriving here is the string the
+     * shell passed.
+     */
+    const handlers = (spy: typeof add): unknown[] =>
+      spy.mock.calls.filter((call) => String(call[0]) === "keydown").map((call) => call[1]);
+    try {
+      render(
+        <AppShell update={noUpdate}>
+          <div>content</div>
+        </AppShell>,
+      );
+
+      const atMount = new Set(handlers(add));
+      // Belt and braces against the whole case going vacuous: an empty set would make both
+      // assertions below true of an app that binds nothing at all.
+      expect(atMount.size).toBeGreaterThan(0);
+      add.mockClear();
+      remove.mockClear();
+
+      // Three view changes, which is three re-renders of the entire shell — and nothing about
+      // the caption row, so nothing new is mounted that could register a listener of its own.
+      // Neither number may move.
+      await user.keyboard("{Control>}3{/Control}");
+      await user.keyboard("{Control>}4{/Control}");
+      await user.keyboard("{Control>}1{/Control}");
+      expect(handlers(add)).toEqual([]);
+      expect(handlers(remove)).toEqual([]);
+
+      // And now the press that changes the flag the handler reads, twice — the input the
+      // closure-shaped implementation gets wrong.
+      await user.keyboard("{F1}");
+      await user.keyboard("{F1}");
+      // Filtered to the mount-time set rather than empty, because the panel `F1` opens registers
+      // an Escape listener of its own while it is up and takes it away again on the way down.
+      // Those two are somebody else's and are supposed to happen; a mount-time handler coming
+      // off is not.
+      expect(handlers(remove).filter((handler) => atMount.has(handler))).toEqual([]);
+    } finally {
+      // Restored by hand rather than by `vi.restoreAllMocks()`, which would also undo the
+      // module-level `invalidate` spy this file installs once and every later test reads.
+      add.mockRestore();
+      remove.mockRestore();
+    }
   });
 });

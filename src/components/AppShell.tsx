@@ -37,6 +37,7 @@ import {
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { LAYER } from "@/lib/layers";
 import { DURATION, statusLine as statusLineMotion } from "@/lib/motion";
+import { matchesChord, matchesShortcut, shortcut } from "@/lib/shortcuts";
 import { useAppStore } from "@/lib/store";
 import { usePrefetchDeckSearchOpen } from "@/features/decks/useDeckSearchOpen";
 import { useCardZoomPersistence } from "@/lib/useCardZoomPersistence";
@@ -68,6 +69,17 @@ import { cn } from "@/lib/utils";
 const NAV_ID = "app-nav";
 
 /**
+ * The two chords this shell binds, looked up **once at module scope** rather than per press.
+ *
+ * `shortcut()` throws on an id the catalogue does not carry, which is the whole reason it is a
+ * function; resolving here rather than inside the handler is what makes that throw arrive at
+ * import time — before a render, before a keypress — so a renamed id is a suite that cannot even
+ * load rather than a key that quietly stopped working.
+ */
+const SWITCH_VIEW = shortcut("global", "switchView");
+const KEY_MAP = shortcut("global", "keyMap");
+
+/**
  * The window: sidebar, ribbon, and whatever view the store points at.
  *
  * Owns the sync status because everything that needs it lives here — the ribbon's summary
@@ -90,6 +102,9 @@ export function AppShell({ children, update }: { children: ReactNode; update: Up
 function Shell({ children, update }: { children: ReactNode; update: Update }) {
   const activeView = useAppStore((s) => s.activeView);
   const setActiveView = useAppStore((s) => s.setActiveView);
+  // The flag `TitleBar` draws the map from and this component's `F1` turns over — see its doc in
+  // `store.ts` for why one press and one panel need a store between them.
+  const setKeyMapOpen = useAppStore((s) => s.setKeyMapOpen);
   const { status, error, refresh, refreshing, upToDate } = useSync();
   const progress = useSyncProgress();
   // Web only in effect: on desktop this answers "present" for every count and its effect
@@ -189,6 +204,67 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // rather than in the ribbon itself so there is exactly one subscription for the life of the
   // app, and passed down `isWebTarget()`-gated at the call site below.
   const deviceSync = useDeviceSyncLive();
+  /**
+   * The app's two window-wide chords: `Ctrl+1`…`Ctrl+6` to jump between the six destinations,
+   * and `F1` to open the map that says so.
+   *
+   * **Both matched against `@/lib/shortcuts` rather than compared by hand**, which is what makes
+   * the panel's rows and these bindings one fact instead of two that drift silently past both CI
+   * jobs. The `switchView` entry's chords are `NAV`'s own order, and the *index* is the binding —
+   * so the rail stays the single list of destinations rather than being restated here as a
+   * seventh copy, exactly as `nav.ts` argues about the label being the ribbon's `<h1>`.
+   *
+   * **The modal guard is `[aria-modal="true"]`, and it covers `Ctrl+1…6` alone.** `Dialog.tsx`
+   * is the one modal chrome in this app and always sets the attribute, so asking the document is
+   * asking the thing that knows, with nothing to register and nothing to keep in step. A view
+   * that switched out from under an open dialog would leave that dialog sitting over a page it
+   * has no relationship to. `F1` deliberately passes the guard: the map is *more* use with a
+   * dialog up, not less, and it draws over whatever is there rather than replacing it.
+   *
+   * **Not guarded by `isTextField`**, and that is the one place this differs from the deck
+   * editor's undo. `Ctrl+Z` yields in a field because the browser's own undo is there and must
+   * not be swallowed; `Ctrl+1` has no native meaning in a field at all, so yielding would only
+   * make view-switching dead exactly where a reader's caret usually is — in the quick-add box,
+   * in a search field. The argument lives at each call site because it is a fact about the
+   * binding rather than about matching a chord.
+   *
+   * **The listener binds once for the life of the shell.** Both dependencies are zustand setters,
+   * which are created with the store and never replaced, and the current flag is read through
+   * `getState()` at press time rather than closed over — `useCardZoomGesture`'s idiom. Reading
+   * `keyMapOpen` as a dependency would tear the listener down and put a new one up on every
+   * press of the key that toggles it.
+   */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (matchesShortcut(KEY_MAP, e)) {
+        // The press is ours whether or not it does anything, so the browser never sees a held
+        // `F1` either.
+        e.preventDefault();
+        // **Auto-repeat is swallowed here and nowhere else, because this is the only chord whose
+        // meaning depends on the state it changes.** Holding a key fires `keydown` at the OS
+        // repeat rate, and a toggle on that is the panel strobing through its own fade for as
+        // long as the finger is down — it lands on whichever side the reader let go on.
+        // `Ctrl+1…6` below is left alone deliberately: re-selecting the view you are on is
+        // idempotent, so a guard there would be a rule with no failure behind it, and hoisting
+        // one to the top of the handler would decide the question for every chord this shell
+        // ever grows — including a stepping chord, where repeating *is* the binding.
+        if (!e.repeat) setKeyMapOpen(!useAppStore.getState().keyMapOpen);
+        return;
+      }
+      if (document.querySelector('[aria-modal="true"]') !== null) return;
+      const i = SWITCH_VIEW.chords.findIndex((c) => matchesChord(c, e));
+      // `-1` is "not one of ours". The second half is not ceremony: the chords and the
+      // destinations are two lists that agree by construction rather than by type, and the day
+      // a seventh chord is written without a seventh `NAV` entry, `NAV[i]` is `undefined` and
+      // this handler throws on every press. The reverse — a seventh destination with no chord —
+      // costs nothing and needs no guard.
+      if (i === -1 || i >= NAV.length) return;
+      e.preventDefault();
+      setActiveView(NAV[i].id);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [setActiveView, setKeyMapOpen]);
   // Android drops its socket in the background because Doze would sever it anyway, and a
   // phone that looks connected while being hours stale is worse than one that knows it is
   // offline. Desktop never calls this: an idle hibernated socket costs nothing.

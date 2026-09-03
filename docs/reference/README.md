@@ -25,6 +25,7 @@ or a number to compare a new measurement against.
 | [tags-live-findings.md](tags-live-findings.md) | The Tags page in the shipped window — the art ingest timed, both performance gates settled, **and what is still open** | [`src/CLAUDE.md`](../../src/CLAUDE.md) |
 | [tag-search-syntax.md](tag-search-syntax.md) | Scryfall tagger syntax in the search box — the keywords, why resolution is exact, and the two failures that fail closed | [`src/CLAUDE.md`](../../src/CLAUDE.md) |
 | [frontend-design.md](frontend-design.md) | The ribbon, card images, foil, layers, tables, the Settings rail and its two lopsided flex numbers | [`src/CLAUDE.md`](../../src/CLAUDE.md) |
+| [keyboard-shortcuts.md](keyboard-shortcuts.md) | The chord catalogue — the fence and the four rows outside it, exact modifier matching and the two chords it narrowed away, where the text-field yield lives, and the live pass that proved the panel needs no `LAYER` rung | [`src/CLAUDE.md`](../../src/CLAUDE.md) |
 | [motion.md](motion.md) | `motion@13.1.0` — the timing scale, reduced motion, and **two forbidden APIs** | [`src/CLAUDE.md`](../../src/CLAUDE.md) |
 | [storybook.md](storybook.md) | The workbench and its fake, in full | [`.storybook/CLAUDE.md`](../../.storybook/CLAUDE.md) |
 | [live-ui-verification.md](live-ui-verification.md) | The CDP harness contract — `scripts/cdp.mjs` and its traps | [`src/CLAUDE.md`](../../src/CLAUDE.md) |
