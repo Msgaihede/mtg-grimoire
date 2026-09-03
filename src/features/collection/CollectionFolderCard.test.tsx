@@ -3,6 +3,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FOLDER_DROP_LINE_ATTR } from "@/components/FolderDropLine";
+import { NOT_A_DRAG } from "@/features/decks/dnd";
 import { DROP_EDGE, DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import {
   folderDraggable,
@@ -32,6 +33,11 @@ import {
  * takes it *back out*, and "without the breadcrumb a drag can only ever push cards deeper" is a
  * claim no test of either component alone can make. `WishFolderCard.test.tsx`'s arrangement, for
  * its reason.
+ *
+ * **The tile has two shapes since 2026-09-03** — the drawer, and the drawer with its name being
+ * edited, because `Rename…` is answered on the card rather than in a strip above the wall. The
+ * last section here is that second shape: what it replaces, what it keeps, and the two things
+ * about a drag that deliberately do not change while it is open.
  *
  * **Both drags are pointer drags now, driven over `@dnd-kit/dom`'s real code path** — one press,
  * a gesture that crosses the activation threshold, and a release wherever the pointer was left.
@@ -225,6 +231,26 @@ const onDropFolder = vi.fn();
 const onContextMenu = vi.fn();
 const onKeyDown = vi.fn();
 const onClickMenu = vi.fn();
+const onRenameSubmit = vi.fn();
+const onRenameCancel = vi.fn();
+
+/**
+ * The rename arm at rest, which is what every case here that is not about the field passes.
+ *
+ * Spelled once rather than at forty call sites — and it is a *required* prop rather than an
+ * optional one on purpose, so a page that draws a wall of drawers cannot forget to say what
+ * `Rename…` does on them and leave a menu row that opens nothing.
+ */
+const RESTING = {
+  active: false,
+  pending: false,
+  onSubmit: onRenameSubmit,
+  onCancel: onRenameCancel,
+};
+
+/** …and the same card with its name being edited: `active` is the page's flag, because one field
+ *  is open at a time across the whole cabinet. */
+const RENAMING = { ...RESTING, active: true };
 
 beforeEach(() => {
   onOpen.mockReset();
@@ -233,24 +259,18 @@ beforeEach(() => {
   onContextMenu.mockReset();
   onKeyDown.mockReset();
   onClickMenu.mockReset();
+  onRenameSubmit.mockReset();
+  onRenameCancel.mockReset();
 });
 
 describe("CollectionFolderCard", () => {
-  function mount({
-    on = node(BINDER),
-    summary = { cards: 12, value: 340.25 } as CollectionFolderTotals | null,
-    currency = "usd" as const,
-    canDrop = () => true,
-    canDropFolder = () => true,
-    withSource = false,
-    withTile = false,
-    withFolder = false,
-    folderDrag,
-  }: {
+  interface Props {
     /** Which drawer this card draws. Only the payload test below changes it. */
     on?: FolderNode<CollectionFolder>;
     summary?: CollectionFolderTotals | null;
     currency?: "usd" | "eur";
+    /** Whether the card is currently *being* the field, and whether the write is in flight. */
+    rename?: typeof RESTING;
     canDrop?: (drop: CollectionDrop) => boolean;
     canDropFolder?: (drag: FolderDrag, edge: FolderEdge) => boolean;
     withSource?: boolean;
@@ -260,8 +280,21 @@ describe("CollectionFolderCard", () => {
     /** A sibling drawer in the air — the third payload this card reads, under its own key. */
     withFolder?: boolean;
     folderDrag?: FolderDrag;
-  } = {}) {
-    render(
+  }
+
+  function tree({
+    on = node(BINDER),
+    summary = { cards: 12, value: 340.25 } as CollectionFolderTotals | null,
+    currency = "usd" as const,
+    rename = RESTING,
+    canDrop = () => true,
+    canDropFolder = () => true,
+    withSource = false,
+    withTile = false,
+    withFolder = false,
+    folderDrag,
+  }: Props) {
+    return (
       <>
         {withSource && <Source />}
         {withTile && <TileSource />}
@@ -275,14 +308,29 @@ describe("CollectionFolderCard", () => {
             currency={currency}
             onOpen={onOpen}
             rowMenu={{ onContextMenu, onKeyDown, onClick: onClickMenu }}
+            rename={rename}
             canDrop={canDrop}
             onDropCard={onDropCard}
             canDropFolder={canDropFolder}
             onDropFolder={onDropFolder}
           />
         </ul>
-      </>,
+      </>
     );
+  }
+
+  /**
+   * Draw the card, and keep the props so the same card can be drawn again with one of them
+   * changed.
+   *
+   * **`show` exists for the caret**, which is the one thing here that is a fact about a
+   * *transition* rather than about a state: `useFolderFieldReturn` fires on the render where
+   * `active` goes false, so a test that mounted the resting card would be asserting about a
+   * component that was never renaming.
+   */
+  function mount(props: Props = {}) {
+    const view = render(tree(props));
+    return { show: (next: Props) => view.rerender(tree({ ...props, ...next })) };
   }
 
   /**
@@ -309,8 +357,13 @@ describe("CollectionFolderCard", () => {
    * because the drag library keeps one element drop target per element and the copy drag already
    * owns the `<li>`. A drag aimed at {@link face} finds it by walking up, exactly as a pointer
    * does; this is the handle for the one thing a walk cannot do, which is state the box.
+   *
+   * Taken off an `<li>` rather than off a folder's name, because the renaming cases below reach
+   * the same wrapper on a card whose name is an `<input>` — the wrapper is where the field is
+   * drawn, and it is the whole reason a rename does not tear the folder drop target down.
    */
-  const slot = (name?: string) => card(name).firstElementChild as HTMLElement;
+  const box = (li: HTMLElement) => li.firstElementChild as HTMLElement;
+  const slot = (name?: string) => box(card(name));
 
   /**
    * Which end the drop line is on, or `null` for no line at all.
@@ -319,8 +372,8 @@ describe("CollectionFolderCard", () => {
    * stylesheet, so a class assertion would be a check on this repo's source text rather than on
    * the drawing. `FolderDropLine` carries the edge as that attribute's *value* for exactly this.
    */
-  const line = () =>
-    card().querySelector(`[${FOLDER_DROP_LINE_ATTR}]`)?.getAttribute(FOLDER_DROP_LINE_ATTR) ?? null;
+  const line = (li: HTMLElement = card()) =>
+    li.querySelector(`[${FOLDER_DROP_LINE_ATTR}]`)?.getAttribute(FOLDER_DROP_LINE_ATTR) ?? null;
 
   /**
    * Give the card somewhere to be — the `<li>`, the wrapper inside it and the face, all at
@@ -335,6 +388,23 @@ describe("CollectionFolderCard", () => {
    */
   const stand = (name?: string) => {
     for (const element of [card(name), slot(name), face(name)]) {
+      element.getBoundingClientRect = () => CARD_BOX;
+    }
+  };
+
+  /**
+   * The card while its name is being edited, and the field that has replaced the name.
+   *
+   * Addressed through the input, because the button {@link card} finds it by is exactly what the
+   * field replaced — and that substitution is itself one of the claims below.
+   */
+  const field = () => screen.getByLabelText(`Rename ${BINDER.name}`);
+  const renaming = () => field().closest("li") as HTMLElement;
+
+  /** {@link stand}, for the renaming card: the same two drop targets, named the other way. There is
+   *  no third element to measure, because the face a pointer would be over is the field. */
+  const standRenaming = () => {
+    for (const element of [renaming(), box(renaming())]) {
       element.getBoundingClientRect = () => CARD_BOX;
     }
   };
@@ -752,6 +822,171 @@ describe("CollectionFolderCard", () => {
     await drawer.drop();
     expect(onDropFolder).toHaveBeenCalledWith(OTHER_FOLDER, "inside");
     expect(onDropCard).not.toHaveBeenCalled();
+  });
+
+  /* ------------------------------------------------ the name, edited on the card ------- */
+
+  /**
+   * **`Rename…` is answered on the card**, which is the whole of what changed on 2026-09-03: the
+   * strip that used to open under the breadcrumb is gone and the tile becomes the field. The cases
+   * below are the ones a suite can see — the substitution, what the field opens holding, what
+   * survives underneath it, where the caret goes afterwards, and the two things that deliberately
+   * do **not** change while it is open.
+   */
+  it("becomes the field, and draws neither of the two buttons it replaced", () => {
+    mount({ rename: RENAMING });
+
+    expect(field()).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Rename folder" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+
+    // **The `⋯` is the one that matters**: a card offering `Rename…`, `Move to folder…` and
+    // `Delete…` over a name that is halfway through being typed is a menu about a folder in a
+    // state the page cannot answer for. The folder's own button goes with it — the name is not
+    // somewhere to press while it is somewhere to type.
+    expect(screen.queryByRole("button", { name: "Manage Trade binder" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Trade binder folder/ })).not.toBeInTheDocument();
+  });
+
+  /**
+   * **Named for the folder it is about, and opening on its current name — selected.**
+   *
+   * The name matters because a wall of drawers renames one at a time and every field on it would
+   * otherwise be called the same thing. The *selection* is what makes the commonest rename one
+   * gesture: a reader who means to replace the word types it, and a reader who means to edit
+   * inside it presses an arrow key first. `focus()` and `select()` are two calls rather than one
+   * because the spec says `select()` only sets the selection — Chromium focuses on select, so a
+   * missing `focus()` is a defect that only the suite can see.
+   */
+  it("opens named for the folder, holding the current name, selected", () => {
+    mount({ rename: RENAMING });
+
+    const input = field() as HTMLInputElement;
+    expect(input).toHaveValue("Trade binder");
+    expect(input).toHaveFocus();
+    expect([input.selectionStart, input.selectionEnd]).toEqual([0, "Trade binder".length]);
+  });
+
+  /**
+   * **The figures line stays, and it is the whole reason a rename is not the create tile with
+   * another label.** A reader renaming *Trade binder* is looking at the drawer holding twelve
+   * cards worth $340.25; a box that dropped the count while they typed would make them stop and
+   * check they had the right one. Asserted *inside the field's own form* rather than merely
+   * present on the card, because a line that survived somewhere else on the tile would be a
+   * different drawing that passes the same `getByText`.
+   */
+  it("goes on saying what is in the drawer while the name is being edited", () => {
+    mount({ rename: RENAMING });
+
+    const figures = screen.getByText("12 cards · $340.25");
+    expect(figures).toBeInTheDocument();
+    expect(field().closest("form")!.contains(figures)).toBe(true);
+  });
+
+  /**
+   * **The caret's way back, and it is a fact about the *transition*.**
+   *
+   * The control the field replaced is the `⋯`, so by the time the page's own dismiss tries to
+   * focus what it remembered, that element has been unmounted and `focus()` is a silent no-op —
+   * `useFolderFieldReturn` is the answer, and this is the assertion that the card handed it the
+   * right ref. The end state is the one every ordinary close leaves: the focused input unmounts
+   * and the browser drops the caret to `<body>`. (That `<body>` guard is the hook's own and is
+   * fenced where the hook lives; what could break *here* is the ref landing on nothing, or on the
+   * folder button instead, and a reader whose Tab restarts from the top of the app is the symptom
+   * of either.)
+   */
+  it("hands the caret to the ⋯ when the field closes", () => {
+    const view = mount({ rename: RENAMING });
+    expect(field()).toHaveFocus();
+
+    view.show({ rename: RESTING });
+
+    expect(screen.getByRole("button", { name: "Manage Trade binder" })).toHaveFocus();
+  });
+
+  /**
+   * **Enter is the form's own submission and the tick is the same answer**, but which callback
+   * each arm reaches is this card's wiring rather than the field's — and a submit wired to
+   * `onCancel` would look right on screen and quietly throw the reader's typing away.
+   */
+  it("hands the page the name typed, and the cancel separately", async () => {
+    const user = userEvent.setup();
+    mount({ rename: RENAMING });
+
+    await user.keyboard("Binder{Enter}");
+    expect(onRenameSubmit).toHaveBeenCalledWith("Binder");
+    expect(onRenameCancel).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onRenameCancel).toHaveBeenCalledTimes(1);
+    expect(onRenameSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * **A copy dropped on a drawer whose name is being edited files perfectly well, and the targets
+   * are left registered on purpose.** Tearing them down would make the wall answer a drag
+   * differently depending on a state the *dragger* cannot see — they are renaming a folder three
+   * tiles away, and this one silently stops taking cards.
+   *
+   * The wash is not asserted and cannot be: `DROP_OVER` is drawn on the folder button, which is
+   * exactly what the field replaced. The ring on the `<li>` and the delivered drop are the claim.
+   */
+  it("still takes a copy while its name is being edited", async () => {
+    mount({ withSource: true, rename: RENAMING });
+    standRenaming();
+
+    const held = await startPointerDrag(screen.getByText("the copy"));
+    expect(marked(renaming(), DROP_RING)).toBe(true);
+
+    await held.over(renaming());
+    await held.drop();
+    expect(onDropCard).toHaveBeenCalledWith(ENTRY_DROP);
+  });
+
+  /** The other target, the same way — and the drop line still moves with the pointer, because it
+   *  is drawn on the `<li>` rather than on anything the field replaced. */
+  it("still takes a folder beside it while its name is being edited", async () => {
+    mount({ withFolder: true, rename: RENAMING });
+    standRenaming();
+
+    const held = await startPointerDrag(screen.getByText("the folder"));
+    await held.over(box(renaming()), BEFORE);
+    expect(line(renaming())).toBe("before");
+
+    await held.drop();
+    expect(onDropFolder).toHaveBeenCalledWith(OTHER_FOLDER, "before");
+  });
+
+  /**
+   * **What the field _does_ suppress is the card as a drag source**, and the mechanism is one
+   * `data-no-drag` on the `<form>` matched with `closest()` — so the input, the tick and the cross
+   * are covered by one mark rather than three. Without it, pressing into the name and moving five
+   * pixels files the folder somewhere and the press that was meant is never delivered.
+   *
+   * **The tick is what makes this non-vacuous.** `NOT_A_DRAG` excludes `input` by tag, so a press
+   * in the box would be refused whether the form were marked or not; a `<button>` is excluded by
+   * nothing — `dndManager` replaced the library's own `preventActivation` precisely so that a
+   * card's name-as-a-button stays a grab handle — so the tick's press is refused by the mark and
+   * by nothing else. Driven as well as read, because the selector and the sensor agreeing is the
+   * thing that has to be true. **And it is the mark doing it**: driven while writing this, the
+   * same gesture pressed on the `<li>` itself — the one pixel of a renaming card the form does not
+   * cover, and therefore not an assertion worth keeping — started the drag, so the source is live
+   * on a renaming card and the tick's press is refused by the `<form>` rather than by a
+   * registration that went missing with the folder button.
+   */
+  it("refuses to be picked up by a press inside the field", async () => {
+    mount({ rename: RENAMING });
+    standRenaming();
+
+    const guard = field().closest("[data-no-drag]");
+    expect(guard?.tagName).toBe("FORM");
+    const tick = screen.getByRole("button", { name: "Rename folder" });
+    expect(tick.closest(NOT_A_DRAG)).toBe(guard);
+    expect(screen.getByRole("button", { name: "Cancel" }).closest(NOT_A_DRAG)).toBe(guard);
+
+    const refused = await startPointerDrag(renaming(), { pressOn: tick });
+    expect(refused.started).toBe(false);
+    await refused.cancel();
   });
 });
 

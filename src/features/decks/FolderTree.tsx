@@ -327,7 +327,7 @@ export function FolderTree({
           // has a place in the tree, and correcting its name is not a new thing arriving.
           naming?.kind === "rename" && naming.folderId === node.folder.id ? (
             <li key={node.folder.id}>
-              <FolderNameField
+              <TreeNameField
                 depth={node.depth + 1}
                 initial={node.folder.name}
                 label={`Rename ${node.folder.name}`}
@@ -359,7 +359,7 @@ export function FolderTree({
               menuOpenerRef={menuOpenerRef}
             >
               {newAt === node.folder.id && (
-                <FolderNameField
+                <TreeNameField
                   depth={node.depth + 2}
                   where={`in ${node.folder.name}`}
                   label="New folder name"
@@ -375,7 +375,7 @@ export function FolderTree({
 
         {newAt === null && (
           <li>
-            <FolderNameField
+            <TreeNameField
               depth={1}
               where="at the top level"
               label="New folder name"
@@ -626,7 +626,17 @@ function FolderRow({
  * deck form, the delete question, both move pickers) are all discarded the same two ways —
  * Escape, or looking away.
  */
-function FolderNameField({
+/*
+ * **Named `TreeNameField` rather than `FolderNameField` since 2026-09-03**, and the rename is
+ * the whole of what changed here. `components/FolderNameField.tsx` became a shared component
+ * that day — the folder *wall's* field, drawn as the tile itself on the collection and the
+ * wishlist — and this row's field is a different thing at a different shape: a tree row at a
+ * depth, with a `where` line and no visible Cancel. Two unrelated components answering one
+ * grep is the confusion the collection and wishlist pages had while they each kept a private
+ * copy of the third, so one of the two names had to move, and the shared one has the better
+ * claim to the plain one.
+ */
+function TreeNameField({
   depth,
   where,
   label,

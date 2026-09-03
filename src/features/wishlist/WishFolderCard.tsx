@@ -72,6 +72,7 @@ import {
 } from "react";
 import { Folder, MoreHorizontal } from "lucide-react";
 import { FolderDropLine } from "@/components/FolderDropLine";
+import { FolderNameField, useFolderFieldReturn } from "@/components/FolderNameField";
 import { ParentFolderCard } from "@/components/ParentFolderCard";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { plural } from "@/lib/counts";
@@ -156,6 +157,7 @@ export function WishFolderCard({
   currency,
   onOpen,
   rowMenu,
+  rename,
   canDrop,
   onDropWish,
   canDropFolder,
@@ -181,6 +183,27 @@ export function WishFolderCard({
     onContextMenu: MouseEventHandler<HTMLButtonElement>;
     onKeyDown: KeyboardEventHandler<HTMLButtonElement>;
     onClick: MouseEventHandler<HTMLButtonElement>;
+  };
+  /**
+   * `Rename…`, answered **on the card** rather than in a strip above the wall.
+   *
+   * `active` is the page's, not the card's, because one field is open at a time across the whole
+   * wall: pressing `New folder` has to close a rename already in progress, and a card holding its
+   * own flag could not know that had happened. It is also what makes the draft disposable — the
+   * field is mounted by this flag and holds the half-typed name in its own state, so a cancelled
+   * rename cannot survive into the next one.
+   *
+   * **The card keeps its figures line while the field is open** (see the render), which is the
+   * whole reason a rename is not simply `NewFolderCard`'s tile with a different label: a reader
+   * renaming *Standard* is looking at the drawer holding six wishes worth $312, and a box that
+   * dropped the count would make them check they had the right one.
+   */
+  rename: {
+    active: boolean;
+    /** The write is in flight — holds the field open and greys the tick. */
+    pending: boolean;
+    onSubmit: (name: string) => void;
+    onCancel: () => void;
   };
   /** Whether *this* folder would take the wish currently in the air — spec §9: the folder a wish
    *  is already filed in refuses it, and draws no mark rather than one that does nothing. */
@@ -236,6 +259,11 @@ export function WishFolderCard({
     onDrop: onDropFolder,
   });
   const { shown, spoken } = face(summary, currency);
+  // The caret's way back out of the field, and it has to be a ref taken here rather than the
+  // element the page remembered when the menu was opened: the `⋯` this restores to is a *new*
+  // element, built by the render that closed the field, so the one the page is holding is a
+  // detached node whose `focus()` is a silent no-op. See `useFolderFieldReturn`.
+  const manageRef = useFolderFieldReturn<HTMLButtonElement>(rename.active);
 
   return (
     // No mark of its own: this box registers the wish drop target and is what `FolderDropLine` is
@@ -243,90 +271,125 @@ export function WishFolderCard({
     // own doc for why an outline around an outline was the reported bug.
     <li ref={ref} className="relative rounded-xl">
       <div ref={slot}>
-        <button
-          type="button"
-          // Starts with the visible label and then says, in words, what the second line says in
-          // figures — WCAG 2.5.3, and `FolderCard`'s arrangement: the name is the prefix, and the
-          // count is a sentence rather than a bare number a screen reader cannot attach to
-          // anything.
-          aria-label={`${node.folder.name} folder, ${spoken}`}
-          onClick={onOpen}
-          // **The menu's two doors are on this button**, never on the `<li>` around it — the panel
-          // hands the caret back to the element a menu was opened on, and this is the focusable one.
-          // `FolderTree`'s rule, and the same reason it gives.
-          onContextMenu={rowMenu.onContextMenu}
-          onKeyDown={rowMenu.onKeyDown}
-          className={cn(
-            // `pr-9` leaves the manage trigger its corner: the trigger is a *sibling* rather than a
-            // child, because a button inside a button is not markup a browser will build.
-            "block w-full rounded-xl border border-dashed border-border p-2.5 pr-9 text-left",
-            "transition-colors duration-150 hover:border-accent motion-reduce:transition-none",
-            // The card's own dash going faintly gold — one mark for both drags, raised the moment
-            // either payload leaves its tile and on every drawer that would take it, which is what
-            // tells a reader where a drag can end before they have aimed anywhere. It sits *above*
-            // the wash below it because `cn` is `tailwind-merge` and both spell a border colour:
-            // the later argument wins the group, so "the one you are on" outranks "one of the ones
-            // you could be on" rather than the two fighting over argument order.
-            (armed || folderArmed) && DROP_EDGE,
-            // One wash for both drags, because only one thing is ever in the air: a wish over this
-            // drawer and a folder over its middle are the same claim — what you are holding lands
-            // *in here*. The other two landings are a line rather than a wash, which is what keeps
-            // "inside this folder" and "beside this folder" from wearing one mark.
-            (over || edge === "inside") && cn("border-accent", DROP_OVER),
-            FOCUS,
-          )}
-        >
-          <span className="flex items-center gap-2">
-            <Folder className="size-3.5 flex-none text-dim" aria-hidden="true" />
-            <span
-              className="min-w-0 flex-1 truncate text-sm"
-              {...tip(node.folder.name, { whenClipped: true })}
+        {rename.active ? (
+          /* **The card becomes the field, and keeps its second line.** The name is edited on the
+             line it is drawn on, at the same track and inside the same dashed edge — a folder
+             being renamed is still a container, so the dash stays and only its colour moves to
+             `border-accent`. The figures line goes on saying what is in the drawer, which is what
+             a reader checks they have the right one by.
+
+             The two drop targets above are left registered on purpose: a wish dropped onto a
+             folder whose name is being edited files perfectly well, and tearing the targets down
+             would make the wall answer a drag differently depending on a state the dragger cannot
+             see. What the field *does* suppress is this card as a drag **source** — its `<form>`
+             carries `data-no-drag`, so pressing into the name places a caret instead of picking
+             the folder up. */
+          <FolderNameField
+            mode="rename"
+            label={`Rename ${node.folder.name}`}
+            initial={node.folder.name}
+            submitLabel="Rename folder"
+            pending={rename.pending}
+            footer={
+              <span className="mt-1 block truncate text-xs tabular-nums text-dim">{shown}</span>
+            }
+            onSubmit={rename.onSubmit}
+            onCancel={rename.onCancel}
+          />
+        ) : (
+          <>
+            <button
+              type="button"
+              // Starts with the visible label and then says, in words, what the second line says in
+              // figures — WCAG 2.5.3, and `FolderCard`'s arrangement: the name is the prefix, and
+              // the count is a sentence rather than a bare number a screen reader cannot attach to
+              // anything.
+              aria-label={`${node.folder.name} folder, ${spoken}`}
+              onClick={onOpen}
+              // **The menu's two doors are on this button**, never on the `<li>` around it — the
+              // panel hands the caret back to the element a menu was opened on, and this is the
+              // focusable one. `FolderTree`'s rule, and the same reason it gives.
+              onContextMenu={rowMenu.onContextMenu}
+              onKeyDown={rowMenu.onKeyDown}
+              className={cn(
+                // `pr-9` leaves the manage trigger its corner: the trigger is a *sibling* rather
+                // than a child, because a button inside a button is not markup a browser will
+                // build.
+                "block w-full rounded-xl border border-dashed border-border p-2.5 pr-9 text-left",
+                "transition-colors duration-150 hover:border-accent motion-reduce:transition-none",
+                // The card's own dash going faintly gold — one mark for both drags, raised the
+                // moment either payload leaves its tile and on every drawer that would take it,
+                // which is what tells a reader where a drag can end before they have aimed
+                // anywhere. It sits *above* the wash below it because `cn` is `tailwind-merge`
+                // and both spell a border colour: the later argument wins the group, so "the one
+                // you are on" outranks "one of the ones you could be on" rather than the two
+                // fighting over argument order.
+                (armed || folderArmed) && DROP_EDGE,
+                // One wash for both drags, because only one thing is ever in the air: a wish over
+                // this drawer and a folder over its middle are the same claim — what you are
+                // holding lands *in here*. The other two landings are a line rather than a wash,
+                // which is what keeps "inside this folder" and "beside this folder" from wearing
+                // one mark.
+                (over || edge === "inside") && cn("border-accent", DROP_OVER),
+                FOCUS,
+              )}
             >
-              {node.folder.name}
-            </span>
-          </span>
-          <span className="mt-1 block truncate text-xs tabular-nums text-dim">{shown}</span>
-        </button>
+              <span className="flex items-center gap-2">
+                <Folder className="size-3.5 flex-none text-dim" aria-hidden="true" />
+                <span
+                  className="min-w-0 flex-1 truncate text-sm"
+                  {...tip(node.folder.name, { whenClipped: true })}
+                >
+                  {node.folder.name}
+                </span>
+              </span>
+              <span className="mt-1 block truncate text-xs tabular-nums text-dim">{shown}</span>
+            </button>
 
-        {/* The visible way into the same menu the right-click opens — the affordance a reader who
-            does not know a card can be right-clicked has. Named for the folder, because a wall of
-            these is otherwise a row of controls all called "Manage": a screen reader reads them
-            out of context, one after another, with nothing to tell them apart.
+            {/* The visible way into the same menu the right-click opens — the affordance a reader
+                who does not know a card can be right-clicked has. Named for the folder, because a
+                wall of these is otherwise a row of controls all called "Manage": a screen reader
+                reads them out of context, one after another, with nothing to tell them apart.
 
-            **`aria-haspopup="menu"` and no `aria-expanded`, which is a deliberately partial
-            declaration.** This is the app's first plain-click menu trigger — `menuClick` is new —
-            so it inherits nothing, and the two halves of the declaration cost very different
-            things. The popup *kind* is a fact about this button and is free: without it NVDA
-            announces "Manage Ordered, button" and a reader has no way to know a press opens
-            anything. The expanded *state* is a fact about `ContextMenuProvider`, which holds the
-            one open menu in state and publishes only `openMenu`/`closeMenu` — every other popup
-            trigger in the app (`AnchoredPopup`, `Submenu`) owns its own open flag and this one
-            cannot, because the panel is mounted at the app root and closes by routes this card
-            never hears about. Publishing it would put the open menu's identity in the context value
-            and re-render every card surface in the app on each open. A static `aria-expanded="false"`
-            that never changed would be worse than none — it is an assertion, and it would be wrong
-            for exactly as long as the menu is up. */}
-        <button
-          type="button"
-          aria-label={`Manage ${node.folder.name}`}
-          aria-haspopup="menu"
-          // `data-no-drag`, and it is load-bearing from the moment the card became draggable:
-          // Chromium starts a drag from the nearest draggable *ancestor* of whatever was pressed,
-          // so without it a press on the `⋯` plus five pixels of travel files this folder somewhere
-          // instead of opening its menu — and the click that was meant is never delivered.
-          // `composedDraggable`'s capture-phase guard is what reads it; `dnd.ts` has the measurement.
-          data-no-drag=""
-          onClick={rowMenu.onClick}
-          onKeyDown={rowMenu.onKeyDown}
-          className={cn(
-            "absolute right-1 top-1 grid size-7 place-items-center rounded-md text-dim",
-            "transition-colors duration-150 hover:bg-surface hover:text-text",
-            "motion-reduce:transition-none",
-            FOCUS,
-          )}
-        >
-          <MoreHorizontal className="size-4" aria-hidden="true" />
-        </button>
+                **`aria-haspopup="menu"` and no `aria-expanded`, which is a deliberately partial
+                declaration.** This is the app's first plain-click menu trigger — `menuClick` is
+                new — so it inherits nothing, and the two halves of the declaration cost very
+                different things. The popup *kind* is a fact about this button and is free: without
+                it NVDA announces "Manage Ordered, button" and a reader has no way to know a press
+                opens anything. The expanded *state* is a fact about `ContextMenuProvider`, which
+                holds the one open menu in state and publishes only `openMenu`/`closeMenu` — every
+                other popup trigger in the app (`AnchoredPopup`, `Submenu`) owns its own open flag
+                and this one cannot, because the panel is mounted at the app root and closes by
+                routes this card never hears about. Publishing it would put the open menu's
+                identity in the context value and re-render every card surface in the app on each
+                open. A static `aria-expanded="false"` that never changed would be worse than none
+                — it is an assertion, and it would be wrong for exactly as long as the menu is
+                up. */}
+            <button
+              ref={manageRef}
+              type="button"
+              aria-label={`Manage ${node.folder.name}`}
+              aria-haspopup="menu"
+              // `data-no-drag`, and it is load-bearing from the moment the card became draggable:
+              // Chromium starts a drag from the nearest draggable *ancestor* of whatever was
+              // pressed, so without it a press on the `⋯` plus five pixels of travel files this
+              // folder somewhere instead of opening its menu — and the click that was meant is
+              // never delivered. `composedDraggable`'s capture-phase guard is what reads it;
+              // `dnd.ts` has the measurement.
+              data-no-drag=""
+              onClick={rowMenu.onClick}
+              onKeyDown={rowMenu.onKeyDown}
+              className={cn(
+                "absolute right-1 top-1 grid size-7 place-items-center rounded-md text-dim",
+                "transition-colors duration-150 hover:bg-surface hover:text-text",
+                "motion-reduce:transition-none",
+                FOCUS,
+              )}
+            >
+              <MoreHorizontal className="size-4" aria-hidden="true" />
+            </button>
+          </>
+        )}
       </div>
 
       {/* Drawn straight off `edge`, which is `null` both when the pointer is elsewhere and when

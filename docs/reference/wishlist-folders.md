@@ -308,6 +308,55 @@ two drop targets. Four decisions:
 reader is standing, and is still the only way out of a level whose wall is not drawn. What changed
 is that the ordinary case has a target the size of the things around it.
 
+## The wall names its own folders, and the strip kept two of its four jobs
+
+**2026-09-03.** `New folder` and a folder card's `⋯ → Rename…` used to raise a **bordered strip
+under the breadcrumb** — a box with its own edge, an input, `Create folder` and `Cancel` spelled
+out in words, and, on a create, a line reading *in Wishlist* to say which level the strip was
+about. Every one of those pieces re-established a context the wall on screen already carried, so
+each one is gone and the tile *becomes* the field.
+`src/components/FolderNameField.tsx` is the shape and
+[frontend-design.md](frontend-design.md) is the whole argument. Three things belong here, because
+they are facts about this cabinet rather than about the field.
+
+**It is the section above one step further in.** The way *out* of a folder had to be a tile
+because every place a wish can be pushed *into* is a 62px tile in the row above the wishes and a
+breadcrumb segment is a word — the same reading applies to naming one. A name typed on the line
+the folder's name will occupy needs nothing above the wall to say which level it lands in, because
+the wall it is drawn in **is** that level; the *in Wishlist* line was the strip paying, in a
+second panel, for standing somewhere the wall was not.
+
+**A rename keeps the wish count and the cost under the field.** `6 wishes · $312.00` — `face`'s
+line, and the `—` of a summary that has not answered yet — stays exactly where a folder card
+prints it, inside the same dashed edge with only its colour moved to `border-accent`. A folder
+being renamed is still a container, so the dash every drawer on this wall wears stays, and the
+create tile's **solid** edge is the whole of what tells the two shapes apart. Dropping the figures
+would have made a reader stop to check they had the right drawer, and collapsing "still counting"
+into "empty" is exactly the distinction `face` draws that em dash for.
+
+**The strip survives for `Move to folder…` and `Delete…`, and that residue is the rule rather
+than a leftover.** The answer to "into which folder" is a list of the *other* folders, and the
+answer to "delete this?" is a sentence about what happens to the wishes inside. Neither is a name
+typed on a line, and neither has a tile of its own to be drawn on.
+
+One consequence in the page itself: `openPanel` gained a level clause —
+`flatten || (panel?.kind === "newFolder" && panel.parentId !== folderId) ? null : panel` — because
+a create panel that outlives a walk into another folder used to be merely confusing about which
+level it meant, and is now a layer with **no field on screen at all**, still swallowing the
+Escape that should have walked the reader back out.
+
+**The geometry is measured; the shipped window is not.** Headless Edge over the built stylesheet
+on 2026-09-03 put all four states in one row — the resting tile, the tile naming, a resting folder
+card, a card renaming — and read **62px** and one `top` for every one of them, with the whole
+single-row scroller at **74px** (62 plus `p-1.5` either side), which is `max-h-44`-is-a-ceiling
+holding exactly as this page's own wall promises. The ✓ / ✕ pair lands at the same `y = 34` as a
+folder card's `⋯`, and `border-style` computes `solid` on the two create shapes against `dashed`
+on the two rename shapes. The method and the full table are in
+[frontend-design.md](frontend-design.md). What no headless page can settle is where the caret goes
+on the way out of the field, and the app lock was held elsewhere all session — so nothing here has
+been driven in the real app, and the pass recorded at the end of this page predates the change and
+says nothing about it.
+
 ## What a wish costs, and which printing it is drawn as
 
 Two changes, both 2026-08-26, both in `src-tauri/src/wishlist.rs`, and the second one dragged
@@ -564,6 +613,8 @@ dx 0.0 / dy 0.0 from its trigger on keyboard activation, which is what `menuClic
 | `src-tauri/src/sorting.rs` | `row_price_expr`'s two arms, and `deck_card_price_expr` as one caller of it |
 | `src/lib/folderTree.ts` | `buildFolderTree` and friends, shared with the deck gallery |
 | `src/features/wishlist/wishDrag.ts` | The payload, the tile that offers it, the target that takes it |
-| `src/features/wishlist/WishFolderCard.tsx` | The tile, and its stories beside it |
+| `src/features/wishlist/WishFolderCard.tsx` | The tile, its `rename` branch, and its stories beside it |
+| `src/components/FolderNameField.tsx` | The one naming field, both shapes, `FOLDER_CARD_HEIGHT` and `useFolderFieldReturn` |
+| `src/components/NewFolderCard.tsx` | The tile that makes a folder, and the field it becomes |
 | `src/components/ParentFolderCard.tsx` | The up-one-level tile all three cabinets draw, and its stories |
 | `src/features/card/cardMenu.tsx` | `buildWishlistTargetItems` — `Add to → Wishlist` |

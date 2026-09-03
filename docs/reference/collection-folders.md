@@ -937,6 +937,60 @@ copies had walked off), so a lone tile in an otherwise empty band would be a rin
 every card in the group — the invitation to a gesture that does nothing that `wall` declines to
 make one paragraph up. The breadcrumb is still the way out of one, as it always was.
 
+## The wall names its own folders, and the strip kept two of its four jobs
+
+**2026-09-03.** The tile that makes a folder and the card that holds one both answer their naming
+gesture **on themselves** now. `New folder` and a folder card's `⋯ → Rename…` used to raise a
+bordered strip under the breadcrumb — a box with its own edge, an input, `Create folder` and
+`Cancel` spelled out in words, and, on a create, a line reading *in Collection* to say which level
+the strip was about — and every piece of that re-established a context the wall on screen already
+carried. The name is typed on the line the folder's name will occupy instead, at the same track
+and the same footprint, so nothing above the wall opens and nothing in the wall reflows.
+`src/components/FolderNameField.tsx` is the shape, [frontend-design.md](frontend-design.md) is the
+whole argument, and the wishlist's cabinet took the same change on the same day
+([wishlist-folders.md](wishlist-folders.md)). Four things belong here, because they are facts
+about this cabinet rather than about the field.
+
+**The naming tile inherits `canMakeFolder`'s fence, so the app's own folders never grow one.** The
+wall is drawn where `cabinet && (wall.length > 0 || canMakeFolder)`, and a deck group answers no
+to both — nothing nests under it, and `create_folder` refuses it as a parent — so there is no wall
+inside one and therefore nowhere for a field to open. `Recently removed` is the same. That is
+§"The copies control"'s positive predicate reaching a third control: a fourth
+`collection_folders.kind` added later gets **no** naming tile by default, rather than one whose
+only outcome is `FOLDER_NOT_YOURS`.
+
+**The pinned strip is untouched for the same reason it carries no `⋯`.** Its cards are the app's
+own folders and every write in `collection_folders.rs` refuses them, so there was never a rename
+on one to move — the argument is §"The app's own folders in the card menu"'s, unchanged.
+
+**A rename keeps `folderFace`'s figures line, em dash included.** `12 cards · $340.00` stays under
+the field, inside the same dashed edge with only its colour moved to `border-accent` — a folder
+being renamed is still a container, so the dash stays and the create tile's **solid** edge is the
+whole of what tells the two shapes apart. It keeps the `—` of a summary that has not answered yet
+too, which is right for the reason the card draws it: "still counting" and "empty" are two
+different answers, and a rename is not the moment to collapse them.
+
+**The strip survives for `Move to folder…` and `Delete…`, and that residue is the rule rather
+than a leftover.** The answer to "into which folder" is a list of the *other* folders, and the
+answer to "delete this?" is the two-halved sentence §"What driving the shipped window found"
+measured — *its cards move back to your collection; folders inside it are deleted*. Neither is a
+name typed on a line, and neither has a tile of its own to be drawn on.
+
+One consequence in the page itself: `openPanel` gained a level clause —
+`flatten || (panel?.kind === "newFolder" && panel.parentId !== folderId) ? null : panel` — because
+a create panel that outlives a walk into another folder used to be merely confusing about which
+level it meant, and is now a layer with **no field on screen at all**, still swallowing the Escape
+that should have walked the reader back out.
+
+**The geometry is measured; the shipped window is not.** Headless Edge over the built stylesheet
+on 2026-09-03 put all four states in one row and read **62px** and one `top` for every tile,
+`y = 34` for the `⋯` and for both ✓ / ✕ pairs, and `border-style` computing `solid` on the two
+create shapes against `dashed` on the two rename shapes — the method and the full table are in
+[frontend-design.md](frontend-design.md). What no headless page can settle is where the caret is
+after each way out of the field, and the app lock was held elsewhere all session, so this cabinet
+has not been driven in the real app. The pass recorded below is a v24 one that predates the change
+entirely — see the correction attached to its harness note.
+
 ## The refusals are sentences, not constraint failures
 
 `deck::set_folder`'s reasoning, twice over: **a constraint failure names the table and not the
@@ -1440,6 +1494,12 @@ What it owes an answer to, at least:
   moves into a deck's group from the search column.
 - **The import box ticked**, and where the copies land — see the note below the checkbox, which
   says the root and not the deck's group.
+- **The naming tiles** (2026-09-03, §"The wall names its own folders"), which are a separate
+  change and owe a pass of their own — but only for the half a headless page cannot reach. The
+  footprint, the corner pair and the two border styles were measured in headless Edge over the
+  built CSS that day; what is still owed is where the caret is after each of Escape, the ✕, an
+  outside click and a committed write, the blur discard against a real pointer rather than a
+  synthesised `relatedTarget`, and a name long enough to need the truncation.
 
 Fill this in from the running window, not from the suite.
 
@@ -1487,7 +1547,15 @@ the card menu, and each submenu needs `pointerenter` + `mouseover` + `focus()` +
 together. **New: the folder-name field is controlled, so assigning `.value` writes a character
 React never sees** — go through
 `Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set` and then dispatch
-`input`, or `Create folder` stays disabled over a box that visibly contains a name.
+`input`, or the submit stays disabled over a box that visibly contains a name.
+
+**One correction to that note, made 2026-09-03 without a new pass.** The controlled-input trap is
+unchanged, but the field is no longer a strip under the breadcrumb and its submit no longer prints
+`Create folder` — it is a ✓ in the naming tile's own corner, carrying that string as its
+accessible name. So find it by accessible name, never by text; `cdp.mjs`'s `click` takes CSS and
+only `text` matches text, so a pass that matched the words will now find nothing on a control
+plainly on screen. The table above is left as it was read on `3036e18`: it is the record of that
+build, not a description of this one.
 
 ## Deliberately out of scope
 
@@ -1522,7 +1590,9 @@ React never sees** — go through
 | `src/features/collection/CollectionPage.tsx` | The `tiles` memo, `copiesByTile`, `entryIdsOf` — the wall's own printing-and-finish grain, keyed through `tileKeyOf` |
 | `src/features/decks/collectionTiles.ts` | `foldCopies` — the *other* fold of the same rows, split the same way and keyed through the same `tileKeyOf` |
 | `src/features/search/CardGrid.tsx` | `GridCard.key` and `tileKey` — a tile's identity where it differs from its card's |
-| `src/features/collection/CollectionFolderCard.tsx` | The tile, `folderFace`, and its stories beside it |
+| `src/features/collection/CollectionFolderCard.tsx` | The tile, `folderFace`, its `rename` branch, and its stories beside it |
+| `src/components/FolderNameField.tsx` | The one naming field, both shapes, `FOLDER_CARD_HEIGHT` and `useFolderFieldReturn` |
+| `src/components/NewFolderCard.tsx` | The tile that makes a folder, and the field it becomes |
 | `src/components/ParentFolderCard.tsx` | The up-one-level tile all three cabinets draw, and its stories |
 | `src/features/collection/PinnedFolders.tsx` | The app's own folders — pinned, flat and locked — `DECK_KIND`, `REMOVED_KIND`, and neither one a drop target |
 | `src/features/card/cardMenu.tsx` | `buildCollectionTargetItems` — `Add to → Collection`, and `Move to → folder` |
