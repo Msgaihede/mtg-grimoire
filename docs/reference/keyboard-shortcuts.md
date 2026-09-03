@@ -237,16 +237,27 @@ raw CDP where that harness could not reach.
    does not gain a sideways scroll.
 5. **The button is not a drag region.** It carries no `data-tauri-drag-region` and a real CDP click
    opened the panel: Tauri does not swallow the press.
-6. **Escape closes and hands the caret back** — `document.activeElement` is the trigger button
-   afterwards. **That reading is the click path's, and the hand-back has been conditional since
-   the review pass later the same day**: it fires only where the caret is already inside the
-   panel's box, which is what a press on the trigger leaves and what `F1` does not. The `F1`-then
-   Escape path is pinned in `KeyMap.test.tsx` and has **not** been re-driven in the window.
-7. **The scope swap.** On Search the panel drew **one** heading, `Everywhere` — the `search` scope
+6. **Escape closes, and where the caret goes depends on where it was.** All three states were
+   driven in the window, the last two on a re-drive after the hand-back became conditional:
+   - **Click the trigger, press Escape** — `document.activeElement` is the trigger afterwards.
+   - **Caret in the search box, `F1`, Escape** — the panel opened with the caret still in the
+     box (`F1` moves focus nowhere), and after Escape it was **still in the box**. This is the
+     case the condition exists for: before it, a reader was moved to the caption row from a
+     field they had never left.
+   - **Click the trigger, click the panel's `Everywhere` heading, Escape** — nothing in the
+     panel is focusable, so the press dropped the caret to `<body>`; Escape put it back on the
+     trigger. This is the half a bare `contains(...)` test would have lost, and losing it is
+     what the unconditional `focus()` was there to prevent in the first place.
+7. **The whitespace between the caps costs nothing on screen.** Measured in the window: the
+   `<dd>` computes `gap: 4px` and the gaps between adjacent caps measure **4px** and **4px** —
+   the whitespace-only child runs generate no anonymous flex item (CSS Flexbox §4), exactly as
+   claimed. `textContent` reads `" Ctrl 1 to Ctrl 6"` rather than `Ctrl1toCtrl6`. The 22.45px in
+   the middle is the word `to`, which is a real element and meant to be there.
+8. **The scope swap.** On Search the panel drew **one** heading, `Everywhere` — the `search` scope
    binds nothing and drew nothing at all, no empty heading. In the deck editor it drew `Everywhere`
    + `Deck editor` and **no** `Decks` section.
-8. **Both chord shapes render correctly**: `Ctrl 1 to Ctrl 6`, and `Ctrl Click or Shift Click`.
-9. **The trigger's tooltip is hidden behind the open panel, and that is confirmed harmless.** See
+9. **Both chord shapes render correctly**: `Ctrl 1 to Ctrl 6`, and `Ctrl Click or Shift Click`.
+10. **The trigger's tooltip is hidden behind the open panel, and that is confirmed harmless.** See
    below.
 
 ## Two things for whoever drives this next
