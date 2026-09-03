@@ -30,6 +30,63 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.20.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.19.0...v0.20.0) (2026-09-03)
+
+
+### Features
+
+* **chrome:** a key map in the caption row, next to the window controls ([ffc9c33](https://github.com/Msgaihede/mtg-grimoire/commit/ffc9c33e5ba468c114b3532b4a68329e7dc200f0))
+* **collection:** lock a folder to set its cards aside ([2237edb](https://github.com/Msgaihede/mtg-grimoire/commit/2237edbdad861224101dafaca6dc330cbec0fec8))
+* **collection:** lock a folder to set its cards aside ([ae09088](https://github.com/Msgaihede/mtg-grimoire/commit/ae09088e60b9675d87c9762a5965f9165acd0c1f))
+* **decks:** count only the copies a deck can use in its card search ([63f5002](https://github.com/Msgaihede/mtg-grimoire/commit/63f500272c2d8c723fee2f4809ddd6d48441f47f))
+* **decks:** count only the copies a deck can use in its card search ([89b580d](https://github.com/Msgaihede/mtg-grimoire/commit/89b580d40f3be677c8ad5edb7e038e56c84c01fd)), closes [#349](https://github.com/Msgaihede/mtg-grimoire/issues/349)
+* **decks:** only file copies into a deck folder for a card the deck plays ([ebec817](https://github.com/Msgaihede/mtg-grimoire/commit/ebec817aa47dc1f3bb0009e805a9e73f44f1e641))
+* **decks:** only file copies into a deck folder for a card the deck plays ([0c56d41](https://github.com/Msgaihede/mtg-grimoire/commit/0c56d41b19bb85ea9c88a6f4ddae67b41917c7aa))
+* **decks:** pull missing deck cards from the collection ([43f6ea5](https://github.com/Msgaihede/mtg-grimoire/commit/43f6ea5250a0819fe093ed1bd9f3d60ba58e3281))
+* **decks:** pull missing deck cards from the collection ([18239fa](https://github.com/Msgaihede/mtg-grimoire/commit/18239faa0c57c87153365e4cced9dbc5afcbc831)), closes [#351](https://github.com/Msgaihede/mtg-grimoire/issues/351)
+* **decks:** quick collection actions for cards with missing quantities ([5f5c09d](https://github.com/Msgaihede/mtg-grimoire/commit/5f5c09d1de666112328424d28a18600e7a8581f8))
+* **decks:** quick collection actions on a deck card ([#350](https://github.com/Msgaihede/mtg-grimoire/issues/350)) ([2a125f4](https://github.com/Msgaihede/mtg-grimoire/commit/2a125f444ab0b3e610ade4b4485c0093ff91ce69))
+* **decks:** rename deck card tags to labels ([fdd431f](https://github.com/Msgaihede/mtg-grimoire/commit/fdd431f623cf076f2f441b04a874f16a7520e383))
+* **decks:** rename deck card tags to labels ([2e728e3](https://github.com/Msgaihede/mtg-grimoire/commit/2e728e31dc5f2d40b0236cd9ab7d134d5c8d6fc4)), closes [#355](https://github.com/Msgaihede/mtg-grimoire/issues/355)
+* **folders:** the tile becomes the field on the collection and wishlist walls ([5d0a754](https://github.com/Msgaihede/mtg-grimoire/commit/5d0a754570fe4be50ab76e25b7d4002c57bf8f08))
+* **folders:** the tile becomes the field on the collection and wishlist walls ([913ef92](https://github.com/Msgaihede/mtg-grimoire/commit/913ef92884a32010a50ab72119a4b402dc7411f8))
+* **settings:** a nav rail and a filtered pane, in place of one long scroll ([4e11d6f](https://github.com/Msgaihede/mtg-grimoire/commit/4e11d6f260e89c20c3366f7dccfc7c473e07a314))
+* **settings:** a nav rail and a filtered pane, in place of one long scroll ([0c86dda](https://github.com/Msgaihede/mtg-grimoire/commit/0c86ddae17bea21f51725a3dffce936ad837b0b7))
+* **shell:** Ctrl+1..6 jumps between sections, F1 shows the key map ([6779c95](https://github.com/Msgaihede/mtg-grimoire/commit/6779c953f7006fc8867d600b0d20a5d60fc68160))
+* **shortcuts:** a keyboard map in the caption row ([53db05c](https://github.com/Msgaihede/mtg-grimoire/commit/53db05c254f9779370a6718553fda1e1a5aa1ae5))
+* **shortcuts:** one catalogue for every chord the app binds ([0176c55](https://github.com/Msgaihede/mtg-grimoire/commit/0176c5507c521a8120e2071083550a8e2b2d6874))
+* **wishlist:** optimise a folder for the cheapest printings ([896cf5f](https://github.com/Msgaihede/mtg-grimoire/commit/896cf5f2e92feab56e27422b78b1b8f2531c3a26))
+* **wishlist:** optimise a folder for the cheapest printings ([a589e12](https://github.com/Msgaihede/mtg-grimoire/commit/a589e12f715af95d2d0864d2c6ba4067ffddc04e)), closes [#352](https://github.com/Msgaihede/mtg-grimoire/issues/352)
+
+
+### Bug Fixes
+
+* **cards:** one foil icon, everywhere ([4262e14](https://github.com/Msgaihede/mtg-grimoire/commit/4262e146f56908ae8dcf46185dc0e5ebee7101a1))
+* **cards:** one foil icon, everywhere ([a8e567d](https://github.com/Msgaihede/mtg-grimoire/commit/a8e567d830d68d060b2fd398c7ec9fbcb2073adc)), closes [#353](https://github.com/Msgaihede/mtg-grimoire/issues/353)
+* **collection,wishlist:** match the deck builder's quantity control ([779ae5b](https://github.com/Msgaihede/mtg-grimoire/commit/779ae5bcf15998cd11383dfe1746b37a97a0f21c))
+* **collection,wishlist:** match the deck builder's quantity control ([dba2596](https://github.com/Msgaihede/mtg-grimoire/commit/dba25961675faeca0fff612cb5efad1f24d73c3a)), closes [#348](https://github.com/Msgaihede/mtg-grimoire/issues/348)
+* **decks:** estimate a bracket floor of 2, never 1 ([3b50a0d](https://github.com/Msgaihede/mtg-grimoire/commit/3b50a0d6fe930436cb668ae5417fa55102269f6b))
+* **decks:** estimate a bracket floor of 2, never 1 ([3251f3e](https://github.com/Msgaihede/mtg-grimoire/commit/3251f3eea2fbaf27a35b4a5a19f55235fa00b62e)), closes [#342](https://github.com/Msgaihede/mtg-grimoire/issues/342)
+* **decks:** grey the quick collection rows in a switched-off pile ([0618814](https://github.com/Msgaihede/mtg-grimoire/commit/0618814381afcfc1a9577f34044d570aa90fcadf))
+* **decks:** release owned copies when a replace import clears a live list ([85593d0](https://github.com/Msgaihede/mtg-grimoire/commit/85593d03b79eaa77ad256ce79b7742ad5119ef3e))
+* **decks:** release owned copies when a replace import clears a live list ([1cbfce8](https://github.com/Msgaihede/mtg-grimoire/commit/1cbfce839bba0c7ff55cad5468792b73515166a5)), closes [#336](https://github.com/Msgaihede/mtg-grimoire/issues/336)
+* **decks:** say Theory + Actual, and drop the one-list deck badge ([3d237b8](https://github.com/Msgaihede/mtg-grimoire/commit/3d237b8829aedf9d7a6faec30b826e7a5720f60a))
+* **decks:** say Theory + Actual, and drop the one-list deck badge ([5262968](https://github.com/Msgaihede/mtg-grimoire/commit/5262968a44ab38c85c7002ebb90bec11cf983808)), closes [#357](https://github.com/Msgaihede/mtg-grimoire/issues/357)
+* **decks:** stop calling every theory card short of copies ([260067f](https://github.com/Msgaihede/mtg-grimoire/commit/260067f1354990a13d307ead3ed95844e38861a0))
+* **decks:** stop calling every theory card short of copies ([25ebef2](https://github.com/Msgaihede/mtg-grimoire/commit/25ebef2f3690738036181e812d6e46ea4fb2c8a1)), closes [#354](https://github.com/Msgaihede/mtg-grimoire/issues/354)
+* **dnd:** keep a folder's drop mark while its name is being edited ([2834b41](https://github.com/Msgaihede/mtg-grimoire/commit/2834b4120c73ab5a29e67eeb3b3158e01ce00187))
+* **dnd:** make the drop marks quiet, aligned and see-through ([78ba560](https://github.com/Msgaihede/mtg-grimoire/commit/78ba560b666968481e85ccbd025e9af97da31e58))
+* **dnd:** make the drop marks quiet, aligned and see-through ([6866719](https://github.com/Msgaihede/mtg-grimoire/commit/686671996b5031906ced53f2b222862877b008ee))
+* **images:** ask again for a card picture that never answers ([287f477](https://github.com/Msgaihede/mtg-grimoire/commit/287f47733b74d5bfdd80adbb8c6cc7939becfb70))
+* **images:** ask again for a card picture that never answers ([2b0049a](https://github.com/Msgaihede/mtg-grimoire/commit/2b0049a239d919d0c6eca5d8c5938a9d255cbb81))
+* **shortcuts:** a range is declared, not inferred from a chord count ([3116e47](https://github.com/Msgaihede/mtg-grimoire/commit/3116e47b72924e21317551d352755f9b0ceae6f4))
+* **shortcuts:** the final review's six, and a caret that had nowhere to go ([59a14ae](https://github.com/Msgaihede/mtg-grimoire/commit/59a14ae9e7824730c376efc950425a3eed85637e))
+* **ui:** let a dropdown's own list scroll without closing the panel ([253d7ef](https://github.com/Msgaihede/mtg-grimoire/commit/253d7efb059f89467a77a73d22a0ae94ca1107cc))
+* **ui:** let a dropdown's own list scroll without closing the panel ([ae3e355](https://github.com/Msgaihede/mtg-grimoire/commit/ae3e35596ca4a18bc1031368e01c75ec9ae2ce2d)), closes [#335](https://github.com/Msgaihede/mtg-grimoire/issues/335)
+* **ui:** only draw a focus outline when the keyboard moved the caret ([908df30](https://github.com/Msgaihede/mtg-grimoire/commit/908df3084f5b6671440365198764735e12262a02))
+* **ui:** only draw a focus outline when the keyboard moved the caret ([18ebb17](https://github.com/Msgaihede/mtg-grimoire/commit/18ebb172d0a73390912b94634d5db69f8a5740db))
+* **web:** count both merges' new commands in the route drift test ([e7c94c1](https://github.com/Msgaihede/mtg-grimoire/commit/e7c94c1d0feb5275d164ee2792b1423176084033))
+
 ## [0.19.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.18.0...v0.19.0) (2026-09-01)
 
 
