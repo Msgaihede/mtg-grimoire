@@ -1077,6 +1077,31 @@ describe("CardStack cards", () => {
   });
 
   /**
+   * **The theory list is the second reason a row reads 0 owned without the shelf being empty**
+   * ([issue #354](https://github.com/Msgaihede/mtg-grimoire/issues/354)). `deck.rs`'s rule 2 is
+   * that a plan holds nothing — the copies in the deck's group belong to what is sleeved up — so
+   * every card of a plan drew `0/N` in red, however full the collection was. Both halves go: the
+   * figure and the clause in the name, which is the whole of what a keyboard reader hears.
+   *
+   * The row is otherwise identical to `SOL_RING`, which draws `1/2` and says "you own 1 of 2" in
+   * the test above; only the variant differs, so this cannot pass for want of a shortage.
+   */
+  it("never calls a theory row short of copies", () => {
+    render(
+      <CardStack
+        cards={[
+          card({ name: "Sol Ring", quantity: 2, ownedQuantity: 0, variant: "theory" }),
+        ]}
+        label="Ramp"
+        currency="usd"
+      />,
+    );
+
+    expect(screen.queryByText("0/2")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sol Ring, 2 copies" })).toBeInTheDocument();
+  });
+
+  /**
    * **The tag and the copy count are one mark now**, and this is what says so: there is no
    * second element carrying the tag, the count is drawn on it, and both facts are in the one
    * `title`. A stack's reveal strip is 34px and was spending it twice to say two things a
