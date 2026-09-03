@@ -191,8 +191,10 @@ the design that jsdom cannot check; §10 drives it in the real window.
 ### 7.4 Contents
 
 Sections in `activeScopes` order, each a heading and a list of rows; a row is its label and its
-caps. A scope with no shortcuts draws nothing rather than an empty heading — five of the six
-views are in that state today, which is what `Ctrl+1…6` in `"global"` is for.
+caps. A scope with no shortcuts draws nothing rather than an empty heading — **all six** views
+are in that state today, which is what `Ctrl+1…6` in `"global"` is for. (This said "five of the
+six" until the catalogue existed to check it against: `deckEditor` is a scope of its own that
+*replaces* `decks` per §4.4, so `decks` is as empty as the other five.)
 
 ### 7.5 Open state
 
