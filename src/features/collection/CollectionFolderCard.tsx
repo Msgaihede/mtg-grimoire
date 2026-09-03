@@ -20,7 +20,9 @@
  *
  * **Drawn as an `<li>`, so a caller draws a wall of these inside a `<ul>`** — `FolderCard`'s
  * shape, and a row of folders genuinely is a list. That `<li>` is a positioning box and a drop
- * registration and nothing else: it draws no mark of its own. The scroller around the wall still
+ * registration: it draws no mark of its own for as long as the card has a face to draw one on.
+ * The exception is a rename, where the field replaces that face and the `<li>` carries the marks
+ * for the length of the edit — its own `className` argues it. The scroller around the wall still
  * carries `DROP_MARK_ROOM`, but no longer for the drop affordance — `FOCUS` stands 4px proud of
  * this card's button and `overflow` clips at the padding box, which is a WCAG 2.4.7 matter rather
  * than a cosmetic one. That constant's own note carries the whole reading.
@@ -60,7 +62,7 @@ import { FolderNameField, useFolderFieldReturn } from "@/components/FolderNameFi
 import { ParentFolderCard } from "@/components/ParentFolderCard";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { count } from "@/lib/counts";
-import { DROP_EDGE, DROP_OVER } from "@/lib/dropMarks";
+import { DROP_EDGE, DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import {
   folderDraggable,
   useFolderDropTarget,
@@ -276,7 +278,28 @@ export function CollectionFolderCard({
   // dashed edge the reader actually sees. Anything drawn on it is a second outline around the
   // first. See the file header.
   return (
-    <li ref={ref} className="relative rounded-xl">
+    <li
+      ref={ref}
+      className={cn(
+        "relative rounded-xl",
+        // **While the name is being edited the marks come back out here, and only then.**
+        // Both drop targets stay registered through a rename — a copy dropped on a drawer whose
+        // name is being typed files perfectly well, and a target that silently stopped
+        // advertising would make the wall answer a drag differently depending on a state the
+        // *dragger* cannot see. But the face is what carries the marks, and while the field is up
+        // there is no face: it is `FolderNameField` instead. So this box takes them for the
+        // length of the edit.
+        //
+        // **It is {@link DROP_RING} here rather than {@link DROP_EDGE}, and that is the same rule
+        // rather than an exception to it.** The rule is that the mark goes on the element wearing
+        // the card's own edge; this `<li>` has no border, so it takes the mark a borderless
+        // target wears. And the misalignment the 2026-09-03 pass fixed cannot come back in this
+        // state for the plain reason that there is only one box drawing anything — two outlines
+        // are what disagreed, and the second one is gone with the face.
+        rename.active && (armed || folderArmed) && DROP_RING,
+        rename.active && (over || edge === "inside") && DROP_OVER,
+      )}
+    >
       <div ref={slot}>
         {rename.active ? (
           /* **The card becomes the field, and keeps its second line.** The name is edited on the
