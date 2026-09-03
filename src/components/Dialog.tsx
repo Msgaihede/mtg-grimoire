@@ -421,7 +421,13 @@ function Panel({
           "flex max-h-full max-w-full flex-col rounded-xl border border-border bg-bg shadow-2xl",
           flanks !== undefined && "relative col-start-2",
           width,
-          FOCUS,
+          // **No focus outline, and its absence is the rule rather than an omission.** This
+          // panel is a landing pad: `tabIndex={-1}` so the caret has somewhere to go when the
+          // dialog opens instead of being dropped on `<body>`, and a reader can neither Tab nor
+          // arrow onto it. An outline here therefore states nothing — what it draws is the
+          // whole modal ringed in gold the moment the reader presses any key at all, which is
+          // what it did until 2026-09-03. The close button below keeps its own; that one is a
+          // control. `src/lib/focus.ts` carries the rule and all eleven sites.
         )}
       >
         <header className="flex items-center gap-3 border-b border-border px-5 py-4">

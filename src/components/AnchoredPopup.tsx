@@ -255,7 +255,10 @@ function Panel({
         // built by interpolation emits no rule at all.
         align === "start" ? "origin-top-left" : "origin-top-right",
         !present && "pointer-events-none",
-        FOCUS,
+        // No focus outline: a landing pad, not a control — `tabIndex={-1}` only so the caret has
+        // somewhere to go while the popup is open, and neither Tab nor an arrow reaches the
+        // panel itself. Its trigger and its own contents keep theirs. `src/lib/focus.ts` has
+        // the rule and all eleven sites.
         panelClassName,
       )}
     >

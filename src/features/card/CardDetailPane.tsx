@@ -362,7 +362,11 @@ export function CardDetailPane({ cardId, onClose }: { cardId: string; onClose: (
         // comes from rather than at its own middle.
         "origin-right",
         !present && "pointer-events-none",
-        FOCUS,
+        // No focus outline: this pane is a landing pad, not a control. `tabIndex={-1}` exists so
+        // the caret has somewhere to go when the body mounts, and neither Tab nor an arrow can
+        // reach it — so the ring stated nothing and drew a gold border down the whole column on
+        // the reader's next keystroke. Its buttons and printing rows keep theirs.
+        // `src/lib/focus.ts` has the rule and all eleven sites.
       )}
     >
       {/* What a refused **collection or wishlist** add from either of this pane's menus left
