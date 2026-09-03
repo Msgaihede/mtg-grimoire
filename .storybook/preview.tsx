@@ -5,6 +5,7 @@ import type { Decorator, Preview } from "@storybook/react-vite";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { CardToDeckProvider } from "@/features/card/cardMenu";
+import { installKeyboardModality } from "@/lib/keyboardModality";
 import { installWorld, type FakeParams, type FakeWorld } from "./fake/world";
 import { setArtMode } from "./fake/images";
 // The app's stylesheet *through* `preview.css`, never directly: that file adds `.storybook` as
@@ -12,6 +13,14 @@ import { setArtMode } from "./fake/images";
 import "./preview.css";
 import "mana-font/css/mana.css";
 import "keyrune/css/keyrune.css";
+
+// **What `main.tsx` does for the app, done once for the preview frame.** Every focus outline in
+// the app is gated on the `data-kbd` attribute this maintains, so a workbench without it is one
+// where Tab draws nothing and a play that asserts a focus ring fails for a reason that has
+// nothing to do with the component under test. Module scope, not a decorator: it is a property
+// of the frame the stories share, and installing it per story would stack a listener set per
+// remount. The uninstaller is dropped deliberately — the frame outlives every story in it.
+installKeyboardModality(window);
 
 /**
  * Point the fake at this story's world, once per commit, **before the story's own effects

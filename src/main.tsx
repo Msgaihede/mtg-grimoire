@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import { installKeyboardModality } from "./lib/keyboardModality";
 import { captureInstallPrompt } from "./pwa/install";
 import { PwaShell } from "./pwa/PwaShell";
 import { WebBoot } from "./web/WebBoot";
@@ -22,6 +23,13 @@ if (!root) throw new Error("index.html is missing its #root element");
 // called `preventDefault()` on it by then has lost it for good — there is no API to ask again.
 // Inert on desktop.
 captureInstallPrompt(window);
+
+// Before React too, and never torn down: every focus outline in the app is gated on the
+// attribute this keeps on `<html>` (see `src/index.css`), so a window that has not installed it
+// is a window where the keyboard draws no focus indicator at all. Outside React because it is a
+// property of the *window* rather than of any tree — one listener set for both roots below, and
+// for whatever remounts under them.
+installKeyboardModality(window);
 
 ReactDOM.createRoot(root).render(
   <React.StrictMode>

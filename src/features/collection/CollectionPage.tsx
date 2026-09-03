@@ -3150,7 +3150,10 @@ function DeleteFolderConfirm({
       tabIndex={-1}
       role="group"
       aria-label={`Delete ${name}`}
-      className={cn("rounded-md", FOCUS)}
+      // No `FOCUS`: a landing pad, not a control — the `tabIndex` above is there only so the
+      // caret has somewhere to go when the confirmation opens, and neither Tab nor an arrow
+      // reaches this box. Its two buttons keep theirs. `src/lib/focus.ts` has the rule.
+      className={cn("rounded-md")}
       onBlur={(e) => {
         if (pending) return;
         if (!panelRef.current?.contains(e.relatedTarget)) onClose();

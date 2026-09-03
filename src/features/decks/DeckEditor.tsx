@@ -3638,7 +3638,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       // position is still inside *this* column's scrolled content, so the phantom bar moved rather
       // than went. The rule that generalises is "a scroll container is the containing block for
       // its own absolutely positioned content", and the scroller here is this element.
-      className={cn("relative flex h-full min-h-0 flex-col gap-3", FOCUS)}
+      // No `FOCUS`: this section is a landing pad, not a control. `tabIndex={-1}` is there so
+      // the caret has somewhere to go when a card leaves the pile under it, and neither Tab nor
+      // an arrow can reach the editor root itself — so the outline ringed the entire builder,
+      // piles and rail and all, on any keystroke. The piles and cards inside keep theirs.
+      // `src/lib/focus.ts` has the rule.
+      className={cn("relative flex h-full min-h-0 flex-col gap-3")}
     >
       {/* The four quick destinations, drawn across the top of this scroller for the length of a
           drag and at no other time. **The first child on purpose**: it is `sticky top-0`, so it

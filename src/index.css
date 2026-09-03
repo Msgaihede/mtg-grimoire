@@ -52,6 +52,50 @@
    `tsc` and the suite both green. See `docs/reference/frontend-design.md` for the grep. */
 @custom-variant coarse (@media (pointer: coarse));
 
+/* **Tailwind's built-in `focus-visible` variant, redefined to require a keyboard.**
+
+   `:focus-visible` does not mean what its name promises. Chromium's heuristic is modality-based
+   rather than navigation-based: any `keydown` arms it and whatever *already* holds focus starts
+   matching, with the focus never moving. So a reader clicked a card, the dialog focused its own
+   `tabIndex={-1}` panel, they pressed `w` — and a gold outline appeared around the whole modal.
+   The measurement, four steps of it, is in `src/lib/keyboardModality.ts`.
+
+   That module publishes `data-kbd` on `<html>` when focus *moved* and the reader's last input was
+   a key. Gating the variant here rather than at the call sites is the whole leverage: **every
+   `focus-visible:` utility in `src/` is covered by this one line without changing, and so is
+   every one written after today.** The alternative — a new variant name spelled out at each of
+   the ~400 sites — is a rule that has to be remembered, and the site that forgets it is a focus
+   outline that flickers on for a keystroke that did nothing.
+
+   The `&:is(…)` shape is `dark`'s directly above, for the same reason: it keeps the whole
+   condition on the element being styled, so the variant composes with the others (`coarse`,
+   `dark`, `[&::-webkit-slider-thumb]`) instead of fighting them for the selector's front.
+
+   **Proved by building, never by reading**, which is `coarse`'s warning above and it applies
+   double to an *override* of a variant Tailwind already ships: a redefinition this version
+   ignores does not warn, it silently leaves the built-in in place — and the app then looks
+   exactly as it does today, with `tsc` and the whole suite green.
+   `src/lib/keyboardModality.test.ts` therefore compiles these declarations against the real
+   Tailwind and reads the selector back, so the check is a build's and not a reader's. */
+@custom-variant focus-visible (&:is(html[data-kbd] *):focus-visible);
+
+/* The same gate for the one control whose focus ring is not painted on the focusable box.
+
+   A range input's ring goes on `::-webkit-slider-thumb` — the input itself is a full-width track
+   with no edges a reader could make sense of, which is `PriceRange`'s own note. That made it the
+   single site in `src/` that spelled the pseudo-class inside an *arbitrary* variant, by hand and
+   in square brackets, where the redefinition above cannot reach it: Tailwind rewrites the variant
+   it owns by name, not a string a component wrote for itself.
+
+   So it gets a name of its own rather than a stack of two. Composing the gate and the
+   pseudo-element at the call site would work, and the reason not to is this file's standing one —
+   a variant Tailwind mis-parses emits nothing, silently, and a thumb whose outline quietly
+   stopped existing looks exactly like a thumb whose outline is correctly suppressed. One name,
+   compiled and asserted in `keyboardModality.test.ts`, cannot fail that way. That test also
+   sweeps `src/` so a second component cannot reintroduce the hand-spelled form — which is why
+   this paragraph describes the shape instead of quoting it. */
+@custom-variant focus-thumb (&:is(html[data-kbd] *):focus-visible::-webkit-slider-thumb);
+
 @theme inline {
   /* The display face. Titles, the first-run hero, section headers — never body text and
        never below 18px, which is the whole of Cinzel's brief. */
@@ -216,6 +260,28 @@
   }
   body {
     @apply bg-background text-foreground;
+  }
+  /* **The browser's own focus ring, held to the same rule as ours.**
+
+     The variant at the head of this file gates every `focus-visible:` utility the app writes, but
+     it cannot reach the one rule the app did not write: the user agent's own
+     `:focus-visible { outline: auto }`, which runs off Chromium's heuristic and therefore paints
+     on the exact keystroke this whole change exists to ignore. Without this line the fix would
+     read as a *recolour* — the gold outline replaced by the platform's blue one, on the same
+     press, around the same modal.
+
+     In `base` so that any utility beats it: when `data-kbd` *is* set this selector does not match
+     at all, so the two can never both be live and there is nothing here for a real focus outline
+     to fight. `:where()` on the root keeps the specificity at a single pseudo-class, which is the
+     weakest thing that can still say "only while the reader is not on the keyboard".
+
+     The `::-webkit-slider-thumb` arm is `PriceRange`'s: a range input draws its ring on the thumb
+     pseudo-element rather than on the box, so the selector above sails straight past it. That
+     component gates its own thumb outline through `focus-thumb:` — this is the UA half of the same
+     control. */
+  html:not([data-kbd]) :focus-visible,
+  html:not([data-kbd]) :focus-visible::-webkit-slider-thumb {
+    outline: none;
   }
   html {
     @apply font-sans;
