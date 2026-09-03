@@ -589,9 +589,15 @@ describe("CardStack flip-through", () => {
    *  a group unmounts whenever the deck regroups, which is every card write. */
   it("takes its timers with it when the group unmounts", () => {
     const { unmount } = render(<CardStack cards={CARDS} label="Ramp" currency="usd" />);
+    // What a resting stack already keeps: one stall watchdog per `CardImage` in it. Measured
+    // rather than written down, because the claim here is about the *dwell* — that it is one
+    // timer and that it leaves with the group — and an absolute count encodes every other
+    // timer any card frame happens to keep. It read `1` until `CardImage` gained a watchdog,
+    // and then failed for a reason that had nothing to do with dwelling.
+    const resting = vi.getTimerCount();
 
     arriveOn(items()[0]);
-    expect(vi.getTimerCount()).toBe(1);
+    expect(vi.getTimerCount()).toBe(resting + 1);
 
     unmount();
     expect(vi.getTimerCount()).toBe(0);

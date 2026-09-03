@@ -173,3 +173,64 @@ export function imageRetryDelayMs(attempt: number, random: number = Math.random(
   const dither = Math.min(Math.max(random, 0), 1) * IMAGE_RETRY_SPREAD_MS;
   return Math.min(doubled, IMAGE_RETRY_CEILING_MS) + Math.floor(dither);
 }
+
+/**
+ * How long a visible card frame waits for a picture that is saying nothing at all, before it
+ * asks again.
+ *
+ * **This is a different failure from the one above and needs a different schedule.** The retry
+ * ladder is for a picture the protocol *refused* — a 502 or a 503 — which arrives as an `error`
+ * event, and whose 30-second floor exists so a rate limit is not hammered. Nothing here has been
+ * refused: no `load`, no `error`, nothing. The request went out and no answer came back, and a
+ * lost message costs nothing to send again, so waiting half a minute over it would be thirty
+ * seconds of a blank card for no reason.
+ *
+ * **Five seconds, against a measured ceiling of 451 ms.** Timed in the shipped window on
+ * 2026-09-01 over 400 tiles of the search wall, debug build: **p50 7 ms, p90 275 ms, p99 421 ms,
+ * max 451 ms**. A deliberate burst of 200 simultaneous warm requests came back in a median of
+ * 116 ms and a worst of 167 ms, and 132/216 ms with the machine held at 72 % CPU. So this is
+ * roughly eleven times the worst load anyone has measured, and nothing that is merely slow will
+ * meet it.
+ *
+ * **Nor is it expensive when it fires early**, which is what makes the number safe rather than
+ * lucky: `Cache::get` is single-flight per key, so a second ask for a picture already being
+ * fetched waits on the same lock and reads what the first one writes. A watchdog that pre-empts
+ * a genuinely slow *network* fetch — bounded at ten seconds by `IMAGE_TIMEOUT` in `scryfall.rs`
+ * — therefore costs one extra local request and no extra download.
+ */
+export const IMAGE_STALL_DEADLINE_MS = 5_000;
+
+/**
+ * How far past each deadline the asks are scattered. A screenful of tiles is requested in the
+ * same instant and would go silent in the same instant, so a fixed deadline would send all of
+ * them back together — {@link IMAGE_RETRY_SPREAD_MS}'s reasoning, at this schedule's scale.
+ */
+export const IMAGE_STALL_SPREAD_MS = 500;
+
+/**
+ * How many times a silent picture is asked for again before the frame gives up and reports a
+ * failure the ordinary way.
+ *
+ * Two, for a reason the ladder above does not share: the first ask covers a single lost answer,
+ * which is the whole of the failure this exists for, and the second covers the ask itself being
+ * lost. A picture still silent after three requests is not a dropped message, and pretending
+ * otherwise would keep a frame asking forever over something no amount of asking fixes. What
+ * happens then is `onError` — the same door a 502 comes through, so the frame says "No image"
+ * and joins the backoff above rather than inventing a third state.
+ */
+export const IMAGE_STALL_LIMIT = 2;
+
+/**
+ * When the `attempt`-th ask for a silent picture should go out: the deadline, doubling per
+ * attempt, dithered.
+ *
+ * It doubles for the case the flat schedule would serve badly — a cold fetch queued behind
+ * fifteen others on a slow connection, where asking again changes nothing and the second wait
+ * should be the longer one. `random` is a seam for the test rather than a caller's choice, the
+ * same as {@link imageRetryDelayMs}: the dither has to be observable to be provable.
+ */
+export function imageStallDeadlineMs(attempt: number, random: number = Math.random()): number {
+  const doubled = IMAGE_STALL_DEADLINE_MS * 2 ** Math.max(0, attempt - 1);
+  const dither = Math.min(Math.max(random, 0), 1) * IMAGE_STALL_SPREAD_MS;
+  return doubled + Math.floor(dither);
+}
