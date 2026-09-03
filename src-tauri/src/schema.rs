@@ -305,9 +305,12 @@ pub const LEGACY_SINGLE_FILE_VERSION: i64 = 26;
 /// says `'custom'` to `'card_art'`, because the reader-picked cover picture is gone. 33 is the
 /// deck label's rename — `deck_tags` becomes `deck_labels`, `deck_cards.tag_id` becomes
 /// `label_id`, and the `deck_audit` rows that recorded one say `label` instead of `tag` — the
-/// storage half of a word this app changed everywhere at once. The
+/// storage half of a word this app changed everywhere at once. 34 is one column on
+/// `collection_folders`, `locked` — the drawer a reader has set aside, so the app stops
+/// *offering* what is in it without ever stopping them reaching it; `NOT NULL DEFAULT 0`, so
+/// every folder that already exists is unlocked and the upgrade is invisible. The
 /// user's ladder can never restart, because its rungs describe rows nothing else can produce.
-pub const USER_SCHEMA_VERSION: i64 = 33;
+pub const USER_SCHEMA_VERSION: i64 = 34;
 
 /// `corpus.db`'s version, on a number line of its own.
 ///
@@ -3589,7 +3592,7 @@ CREATE TABLE {schema}.collection_folders (
                  deck_id INTEGER REFERENCES decks(id) ON DELETE CASCADE,
                  sort_order INTEGER NOT NULL,
                  created_at INTEGER NOT NULL,
-                 updated_at INTEGER NOT NULL, sync_uid TEXT, needs_review TEXT,
+                 updated_at INTEGER NOT NULL, sync_uid TEXT, needs_review TEXT, locked INTEGER NOT NULL DEFAULT 0,
                  CHECK ((kind = 'deck') = (deck_id IS NOT NULL))
              );
 
@@ -4828,6 +4831,39 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
         tx.commit()?;
     }
 
+    // v34: a folder the reader has set aside.
+    //
+    // **`NOT NULL DEFAULT 0`, and the default is the answer rather than a placeholder** —
+    // v24's third trap read the same way round. Every folder that already exists is unlocked,
+    // which is what makes this upgrade invisible: a reader who never presses Lock cannot tell
+    // the rung ran, and there is no state a repair or a seed would have to reach.
+    //
+    // **`ADD COLUMN` and never a rebuild**, v30's argument over a table shaped the other way:
+    // this one ends in a table-level `CHECK` rather than a `WITHOUT ROWID` option, and the
+    // ALTER splices its text in before that `CHECK`, on the `updated_at` line, exactly where
+    // v29's two landed. Measured with `node:sqlite` on 2026-09-03:
+    // `updated_at INTEGER NOT NULL, sync_uid TEXT, needs_review TEXT, locked INTEGER NOT NULL
+    // DEFAULT 0,`. [`USER_SCHEMA_SQL`] wears that exact shape, which is what
+    // `the_user_schema_is_byte_identical_to_what_the_ladder_builds` compares.
+    //
+    // **No index, and that is the whole of what keeps the `sqlite_master` count where v33 left
+    // it.** The column is in no grain, no unique index and no sort — it is read once per folder
+    // and interpreted, never searched on.
+    //
+    // **It was written as 33 and renumbered to 34 on the way in**, which is this ladder's own
+    // rule rather than an accident worth hiding: the deck label's rename took 33 while this
+    // branch was open, and the number belongs to whoever lands first. Take the next free one.
+    if v < 34 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "ALTER TABLE collection_folders ADD COLUMN locked INTEGER NOT NULL DEFAULT 0;",
+        )?;
+        // Literal `34`, for the reason every step before it writes its own: this step is what
+        // *makes* a database version 34.
+        tx.execute_batch("PRAGMA main.user_version = 34;")?;
+        tx.commit()?;
+    }
+
     // **The clock, repaired on every launch at every version — and this is not belt-and-braces.**
     //
     // Every capture trigger ends `FROM sync_clock c, sync_identity i, sync_group g`. That is a
@@ -5937,6 +5973,23 @@ pub(crate) mod tests {
     /// `idx_device_names_uid` with it.
     const UNDO_V31: &str = "DROP TABLE IF EXISTS device_names;";
 
+    /// v34's set-aside marker, and the newest rewind on the user ladder.
+    ///
+    /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one:
+    /// `ALTER TABLE collection_folders ADD COLUMN locked` is not idempotent, so a fixture that
+    /// kept the column dies at `duplicate column name` on the way back up — a failure no real
+    /// upgrade can produce, and one that takes every unrelated test in the chain with it.
+    ///
+    /// **It runs first, before [`UNDO_V33`]**, for that constant's stated reason: a rewind
+    /// walks the ladder backwards, and this is now the top of it.
+    ///
+    /// **No index needs a line of its own**, [`UNDO_V20`]'s rule: the rung creates none, and
+    /// `DROP COLUMN` would refuse a column an index named. The table-level `CHECK` names
+    /// `kind` and `deck_id` and not this column, which is the other thing `DROP COLUMN`
+    /// refuses over — measured with `node:sqlite` on 2026-09-03, the drop restores the v29
+    /// text byte for byte and the re-climb lands back on the v34 one.
+    const UNDO_V34: &str = "ALTER TABLE collection_folders DROP COLUMN locked;";
+
     /// And v33's rename, back to the tag the label used to be.
     ///
     /// **It runs first, before [`UNDO_V31`]**, for that constant's stated reason: a rewind walks
@@ -6007,7 +6060,8 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} PRAGMA main.user_version = 28;"
+            "{UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
+             PRAGMA main.user_version = 28;"
         ))
         .unwrap();
         conn
@@ -6016,11 +6070,13 @@ pub(crate) mod tests {
     /// A user file at 31 — the shape every machine carries the day before card-art-only covers
     /// land, and the only population the v32 rung is *for*.
     ///
-    /// **Head wearing the previous number, and that is the honest construction rather than a
-    /// shortcut** — [`v22_database`]'s argument one number line up. v32 writes no shape at all;
-    /// it flips the contents of one column, so a v31 database and a v32 one *are* the same
-    /// schema and renumbering is the whole of the difference. There is no `UNDO_V32` for the
-    /// same reason, and no fixture below owes it a line.
+    /// **Head, rewound past every shape above 31 and then stamped with the number, which is
+    /// the honest construction rather than a shortcut** — [`v22_database`]'s argument one
+    /// number line up. v32 writes no shape at all; it flips the contents of one column, so a
+    /// v31 database and a v32 one *are* the same schema and renumbering is the whole of the
+    /// difference. There is no `UNDO_V32` for that reason and no fixture below owes it a line
+    /// — [`UNDO_V33`] is the next rung above with a shape to take back, and this fixture wore
+    /// nothing but the stamp until it existed.
     ///
     /// **[`UNDO_V33`] is the line it does owe**, and it was added the day v33 landed: this
     /// function said "head wearing the previous number" while head had moved a rung further,
@@ -6034,7 +6090,30 @@ pub(crate) mod tests {
     fn user_file_at_31() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
-        conn.execute_batch(&format!("{UNDO_V33} PRAGMA main.user_version = 31;"))
+        conn.execute_batch(&format!(
+            "{UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 31;"
+        ))
+        .unwrap();
+        conn
+    }
+
+    /// A user file at 33 — the shape every machine carries the day before a folder could be
+    /// set aside, and the only population the v34 rung is *for*.
+    ///
+    /// Rewound from head rather than written out a second time, [`user_file_at_27`]'s device:
+    /// a hand-typed "v33" would be whatever somebody remembered, and the difference between
+    /// remembered and real is the whole of what this tests. One rewind does it, because v34
+    /// writes exactly one column.
+    ///
+    /// **It takes no `foreign_keys` parameter where [`user_file_at_32`] does**, and the
+    /// asymmetry is the rungs rather than an oversight: v33 drops and rebuilds `deck_audit`,
+    /// so a CASCADE either fires or does not and the pragma decides which. v34 is one
+    /// `ADD COLUMN` against a table nothing references, which no setting of that pragma can
+    /// make behave two ways.
+    fn user_file_at_33() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        create_user_schema(&conn, "main").unwrap();
+        conn.execute_batch(&format!("{UNDO_V34} PRAGMA main.user_version = 33;"))
             .unwrap();
         conn
     }
@@ -6063,8 +6142,10 @@ pub(crate) mod tests {
         )
         .unwrap();
         create_user_schema(&conn, "main").unwrap();
-        conn.execute_batch(&format!("{UNDO_V33} PRAGMA main.user_version = 32;"))
-            .unwrap();
+        conn.execute_batch(&format!(
+            "{UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 32;"
+        ))
+        .unwrap();
         conn
     }
 
@@ -6119,7 +6200,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} \
+            "{UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} \
              PRAGMA main.user_version = 27;"
         ))
         .unwrap();
@@ -6497,7 +6578,7 @@ pub(crate) mod tests {
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, USER_SCHEMA_VERSION);
-        assert_eq!(USER_SCHEMA_VERSION, 33);
+        assert_eq!(USER_SCHEMA_VERSION, 34);
     }
 
     /// **It is synced, and `sync_devices` still is not.** The whole point is that a NAME
@@ -6643,8 +6724,14 @@ pub(crate) mod tests {
     /// **It read `USER_SCHEMA_VERSION - 1` until v33, and that arithmetic was only ever true
     /// while v32 was head.** "One below head" and "below the rung under test" are the same
     /// sentence for exactly as long as no rung lands above the one a fixture is named for, and
-    /// v33 is the rung that made them different. The literal is the fixture's own number, and
-    /// the assertion that carries the argument is the `<` beside it.
+    /// v33 is the rung that made them different. Two rungs landed the same week and **both
+    /// branches found this independently**, which is the strongest evidence available that the
+    /// anchor rather than the number was wrong.
+    ///
+    /// **So it asserts both halves, because they say different things.** The literal `31` is
+    /// the fixture's own number and catches a fixture that drifted; `< 32` is the rung under
+    /// test and is what the test is *for*. Anchoring to head instead would go quietly wrong
+    /// again at v35.
     #[test]
     fn the_v31_fixture_really_sits_below_the_rung_it_tests() {
         let conn = user_file_at_31();
@@ -6653,8 +6740,8 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(version, 31, "the fixture is a v31 file");
         assert!(
-            version < USER_SCHEMA_VERSION,
-            "below head, or the rung under test never runs"
+            version < 32,
+            "below the v32 rung, or the rung under test never runs — got {version}"
         );
     }
 
@@ -6924,6 +7011,120 @@ pub(crate) mod tests {
         }
     }
 
+    // ---- v34: a folder the reader has set aside ------------------------------------
+
+    /// v34's column exists on an UPGRADED file, the ladder is what put it there, and a folder
+    /// that predates the rung reads unlocked.
+    ///
+    /// **The value is the half of this that matters, and the column check alone would not
+    /// catch the failure worth catching.** A rung that added the column with no `DEFAULT`, or
+    /// with `DEFAULT 1`, passes a `pragma_table_info` probe and hands the reader a collection
+    /// whose every drawer was set aside by the upgrade — a silent change to what the
+    /// collection page offers, with nothing going red. So the folder is seeded **before**
+    /// `migrate_user` runs: a row inserted afterwards takes its value from the table's shape
+    /// either way and cannot tell a backfilled 0 from a fresh one.
+    #[test]
+    fn v34_adds_the_locked_column() {
+        let conn = user_file_at_33();
+        conn.execute(
+            "INSERT INTO collection_folders
+                 (id, parent_id, name, kind, deck_id, sort_order, created_at, updated_at)
+             VALUES (7, NULL, 'Trade pile', 'user', NULL, 0, 0, 0)",
+            [],
+        )
+        .unwrap();
+
+        migrate_user(&conn).unwrap();
+
+        let cols: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('collection_folders')")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert!(
+            cols.iter().any(|c| c == "locked"),
+            "the ladder did not add locked: {cols:?}"
+        );
+
+        let locked: i64 = conn
+            .query_row(
+                "SELECT locked FROM collection_folders WHERE id = 7",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            locked, 0,
+            "a folder that existed before the rung must not come out set aside"
+        );
+
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, USER_SCHEMA_VERSION);
+    }
+
+    /// The second pass has to be a no-op rather than `duplicate column name`.
+    ///
+    /// `the_v24_rung_is_idempotent_over_an_already_upgraded_database`'s job one number line up,
+    /// and this rung has less standing between it and that failure than that one did: v24
+    /// probes `pragma_table_info` before its `ALTER`, while this is a bare
+    /// `ALTER TABLE … ADD COLUMN` — SQLite offers no `IF NOT EXISTS` on either half of
+    /// `ALTER TABLE`, so the version guard is the only thing making a second launch survivable.
+    /// A rung written `if v <= 33`, or one whose stamp never landed, breaks on the launch after
+    /// the upgrade and on nobody's machine before that.
+    #[test]
+    fn the_v34_rung_is_idempotent_over_an_already_upgraded_database() {
+        let conn = user_file_at_33();
+        migrate_user(&conn).unwrap();
+        migrate_user(&conn).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, USER_SCHEMA_VERSION);
+    }
+
+    /// The fixture is a real v32 file and not head wearing a v32 label.
+    ///
+    /// `the_v27_fixture_carries_none_of_v28`'s job for this rung. What it catches is the
+    /// fixture rewound in only one of its two halves: the column really gone but the version
+    /// left at head would leave `migrate_user` no rung to run, and the test above would pass
+    /// while watching nothing happen. The other order is loud on its own — a fixture that kept
+    /// `locked` dies at `duplicate column name`, which is [`UNDO_V34`]'s whole reason.
+    #[test]
+    fn the_v33_fixture_carries_none_of_v34() {
+        let conn = user_file_at_33();
+
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 33);
+        let n: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('collection_folders')
+                  WHERE name = 'locked'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 0, "locked must not exist before the rung that adds it");
+
+        // And it is a real user file otherwise — a fixture that rewound too far would test the
+        // rung against a database no reader has. `device_names` is v31's, so its presence is
+        // what says this file sits above that rung rather than below it.
+        let names: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM main.sqlite_master
+                  WHERE type = 'table' AND name = 'device_names'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(names, 1, "a v33 file has everything v31 built");
+    }
+
     /// A v28 file walks up keeping every row it had, and twice is the same as once.
     #[test]
     fn migrating_a_v28_user_file_keeps_its_rows_and_is_idempotent() {
@@ -7007,7 +7208,8 @@ pub(crate) mod tests {
             })
             .collect();
         conn.execute_batch(&format!(
-            "{UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} PRAGMA main.user_version = 28;"
+            "{UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
+             PRAGMA main.user_version = 28;"
         ))
         .unwrap();
 

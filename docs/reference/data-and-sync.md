@@ -632,6 +632,21 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   **On the wire this rename is a version boundary**, and [sync.md](sync.md) carries what it costs:
   the table name is what an op is addressed by, so a device on this build and one still on v32 do
   not exchange label rows until both have updated.
+  **v34 adds `collection_folders.locked` and is a shape rung again**, so it owes the two things
+  v32 was the first to owe neither of: a line in `USER_SCHEMA_SQL` and an `UNDO_V34` beside it.
+  One statement — `ALTER TABLE collection_folders ADD COLUMN locked INTEGER NOT NULL DEFAULT 0`
+  — landed 2026-09-03 for [issue #365](https://github.com/Msgaihede/mtg-grimoire/issues/365).
+  **`NOT NULL DEFAULT 0` is what makes the upgrade invisible**, v24's third trap answered the
+  same way round: every folder that already exists is unlocked, which is the state it was in,
+  so the unset value is not a lie a `DEFAULT` is telling — it is the answer. No index, so the
+  `sqlite_master` count v33 left behind does not move. It is on
+  `sync_engine::capture`'s `collection_folders` `Spec` as a plain field, which makes it
+  last-writer-wins per field and needs no `apply::META` entry — it is in no grain, is no
+  counter and is not the tree column. The lock's whole design is
+  [collection-folders.md](collection-folders.md).
+  **It was written as v33 and renumbered on the way in**, which is the ladder's own rule
+  working rather than an accident worth hiding: the rung above took 33 while this branch was
+  open, and the number belongs to whoever lands first.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every

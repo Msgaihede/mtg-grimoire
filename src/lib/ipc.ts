@@ -1038,6 +1038,27 @@ export interface CollectionQuery extends CardFilters {
    */
   rootOnly?: boolean;
   /**
+   * `true` drops the copies filed in a **locked** folder — a drawer the reader set aside
+   * ({@link CollectionFolder.locked}) — and in every folder underneath one, since the lock
+   * inherits down the tree. Default `false`; **ignored entirely when {@link folderId} names a
+   * folder**, which is what makes "except inside the folder" true: standing in a locked drawer,
+   * or in a sub-folder of one, names it, and a named folder is served whole.
+   *
+   * The default is {@link rootOnly}'s argument verbatim, and here it is the whole of the field's
+   * safety rather than a convenience. **The callers whose silence must go on meaning
+   * "everything" are the plain-text mirror and the export sweep**, both of which page through
+   * this query for a whole-collection backup — `mirror/read.rs` already says in words that such
+   * a read is the one that must never ask the narrowing question. A backup or a CSV that
+   * silently omitted the reader's locked cards, raising nothing, is the worst failure available
+   * in this feature, and an unasked question keeping today's answer is what forecloses it.
+   *
+   * Who sends it: the collection page, and the deck builder's Collection Search tab — that tab
+   * asks "what can I build with today", which is exactly the question a set-aside drawer is not
+   * part of. Who does not, and must not: the mirror, the export sweep, the importer's preview
+   * and the web route's passthrough.
+   */
+  excludeLocked?: boolean;
+  /**
    * Whether copies a deck has taken off the desk are part of the answer.
    *
    * `"all"` — the default, and what every caller written before folders existed sends by
@@ -1771,6 +1792,30 @@ export interface CollectionFolder {
    *  that pair, so the two can never be read apart. */
   deckId: number | null;
   sortOrder: number;
+  /**
+   * A drawer the reader has **set aside** — cards being held for a trade, a display case — so
+   * the app stops *offering* what is in it without ever stopping them reaching it.
+   *
+   * What that split means, concretely: the collection's own lists drop these copies when they
+   * ask ({@link CollectionQuery.excludeLocked}) and `owned_spare` stops counting them as
+   * something a deck could be built from, while every statement about what the reader *has* is
+   * untouched — the owned pip, both owned badges, the Owned/Missing facet, a wish's filled
+   * count and the folder's own tile all still see them. Deleting the folder is the one write
+   * refused, because it would re-file every card inside it to the root and silently undo the
+   * filing the lock was protecting. Moving a card in or out is always allowed.
+   *
+   * **This is the folder's own flag, not the effective answer — the lock inherits down the
+   * tree.** A folder inside a locked folder is locked, computed over ancestry rather than
+   * stored twice (two copies of one fact disagree the first time a folder is moved). Ask
+   * `lockedFolderIds` in `@/lib/folderTree` for the effective answer; it is the single place
+   * that walk is written, and a badge, a greyed menu row or a drag confirmation must never
+   * re-derive it from this field alone.
+   *
+   * **Not the sense `PinnedFolders.tsx` means by *fixed***: those are the app's own folders,
+   * with no rename, no delete, no move and no `⋯` at all. A folder locked here is still the
+   * reader's own drawer — still renameable, still movable, still a drop target both ways.
+   */
+  locked: boolean;
 }
 
 /**
@@ -4580,8 +4625,27 @@ export const ipc = {
    * otherwise exactly as they were, and the backend re-files them by hand before the row goes so
    * two copies of one printing landing at the root merge instead of colliding on the grain.
    * Sub-folders *do* go with it. An id that resolves to nothing is a success.
+   *
+   * **A locked folder is refused in words** (`collection_folders::FOLDER_IS_LOCKED`), on the
+   * **effective** lock — so a sub-folder of a locked one is refused too. Re-filing a set-aside
+   * drawer's cards to the root is exactly the undoing the lock exists to prevent; a caller draws
+   * the row greyed with its reason rather than letting the press reach here.
    */
   collectionFolderDelete: (id: number) => invoke<void>("collection_folder_delete", { id }),
+  /**
+   * Set or clear a folder's own lock — a drawer set aside, {@link CollectionFolder.locked}.
+   *
+   * `rename_folder`'s shape exactly: one scalar, fenced to the reader's own folders, answering
+   * the folder re-read. The app's own two — a deck's group and `Recently removed` — are refused
+   * in words, because a group is already fixed and a holding area is not something to set aside.
+   *
+   * **It writes the folder's own flag and nothing else.** The lock inherits down the tree, so
+   * unlocking a folder whose parent is locked changes what this row says and not what the reader
+   * sees; that is why a caller greys the row rather than offering a press that reports success
+   * over an unmoved badge.
+   */
+  collectionFolderSetLocked: (id: number, locked: boolean) =>
+    invoke<CollectionFolder>("collection_folder_set_locked", { id, locked }),
   /**
    * Move one owned row into a folder — `folderId: null` is the root of the collection, a real
    * destination and not an omission.

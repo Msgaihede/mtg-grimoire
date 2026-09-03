@@ -43,6 +43,7 @@ const THIS_GROUP: CollectionFolder = {
   kind: "deck",
   deckId: DECK_ID,
   sortOrder: 0,
+  locked: false,
 };
 /** Another deck's group — the folder the confirm exists for. */
 const OTHER_GROUP: CollectionFolder = {
@@ -52,6 +53,7 @@ const OTHER_GROUP: CollectionFolder = {
   kind: "deck",
   deckId: 9,
   sortOrder: 0,
+  locked: false,
 };
 /** A drawer the reader made. On the desk, so no confirm. */
 const BINDER: CollectionFolder = {
@@ -61,6 +63,7 @@ const BINDER: CollectionFolder = {
   kind: "user",
   deckId: null,
   sortOrder: 0,
+  locked: false,
 };
 /** The one holding area. **On the desk too** — a card that left the collection without leaving
  *  the database is not a card a deck is using. */
@@ -71,6 +74,7 @@ const REMOVED: CollectionFolder = {
   kind: "removed",
   deckId: null,
   sortOrder: 0,
+  locked: false,
 };
 
 const FOLDERS = [THIS_GROUP, OTHER_GROUP, BINDER, REMOVED];
@@ -200,6 +204,43 @@ describe("useCollectionSearch", () => {
 
     await waitFor(() => expect(collectionList.mock.calls.length).toBeGreaterThan(asked));
     expect(lastQuery().allocation).toBe("all");
+  });
+
+  /**
+   * **The set-aside drawers drop out, and it is asserted on the payload for `allocation`'s
+   * reason.** `CollectionQuery.excludeLocked` defaults to `false` — an unasked question keeps
+   * today's answer, which is what keeps the mirror's and the export sweep's whole-collection
+   * reads whole — so a tab that merely *believed* it wanted the narrow list and dropped the field
+   * on the way to the wire would read as correct everywhere except in the rows it got back.
+   *
+   * The expected value is written out as a literal rather than read off the hook or off a
+   * constant: a test that asks the implementation what it sends passes against the defect it was
+   * written for.
+   *
+   * It is the same question `DEFAULT_ALLOCATION` answers one line above — *what can I build with
+   * today* — so the two travel together and there is no press that turns this one off.
+   */
+  it("drops the copies in a locked folder, with no press to turn it off", async () => {
+    const { result } = mount();
+
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+    expect(lastQuery().excludeLocked).toBe(true);
+
+    // Widening the allocation is the one control over which copies this list asks for, and it
+    // says nothing about a drawer the reader set aside: `all` puts back the copies a *deck* is
+    // holding, not the ones they took off the table themselves.
+    let asked = collectionList.mock.calls.length;
+    act(() => result.current.setAllocation("all"));
+    await waitFor(() => expect(collectionList.mock.calls.length).toBeGreaterThan(asked));
+    expect(lastQuery().excludeLocked).toBe(true);
+
+    // And `Reset all` leaves it alone, for the reason it leaves the allocation pressed: this is
+    // what the tab *is* rather than a filter laid over it. The wait is on a **new request**, so
+    // the assertion cannot be read off the page the reset replaced.
+    asked = collectionList.mock.calls.length;
+    act(() => result.current.resetAll());
+    await waitFor(() => expect(collectionList.mock.calls.length).toBeGreaterThan(asked));
+    expect(lastQuery().excludeLocked).toBe(true);
   });
 
   /**

@@ -116,7 +116,7 @@ both plus the frontend.
   every upgraded one, and a fresh worktree is a fresh install, so nothing else here can see it.
   The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
-  numbers from there (`USER_SCHEMA_VERSION` **33** since the deck label took its own name,
+  numbers from there (`USER_SCHEMA_VERSION` **34** since collection folders learned to lock,
   `CORPUS_SCHEMA_VERSION` 1, deliberately
   incomparable). This line read **v25** while that was head, and
   [the ladder's history](../docs/reference/data-and-sync.md) is the story. (This line read
@@ -131,7 +131,13 @@ both plus the frontend.
   reading `'custom'` to `'card_art'` and is the first rung on either ladder that changes no
   shape at all; v33 renames `deck_tags` to `deck_labels`, `deck_cards.tag_id` to `label_id`, both
   of that table's indexes, and the `deck_audit` kind and payload key `'tag'` to `'label'`, so that
-  "tag" in this app means Scryfall's taxonomy and nothing else.)
+  "tag" in this app means Scryfall's taxonomy and nothing else; v34 adds
+  `collection_folders.locked`, the flag behind
+  [issue #365](https://github.com/Msgaihede/mtg-grimoire/issues/365), and is a shape rung again —
+  so it owes its `USER_SCHEMA_SQL` line and its `UNDO_V34`, where v32 owed neither. **v33 and v34
+  landed the same day from two branches**, which is this list's own rule in action: take the next
+  free number when you land, never reuse one, and never assume the number you wrote is the one
+  you ship.)
 - **v24 and v25 are one spec's rung split in two, and the split is deliberate.** v24 creates
   `collection_folders` in its **final** shape — `kind` and `deck_id` columns and both partial
   unique indexes included — and files nothing into it. **v25 inserts the single `removed` folder

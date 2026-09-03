@@ -79,6 +79,8 @@ const collectionFolderRename = vi.hoisted(() => vi.fn());
 const collectionFolderMove = vi.hoisted(() => vi.fn());
 const collectionFolderReorder = vi.hoisted(() => vi.fn());
 const collectionFolderDelete = vi.hoisted(() => vi.fn());
+/** Setting a drawer aside, and bringing it back — issue #365's one new write. */
+const collectionFolderSetLocked = vi.hoisted(() => vi.fn());
 const collectionSetFolder = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
@@ -106,6 +108,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     collectionFolderMove,
     collectionFolderReorder,
     collectionFolderDelete,
+    collectionFolderSetLocked,
     collectionSetFolder,
   },
 }));
@@ -210,7 +213,13 @@ const BURN: DeckRow = {
 
 /** Two drawers, one inside the other — flat rows, because the tree is the page's to build from
  *  `parentId`. `kind: "user"` is a folder the reader made and named, which is the only kind this
- *  PR can produce and the only kind the nestable wall draws. */
+ *  PR can produce and the only kind the nestable wall draws.
+ *
+ *  **`locked: false` on every fixture here is the state schema v33's `NOT NULL DEFAULT 0` puts
+ *  every existing database in**, so the whole of this file goes on describing the app as it was.
+ *  The lock block near the end spreads its own drawers off these rather than turning the flag on
+ *  here, which is what keeps "a locked folder" a claim one describe makes and not a property the
+ *  file's fixtures quietly acquired. */
 const BINDER: CollectionFolder = {
   id: 3,
   parentId: null,
@@ -218,6 +227,7 @@ const BINDER: CollectionFolder = {
   kind: "user",
   deckId: null,
   sortOrder: 0,
+  locked: false,
 };
 const FOILS: CollectionFolder = {
   id: 9,
@@ -226,6 +236,7 @@ const FOILS: CollectionFolder = {
   kind: "user",
   deckId: null,
   sortOrder: 0,
+  locked: false,
 };
 
 /** A **second** drawer at the top level, so the wall has a *level* to rearrange rather than one
@@ -238,6 +249,7 @@ const SEALED: CollectionFolder = {
   kind: "user",
   deckId: null,
   sortOrder: 1,
+  locked: false,
 };
 
 /** A drawer whose parent this list does not carry — another window deleted it between the two
@@ -250,6 +262,7 @@ const ORPHAN: CollectionFolder = {
   kind: "user",
   deckId: null,
   sortOrder: 2,
+  locked: false,
 };
 
 /**
@@ -270,6 +283,9 @@ const DECK_GROUP: CollectionFolder = {
   kind: "deck",
   deckId: 1,
   sortOrder: 0,
+  // Never anything but `false` for either of these two: `collection_folder_set_locked` calls
+  // `user_folder` first, so the app's own folders refuse the write in words.
+  locked: false,
 };
 const REMOVED: CollectionFolder = {
   id: 21,
@@ -278,6 +294,7 @@ const REMOVED: CollectionFolder = {
   kind: "removed",
   deckId: null,
   sortOrder: 0,
+  locked: false,
 };
 
 const summary = (over: Partial<CollectionSummary> = {}): CollectionSummary => ({
@@ -585,6 +602,10 @@ beforeEach(() => {
   // reaches nothing here and the empty array is the honest fixture.
   collectionFolderReorder.mockReset().mockResolvedValue([]);
   collectionFolderDelete.mockReset().mockResolvedValue(undefined);
+  // The re-read row the command answers with. It reaches nothing on screen — the hook settles by
+  // invalidating `["collection"]` rather than seeding from the answer — so what matters here is
+  // that the promise resolves rather than what is in it.
+  collectionFolderSetLocked.mockReset().mockResolvedValue({ ...BINDER, locked: true });
   collectionSetFolder.mockReset().mockResolvedValue({ id: 7, quantity: 2, removed: false });
   useAppStore.setState({
     collectionView: "table",
@@ -4170,6 +4191,384 @@ describe("renaming a folder on its own card", () => {
     const remove = await screen.findByRole("group", { name: "Delete Trade binder" });
     expect(wall.contains(remove)).toBe(false);
     expect(remove.parentElement).toHaveClass("border", "border-border");
+  });
+});
+
+/**
+ * **A drawer the reader has set aside** — issue #365, design §§3–6.
+ *
+ * The one sentence the whole feature is a consequence of: a locked folder is a drawer the app
+ * stops *offering* what is in, without ever stopping the reader reaching it. So everything here is
+ * about a mark, two greyed rows and one interruption — and **nothing here is a refusal**, because
+ * filing a card into and out of a locked drawer has no Rust fence behind it at all.
+ *
+ * **Every case is about the *effective* lock**, which is the folder's own flag OR any ancestor's:
+ * the badge, the greyed rows and the confirmation are all four computed once by the page over the
+ * whole cabinet (`lockedFolderIds`), and the two cases below that put an inherited lock beside an
+ * own one are what would go red if any of them started reading `CollectionFolder.locked`.
+ */
+describe("locking a folder", () => {
+  /** `Trade binder`, set aside — the same drawer every other folder block here uses, with the one
+   *  column that moved. Spread rather than mutated, so the shared fixture stays unlocked for the
+   *  rest of the file. */
+  const LOCKED_BINDER: CollectionFolder = { ...BINDER, locked: true };
+  /** A second drawer *inside* `Trade binder`, beside {@link FOILS} — what a move that has crossed
+   *  nothing needs, since both ends have to be under one locked parent. */
+  const SLEEVED: CollectionFolder = {
+    id: 10,
+    parentId: 3,
+    name: "Sleeved",
+    kind: "user",
+    deckId: null,
+    sortOrder: 1,
+    locked: false,
+  };
+
+  beforeEach(() => {
+    // No wall while the list is flattened, and the store ships flattened — every folder block in
+    // this file turns it off for itself, for the same reason.
+    useAppStore.setState({ collectionFlattened: false });
+    collectionFolderSummary.mockResolvedValue([]);
+  });
+
+  const manage = async (user: { click: (element: Element) => Promise<unknown> }, name: string) => {
+    await user.click(screen.getByRole("button", { name: `Manage ${name}` }));
+    await screen.findByRole("menu");
+  };
+
+  /**
+   * **The badge, on the drawer the reader locked and on everything filed inside it.**
+   *
+   * The `⋯` owns this card's other slot, so the leading glyph is the badge — `Folder` becomes
+   * `Lock` — and the word joins the figures line, because a glyph is not an accessible name. The
+   * second half is the one that matters: `Foils` carries `locked: false` of its own and wears the
+   * badge anyway, because the lock inherits down the tree. A mark drawn only on the folder the
+   * reader pressed Lock on would make the inheritance invisible exactly where it matters, which is
+   * standing inside that drawer looking at what it took with it.
+   */
+  it("badges the locked drawer, and every drawer inside it", async () => {
+    collectionFolderList.mockResolvedValue([LOCKED_BINDER, FOILS]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+
+    const binder = await screen.findByRole("button", { name: /^Trade binder folder/ });
+    expect(binder.querySelector(".lucide-lock")).toBeInTheDocument();
+    expect(binder).toHaveAccessibleName(/^Trade binder folder, locked,/);
+
+    await user.click(binder);
+    const foils = await screen.findByRole("button", { name: /^Foils folder/ });
+    expect(foils.querySelector(".lucide-lock")).toBeInTheDocument();
+    expect(foils).toHaveAccessibleName(/^Foils folder, locked,/);
+  });
+
+  /** Nothing is badged in a cabinet nobody has locked, which is every database the upgrade
+   *  reaches: schema v33's column is `NOT NULL DEFAULT 0`. */
+  it("leaves an unlocked cabinet exactly as it was", async () => {
+    collectionFolderList.mockResolvedValue([BINDER]);
+    wrap(<CollectionPage />);
+
+    const binder = await screen.findByRole("button", { name: /^Trade binder folder/ });
+    expect(binder.querySelector(".lucide-lock")).toBeNull();
+    expect(binder.querySelector(".lucide-folder")).toBeInTheDocument();
+    expect(binder).not.toHaveAccessibleName(/locked/);
+  });
+
+  /** The press, end to end: one row, the folder's **own** flag, and the id the card was drawn
+   *  from. */
+  it("sets a drawer aside from its card's menu", async () => {
+    collectionFolderList.mockResolvedValue([BINDER]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await screen.findByRole("button", { name: /^Trade binder folder/ });
+
+    await manage(user, "Trade binder");
+    await user.click(screen.getByRole("menuitem", { name: "Lock folder" }));
+
+    await waitFor(() => expect(collectionFolderSetLocked).toHaveBeenCalledWith(3, true));
+  });
+
+  /** …and back again. The row is the same row wearing the other word, because it toggles one
+   *  flag — a second row would be a second copy of the fact to disagree with the first. */
+  it("brings a locked drawer back from the same row", async () => {
+    collectionFolderList.mockResolvedValue([LOCKED_BINDER]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await screen.findByRole("button", { name: /^Trade binder folder/ });
+
+    await manage(user, "Trade binder");
+    expect(screen.queryByRole("menuitem", { name: "Lock folder" })).toBeNull();
+    await user.click(screen.getByRole("menuitem", { name: "Unlock folder" }));
+
+    await waitFor(() => expect(collectionFolderSetLocked).toHaveBeenCalledWith(3, false));
+  });
+
+  /**
+   * **Greyed with its reason inside a locked parent**, because unlocking a child of a locked
+   * parent changes nothing a reader can see — the badge stays and the copies stay out of the
+   * flattened list — and a row that reported success over an unmoved badge is worse than a greyed
+   * one.
+   *
+   * `aria-disabled` and never the attribute: a greyed row exists to be *read*. The name is
+   * matched with two regexes rather than one string, because this repo's convention is that a
+   * greyed row's accessible name carries the reason as well as the label — an exact-string query
+   * fails here and reads as "the row is missing".
+   */
+  it("greys the lock row, with its reason, inside a locked parent", async () => {
+    collectionFolderList.mockResolvedValue([LOCKED_BINDER, FOILS]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await user.click(await screen.findByRole("button", { name: /^Trade binder folder/ }));
+    await screen.findByRole("button", { name: /^Foils folder/ });
+
+    await manage(user, "Foils");
+    const row = screen.getByRole("menuitem", { name: /Lock folder/ });
+    expect(row).toHaveAttribute("aria-disabled", "true");
+    expect(row).not.toHaveAttribute("disabled");
+    expect(row).toHaveAccessibleName(/a folder above it is locked/);
+
+    await user.click(row);
+    expect(collectionFolderSetLocked).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **Delete… greys on the effective lock**, which is `delete_folder`'s own fence said early:
+   * deleting re-files every card in the sub-tree to the root, silently undoing exactly the filing
+   * the lock was protecting, so the backend refuses it in words. The UI must not let the press
+   * happen at all — `PinnedFolders`' rule, that a control whose only outcome is a sentence
+   * explaining that it does not work teaches the reader nothing its absence would not.
+   *
+   * **Rename and Move are asserted live in the same breath**, which is the other half of §4.4:
+   * neither disturbs a card, so neither is what the lock is about, and a greyed pair there would
+   * be this feature over-reaching.
+   */
+  it("greys Delete…, with its reason, and leaves Rename and Move alone", async () => {
+    collectionFolderList.mockResolvedValue([LOCKED_BINDER]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await screen.findByRole("button", { name: /^Trade binder folder/ });
+
+    await manage(user, "Trade binder");
+    const remove = screen.getByRole("menuitem", { name: /^Delete/ });
+    expect(remove).toHaveAttribute("aria-disabled", "true");
+    expect(remove).toHaveAccessibleName(/unlock it first/);
+    expect(screen.getByRole("menuitem", { name: /^Rename/ })).not.toHaveAttribute("aria-disabled");
+    expect(screen.getByRole("menuitem", { name: /^Move to folder/ })).not.toHaveAttribute(
+      "aria-disabled",
+    );
+
+    await user.click(remove);
+    expect(screen.queryByRole("group", { name: "Delete Trade binder" })).toBeNull();
+  });
+
+  /** The same greying one level down, wearing the *other* sentence: a drawer whose own flag is off
+   *  is unlocked by its parent, so "unlock it first" would send the reader to a row that is itself
+   *  greyed. */
+  it("greys Delete… inside a locked parent, naming the parent as the reason", async () => {
+    collectionFolderList.mockResolvedValue([LOCKED_BINDER, FOILS]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await user.click(await screen.findByRole("button", { name: /^Trade binder folder/ }));
+    await screen.findByRole("button", { name: /^Foils folder/ });
+
+    await manage(user, "Foils");
+    const remove = screen.getByRole("menuitem", { name: /^Delete/ });
+    expect(remove).toHaveAttribute("aria-disabled", "true");
+    expect(remove).toHaveAccessibleName(/a folder above it is locked/);
+  });
+
+  /**
+   * **The drag, which is the one gesture worth interrupting** (design §5).
+   *
+   * A drop target is a rectangle a pointer can land on by mistake, so a drag across the edge of a
+   * set-aside drawer asks first and names the drawer. An explicit menu pick does not, and the last
+   * case in this block is the fence for that.
+   *
+   * The question carries no `dialog` or `alertdialog` role — no confirmation in this app does — so
+   * it is found by its `role="group"` name and read for its text, which is the note
+   * `CollectionSearchTab`'s cross-deck question already carries.
+   */
+  describe("dragging a copy across the edge", () => {
+    it("asks before filing a copy into a locked drawer, and files it when told to", async () => {
+      collectionFolderList.mockResolvedValue([LOCKED_BINDER]);
+      const user = userEvent.setup();
+      const { container } = wrap(<CollectionPage />);
+      await screen.findByText("Lightning Bolt");
+      const card = stand("Trade binder");
+
+      const held = await holdCopy(cardSources(container)[0], {
+        pressOn: screen.getByText("Lightning Bolt"),
+      });
+      await held.over(card);
+      await held.drop();
+
+      const question = await screen.findByRole("group", {
+        name: "Move Lightning Bolt into Trade binder",
+      });
+      // Nothing has moved yet: the question is asked *instead of* the write, not after it.
+      expect(collectionSetFolder).not.toHaveBeenCalled();
+      expect(question).toHaveTextContent("“Trade binder” is locked.");
+
+      await user.click(within(question).getByRole("button", { name: "Move it" }));
+      await waitFor(() => expect(collectionSetFolder).toHaveBeenCalledWith(7, 3));
+    });
+
+    /** Declining leaves the copy exactly where it was, and takes the question away with it. */
+    it("leaves the copy where it is when the reader declines", async () => {
+      collectionFolderList.mockResolvedValue([LOCKED_BINDER]);
+      const user = userEvent.setup();
+      const { container } = wrap(<CollectionPage />);
+      await screen.findByText("Lightning Bolt");
+      const card = stand("Trade binder");
+
+      const held = await holdCopy(cardSources(container)[0], {
+        pressOn: screen.getByText("Lightning Bolt"),
+      });
+      await held.over(card);
+      await held.drop();
+
+      const question = await screen.findByRole("group", {
+        name: "Move Lightning Bolt into Trade binder",
+      });
+      await user.click(within(question).getByRole("button", { name: "Leave it there" }));
+
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("group", { name: "Move Lightning Bolt into Trade binder" }),
+        ).toBeNull(),
+      );
+      expect(collectionSetFolder).not.toHaveBeenCalled();
+    });
+
+    /**
+     * **Out of a locked drawer asks too**, and the sentence is the other one: a copy leaving goes
+     * back among the ones the app offers, which is the reader's own decision being undone rather
+     * than made.
+     */
+    it("asks before taking a copy out of a locked drawer", async () => {
+      collectionFolderList.mockResolvedValue([LOCKED_BINDER, SEALED]);
+      collectionList.mockResolvedValue(
+        page([{ ...BOLT, folderId: 3, folderName: "Trade binder" }]),
+      );
+      const { container } = wrap(<CollectionPage />);
+      await screen.findByText("Lightning Bolt");
+      const card = stand("Sealed");
+
+      const held = await holdCopy(cardSources(container)[0], {
+        pressOn: screen.getByText("Lightning Bolt"),
+      });
+      await held.over(card);
+      await held.drop();
+
+      const question = await screen.findByRole("group", {
+        name: "Move Lightning Bolt out of Trade binder",
+      });
+      expect(question).toHaveTextContent("“Trade binder” is locked.");
+      expect(collectionSetFolder).not.toHaveBeenCalled();
+    });
+
+    /**
+     * **A move *within* one locked drawer is not a move across its edge**, and this is the case
+     * that says the rule is computed from both ends rather than from either.
+     *
+     * Both `Foils` and `Sleeved` are effectively locked — they are inside `Trade binder` — so a
+     * confirmation keyed on "is the destination locked" would fire here, and one keyed on "are
+     * both ends locked" would fire here too. Only naming the *drawer* each end is set aside inside
+     * and comparing the two gets this right: nothing has crossed the boundary the reader drew, so
+     * the copy files with no question at all.
+     */
+    it("files a copy between two drawers inside one locked parent without asking", async () => {
+      collectionFolderList.mockResolvedValue([LOCKED_BINDER, FOILS, SLEEVED]);
+      collectionList.mockResolvedValue(page([{ ...BOLT, folderId: 9, folderName: "Foils" }]));
+      const user = userEvent.setup();
+      const { container } = wrap(<CollectionPage />);
+      await user.click(await screen.findByRole("button", { name: /^Trade binder folder/ }));
+      await screen.findByRole("button", { name: /^Sleeved folder/ });
+      const card = stand("Sleeved");
+
+      const held = await holdCopy(cardSources(container)[0], {
+        pressOn: screen.getByText("Lightning Bolt"),
+      });
+      await held.over(card);
+      await held.drop();
+
+      await waitFor(() => expect(collectionSetFolder).toHaveBeenCalledWith(7, 10));
+      expect(screen.queryByRole("group", { name: /^Move Lightning Bolt/ })).toBeNull();
+    });
+
+    /**
+     * **The drawer is the *outermost* lock, not the nearest one** — which is the half a "walk up
+     * to the first locked ancestor" reading gets wrong.
+     *
+     * `Foils` is locked in its own right *and* sits inside a locked `Trade binder`. It is still
+     * one drawer: the reader set the binder aside, and locking a shelf inside it did not carve a
+     * second boundary through the middle of what they set aside. Stopping the walk at `Foils`
+     * would make this move `Foils → Trade binder`, which is a crossing, and would ask a reader to
+     * confirm a move inside their own drawer.
+     */
+    it("treats a locked drawer inside a locked drawer as one drawer", async () => {
+      collectionFolderList.mockResolvedValue([
+        LOCKED_BINDER,
+        { ...FOILS, locked: true },
+        SLEEVED,
+      ]);
+      collectionList.mockResolvedValue(page([{ ...BOLT, folderId: 9, folderName: "Foils" }]));
+      const user = userEvent.setup();
+      const { container } = wrap(<CollectionPage />);
+      await user.click(await screen.findByRole("button", { name: /^Trade binder folder/ }));
+      await screen.findByRole("button", { name: /^Sleeved folder/ });
+      const card = stand("Sleeved");
+
+      const held = await holdCopy(cardSources(container)[0], {
+        pressOn: screen.getByText("Lightning Bolt"),
+      });
+      await held.over(card);
+      await held.drop();
+
+      await waitFor(() => expect(collectionSetFolder).toHaveBeenCalledWith(7, 10));
+      expect(screen.queryByRole("group", { name: /^Move Lightning Bolt/ })).toBeNull();
+    });
+
+    /**
+     * **A drag that touches no locked drawer at either end is untouched by any of this**, which is
+     * every drag in the rest of this file and the reason none of them had to change.
+     */
+    it("files a copy between two unlocked drawers without asking", async () => {
+      collectionFolderList.mockResolvedValue([BINDER, SEALED]);
+      const { container } = wrap(<CollectionPage />);
+      await screen.findByText("Lightning Bolt");
+      const card = stand("Trade binder");
+
+      const held = await holdCopy(cardSources(container)[0], {
+        pressOn: screen.getByText("Lightning Bolt"),
+      });
+      await held.over(card);
+      await held.drop();
+
+      await waitFor(() => expect(collectionSetFolder).toHaveBeenCalledWith(7, 3));
+      expect(screen.queryByRole("group", { name: /^Move Lightning Bolt/ })).toBeNull();
+    });
+
+    /**
+     * **An explicit menu pick is deliberately not confirmed** (design §5). `Move to folder…` and
+     * the card menu's `Add to → <folder>` both put the folder's name in the press the reader made,
+     * so a question there would ask them to agree with a sentence they had just typed the answer
+     * to — which is `PinnedFolders`' own rule one step further along.
+     */
+    it("does not ask when the reader names the locked folder themselves", async () => {
+      collectionFolderList.mockResolvedValue([LOCKED_BINDER]);
+      const user = userEvent.setup();
+      wrap(<CollectionPage />);
+      await screen.findByText("Lightning Bolt");
+
+      screen
+        .getByText("Lightning Bolt")
+        .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+      await user.click(await screen.findByRole("menuitem", { name: /^Move to/ }));
+      await user.click(await screen.findByRole("menuitem", { name: "Trade binder" }));
+
+      await waitFor(() => expect(collectionSetFolder).toHaveBeenCalledWith(7, 3));
+      expect(screen.queryByRole("group", { name: /^Move Lightning Bolt/ })).toBeNull();
+    });
   });
 });
 

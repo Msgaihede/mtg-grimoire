@@ -69,6 +69,7 @@ const THIS_GROUP: CollectionFolder = {
   kind: "deck",
   deckId: DECK_ID,
   sortOrder: 0,
+  locked: false,
 };
 const OTHER_GROUP: CollectionFolder = {
   id: 11,
@@ -77,6 +78,7 @@ const OTHER_GROUP: CollectionFolder = {
   kind: "deck",
   deckId: 9,
   sortOrder: 0,
+  locked: false,
 };
 const BINDER: CollectionFolder = {
   id: 12,
@@ -85,6 +87,7 @@ const BINDER: CollectionFolder = {
   kind: "user",
   deckId: null,
   sortOrder: 0,
+  locked: false,
 };
 
 function row(over: Partial<CollectionRow> = {}): CollectionRow {

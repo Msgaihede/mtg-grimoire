@@ -198,6 +198,7 @@ function groupsOf(decks: FakeDeck[]): FakeCollectionFolder[] {
       kind: "deck",
       deckId: d.id,
       sortOrder: 0,
+      locked: false,
     })),
     {
       id: REMOVED_FOLDER,
@@ -206,6 +207,7 @@ function groupsOf(decks: FakeDeck[]): FakeCollectionFolder[] {
       kind: "removed",
       deckId: null,
       sortOrder: 0,
+      locked: false,
     },
   ];
 }
@@ -2478,8 +2480,10 @@ describe("the collection grain", () => {
   it("refuses an add into a folder the app owns, and still takes the reader's own", () => {
     const db = makeDb({
       collectionFolders: [
-        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0 },
-        { id: 2, parentId: null, name: "Burn", kind: "deck", deckId: 7, sortOrder: 1 },
+        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0,
+          locked: false },
+        { id: 2, parentId: null, name: "Burn", kind: "deck", deckId: 7, sortOrder: 1,
+          locked: false },
       ],
     });
     const w = writeHandlers(db);
@@ -3095,8 +3099,10 @@ describe("the collection's folders", () => {
   function filed(over: Partial<FakeDb> = {}): FakeDb {
     return makeDb({
       collectionFolders: [
-        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0 },
-        { id: 2, parentId: 1, name: "Trade binder", kind: "user", deckId: null, sortOrder: 0 },
+        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0,
+          locked: false },
+        { id: 2, parentId: 1, name: "Trade binder", kind: "user", deckId: null, sortOrder: 0,
+          locked: false },
       ],
       ...over,
     });
@@ -3135,10 +3141,12 @@ describe("the collection's folders", () => {
   it("refuses every write against a folder the app owns, and only those", () => {
     const db = filed({
       collectionFolders: [
-        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0 },
-        { id: 2, parentId: null, name: "Burn", kind: "deck", deckId: 7, sortOrder: 1 },
+        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0,
+          locked: false },
+        { id: 2, parentId: null, name: "Burn", kind: "deck", deckId: 7, sortOrder: 1,
+          locked: false },
         { id: 3, parentId: null, name: "Recently removed", kind: "removed", deckId: null,
-          sortOrder: 2 },
+          sortOrder: 2, locked: false },
       ],
       collectionEntries: [entry({ id: 1, quantity: 1 })],
     });
@@ -3173,10 +3181,12 @@ describe("the collection's folders", () => {
   it("refuses to file a card out of a deck by hand, and only out of a deck", () => {
     const db = filed({
       collectionFolders: [
-        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0 },
-        { id: 2, parentId: null, name: "Burn", kind: "deck", deckId: 7, sortOrder: 1 },
+        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0,
+          locked: false },
+        { id: 2, parentId: null, name: "Burn", kind: "deck", deckId: 7, sortOrder: 1,
+          locked: false },
         { id: 3, parentId: null, name: "Recently removed", kind: "removed", deckId: null,
-          sortOrder: 2 },
+          sortOrder: 2, locked: false },
       ],
       collectionEntries: [
         entry({ id: 1, quantity: 1, folderId: 2 }),
@@ -3198,9 +3208,12 @@ describe("the collection's folders", () => {
   it("answers every folder flat, in `sortOrder, id`, and hides none of them by kind", () => {
     const db = makeDb({
       collectionFolders: [
-        { id: 3, parentId: null, name: "Someday", kind: "user", deckId: null, sortOrder: 0 },
-        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0 },
-        { id: 2, parentId: null, name: "Burn", kind: "deck", deckId: 7, sortOrder: 1 },
+        { id: 3, parentId: null, name: "Someday", kind: "user", deckId: null, sortOrder: 0,
+          locked: false },
+        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0,
+          locked: false },
+        { id: 2, parentId: null, name: "Burn", kind: "deck", deckId: 7, sortOrder: 1,
+          locked: false },
       ],
     });
     // The reader's own arrangement, `sortOptions`' "they arranged it themselves" exemption — so
@@ -3266,9 +3279,12 @@ describe("the collection's folders", () => {
   it("merges the rows it un-files, onto the root row and onto each other", () => {
     const db = makeDb({
       collectionFolders: [
-        { id: 1, parentId: null, name: "Top", kind: "user", deckId: null, sortOrder: 0 },
-        { id: 2, parentId: 1, name: "A", kind: "user", deckId: null, sortOrder: 0 },
-        { id: 3, parentId: 1, name: "B", kind: "user", deckId: null, sortOrder: 1 },
+        { id: 1, parentId: null, name: "Top", kind: "user", deckId: null, sortOrder: 0,
+          locked: false },
+        { id: 2, parentId: 1, name: "A", kind: "user", deckId: null, sortOrder: 0,
+          locked: false },
+        { id: 3, parentId: 1, name: "B", kind: "user", deckId: null, sortOrder: 1,
+          locked: false },
       ],
       collectionEntries: [
         entry({ id: 1, cardId: BOLT.id, quantity: 1, folderId: null }),
@@ -3397,10 +3413,12 @@ describe("the collection's folders", () => {
   it("drops only a deck folder's copies when the query asks for the unallocated ones", () => {
     const db = makeDb({
       collectionFolders: [
-        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0 },
+        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0,
+          locked: false },
         { id: 2, parentId: null, name: "Recently removed", kind: "removed", deckId: null,
-          sortOrder: 1 },
-        { id: 3, parentId: null, name: "Burn", kind: "deck", deckId: 7, sortOrder: 2 },
+          sortOrder: 1, locked: false },
+        { id: 3, parentId: null, name: "Burn", kind: "deck", deckId: 7, sortOrder: 2,
+          locked: false },
       ],
       collectionEntries: [
         entry({ id: 1, cardId: BOLT.id, folderId: null }),
@@ -3438,9 +3456,12 @@ describe("the collection's folders", () => {
   it("counts copies per folder directly, leaves the root out, skips an empty one, and answers null for an unpriced folder", () => {
     const db = filed({
       collectionFolders: [
-        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0 },
-        { id: 2, parentId: 1, name: "Trade binder", kind: "user", deckId: null, sortOrder: 0 },
-        { id: 3, parentId: null, name: "Someday", kind: "user", deckId: null, sortOrder: 1 },
+        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0,
+          locked: false },
+        { id: 2, parentId: 1, name: "Trade binder", kind: "user", deckId: null, sortOrder: 0,
+          locked: false },
+        { id: 3, parentId: null, name: "Someday", kind: "user", deckId: null, sortOrder: 1,
+          locked: false },
       ],
       collectionEntries: [
         entry({ id: 1, cardId: BOLT.id, quantity: 2, folderId: 1 }),
@@ -3469,6 +3490,229 @@ describe("the collection's folders", () => {
     // is where the app *puts* cards rather than filing the reader chose. There are no decks in
     // this fixture, so it is the only row left.
     expect(db.collectionFolders.map((f) => f.kind)).toEqual(["removed"]);
+  });
+
+  /**
+   * User schema v33's flag, from the press to the wire — two claims in one test because they
+   * are one claim.
+   *
+   * The write stores it and `collection_folder_list` carries it. A projection that dropped the
+   * field would leave the fake agreeing with itself and telling the page `undefined`, which is a
+   * folder neither locked nor unlocked and a state the column cannot hold.
+   *
+   * **The wire carries the folder's own flag and not the effective one**, which is why
+   * `Trade binder` still reads `false` while its parent is locked: the badge and the greyed rows
+   * walk the ancestry off a tree the page already has, and a DTO carrying the inherited answer
+   * would be the stored second copy the whole design avoids.
+   */
+  it("stores the lock on the folder the press named and carries it on the wire", () => {
+    const db = filed();
+    const w = writeHandlers(db);
+    expect(readHandlers(db).collection_folder_list().map((f) => f.locked)).toEqual([false, false]);
+
+    expect(w.collection_folder_set_locked({ id: 1, locked: true })).toMatchObject({
+      id: 1,
+      name: "Binder",
+      locked: true,
+    });
+    expect(db.collectionFolders.find((f) => f.id === 1)!.locked).toBe(true);
+    expect(readHandlers(db).collection_folder_list().map((f) => f.locked)).toEqual([true, false]);
+
+    // A new drawer is its own row and carries no flag, **even inside a locked parent**: it is
+    // effectively locked by its ancestry the moment it exists, and a stored `true` would be
+    // unlockable to a folder whose badge would not go away.
+    expect(w.collection_folder_create({ parentId: 1, name: "Paid for" }).locked).toBe(false);
+
+    // Reversible in one press, which is why the toggle asks for no confirmation.
+    expect(w.collection_folder_set_locked({ id: 1, locked: false }).locked).toBe(false);
+    expect(readHandlers(db).collection_folder_list().every((f) => !f.locked)).toBe(true);
+  });
+
+  /** The toggle takes `user_folder` before it takes an argument, like every other write in this
+   *  cabinet: a deck's group is already fixed and `Recently removed` is a holding area, so a
+   *  lock on either would be a control with no meaning. Gone before not-yours, that helper's
+   *  ordering — a folder that is not there cannot be the app's. */
+  it("refuses to lock a folder the app owns, at both of its kinds", () => {
+    const db = filed({
+      collectionFolders: [
+        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0,
+          locked: false },
+        { id: 2, parentId: null, name: "Burn", kind: "deck", deckId: 7, sortOrder: 1,
+          locked: false },
+        { id: 3, parentId: null, name: "Recently removed", kind: "removed", deckId: null,
+          sortOrder: 2, locked: false },
+      ],
+    });
+    const w = writeHandlers(db);
+    const notYours = /is the app's own/;
+    expect(() => w.collection_folder_set_locked({ id: 2, locked: true })).toThrow(notYours);
+    expect(() => w.collection_folder_set_locked({ id: 3, locked: true })).toThrow(notYours);
+    expect(() => w.collection_folder_set_locked({ id: 404, locked: true })).toThrow(
+      /not there any more/,
+    );
+    expect(db.collectionFolders.map((f) => f.locked)).toEqual([false, false, false]);
+    // The reader's own drawer is the one this write is for.
+    expect(w.collection_folder_set_locked({ id: 1, locked: true }).locked).toBe(true);
+  });
+
+  /**
+   * The one folder write a lock refuses, and the **inherited** case a per-row check would wave
+   * through.
+   *
+   * Deleting re-files every card in the sub-tree to the root, which silently undoes exactly the
+   * filing the lock was protecting — and it does that whichever folder in the sub-tree was
+   * named, which is why the refusal is on the effective lock and not on the row's own flag.
+   */
+  it("refuses to delete a locked folder, and a folder inside a locked one", () => {
+    const db = filed({
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT.id, folderId: 1 }),
+        entry({ id: 2, cardId: BOLT_2X2.id, folderId: 2 }),
+      ],
+    });
+    const w = writeHandlers(db);
+    w.collection_folder_set_locked({ id: 1, locked: true });
+    const isLocked = /That folder is locked\. Unlock it before deleting it\./;
+
+    expect(() => w.collection_folder_delete({ id: 1 })).toThrow(isLocked);
+    // `Trade binder`'s own flag is `false` and the press is refused all the same.
+    expect(db.collectionFolders.find((f) => f.id === 2)!.locked).toBe(false);
+    expect(() => w.collection_folder_delete({ id: 2 })).toThrow(isLocked);
+    // Nothing moved: both drawers stand and both cards are filed where they were.
+    expect(db.collectionFolders).toHaveLength(2);
+    expect(db.collectionEntries.map((e) => e.folderId)).toEqual([1, 2]);
+
+    // Unlocking the parent lets the child go, because the child never had a flag of its own to
+    // clear — which is the whole of the inheritance, seen from the end that matters.
+    w.collection_folder_set_locked({ id: 1, locked: false });
+    w.collection_folder_delete({ id: 2 });
+    expect(db.collectionFolders.map((f) => f.id)).toEqual([1]);
+    expect(db.collectionEntries.map((e) => e.folderId)).toEqual([1, null]);
+  });
+
+  /**
+   * Everything a lock does **not** refuse, asserted together because each of them being allowed
+   * is a decision rather than an oversight.
+   *
+   * Rename and move disturb no card, so neither refuses. Filing a copy in and out is the thing
+   * the issue was explicit about always being possible: there is no Rust fence and none here
+   * either, because `set_entry_folder` already refuses a deck source and a non-`user`
+   * destination, and a locked folder is a `user` folder on both counts. The warning is the
+   * drag's confirmation, which belongs to the page.
+   */
+  it("still renames and moves a locked folder, and files a card into one and back out", () => {
+    const db = filed({
+      collectionFolders: [
+        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0,
+          locked: false },
+        { id: 2, parentId: 1, name: "Trade binder", kind: "user", deckId: null, sortOrder: 0,
+          locked: false },
+        { id: 3, parentId: null, name: "Someday", kind: "user", deckId: null, sortOrder: 1,
+          locked: false },
+      ],
+      collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 2 })],
+    });
+    const w = writeHandlers(db);
+    w.collection_folder_set_locked({ id: 2, locked: true });
+
+    expect(w.collection_folder_rename({ id: 2, name: "Trade pile" }).name).toBe("Trade pile");
+    expect(w.collection_folder_move({ id: 2, parentId: 3 }).parentId).toBe(3);
+    // Still locked after both: neither write is an unlock, and a lock that fell off a rename
+    // would be a drawer that quietly re-opened.
+    expect(db.collectionFolders.find((f) => f.id === 2)!.locked).toBe(true);
+
+    expect(w.collection_set_folder({ id: 1, folderId: 2 }).id).toBe(1);
+    expect(db.collectionEntries[0].folderId).toBe(2);
+    expect(w.collection_set_folder({ id: 1, folderId: null }).id).toBe(1);
+    expect(db.collectionEntries[0].folderId).toBeNull();
+  });
+
+  /**
+   * `collection::scope`'s v33 term, and every state of it a page or a backup depends on.
+   *
+   * **The first assertion is the one that matters most.** A query that never asks still sees a
+   * locked folder's copies, which is the plain-text mirror's and the export sweep's guarantee:
+   * an unconditional term here would make every backup silently omit the reader's set-aside
+   * cards and raise nothing at all.
+   */
+  it("drops a locked folder's copies only when asked, and never when the folder is named", () => {
+    const db = filed({
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT.id, folderId: null }),
+        entry({ id: 2, cardId: BOLT_2X2.id, folderId: 1 }),
+        entry({ id: 3, cardId: FOIL_ONLY.id, finish: "foil", folderId: 2 }),
+      ],
+    });
+    writeHandlers(db).collection_folder_set_locked({ id: 1, locked: true });
+    const list = (query: Partial<CollectionQuery>) =>
+      readHandlers(db)
+        .collection_list({ query: { limit: 10, offset: 0, ...query } })
+        .items.map((r) => r.id)
+        .sort((a, b) => a - b);
+
+    expect(list({})).toEqual([1, 2, 3]);
+    expect(list({ excludeLocked: false })).toEqual([1, 2, 3]);
+    // Asked: `Binder`'s copies go and so do `Trade binder`'s, because the lock is the effective
+    // one. The unfiled row stays, which is the `IS NULL` arm the crate spells first — the root
+    // is where most copies are and is not a folder to look up.
+    expect(list({ excludeLocked: true })).toEqual([1]);
+    // Ignored entirely when `folderId` names a folder, which is `rootOnly`'s rule applied to a
+    // second field rather than a fourth state: standing in a locked drawer names it, and a named
+    // folder is served whole. Both rungs, because the second is the inherited one.
+    expect(list({ excludeLocked: true, folderId: 1 })).toEqual([2]);
+    expect(list({ excludeLocked: true, folderId: 2 })).toEqual([3]);
+    // The header is taken over the same rows — `collection_summary` reads `collectionScope` and
+    // nothing else, so a narrowed list may not be summarised over the whole cabinet.
+    expect(
+      readHandlers(db).collection_summary({ query: { limit: 0, offset: 0, excludeLocked: true } })
+        .entries,
+    ).toBe(1);
+  });
+
+  /**
+   * Spec §4.2 — the **one** ownership-shaped figure a lock moves — with §4.3's fence beside it in
+   * the same test, so neither can be changed without the other being read.
+   *
+   * `ownedSpare` is what a plan can count on, and `deck_theory`'s own doc is the argument: a deck
+   * on a table has its cards, so a copy in its group is not spare — and a card in a display case
+   * is not one a plan can count on either. Widening it is safe because it is a *display* field
+   * meaning **spare**, forbidden from being a term in any arithmetic.
+   *
+   * Everything that says what the reader **has** is untouched, and the folder's own tile is the
+   * cheapest of those to assert: a locked folder that stopped counting its own copies would put
+   * the badge above a lie.
+   */
+  it("takes a locked folder's copies out of what a plan can count on, and out of nothing else", () => {
+    const db = seed("starter");
+    const lotus = () =>
+      readHandlers(db)
+        .deck_theory_diff({ deckId: 4 })
+        .find((d) => d.name === "Black Lotus")!;
+    // `Trade binder` holds the only Black Lotus anywhere in this seed and no deck's group does,
+    // so it is spare. The seed locks `Someday` and not this folder — the press below does.
+    expect(lotus().ownedSpare).toBe(1);
+
+    writeHandlers(db).collection_folder_set_locked({ id: 2, locked: true });
+    expect(lotus().ownedSpare).toBe(0);
+
+    // §4.3: the folder's own tile still counts both copies in it. Every other figure on that
+    // list is the crate's to fence — the search's owned pip, both owned badges, the
+    // Owned/Missing facet, a wish's filled quantity — and every one of them counts a locked
+    // copy, because a graded card in a case is still cardboard on the reader's shelf.
+    const tile = readHandlers(db)
+      .collection_folder_summary({})
+      .find((t) => t.folderId === 2)!;
+    expect(tile.cards).toBe(2);
+  });
+
+  /** The `starter` seed's own lock, measured here rather than written down twice — `seeds.ts`
+   *  explains *which* folder and why, and this is what stops that note rotting and what lets a
+   *  story rely on the badge being on screen without standing up a seed of its own. **Exactly
+   *  one, and it is the empty drawer**: locking one with cards in it would have rewritten
+   *  another fixture's meaning, which that note names. */
+  it("locks exactly one folder in the starter seed, and it is the empty one", () => {
+    const folders = readHandlers(seed("starter")).collection_folder_list();
+    expect(folders.filter((f) => f.locked).map((f) => f.name)).toEqual(["Someday"]);
   });
 });
 
@@ -4707,8 +4951,24 @@ describe("pulling owned copies into a deck", () => {
     const db = shortOfThree({
       collectionFolders: [
         ...groupsOf([deck({ id: 1, name: "Burn" })]),
-        { id: 1, parentId: null, name: "Shoebox", kind: "user", deckId: null, sortOrder: 1 },
-        { id: 2, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0 },
+        {
+          id: 1,
+          parentId: null,
+          name: "Shoebox",
+          kind: "user",
+          deckId: null,
+          sortOrder: 1,
+          locked: false,
+        },
+        {
+          id: 2,
+          parentId: null,
+          name: "Binder",
+          kind: "user",
+          deckId: null,
+          sortOrder: 0,
+          locked: false,
+        },
       ],
       collectionEntries: [
         entry({ id: 1, cardId: BOLT.id, quantity: 1, folderId: 1 }),
@@ -5218,6 +5478,7 @@ describe("collection_import_commit", () => {
       kind: "user",
       deckId: null,
       sortOrder: 9,
+      locked: false,
     });
     w.collection_import_commit({ items: line, mode: "add", folderId: 7 });
     expect(db.collectionEntries.map((e) => e.folderId)).toEqual([7]);
@@ -6457,6 +6718,11 @@ describe("the busy fault", () => {
       // the ordering mistake the loop is looking for.
       enabled: true,
       root: "D:\\Backups\\MTG",
+      // `collection_folder_set_locked`'s own argument (user schema v33). Never read on
+      // this path — `refuseIfBusy` comes first, as it does for every write in the loop —
+      // and here for `collapsed`'s reason: `invoke` matches by name, and a boolean has no
+      // junk state that could fail this loop instead.
+      locked: true,
     };
     // The five above excluded, this is every command that really takes the write lock —
     // re-counted 2026-08-12 **after a merge in which three branches had each added one**,
@@ -6683,8 +6949,18 @@ describe("the busy fault", () => {
     // folding it, and the facet index's `owned` dimension is built by counting rows. The same
     // lock from this loop's point of view. Its read half (`deck_pull_plan`) goes through
     // `db_read` and is not in this table at all, exactly as the folder branches' reads were not.
-    // Re-counted by running the sweep, not by adding one on paper.
-    expect(names).toHaveLength(88);
+    //
+    // Locking a collection folder then added **one more**, 88 → 89:
+    // `collection_folder_set_locked` takes `sync::with_write` like every other write in
+    // that cabinet — it is `rename_folder`'s shape with a boolean where the name goes — so
+    // it belongs in the loop rather than in `unlocked`. Its read half is
+    // `collection_folder_list`, which is in `readHandlers` and answers through every second
+    // of a sync: the same split every folder write before it is on.
+    //
+    // **Both landed the same day on two branches, and 89 is what the sweep answered after the
+    // merge** — not 88 twice, which is what each branch's own note said and what adding one on
+    // paper to either would have produced. Re-counted by running it.
+    expect(names).toHaveLength(89);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
