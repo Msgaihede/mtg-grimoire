@@ -5527,6 +5527,372 @@ describe("pulling owned copies into a deck", () => {
 });
 
 /**
+ * `deck_quick_add_wishes` and `deck_quick_add_to_collection` \u2014 the **fourth** write that reaches
+ * across the deck boundary and the only one that *creates* copies rather than moving them.
+ *
+ * **The feature is one sentence**: a deck lists four Bolts and holds one, the reader has just
+ * bought the other three, and one press records them into the deck's own group and takes them off
+ * the shopping list. Everything below is a way of getting that wrong \u2014 recording copies into a
+ * deck that does not play the card, standing a second row beside the one already in the group,
+ * taking a foil wish down for a nonfoil purchase, or clearing a wish and then failing to record
+ * the copies it was cleared for.
+ */
+describe("quick-adding bought copies into a deck", () => {
+  /**
+   * The issue's own arithmetic with the pull's fixture reused: `Burn` lists four Bolts, holds one
+   * in its group, and the reader has just bought three. There is one wish for them at the root.
+   */
+  const shortOfThree = (over: Partial<FakeDb> = {}) =>
+    makeDeckDb({
+      decks: [deck({ id: 1, name: "Burn" })],
+      deckCards: [deckCard({ id: 1, cardId: BOLT.id, categoryKind: "main", quantity: 4 })],
+      collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 1, folderId: groupId(1) })],
+      wishlistEntries: [wish({ id: 1, cardId: BOLT.id, quantity: 3 })],
+      ...over,
+    });
+  const wishesFor = (db: FakeDb, cardId = BOLT.id, finish: Finish | null = null) =>
+    readHandlers(db).deck_quick_add_wishes({ cardId, finish: finish as never });
+  const quickAdd = (
+    db: FakeDb,
+    over: Partial<{
+      deckId: number;
+      cardId: string;
+      finish: Finish | null;
+      condition: string;
+      quantity: number;
+      wishId: number | null;
+    }> = {},
+  ) =>
+    writeHandlers(db).deck_quick_add_to_collection({
+      deckId: 1,
+      cardId: BOLT.id,
+      quantity: 3,
+      wishId: null,
+      ...over,
+    } as never);
+  const copiesIn = (db: FakeDb, folderId: number | null) =>
+    db.collectionEntries
+      .filter((e) => e.folderId === folderId)
+      .reduce((n, e) => n + e.quantity, 0);
+
+  /**
+   * **The assertion the whole feature turns on**, and it is a pair rather than one number: the
+   * copies land in the deck's **group** and the deck's `quantity` is untouched, so `ownedQuantity`
+   * rises to meet a line nobody edited.
+   *
+   * A handler that filed at the root instead would pass every wishlist assertion below and leave
+   * the deck reading 1 of 4 after a press that said it recorded three \u2014 which is the one thing a
+   * reader would look at.
+   */
+  it("records the copies into the deck's own group and touches no deck_cards cell", () => {
+    const db = shortOfThree();
+    const before = liveDeck(db)!.cards[0];
+    expect([before.quantity, before.ownedQuantity]).toEqual([4, 1]);
+
+    const out = quickAdd(db);
+
+    expect(out).toEqual({ copies: 3, entryId: 1, wishCopies: 0 });
+    const after = liveDeck(db)!.cards[0];
+    expect([after.quantity, after.ownedQuantity]).toEqual([4, 4]);
+    expect(db.deckCards).toHaveLength(1);
+    expect(db.deckCards[0].quantity).toBe(4);
+    expect(copiesIn(db, groupId(1))).toBe(4);
+    expect(copiesIn(db, null)).toBe(0);
+    // No wish was named, so the shopping list is exactly where it was.
+    expect(db.wishlistEntries.map((w) => w.quantity)).toEqual([3]);
+  });
+
+  /**
+   * **The fold is `addEntry`'s**, so a second press raises the row the first one made rather than
+   * standing a twin beside it \u2014 `folderId` is the eleventh term of the storage grain, and two
+   * rows of one grain in one folder is a state no other write in this fake can produce.
+   *
+   * Both halves are asserted, because either alone passes against a real bug: a handler that
+   * skipped the fold would still answer the right *total* here, and one that folded onto the wrong
+   * grain would answer one row with the wrong id.
+   */
+  it("folds a second press onto the row the first one landed in", () => {
+    const db = shortOfThree({
+      deckCards: [deckCard({ id: 1, cardId: BOLT.id, categoryKind: "main", quantity: 8 })],
+    });
+    const first = quickAdd(db, { quantity: 2 });
+    const second = quickAdd(db, { quantity: 2 });
+
+    expect(second.entryId).toBe(first.entryId);
+    expect(db.collectionEntries.filter((e) => e.folderId === groupId(1))).toHaveLength(1);
+    expect(copiesIn(db, groupId(1))).toBe(5);
+  });
+
+  /**
+   * **Issue #358's fence, and it reads the live list only.** A copy filed into a group that no
+   * `deck_cards` row backs is a phantom: the collection says the card is spoken for, every other
+   * deck is refused it, and nothing on the deck screen accounts for it.
+   *
+   * Two worlds, because they fail for two different reasons that a single fixture would conflate:
+   * a card the deck has never heard of, and a card it only *plans*. The second is the one worth
+   * pinning \u2014 a handler walking both variants would let a theory row conjure copies into a group.
+   * Both assert the store is untouched, which is what separates a refusal from a rollback that
+   * did not happen.
+   */
+  it("refuses a card the deck does not play, and a card it only plans", () => {
+    const db = shortOfThree();
+    // A different **oracle** card, not a different printing: the fence is oracle-grained, so
+    // `BOLT_2X2` here would be let through and the test below is the one that says so.
+    expect(() => quickAdd(db, { cardId: FOIL_ONLY.id })).toThrow(/does not play this card/);
+
+    const planned = shortOfThree({
+      deckCards: [
+        deckCard({ id: 1, cardId: BOLT.id, variant: "theory", categoryKind: "main", quantity: 4 }),
+      ],
+      collectionEntries: [],
+    });
+    expect(() => quickAdd(planned)).toThrow(/does not play this card/);
+    expect(planned.collectionEntries).toEqual([]);
+    expect(planned.deckAudit).toEqual([]);
+  });
+
+  /**
+   * **A different printing of the card the deck plays is not refused**, and that is the fence
+   * reading the oracle card rather than the printing \u2014 `deck::release_group_copies`' rule and
+   * `ownedByOracle`'s. It sits here rather than beside the refusal above because the two are one
+   * decision seen from both sides, and a handler comparing `card_id` strings passes the refusal
+   * test and fails this one.
+   */
+  it("lets a different printing of a card the deck plays through the fence", () => {
+    const db = shortOfThree({
+      deckCards: [deckCard({ id: 1, cardId: BOLT_2X2.id, categoryKind: "main", quantity: 4 })],
+      collectionEntries: [],
+    });
+    expect(quickAdd(db, { quantity: 1 }).copies).toBe(1);
+    expect(db.collectionEntries).toHaveLength(1);
+    expect(db.collectionEntries[0]).toMatchObject({ cardId: BOLT.id, folderId: groupId(1) });
+  });
+
+  /** The three refusals that are about the press rather than about the card. The deck fence is
+   *  **before** the not-played one on purpose: "that deck is gone" and "that deck does not play
+   *  this" are different things to tell a stale editor, and a handler that asked about the cards
+   *  first would answer the wrong one of them for a deck that is not there. */
+  it("refuses no copies, a deck that is gone and a deck with no group", () => {
+    const db = shortOfThree();
+    expect(() => quickAdd(db, { quantity: 0 })).toThrow(/quantity of at least one/);
+    // The gone deck is asked about with a card **it does not play either**, so a handler that
+    // checked the list first would answer NOT_IN_DECK and this assertion is what catches it.
+    expect(() => quickAdd(db, { deckId: 404, cardId: FOIL_ONLY.id })).toThrow(/deck is not there/);
+    expect(db.collectionEntries).toHaveLength(1);
+
+    db.collectionFolders = db.collectionFolders.filter((f) => f.deckId !== 1);
+    expect(() => quickAdd(db)).toThrow(/no folder to hold its cards/);
+  });
+
+  /**
+   * **The read's predicate is `OWNED_SQL`'s first arm with the any-printing arm dropped**, so the
+   * narrowing is on the *printing*: a wish for any printing of the card is left standing, exactly
+   * as the pull leaves an Alpha Bolt out of an M10 line and for the same trade \u2014 nothing is ever
+   * taken off a shopping list that is not the cardboard the reader has just recorded.
+   *
+   * A NULL `preferredFinish` still matches, because the list itself says a wish that names no
+   * finish takes any of them; excluding it would refuse the commonest wish there is. The seed puts
+   * the one match **last**, so a handler that ignored the finish or the printing answers more than
+   * one row rather than coinciding.
+   */
+  it("offers the exact printing at any finish it names, and never an any-printing wish", () => {
+    const db = shortOfThree({
+      wishlistEntries: [
+        // Another printing of the same oracle card \u2014 the narrowing this feature took.
+        wish({ id: 1, cardId: BOLT_2X2.id, quantity: 1 }),
+        // The any-printing wish: `cardId` null, which no equality can match.
+        wish({ id: 2, cardId: null, quantity: 1 }),
+        // The right printing pinned to the wrong finish.
+        wish({ id: 3, cardId: BOLT.id, preferredFinish: "foil", quantity: 1 }),
+        // …and the two that do match: an explicit `nonfoil` and a wish that names no finish.
+        wish({ id: 4, cardId: BOLT.id, preferredFinish: "nonfoil", quantity: 1 }),
+        wish({ id: 5, cardId: BOLT.id, quantity: 2 }),
+      ],
+    });
+    expect(wishesFor(db).map((w) => w.id)).toEqual([4, 5]);
+    // And the foil press is the mirror image: the `foil` wish and the finish-blind one, never the
+    // `nonfoil` one. Both directions, because a handler that compared nothing passes either alone.
+    expect(wishesFor(db, BOLT.id, "foil").map((w) => w.id)).toEqual([3, 5]);
+  });
+
+  /**
+   * **The order is the picker's pre-selection**: the root first, then the reader's own folders in
+   * their `sortOrder`, oldest row first inside a tie. It is the pull's order and its argument \u2014
+   * rank by how little of the reader's filing the write disturbs \u2014 borrowed rather than
+   * re-decided.
+   *
+   * The ids run against the answer on purpose, so a handler that returned rows in store order
+   * fails rather than coinciding. `folderName` rides along for the dialog to draw, `null` at the
+   * root because the backend has no row to read a name off.
+   */
+  it("offers the root first, then the reader's folders in their own order", () => {
+    const db = shortOfThree({
+      wishlistFolders: [
+        { id: 1, parentId: null, name: "Later", sortOrder: 1 },
+        { id: 2, parentId: null, name: "Ordered", sortOrder: 0 },
+      ],
+      wishlistEntries: [
+        wish({ id: 1, cardId: BOLT.id, quantity: 1, folderId: 1 }),
+        wish({ id: 2, cardId: BOLT.id, quantity: 1, folderId: 2 }),
+        wish({ id: 3, cardId: BOLT.id, quantity: 1 }),
+        wish({ id: 4, cardId: BOLT.id, quantity: 1 }),
+      ],
+    });
+    expect(wishesFor(db)).toEqual([
+      { id: 3, quantity: 1, folderId: null, folderName: null },
+      { id: 4, quantity: 1, folderId: null, folderName: null },
+      { id: 2, quantity: 1, folderId: 2, folderName: "Ordered" },
+      { id: 1, quantity: 1, folderId: 1, folderName: "Later" },
+    ]);
+  });
+
+  /** An empty answer is the ordinary case, never a refusal \u2014 most cards a deck is short of are on
+   *  no shopping list at all, and the editor reads `[]` as "record the copies and take nothing
+   *  off". A read that refused would put a banner on every quick add in the app. */
+  it("answers an empty list for a card nobody wished for", () => {
+    expect(wishesFor(shortOfThree({ wishlistEntries: [] }))).toEqual([]);
+  });
+
+  /**
+   * **The wish is decremented by `min(copies, what it held)` and deleted at zero**, because
+   * `wishlist_entries` has a CHECK against a zero row: a want that is met is over.
+   *
+   * Both arms in one test, because they are one arithmetic seen at two sizes and a fixture that
+   * showed only the delete could not tell a decrement from a delete-and-recreate.
+   */
+  it("takes copies off the named wish, and deletes it when they cover it", () => {
+    const partial = shortOfThree({
+      wishlistEntries: [wish({ id: 1, cardId: BOLT.id, quantity: 5 })],
+    });
+    expect(quickAdd(partial, { wishId: 1 })).toMatchObject({ copies: 3, wishCopies: 3 });
+    expect(partial.wishlistEntries.map((w) => w.quantity)).toEqual([2]);
+
+    // A wish for one copy against a press of three: the wish is cleared and **all three copies are
+    // still recorded**. The shortfall and the shopping list are two different numbers, and neither
+    // clamps the other.
+    const small = shortOfThree({
+      wishlistEntries: [wish({ id: 1, cardId: BOLT.id, quantity: 1 })],
+    });
+    expect(quickAdd(small, { wishId: 1 })).toMatchObject({ copies: 3, wishCopies: 1 });
+    expect(small.wishlistEntries).toEqual([]);
+    expect(copiesIn(small, groupId(1))).toBe(4);
+  });
+
+  /**
+   * **The wish is re-read inside the write and re-checked against the predicate the read used** \u2014
+   * the pull's "the plan is the fence" one table over, because the picker's answer is a round trip
+   * old.
+   *
+   * **And the copies roll back with it.** The crate gets that from the transaction the whole press
+   * sits in; a fake with no transaction has to undo the add by hand, or it shows a reader copies
+   * standing after a press that failed \u2014 a state the backend cannot produce, and the class of
+   * defect this feature has already shipped once. So every arm asserts the group is untouched.
+   */
+  it("refuses a wish that has moved on, and records nothing when it does", () => {
+    const gone = shortOfThree();
+    gone.wishlistEntries = [];
+    expect(() => quickAdd(gone, { wishId: 1 })).toThrow(/not there any more/);
+    expect(copiesIn(gone, groupId(1))).toBe(1);
+    expect(gone.deckAudit).toEqual([]);
+
+    // Re-pinned to another printing since the picker read it \u2014 a different sentence, because a
+    // line that is still on the list and a line that has gone are different things to be told.
+    const repinned = shortOfThree({
+      wishlistEntries: [wish({ id: 1, cardId: BOLT_2X2.id, quantity: 3 })],
+    });
+    expect(() => quickAdd(repinned, { wishId: 1 })).toThrow(/not for this card/);
+    expect(copiesIn(repinned, groupId(1))).toBe(1);
+
+    // …and re-pinned to another *finish*, which is the same sentence and a different fixture: a
+    // handler that re-checked only the card id passes the arm above and fails this one.
+    const refoiled = shortOfThree({
+      wishlistEntries: [wish({ id: 1, cardId: BOLT.id, preferredFinish: "foil", quantity: 3 })],
+    });
+    expect(() => quickAdd(refoiled, { wishId: 1 })).toThrow(/not for this card/);
+    expect(copiesIn(refoiled, groupId(1))).toBe(1);
+    expect(refoiled.wishlistEntries[0].quantity).toBe(3);
+  });
+
+  /**
+   * **The `wishGone` fault is the one refusal here a story cannot press its way into**, which is
+   * why it is a fault and not a seed: the wish has to be *there* when the picker reads it and gone
+   * when the write re-reads it, and no arrangement of rows can be both. Both halves are asserted
+   * together \u2014 the read still answering is what makes the fault a stale dialog rather than an
+   * empty one.
+   */
+  it("stands in the stale-wish world with the read still answering", () => {
+    const db = shortOfThree({ fault: "wishGone" });
+    expect(wishesFor(db).map((w) => w.id)).toEqual([1]);
+    expect(() => quickAdd(db, { wishId: 1 })).toThrow(/not there any more/);
+    expect(copiesIn(db, groupId(1))).toBe(1);
+    // And the press without a wish is untouched by it: the fault lands on the wishlist arm alone.
+    expect(quickAdd(db).copies).toBe(3);
+  });
+
+  /**
+   * **One history row, `delta` 0 and no card id.** `delta` is what `auditText.ts`'s day header
+   * adds up, so a quick add contributing to it would make a day of filing look like a day of
+   * deckbuilding \u2014 and the deck's *list* really did gain nothing.
+   *
+   * **And no undo step**, read through `allHandlers` because `journalled` is what would file one
+   * and `writeHandlers` alone could not tell a decision from an omission. This write changes no
+   * `deck_cards` cell, so the only half a step could put back is the copies \u2014 which are the
+   * reader's, bought and recorded, and quietly unfiling them is worse than doing nothing.
+   */
+  it("records one move row with a zero delta, and files no undo step", () => {
+    const db = shortOfThree();
+    const h = allHandlers(db);
+    h.deck_update({ id: 1, patch: { name: "Renamed" } });
+    const steps = db.deckUndo.length;
+    const cursor = h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id;
+
+    h.deck_quick_add_to_collection({
+      deckId: 1,
+      cardId: BOLT.id,
+      quantity: 3,
+      wishId: 1,
+    } as never);
+
+    const row = db.deckAudit[db.deckAudit.length - 1];
+    expect(row).toMatchObject({
+      deckId: 1,
+      variant: "live",
+      kind: "move",
+      cardId: null,
+      cardName: null,
+      delta: 0,
+    });
+    expect(JSON.parse(row.payload)).toEqual({ quickAdd: { copies: 3, wishes: 3 } });
+    expect(db.deckUndo).toHaveLength(steps);
+    expect(h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id).toBe(cursor);
+  });
+
+  /**
+   * **The `starter` seed already carries the ambiguous case, and this pins it** rather than adding
+   * a fixture row for it \u2014 a new corpus row is a fix round here, and the world that stories the
+   * picker is one that already exists. Deck 1 plays four Counterspells and holds two, and there
+   * are two `mh2 267` wishes: one at the root and one in a folder.
+   *
+   * If a later edit to `seeds.ts` takes either wish away, the `QuickUnwishDialog` stories lose the
+   * only world they can be about \u2014 which is a thing to be told here rather than by a story that
+   * quietly draws one row.
+   */
+  it("finds two matching wishes in the starter world, so the picker has something to ask", () => {
+    const db = seed("starter");
+    const counterspell = db.deckCards.find(
+      (dc) => dc.deckId === 1 && dc.name === "Counterspell" && dc.variant === "live",
+    )!;
+    const wishes = readHandlers(db).deck_quick_add_wishes({
+      cardId: counterspell.cardId,
+      finish: counterspell.finish,
+    });
+    expect(wishes).toHaveLength(2);
+    // The root first, which is the pre-pick, and the folder's name for the dialog to draw.
+    expect(wishes.map((w) => w.folderName)).toEqual([null, "Backordered"]);
+  });
+});
+
+/**
  * `deck_clear` — the pile clear above with one filter dropped, so these are the same questions
  * asked of the whole list.
  *
@@ -7039,6 +7405,15 @@ describe("the busy fault", () => {
       // and here for `collapsed`'s reason: `invoke` matches by name, and a boolean has no
       // junk state that could fail this loop instead.
       locked: true,
+      // The quick add's three, none of which is read on this path either — `refuseIfBusy` is the
+      // first statement in it, ahead even of the zero-quantity refusal. All three are valid for
+      // `root`'s reason: `finish` and `condition` are both *validated* by that handler, so a
+      // spelling this app does not know would fail the loop by answering "is not a finish"
+      // instead of BUSY, which is exactly the ordering mistake this sweep looks for. `wishId`
+      // is `null` because the wishlist arm is the one half a busy database must not reach.
+      finish: null,
+      condition: "NM",
+      wishId: null,
       // `wishlist_optimize_apply`'s, and the **second** key on this record that three writes
       // share — `collection_import_commit` and `wishlist_import_commit` take an `items` of their
       // own shape, and `section`'s three values above are the precedent for saying so out loud.
@@ -7286,15 +7661,23 @@ describe("the busy fault", () => {
     // merge** — not 88 twice, which is what each branch's own note said and what adding one on
     // paper to either would have produced. Re-counted by running it.
     //
-    // Re-pointing a wishlist at its cheapest printings then added **one**, 89 → 90:
-    // `wishlist_optimize_apply` takes `sync::with_write` like every other wishlist write, and it
-    // is the second write in this table whose whole body is a transaction over a list of items
-    // (`wishlist_import_commit` being the first), which is why `items` joins the record above.
-    // Its read half, `wishlist_optimize_plan`, writes nothing and goes through `db_read` — so it
-    // is in `readHandlers` and not in this table at all, exactly as `deck_pull_plan` is not.
-    // Re-counted by running the sweep on this branch; a merge with any sibling that adds a write
-    // has to run it again rather than adding one to this figure.
-    expect(names).toHaveLength(90);
+    // **Then two branches added one each and the merge answered 91, which is the paragraph above
+    // happening a second time — and this time both sides had written the warning themselves.**
+    // Each branch's note said "89 → 90", each was right about its own tree, and each would have
+    // been wrong the moment the other landed; the resolution is the sweep's answer, not either
+    // number and not one plus the other on paper.
+    //
+    // `deck_quick_add_to_collection` (issue #350) is the fourth write to reach across the deck
+    // boundary and the first that *creates* a `collection_entries` row rather than moving one, so
+    // it takes `collection_source::with_write_owned` for the strongest version of its three
+    // neighbours' reason — the facet index's `owned` dimension is built by counting rows and this
+    // write makes one. `wishlist_optimize_apply` (issue #352) takes `sync::with_write` like every
+    // other wishlist write, and is the second write here whose whole body is a transaction over a
+    // list of items (`wishlist_import_commit` being the first), which is why `items` joins the
+    // record above. **Both read halves are absent from this table** — `deck_quick_add_wishes`
+    // through `lock_db_read` and `wishlist_optimize_plan` through `db_read` — exactly as
+    // `deck_pull_plan` is.
+    expect(names).toHaveLength(91);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,

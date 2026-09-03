@@ -22,6 +22,7 @@ import {
   useSetCollectionFolder,
 } from "@/features/collection/useCollectionFolders";
 import { useWishlistFolderList } from "@/features/wishlist/useWishlistFolders";
+import { MENU_CONDITION } from "@/lib/conditions";
 import type { Finish } from "@/lib/finish";
 import { ipc, ipcError } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
@@ -33,18 +34,6 @@ import {
   type CardMenuDeps,
   type CardMenuTarget,
 } from "./cardMenu";
-
-/**
- * The condition a menu add records.
- *
- * Near Mint, always, and stated here rather than left to the backend's default so that the one
- * decision the menu makes on the reader's behalf is visible at the place it is made. A
- * collection row's identity includes its condition, so something has to choose; an unmarked
- * card is assumed NM everywhere else in this app (the quick-add popup opens on it), and the
- * menu is the fast path rather than the careful one — the popup is still there for a played
- * copy.
- */
-const MENU_CONDITION = "NM" as const;
 
 export interface CardMenuWiring {
   /** One object for the whole page. Hand it to `buildCardMenu` with each row's own target. */

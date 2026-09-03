@@ -432,9 +432,12 @@ a file says nothing about a reader's filing. The deck arms are the one caller th
 `useImport` reads the deck's `kind: "deck"` group out of `collection_folder_list` **at press
 time** — a query would be `undefined` while it loaded, and `importIntoNewDeck`'s deck did not
 exist a statement earlier — and sends it, so the decklist and the group agree the moment the
-dialog closes and no other deck can claim the copies. `collection::IMPORT_FOLDERS` is the fence:
-the reader's own folders and a deck group, never `Recently removed` and never an id nothing
-answers to. A deck with no group **refuses** (`NO_DECK_GROUP`, the crate's own sentence) rather
+dialog closes and no other deck can claim the copies. `collection::DECK_WRITE_FOLDERS` is the
+fence: the reader's own folders and a deck group, never `Recently removed` and never an id nothing
+answers to. **It was called `IMPORT_FOLDERS` until 2026-09-03**, when the quick add
+(`deck_quick_add.rs`, [issue #350](https://github.com/Msgaihede/mtg-grimoire/issues/350)) became
+the second write to pass it — a constant named after one of its two callers is a name that reads
+as a rule about imports rather than about deck-driven writes. A deck with no group **refuses** (`NO_DECK_GROUP`, the crate's own sentence) rather
 than falling back to the root, and the refusal rides back in `ownRefusal` like every other on this
 half. `OWN_COPIES_HINT` says the consequence a checkbox label cannot imply: *"They are filed into
 this deck's own folder, so no other deck can use them."*

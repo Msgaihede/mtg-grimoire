@@ -12,6 +12,25 @@
 export const CONDITIONS = ["NM", "LP", "MP", "HP", "DMG"] as const;
 export type Condition = (typeof CONDITIONS)[number];
 
+/**
+ * The condition a **menu** add records, on either of the two menus that record one.
+ *
+ * Near Mint, always, and stated in the app rather than left to the backend's default so that the
+ * one decision a menu makes on the reader's behalf is visible at the place it is made. A
+ * collection row's identity includes its condition, so something has to choose; an unmarked card
+ * is assumed NM everywhere else in this app (the quick-add popup opens on it), and a menu is the
+ * fast path rather than the careful one — the popup is still there for a played copy.
+ *
+ * **It lived on `useCardMenuDeps.ts` until 2026-09-03, beside the card menu's own collection add,
+ * and moved here when the deck card menu's quick add became the second caller.** The move is not
+ * tidying: `useCardMenuDeps` imports `DEFAULT_VARIANT` from `useDeck`, so `useDeck` importing this
+ * constant back closed a two-module cycle. That particular cycle was harmless — both reads sit
+ * inside function bodies, so nothing is `undefined` at module-evaluation time — but it is harmless
+ * by a property of the *call sites* rather than of the modules, which is a thing a later edit
+ * silently takes away. A constant shared by two features is vocabulary, and vocabulary lives here.
+ */
+export const MENU_CONDITION: Condition = "NM";
+
 /** Sentence case, as every other label in the app is. */
 export const CONDITION_LABEL: Record<Condition, string> = {
   NM: "Near mint",

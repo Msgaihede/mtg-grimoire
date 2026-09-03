@@ -62,6 +62,7 @@ pub mod deck;
 pub mod deck_audit;
 pub mod deck_meta;
 pub mod deck_pull;
+pub mod deck_quick_add;
 pub mod deck_theory;
 pub mod deck_undo;
 pub mod errors;

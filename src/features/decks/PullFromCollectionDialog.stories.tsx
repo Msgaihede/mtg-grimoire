@@ -264,6 +264,45 @@ export const PickingASource: Story = {
 };
 
 /**
+ * **The same dialog opened from one card's right-click** — `Collection ▸ Pull 2 from your
+ * collection` (issue #350).
+ *
+ * The subtitle is the *whole* of the difference: it names the card instead of the deck's
+ * shortfall, because a panel headed `Pull from collection` over a single row, saying *cards this
+ * deck is short of*, reads as a plan that has lost the rest of itself. The heading does not move —
+ * it says what the press does, and that is the same act at either scope.
+ *
+ * **The narrowing is the caller's and never this component's.** The editor filters the same cached
+ * plan to the card's `pullKey` and hands over what is left, so nothing here holds a notion of a
+ * key and the two entrances cannot come to disagree about which rows belong to which card. That
+ * is why this story is one `args` line rather than a second component.
+ *
+ * **It opens at all only where there is a decision in it**: `choosePull` takes a lone candidate
+ * outright with no dialog, and sends two or more — this row — here. None comes here too, so that
+ * {@link NothingToPull}'s three sentences do the explaining rather than a banner that could only
+ * have said the search found nothing.
+ */
+export const OneCard: Story = {
+  args: { rows: [BOROS_CHARM], cardName: "Boros Charm" },
+  play: async ({ canvas }) => {
+    await waitFor(
+      async () =>
+        await expect(
+          await canvas.findByText("Copies of Boros Charm you already own — into Boros Burn"),
+        ).toBeVisible(),
+      { timeout: FRAME_WAIT },
+    );
+
+    // The heading is unchanged, which is the half a reader would notice if it were not.
+    await expect(canvas.getByRole("heading", { name: "Pull from collection" })).toBeVisible();
+    await expect(
+      canvas.queryByText("Cards this deck is short of that you already own — into Boros Burn"),
+    ).toBeNull();
+    await expect(canvas.getByText("2 copies across 1 card")).toBeVisible();
+  },
+};
+
+/**
  * A line the collection cannot finish: two foil copies wanted, one sitting in `Recently removed`.
  *
  * **The sentence is a statement, not a warning.** It is the ordinary answer for a deck that is

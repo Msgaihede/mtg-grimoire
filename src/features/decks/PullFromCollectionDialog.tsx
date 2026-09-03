@@ -9,6 +9,20 @@
  * asked of the copies the reader has **not** got; this is the half that can be answered without
  * spending anything (issue #351).
  *
+ * ## Two entrances, one dialog
+ *
+ * The deck-wide press in the stats band was the only one until 2026-09-03; a deck card's
+ * right-click now has `Collection ▸ Pull N from your collection`, which is the same dialog over
+ * **one row of the plan** (issue #350). The narrowing is entirely the caller's — it filters the
+ * plan to that card's {@link pullKey} and passes a `cardName` for the sentence — so nothing in
+ * this file knows the difference beyond one line of prose, and the per-card press reads the same
+ * cached `deck_pull_plan` the deck-wide one does.
+ *
+ * **The per-card entrance opens this dialog only when there is a decision in it**: one candidate
+ * pulls outright with no dialog at all, and two or more, or none, land here. That test is
+ * `quickCollection.ts`'s `choosePull` and is deliberately not this component's — a dialog that
+ * decided whether it should have been opened is a dialog with an opinion about its own caller.
+ *
  * ## What the reader is actually deciding
  *
  * Almost never anything. Every row arrives ticked, the backend has already pre-picked a source
@@ -277,6 +291,54 @@ const CONFIRM = cn(
 );
 
 /**
+ * The subtitle, in the two scopes this dialog is opened at.
+ *
+ * **A card name narrows the sentence and nothing else about the dialog changes**, which is the
+ * whole of what {@link PullFromCollectionDialogProps.cardName} buys: the body draws whatever rows
+ * it was handed, so the per-card opener is the deck-wide one with a filter applied at the caller
+ * and a sentence that says so. Written as a function rather than inline because it is the one
+ * place the two scopes are told apart, and a reader looking for that difference should find it
+ * in one place.
+ */
+function subtitleFor(deckName: string, cardName: string | null | undefined): string {
+  return cardName === null || cardName === undefined
+    ? `Cards this deck is short of that you already own — into ${deckName}`
+    : `Copies of ${cardName} you already own — into ${deckName}`;
+}
+
+export interface PullFromCollectionDialogProps {
+  open: boolean;
+  /** The deck the copies are going into — the dialog names it. */
+  deckName: string;
+  /**
+   * The one card this pull is about, or absent for the deck-wide press.
+   *
+   * **Only the subtitle reads it.** The rows arrive **already filtered** — see {@link rows} —
+   * so this component holds no opinion about a `PullKey` and cannot come to disagree with the
+   * caller about which rows belong to which card. What it changes is the sentence under the
+   * heading, because a panel headed `Pull from collection` over a single row, saying *cards this
+   * deck is short of*, reads as a plan that has lost the rest of itself.
+   */
+  cardName?: string | null;
+  /**
+   * The plan, or `null` while the read has not answered.
+   *
+   * **Filtered by the caller, never here.** The per-card entrance (a deck card's
+   * `Collection ▸ Pull …`) hands over the rows whose {@link pullKey} matches that card, and the
+   * deck-wide one hands over the whole plan. Keeping the narrowing at the caller is what stops
+   * this component growing a notion of a `PullKey` — and it is the same rows either way, out of
+   * the same cached `deck_pull_plan`, so the two entrances can never draw a different plan for
+   * one deck.
+   */
+  rows: readonly DeckPullRow[] | null;
+  loading: boolean;
+  /** Why the plan could not be read, already through `ipcError`. */
+  readError: string | null;
+  pull: PullWrite;
+  onClose: () => void;
+}
+
+/**
  * Ask which owned copies to move into the deck, and move them.
  *
  * Every prop but `open` is about the read or the write; the dialog owns only the reader's
@@ -286,23 +348,13 @@ const CONFIRM = cn(
 export function PullFromCollectionDialog({
   open,
   deckName,
+  cardName,
   rows,
   loading,
   readError,
   pull,
   onClose,
-}: {
-  open: boolean;
-  /** The deck the copies are going into — the dialog names it. */
-  deckName: string;
-  /** The plan, or `null` while the read has not answered. */
-  rows: readonly DeckPullRow[] | null;
-  loading: boolean;
-  /** Why the plan could not be read, already through `ipcError`. */
-  readError: string | null;
-  pull: PullWrite;
-  onClose: () => void;
-}): JSX.Element {
+}: PullFromCollectionDialogProps): JSX.Element {
   return (
     <Dialog
       open={open}
@@ -311,7 +363,10 @@ export function PullFromCollectionDialog({
       // press does and stays the same on every deck, where the destination is the fact that
       // changes — which is what {@link DialogProps.subtitle} is for, and why it is under the
       // heading rather than beside it (a long deck name would otherwise truncate the heading).
-      subtitle={`Cards this deck is short of that you already own — into ${deckName}`}
+      // **The scope rides here too** rather than in the heading, for exactly that reason: a
+      // per-card pull does the same thing to the same deck, and a heading that changed with the
+      // opener would make one press look like two features.
+      subtitle={subtitleFor(deckName, cardName)}
       closeLabel="Close the pull list"
       // Wider than the difference list's `w-[47.5rem]`, because a row here carries a sentence the
       // shopping list does not: a source naming a folder, a condition and up to four traits is

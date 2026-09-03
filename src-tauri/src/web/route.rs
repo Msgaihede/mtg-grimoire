@@ -118,6 +118,11 @@ pub const COMMANDS: &[&str] = &[
     // commands, because what they have in common is the boundary and not the table.
     "deck_pull_plan",
     "deck_pull_from_collection",
+    // The fourth: the read that finds a card's matching wishes, and the write that records
+    // copies straight into a deck's group. Here for the three above's reason — what they have in
+    // common is the boundary and not the table — and this is the one that *creates* a row.
+    "deck_quick_add_wishes",
+    "deck_quick_add_to_collection",
     // The Wishlist destination.
     "wishlist_list",
     "wishlist_add",
@@ -1199,6 +1204,49 @@ pub fn call(
                 command,
                 crate::collection_source::with_write_owned(state, |c| {
                     crate::deck_pull::from_collection(c, deck_id, &picks)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        // The fourth crossing, and the split is the third's: **the read is `lock_db_read` and
+        // the write is `with_write_owned`**. The write owes the owned rebuild more than its
+        // three neighbours do — they move a `collection_entries` row and this one *makes* one,
+        // and the facet index's `owned` dimension counts rows.
+        //
+        // `finish`, `condition` and `wishId` come through `optional`: JavaScript sends an absent
+        // key rather than a `null` for a regular copy and for "no wish was picked", and a
+        // `field::<Option<_>>` would refuse the ordinary call.
+        "deck_quick_add_wishes" => {
+            let card_id: String = field(command, args, "cardId")?;
+            let finish: Option<String> = optional(command, args, "finish")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::deck_quick_add::wishes(&conn, &card_id, finish.as_deref())
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_quick_add_to_collection" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let card_id: String = field(command, args, "cardId")?;
+            let finish: Option<String> = optional(command, args, "finish")?;
+            let condition: Option<String> = optional(command, args, "condition")?;
+            let quantity: i64 = field(command, args, "quantity")?;
+            let wish_id: Option<i64> = optional(command, args, "wishId")?;
+            encode(
+                command,
+                crate::collection_source::with_write_owned(state, |c| {
+                    crate::deck_quick_add::quick_add(
+                        c,
+                        deck_id,
+                        &card_id,
+                        finish.as_deref(),
+                        condition.as_deref(),
+                        quantity,
+                        wish_id,
+                    )
                 })
                 .map_err(RouteError::Failed)?,
             )
@@ -2515,9 +2563,17 @@ mod tests {
                 "`{name}` is advertised in COMMANDS and has no match arm"
             );
         }
+        // **Take this number from the failure, never from arithmetic.** It is a fact about a
+        // *tree*, so every open branch has a different one and two branches that each add a
+        // route both write the same next value and both are right until either lands. It read
+        // 128 on the quick-add branch (issue #350, two routes) and 128 on the
+        // cheapest-printing one (issue #352, two more), and the merge of the two answers
+        // **130** — which neither side could have written and adding one branch's delta to the
+        // other's total would have got to only by luck. `left` in the assertion message is
+        // `COMMANDS.len()` as the build computed it; that is the answer.
         assert_eq!(
             COMMANDS.len(),
-            129,
+            131,
             "update this number when a command is added"
         );
     }

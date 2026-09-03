@@ -287,6 +287,99 @@ describe("auditSentence", () => {
   });
 
   /**
+   * **A quick add is the second `move` that names no card**, and it is the fourth reuse of an
+   * existing kind: `AUDIT_KINDS` stays at nine because the column carries a CHECK SQLite cannot
+   * alter. `move` is the least wrong word rather than the honest one — this write *creates*
+   * copies where the pull moves them — and what the two share is that neither writes a
+   * `deck_cards` row, so `delta` is `0` on both and the fixture says so.
+   *
+   * "for this deck" rather than "into this deck": the copies went into the reader's collection,
+   * filed in the deck's group. A line saying they were added to the deck would be the one thing
+   * this press did not do.
+   */
+  it("words a quick add rather than reading it as a card move", () => {
+    const recorded = auditSentence(
+      entry("move", { quickAdd: { copies: 4, wishes: 1 } }, { cardId: null, cardName: null, delta: 0 }),
+    );
+
+    expect(recorded).toEqual({
+      text: "Recorded 4 copies for this deck",
+      detail: "1 copy off your wishlist",
+    });
+    // The wrong-but-plausible answers, asserted the way the pull's are: every `default` arm in
+    // this file is a true-sounding sentence, so a drift here fails nothing on its own.
+    expect(recorded.text).not.toContain("Moved");
+    expect(recorded.text).not.toContain("Pulled");
+    expect(recorded.text).not.toContain("a card");
+  });
+
+  /** One copy in each half is the smallest useful press and the count both have to get right. */
+  it("says one copy and not 1 copys, in both halves", () => {
+    expect(
+      auditSentence(entry("move", { quickAdd: { copies: 1, wishes: 1 } }, { cardId: null })),
+    ).toEqual({ text: "Recorded 1 copy for this deck", detail: "1 copy off your wishlist" });
+
+    expect(
+      auditSentence(entry("move", { quickAdd: { copies: 3, wishes: 2 } }, { cardId: null })).detail,
+    ).toBe("2 copies off your wishlist");
+  });
+
+  /**
+   * **`wishes` is copies, never wishlist lines** — `deck_quick_add_to_collection` takes one
+   * optional `wish_id`, so a press clears **at most one line** and records
+   * `min(copies, wish.quantity)` off it. A four-copy press against a wish for four is therefore
+   * `{"copies": 4, "wishes": 4}` and one line cleared, and the detail this used to draw — `4
+   * wishes cleared` — sent the reader looking for three shopping lines that never existed. The
+   * assertion is the *absence* of that word, because the count alone reads correctly under both
+   * spellings and only the noun is wrong.
+   */
+  it("counts wishlist copies rather than wishlist lines", () => {
+    const detail = auditSentence(
+      entry("move", { quickAdd: { copies: 4, wishes: 4 } }, { cardId: null }),
+    ).detail;
+
+    expect(detail).toBe("4 copies off your wishlist");
+    expect(detail).not.toContain("wishes");
+    expect(detail).not.toContain("cleared");
+  });
+
+  /** A press that named no wish, an older build's row and a truncated payload all read `0`
+   *  through `numberField` — and "0 copies off your wishlist" is a detail about something that
+   *  did not happen. `importLine`'s `labelsCreated` rule, a third payload over. */
+  it("draws no detail for a quick add that cleared no wish", () => {
+    expect(
+      auditSentence(entry("move", { quickAdd: { copies: 4, wishes: 0 } }, { cardId: null })).detail,
+    ).toBeNull();
+    expect(
+      auditSentence(entry("move", { quickAdd: { copies: 4 } }, { cardId: null })).detail,
+    ).toBeNull();
+  });
+
+  /** The regression that matters, twice over: an ordinary move stays a move, and a **pull** is
+   *  still a pull. The two payloads sit side by side in one branch, so a quick-add arm that
+   *  claimed the `move` kind whole would rewrite every pull line in the reader's history. */
+  it("leaves the pull's own rows to the pull", () => {
+    expect(auditSentence(entry("move", { pull: { copies: 2, cards: 1 } }, { cardId: null }))).toEqual(
+      { text: "Pulled 2 copies from your collection", detail: "across 1 card" },
+    );
+    expect(auditSentence(entry("move", { from: "Ramp", to: "Land" })).text).toBe("Moved Sol Ring");
+  });
+
+  /** A `quickAdd` payload on a kind this build has no sentence for falls through to that kind's
+   *  own branch — `pullLine`'s defensive rule, one payload over. */
+  it("leaves a kind it has no quick-add sentence for to its own branch", () => {
+    expect(
+      auditSentence(
+        entry(
+          "add",
+          { category: "Ramp", quantity: 2, quickAdd: { copies: 4, wishes: 1 } },
+          { cardId: "c-1" },
+        ),
+      ),
+    ).toEqual({ text: "Added 2 × Sol Ring", detail: "to Ramp" });
+  });
+
+  /**
    * A swap that folds is the one that has to say so: two rows became one, and a deck list
    * that silently loses a line reads like a bug.
    */
