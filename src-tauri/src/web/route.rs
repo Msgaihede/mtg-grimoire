@@ -2547,9 +2547,17 @@ mod tests {
                 "`{name}` is advertised in COMMANDS and has no match arm"
             );
         }
+        // **Take this number from the failure, never from arithmetic.** It is a fact about a
+        // *tree*, so every open branch has a different one and two branches that each add a
+        // route both write the same next value and both are right until either lands. It read
+        // 128 on the quick-add branch (issue #350, two routes) and 128 on the
+        // cheapest-printing one (issue #352, two more), and the merge of the two answers
+        // **130** — which neither side could have written and adding one branch's delta to the
+        // other's total would have got to only by luck. `left` in the assertion message is
+        // `COMMANDS.len()` as the build computed it; that is the answer.
         assert_eq!(
             COMMANDS.len(),
-            128,
+            130,
             "update this number when a command is added"
         );
     }
