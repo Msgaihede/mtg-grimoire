@@ -346,7 +346,23 @@ export function SearchPage() {
   }, [latestKey, isPlaceholder]);
 
   return (
-    <section className="flex h-full flex-col gap-4">
+    <section
+      className={cn(
+        "flex flex-col gap-4",
+        // **`h-full` is the table's, not the page's.** `VirtualTable` is `min-h-0 flex-1
+        // overflow-auto`, so it has a height only while every box above it has one — this
+        // section pinned to `main`'s height is the top of that chain, and without it the table
+        // collapses to nothing.
+        //
+        // The wall wants the opposite and now says so: under `CardGrid`'s `grow` it is as tall
+        // as its rows, `main` is what scrolls, and a section clamped to one screen would be a
+        // containing block one screen tall — which is as far as `FilterBar`'s `sticky top-0`
+        // could then travel, so the bar would unstick and scroll away after the first viewport
+        // of cards. That pin has never engaged before, because until now every wall this row
+        // sits above was its own scroller; the bar's own comment says so.
+        view === "table" && "h-full",
+      )}
+    >
       {/* Not shown: the filter bar says what this view is far better than a title would,
           and the window is short. It is here to name the view for assistive tech. */}
       <h2 className="sr-only">Card search</h2>
@@ -481,7 +497,16 @@ function Results({ search }: { search: CardSearch }) {
   const empty = rows.length === 0;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-2">
+    <div
+      className={cn(
+        "flex flex-col gap-2",
+        // The section's `h-full` reasoning, one level in: `min-h-0 flex-1` is what hands the
+        // table a definite height to scroll inside, and is exactly what a growing wall must not
+        // be given — a flex item told to fill a bounded column cannot also be as tall as its
+        // own content.
+        view === "table" && "min-h-0 flex-1",
+      )}
+    >
       {/* One live region, mounted for the life of the view: a region that appears together
           with its text announces nothing, because there was no change for a screen reader
           to notice. The rows stay outside it — a live region wrapped around a virtualised
@@ -539,6 +564,10 @@ function Results({ search }: { search: CardSearch }) {
           <CardGrid
             rows={rows}
             listKey={searchKey}
+            // **This wall grows and `main` scrolls it — the page is one long page.** The first of
+            // the four page-width walls to say so; the other three, and the two bounded surfaces
+            // that must keep a scroller of their own, are untouched. See `CardGrid`'s `grow`.
+            grow
             // **A phone gets a narrower card, so the wall is two columns rather than one.** At
             // 390px this wall is 324 wide and the standard 170px tile floors to a single column
             // with 90px of margin either side of it; 144 fits two with the leftover split into
