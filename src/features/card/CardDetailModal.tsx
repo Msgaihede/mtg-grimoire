@@ -66,7 +66,7 @@ import { useDecks } from "@/features/decks/useDecks";
 import { sameDeckSlot } from "@/features/decks/deckWalk";
 import { LabelSwatch } from "@/features/decks/LabelColorPicker";
 import type { DropdownOption } from "@/components/Dropdown/types";
-import { soleFinish } from "@/lib/finish";
+import { parseFinishes, soleFinish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import {
   ipc,
@@ -78,6 +78,7 @@ import {
 } from "@/lib/ipc";
 import { PRESS } from "@/lib/motion";
 import { sortOptions } from "@/lib/options";
+import { pricesAsOf } from "@/lib/prices";
 import { useAppStore, type CardWalkStop } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
@@ -460,7 +461,13 @@ export function CardDetailModal() {
   const flanks: DialogFlanks | undefined = room && pair !== null ? pair : undefined;
   const chevrons: ReactNode =
     !room && pair !== null ? (
-      <div className="mr-auto flex shrink-0 items-center gap-2">
+      // **No `mr-auto` since 2026-09-03**, and its removal is what puts the pair back beside the
+      // buttons. It used to push the chevrons into the action row's left corner, which was free;
+      // that corner is the panel's two footnotes now, and an auto margin left in here would take
+      // the row's whole slack — an auto margin is served *before* a flex `grow` — so the credit
+      // and the price-age line would sit hard against the pair with the buttons still at the far
+      // right. See the footer.
+      <div className="flex shrink-0 items-center gap-2">
         {pair.left}
         {pair.right}
       </div>
@@ -1209,6 +1216,18 @@ function Body({
 
   const artist = card === null ? null : artistOf(card, face, melded);
 
+  /**
+   * Whether this panel is quoting a price at all — and therefore whether the footer's second
+   * footnote has anything to be about.
+   *
+   * **`CardModalArt`'s own gate, read here rather than reimplemented.** That column draws one
+   * cell per finish and draws *no* cells for a printing whose `finishes` is empty — which is not
+   * the same claim as "this card is free": nothing is known about how it is sold, so nothing is
+   * priced. `parseFinishes` is the one reader of that column, so the two conditions cannot drift
+   * into a footer dating prices that are not on screen.
+   */
+  const priced = card !== null && parseFinishes(card.finishes).length > 0;
+
   return (
     <>
       {/* The panel's own scroller lives on the grid below; this wrapper is the flex column
@@ -1254,8 +1273,15 @@ function Body({
               // rail sits at this rung.
               "@min-[640px]/card:grid-rows-[minmax(0,1fr)_auto] @min-[640px]/card:overflow-y-visible",
               "@min-[640px]/card:grid-cols-[18.75rem_1fr]",
-              "@min-[900px]/card:grid-rows-[minmax(0,1fr)] @min-[900px]/card:grid-cols-[20rem_1fr_max-content]",
-              "@min-[1200px]/card:grid-cols-[23.5rem_1fr_max-content]",
+              // **The rail's track is `minmax(11rem,max-content)` rather than a bare
+              // `max-content`, which is a floor and not a width.** Sized to its content alone it
+              // measured 156px in the shipped window — set by whichever rail entry happens to
+              // have the longest word, so the column's width was decided by a label rather than
+              // by anybody. The floor gives it room without pinning it: a surface whose actions
+              // are wider than 11rem still gets the width it needs, and `1fr` in the middle pays
+              // for the difference either way.
+              "@min-[900px]/card:grid-rows-[minmax(0,1fr)] @min-[900px]/card:grid-cols-[20rem_1fr_minmax(11rem,max-content)]",
+              "@min-[1200px]/card:grid-cols-[23.5rem_1fr_minmax(11rem,max-content)]",
             )}
           >
             <div
@@ -1348,6 +1374,16 @@ function Body({
                 "@min-[640px]/card:col-start-2 @min-[640px]/card:row-start-2",
                 "@min-[900px]/card:col-start-3 @min-[900px]/card:row-start-1",
                 "@min-[900px]/card:min-h-0 @min-[900px]/card:overflow-y-auto",
+                // **The rule between the options and the content, and it is drawn at exactly the
+                // rung where there is something to divide.** At `@min-[900px]/card` and above the
+                // rail is the grid's third column, standing beside the controls; below it the
+                // rail is `row-start-2` — *under* those controls, in the same column — where a
+                // left border would be a vertical line with nothing on either side of it.
+                //
+                // `pl-5` matches the grid's own `gap-5`, so the line sits midway in the 20px
+                // gutter rather than hard against the first word of `Options`. It is the
+                // mockup's `border-left` on this column, which the first implementation dropped.
+                "@min-[900px]/card:border-l @min-[900px]/card:border-border @min-[900px]/card:pl-5",
               )}
             >
               <CardModalRail
@@ -1363,93 +1399,142 @@ function Body({
         {/* **Outside the scrollers**, which is spec §2's one instruction about this row: the way
             to add a card must not be somewhere a reader has to scroll to find. */}
         <div className="shrink-0 border-t border-border px-5 py-3">
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            {/* Below 900 the pair sits in this row's left corner rather than off the panel's
-                edges — {@link useFlankRoom} decides which, because the room they need is the
-                scrim's and the scrim is the window. */}
-            {chevrons}
-            <button
-              type="button"
-              // **The name is the long form at every rung and the visible words shorten**, so a
-              // test, a screen reader and voice control all read one name whatever the panel is.
-              // Two spans swapped by a container query would join into "WishlistAdd to wishlist"
-              // wherever the query does not resolve — which is every test in this repo.
-              aria-label="Add to wishlist"
-              disabled={target === null}
-              onClick={() => target !== null && deps.addToWishlist(target, null)}
-              className={cn(ACTION, "disabled:opacity-40", PRESS, FOCUS)}
-            >
-              <span className="@min-[900px]/card:hidden">Wishlist</span>
-              <span className="hidden @min-[900px]/card:inline">Add to wishlist</span>
-            </button>
-            <button
-              type="button"
-              aria-label="Add to collection"
-              disabled={target === null}
-              onClick={() =>
-                target !== null &&
-                deps.addToCollection(
-                  target,
-                  // What the cardboard *is* where the printing has one answer, and the plain copy
-                  // otherwise. `soleFinish` speaks only for a printing with a single finish, which
-                  // is the one case a single press can be sure about.
-                  soleFinish(card?.finishes ?? null) ?? "nonfoil",
-                  null,
-                )
-              }
-              className={cn(ACTION, "disabled:opacity-40", PRESS, FOCUS)}
-            >
-              <span className="@min-[900px]/card:hidden">Collection</span>
-              <span className="hidden @min-[900px]/card:inline">Add to collection</span>
-            </button>
-            <Dropdown
-              // The trigger *is* the button: `value=""` never matches an option, so the
-              // placeholder is what it always reads — which is right for a control that performs
-              // an action rather than holding a setting. Picking a deck writes and leaves the
-              // trigger saying `Add to deck` again.
-              value=""
-              onChange={(deckId) => {
-                if (target === null || addToDeck === null) return;
-                addToDeck(target, Number(deckId), DEFAULT_VARIANT);
-              }}
-              options={deckOptions}
-              placeholder="Add to deck"
-              label="Add to deck"
-              // A gallery can hold dozens of decks, which is exactly the list that needs a box.
-              searchable
-              searchLabel="Search decks"
-              // `null` where nothing mounted `CardToDeckProvider` — the picker cannot write, so it
-              // is out of reach rather than drawn and inert. That is `useOptionalAddCardToDeck`'s
-              // documented shape one layer up.
-              disabled={target === null || addToDeck === null}
-              // Full width and first below the phone fold, where a right-aligned row of three
-              // would be three cramped targets. It is the press this row exists for, so it is the
-              // one that gets the whole line.
-              className={cn(
-                ACTION_PRIMARY,
-                "order-first w-full @min-[640px]/card:order-none @min-[640px]/card:w-auto",
+          <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-2">
+            {/* **The panel's two footnotes, stacked in the row's left corner rather than under
+                it.** Both used to hang below something: the credit under this row, and
+                `pricesAsOf` under `CardModalArt`'s price cells. Neither may cost the panel a rung
+                of height — a footer that grows is height taken off the picture — so they are a
+                flex *item* of the action row now, and the two lines sit one above the other in
+                the space the buttons leave.
+
+                **`flex-1` and never a content basis, which is the whole of why this shares the
+                row rather than breaking it.** `flex: 1 1 0%` gives these a hypothetical size of
+                zero, so they can never push the buttons onto a second line; the sentences wrap
+                inside whatever is left instead. With `basis-auto` the credit's max-content is
+                wider than the slack at every rung below ~1200 and the row would wrap on almost
+                every card — which is the arrangement this replaced, drawn sideways.
+                `min-w-0` because a flex item's floor is its min-content and a long illustrator's
+                name would otherwise hold the row open.
+
+                Below the phone fold the group beside this is `w-full`, so it takes a line of its
+                own and these get one too — above the buttons rather than below them, which is
+                the wrap the reader asked for and not a new rung. Measured in the shipped window
+                at a 390px panel: the footnotes 55px over a 44px action line, the footer 132 tall
+                and nothing crushed. */}
+            <div className="min-w-0 flex-1 text-[0.7rem] leading-relaxed text-dim">
+              {/* **Required wherever art is shown**, which is Scryfall's usage rule rather than a
+                  courtesy — the artist and the source have to be identifiable in the same
+                  interface that draws the picture. The artist is the one whose art is *on
+                  screen*, which is why {@link artistOf} takes the face **and the meld view**: the
+                  two sides of a double-faced card are not always the same illustrator, and
+                  neither are the two halves of a meld, so a credit naming the open card while a
+                  counterpart's picture is up would be the wrong illustrator under the right
+                  art. */}
+              {card !== null && (
+                <p>
+                  {artist !== null && <>Illustrated by {artist}. </>}
+                  Card images © Wizards of the Coast · Data © Scryfall
+                </p>
               )}
-            />
+              {/* Spec §5: a price is never shown without saying how old it is — and, now that
+                  there is more than one answer, whose it is. `pricesAsOf` says which of the two
+                  clocks this marketplace runs on: the card-data sync for the blob-backed pair,
+                  the last price-feed refresh for the two this app downloads.
+
+                  **{@link priced} is `CardModalArt`'s own `finishes.length > 0`, moved with the
+                  sentence rather than dropped.** A printing whose finishes are unknown draws no
+                  price cells at all, so a line dating prices that are not on screen would be a
+                  caption about nothing. */}
+              {priced && <p>{pricesAsOf(marketplace)}</p>}
+            </div>
+
+            {/* The chevrons and the three presses, as one group, so the wrap below the phone fold
+                is a whole action row moving rather than the buttons splitting around a sentence.
+                **`w-full` here is what gives them that line**, and it is doing that job alone:
+                the `order-first w-full` on the `Add to deck` dropdown below is inert and has been
+                since this modal was written. `Dropdown` puts a caller's `className` on its
+                *trigger* and keeps a wrapper `<div>` of its own as the flex item (`fill` is the
+                prop that widens that wrapper), so the class sizes a button to 100% of a box that
+                is already content-width. Measured in the shipped window at a 390px panel: the
+                three controls sit on one 44px line at 85 / 98 / 132px, with `Add to deck` last
+                rather than first and full-width nowhere. Reported rather than fixed — `fill` is a
+                boolean and would widen the trigger at *every* rung, which is a change to the wide
+                panel nobody asked for. */}
+            <div className="flex w-full flex-wrap items-center justify-end gap-2 @min-[640px]/card:w-auto">
+              {/* Below 900 the pair sits in this row rather than off the panel's edges —
+                  {@link useFlankRoom} decides which, because the room they need is the scrim's
+                  and the scrim is the window. */}
+              {chevrons}
+              <button
+                type="button"
+                // **The name is the long form at every rung and the visible words shorten**, so a
+                // test, a screen reader and voice control all read one name whatever the panel is.
+                // Two spans swapped by a container query would join into "WishlistAdd to wishlist"
+                // wherever the query does not resolve — which is every test in this repo.
+                aria-label="Add to wishlist"
+                disabled={target === null}
+                onClick={() => target !== null && deps.addToWishlist(target, null)}
+                className={cn(ACTION, "disabled:opacity-40", PRESS, FOCUS)}
+              >
+                <span className="@min-[900px]/card:hidden">Wishlist</span>
+                <span className="hidden @min-[900px]/card:inline">Add to wishlist</span>
+              </button>
+              <button
+                type="button"
+                aria-label="Add to collection"
+                disabled={target === null}
+                onClick={() =>
+                  target !== null &&
+                  deps.addToCollection(
+                    target,
+                    // What the cardboard *is* where the printing has one answer, and the plain copy
+                    // otherwise. `soleFinish` speaks only for a printing with a single finish, which
+                    // is the one case a single press can be sure about.
+                    soleFinish(card?.finishes ?? null) ?? "nonfoil",
+                    null,
+                  )
+                }
+                className={cn(ACTION, "disabled:opacity-40", PRESS, FOCUS)}
+              >
+                <span className="@min-[900px]/card:hidden">Collection</span>
+                <span className="hidden @min-[900px]/card:inline">Add to collection</span>
+              </button>
+              <Dropdown
+                // The trigger *is* the button: `value=""` never matches an option, so the
+                // placeholder is what it always reads — which is right for a control that performs
+                // an action rather than holding a setting. Picking a deck writes and leaves the
+                // trigger saying `Add to deck` again.
+                value=""
+                onChange={(deckId) => {
+                  if (target === null || addToDeck === null) return;
+                  addToDeck(target, Number(deckId), DEFAULT_VARIANT);
+                }}
+                options={deckOptions}
+                placeholder="Add to deck"
+                label="Add to deck"
+                // A gallery can hold dozens of decks, which is exactly the list that needs a box.
+                searchable
+                searchLabel="Search decks"
+                // `null` where nothing mounted `CardToDeckProvider` — the picker cannot write, so it
+                // is out of reach rather than drawn and inert. That is `useOptionalAddCardToDeck`'s
+                // documented shape one layer up.
+                disabled={target === null || addToDeck === null}
+                // Meant as full width and first below the phone fold, where a right-aligned row of
+                // three would be three cramped targets — it is the press this row exists for.
+                // **It has never done either, and the class is kept as the statement of intent
+                // rather than as a working rule**: `Dropdown` lands a caller's `className` on its
+                // trigger and stays a content-width wrapper `<div>` in the flex row, so `w-full`
+                // is 100% of a box that is already the button's size and `order-first` orders an
+                // only child. Driven at a 390px panel on 2026-09-03: last in the row, 132px wide.
+                // The group above carries the wrap that keeps the rung usable; making this one
+                // fill needs `fill`, which is a boolean and would widen it at every rung too.
+                className={cn(
+                  ACTION_PRIMARY,
+                  "order-first w-full @min-[640px]/card:order-none @min-[640px]/card:w-auto",
+                )}
+              />
+            </div>
           </div>
-
-          {/* **Required wherever art is shown**, which is Scryfall's usage rule rather than a
-              courtesy — the artist and the source have to be identifiable in the same interface
-              that draws the picture. The artist is the one whose art is *on screen*, which is
-              why {@link artistOf} takes the face **and the meld view**: the two sides of a
-              double-faced card are not always the same illustrator, and neither are the two
-              halves of a meld, so a credit naming the open card while a counterpart's picture is
-              up would be the wrong illustrator under the right art.
-
-              **`pricesAsOf` is not repeated here.** `CardModalArt` draws it under the price cells
-              it dates, and a second copy of one sentence in one panel is worse than one — a
-              printing with no finishes draws neither, which is right, because it draws no prices
-              for a caption to be about. */}
-          {card !== null && (
-            <p className="mt-2 text-[0.7rem] leading-relaxed text-dim">
-              {artist !== null && <>Illustrated by {artist}. </>}
-              Card images © Wizards of the Coast · Data © Scryfall
-            </p>
-          )}
         </div>
       </div>
     </>
@@ -1478,7 +1563,11 @@ function InlineCounts({ counts, scope }: { counts: RailCounts; scope: CardModalS
 
   return (
     <div className="flex flex-col gap-1 border-t border-border pt-3 text-sm @min-[1200px]/card:hidden">
-      <h3 className="text-xs uppercase tracking-wide text-dim">In your grimoire</h3>
+      {/* **The same accent the rail's copy takes, and the pairing is the point.** These two are
+          one block at two rungs — exactly one is ever visible — so a colour applied to one of
+          them is a heading that changes hue when the window is resized. `CardModalRail` carries
+          the argument for the accent itself. */}
+      <h3 className="text-xs uppercase tracking-wide text-accent">In your grimoire</h3>
       <dl className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
         <Figure label="Owned" value={counts.owned} />
         <Figure label="Wished" value={counts.wished} />

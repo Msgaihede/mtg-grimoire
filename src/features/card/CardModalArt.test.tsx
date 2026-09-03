@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { CardDetail, CardFace, MeldRelation } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
+import { pricesAsOf } from "@/lib/prices";
 import { CardModalArt } from "./CardModalArt";
 
 /**
@@ -117,13 +118,25 @@ describe("CardModalArt", () => {
     expect(screen.getByText("—")).toBeInTheDocument();
   });
 
-  it("says how old the prices are and whose they are", () => {
-    // Spec §5: a price is never shown without saying how old it is — and, now that there is
-    // more than one answer, whose. `pricesAsOf` also picks the right clock: the card-data sync
-    // for the blob-backed pair, the last feed refresh for the two this app downloads.
+  it("leaves the as-of sentence to the host, so one panel says it once", () => {
+    // **Spec §5 has not been weakened; it has moved.** A price is never shown without saying how
+    // old it is — and, now that there is more than one answer, whose — but the sentence is a
+    // footnote of the whole panel now rather than a caption under these cells, drawn by
+    // `CardDetailModal` beside the Scryfall credit. `CardDetailModal.test.tsx`'s "dates the
+    // prices it draws, in the footer beside the credit" is the positive half of this pair and is
+    // where the wording and the clock are pinned.
+    //
+    // The assertion here is the *negative* half and is worth its own test: a column that started
+    // drawing it again would put two copies of one sentence in one panel, which is the thing this
+    // file's own doc comment argues against, and nothing else in the suite would notice.
+    // Through `pricesAsOf` rather than the sentence typed out, so this pins the function rather
+    // than a copy of its words.
     render(<CardModalArt card={card({})} {...rest} />);
 
-    expect(screen.getByText(/tcgplayer prices as of the last card-data sync/i)).toBeInTheDocument();
+    expect(screen.queryByText(pricesAsOf(MARKETPLACES.tcgplayer))).not.toBeInTheDocument();
+    // Not vacuous: the cells the sentence used to sit under are still here, so this is a column
+    // that prices a card and does not date it, rather than one that drew nothing at all.
+    expect(screen.getByText("$620.00")).toBeInTheDocument();
   });
 
   it("says `Set as` behind a deck row and `View as` without one", () => {

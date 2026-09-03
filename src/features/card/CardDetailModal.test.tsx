@@ -3,7 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { CardDetail } from "@/lib/ipc";
-import type { MarketplaceId } from "@/lib/marketplace";
+import { MARKETPLACES, type MarketplaceId } from "@/lib/marketplace";
+import { pricesAsOf } from "@/lib/prices";
 
 const cardDetail = vi.fn();
 const cardPrintings = vi.fn();
@@ -396,6 +397,73 @@ it("credits the illustrator of the face on screen, meld view included", async ()
   expect(screen.getByAltText("Brisela, Voice of Nightmares")).toBeInTheDocument();
 });
 
+it("dates the prices it draws, in the footer beside the credit", async () => {
+  // **Spec §5: a price is never shown without saying how old it is** — and, with five
+  // marketplaces in the picker, whose. This lived under `CardModalArt`'s price cells until
+  // 2026-09-03 and is a footnote of the panel now; the obligation did not move with it, so this
+  // is that file's assertion in its new home rather than a new test.
+  //
+  // Through `pricesAsOf` rather than the sentence typed out here, so it pins the function — and
+  // with it the right clock, the card-data sync for the blob-backed pair rather than a feed
+  // refresh — instead of a copy of its words. **Once**, because the whole point of the move is
+  // that one panel says it one time: `CardModalArt.test.tsx`'s negative half guards the other
+  // end.
+  renderModal("c1");
+  await screen.findByRole("dialog");
+
+  const asOf = await screen.findByText(pricesAsOf(MARKETPLACES.tcgplayer));
+  expect(screen.getAllByText(pricesAsOf(MARKETPLACES.tcgplayer))).toHaveLength(1);
+  // Beside the credit rather than anywhere in the panel: the two are one block, credit above.
+  const footnotes = asOf.parentElement as HTMLElement;
+  expect(within(footnotes).getByText(/card images © wizards of the coast/i)).toBeInTheDocument();
+});
+
+it("says nothing about the age of prices it is not drawing", async () => {
+  // `CardModalArt` draws one cell per finish and **no cells at all** for a printing whose
+  // `finishes` is empty — nothing is known about how it is sold, which is not the claim that it
+  // is free. That arm was this column's and travelled with the sentence: a footer dating prices
+  // that are not on screen is a caption about nothing, and it is the half of a moved condition
+  // that is easiest to leave behind.
+  cardDetail.mockResolvedValue({ ...detail, finishes: null });
+  renderModal("c1");
+  await screen.findByRole("dialog");
+
+  // The credit is still drawn — this is a card with no known finishes, not a card with no art —
+  // so the footnote block being present is what makes the missing line an assertion.
+  expect(await screen.findByText(/card images © wizards of the coast/i)).toBeInTheDocument();
+  expect(screen.queryByText(pricesAsOf(MARKETPLACES.tcgplayer))).not.toBeInTheDocument();
+});
+
+it("keeps both footnotes in the action row rather than under it", async () => {
+  // **The reader's instruction, and the only part of it a suite can hold.** The two sentences
+  // are the footer's left corner and the chevrons and buttons its right — one row — so the
+  // footnotes may not add a rung of height beneath the buttons, which is height taken off the
+  // picture on a panel whose whole job is to show one.
+  //
+  // **jsdom has no layout engine**, so this asserts *structure* and one class rather than a
+  // measurement: the footnote block is a flex item of the same wrapping row the buttons are in,
+  // and its next sibling is the group that holds them. Moving the block back out — under the row
+  // as the `<p className="mt-2">` this replaced — leaves it with no next sibling and reparents it
+  // onto the footer's padded box, so both halves of this go red. The pixels were read in the
+  // running window.
+  renderModal("c1");
+  await screen.findByRole("dialog");
+
+  const credit = await screen.findByText(/card images © wizards of the coast/i);
+  const footnotes = credit.parentElement as HTMLElement;
+  const actions = footnotes.nextElementSibling as HTMLElement | null;
+
+  expect(actions).not.toBeNull();
+  expect(actions).toContainElement(screen.getByRole("button", { name: "Add to collection" }));
+  expect(actions).toContainElement(screen.getByRole("button", { name: "Add to wishlist" }));
+  // The shared parent is the row itself and not the footer's box around it — `flex-wrap` is what
+  // tells those two apart, and it is also the thing that lets the phone rung stack them instead
+  // of crushing the buttons.
+  const row = footnotes.parentElement as HTMLElement;
+  expect(row.classList.contains("flex")).toBe(true);
+  expect(row.classList.contains("flex-wrap")).toBe(true);
+});
+
 /**
  * What both copies of the **In your grimoire** block state for one word.
  *
@@ -528,6 +596,48 @@ it("sizes the panel with one variant family, never a named breakpoint", async ()
   expect(sized.length).toBeGreaterThanOrEqual(6);
 
   expect(sized.filter((c) => /^(sm|md|lg|xl|2xl):/.test(c))).toEqual([]);
+});
+
+/**
+ * **The rule between the options and the content is drawn at exactly the rung where the rail is a
+ * column, and the pairing is the whole assertion.**
+ *
+ * At `@min-[900px]/card` the rail is the grid's third column, standing beside the controls with a
+ * gutter between them — a vertical rule there separates two things. Below that rung the rail is
+ * `row-start-2`, *under* those controls and in the same column, where a left border would be a
+ * line with nothing on either side of it. So the border and the `col-start-3` that earns it have
+ * to move together, and this test fails if either is given a rung of its own.
+ *
+ * **jsdom resolves no container query**, so what is checked is the variant on the class rather
+ * than a rendered pixel — the same reason the panel's own rung test is written that way. The
+ * border was measured in the shipped window instead: `1px solid oklch(0.3 0.01 270)` at 1400,
+ * and `0px` at 820 and 390.
+ */
+it("draws the rail's divider only at the rung where the rail is a column", async () => {
+  renderModal("c1");
+  const panel = await screen.findByRole("dialog");
+  // **The panel mounts before the card arrives, and the whole body grid is behind `card !== null`
+  // — so a rung assertion made on the panel alone is made against an empty box.** `findByRole`
+  // above resolves the moment `Dialog` renders, which is several commits early; waiting for a
+  // rail entry is waiting for the column this test is about to exist at all.
+  await screen.findByRole("button", { name: "Legality" });
+
+  // Found by walking `classList` rather than with `querySelector`, because the class this is
+  // about contains `[`, `]`, `/` and `:` — every one of which is CSS syntax, so an attribute
+  // selector carrying it has to be escaped to be a *selector* rather than a parse error. The
+  // first spelling of this test matched nothing and read as a missing element.
+  const rail = [...panel.querySelectorAll("div")].find((d) =>
+    d.classList.contains("@min-[900px]/card:col-start-3"),
+  );
+  expect(rail).toBeDefined();
+
+  const classes = [...(rail as HTMLElement).classList];
+  expect(classes).toContain("@min-[900px]/card:border-l");
+  // The gutter's own width, so the rule sits midway rather than against the first word.
+  expect(classes).toContain("@min-[900px]/card:pl-5");
+  // The half that would go wrong quietly: an unprefixed `border-l` draws the line on a phone,
+  // down the side of a rail that is one more block in a single scroller.
+  expect(classes).not.toContain("border-l");
 });
 
 /**

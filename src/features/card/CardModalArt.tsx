@@ -16,7 +16,7 @@ import { FOCUS } from "@/lib/focus";
 import { CARD_ASPECT, cardArtSrc, cardImageUrl } from "@/lib/images";
 import type { CardDetail, DeckFinish, MeldRelation } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
-import { formatPrice, pricesAsOf } from "@/lib/prices";
+import { formatPrice } from "@/lib/prices";
 import { finishTreatments, treatmentName } from "@/lib/treatment";
 import { cn } from "@/lib/utils";
 import { cardTurn, meldPartsOf, meldResultOf, type CardTurn } from "./orientation";
@@ -109,14 +109,18 @@ export interface MeldTarget {
  * ## What is here and what is deliberately not
  *
  * Top to bottom: the art in a bordered box with a **chin** under it (rarity, set code, collector
- * number, and the set's name pushed right), the row that changes what the picture shows, one
- * price cell per finish, and the sentence saying how old those prices are.
+ * number, and the set's name pushed right), the row that changes what the picture shows, and one
+ * price cell per finish.
  *
- * **The artist credit and the Scryfall source line are not here**, though the image policy
- * requires both wherever art is shown. They are the panel's footnotes, drawn once by
- * `CardDetailModal` — the artist that has to be credited is the one whose art is *on screen*,
- * which with a meld view up is not this card's illustrator at all, and two copies of a credit is
- * worse than one.
+ * **Three sentences are not here, and all three are the panel's footnotes** — the artist credit,
+ * the Scryfall source line and, since 2026-09-03, spec §5's *how old these prices are*. The first
+ * two were never here: the image policy requires both wherever art is shown, and the artist that
+ * has to be credited is the one whose art is *on screen*, which with a meld view up is not this
+ * card's illustrator at all. The third **was** here, under the cells it dates, and moved for this
+ * file's own argument rather than against it — two copies of one sentence in one panel is worse
+ * than one, and the footer is where the panel's footnotes live. `CardDetailModal` draws all
+ * three, stacked in the action row's left corner, and it withholds the price line on exactly the
+ * `finishes.length > 0` this column withholds the cells on.
  *
  * ## The price block is the reason this file has a test
  *
@@ -646,35 +650,35 @@ export function CardModalArt({
           Two columns, and a third finish therefore starts a second row rather than squeezing the
           first: three is the ceiling (`cards.finishes` is built from three words across all
           116 712 rows) and two cells of air under a two-finish printing is what the mockup
-          draws. */}
-      {finishes.length > 0 && (
-        <div className="space-y-1.5">
-          <dl className="grid grid-cols-2 gap-2">
-            {finishes.map((f) => (
-              <div key={f} className="min-w-0 rounded-md border border-border px-2.5 py-1.5">
-                {/* **The treatment's word where the copy has one** — `Halo Foil  $95.79` rather
-                    than `Foil  $95.79`, which is the whole of issue #160 stated in the one place
-                    on this column that has room for words. `treatmentName` and not
-                    `treatmentTitle`: a cell has one line for the label, so "Silver Foil · Scroll"
-                    would push the price out of it — the joined reading belongs to the marks.
+          draws.
 
-                    Per finish, so the fence does the work: the nonfoil cell of a Surge Foil
-                    printing still reads `Nonfoil`, because the plain copy is not a Surge Foil. */}
-                <dt className="truncate text-xs text-dim">
-                  {treatmentName(finishTreatments(card.promoTypes, f)) ?? FINISH_LABEL[f]}
-                </dt>
-                <dd className="truncate font-mono text-sm tabular-nums">
-                  {formatPrice(card.finishPrices[f], marketplace.currency)}
-                </dd>
-              </div>
-            ))}
-          </dl>
-          {/* Spec §5: a price is never shown without saying how old it is — and, now that there
-              is more than one answer, whose it is. `pricesAsOf` says which of the two clocks this
-              marketplace runs on: the card-data sync for the blob-backed pair, the last
-              price-feed refresh for the two this app downloads. */}
-          <p className="text-[0.7rem] text-dim">{pricesAsOf(marketplace)}</p>
-        </div>
+          **Spec §5's as-of sentence is no longer under these cells.** It is a footnote of the
+          panel now, drawn once by `CardDetailModal` beside the Scryfall credit — the two
+          sentences share the footer's left corner rather than each hanging under the block it is
+          about. The condition travelled with it: the host draws the sentence only where this
+          `finishes.length > 0` is true, because a printing with no finishes is priced nowhere and
+          a caption about nothing is worse than none. */}
+      {finishes.length > 0 && (
+        <dl className="grid grid-cols-2 gap-2">
+          {finishes.map((f) => (
+            <div key={f} className="min-w-0 rounded-md border border-border px-2.5 py-1.5">
+              {/* **The treatment's word where the copy has one** — `Halo Foil  $95.79` rather
+                  than `Foil  $95.79`, which is the whole of issue #160 stated in the one place
+                  on this column that has room for words. `treatmentName` and not
+                  `treatmentTitle`: a cell has one line for the label, so "Silver Foil · Scroll"
+                  would push the price out of it — the joined reading belongs to the marks.
+
+                  Per finish, so the fence does the work: the nonfoil cell of a Surge Foil
+                  printing still reads `Nonfoil`, because the plain copy is not a Surge Foil. */}
+              <dt className="truncate text-xs text-dim">
+                {treatmentName(finishTreatments(card.promoTypes, f)) ?? FINISH_LABEL[f]}
+              </dt>
+              <dd className="truncate font-mono text-sm tabular-nums">
+                {formatPrice(card.finishPrices[f], marketplace.currency)}
+              </dd>
+            </div>
+          ))}
+        </dl>
       )}
     </div>
   );

@@ -14,6 +14,11 @@
  * at all and its entries join the single scroller under this same **Options** heading. That
  * placement is the host's (`CardDetailModal`); all this file draws is a `flex flex-col` that
  * works in either, which is why nothing here positions itself.
+ *
+ * **The one thing it says about its own height is a floor at the widest rung**, and it is not an
+ * exception to that: `min-h-full` claims the column the host has already given it rather than
+ * asking for a place, and it exists only so the grimoire block's `mt-auto` has free space to
+ * absorb. Both are at `@min-[1200px]/card` and neither means anything without the other.
  */
 import { ExternalLink } from "lucide-react";
 import { useId } from "react";
@@ -76,7 +81,11 @@ const VARIANT_LABEL: Record<DeckVariant, string> = { live: "Actual", theory: "Th
  * the panel moving rather than as a button going down.
  */
 const RAIL_ENTRY = cn(
-  "flex h-11 w-full items-center gap-2 rounded-md border border-border px-3 text-left text-sm",
+  // `px-5` rather than the `px-3` this shipped with: the mockup draws these at 22px and the
+  // tighter inset read as cramped against a 44px-tall control. It also lifts the column's own
+  // `max-content` contribution, which is why the rail's track carries a floor rather than a
+  // fixed width — see the grid in `CardDetailModal`.
+  "flex h-11 w-full items-center gap-2 rounded-md border border-border px-5 text-left text-sm",
   "text-text hover:border-accent/40 hover:text-accent",
   PRESS_SOFT,
 );
@@ -136,7 +145,24 @@ export function CardModalRail({
         `${counts.deck}× in ${scope.deck.categoryName} · ${VARIANT_LABEL[scope.deck.variant]}`;
 
   return (
-    <div className="flex flex-col gap-5">
+    // **`min-h-full` is what makes the grimoire block's `mt-auto` below mean anything, and it is
+    // half a fix on its own.** An auto margin absorbs a flex line's *free* space, and a column
+    // sized to its own content has none — so the block would sit directly under the options list
+    // at every width, the class present and inert, and jsdom would report both classes correctly
+    // either way. The column that holds this rail is a grid item and therefore already stretches
+    // to the row (`CardDetailModal`'s third track); what was content-height is this box inside
+    // it, which is why the floor goes here rather than on the host.
+    //
+    // **A floor rather than a height**: that host box is `overflow-y-auto` at `@min-[900px]/card`
+    // and up, so a rail whose entries outgrow the picture beside it still grows and scrolls —
+    // `h-full` would pin it to the row and put the last entries under the fold on a surface with
+    // enough actions.
+    //
+    // Only at the rung that draws the block. Below `@min-[1200px]/card` the grimoire section is
+    // `hidden` and the rail is the options list alone, where a stretched column would buy nothing
+    // and — at the 640 rung, where this sits in the grid's `auto` row under the controls — a
+    // percentage floor against an auto-height row resolves to nothing anyway.
+    <div className="flex flex-col gap-5 @min-[1200px]/card:min-h-full">
       <section aria-labelledby={optionsId} className="flex flex-col gap-2">
         <h3 id={optionsId} className="text-xs uppercase tracking-wide text-dim">
           Options
@@ -169,12 +195,25 @@ export function CardModalRail({
           names and an interpolated one emits no rule at all.
 
           **jsdom applies no container query and every box is 0**, so nothing in the suite can see
-          this fold happen — the test pins the class, and the widths are settled in the window. */}
+          this fold happen — the test pins the class, and the widths are settled in the window.
+
+          **`mt-auto` is what puts it at the foot of the rail rather than under the options
+          list**, which is the mockup's `margin-top: auto` and the reason the root above carries a
+          floor: an auto margin takes the free space of a flex line, and there is none in a column
+          that is as tall as its own content. The two classes are one change and neither works
+          alone. At the same rung as the block itself, so nothing is asked of a column that is not
+          drawing it. */}
       <section
         aria-labelledby={grimoireId}
-        className="hidden flex-col gap-2 border-t border-border pt-4 @min-[1200px]/card:flex"
+        className="hidden flex-col gap-2 border-t border-border pt-4 @min-[1200px]/card:mt-auto @min-[1200px]/card:flex"
       >
-        <h3 id={grimoireId} className="text-xs uppercase tracking-wide text-dim">
+        {/* **`text-accent` rather than the `text-dim` every other heading in this column takes,
+            and it is the one exception on purpose.** `Options` labels a list of things to press;
+            this labels the only block in the modal that is about the reader's own collection
+            rather than about the card, and the accent is what this app already uses to say "this
+            is yours" (`OwnedBadge`, the deck line's own `4×`). Nothing else in the rail may take
+            it — a second accented heading here would make it a decoration rather than a mark. */}
+        <h3 id={grimoireId} className="text-xs uppercase tracking-wide text-accent">
           In your grimoire
         </h3>
         <dl className="flex flex-col gap-1 text-sm">

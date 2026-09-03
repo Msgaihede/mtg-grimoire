@@ -139,6 +139,27 @@ describe("the card modal's options rail", () => {
   });
 
   /**
+   * The block sits at the **foot** of the rail at the rung that draws it, which is the mockup's
+   * `margin-top: auto` — and an auto margin absorbs a flex line's *free* space, so it means
+   * nothing in a column that is as tall as its own content.
+   *
+   * **That is why this asserts a pair.** The two classes are one change: `mt-auto` on the section
+   * with a content-height root is the fix present and inert — the block draws directly under the
+   * options list, in the window, with this file's other tests all green. jsdom resolves no
+   * container query and gives every box a height of 0, so nothing here can see either half work;
+   * the class **is** the behaviour at this layer and the pixels were read in the running window.
+   */
+  it("pins the grimoire block to the foot of the rail, and gives it a column to be pinned in", () => {
+    const { container } = renderRail();
+    const grimoire = screen.getByText("In your grimoire").closest("section");
+    const root = container.firstElementChild;
+
+    expect(grimoire?.classList.contains("@min-[1200px]/card:mt-auto")).toBe(true);
+    // The root's floor, at the same rung. Without it the margin above has no space to take.
+    expect(root?.classList.contains("@min-[1200px]/card:min-h-full")).toBe(true);
+  });
+
+  /**
    * The rail is a list rather than a fixed set of slots — spec §7 — so the count of entries is a
    * property of the surface and not of this file. A component with four named slots plus an
    * "extras" hole would draw the deck's six and the search's four differently; this draws one
