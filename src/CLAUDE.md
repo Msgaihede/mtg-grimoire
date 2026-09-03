@@ -543,6 +543,14 @@ Every one of these has its measurement and its story in
   dialog is not a descendant of the container), which is what `FilterBar.test.tsx` does. The
   dropdowns escape this a different way and their own comment says so: `usePopupPlacement`
   measures a zero-size frame precisely to subtract whatever containing block it landed in.
+  **Settings met the same rule from the inside on 2026-09-03, and the lesson is where a container
+  may not go rather than where a dialog may not.** That page's panels mount their dialogs inline —
+  grep `ConfirmDialog` under `src/features/settings/` for the census, since none of them writes
+  the `fixed inset-0` itself and the class is `Dialog.tsx:333`'s — so the rail's container query
+  had to go on the `<nav>` and never on the settings root, which would have reparented every one
+  of those scrims. What made that possible is that the rail's own inline size answers the
+  question being asked; the arithmetic is in
+  [frontend-design.md](../docs/reference/frontend-design.md).
 - **A scroll container is `relative`, because a scroll container has to be the containing block
   for its own absolutely positioned content.** `overflow` clips a descendant only when the
   scroller lies between it and that descendant's **containing block** — and Tailwind's `.sr-only`
