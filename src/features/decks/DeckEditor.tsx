@@ -49,6 +49,7 @@ import {
 } from "@/lib/ipc";
 import { PRESS, statusLine } from "@/lib/motion";
 import { sortOptions } from "@/lib/options";
+import { matchesShortcut, shortcut } from "@/lib/shortcuts";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { clearFieldOnEscape, useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useAppStore, type PaneDeckContext } from "@/lib/store";
@@ -1873,29 +1874,36 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   }, [succeededAt, clearRedo]);
 
   /**
-   * `Ctrl+Z`, `Ctrl+Shift+Z` and `Ctrl+Y`, on `window` for the length of this editor.
+   * Undo and redo, on `window` for the length of this editor.
+   *
+   * **The chords are the catalogue's** — `deckEditor`'s `undo` and `redo` in
+   * `src/lib/shortcuts.ts` — rather than comparisons written out here, so the key map cannot
+   * advertise a chord this handler does not bind. `redo` carries **two** spellings and this
+   * site does not know there are two: `Ctrl+Y` is Windows' and `Ctrl+Shift+Z` is everywhere
+   * else's, both are what a reader's hands know, and this app ships on Windows to people who
+   * use both. A third spelling is an edit to the catalogue and to nothing here.
    *
    * **It yields inside a text field**, which is the whole of what keeps the quick-add box, the
    * deck name and the notes usable: those get the browser's own undo, which this cannot
-   * replace and must not swallow. `isTextField` is `useContextMenu`'s — the same predicate the
-   * native-context-menu carve-out already turns on, rather than a second spelling of "is the
-   * caret in something typed".
+   * replace and must not swallow. That yield stays at this call site rather than moving into
+   * the matcher, because it is a fact about *this* binding — `Ctrl+1` has no native meaning in
+   * a field, and yielding there would kill view-switching exactly where the caret usually is.
+   * `isTextField` is `useContextMenu`'s — the same predicate the native-context-menu carve-out
+   * already turns on, rather than a second spelling of "is the caret in something typed".
    *
-   * `Ctrl+Y` and `Ctrl+Shift+Z` both redo because both are what a reader's hands know: the
-   * first is Windows' and the second is everywhere else's, and this app ships on Windows to
-   * people who use both.
+   * There is no modifier pre-check left: {@link matchesShortcut} is exact in both directions,
+   * so an unlisted modifier is already a non-match and a guard for it would be a second, looser
+   * statement of the same rule.
    */
   const runUndo = undo.runUndo;
   const runRedo = undo.runRedo;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
       if (isTextField(e.target)) return;
-      const key = e.key.toLowerCase();
-      if (key === "z" && !e.shiftKey) {
+      if (matchesShortcut(shortcut("deckEditor", "undo"), e)) {
         e.preventDefault();
         runUndo();
-      } else if (key === "y" || (key === "z" && e.shiftKey)) {
+      } else if (matchesShortcut(shortcut("deckEditor", "redo"), e)) {
         e.preventDefault();
         runRedo();
       }
@@ -3067,8 +3075,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   );
 
   /**
-   * **Delete takes the picked cards out of the deck** — issue #214, and the one keyboard verb this
-   * editor has that is not undo.
+   * **The catalogue's `remove` takes the picked cards out of the deck** — issue #214, and the one
+   * keyboard verb this editor has that is not undo. The chord is `deckEditor`'s `remove` in
+   * `src/lib/shortcuts.ts` rather than a comparison written out here, so the key map cannot
+   * advertise a chord this handler does not bind.
    *
    * ## Why it exists here and nowhere else in the app
    *
@@ -3081,9 +3091,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    *
    * **A text field keeps the key**, through the same `isTextField` the undo handler one screen up
    * yields to and the native context menu's carve-out turns on — a reader deleting a character out
-   * of the deck's name must not lose four cards. **A layer takes it too**: with a dialog or a
-   * confirmation open the deck is behind a scrim, and a key that reached past it would act on a
-   * surface the reader cannot see. And **nothing is written for a set of one**, which is the
+   * of the deck's name must not lose four cards. It stays at this call site for that handler's
+   * reason: which bindings yield to a caret is a fact about each binding, not about matching a
+   * chord. **A layer takes it too**: with a dialog or a confirmation open the deck is behind a
+   * scrim, and a key that reached past it would act on a surface the reader cannot see.
+   * And **nothing is written for a set of one**, which is the
    * deliberate asymmetry — one card has a stepper, a menu row and a tray, all of them visible, and
    * a bare Delete that silently removed whatever was last clicked is a keystroke away from a deck
    * the reader did not mean to edit.
@@ -3100,8 +3112,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   useEffect(() => {
     if (layerOpen) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Delete") return;
-      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (!matchesShortcut(shortcut("deckEditor", "remove"), event)) return;
       if (isTextField(event.target)) return;
       const held = pickedRef.current;
       if (held.length < 2) return;
