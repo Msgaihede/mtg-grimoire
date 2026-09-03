@@ -213,7 +213,7 @@ export function OptimizeWishlistDialog({
       // here carries a name, two printings and two prices, but no sentence naming a folder, a
       // condition and four traits. Still inside the app's 1024px window floor once the scrim's
       // `sm:p-6` is taken off both sides.
-      width="w-[48rem]"
+      size="w-[48rem]"
       // One callback for both rungs, `PullFromCollectionDialog`'s note: where the caret lands is
       // the opener's half of the contract and is decided in the view that owns the trigger.
       onDismiss={onClose}
