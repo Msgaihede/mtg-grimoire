@@ -13,11 +13,18 @@
  * `Dialog`'s `container` prop puts on the panel. Everything inside this file queries that
  * container; the **panel's own size** cannot, and that is {@link PANEL_SIZE}'s whole paragraph.
  *
- * ## What it does not do, and each is a decision rather than an omission
+ * ## The printing picker means two different things, decided by one fact
  *
- * * **No printing *swap*.** A card opened out of a deck row could be re-pointed at another
- *   printing from the pane's printings list. The modal's printing picker calls `viewPrinting`,
- *   which browses; `AllPrintingsDialog` is where a swap still lives.
+ * **With a deck row behind the modal it *swaps*** — `useDeck.swapPrinting`, the same write
+ * `AllPrintingsDialog`'s tiles press, so picking `Beta` out of the dropdown and picking it off the
+ * wall change the deck the same way. That reverses this file's own note, which said the picker
+ * browses and that `AllPrintingsDialog` is where a swap lives: browsing left `paneDeckContext` on
+ * the printing the deck still played while the panel drew another one, which is half of what a
+ * reader reports as the modal going out of sync with itself.
+ *
+ * **With no deck row it browses** — `viewPrinting`, exactly as before. On the search, collection,
+ * wishlist and tags walls there is no row to rewrite, and a picker that invented a deck write on a
+ * surface with no deck would be worse than one that only looks.
  *
  * ## The three things this host owns *for* `CardModalArt`, and why each is here
  *
@@ -1000,15 +1007,70 @@ function Body({
    * The two picks, as functions rather than as inline arrows — because the `Create new…` rows
    * below end in exactly the same two writes and a second copy of either would be a second
    * opinion about the slot a press addresses.
+   *
+   * **`toName` is the destination's word, and it is passed rather than left to the hook**: the
+   * mutation names the pile out of its own cached read, which covers a pick off this picker and
+   * cannot cover a pile {@link makeCategory} has just created — the refetch behind the create is
+   * racing the move. The name reaches the store's `paneDeckContext`, so getting it wrong is the
+   * modal's `4× in <pile>` line naming a pile the card has left.
    */
-  const pickCategory = (categoryId: number) => {
+  const pickCategory = (categoryId: number, toName?: string) => {
     if (scope.deck === null) return;
-    deck.moveCard.mutate({
-      cardId: scope.deck.cardId,
-      from: scope.deck.categoryId,
-      to: categoryId,
-      finish: scope.deck.finish,
-    });
+    setRefusal(null);
+    deck.moveCard.mutate(
+      {
+        cardId: scope.deck.cardId,
+        from: scope.deck.categoryId,
+        to: categoryId,
+        finish: scope.deck.finish,
+        toName: toName ?? deck.categories.find((c) => c.id === categoryId)?.name,
+      },
+      // **A `mutate`-scoped callback, where every other write in this file reports through its
+      // own `useMutation`.** This one is `useDeck`'s single definition, shared with the editor
+      // and with the sidebar's drop target, so a refusal sentence written onto it would be this
+      // modal's words appearing on surfaces that draw their own. TanStack drops a `mutate`
+      // callback when its observer unmounts, which is exactly right here: the observer *is* the
+      // panel the sentence would be drawn in.
+      { onError: (e) => setRefusal(`Could not file this card — ${ipcError(e)}`) },
+    );
+  };
+  /**
+   * The **Printing** picker's press — a deck write where there is a row and a browse where there
+   * is not. See this file's header for the whole argument.
+   *
+   * `deck.swapPrinting` and never a second mutation, and never `useSwapFromPane` either:
+   * that hook exists so a surface holding only a `PaneDeckContext` can borrow this write without
+   * a `Deck` in hand, and this component already mounts `useDeck` on the same deck and variant —
+   * a second mount would be a second observer of one `deck_get` to reach a definition it is
+   * already holding.
+   *
+   * **The same-printing arm is a fence rather than a courtesy.** `deck_swap_printing` refuses
+   * `from === to` outright (`SAME_PRINTING`), and picking the row that is already selected is the
+   * one press a dropdown makes easiest, so this would be a sentence apologising for a press that
+   * asked for nothing.
+   *
+   * **The fold needs nothing here**: the surviving row is at the printing that was picked, and
+   * the mutation's own re-anchor lands the modal on it — see `useDeck`'s `reanchorPane`.
+   */
+  const pickPrinting = (printingId: string) => {
+    const slot = scope.deck;
+    if (slot === null) {
+      viewPrinting(printingId);
+      return;
+    }
+    if (printingId === slot.cardId) return;
+    setRefusal(null);
+    deck.swapPrinting.mutate(
+      {
+        fromCardId: slot.cardId,
+        toCardId: printingId,
+        categoryId: slot.categoryId,
+        // Carried across rather than cleared: the reader is choosing a printing, not an object,
+        // so the foil copy of the old printing becomes the foil copy of the new one.
+        finish: slot.finish,
+      },
+      { onError: (e) => setRefusal(`Could not use that printing — ${ipcError(e)}`) },
+    );
   };
   const pickLabel = (labelId: number | null) => {
     if (scope.deck === null) return;
@@ -1071,8 +1133,10 @@ function Body({
     if (slot === null) return;
     setRefusal(null);
     createCategory
+      // The pile's own name travels into the move, because the deck read behind the create is
+      // racing it — see {@link pickCategory}'s `toName`.
       .mutateAsync({ deckId: slot.deckId, name })
-      .then((category) => pickCategory(category.id))
+      .then((category) => pickCategory(category.id, category.name))
       .catch((e: unknown) => setRefusal(`Could not make that category — ${ipcError(e)}`));
   };
   const makeLabel = (name: string, color: LabelColor) => {
@@ -1263,7 +1327,7 @@ function Body({
                   });
                 }}
                 printings={printingOptions}
-                onPickPrinting={viewPrinting}
+                onPickPrinting={pickPrinting}
                 quantity={quantity}
                 onQuantityChange={changeQuantity}
                 categories={categoryOptions}

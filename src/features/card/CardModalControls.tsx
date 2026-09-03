@@ -115,6 +115,19 @@ export interface CardModalControlsProps {
 
   /** The card's printings, in the shape `Dropdown` draws. Empty until that query answers. */
   printings?: readonly DropdownOption[];
+  /**
+   * A printing was picked — and **what that means is the host's answer, not this file's.**
+   *
+   * With a deck row behind the modal the host swaps the row onto it (`useDeck.swapPrinting`, the
+   * same write `AllPrintingsDialog` presses); with no deck row it browses (`viewPrinting`). This
+   * column deliberately knows neither: it draws a picker over `scope`, and a component that
+   * branched on `scope.deck` to decide which *write* a press makes would be a second opinion
+   * about a question `cardModalScope.ts` is the single answer to.
+   *
+   * The trigger goes on reading the printing that is open until the answer lands — there is no
+   * optimistic patch behind either arm, for the reason `useDeck.swapPrinting` states: a swap can
+   * **fold**, and the number a reader would check afterwards is the one only the server computes.
+   */
   onPickPrinting?: (printingId: string) => void;
   /** The count the stepper reports. Ignored entirely when `scope.quantity` is null. */
   quantity?: number;

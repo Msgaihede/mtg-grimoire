@@ -24,6 +24,7 @@ const deckPullFromCollection = vi.hoisted(() => vi.fn());
 const deckQuickAddWishes = vi.hoisted(() => vi.fn());
 const deckQuickAddToCollection = vi.hoisted(() => vi.fn());
 const deckSwapPrinting = vi.hoisted(() => vi.fn());
+const deckSetCardFinish = vi.hoisted(() => vi.fn());
 const deckCardSetLabel = vi.hoisted(() => vi.fn());
 const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
 const deckSetViewState = vi.hoisted(() => vi.fn());
@@ -49,6 +50,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckQuickAddWishes,
     deckQuickAddToCollection,
     deckSwapPrinting,
+    deckSetCardFinish,
     deckCardSetLabel,
     oracleTagsForPrintings,
     deckSetViewState,
@@ -63,6 +65,11 @@ import {
   usePullPlan,
   useSwapFromPane,
 } from "./useDeck";
+// The real store, not a fake: `reanchorPane` reads and writes it through `getState()`, so what
+// these tests are about is the value that ends up in it. Reset in `beforeEach` below, because a
+// zustand store is a module singleton and a context left behind is a context the next test's
+// guard would match.
+import { useAppStore, type PaneDeckContext } from "@/lib/store";
 
 const DECK: DeckRow = {
   gameKey: "any",
@@ -229,6 +236,9 @@ beforeEach(() => {
   // copies recorded, the row they folded into, and what came off the wish.
   deckQuickAddToCollection.mockReset().mockResolvedValue({ copies: 2, entryId: 44, wishCopies: 1 });
   deckSwapPrinting.mockReset().mockResolvedValue({ folded: false, quantity: 4 });
+  // The same `SwapResult` shape, for the same reason: a finish change folds into whatever the
+  // pile already holds of that finish, so the answer is the survivor's quantity.
+  deckSetCardFinish.mockReset().mockResolvedValue({ folded: false, quantity: 4 });
   deckCardSetLabel.mockReset().mockResolvedValue(undefined);
   // A database that has never fetched the taxonomy — every card answers "no tags", which is
   // the state the app ships in and files every add by its type line. The tests that are about
@@ -238,6 +248,7 @@ beforeEach(() => {
   // Answered rather than left undefined, so a hook that started reading the binder again would
   // fail on the assertion that it did rather than on a rejected promise three frames later.
   collectionList.mockReset().mockResolvedValue({ items: [], total: 0 });
+  useAppStore.setState(useAppStore.getInitialState());
 });
 
 /**
@@ -1679,5 +1690,321 @@ describe("useDeck invalidation", () => {
     });
 
     await waitFor(() => expect(staleRoots(client)).toEqual(["decks"]));
+  });
+});
+
+/**
+ * **Every write that moves a deck row's address moves the open card's context with it.**
+ *
+ * A row is `(deck, category, card, variant, finish)` and `paneDeckContext` names one — so a write
+ * that changes any of the five and leaves the context alone leaves the card modal's deck controls
+ * addressing a row that no longer exists. That was reported as the modal detaching, and it was
+ * three separate holes in one hook: `move` and `refile` change the third part, `swap` the fourth,
+ * `setCardFinish` the fifth (the only one that had been fixed).
+ *
+ * The store is the real one and the assertions are about what ends up in it, because that is what
+ * every reader of the context — the modal's scope, the desk's gold ring, `deckControl.ts`'s caret
+ * hand-back — is drawing from.
+ */
+describe("re-anchoring the open card", () => {
+  /** The card modal open on `BOLT`'s row, which is the address every write below names. */
+  const OPEN: PaneDeckContext = {
+    deckId: 4,
+    categoryId: MAIN.id,
+    categoryName: MAIN.name,
+    cardId: "p1",
+    variant: "live",
+    finish: null,
+  };
+
+  /** The context as it stands, which is the whole assertion in most of these. */
+  const anchor = () => useAppStore.getState().paneDeckContext;
+
+  async function openDeck(variant: "live" | "theory" = "live") {
+    const hook = renderHook(() => useDeck(4, variant), { wrapper });
+    await waitFor(() => expect(hook.result.current.deck).toEqual(DECK));
+    return hook;
+  }
+
+  /**
+   * The fifth part, and the arm that already worked — pinned here because it never had a test of
+   * its own and the generalisation runs straight through it.
+   *
+   * `selectedCardId` is asserted beside the context because `openCardFromDeck` writes both: the
+   * card that is open and the row it came from are one act, which is what stops the two drifting.
+   */
+  it("follows a row onto the finish it was set to", async () => {
+    useAppStore.getState().openCardFromDeck(OPEN);
+    const { result } = await openDeck();
+
+    await result.current.setCardFinish.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      to: "foil",
+    });
+
+    expect(anchor()).toEqual({ ...OPEN, finish: "foil" });
+    expect(useAppStore.getState().selectedCardId).toBe("p1");
+  });
+
+  /**
+   * The third part — **the reported case**, measured in the shipped window on 2026-09-03: the deck
+   * row came back `categoryId: 5 "Draw"` and the context was still `categoryId: 1 "Commander"`,
+   * so the modal's category picker went on reading the pile the card had left.
+   *
+   * **The name travels with the id**, and that is the half a fix could easily miss: a category is
+   * a row the reader named, so nothing downstream can translate the id back into a word — the
+   * modal's `4× in Burn spells` line prints `categoryName` straight.
+   */
+  it("follows a card into the pile a move filed it in, name and all", async () => {
+    useAppStore.getState().openCardFromDeck(OPEN);
+    const { result } = await openDeck();
+
+    await result.current.moveCard.mutateAsync({
+      cardId: "p1",
+      from: MAIN.id,
+      to: SIDE.id,
+      finish: null,
+    });
+
+    expect(anchor()).toEqual({ ...OPEN, categoryId: SIDE.id, categoryName: SIDE.name });
+  });
+
+  /**
+   * The pile the cached `deck_get` cannot name — a category created a beat ago by the very
+   * gesture that is filing into it, where the refetch behind the create is racing the move.
+   *
+   * The caller is holding the name (`deck_category_create` answers it), so it passes `toName`,
+   * and that word reaches no command at all: the assertion is that `deck_move_card` is sent the
+   * same seven arguments it always was.
+   */
+  it("takes the destination's name from the caller when the deck read cannot answer", async () => {
+    useAppStore.getState().openCardFromDeck(OPEN);
+    const { result } = await openDeck();
+
+    await result.current.moveCard.mutateAsync({
+      cardId: "p1",
+      from: MAIN.id,
+      to: 42,
+      finish: null,
+      toName: "Ramp",
+    });
+
+    expect(anchor()).toEqual({ ...OPEN, categoryId: 42, categoryName: "Ramp" });
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p1", MAIN.id, 42, null, "live", null);
+  });
+
+  /**
+   * Neither source can name it: the id moves and the **word is left alone rather than erased**.
+   *
+   * The patch is spread over the context, so a `categoryName: undefined` would delete the field —
+   * which type-checks, draws nothing and is invisible to every assertion that only reads the id.
+   * This is the test that would go red for it.
+   */
+  it("keeps the pile's old word rather than erasing it when nothing can name the new one", async () => {
+    useAppStore.getState().openCardFromDeck(OPEN);
+    const { result } = await openDeck();
+
+    await result.current.moveCard.mutateAsync({
+      cardId: "p1",
+      from: MAIN.id,
+      to: 42,
+      finish: null,
+    });
+
+    expect(anchor()).toEqual({ ...OPEN, categoryId: 42 });
+    expect(anchor()?.categoryName).toBe(MAIN.name);
+  });
+
+  /**
+   * The same third part reached through the quick zones' `Auto` — and the name comes off the
+   * re-file's own answer rather than the cache, because `deck_move_card`'s name arm
+   * finds-or-creates and a pile it has just made is one no cached read carries.
+   */
+  it("follows a card into the pile a re-file chose", async () => {
+    oracleTagsForPrintings.mockResolvedValue([{ cardId: "p1", slugs: ["removal"] }]);
+    deckMoveCard.mockResolvedValue(31);
+    useAppStore.getState().openCardFromDeck(OPEN);
+    const { result } = await openDeck();
+
+    await result.current.refileCard.mutateAsync({
+      cardId: "p1",
+      from: MAIN.id,
+      finish: null,
+      typeLine: "Instant",
+      categoryName: MAIN.name,
+    });
+
+    expect(anchor()).toEqual({ ...OPEN, categoryId: 31, categoryName: "Removal" });
+  });
+
+  /**
+   * **A re-file that moved nothing moves nothing here either**, which is the same gate the
+   * refetch is behind: the card is already in the pile the rule names, so its address did not
+   * change and re-pointing the context would be this hook telling the modal about a move that
+   * never happened.
+   */
+  it("leaves the open card where it is when the re-file had nothing to do", async () => {
+    oracleTagsForPrintings.mockResolvedValue([{ cardId: "p1", slugs: ["removal"] }]);
+    useAppStore.getState().openCardFromDeck(OPEN);
+    const { result } = await openDeck();
+
+    await result.current.refileCard.mutateAsync({
+      cardId: "p1",
+      from: MAIN.id,
+      finish: null,
+      typeLine: "Instant",
+      categoryName: "Removal",
+    });
+
+    expect(anchor()).toEqual(OPEN);
+    expect(deckMoveCard).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The fourth part. **Nothing re-anchored a swap at all until 2026-09-03** — the re-anchor was
+   * documented as living at the call site, and the call site it named was a docked pane that had
+   * been deleted; `AllPrintingsDialog`, which took over the press, notes the row for the *caret*
+   * and never touches the context. So a swap left the card modal underneath addressing the
+   * printing the deck had stopped playing.
+   */
+  it("follows a row onto the printing a swap put in it", async () => {
+    useAppStore.getState().openCardFromDeck(OPEN);
+    const { result } = await openDeck();
+
+    await result.current.swapPrinting.mutateAsync({
+      fromCardId: "p1",
+      toCardId: "p2",
+      categoryId: MAIN.id,
+      finish: null,
+    });
+
+    expect(anchor()).toEqual({ ...OPEN, cardId: "p2" });
+    expect(useAppStore.getState().selectedCardId).toBe("p2");
+  });
+
+  /**
+   * **A fold needs no arm and this is what that claim means.** Swapping onto a printing the pile
+   * already holds turns two rows into one, and the survivor is the row at `toCardId` — which is
+   * exactly where a plain swap lands too, so one line covers both outcomes.
+   */
+  it("lands on the surviving row when a swap folded", async () => {
+    deckSwapPrinting.mockResolvedValue({ folded: true, quantity: 7 });
+    useAppStore.getState().openCardFromDeck(OPEN);
+    const { result } = await openDeck();
+
+    await result.current.swapPrinting.mutateAsync({
+      fromCardId: "p1",
+      toCardId: "p2",
+      categoryId: MAIN.id,
+      finish: null,
+    });
+
+    expect(anchor()).toEqual({ ...OPEN, cardId: "p2" });
+  });
+
+  /**
+   * **Zero deletes the row, so there is no address to move to** — the context is cleared and the
+   * card stays open, which is what `setSelectedCardId` means everywhere else in this app.
+   *
+   * Leaving it was the alternative and is not available: `deck_set_card_quantity` answers
+   * `card_gone` for a slot with no row, so the modal's stepper would become a `+` that can only
+   * be refused, and the modal draws no error state for these mutations — the refusal would be
+   * silent.
+   */
+  it("lets the open card go when the row is stepped to zero", async () => {
+    deckSetCardQuantity.mockResolvedValue({ id: 9, quantity: 0, removed: true });
+    useAppStore.getState().openCardFromDeck(OPEN);
+    const { result } = await openDeck();
+
+    await result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 0,
+    });
+
+    expect(anchor()).toBeNull();
+    // The card, not the modal: the reader was looking at it and may well want to put it back.
+    expect(useAppStore.getState().selectedCardId).toBe("p1");
+  });
+
+  /** A step that did not empty the slot changed no part of the address, so it moves nothing. */
+  it("holds the anchor when the stepper only changed a number", async () => {
+    useAppStore.getState().openCardFromDeck(OPEN);
+    const { result } = await openDeck();
+
+    await result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 3,
+    });
+
+    expect(anchor()).toEqual(OPEN);
+  });
+
+  /**
+   * **The guard is the whole address, and these are the four ways it has to refuse.**
+   *
+   * A reader can have a card open on one row and write to another — a right-click on a second
+   * card, a drag out of a different pile, an editor on the other list — and dragging the open
+   * card along would silently re-point the modal at a row nobody looked at. Each case here writes
+   * a row that differs from the open one in exactly one part.
+   */
+  it.each([
+    ["another pile", { categoryId: SIDE.id, categoryName: SIDE.name }],
+    ["another printing", { cardId: "p2" }],
+    ["another finish", { finish: "foil" as const }],
+    ["another deck", { deckId: 9 }],
+  ])("leaves a card open from %s alone", async (_case, difference) => {
+    useAppStore.getState().openCardFromDeck({ ...OPEN, ...difference });
+    const { result } = await openDeck();
+
+    await result.current.moveCard.mutateAsync({
+      cardId: "p1",
+      from: MAIN.id,
+      to: 42,
+      finish: null,
+      toName: "Ramp",
+    });
+
+    expect(anchor()).toEqual({ ...OPEN, ...difference });
+  });
+
+  /**
+   * The fourth part of the address is the **list**, and it is the one a test can only reach by
+   * mounting the hook the other way round: the editor's Theory tab writes `theory` rows, and a
+   * card open from the Live list must not be dragged onto one.
+   */
+  it("leaves a card open from the other list alone", async () => {
+    useAppStore.getState().openCardFromDeck(OPEN);
+    const { result } = await openDeck("theory");
+
+    await result.current.moveCard.mutateAsync({
+      cardId: "p1",
+      from: MAIN.id,
+      to: SIDE.id,
+      finish: null,
+    });
+
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p1", MAIN.id, SIDE.id, null, "theory", null);
+    expect(anchor()).toEqual(OPEN);
+  });
+
+  /** No card open at all is the common case — most of these writes are made with the modal shut. */
+  it("does nothing when no card is open", async () => {
+    const { result } = await openDeck();
+
+    await result.current.moveCard.mutateAsync({
+      cardId: "p1",
+      from: MAIN.id,
+      to: SIDE.id,
+      finish: null,
+    });
+
+    expect(anchor()).toBeNull();
+    expect(useAppStore.getState().selectedCardId).toBeNull();
   });
 });

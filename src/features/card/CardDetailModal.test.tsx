@@ -27,6 +27,7 @@ const deckLabelAll = vi.fn();
 const deckLabelCreate = vi.fn();
 const deckCategoryCreate = vi.fn();
 const deckMoveCard = vi.fn();
+const deckSwapPrinting = vi.fn();
 const getMarketplace = vi.fn();
 const marketplaceFeedStatus = vi.fn();
 
@@ -68,6 +69,9 @@ vi.mock("@/lib/ipc", async (original) => ({
     deckLabelCreate: (...args: unknown[]) => deckLabelCreate(...args),
     deckCategoryCreate: (...args: unknown[]) => deckCategoryCreate(...args),
     deckMoveCard: (...args: unknown[]) => deckMoveCard(...args),
+    // The Printing picker's write where a deck row is behind the modal — the same command
+    // `AllPrintingsDialog`'s tiles press, borrowed through `useDeck`'s one definition of it.
+    deckSwapPrinting: (...args: unknown[]) => deckSwapPrinting(...args),
     getMarketplace: () => getMarketplace(),
     marketplaceFeedStatus: () => marketplaceFeedStatus(),
   },
@@ -183,6 +187,8 @@ beforeEach(() => {
   });
   deckCategoryCreate.mockReset().mockResolvedValue({ id: 42, name: "Ramp" });
   deckMoveCard.mockReset().mockResolvedValue(42);
+  // A plain swap: the pile held no row of the printing that was picked, so nothing folded.
+  deckSwapPrinting.mockReset().mockResolvedValue({ folded: false, quantity: 4 });
   // Nobody has chosen one, which is what a fresh install reads.
   getMarketplace.mockReset().mockResolvedValue("tcgplayer");
   marketplaceFeedStatus.mockReset().mockResolvedValue([]);
@@ -718,4 +724,104 @@ it("makes a label with a colour from the app's own palette, and puts it on the c
   // The created label is then worn, which is the second half of one act — `mutateAsync` and an
   // explicit chain, because a `mutate`-scoped callback is dropped when its observer unmounts.
   await waitFor(() => expect(deckCardSetLabel).toHaveBeenCalledWith(1, "c1", 2, "live", null, 8));
+});
+
+/**
+ * The two printings the picker offers in the tests below — the open card's own and one other,
+ * which is the smallest list on which a pick can mean anything.
+ */
+const printings = {
+  items: [
+    {
+      id: "c1",
+      setCode: "lea",
+      setName: "Limited Edition Alpha",
+      collectorNumber: "161",
+      finishPrices: { nonfoil: 620, foil: null, etched: null },
+    },
+    {
+      id: "c2",
+      setCode: "leb",
+      setName: "Limited Edition Beta",
+      collectorNumber: "161",
+      finishPrices: { nonfoil: 410, foil: null, etched: null },
+    },
+  ],
+  total: 2,
+};
+
+/** Open the Printing picker and take the other printing out of it. */
+async function pickBeta() {
+  await userEvent.click(screen.getByRole("button", { name: /^printing$/i }));
+  await userEvent.click(await screen.findByRole("option", { name: /Limited Edition Beta/ }));
+}
+
+it("swaps the deck's printing when one is picked out of the dropdown", async () => {
+  // **The picker used to browse**, which left `paneDeckContext.cardId` on the printing the deck
+  // still played while the panel drew another one — half of what a reader reports as the modal
+  // going out of sync. It is the swap now, and it is `useDeck.swapPrinting`: the same command
+  // `AllPrintingsDialog`'s tiles press, so the two doors into one act cannot come to disagree.
+  cardPrintings.mockResolvedValue(printings);
+  await renderFromDeck();
+
+  await pickBeta();
+
+  // deckId, from, to, categoryId, variant, finish — the row's whole address, with the finish
+  // carried across rather than cleared: the reader is choosing a printing, not an object.
+  await waitFor(() => expect(deckSwapPrinting).toHaveBeenCalledWith(1, "c1", "c2", 2, "live", null));
+  // And the modal follows the row, which is the half a swap that only wrote would leave broken:
+  // the re-anchor lives on the mutation (`useDeck`'s `reanchorPane`), so this is the same write
+  // the printings wall gets for free.
+  await waitFor(() =>
+    expect(useAppStore.getState().paneDeckContext).toEqual({ ...deckRow, cardId: "c2" }),
+  );
+  expect(useAppStore.getState().selectedCardId).toBe("c2");
+});
+
+it("browses instead of swapping where there is no deck row to write to", async () => {
+  // **Only where there is a deck row.** On the search, collection, wishlist and tags walls there
+  // is nothing to rewrite, so the pick stays `viewPrinting` — which moves the open card and
+  // deliberately leaves the (already empty) deck context alone.
+  cardPrintings.mockResolvedValue(printings);
+  renderModal("c1");
+  await screen.findByRole("button", { name: /view all printings/i });
+
+  await pickBeta();
+
+  await waitFor(() => expect(useAppStore.getState().selectedCardId).toBe("c2"));
+  expect(deckSwapPrinting).not.toHaveBeenCalled();
+  expect(useAppStore.getState().paneDeckContext).toBeNull();
+});
+
+it("says a refused swap rather than swallowing it", async () => {
+  // Every write this file makes reports in words; this one has to do it through a `mutate`-scoped
+  // callback, because the mutation is `useDeck`'s single definition and a sentence written onto
+  // it would appear on the editor's own surfaces too.
+  cardPrintings.mockResolvedValue(printings);
+  deckSwapPrinting.mockRejectedValue(new Error("deck is gone"));
+  await renderFromDeck();
+
+  await pickBeta();
+
+  expect(await screen.findByRole("alert")).toHaveTextContent(/could not use that printing/i);
+});
+
+it("follows the card into the pile a category pick filed it in", async () => {
+  // **The reported case.** The write landed and the context did not move, so the picker went on
+  // reading the pile the card had left. Both halves are asserted, because a fix that moved only
+  // the id would leave the modal's `4× in …` line naming the old pile — a category is a row the
+  // reader named, so nothing downstream can translate the id back into a word.
+  await renderFromDeck();
+
+  await userEvent.click(screen.getByRole("button", { name: /deck category/i }));
+  await userEvent.click(await screen.findByRole("option", { name: "Lands" }));
+
+  await waitFor(() => expect(deckMoveCard).toHaveBeenCalledWith(1, "c1", 2, 3, null, "live", null));
+  await waitFor(() =>
+    expect(useAppStore.getState().paneDeckContext).toEqual({
+      ...deckRow,
+      categoryId: 3,
+      categoryName: "Lands",
+    }),
+  );
 });
