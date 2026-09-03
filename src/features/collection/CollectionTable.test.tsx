@@ -307,4 +307,25 @@ describe("CollectionTable", () => {
       screen.getByRole("spinbutton", { name: "Quantity of Lightning Bolt (Nonfoil, NM)" }),
     ).toBeInTheDocument();
   });
+
+  /**
+   * **Issue #353.** The mark used to be gated on the copy having a *treatment* name, which was
+   * right only while a treatment had a glyph of its own. Now that the glyph is the finish, that
+   * gate would have drawn the foil icon on the Surge Foil row and nothing on the plain foil row
+   * above it — one fact, two pictures, inside one table.
+   *
+   * The plain copy is still unmarked, which is the rule every surface in the app keeps: nonfoil
+   * is the finish a card is assumed to be.
+   */
+  it("marks a foil row whether or not the copy has a name of its own", () => {
+    renderTable([
+      { ...ROW, finish: "foil" },
+      { ...ROW, id: 44, cardId: "c3", name: "Counterspell", finish: "foil", promoTypes: '["halofoil"]' },
+      { ...ROW, id: 45, cardId: "c4", name: "Giant Growth" },
+    ]);
+
+    expect(screen.getByLabelText("Foil")).toBeInTheDocument();
+    expect(screen.getByLabelText("Halo Foil")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Nonfoil")).toBeNull();
+  });
 });
