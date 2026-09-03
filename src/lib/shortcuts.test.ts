@@ -238,6 +238,18 @@ describe("the catalogue's own entries answer the presses they document", () => {
     );
   });
 
+  // The keyboard's own menu key, which `menu/useContextMenu.ts` has always accepted and this row
+  // listed neither of until 2026-09-03. It is one of the two rows the module doc calls prose, so
+  // nothing but a case like this one holds it to what the handler does.
+  it("the dedicated Menu key opens the context menu too", () => {
+    expect(matchesShortcut(shortcut("global", "contextMenu"), press("ContextMenu"))).toBe(true);
+  });
+
+  it("a modified Menu key is not the context menu", () => {
+    const contextMenu = shortcut("global", "contextMenu");
+    expect(matchesShortcut(contextMenu, press("ContextMenu", { ctrl: true }))).toBe(false);
+  });
+
   it("the pointer rows match no keypress at all", () => {
     expect(matchesShortcut(shortcut("global", "zoom"), press("z", { ctrl: true }))).toBe(false);
     expect(matchesShortcut(shortcut("global", "select"), press("z", { ctrl: true }))).toBe(false);
@@ -283,6 +295,12 @@ describe("chordParts", () => {
 
   it("shortens Escape to the word on the key", () => {
     expect(chordParts({ key: "Escape" })).toEqual(["Esc"]);
+  });
+
+  // `ContextMenu` is the DOM's name for that key and nobody's word for the cap; Windows prints
+  // `Menu` on it.
+  it("names the dedicated context-menu key the way the keyboard does", () => {
+    expect(chordParts({ key: "ContextMenu" })).toEqual(["Menu"]);
   });
 
   it("draws a wheel gesture as Scroll", () => {
@@ -389,6 +407,15 @@ describe("the catalogue's shape", () => {
     expect(SHORTCUTS.collection).toEqual([]);
     expect(SHORTCUTS.wishlist).toEqual([]);
     expect(SHORTCUTS.settings).toEqual([]);
+  });
+
+  // Both presses the handler accepts, drawn in the order the panel draws them: `Shift F10 or
+  // Menu`, the universal spelling first because not every keyboard carries the dedicated key.
+  it("gives the context menu both of the presses that open one", () => {
+    expect(shortcut("global", "contextMenu").chords.map((c) => chordParts(c))).toEqual([
+      ["Shift", "F10"],
+      ["Menu"],
+    ]);
   });
 
   it("gives switchView one chord per rail entry, Ctrl+1 through Ctrl+6", () => {

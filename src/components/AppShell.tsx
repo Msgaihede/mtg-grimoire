@@ -237,8 +237,18 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (matchesShortcut(KEY_MAP, e)) {
+        // The press is ours whether or not it does anything, so the browser never sees a held
+        // `F1` either.
         e.preventDefault();
-        setKeyMapOpen(!useAppStore.getState().keyMapOpen);
+        // **Auto-repeat is swallowed here and nowhere else, because this is the only chord whose
+        // meaning depends on the state it changes.** Holding a key fires `keydown` at the OS
+        // repeat rate, and a toggle on that is the panel strobing through its own fade for as
+        // long as the finger is down — it lands on whichever side the reader let go on.
+        // `Ctrl+1…6` below is left alone deliberately: re-selecting the view you are on is
+        // idempotent, so a guard there would be a rule with no failure behind it, and hoisting
+        // one to the top of the handler would decide the question for every chord this shell
+        // ever grows — including a stepping chord, where repeating *is* the binding.
+        if (!e.repeat) setKeyMapOpen(!useAppStore.getState().keyMapOpen);
         return;
       }
       if (document.querySelector('[aria-modal="true"]') !== null) return;

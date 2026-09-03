@@ -26,15 +26,20 @@ it. Of the nine entries in `SHORTCUTS`:
 | Rows | Fenced how |
 | --- | --- |
 | `switchView`, `keyMap` (`AppShell`); `undo`, `redo`, `remove` (`DeckEditor`) | **Fenced.** The handler calls `matchesShortcut` against the entry. Rename the id and `shortcut()` throws at import; change a chord and the binding changes with it. |
-| `dismiss` (`Escape`), `contextMenu` (`Shift+F10`) | **Prose.** The bindings live in `useDismissOnEscape` and `menu/useContextMenu`, and neither reads the catalogue. |
+| `dismiss` (`Escape`), `contextMenu` (`Shift+F10`, `Menu`) | **Prose.** The bindings live in `useDismissOnEscape` and `menu/useContextMenu`, and neither reads the catalogue. |
 | `zoom` (`Ctrl+wheel`), `select` (`Ctrl`/`Shift`-click) | **Unmatchable by construction.** A pointer chord carries no `key`, so `matchesChord` answers `false` from its shape rather than from a guard a caller could forget. `useCardZoomGesture` and `multiSelect.ts` keep their own logic; the fence there is only that the label sits next to the code it describes. |
 
 **The two prose rows are a ruling, not an oversight.** Threading a shared matcher through
 `e.key === "Escape"` is more machinery than the fence buys, and both are platform conventions that
-will not change. The cost is stated rather than hidden: those two rows can drift from their
-handlers, and one already has — `useContextMenu.ts:159` accepts `e.key === "ContextMenu"` as well
-as `Shift+F10`, which the catalogue row does not mention. That is the harmless direction (the panel
-under-states what is bound), but it is the direction a fence would have caught.
+will not change. The cost is stated rather than hidden, and it was paid on the day the catalogue
+shipped: `useContextMenu.ts:159` accepts `e.key === "ContextMenu"` — the keyboard's own menu key —
+as well as `Shift+F10`, and the `contextMenu` row listed only the second, so the panel under-stated
+what was bound. That is the harmless direction, and it is still the direction a fence would have
+caught rather than a reviewer. The row carries both chords since 2026-09-03 and the panel draws
+`Shift` `F10` **or** `Menu`, universal spelling first because not every keyboard has the dedicated
+key; `Menu` is the cap because `ContextMenu` is the DOM's name for it and nobody's word for the
+thing under their thumb. Nothing stops the pair drifting again — that is what *prose* means here —
+so a change to `menuKey` is a change to this row.
 
 ## `matchesChord` is exact in both directions
 
@@ -118,9 +123,12 @@ an open editor would list chords for a page that is not on screen. `deckEditor` 
 empty today** — `search`, `tags`, `decks`, `collection`, `wishlist`, `settings` — and `SHORTCUTS`
 spells each of them out with an empty array rather than leaving them off the record: making the
 emptiness explicit is what stops a scope being forgotten when a view starts binding something.
-(The design and `KeyMap.tsx`'s comment both say "five of the six", counting `decks` as carrying the
-editor's chords. It does not: `deckEditor` replaces `decks` rather than nesting under it, which is
-the paragraph above. Six, not five.) That emptiness is the whole reason `Ctrl+1…6` sits in
+(**"Five of the six" was written down four times and corrected twice**, which is worth keeping as
+the shape of the mistake rather than as a state anything is still in: it counts `decks` as carrying
+the editor's chords, and `deckEditor` *replaces* `decks` rather than nesting under it — the
+paragraph above. The design and `KeyMap.tsx`'s comment were corrected first, `KeyMap.stories.tsx`
+and `KeyMap.test.tsx` on the review pass that found them still saying it. Six, not five, in all
+four.) That emptiness is the whole reason `Ctrl+1…6` sits in
 `"global"` — it is what gives the panel something true to say on a page that binds nothing.
 
 ## `range` is declared, never counted
@@ -140,6 +148,49 @@ chord's modifiers assumes the run shares them, which is true of the one range th
 is not a fact the component can check. The separator is a **word** in both shapes — an en dash
 between two caps is read out as nothing at all by a screen reader, and `1 6` is a different
 shortcut from `1 to 6`.
+
+**And the caps are held apart by a text node, not by the `gap` between them** (2026-09-03). A row
+of `<kbd>`s separated only by `gap-1` flattens to `Ctrl1toCtrl6` when a text alternative is
+computed — the `Missing2` failure this repo already has a rule about, one surface over — so the
+word `to` is not enough on its own. A whitespace text node fixes it at no visual cost: a sequence
+of child text runs that is *only* white space is not rendered by a flex container and becomes no
+flex item (CSS Flexbox §4), so the drawn row does not move. The alternative was an `aria-label` on
+the `<dd>`, refused twice over — `<dd>` maps to `definition`, a role browsers do not agree takes an
+author's name, and the label would be a second spelling of the caps, free to drift from the ones
+drawn. `KeyMap.test.tsx` pins the flattened reading of all three shapes; **jsdom lays nothing out,
+so only a browser can confirm the row is unchanged to the pixel.**
+
+## Two presses of the panel's own, each with a guard
+
+Both landed on the review pass, 2026-09-03, and neither is visible in the shipped window without
+looking for it.
+
+**`F1` swallows auto-repeat, and `Ctrl+1…6` deliberately does not.** Holding a key fires `keydown`
+at the OS repeat rate, so a *toggle* on that press strobes the panel through its own fade for as
+long as the finger is down and lands on whichever side the reader let go on. The guard is on the
+`F1` branch alone: re-selecting the view you are already on is idempotent, so a guard there would
+be a rule with no failure behind it, and one hoisted to the top of the handler would answer the
+question for every chord the shell ever binds — including a stepping chord, where repeating *is*
+the binding. The press is still `preventDefault`ed on every repeat, so a held `F1` never reaches
+the browser either. `userEvent` cannot express auto-repeat at all (every keydown it dispatches
+carries `repeat: false`), so that case is the one press in `AppShell.test.tsx` fired by hand.
+
+**Escape hands the caret back when the caret has nowhere to go — never merely when the panel is
+open.** That is the whole of the rule, and getting it wrong is possible in both directions. The
+panel has two ways in and they leave the caret in two places: a press on the trigger puts it inside
+the box, while `F1` opens the panel and moves *nothing*. So a reader typing in the deck editor's
+quick-add box who presses `F1` and then Escape was never anywhere but that field, and an
+unconditional `focus()` carried them off to the caption row — a layer handing back a caret it never
+took. **But `contains(document.activeElement)` alone trades that bug for the one the hand-back
+existed to prevent**: nothing in the panel is focusable, so a press on its own text blurs to
+`<body>`, `contains` answers `false` for that, and Escape then leaves the caret on `<body>` where
+the next Tab restarts from the top of the app. The condition is therefore **inside the box _or_
+nowhere** — `document.activeElement` null or `<body>`, which is what a browser leaves behind when
+the thing holding the caret stops being focusable. It is `useFolderFieldReturn`'s reading exactly,
+met from the other side: that hook restores on the same null-or-`<body>` test because the element
+it would hand back to has been replaced. Both halves are pinned and each fails on its own —
+reverting to the unconditional `focus()` reddens the `F1` case alone, reverting to the bare
+`contains()` reddens the `<body>` case alone (`KeyMap.test.tsx`, both measured 2026-09-03).
 
 ## The panel needs no `LAYER` rung
 
@@ -187,8 +238,10 @@ raw CDP where that harness could not reach.
 5. **The button is not a drag region.** It carries no `data-tauri-drag-region` and a real CDP click
    opened the panel: Tauri does not swallow the press.
 6. **Escape closes and hands the caret back** — `document.activeElement` is the trigger button
-   afterwards. That is load-bearing rather than tidy, because `F1` opens the panel with the caret
-   wherever the reader was.
+   afterwards. **That reading is the click path's, and the hand-back has been conditional since
+   the review pass later the same day**: it fires only where the caret is already inside the
+   panel's box, which is what a press on the trigger leaves and what `F1` does not. The `F1`-then
+   Escape path is pinned in `KeyMap.test.tsx` and has **not** been re-driven in the window.
 7. **The scope swap.** On Search the panel drew **one** heading, `Everywhere` — the `search` scope
    binds nothing and drew nothing at all, no empty heading. In the deck editor it drew `Everywhere`
    + `Deck editor` and **no** `Decks` section.

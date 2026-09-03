@@ -1912,9 +1912,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * it walked the tree on every keystroke typed into the quick-add box, for the two presses in a
    * session that are `Ctrl+Z`.
    *
-   * There is no modifier pre-check left: {@link matchesChord} is exact in both directions, so an
-   * unlisted modifier is already a non-match and a guard for it would be a second, looser
-   * statement of the same rule.
+   * There is no modifier pre-check left: `matchesChord`, which `src/lib/shortcuts.ts` builds
+   * {@link matchesShortcut} out of, is exact in both directions — so an unlisted modifier is
+   * already a non-match and a guard for it would be a second, looser statement of the same rule.
    */
   const runUndo = undo.runUndo;
   const runRedo = undo.runRedo;

@@ -37,6 +37,19 @@ function capsFor(label: string): string[] {
   return [...caps].map((cap) => cap.textContent ?? "");
 }
 
+/**
+ * What the row is *read out* as: the `<dd>`'s text flattened the way a text alternative is
+ * flattened — runs of whitespace collapsed to one space, the ends trimmed.
+ *
+ * **{@link capsFor} cannot see this and never could.** It reads each `<kbd>` on its own, so it is
+ * green whether or not anything separates them, while what an assistive technology gets is the
+ * concatenation — `Ctrl1toCtrl6` for caps held apart by nothing but a flex `gap`.
+ */
+function readingOf(label: string): string {
+  const row = screen.getByText(label).nextElementSibling;
+  return (row?.textContent ?? "").replace(/\s+/g, " ").trim();
+}
+
 beforeEach(() => {
   useAppStore.setState(useAppStore.getInitialState());
 });
@@ -59,8 +72,9 @@ describe("KeyMap", () => {
 
   /**
    * **A scope with nothing in it draws nothing at all** — not a heading over a gap, and not a
-   * sentence promising one later. Five of the six views are in that state today, so this is the
-   * case a reader is in most of the time rather than an edge one.
+   * sentence promising one later. All six views are in that state today — `deckEditor` is a
+   * scope of its own that *replaces* `decks` rather than filling it — so this is the case a
+   * reader is in most of the time rather than an edge one.
    */
   it("draws no heading for a scope with no shortcuts", () => {
     useAppStore.setState({ activeView: "search", openDeckId: null, keyMapOpen: true });
@@ -142,16 +156,89 @@ describe("KeyMap", () => {
   });
 
   /**
-   * Escape closes it **and hands the caret back to the trigger**, which is this app's rule for a
-   * layer Escape dismissed and is load-bearing here rather than tidy: `F1` opens this panel with
-   * the caret wherever the reader left it, so without the hand-back the press would leave focus
-   * in a field behind a panel that has just gone.
-   *
-   * The caret is walked in with Tab rather than placed with `focus()` — a programmatic focus is
-   * the one caret a reader cannot produce — and never with a click, which is a press *outside*
-   * the box and would close the panel before Escape could.
+   * **The caps are separated by text, not by the `gap` between them**, and a gap is read out as
+   * nothing at all: without a text node the range row flattens to `Ctrl1toCtrl6`. This repo has
+   * paid for that once already — a label and its count in two spans computed to `Missing2` — and
+   * a stylesheet cannot fix it, since the separation has to exist in the markup an assistive
+   * technology reads. Every shape is pinned, because each puts a different thing between two
+   * caps: a range's `to`, two spellings' `or`, and a single chord's modifiers with nothing
+   * between them but the space this case exists for.
    */
-  it("closes on Escape and hands the caret back to the trigger", async () => {
+  it("reads out with a space between the caps", () => {
+    useAppStore.setState({ activeView: "decks", openDeckId: 7, keyMapOpen: true });
+    render(<Harness />);
+
+    expect(readingOf("Jump to a section")).toBe("Ctrl 1 to Ctrl 6");
+    expect(readingOf("Redo the change you undid")).toBe("Ctrl Y or Ctrl Shift Z");
+    expect(readingOf("Undo the last change")).toBe("Ctrl Z");
+  });
+
+  /**
+   * Escape closes it and the caret stays on the trigger — this app's rule for a layer Escape
+   * dismissed, met from the side where the hand-back is what it has always been.
+   *
+   * **Opened by pressing the trigger**, which is the half of this the case below is not: a click
+   * puts the caret inside the box, so the guarded hand-back fires and lands where the caret
+   * already was.
+   */
+  it("closes on Escape and leaves the caret on the trigger it was opened from", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+
+    await user.click(screen.getByRole("button", { name: KEY_MAP_LABEL }));
+    expect(screen.getByRole("heading", { name: "Everywhere" })).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+
+    expect(screen.getByRole("button", { name: KEY_MAP_LABEL })).toHaveFocus();
+    expect(screen.queryByRole("heading", { name: "Everywhere" })).not.toBeInTheDocument();
+  });
+
+  /**
+   * **A caret with nowhere to go is rescued, and that is the other half of the same rule.**
+   * Nothing in the panel is focusable, so a press on its own text blurs the trigger to `<body>`
+   * — and Escape closing the panel there would leave the caret on `<body>` for good, where the
+   * next Tab restarts from the top of the app. `contains()` alone answers `false` for that
+   * state, which is why the condition asks whether the caret has anywhere to go rather than
+   * where it is.
+   *
+   * The heading is clicked rather than the caret placed by hand, because *how* the caret came to
+   * be nowhere is the case: `userEvent` blurs to `<body>` when a press lands on something with
+   * no focusable ancestor, which is exactly what a reader's press on a `<kbd>` does. It is a
+   * press **inside** the box, so the outside-click rule leaves the panel open.
+   */
+  it("closes on Escape and rescues a caret the panel dropped on the body", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+
+    await user.click(screen.getByRole("button", { name: KEY_MAP_LABEL }));
+    await user.click(screen.getByRole("heading", { name: "Everywhere" }));
+    expect(document.body).toHaveFocus();
+
+    await user.keyboard("{Escape}");
+
+    expect(screen.getByRole("button", { name: KEY_MAP_LABEL })).toHaveFocus();
+    expect(screen.queryByRole("heading", { name: "Everywhere" })).not.toBeInTheDocument();
+  });
+
+  /**
+   * The other way in, and the one an unconditional hand-back gets wrong: **`F1` opens this panel
+   * without moving the caret**, so a reader typing in the deck editor's quick-add box never left
+   * that box — and Escape carrying them off to the caption row is a layer handing back a caret it
+   * never took.
+   *
+   * The rationale this replaced said the hand-back stopped Escape "leaving focus in a field
+   * behind a panel that has just gone", which describes a state that cannot occur: the field
+   * still holds the caret and is still on screen, because the panel took neither. This case and
+   * the one above fail for different reasons and are both needed — an unconditional `focus()`
+   * reddens this one alone, and a bare `contains()` reddens that one alone.
+   *
+   * The flag is written rather than the trigger pressed, because that is exactly what `F1` does
+   * to this component — `AppShell` owns the key and this panel only ever sees the flag turn over
+   * — and the caret is walked in with Tab rather than placed with `focus()`, a programmatic focus
+   * being the one caret a reader cannot produce.
+   */
+  it("closes on Escape and leaves the caret where F1 found it", async () => {
     const user = userEvent.setup();
     useAppStore.setState({ keyMapOpen: true });
     render(<Harness />);
@@ -161,7 +248,7 @@ describe("KeyMap", () => {
 
     await user.keyboard("{Escape}");
 
-    expect(screen.getByRole("button", { name: KEY_MAP_LABEL })).toHaveFocus();
+    expect(screen.getByLabelText("Somewhere else")).toHaveFocus();
     expect(screen.queryByRole("heading", { name: "Everywhere" })).not.toBeInTheDocument();
   });
 

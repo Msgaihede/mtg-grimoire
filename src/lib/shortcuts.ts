@@ -108,7 +108,20 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
     {
       id: "contextMenu",
       label: "Open the menu for what is focused",
-      chords: [{ key: "F10", shift: true }],
+      /**
+       * Both presses `menuKey` accepts, in the order a reader can rely on them: `Shift+F10` is on
+       * every keyboard, and the dedicated key is not on a laptop's.
+       *
+       * This row is one of the two the module doc calls *prose* — `menu/useContextMenu.ts` does
+       * not read the catalogue — and the second chord is what that costs, stated rather than
+       * hidden: the handler accepted the dedicated key from the day it was written and this row
+       * listed one of its two spellings until 2026-09-03. Under-stating what is bound is the
+       * harmless direction, and it is still the direction a fence would have caught.
+       */
+      chords: [
+        { key: "F10", shift: true },
+        { key: "ContextMenu" },
+      ],
     },
     { id: "zoom", label: "Resize the cards", chords: [{ pointer: "wheel", ctrl: true }] },
     {
@@ -235,6 +248,9 @@ const CAPS: Record<string, string> = {
   ArrowUp: "↑",
   ArrowDown: "↓",
   Escape: "Esc",
+  // Windows prints `Menu` on that key and calls it the Menu key everywhere it is documented;
+  // `ContextMenu` is the DOM's name for it and nobody's word for the cap under their thumb.
+  ContextMenu: "Menu",
   wheel: "Scroll",
   click: "Click",
 };

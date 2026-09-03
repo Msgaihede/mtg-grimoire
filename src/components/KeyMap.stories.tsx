@@ -11,9 +11,9 @@ import { KEY_MAP_LABEL, KeyMap } from "./KeyMap";
  *
  * **What it draws is decided entirely by where the reader is standing** — `activeScopes` answers
  * with `global` and exactly one more scope, and a scope holding no shortcuts draws nothing at
- * all rather than a heading over a gap. Five of the six views are in that state today, so the
- * two stories below are not an edge case and its opposite; they are the two shapes a reader
- * actually meets.
+ * all rather than a heading over a gap. All six views are in that state today — `deckEditor` is
+ * a scope of its own that *replaces* `decks` rather than filling it — so the two stories below
+ * are not an edge case and its opposite; they are the two shapes a reader actually meets.
  *
  * The trigger here is scaffolding. `TitleBar` owns the real caption button and keeps it private,
  * so this is that button's geometry and nothing else — the panel has to open from a 46×34 square

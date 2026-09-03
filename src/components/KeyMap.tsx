@@ -85,6 +85,19 @@ function headingFor(scope: ShortcutScope): string {
  * A word rather than a glyph in both cases: an en dash between two caps is read out as nothing
  * at all by a screen reader, and `1 6` is a different shortcut from `1 to 6`.
  *
+ * **The whitespace between the caps is text, not the `gap`, and that is what the row is read out
+ * with.** Adjacent inline elements with nothing between them concatenate when their text is
+ * flattened — this repo has already paid for that once, with a label and its count in two spans
+ * computing to `Missing2` — so caps separated only by `gap-1` say `Ctrl1toCtrl6` to a screen
+ * reader while looking correct to everyone else. A text node fixes it at no visual cost: a
+ * sequence of child text runs that is *only* white space is not rendered by a flex container and
+ * becomes no flex item (CSS Flexbox §4), so the drawn row is unchanged to the pixel. An
+ * `aria-label` on the `<dd>` would have been the other way, and is worse twice over — `<dd>` maps
+ * to `definition`, a role browsers do not agree takes an author's name, and the label would be a
+ * second spelling of the caps built by joining the same parts, free to drift from the ones drawn.
+ * **jsdom has no layout engine**, so the suite can pin the reading and only a browser can confirm
+ * the row did not move.
+ *
  * **Exported for its own test.** The catalogue holds no multi-chord entry that is *not* a range —
  * that is the case the flag exists for and the case a count got wrong — so pinning the `or` shape
  * over three chords means constructing one, and the alternative is a fake row in the catalogue
@@ -97,11 +110,17 @@ export function Caps({ shortcut }: { shortcut: Shortcut }) {
     <dd className="flex flex-wrap items-center justify-end gap-1">
       {drawn.map((chord, i) => (
         <Fragment key={i}>
-          {i > 0 && <span className="px-0.5 text-[0.6875rem] text-dim">{range ? "to" : "or"}</span>}
+          {i > 0 && (
+            <>
+              {" "}
+              <span className="px-0.5 text-[0.6875rem] text-dim">{range ? "to" : "or"}</span>
+            </>
+          )}
           {chordParts(chord).map((part) => (
-            <kbd key={`${String(i)}-${part}`} className={CAP}>
-              {part}
-            </kbd>
+            <Fragment key={`${String(i)}-${part}`}>
+              {" "}
+              <kbd className={CAP}>{part}</kbd>
+            </Fragment>
           ))}
         </Fragment>
       ))}
@@ -165,12 +184,29 @@ export function KeyMap({ children }: { children: ReactNode }) {
     enabled: open,
     onDismiss: () => {
       // The caret goes back to the trigger, which is this app's rule for a layer Escape
-      // dismissed — and here it is load-bearing rather than tidy: `F1` opens this panel with the
-      // caret wherever the reader was, so without the hand-back Escape would leave focus in a
-      // wall behind a panel that has just gone. `:scope >` because the trigger is this box's own
-      // child and the panel below it is not; `focus()` before the close, while it is still
-      // mounted.
-      anchorRef.current?.querySelector<HTMLElement>(":scope > button")?.focus();
+      // dismissed — **and the question the condition asks is whether the caret has anywhere to
+      // go, not where the panel is.** Two states want the hand-back and they are not the same
+      // state: the caret is in this box, so the thing holding it is about to be closed; or the
+      // caret is *nowhere*, which is what a browser leaves behind when whatever held it stopped
+      // being focusable — here, a press on the panel's own text, none of which is. Both would
+      // otherwise end on `<body>`, and a caret on `<body>` is the next Tab restarting from the
+      // top of the app.
+      //
+      // **What the condition is for is the third state**, which is the one an unconditional
+      // `focus()` got wrong: `F1` opens this panel and moves *nothing*, so a reader typing in
+      // the deck editor's quick-add box is still in that field, with the caret in no danger at
+      // all — and taking them to the caption row is a layer handing back a caret it never took.
+      // `useFolderFieldReturn`'s rule, met from the other side: it restores on exactly this
+      // "null or `<body>`" reading, because the element it would hand back to has been replaced.
+      //
+      // `:scope >` because the trigger is this box's own child and the panel below it is not;
+      // `focus()` before the close, while it is still mounted.
+      const box = anchorRef.current;
+      const caret = document.activeElement;
+      const nowhere = caret === null || caret === document.body;
+      if (nowhere || box?.contains(caret) === true) {
+        box?.querySelector<HTMLElement>(":scope > button")?.focus();
+      }
       setOpen(false);
     },
   });

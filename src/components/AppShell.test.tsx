@@ -1697,7 +1697,60 @@ describe("the shell's keyboard bindings", () => {
   });
 
   /**
-   * The listener goes on once and stays on — which none of the four cases above can see.
+   * **Holding `F1` does not strobe the panel**, which is the one thing about a toggle bound to a
+   * key that auto-repeat gets wrong: the OS fires `keydown` at its repeat rate for as long as the
+   * finger is down, and a toggle on that opens and closes the panel over and over, landing on
+   * whichever side the reader let go on.
+   *
+   * **Fired by hand, and there is no alternative**: `userEvent` cannot express auto-repeat at all
+   * — `{F1>3/}` dispatches three presses with `repeat` false on every one of them, which is three
+   * genuine presses and not a held key. Dispatched at `document.body` rather than at `window`, so
+   * the press takes the ordinary propagation path up to the shell's listener.
+   *
+   * **One repeat, not two.** Two of them toggle back to where they started, so the case would
+   * pass against the very handler it is written to catch.
+   */
+  it("does not toggle the keyboard map while F1 auto-repeats", async () => {
+    const user = userEvent.setup();
+    render(
+      <AppShell update={noUpdate}>
+        <div>content</div>
+      </AppShell>,
+    );
+
+    await user.keyboard("{F1}");
+    expect(useAppStore.getState().keyMapOpen).toBe(true);
+
+    fireEvent.keyDown(document.body, { key: "F1", repeat: true });
+    expect(useAppStore.getState().keyMapOpen).toBe(true);
+
+    fireEvent.keyDown(document.body, { key: "F1", repeat: true });
+    expect(useAppStore.getState().keyMapOpen).toBe(true);
+  });
+
+  /**
+   * And the guard is `F1`'s alone — a held `Ctrl+3` goes on arriving.
+   *
+   * Selecting the view you are already on is idempotent, so there is no failure to guard against
+   * here, and hoisting the check to the top of the handler would decide the question for every
+   * chord this shell ever binds — including one that means to repeat. This case is what makes
+   * that placement a decision rather than an accident: it goes red on a handler that drops every
+   * repeated press.
+   */
+  it("keeps switching view while Ctrl+3 auto-repeats", () => {
+    render(
+      <AppShell update={noUpdate}>
+        <div>content</div>
+      </AppShell>,
+    );
+
+    fireEvent.keyDown(document.body, { key: "3", ctrlKey: true, repeat: true });
+
+    expect(useAppStore.getState().activeView).toBe("decks");
+  });
+
+  /**
+   * The listener goes on once and stays on — which none of the cases above can see.
    *
    * **The obvious wrong implementation passes every one of them.** Closing over `keyMapOpen` and
    * listing it as a dependency tears the listener down and puts a new one up each time the flag
