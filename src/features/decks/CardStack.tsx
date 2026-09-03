@@ -34,6 +34,7 @@ import {
   deckCardPress,
   deckCardProps,
   deckCardSelectedProps,
+  deckCardShort,
   DeckCardControls,
   LandedMark,
   revealedWhenOpen,
@@ -835,10 +836,11 @@ function StackedCard({
   // What that copy is *called*, if anything — the same reading the deck's other three views
   // make, so one card is not marked two ways on one screen.
   const treatments = finishTreatments(card.promoTypes, finish);
-  // The allocator claims no copy for an inactive category, so every row in one reads 0 owned
-  // by construction — a shortage mark there would report one the reader does not have. The
-  // switch, never the kind: a Maybeboard switched *on* is short of copies like any other pile.
-  const short = card.categoryActive && card.ownedQuantity < card.quantity;
+  // {@link deckCardShort}, which is also what `deckCardName` says this card's shortage in words
+  // from — an inactive pile and the theory list each read 0 owned for a reason that is not an
+  // empty shelf. The **switch**, never the kind: a Maybeboard switched *on* is short of copies
+  // like any other pile.
+  const short = deckCardShort(card);
   // There is a URL and it has not failed. Not "the bytes have arrived" — nothing here can know
   // that, and nothing needs to: the frame underneath is what shows while they are on their way.
   const drawing = face.src !== null && !face.failed;

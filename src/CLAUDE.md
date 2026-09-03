@@ -91,6 +91,14 @@ Every one of these has its measurement and its story in
   directions were read off the printed images and the frame's geometry was measured in the
   shipped window — including the half-pixel a `translate(-50%, -50%)` centring put under **every**
   card in that frame: [frontend-design.md](../docs/reference/frontend-design.md).
+- **One foil icon, everywhere, and the glyph is the _finish_** — `Sparkles` for foil, `Gem` for
+  etched, `Aperture` only for a **nonfoil** copy that is unusual cardboard anyway (Serialized,
+  Poster), which is the one case with no finish glyph to draw. A treatment renames the mark and
+  must never redraw it: a Surge Foil is foil, so it is that same `Sparkles` with a longer word
+  behind it. Anything that says "this copy is foil" takes its glyph from `FinishMark`'s table —
+  a card face's chip, a table cell, a menu row, the card pane's foil toggle — because half of
+  those surfaces never see a promo type, and a glyph that only some of them can draw is one fact
+  in two pictures. That was issue #353; `docs/reference/frontend-design.md` has the record.
 - **A card's marks share one chip in the art's top-right corner** — `FoilOverlay` draws the
   finish glyph and `GameChangerMark`'s gold crown side by side, because a card fact and a
   printing fact in two boxes start a row of stickers. The crown is `GameChangerBanner`'s glyph
@@ -365,7 +373,31 @@ Every one of these has its measurement and its story in
   solid-bordered where the folders are dashed — the dash means *container, not a thing you own*,
   and a button wearing it would spend that vocabulary. It is drawn wherever the wall is, which is
   why the wall now renders at zero folders: gated on the folder count, a reader with an empty
-  cabinet had no way to make their first one. **The first tile is the way *out* wherever there is
+  cabinet had no way to make their first one. **Pressed, it *becomes* the field — changed
+  2026-09-03.** The tile used to raise a bordered strip under the breadcrumb (an input,
+  `Create folder` and `Cancel` spelled out in words, and a line reading *in Collection* saying
+  which level the strip was about), and every piece of that re-established a context the wall on
+  screen already carried. The name is typed on the line the folder's name will occupy, at the same
+  track and the same footprint, so nothing above the wall opens and nothing in the wall reflows;
+  a folder card's `⋯ → Rename…` does the same on the card, keeping its figures line under the
+  field so a reader can still see which drawer they are renaming. `components/FolderNameField.tsx`
+  is both, and **the border is the whole of what tells them apart**, on the dashed rule above: the
+  create tile stays **solid** because it is still a control, the renaming card stays **dashed**
+  because it is already a container, and both go `border-accent` while open. The strip survives
+  for `Move to folder…` and `Delete…` alone — neither is a name typed on a line, and neither has a
+  tile of its own. **The caret's return is the part a new naming tile must not reinvent**: the
+  page's `dismiss` focuses the element it remembered as the opener, and here that element is
+  exactly what the field replaced, so by then it is a detached node whose `focus()` is a silent
+  no-op. `useFolderFieldReturn(open)` is the fix — the host refs the control React renders in the
+  field's place and restores the caret **only** when `document.activeElement` is null or
+  `document.body`, which is the state Escape, the ✕ and a committed write all leave behind and
+  which keeps the outside-click rule above intact. **The geometry is measured and the caret is
+  not**: headless Edge over the built stylesheet, 2026-09-03, put all four states in one row and
+  read 62px and one `top` for every tile, `y = 34` for the `⋯` and both ✓ / ✕ pairs, and 5px of
+  clear air between a name and the tick on both shapes — but the app lock was held elsewhere all
+  session, so nothing here has been driven in the shipped window, and where the caret lands after
+  each of the four exits is still owed
+  ([frontend-design.md](../docs/reference/frontend-design.md)). **The first tile is the way *out* wherever there is
   one** — `ParentFolderCard`, drawn only inside a folder, dashed like the drawers because it *is*
   one (the level above), naming that level and taking a card or a folder dropped on it. At the root
   it is absent and `New folder` is first again; the breadcrumb above is untouched. Issue #283, and
@@ -543,6 +575,14 @@ Every one of these has its measurement and its story in
   dialog is not a descendant of the container), which is what `FilterBar.test.tsx` does. The
   dropdowns escape this a different way and their own comment says so: `usePopupPlacement`
   measures a zero-size frame precisely to subtract whatever containing block it landed in.
+  **Settings met the same rule from the inside on 2026-09-03, and the lesson is where a container
+  may not go rather than where a dialog may not.** That page's panels mount their dialogs inline —
+  grep `ConfirmDialog` under `src/features/settings/` for the census, since none of them writes
+  the `fixed inset-0` itself and the class is `Dialog.tsx:333`'s — so the rail's container query
+  had to go on the `<nav>` and never on the settings root, which would have reparented every one
+  of those scrims. What made that possible is that the rail's own inline size answers the
+  question being asked; the arithmetic is in
+  [frontend-design.md](../docs/reference/frontend-design.md).
 - **A scroll container is `relative`, because a scroll container has to be the containing block
   for its own absolutely positioned content.** `overflow` clips a descendant only when the
   scroller lies between it and that descendant's **containing block** — and Tailwind's `.sr-only`
@@ -579,6 +619,16 @@ Every one of these has its measurement and its story in
   `ring-inset`, which is what `TableView` draws for rows absolutely positioned inside a
   virtualiser. **jsdom has no layout engine and therefore no clip**, so nothing here is visible to
   the suite — `views.test.tsx` sweeps the class instead.
+  **Since 2026-09-03 that alternative is the default and this rule survives for `FOCUS` alone.**
+  `DROP_RING` is `ring-1 ring-inset ring-accent/45`, so the drop ring is painted *within* the
+  border box and can no longer be clipped by anything — the failure above is a history rather than
+  a live hazard for that mark. `DROP_MARK_ROOM` does not change and must not: `FOCUS` still stands
+  4px proud, and the 6px was always sized for it rather than for the ring. The same pass moved
+  both drop marks onto **the element carrying the target's own edge** — a folder card's `<button>`,
+  never the `<li>` around it — because a ring on a wrapper stood 2px outside a dashed border it was
+  meant to agree with, which is what a reader reported as highlights that do not line up. A card
+  that already has a border wears `DROP_EDGE` (its dash goes gold) instead of growing a second
+  outline. `src/lib/dropMarks.ts` carries all of it.
 - **Anything `fixed` positioned from a measured rect takes its viewport width from
   `document.documentElement.clientWidth`, never `window.innerWidth`.** `innerWidth` includes the
   classic vertical scrollbar; the initial containing block a `fixed` box is laid out against

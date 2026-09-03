@@ -510,10 +510,13 @@ export const Default: Story = {
  * the corpus, covering 5 428 of 107 355 paper printings (5.1 %), which is why a mark on one is
  * information rather than decoration.
  *
- * **The glyph is `Aperture` and it replaces the finish's rather than joining it.** The corner
- * chip still holds at most a crown and one finish mark — `src/CLAUDE.md`'s rule that a third mark
- * wanting that corner means the corner is full — and the chip is `aria-hidden`, so the words a
- * reader is *told* ride in the tile's caption, which is where this story reads them.
+ * **The glyph stays the finish's and only the word changes** (issue #353). All three of these
+ * tiles draw the one foil icon — a treatment that redrew the mark was a second picture of
+ * "this is foil", and only on the surfaces that pass `treatments`. The corner chip still holds
+ * at most a crown and one finish mark — `src/CLAUDE.md`'s rule that a third mark wanting that
+ * corner means the corner is full — and the chip is `aria-hidden`, so the words a reader is
+ * *told* ride in the tile's caption, which is where this story reads them, and which is now the
+ * only place these three rows differ.
  *
  * **The eighth chip.** `Special foil` joins the seven, and it is one chip rather than 32: a chip
  * each would be a filter bar of 39, almost all greyed at zero on any one card. It asks about the

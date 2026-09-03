@@ -1085,12 +1085,12 @@ describe("the sidebar's drop targets", () => {
     expect(entry("Wishlist")).toHaveClass(DROP_RING);
     // The collection is deliberately not a target: `collection_add` carries a finish, a
     // condition and a language that a drop cannot answer.
-    expect(entry("Collection")).not.toHaveClass("ring-accent");
+    expect(entry("Collection")).not.toHaveClass(DROP_RING);
 
     await held.cancel();
 
-    expect(entry("Decks")).not.toHaveClass("ring-accent");
-    expect(entry("Wishlist")).not.toHaveClass("ring-accent");
+    expect(entry("Decks")).not.toHaveClass(DROP_RING);
+    expect(entry("Wishlist")).not.toHaveClass(DROP_RING);
   });
 
   /** Which of the ringed pair is about to take the card. Drawn from the drag's own collision
@@ -1141,7 +1141,7 @@ describe("the sidebar's drop targets", () => {
     const held = await pickUp();
     const decks = boxedEntry("Decks");
 
-    expect(decks).not.toHaveClass("ring-accent");
+    expect(decks).not.toHaveClass(DROP_RING);
     expect(decks).toHaveAttribute("title", "Open a deck to drop cards into it");
     // The wishlist takes a card from anywhere, whatever the Decks view is doing.
     expect(entry("Wishlist")).toHaveClass(DROP_RING);

@@ -1037,6 +1037,10 @@ function Art({
   // "Halo Foil" where the printings wall behind it does, and the foil **view** names the
   // treatment it is previewing rather than the generic word.
   const markedTreatments = finishTreatments(card.promoTypes, marked);
+  // `FinishMark`'s own table, read by finish — which is now the whole rule rather than most of
+  // it: a Surge Foil printing draws `Sparkles` on the rows below and this button draws
+  // `Sparkles` too, where the row used to swap in the treatment's glyph and this never could
+  // (issue #353).
   const FoilGlyph = foilable === "etched" ? Gem : Sparkles;
 
   /**
@@ -1332,8 +1336,9 @@ function Art({
                   `role="img"` carrying the finish as its accessible name, and a labelled image
                   inside a button *joins* the button's name: this control would be called
                   "Foil View as foil". It is the trap `FoilOverlay` documents from the wall's
-                  tiles, one surface over. The two glyphs stay the same two so the button and the
-                  finish marks on the printings rows below agree about what foil looks like. */}
+                  tiles, one surface over. The two glyphs are the only two, so the button and
+                  the finish marks on the printings rows below now agree about what foil looks
+                  like on every printing rather than only on the unnamed ones. */}
               <FoilGlyph className="size-3.5 shrink-0" aria-hidden="true" />
               <span className="min-w-0 truncate">{foilLabel}</span>
             </button>
