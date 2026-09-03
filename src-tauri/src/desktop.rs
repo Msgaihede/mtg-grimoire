@@ -19,7 +19,8 @@ use crate::{
     camera, card, collection, collection_alloc, collection_folders, combos, db, deck, deck_audit,
     deck_meta, deck_pull, deck_theory, deck_undo, errors, export, flatten, images, import, index,
     listview, marketplace, marketplace_feed, mirror, nav, paths, reset, schema, scryfall, search,
-    sync, sync_engine, sync_pair, tags, update, wishlist, wishlist_folders, zoom,
+    sync, sync_engine, sync_pair, tags, update, wishlist, wishlist_folders, wishlist_optimize,
+    zoom,
 };
 // **Not in the list above, because this file compiles for Android too.** Its name says
 // `desktop`, but its gate is `cfg(not(target_family = "wasm"))` — desktop *and* mobile — while
@@ -399,6 +400,8 @@ pub fn run() {
             wishlist::wishlist_list,
             wishlist::wishlist_import_commit,
             wishlist::wishlist_set_printing,
+            wishlist_optimize::wishlist_optimize_plan,
+            wishlist_optimize::wishlist_optimize_apply,
             wishlist_folders::wishlist_folder_list,
             wishlist_folders::wishlist_folder_create,
             wishlist_folders::wishlist_folder_rename,

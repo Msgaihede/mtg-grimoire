@@ -124,6 +124,11 @@ pub const COMMANDS: &[&str] = &[
     "wishlist_set_quantity",
     "wishlist_remove",
     "wishlist_set_printing",
+    // The cheapest-printing sweep, both halves: a preview that writes nothing, and the press
+    // over the rows the reader ticked. Routed together, because a browser that could ask for
+    // the plan and not commit it would draw a dialog with a dead button.
+    "wishlist_optimize_plan",
+    "wishlist_optimize_apply",
     "wishlist_import_commit",
     "wishlist_folder_list",
     "wishlist_folder_summary",
@@ -1257,6 +1262,29 @@ pub fn call(
                     crate::wishlist::set_wish_printing(c, id, card_id)
                 })
                 .map_err(RouteError::Failed)?,
+            )
+        }
+
+        // Issue #352's two halves. The plan is a read and takes the read connection; the apply
+        // is one transaction over the rows the reader ticked and takes plain `with_write`, for
+        // the reason the block above gives — a wish is something the reader does not have, so
+        // there is no owned index to invalidate.
+        "wishlist_optimize_plan" => {
+            let query: crate::wishlist::WishlistQuery = field(command, args, "query")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::wishlist_optimize::plan(&conn, &query).map_err(RouteError::Failed)?,
+            )
+        }
+
+        "wishlist_optimize_apply" => {
+            let items: Vec<crate::wishlist_optimize::WishOptimizeApplyItem> =
+                field(command, args, "items")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::wishlist_optimize::apply(c, &items))
+                    .map_err(RouteError::Failed)?,
             )
         }
 
@@ -2489,7 +2517,7 @@ mod tests {
         }
         assert_eq!(
             COMMANDS.len(),
-            127,
+            129,
             "update this number when a command is added"
         );
     }

@@ -548,6 +548,149 @@ The collection's half of this — including the fence that keeps a stepper out o
 the app — is in
 [collection-folders.md](collection-folders.md#the-copies-control-belongs-to-a-normal-folder-in-both-views).
 
+## Re-pointing the list at its cheapest printings
+
+**2026-09-03, [issue #352](https://github.com/Msgaihede/mtg-grimoire/issues/352), and the whole
+feature is the fact that it is _two_ commands.** `wishlist_optimize_plan` writes nothing and says
+what would change; `wishlist_optimize_apply` takes back the subset the reader left ticked and
+commits it. One button that repointed forty wishes the moment it was pressed would be a shopping
+list rewritten by a rule its owner never saw applied to rows they never looked at — and the rule is
+not obvious, because "cheapest" here means cheapest *at one marketplace, at this wish's finish,
+today*, which is three qualifications a press cannot carry. The preview is where they become
+visible, and it is why there is no confirmation dialog in front of Apply: the preview **is** the
+confirmation.
+
+### The scope is the query, not the page
+
+`plan` takes the page's own `WishlistQuery` and reads it through `wishlist::wishlist_scope` — the
+same `FROM` and `WHERE` `list_wishes` draws with, rather than a second copy of the folder rule and
+the filter terms. So the folder the reader is standing in, the Flatten switch and every active card
+filter scope the sweep, and the sentence the dialog opens with is about the list they are looking
+at.
+
+**`limit` and `offset` are ignored**, which is the half worth stating: a preview that stopped at the
+foot of page one would leave wishes un-optimised for a reason nothing on screen mentions, and the
+reader would have to press the button once per page to find out. Ignoring them makes `considered`
+the very number the page header already shows as its total — one figure, two places, and no way for
+them to disagree.
+
+### Which wishes can move, and why the other two buckets exist
+
+`moves.length + alreadyCheapest + skipped == considered`. The partition is the point: a preview that
+quietly dropped a wish and a preview that quietly counted it twice look identical on screen, because
+the dialog draws the moves and a sentence made of the other three numbers, and nothing in it can be
+checked against anything else.
+
+- **An any-printing wish is `alreadyCheapest` and is never offered.** `list_wishes`' join already
+  draws and prices it at the cheapest printing of its oracle card (the section above), so there is
+  no saving to find — and pinning it would *cost* the reader something real: the day a cheaper
+  printing is released, the wish that names none follows it and a wish this sweep pinned does not.
+  The flexibility is what makes it cheap, so spending it to buy nothing is the wrong trade.
+- **Three ways a wish is `skipped`**, all of them "there is nothing to compare against" rather than
+  "nothing to gain": a wish with **no `oracle_id`** has nothing to find sibling printings *by*; a
+  wish **pinned to a printing `cards` no longer has** — the state `needs_review` marks — has no
+  price on the `from` side and no printing to describe honestly, because its denormalised
+  `set_code`/`collector_number`/`lang` would put a piece of cardboard on screen that does not
+  exist; and an oracle card **no printing of which this marketplace prices at this wish's finish**
+  is a question this marketplace cannot answer, which is not the same as a saving of nothing.
+- **Everything else is a move only if the candidate is _strictly_ cheaper.** Without the `<`, a
+  printing tied at the same price sorts ahead of the one the reader is already on — the candidate
+  order breaks a tie by release date — and the preview would offer a saving of 0.00 on a swap that
+  buys nothing. The wish's own printing is a candidate like any other, which is what makes the
+  comparison meaningful instead of a special case, and "priced, and nothing beats it" is by far the
+  commonest way a wish lands in `alreadyCheapest`.
+
+### What is a candidate, measured rather than assumed
+
+The candidate query is `WHERE c.oracle_id = ? AND c.digital = 0 AND (price) IS NOT NULL`, ordered
+`price ASC, released_at DESC, id ASC` — the same tiebreak `list_wishes`' cheapest-printing join
+uses, so a pinned wish is offered the printing an un-pinned one would already be drawn as.
+
+- **A printing with no price is not a candidate at all**, which is issue #352's own sentence: "a
+  card without a price should not be considered the cheapest printing". A hole in a pricelist is
+  not a bargain. It is also what makes `to.price` a number and never `null`, everywhere in the
+  answer.
+- **`c.digital = 0` states the intent and excludes nothing today.** Measured against the dev card
+  database on 2026-09-03: **9 355 digital printings of 117 621, 0 of which carry a `price_usd`** —
+  so the `IS NOT NULL` beside it already drops every one of them. It stays because an Arena-only
+  printing is not a piece of cardboard anybody can be sent, and arithmetic that happens to agree
+  today is not a rule; the day a feed prices them, the clause is already there.
+- **No language fence, and it is a decision rather than an omission.** Measured the same day:
+  **1 073 non-English printings carry a USD price**, so a cheaper printing in another language is a
+  live case and not a theoretical one. What makes it safe is that the preview shows `lang` on
+  **both** sides — a Japanese `sta 105` becoming an English `2x2 117` is visible before the press,
+  which is exactly what having a preview is for.
+
+Every figure is `sorting::row_price_expr` over `WISH_PREFERRED_FINISH`, the same expression
+`WishRow.unitPrice` is, so the dialog and the row behind it cannot disagree about what one copy
+costs. The finish column is handed over **bare** and never coalesced — the rule the section above
+argues at length — so a foil wish is compared foil to foil and a wish that names no finish is
+compared through the `nonfoil → foil → etched` chain at both ends.
+
+### Where a `null` can appear, and what each one means
+
+| Field | `null` means |
+| --- | --- |
+| `from.price` | Unpriced **there** — this marketplace does not list the printing the wish is on. |
+| `to.price` | Never `null`. An unpriced printing is not a candidate. |
+| `savedPerCopy`, `saved` | `null` **exactly when `from.price` is**, and never `0`. |
+| `preferredFinish` | The reader has not said, which prices through the chain rather than at nonfoil. |
+| `folderId` | The root of the list — a real place, the grain's fourth term. |
+
+**A wish whose current printing this marketplace does not list is still offered, and counts no
+saving.** An unlisted printing may be cheap rather than dear, so the saving is *unknown* and not
+zero, and a figure invented for it would inflate a headline nobody can check. The dialog draws that
+row `— → $2.00` and leaves it **unticked**, which is the one place the default is a subset rather
+than everything: the app has no basis for claiming that swap is an improvement, so the reader has
+to say so.
+
+**The plan does not echo the marketplace back.** Every price in it was quoted at the one the query
+carried, which came from `useMarketplace()`, which is also what the dialog renders with — and the
+query is in the caller's key, so a switch refetches rather than relabels. A second copy of that fact
+travelling in the answer is one more thing that can disagree with the hook.
+
+**The moves come back in `list_wishes`' _fallback_ order — `name ASC, id ASC` — and not in the
+reader's chosen sort.** The money sorts order by output aliases (`unit_price`, `owned_quantity`)
+this statement does not select, so honouring `sort` would mean selecting columns a preview has no
+use for. A preview is a list of changes, not a second rendering of the page.
+
+### Apply: one transaction, and two things that are not failures
+
+`apply` is one transaction over the whole batch, `wishlist::commit_import`'s rule: a sweep seen half
+done is a shopping list nobody can reason about, and a reader who pressed once must not have to work
+out which half of their list moved. Every item gets a `WishOptimizeResult`, **in the order it was
+sent**, so the caller can sum the saving over exactly the rows that moved rather than over the rows
+it hoped would.
+
+- **`fromCardId` is a guard, not a description.** Between the preview and the press a sync can land
+  or another pane can repoint the same wish; applying regardless would move a printing the reader
+  never saw. So the wish's *current* `card_id` is read inside the transaction and a row that no
+  longer matches is left exactly as it is and reported **`stale`**. A wish that has left the list
+  entirely is **`missing`** — the same thought one step further along.
+- **A repoint that lands on a grain another wish already holds merges**, which is the merge rule
+  this page already states for both of the writes above and not a new one. It is reported
+  **`merged`** rather than as a failure, the two quantities sum into the row that was already
+  there, and **the saving still stands** — the reader is buying the cheaper printing either way.
+  The result names the **item's** `wishId` and not the survivor's, because the caller matches
+  results back to the rows it sent.
+
+The repoint itself goes through `set_printing_inner` and never a second `UPDATE`, so the merge, the
+`needs_review` clear and the four-column refresh from `cards` are that function's and not a second
+spelling of all three. A `toCardId` `cards` has no row for is the one genuine `Err` here, and it
+rolls the whole batch back — which is what one transaction *means*.
+
+### Deliberately not built: the post-apply highlight
+
+The issue offers a transient highlight on the rows that moved, marked optional, and it was **not
+built**. The preview is the verification — the reader has already seen every `from → to` pair and
+ticked the ones they wanted — and the dialog's outcome state then says what happened and stays on
+screen until they dismiss it: how many moved, how many folded into a wish they already had, how
+many moved from a printing this marketplace does not price, and **every wish that did not move, by
+name and with its reason**. A highlight that fades would say a thinner version of that worse: a
+reader who looked away misses it entirely, and a list that flashes after a press teaches nothing
+the press did not already say. It is recorded here rather than left unmentioned so that the next
+reader knows it was weighed.
+
 ## The wipe
 
 `reset::clear_wishlist` empties `wishlist_entries` **and then** `wishlist_folders`, and needs the
@@ -616,6 +759,9 @@ dx 0.0 / dy 0.0 from its trigger on keyboard activation, which is what `menuClic
 | `src-tauri/src/schema.rs` | The v23 step, `WISHLIST_GRAIN`, and the whole-schema `ON DELETE` inventory |
 | `src-tauri/src/wishlist_folders.rs` | The five folder commands, `set_wish_folder`, `folder_summary` |
 | `src-tauri/src/wishlist.rs` | `set_wish_printing`, `elsewhere`, `OWNED_SQL`, `WISH_PREFERRED_FINISH`, the cheapest-printing join |
+| `src-tauri/src/wishlist_optimize.rs` | `plan` and `apply`, the candidate query, and the six DTOs `ipc.test.ts`'s `plainMirrors` pins |
+| `src/features/wishlist/optimizePlan.ts` | The conclusions drawn from those facts — the ticked set, the headline, the outcome reading |
+| `src/features/wishlist/OptimizeWishlistDialog.tsx` | The preview, and the one press that commits it |
 | `src-tauri/src/sorting.rs` | `row_price_expr`'s two arms, and `deck_card_price_expr` as one caller of it |
 | `src/lib/folderTree.ts` | `buildFolderTree` and friends, shared with the deck gallery |
 | `src/features/wishlist/wishDrag.ts` | The payload, the tile that offers it, the target that takes it |
