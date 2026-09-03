@@ -1,4 +1,4 @@
-//! Deck categories, tags and folders: everything schema v8 (Plan 8, Task 1) carved out of a
+//! Deck categories, labels and folders: everything schema v8 (Plan 8, Task 1) carved out of a
 //! deck's fixed five-word zone and its bare gallery listing.
 //!
 //! Shaped like [`crate::deck`] and [`crate::collection`]: pure functions over a `Connection`,
@@ -7,23 +7,23 @@
 //!
 //! Three tables, three different relationships to "the deck":
 //!
-//! * **Categories** and **tags** are *of* one deck (`deck_id NOT NULL`) — a category names a
-//!   pile within a deck, a tag is a per-deck label a deck card can carry. Every write to
+//! * **Categories** and **labels** are *of* one deck (`deck_id NOT NULL`) — a category names a
+//!   pile within a deck, a label is a per-deck mark a deck card can carry. Every write to
 //!   either goes through [`crate::deck::touch_deck`], so the gallery's "recently edited"
 //!   order moves the same way a card add or a rename does.
 //! * **Folders** are not of any deck at all — they file decks the way a filesystem directory
 //!   files files, and `decks.folder_id` is `ON DELETE SET NULL` rather than the CASCADE every
-//!   category and tag write takes. No folder write touches a deck's `updated_at`, and three of
-//!   the four record nothing in `deck_audit` (which is `deck_id NOT NULL` — creating, renaming
+//!   category and label write takes. No folder write touches a deck's `updated_at`, and three
+//!   of the four record nothing in `deck_audit` (which is `deck_id NOT NULL` — creating, renaming
 //!   or moving a folder changes no deck, so there is no deck to name). **[`delete_folder`] is
 //!   the exception**: SET NULL re-files every deck in the folder and in the sub-folders that
 //!   CASCADE with it, so it writes one `folder` row per deck it un-filed. The `folder` audit
 //!   *kind* is not about folder CRUD even there: it records a **deck being filed**, and the
 //!   other two writers of it are `deck::update_deck` and `deck::set_folder`.
 //!
-//! Every category and tag write records one [`crate::deck_audit`] row inside its own
-//! transaction, so a refused write leaves no history. The `tag` kind covers two events and
-//! `card_id` is what tells them apart: a card wearing a label (`set_card_tag`, `card_id` set)
+//! Every category and label write records one [`crate::deck_audit`] row inside its own
+//! transaction, so a refused write leaves no history. The `label` kind covers two events and
+//! `card_id` is what tells them apart: a card wearing a label (`set_card_label`, `card_id` set)
 //! and the label itself being made, renamed or deleted (`card_id` NULL, and an `action` verb —
 //! without one a delete would read as a labelling).
 //!
@@ -81,21 +81,21 @@ fn predefined_refusal(name: &str) -> String {
     format!("{name} is required by this deck's rules — it can be emptied but not removed.")
 }
 
-/// What an *adjustment* to a tag says when the id it names is not there.
-pub const TAG_GONE: &str = "That tag is not there any more.";
+/// What an *adjustment* to a label says when the id it names is not there.
+pub const LABEL_GONE: &str = "That label is not there any more.";
 
-/// [`CATEGORY_NAME_TAKEN`]'s twin for [`DECK_TAG_GRAIN`](crate::schema::DECK_TAG_GRAIN) —
+/// [`CATEGORY_NAME_TAKEN`]'s twin for [`DECK_LABEL_GRAIN`](crate::schema::DECK_LABEL_GRAIN) —
 /// and it says **app-wide** where the category one says "this deck", because since schema v21
 /// that is the difference between the two grains. The name it refuses is refused by
-/// `tag_name_key`'s comparison rather than by the word: `removal` collides with `Removal`, and
+/// `label_name_key`'s comparison rather than by the word: `removal` collides with `Removal`, and
 /// so does a `Café` spelled with a combining accent against one spelled without.
 ///
 /// The sentence names the way out, because a reader who typed a name that exists has not made
-/// a mistake — they have found the tag they wanted and are one press away from using it.
-pub const TAG_NAME_TAKEN: &str =
-    "A tag with that name already exists. Pick it from the list instead of making a second one.";
+/// a mistake — they have found the label they wanted and are one press away from using it.
+pub const LABEL_NAME_TAKEN: &str =
+    "A label with that name already exists. Pick it from the list instead of making a second one.";
 
-/// What [`set_card_tag`] says when the `(deckId, cardId, categoryId, variant)` it was handed
+/// What [`set_card_label`] says when the `(deckId, cardId, categoryId, variant)` it was handed
 /// does not resolve to a row — [`crate::deck::card_gone`]'s reason, generalised: a category
 /// replaced the fixed zone word, but a stale editor pointing at a row that moved or was
 /// stepped to zero is exactly as possible as it always was.
@@ -117,9 +117,9 @@ pub const FOLDER_CYCLE: &str = "A folder cannot be moved inside itself.";
 /// write. Deep enough that no filing anyone does by hand reaches it.
 const MAX_FOLDER_DEPTH: usize = 64;
 
-/// The variant a category or tag write reads its own row back with, when the command that
+/// The variant a category or label write reads its own row back with, when the command that
 /// changed it carries no variant of its own to ask by (`create`, `rename`, `setActive`,
-/// `reorder`, every tag write). `schema::DECK_VARIANTS[0]` spelled out rather than indexed,
+/// `reorder`, every label write). `schema::DECK_VARIANTS[0]` spelled out rather than indexed,
 /// because a rename is a fact about the category itself and not about one variant's card
 /// list — "live" is simply the one the editor opens on by default.
 const READBACK_VARIANT: &str = "live";
@@ -198,26 +198,26 @@ pub struct DeckCategoryRow {
     pub total_price: Option<f64>,
 }
 
-/// One tag **in use in one list of one deck** — what [`list_tags`] answers.
+/// One label **in use in one list of one deck** — what [`list_labels`] answers.
 ///
 /// It carried a `deck_id` until schema v21 and does not any more, because there is no such
-/// fact: a tag is one app-wide row ([`DECK_TAG_GRAIN`](crate::schema::DECK_TAG_GRAIN)) and
-/// what a deck has is not a list of tags but a list of *cards*, some of which wear one. So
-/// this row is a tag **and** a fact about the deck the caller asked by — which is why the two
-/// arguments are not symmetric and why `deck_tag_list` cannot answer a tag nothing is wearing.
-/// [`GlobalTag`] is the other half: every tag there is, including those.
+/// fact: a label is one app-wide row ([`DECK_LABEL_GRAIN`](crate::schema::DECK_LABEL_GRAIN)) and
+/// what a deck has is not a list of labels but a list of *cards*, some of which wear one. So
+/// this row is a label **and** a fact about the deck the caller asked by — which is why the two
+/// arguments are not symmetric and why `deck_label_list` cannot answer a label nothing is wearing.
+/// [`GlobalLabel`] is the other half: every label there is, including those.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DeckTagRow {
+pub struct DeckLabelRow {
     pub id: i64,
     pub name: String,
     pub color: String,
-    /// Copies carrying this tag, `sum(quantity)` for [`DeckCategoryRow::card_count`]'s reason,
+    /// Copies carrying this label, `sum(quantity)` for [`DeckCategoryRow::card_count`]'s reason,
     /// scoped to the one `variant` the caller asked by — exactly as that field is.
     ///
     /// The two have to agree, and briefly did not: [`crate::deck::get_deck`] threaded its
-    /// variant into [`list_categories`] and not into [`list_tags`], so a Theory read came back
-    /// with Theory category counts beside **Live** tag counts. Nothing drew the number yet, so
+    /// variant into [`list_categories`] and not into [`list_labels`], so a Theory read came back
+    /// with Theory category counts beside **Live** label counts. Nothing drew the number yet, so
     /// nothing was visibly wrong; the contract was, which is the cheaper thing to fix.
     /// A write's own readback still uses [`READBACK_VARIANT`] — a rename carries no variant of
     /// its own, and `live` is the one the editor opens on.
@@ -235,27 +235,28 @@ pub struct DeckFolderRow {
     pub sort_order: i64,
 }
 
-/// One tag as a thing in itself — [`list_all_tags`]'s row, and what every tag *write* answers.
+/// One label as a thing in itself — [`list_all_labels`]'s row, and what every label *write*
+/// answers.
 ///
-/// **No deck in it, and that is the whole shape of the feature.** A tag is one row the app
+/// **No deck in it, and that is the whole shape of the feature.** A label is one row the app
 /// owns; the two counts say how far its reach goes, which is the fact a reader needs before
 /// recolouring or deleting one. Both span every deck and both variants, deliberately: the
 /// question these numbers answer is "what else moves if I change this", and an answer scoped to
 /// the deck on screen would understate it in exactly the way that matters.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GlobalTag {
+pub struct GlobalLabel {
     pub id: i64,
     pub name: String,
     pub color: String,
     /// Copies wearing it anywhere — `sum(quantity)`, [`DeckCategoryRow::card_count`]'s unit.
     pub card_count: i64,
-    /// Decks with at least one card wearing it. `0` for a tag made and never used, which is
-    /// the one row `deck_tag_list` can never answer and this list always can.
+    /// Decks with at least one card wearing it. `0` for a label made and never used, which is
+    /// the one row `deck_label_list` can never answer and this list always can.
     pub deck_count: i64,
 }
 
-/// A name good enough for a category, a tag or a folder — trimmed, non-empty.
+/// A name good enough for a category, a label or a folder — trimmed, non-empty.
 /// [`crate::deck::valid_name`]'s discipline, generalised to the three more places a blank
 /// string would end up on a tile no one can read. `what` is what the refusal names.
 pub(crate) fn valid_name<'a>(name: &'a str, what: &str) -> Result<&'a str, String> {
@@ -265,7 +266,7 @@ pub(crate) fn valid_name<'a>(name: &'a str, what: &str) -> Result<&'a str, Strin
         .ok_or_else(|| format!("{what} needs a name."))
 }
 
-/// A tag colour good enough to store — non-empty, and nothing more. `deck_tags.color` carries
+/// A label colour good enough to store — non-empty, and nothing more. `deck_labels.color` carries
 /// no CHECK: it names a token from the app's fixed palette (schema.rs's own words), and
 /// picking from that palette is the webview's job, not this module's — the boundary CLAUDE.md
 /// draws between Rust's data plumbing and TypeScript's domain logic.
@@ -273,7 +274,7 @@ pub(crate) fn valid_color(color: &str) -> Result<&str, String> {
     let color = color.trim();
     (!color.is_empty())
         .then_some(color)
-        .ok_or_else(|| "A tag needs a colour.".to_owned())
+        .ok_or_else(|| "A label needs a colour.".to_owned())
 }
 
 /// A deck variant the schema knows, refused in words rather than as a CHECK failure — the
@@ -281,7 +282,7 @@ pub(crate) fn valid_color(color: &str) -> Result<&str, String> {
 /// [`crate::schema::DECK_VARIANTS`].
 ///
 /// `pub(crate)`: every card command in [`crate::deck`] opens with it too. It lives here
-/// because `deck_categories` and `deck_tags` are this module's, and one definition of "is
+/// because `deck_categories` and `deck_labels` are this module's, and one definition of "is
 /// that a variant" is what keeps the two modules' refusals identical.
 pub(crate) fn valid_variant(variant: &str) -> Result<&str, String> {
     crate::schema::DECK_VARIANTS
@@ -298,7 +299,7 @@ pub(crate) fn valid_variant(variant: &str) -> Result<&str, String> {
 /// Whether the row named `id` in `table` — always a literal table name from this module, never
 /// a caller-supplied string, so building the statement with `format!` carries no injection risk
 /// — belongs to `deck_id`. `None` when the row is not there at all, distinct from `Some` of the
-/// wrong deck, because [`delete_category`]'s move target and [`set_card_tag`]'s tag id each
+/// wrong deck, because [`delete_category`]'s move target and [`set_card_label`]'s label id each
 /// need to tell "gone" from "not yours" apart to answer the right sentence.
 fn owning_deck(conn: &Connection, table: &str, id: i64) -> Result<Option<i64>, String> {
     conn.query_row(
@@ -631,7 +632,7 @@ fn record_category(
     )
 }
 
-/// One undo step for a category or tag write, with the two `Step::new` lines every caller here
+/// One undo step for a category or label write, with the two `Step::new` lines every caller here
 /// would otherwise repeat.
 fn record_category_step(
     tx: &Connection,
@@ -662,19 +663,19 @@ fn category_step_row(
         .collect())
 }
 
-/// The same for a tag.
-fn tag_step_row(tx: &Connection, id: i64) -> Result<Vec<crate::deck_undo::TagRow>, String> {
-    Ok(crate::deck_undo::read_tag(tx, id)?.into_iter().collect())
+/// The same for a label.
+fn label_step_row(tx: &Connection, id: i64) -> Result<Vec<crate::deck_undo::LabelRow>, String> {
+    Ok(crate::deck_undo::read_label(tx, id)?.into_iter().collect())
 }
 
-/// One `tag`-kind history row **about the label itself** — created, renamed or deleted. No
+/// One `label`-kind history row **about the label itself** — created, renamed or deleted. No
 /// card, and an `action` verb: see the module doc for why the two halves of this kind share it.
-fn record_tag(tx: &Connection, deck_id: i64, payload: &serde_json::Value) -> Result<i64, String> {
+fn record_label(tx: &Connection, deck_id: i64, payload: &serde_json::Value) -> Result<i64, String> {
     crate::deck_audit::record(
         tx,
         deck_id,
         crate::deck_audit::DECK_LEVEL,
-        crate::deck_audit::TAG,
+        crate::deck_audit::LABEL,
         None,
         payload,
         0,
@@ -976,14 +977,14 @@ pub fn delete_category(
     if let Some(target) = move_to_category_id {
         // `deck::move_card`'s INSERT … SELECT … ON CONFLICT shape verbatim, over categories
         // instead of zones. The `DO UPDATE` touches only `quantity`/`updated_at`: a row the
-        // target already holds keeps its own `tag_id` and `needs_review`, never the moved
+        // target already holds keeps its own `label_id` and `needs_review`, never the moved
         // row's — the same "the existing row wins a fold" rule `move_card`'s comment names.
         let sql = format!(
             "INSERT INTO deck_cards
                 (deck_id, category_id, variant, card_id, set_code, collector_number, lang,
-                 name, tag_id, quantity, needs_review, created_at, updated_at)
+                 name, label_id, quantity, needs_review, created_at, updated_at)
              SELECT deck_id, ?2, variant, card_id, set_code, collector_number, lang, name,
-                    tag_id, quantity, needs_review, unixepoch(), unixepoch()
+                    label_id, quantity, needs_review, unixepoch(), unixepoch()
                FROM deck_cards WHERE category_id = ?1
              ON CONFLICT({grain}) DO UPDATE SET
                 quantity = deck_cards.quantity + excluded.quantity,
@@ -1075,26 +1076,26 @@ pub fn delete_category(
 }
 
 // ---------------------------------------------------------------------------------------
-// Tags
+// Labels
 // ---------------------------------------------------------------------------------------
 
-/// Every tag in use in one list of one deck, **most-used first** — [`DeckTagRow`]'s read.
+/// Every label in use in one list of one deck, **most-used first** — [`DeckLabelRow`]'s read.
 ///
 /// ## Why membership is a join and not a column
 ///
-/// It was `WHERE t.deck_id = ?1` until schema v21, when tags became app-wide. There is no
-/// deck on the row to filter by any more, so "this deck's tags" is derived from the only place
-/// the fact now lives: the cards. A tag is in this list because something in it is wearing the
-/// tag, which is also exactly what the right-click menu wants to offer — one definition of
+/// It was `WHERE t.deck_id = ?1` until schema v21, when labels became app-wide. There is no
+/// deck on the row to filter by any more, so "this deck's labels" is derived from the only place
+/// the fact now lives: the cards. A label is in this list because something in it is wearing the
+/// label, which is also exactly what the right-click menu wants to offer — one definition of
 /// "in use", serving the menu, the dialog and the counts.
 ///
 /// ## `variant` scopes membership now, where it used to scope only the count
 ///
 /// **A deliberate widening, and the issue asks for it in those words**: the live list and the
-/// theory list are treated as different decks where tags are concerned. A label worn only by
+/// theory list are treated as different decks where labels are concerned. A label worn only by
 /// theory rows is not offered while the reader is editing live, because offering it there would
 /// be offering a fact about a list they are not looking at. It costs nothing to reach — the
-/// tag is still in [`list_all_tags`], one section down in the dialog.
+/// label is still in [`list_all_labels`], one section down in the dialog.
 ///
 /// ## The order
 ///
@@ -1103,17 +1104,17 @@ pub fn delete_category(
 /// is overwhelmingly the one they have already used most in this very deck, and an alphabet
 /// puts that wherever its first letter happens to fall. `t.name` breaks the tie so the answer
 /// is stable rather than SQLite's row order.
-pub fn list_tags(
+pub fn list_labels(
     conn: &Connection,
     deck_id: i64,
     variant: &str,
-) -> Result<Vec<DeckTagRow>, String> {
+) -> Result<Vec<DeckLabelRow>, String> {
     let variant = valid_variant(variant)?;
     let mut stmt = conn
         .prepare(
             "SELECT t.id, t.name, t.color, sum(dc.quantity)
-               FROM deck_tags t
-               JOIN deck_cards dc ON dc.tag_id = t.id
+               FROM deck_labels t
+               JOIN deck_cards dc ON dc.label_id = t.id
               WHERE dc.deck_id = ?1 AND dc.variant = ?2
               GROUP BY t.id, t.name, t.color
               ORDER BY sum(dc.quantity) DESC, t.name",
@@ -1121,7 +1122,7 @@ pub fn list_tags(
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(params![deck_id, variant], |r| {
-            Ok(DeckTagRow {
+            Ok(DeckLabelRow {
                 id: r.get(0)?,
                 name: r.get(1)?,
                 color: r.get(2)?,
@@ -1133,33 +1134,34 @@ pub fn list_tags(
         .map_err(|e| e.to_string())
 }
 
-/// Every tag there is, most-used first — [`GlobalTag`]'s read, and **the only list that can
-/// answer a tag no card is wearing**.
+/// Every label there is, most-used first — [`GlobalLabel`]'s read, and **the only list that can
+/// answer a label no card is wearing**.
 ///
-/// It replaced `tag_suggestions`, which grouped `deck_tags` on `(name, color)` and answered
-/// names rather than rows. That shape existed because two decks could hold two rows spelling
-/// one word, and picking a "suggestion" *copied* it into the deck you were in. Schema v21
-/// removed the thing it was working around: there is one row per name now, so this answers ids,
-/// and picking one **uses** that tag rather than making a second one.
+/// It replaced `tag_suggestions` — the label was called a tag then, and the function name is
+/// left as it was written because nothing answers to it any more — which grouped the table on
+/// `(name, color)` and answered names rather than rows. That shape existed because two decks
+/// could hold two rows spelling one word, and picking a "suggestion" *copied* it into the deck
+/// you were in. Schema v21 removed the thing it was working around: there is one row per name
+/// now, so this answers ids, and picking one **uses** that label rather than making a second one.
 ///
-/// `LEFT JOIN`, so a tag worn by nothing is a row with two zeroes rather than a row that is not
-/// there. That is the whole reason a reader can make a tag in the Tags dialog before any card
-/// wears it and still find it afterwards.
-pub fn list_all_tags(conn: &Connection) -> Result<Vec<GlobalTag>, String> {
+/// `LEFT JOIN`, so a label worn by nothing is a row with two zeroes rather than a row that is
+/// not there. That is the whole reason a reader can make a label in the Labels dialog before any
+/// card wears it and still find it afterwards.
+pub fn list_all_labels(conn: &Connection) -> Result<Vec<GlobalLabel>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT t.id, t.name, t.color,
                     coalesce(sum(dc.quantity), 0),
                     count(DISTINCT dc.deck_id)
-               FROM deck_tags t
-               LEFT JOIN deck_cards dc ON dc.tag_id = t.id
+               FROM deck_labels t
+               LEFT JOIN deck_cards dc ON dc.label_id = t.id
               GROUP BY t.id, t.name, t.color
               ORDER BY coalesce(sum(dc.quantity), 0) DESC, t.name",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |r| {
-            Ok(GlobalTag {
+            Ok(GlobalLabel {
                 id: r.get(0)?,
                 name: r.get(1)?,
                 color: r.get(2)?,
@@ -1172,25 +1174,25 @@ pub fn list_all_tags(conn: &Connection) -> Result<Vec<GlobalTag>, String> {
         .map_err(|e| e.to_string())
 }
 
-/// One tag by id, as [`GlobalTag`] — every write's readback.
+/// One label by id, as [`GlobalLabel`] — every write's readback.
 ///
-/// **A write answers the global row, not a [`DeckTagRow`]**, and the change is not cosmetic:
+/// **A write answers the global row, not a [`DeckLabelRow`]**, and the change is not cosmetic:
 /// a create, a rename and a recolour are all app-wide acts now, so the honest answer is the
 /// thing that changed rather than one deck's view of it. It also retires `READBACK_VARIANT` for
-/// tags — that constant existed because a rename carries no variant and something had to pick
+/// labels — that constant existed because a rename carries no variant and something had to pick
 /// one to count by, and a global row's counts are not scoped by a variant at all.
-fn read_global_tag(conn: &Connection, id: i64) -> Result<Option<GlobalTag>, String> {
+fn read_global_label(conn: &Connection, id: i64) -> Result<Option<GlobalLabel>, String> {
     conn.query_row(
         "SELECT t.id, t.name, t.color,
                 coalesce(sum(dc.quantity), 0),
                 count(DISTINCT dc.deck_id)
-           FROM deck_tags t
-           LEFT JOIN deck_cards dc ON dc.tag_id = t.id
+           FROM deck_labels t
+           LEFT JOIN deck_cards dc ON dc.label_id = t.id
           WHERE t.id = ?1
           GROUP BY t.id, t.name, t.color",
         params![id],
         |r| {
-            Ok(GlobalTag {
+            Ok(GlobalLabel {
                 id: r.get(0)?,
                 name: r.get(1)?,
                 color: r.get(2)?,
@@ -1204,14 +1206,14 @@ fn read_global_tag(conn: &Connection, id: i64) -> Result<Option<GlobalTag>, Stri
 }
 
 /// Whether some **other** row already holds this name, by
-/// [`tag_name_key`](crate::schema::tag_name_key)'s comparison rather than by the word.
+/// [`label_name_key`](crate::schema::label_name_key)'s comparison rather than by the word.
 ///
 /// `except` is the row allowed to hold it — `None` for a create, the row's own id for a rename,
 /// which is what lets a reader recapitalise `removal` to `Removal` without being told the name
 /// is taken by itself.
-fn tag_name_is_taken(conn: &Connection, key: &str, except: Option<i64>) -> Result<bool, String> {
+fn label_name_is_taken(conn: &Connection, key: &str, except: Option<i64>) -> Result<bool, String> {
     conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM deck_tags
+        "SELECT EXISTS(SELECT 1 FROM deck_labels
                         WHERE name_key = ?1 AND id IS NOT ?2)",
         params![key, except],
         |r| r.get(0),
@@ -1219,64 +1221,64 @@ fn tag_name_is_taken(conn: &Connection, key: &str, except: Option<i64>) -> Resul
     .map_err(|e| e.to_string())
 }
 
-/// Make a tag. **App-wide** — `deck_id` says where the reader was standing, for the history
-/// row and the undo step, and is not stored on the tag.
+/// Make a label. **App-wide** — `deck_id` says where the reader was standing, for the history
+/// row and the undo step, and is not stored on the label.
 ///
-/// Refuses a name any tag already holds ([`TAG_NAME_TAKEN`]). That refusal is the issue's
+/// Refuses a name any label already holds ([`LABEL_NAME_TAKEN`]). That refusal is the issue's
 /// second half and it is enforced here rather than in the webview, because uniqueness is a
 /// property of the table: the dialog steering a reader away from a duplicate is a courtesy, and
 /// two windows racing the same new name is what a UNIQUE index is for.
-pub fn create_tag(
+pub fn create_label(
     conn: &Connection,
     deck_id: i64,
     name: &str,
     color: &str,
-) -> Result<GlobalTag, String> {
-    let name = valid_name(name, "A tag")?;
+) -> Result<GlobalLabel, String> {
+    let name = valid_name(name, "A label")?;
     let color = valid_color(color)?;
-    let key = crate::schema::tag_name_key(name);
+    let key = crate::schema::label_name_key(name);
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    if tag_name_is_taken(&tx, &key, None)? {
-        return Err(TAG_NAME_TAKEN.to_owned());
+    if label_name_is_taken(&tx, &key, None)? {
+        return Err(LABEL_NAME_TAKEN.to_owned());
     }
     crate::deck::touch_deck(&tx, deck_id)?;
     let id: i64 = tx
         .query_row(
-            "INSERT INTO deck_tags (name, name_key, color, created_at, updated_at)
+            "INSERT INTO deck_labels (name, name_key, color, created_at, updated_at)
              VALUES (?1, ?2, ?3, unixepoch(), unixepoch())
              RETURNING id",
             params![name, key, color],
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
-    let audit_id = record_tag(
+    let audit_id = record_label(
         &tx,
         deck_id,
-        &json!({ "action": "create", "tag": name, "previous": null }),
+        &json!({ "action": "create", "label": name, "previous": null }),
     )?;
     // Nothing wears it yet, so the label itself is the whole of the change.
     record_category_step(
         &tx,
         audit_id,
         deck_id,
-        vec![crate::deck_undo::Op::Tags {
+        vec![crate::deck_undo::Op::Labels {
             restore: vec![],
             patch: vec![],
             delete: vec![id],
             carriers: vec![],
         }],
-        vec![crate::deck_undo::Op::Tags {
-            restore: tag_step_row(&tx, id)?,
+        vec![crate::deck_undo::Op::Labels {
+            restore: label_step_row(&tx, id)?,
             patch: vec![],
             delete: vec![],
             carriers: vec![],
         }],
     )?;
     tx.commit().map_err(|e| e.to_string())?;
-    read_global_tag(conn, id)?.ok_or_else(|| TAG_GONE.to_owned())
+    read_global_label(conn, id)?.ok_or_else(|| LABEL_GONE.to_owned())
 }
 
-/// Rename and/or recolour a tag, **everywhere at once**.
+/// Rename and/or recolour a label, **everywhere at once**.
 ///
 /// This is the change the issue is chiefly about: one row means one colour, so a reader who
 /// recolours "Cut candidate" here recolours it in the nine other decks wearing it, and there is
@@ -1286,35 +1288,35 @@ pub fn create_tag(
 /// and the undo step. It is honest rather than arbitrary: the change is global, but the *act*
 /// happened somewhere, and a history that could not say where would be a worse record than one
 /// that names the deck the reader pressed it in.
-pub fn update_tag(
+pub fn update_label(
     conn: &Connection,
     deck_id: i64,
     id: i64,
     name: &str,
     color: &str,
-) -> Result<GlobalTag, String> {
-    let name = valid_name(name, "A tag")?;
+) -> Result<GlobalLabel, String> {
+    let name = valid_name(name, "A label")?;
     let color = valid_color(color)?;
-    let key = crate::schema::tag_name_key(name);
+    let key = crate::schema::label_name_key(name);
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     // The old name, for the history and for the choice of verb: this statement is the last
     // moment it still exists.
-    let tag: Option<String> = tx
+    let label: Option<String> = tx
         .query_row(
-            "SELECT name FROM deck_tags WHERE id = ?1",
+            "SELECT name FROM deck_labels WHERE id = ?1",
             params![id],
             |r| r.get(0),
         )
         .optional()
         .map_err(|e| e.to_string())?;
-    let previous = tag.ok_or_else(|| TAG_GONE.to_owned())?;
-    if tag_name_is_taken(&tx, &key, Some(id))? {
-        return Err(TAG_NAME_TAKEN.to_owned());
+    let previous = label.ok_or_else(|| LABEL_GONE.to_owned())?;
+    if label_name_is_taken(&tx, &key, Some(id))? {
+        return Err(LABEL_NAME_TAKEN.to_owned());
     }
     crate::deck::touch_deck(&tx, deck_id)?;
-    let before = tag_step_row(&tx, id)?;
+    let before = label_step_row(&tx, id)?;
     tx.execute(
-        "UPDATE deck_tags SET name = ?2, name_key = ?3, color = ?4, updated_at = unixepoch()
+        "UPDATE deck_labels SET name = ?2, name_key = ?3, color = ?4, updated_at = unixepoch()
           WHERE id = ?1",
         params![id, name, key, color],
     )
@@ -1322,85 +1324,85 @@ pub fn update_tag(
     // **Two verbs now, where `rename` used to cover both.** It covered both because a colour
     // was one of six palette tokens and never appeared in a sentence, so a second verb would
     // have named a distinction no reader could see. Both halves of that have gone: the colour
-    // is the reader's own hex, and it is the same colour in every deck — so "Recoloured tag
+    // is the reader's own hex, and it is the same colour in every deck — so "Recoloured label
     // Ramp" is a line a reader may well come back looking for. `auditText` has rendered
     // `recolour` since before anything wrote it.
     let payload = if previous == name {
-        json!({ "action": "recolour", "tag": name, "previous": null, "color": color })
+        json!({ "action": "recolour", "label": name, "previous": null, "color": color })
     } else {
-        json!({ "action": "rename", "tag": name, "previous": previous, "color": color })
+        json!({ "action": "rename", "label": name, "previous": previous, "color": color })
     };
-    let audit_id = record_tag(&tx, deck_id, &payload)?;
+    let audit_id = record_label(&tx, deck_id, &payload)?;
     record_category_step(
         &tx,
         audit_id,
         deck_id,
-        vec![crate::deck_undo::Op::Tags {
+        vec![crate::deck_undo::Op::Labels {
             restore: vec![],
             patch: before,
             delete: vec![],
             carriers: vec![],
         }],
-        vec![crate::deck_undo::Op::Tags {
+        vec![crate::deck_undo::Op::Labels {
             restore: vec![],
-            patch: tag_step_row(&tx, id)?,
+            patch: label_step_row(&tx, id)?,
             delete: vec![],
             carriers: vec![],
         }],
     )?;
     tx.commit().map_err(|e| e.to_string())?;
-    read_global_tag(conn, id)?.ok_or_else(|| TAG_GONE.to_owned())
+    read_global_label(conn, id)?.ok_or_else(|| LABEL_GONE.to_owned())
 }
 
-/// Take a tag off **this deck's cards in one list**, leaving the tag itself alone.
+/// Take a label off **this deck's cards in one list**, leaving the label itself alone.
 ///
-/// **The action the global list needed and the per-deck one never did.** While a tag belonged
+/// **The action the global list needed and the per-deck one never did.** While a label belonged
 /// to a deck, "I am done with this label here" and "this label should stop existing" were the
 /// same press. They are not any more, and conflating them would mean a reader tidying one deck
 /// silently stripping the label off nine others. So the row in the deck's own section offers
-/// this, and deleting a tag outright is a separate act on the app-wide list.
+/// this, and deleting a label outright is a separate act on the app-wide list.
 ///
-/// Scoped to `variant` for [`list_tags`]'s reason: the row this press is on was drawn from one
+/// Scoped to `variant` for [`list_labels`]'s reason: the row this press is on was drawn from one
 /// list, so the press is about that list. A label worn by theory rows survives being removed
 /// from live.
 ///
 /// Answers how many rows lost the label. Zero is a success, not a refusal — the caller wanted
 /// this deck's cards not to wear it and they do not.
-pub fn remove_tag_from_deck(
+pub fn remove_label_from_deck(
     conn: &Connection,
     deck_id: i64,
-    tag_id: i64,
+    label_id: i64,
     variant: &str,
 ) -> Result<i64, String> {
     let variant = valid_variant(variant)?;
     let name: Option<String> = conn
         .query_row(
-            "SELECT name FROM deck_tags WHERE id = ?1",
-            params![tag_id],
+            "SELECT name FROM deck_labels WHERE id = ?1",
+            params![label_id],
             |r| r.get(0),
         )
         .optional()
         .map_err(|e| e.to_string())?;
-    let name = name.ok_or_else(|| TAG_GONE.to_owned())?;
+    let name = name.ok_or_else(|| LABEL_GONE.to_owned())?;
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     // Exactly the rows about to be cleared, read before the UPDATE that clears them — the only
     // place the fact still exists once it has run.
-    let carriers = crate::deck_undo::read_carriers_in(&tx, tag_id, deck_id, variant)?;
+    let carriers = crate::deck_undo::read_carriers_in(&tx, label_id, deck_id, variant)?;
     if carriers.is_empty() {
         return Ok(0);
     }
     crate::deck::touch_deck(&tx, deck_id)?;
     let cleared = tx
         .execute(
-            "UPDATE deck_cards SET tag_id = NULL, updated_at = unixepoch()
-              WHERE deck_id = ?1 AND variant = ?2 AND tag_id = ?3",
-            params![deck_id, variant, tag_id],
+            "UPDATE deck_cards SET label_id = NULL, updated_at = unixepoch()
+              WHERE deck_id = ?1 AND variant = ?2 AND label_id = ?3",
+            params![deck_id, variant, label_id],
         )
         .map_err(|e| e.to_string())? as i64;
-    let audit_id = record_tag(
+    let audit_id = record_label(
         &tx,
         deck_id,
-        &json!({ "action": "remove", "tag": name, "previous": null, "cards": cleared }),
+        &json!({ "action": "remove", "label": name, "previous": null, "cards": cleared }),
     )?;
     // No `restore`, no `delete`: the label was never touched. The whole of the change is which
     // cards were wearing it, so the whole of the reversal is the carriers.
@@ -1408,13 +1410,13 @@ pub fn remove_tag_from_deck(
         &tx,
         audit_id,
         deck_id,
-        vec![crate::deck_undo::Op::Tags {
+        vec![crate::deck_undo::Op::Labels {
             restore: vec![],
             patch: vec![],
             delete: vec![],
             carriers: carriers.clone(),
         }],
-        vec![crate::deck_undo::Op::Tags {
+        vec![crate::deck_undo::Op::Labels {
             restore: vec![],
             patch: vec![],
             delete: vec![],
@@ -1423,7 +1425,7 @@ pub fn remove_tag_from_deck(
             carriers: carriers
                 .iter()
                 .map(|c| crate::deck_undo::Carrier {
-                    tag_id: None,
+                    label_id: None,
                     ..c.clone()
                 })
                 .collect(),
@@ -1433,22 +1435,22 @@ pub fn remove_tag_from_deck(
     Ok(cleared)
 }
 
-/// Delete a tag **from the whole app**. `deck_cards.tag_id` is `ON DELETE SET NULL`, so every
-/// card carrying it anywhere is left in place, untagged — deleting a tag must never delete a
-/// card. Like [`crate::deck::delete_deck`], an id that resolves to nothing is a success: the
-/// caller wanted that tag gone, and it is gone.
+/// Delete a label **from the whole app**. `deck_cards.label_id` is `ON DELETE SET NULL`, so
+/// every card carrying it anywhere is left in place, unlabelled — deleting a label must never
+/// delete a card. Like [`crate::deck::delete_deck`], an id that resolves to nothing is a
+/// success: the caller wanted that label gone, and it is gone.
 ///
-/// **The reach is the app's now, and the confirmation is what owes the reader that.** A tag
-/// worn in six decks loses its label in six decks; [`GlobalTag::deck_count`] exists so the
+/// **The reach is the app's now, and the confirmation is what owes the reader that.** A label
+/// worn in six decks comes off the cards in six decks; [`GlobalLabel::deck_count`] exists so the
 /// dialog can say the number before the press rather than after it.
 ///
-/// `deck_id` is where the reader was standing — [`update_tag`]'s argument, for its reason.
-pub fn delete_tag(conn: &Connection, deck_id: i64, id: i64) -> Result<(), String> {
-    // Read rather than `owning_deck`, which no longer means anything for a tag: the history
+/// `deck_id` is where the reader was standing — [`update_label`]'s argument, for its reason.
+pub fn delete_label(conn: &Connection, deck_id: i64, id: i64) -> Result<(), String> {
+    // Read rather than `owning_deck`, which no longer means anything for a label: the history
     // needs the name, and this is the last statement in which it is knowable.
     let name: Option<String> = conn
         .query_row(
-            "SELECT name FROM deck_tags WHERE id = ?1",
+            "SELECT name FROM deck_labels WHERE id = ?1",
             params![id],
             |r| r.get(0),
         )
@@ -1460,24 +1462,24 @@ pub fn delete_tag(conn: &Connection, deck_id: i64, id: i64) -> Result<(), String
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     crate::deck::touch_deck(&tx, deck_id)?;
     // **The label, and every card wearing it in every deck.** The DELETE below silently
-    // un-labels them through the FK's `SET NULL`, and the history row says only that a tag
+    // un-labels them through the FK's `SET NULL`, and the history row says only that a label
     // went — so undo has to put the label back *and* put it back on those cards, which is the
     // only place either fact still exists. `Carrier` carries its own `deck_id` for exactly this
     // reason: the carriers of a global delete are not all in the deck the press happened in.
-    let before = tag_step_row(&tx, id)?;
+    let before = label_step_row(&tx, id)?;
     let carriers = crate::deck_undo::read_carriers(&tx, id)?;
     let cards: i64 = carriers.len() as i64;
-    tx.execute("DELETE FROM deck_tags WHERE id = ?1", params![id])
+    tx.execute("DELETE FROM deck_labels WHERE id = ?1", params![id])
         .map_err(|e| e.to_string())?;
-    // `previous` is null: this row is about the label, and the label it is about is `tag`.
-    // `previous` carries the *former* name of a renamed one and nothing else, so filling it
-    // here would make a delete read as a rename that went nowhere. `cards` is what
-    // `auditText`'s "N cards untagged" is rendered from — it has always been read and was
+    // `previous` is null: this row is about the label, and the one it is about is named by the
+    // `label` key. `previous` carries the *former* name of a renamed one and nothing else, so
+    // filling it here would make a delete read as a rename that went nowhere. `cards` is what
+    // `auditText`'s "N cards unlabelled" is rendered from — it has always been read and was
     // never written until the reach became worth stating.
-    let audit_id = record_tag(
+    let audit_id = record_label(
         &tx,
         deck_id,
-        &json!({ "action": "delete", "tag": name, "previous": null, "cards": cards }),
+        &json!({ "action": "delete", "label": name, "previous": null, "cards": cards }),
     )?;
     // The carriers ride on the same op as the restore, so they are written after it and can be
     // rewritten through the remap when the label comes back under a fresh id. On the redo side
@@ -1486,13 +1488,13 @@ pub fn delete_tag(conn: &Connection, deck_id: i64, id: i64) -> Result<(), String
         &tx,
         audit_id,
         deck_id,
-        vec![crate::deck_undo::Op::Tags {
+        vec![crate::deck_undo::Op::Labels {
             restore: before,
             patch: vec![],
             delete: vec![],
             carriers,
         }],
-        vec![crate::deck_undo::Op::Tags {
+        vec![crate::deck_undo::Op::Labels {
             restore: vec![],
             patch: vec![],
             delete: vec![id],
@@ -1503,27 +1505,27 @@ pub fn delete_tag(conn: &Connection, deck_id: i64, id: i64) -> Result<(), String
     Ok(())
 }
 
-/// Set (or clear) the one tag a deck card carries. **A card carries 0 or 1 tags** — the whole
-/// of that rule is the `tag_id` column itself; nothing here enforces it beyond writing to it.
+/// Set (or clear) the one label a deck card carries. **A card carries 0 or 1 labels** — the whole
+/// of that rule is the `label_id` column itself; nothing here enforces it beyond writing to it.
 ///
 /// Identifies the row by `(deckId, cardId, categoryId, variant)` —
 /// [`DECK_CARD_GRAIN`](crate::schema::DECK_CARD_GRAIN) exactly, so at most one row can match.
 /// A row that no longer matches — moved, folded, stepped to zero since the editor last read it
 /// — answers [`CARD_NOT_IN_CATEGORY`], `deck::card_gone`'s reason.
 ///
-/// **The wrong-deck fence went with schema v21 and left nothing behind.** It refused a `tagId`
-/// that resolved to another deck's tag, which was a real hazard while a tag was per-deck: the
-/// FK only checked that the id existed. There is no other deck's tag any more — every row in
-/// `deck_tags` is every deck's — so the only refusal left is [`TAG_GONE`], for an id that
+/// **The wrong-deck fence went with schema v21 and left nothing behind.** It refused a `labelId`
+/// that resolved to another deck's label, which was a real hazard while a label was per-deck: the
+/// FK only checked that the id existed. There is no other deck's label any more — every row in
+/// `deck_labels` is every deck's — so the only refusal left is [`LABEL_GONE`], for an id that
 /// resolves to nothing at all.
-pub fn set_card_tag(
+pub fn set_card_label(
     conn: &Connection,
     deck_id: i64,
     card_id: &str,
     category_id: i64,
     variant: &str,
     finish: Option<&str>,
-    tag_id: Option<i64>,
+    label_id: Option<i64>,
 ) -> Result<(), String> {
     let variant = valid_variant(variant)?;
     // Addresses the row and is never written: since schema v18 a pile can hold the regular copy
@@ -1531,18 +1533,18 @@ pub fn set_card_tag(
     let finish = crate::deck::normalise_finish(finish)?;
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     // The new label's own name — the history needs the word rather than the id, and the same
-    // read is what stands between a stale editor and a `tag_id` pointing at nothing.
-    let applied: Option<String> = match tag_id {
-        Some(tag) => {
+    // read is what stands between a stale editor and a `label_id` pointing at nothing.
+    let applied: Option<String> = match label_id {
+        Some(label) => {
             let row: Option<String> = tx
                 .query_row(
-                    "SELECT name FROM deck_tags WHERE id = ?1",
-                    params![tag],
+                    "SELECT name FROM deck_labels WHERE id = ?1",
+                    params![label],
                     |r| r.get(0),
                 )
                 .optional()
                 .map_err(|e| e.to_string())?;
-            Some(row.ok_or_else(|| TAG_GONE.to_owned())?)
+            Some(row.ok_or_else(|| LABEL_GONE.to_owned())?)
         }
         None => None,
     };
@@ -1554,7 +1556,7 @@ pub fn set_card_tag(
     let card: Option<(String, Option<String>)> = tx
         .query_row(
             "SELECT dc.name, t.name
-               FROM deck_cards dc LEFT JOIN deck_tags t ON t.id = dc.tag_id
+               FROM deck_cards dc LEFT JOIN deck_labels t ON t.id = dc.label_id
               WHERE dc.deck_id = ?1 AND dc.card_id = ?2 AND dc.category_id = ?3
                 AND dc.variant = ?4 AND coalesce(dc.finish, '') = coalesce(?5, '')",
             params![deck_id, card_id, category_id, variant, finish],
@@ -1563,28 +1565,28 @@ pub fn set_card_tag(
         .optional()
         .map_err(|e| e.to_string())?;
     let (card_name, previous) = card.ok_or_else(|| CARD_NOT_IN_CATEGORY.to_owned())?;
-    // The whole row, not just its label. The history carries the two tag *names* and `previous`
-    // is `null` for an untagged card — indistinguishable from a card wearing a tag called
+    // The whole row, not just its label. The history carries the two label *names* and `previous`
+    // is `null` for an unlabelled card — indistinguishable from a card wearing a label called
     // nothing — while the step carries the id the column actually held.
     let cells = vec![crate::deck_undo::Cell::card(variant, category_id, card_id)];
     let before = crate::deck_undo::read_cells(&tx, deck_id, &cells)?;
     tx.execute(
-        "UPDATE deck_cards SET tag_id = ?6, updated_at = unixepoch()
+        "UPDATE deck_cards SET label_id = ?6, updated_at = unixepoch()
           WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4
             AND coalesce(finish, '') = coalesce(?5, '')",
-        params![deck_id, card_id, category_id, variant, finish, tag_id],
+        params![deck_id, card_id, category_id, variant, finish, label_id],
     )
     .map_err(|e| e.to_string())?;
-    // `card_id` set is what marks this the *card's* half of the `tag` kind, and `tag: null` is
+    // `card_id` set is what marks this the *card's* half of the `label` kind, and `label: null` is
     // how a row says the card wears nothing now — clearing a label is as much a change as
     // applying one, and `previous` is the only place the label it lost is written down.
     let audit_id = crate::deck_audit::record(
         &tx,
         deck_id,
         variant,
-        crate::deck_audit::TAG,
+        crate::deck_audit::LABEL,
         Some((card_id, &card_name)),
-        &json!({ "tag": applied, "previous": previous }),
+        &json!({ "label": applied, "previous": previous }),
         0,
     )?;
     crate::deck_undo::record_cells(&tx, audit_id, deck_id, cells, before, None)?;
@@ -1626,7 +1628,7 @@ pub fn list_folders(conn: &Connection) -> Result<Vec<DeckFolderRow>, String> {
 }
 
 /// Make a new folder under `parentId` (root, if `None`). No uniqueness rule on the name —
-/// unlike a category or a tag, `deck_folders` carries no grain constant and no unique index
+/// unlike a category or a label, `deck_folders` carries no grain constant and no unique index
 /// on `(parent_id, name)`, so two sibling folders may share a name.
 pub fn create_folder(
     conn: &Connection,
@@ -1868,7 +1870,7 @@ pub fn delete_folder(conn: &Connection, id: i64) -> Result<(), String> {
 /// write itself answers [`crate::db::BUSY`] when the database is busy.
 #[cfg(not(target_family = "wasm"))]
 fn unfinished(e: tauri::Error) -> String {
-    format!("the deck's categories, tags or folders could not be written: {e}")
+    format!("the deck's categories, labels or folders could not be written: {e}")
 }
 
 /// The category panel. **Read-only connection** — see [`list_categories`]'s doc: it backfills
@@ -1979,82 +1981,84 @@ pub async fn deck_category_delete(
 /// **Read-only** connection, like every list in this module.
 #[cfg(not(target_family = "wasm"))]
 #[tauri::command]
-pub async fn deck_tag_list(
+pub async fn deck_label_list(
     state: tauri::State<'_, Arc<AppState>>,
     deck_id: i64,
     variant: String,
-) -> Result<Vec<DeckTagRow>, String> {
+) -> Result<Vec<DeckLabelRow>, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        list_tags(&crate::sync::lock_db_read(&state), deck_id, &variant)
+        list_labels(&crate::sync::lock_db_read(&state), deck_id, &variant)
     })
     .await
-    .map_err(|e| format!("the deck's tags could not be read: {e}"))?
+    .map_err(|e| format!("the deck's labels could not be read: {e}"))?
 }
 
 #[cfg(not(target_family = "wasm"))]
 #[tauri::command]
-pub async fn deck_tag_create(
+pub async fn deck_label_create(
     state: tauri::State<'_, Arc<AppState>>,
     deck_id: i64,
     name: String,
     color: String,
-) -> Result<GlobalTag, String> {
+) -> Result<GlobalLabel, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        with_write(&state, |c| create_tag(c, deck_id, &name, &color))
+        with_write(&state, |c| create_label(c, deck_id, &name, &color))
     })
     .await
     .map_err(unfinished)?
 }
 
 /// `deck_id` is where the reader was standing, not what is being changed — see
-/// [`update_tag`], which is app-wide.
+/// [`update_label`], which is app-wide.
 #[cfg(not(target_family = "wasm"))]
 #[tauri::command]
-pub async fn deck_tag_update(
+pub async fn deck_label_update(
     state: tauri::State<'_, Arc<AppState>>,
     deck_id: i64,
     id: i64,
     name: String,
     color: String,
-) -> Result<GlobalTag, String> {
+) -> Result<GlobalLabel, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        with_write(&state, |c| update_tag(c, deck_id, id, &name, &color))
+        with_write(&state, |c| update_label(c, deck_id, id, &name, &color))
     })
     .await
     .map_err(unfinished)?
 }
 
-/// Deletes the tag **everywhere**, and answers nothing. `deck_id` is where the reader was.
+/// Deletes the label **everywhere**, and answers nothing. `deck_id` is where the reader was.
 #[cfg(not(target_family = "wasm"))]
 #[tauri::command]
-pub async fn deck_tag_delete(
+pub async fn deck_label_delete(
     state: tauri::State<'_, Arc<AppState>>,
     deck_id: i64,
     id: i64,
 ) -> Result<(), String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || with_write(&state, |c| delete_tag(c, deck_id, id)))
-        .await
-        .map_err(unfinished)?
+    tauri::async_runtime::spawn_blocking(move || {
+        with_write(&state, |c| delete_label(c, deck_id, id))
+    })
+    .await
+    .map_err(unfinished)?
 }
 
-/// Answers how many rows lost the label — see [`remove_tag_from_deck`], which leaves the tag
+/// Answers how many rows lost the label — see [`remove_label_from_deck`], which leaves the label
 /// itself alone.
 #[cfg(not(target_family = "wasm"))]
 #[tauri::command]
-pub async fn deck_tag_remove_from_deck(
+pub async fn deck_label_remove_from_deck(
     state: tauri::State<'_, Arc<AppState>>,
     deck_id: i64,
-    tag_id: i64,
+    label_id: i64,
     variant: String,
 ) -> Result<i64, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         with_write(&state, |c| {
-            remove_tag_from_deck(c, deck_id, tag_id, &variant)
+            remove_label_from_deck(c, deck_id, label_id, &variant)
         })
     })
     .await
@@ -2062,32 +2066,34 @@ pub async fn deck_tag_remove_from_deck(
 }
 
 /// **Read-only**, and the one command in this module with no deck id at all — see
-/// [`list_all_tags`]'s doc.
+/// [`list_all_labels`]'s doc.
 #[cfg(not(target_family = "wasm"))]
 #[tauri::command]
-pub async fn deck_tag_all(
+pub async fn deck_label_all(
     state: tauri::State<'_, Arc<AppState>>,
-) -> Result<Vec<GlobalTag>, String> {
+) -> Result<Vec<GlobalLabel>, String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || list_all_tags(&crate::sync::lock_db_read(&state)))
-        .await
-        .map_err(|e| format!("the tag list could not be read: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        list_all_labels(&crate::sync::lock_db_read(&state))
+    })
+    .await
+    .map_err(|e| format!("the label list could not be read: {e}"))?
 }
 
 #[cfg(not(target_family = "wasm"))]
 #[tauri::command]
-pub async fn deck_card_set_tag(
+pub async fn deck_card_set_label(
     state: tauri::State<'_, Arc<AppState>>,
     deck_id: i64,
     card_id: String,
     category_id: i64,
     variant: String,
-    tag_id: Option<i64>,
+    label_id: Option<i64>,
 ) -> Result<(), String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         with_write(&state, |c| {
-            set_card_tag(c, deck_id, &card_id, category_id, &variant, None, tag_id)
+            set_card_label(c, deck_id, &card_id, category_id, &variant, None, label_id)
         })
     })
     .await
@@ -3354,14 +3360,14 @@ mod tests {
         assert!(elsewhere > 0, "the control deck exists and was left alone");
     }
 
-    // -- Rule 4: one tag list, app-wide, one row per name ------------------------------------
+    // -- Rule 4: one label list, app-wide, one row per name ------------------------------------
 
-    /// A card in one deck's live list, wearing one tag. The tag rules below all need the same
+    /// A card in one deck's live list, wearing one label. The label rules below all need the same
     /// shape and none of them is about building it.
     ///
     /// The category is found before it is made, because a deck's `Main deck` is unique by
     /// `DECK_CATEGORY_GRAIN` and half these tests put two cards in one deck.
-    fn tagged(conn: &Connection, deck_id: i64, card: &str, tag: i64, qty: i64) -> i64 {
+    fn labelled(conn: &Connection, deck_id: i64, card: &str, label: i64, qty: i64) -> i64 {
         let cat = conn
             .query_row(
                 "SELECT id FROM deck_categories WHERE deck_id = ?1 AND name = 'Main deck'",
@@ -3373,26 +3379,26 @@ mod tests {
             .unwrap_or_else(|| category(conn, deck_id, "main", "Main deck"));
         crate::schema::tests::seed_card(conn, card, "lea", "161");
         deck_card(conn, deck_id, card, cat, qty);
-        set_card_tag(conn, deck_id, card, cat, "live", None, Some(tag)).unwrap();
+        set_card_label(conn, deck_id, card, cat, "live", None, Some(label)).unwrap();
         cat
     }
 
     #[test]
-    fn deck_tag_all_is_global_and_ordered_by_copies_then_name() {
+    fn deck_label_all_is_global_and_ordered_by_copies_then_name() {
         let conn = conn();
         let deck_a = deck(&conn, "Burn");
         let deck_b = deck(&conn, "Control");
         // One row per name, made once — a second deck does not get its own copy any more, which
         // is the whole of the change. `Draw` is worn by nothing at all.
-        let removal = create_tag(&conn, deck_a, "Removal", "red").unwrap();
-        let ramp = create_tag(&conn, deck_a, "Ramp", "green").unwrap();
-        create_tag(&conn, deck_a, "Draw", "blue").unwrap();
+        let removal = create_label(&conn, deck_a, "Removal", "red").unwrap();
+        let ramp = create_label(&conn, deck_a, "Ramp", "green").unwrap();
+        create_label(&conn, deck_a, "Draw", "blue").unwrap();
 
-        tagged(&conn, deck_a, "bolt-lea", removal.id, 4);
-        tagged(&conn, deck_b, "swords-lea", removal.id, 3);
-        tagged(&conn, deck_a, "llanowar-lea", ramp.id, 2);
+        labelled(&conn, deck_a, "bolt-lea", removal.id, 4);
+        labelled(&conn, deck_b, "swords-lea", removal.id, 3);
+        labelled(&conn, deck_a, "llanowar-lea", ramp.id, 2);
 
-        let all = list_all_tags(&conn).unwrap();
+        let all = list_all_labels(&conn).unwrap();
         let seen: Vec<(&str, i64, i64)> = all
             .iter()
             .map(|t| (t.name.as_str(), t.card_count, t.deck_count))
@@ -3400,69 +3406,69 @@ mod tests {
         assert_eq!(
             seen,
             vec![("Removal", 7, 2), ("Ramp", 2, 1), ("Draw", 0, 0)],
-            "copies descending, then name — and a tag nothing wears is still a row"
+            "copies descending, then name — and a label nothing wears is still a row"
         );
     }
 
     #[test]
-    fn deck_tag_create_refuses_a_duplicate_name_in_any_deck() {
+    fn deck_label_create_refuses_a_duplicate_name_in_any_deck() {
         let conn = conn();
         let deck_a = deck(&conn, "Burn");
         let deck_b = deck(&conn, "Control");
-        create_tag(&conn, deck_a, "Removal", "red").unwrap();
+        create_label(&conn, deck_a, "Removal", "red").unwrap();
 
-        // The same deck, and then a *different* one: while a tag was per-deck the second of
+        // The same deck, and then a *different* one: while a label was per-deck the second of
         // these was allowed and made the second row this feature exists to prevent.
         assert_eq!(
-            create_tag(&conn, deck_a, "Removal", "blue").unwrap_err(),
-            TAG_NAME_TAKEN
+            create_label(&conn, deck_a, "Removal", "blue").unwrap_err(),
+            LABEL_NAME_TAKEN
         );
         assert_eq!(
-            create_tag(&conn, deck_b, "Removal", "blue").unwrap_err(),
-            TAG_NAME_TAKEN
+            create_label(&conn, deck_b, "Removal", "blue").unwrap_err(),
+            LABEL_NAME_TAKEN
         );
     }
 
     #[test]
-    fn deck_tag_create_compares_names_case_insensitively_and_normalised() {
+    fn deck_label_create_compares_names_case_insensitively_and_normalised() {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
-        create_tag(&conn, deck_id, "Removal", "red").unwrap();
+        create_label(&conn, deck_id, "Removal", "red").unwrap();
 
         for spelling in ["removal", "REMOVAL", "  Removal  "] {
             assert_eq!(
-                create_tag(&conn, deck_id, spelling, "blue").unwrap_err(),
-                TAG_NAME_TAKEN,
+                create_label(&conn, deck_id, spelling, "blue").unwrap_err(),
+                LABEL_NAME_TAKEN,
                 "`{spelling}` is the same label"
             );
         }
 
         // The Unicode half, which `COLLATE NOCASE` could not answer: a combining acute against
         // a precomposed one. Both are typeable and which one arrives is the keyboard's choice.
-        create_tag(&conn, deck_id, "Caf\u{e9}", "red").unwrap();
+        create_label(&conn, deck_id, "Caf\u{e9}", "red").unwrap();
         assert_eq!(
-            create_tag(&conn, deck_id, "Cafe\u{301}", "blue").unwrap_err(),
-            TAG_NAME_TAKEN
+            create_label(&conn, deck_id, "Cafe\u{301}", "blue").unwrap_err(),
+            LABEL_NAME_TAKEN
         );
         assert_eq!(
-            create_tag(&conn, deck_id, "CAF\u{c9}", "blue").unwrap_err(),
-            TAG_NAME_TAKEN
+            create_label(&conn, deck_id, "CAF\u{c9}", "blue").unwrap_err(),
+            LABEL_NAME_TAKEN
         );
     }
 
     #[test]
-    fn deck_tag_create_keeps_the_capitals_the_reader_typed() {
+    fn deck_label_create_keeps_the_capitals_the_reader_typed() {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
-        let tag = create_tag(&conn, deck_id, "Cut Candidate", "red").unwrap();
+        let label = create_label(&conn, deck_id, "Cut Candidate", "red").unwrap();
         assert_eq!(
-            tag.name, "Cut Candidate",
+            label.name, "Cut Candidate",
             "the key is never the display name"
         );
         let stored: String = conn
             .query_row(
-                "SELECT name_key FROM deck_tags WHERE id = ?1",
-                params![tag.id],
+                "SELECT name_key FROM deck_labels WHERE id = ?1",
+                params![label.id],
                 |r| r.get(0),
             )
             .unwrap();
@@ -3470,21 +3476,21 @@ mod tests {
     }
 
     #[test]
-    fn deck_tag_update_writes_the_new_name_and_color_for_every_deck() {
+    fn deck_label_update_writes_the_new_name_and_color_for_every_deck() {
         let conn = conn();
         let deck_a = deck(&conn, "Burn");
         let deck_b = deck(&conn, "Control");
-        let tag = create_tag(&conn, deck_a, "Removal", "red").unwrap();
-        tagged(&conn, deck_b, "swords-lea", tag.id, 1);
+        let label = create_label(&conn, deck_a, "Removal", "red").unwrap();
+        labelled(&conn, deck_b, "swords-lea", label.id, 1);
 
-        let returned = update_tag(&conn, deck_a, tag.id, "Interaction", "blue").unwrap();
+        let returned = update_label(&conn, deck_a, label.id, "Interaction", "blue").unwrap();
         assert_eq!(returned.name, "Interaction");
         assert_eq!(returned.color, "blue");
 
         let (stored_name, stored_color, stored_key): (String, String, String) = conn
             .query_row(
-                "SELECT name, color, name_key FROM deck_tags WHERE id = ?1",
-                params![tag.id],
+                "SELECT name, color, name_key FROM deck_labels WHERE id = ?1",
+                params![label.id],
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .unwrap();
@@ -3494,42 +3500,42 @@ mod tests {
 
         // The other deck reads the same row, which is the issue's headline: recolouring here
         // recoloured it there, with nothing to propagate.
-        let elsewhere = list_tags(&conn, deck_b, "live").unwrap();
+        let elsewhere = list_labels(&conn, deck_b, "live").unwrap();
         assert_eq!(elsewhere.len(), 1);
         assert_eq!(elsewhere[0].name, "Interaction");
         assert_eq!(elsewhere[0].color, "blue");
     }
 
     #[test]
-    fn deck_tag_update_refuses_a_name_another_tag_holds_but_allows_recapitalising_its_own() {
+    fn deck_label_update_refuses_a_name_another_label_holds_but_allows_recapitalising_its_own() {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
-        let removal = create_tag(&conn, deck_id, "Removal", "red").unwrap();
-        create_tag(&conn, deck_id, "Ramp", "green").unwrap();
+        let removal = create_label(&conn, deck_id, "Removal", "red").unwrap();
+        create_label(&conn, deck_id, "Ramp", "green").unwrap();
 
         assert_eq!(
-            update_tag(&conn, deck_id, removal.id, "ramp", "red").unwrap_err(),
-            TAG_NAME_TAKEN
+            update_label(&conn, deck_id, removal.id, "ramp", "red").unwrap_err(),
+            LABEL_NAME_TAKEN
         );
         // Its own name in different capitals is not taken — by itself.
-        let fixed = update_tag(&conn, deck_id, removal.id, "REMOVAL", "red").unwrap();
+        let fixed = update_label(&conn, deck_id, removal.id, "REMOVAL", "red").unwrap();
         assert_eq!(fixed.name, "REMOVAL");
     }
 
     #[test]
-    fn deck_tag_list_answers_only_what_this_deck_and_variant_wears_most_first() {
+    fn deck_label_list_answers_only_what_this_deck_and_variant_wears_most_first() {
         let conn = conn();
         let deck_a = deck(&conn, "Burn");
         let deck_b = deck(&conn, "Control");
-        let removal = create_tag(&conn, deck_a, "Removal", "red").unwrap();
-        let ramp = create_tag(&conn, deck_a, "Ramp", "green").unwrap();
-        let elsewhere = create_tag(&conn, deck_a, "Elsewhere", "blue").unwrap();
-        create_tag(&conn, deck_a, "Unworn", "amber").unwrap();
+        let removal = create_label(&conn, deck_a, "Removal", "red").unwrap();
+        let ramp = create_label(&conn, deck_a, "Ramp", "green").unwrap();
+        let elsewhere = create_label(&conn, deck_a, "Elsewhere", "blue").unwrap();
+        create_label(&conn, deck_a, "Unworn", "amber").unwrap();
 
-        let cat = tagged(&conn, deck_a, "bolt-lea", ramp.id, 2);
+        let cat = labelled(&conn, deck_a, "bolt-lea", ramp.id, 2);
         crate::schema::tests::seed_card(&conn, "swords-lea", "lea", "161");
         deck_card(&conn, deck_a, "swords-lea", cat, 4);
-        set_card_tag(
+        set_card_label(
             &conn,
             deck_a,
             "swords-lea",
@@ -3539,9 +3545,9 @@ mod tests {
             Some(removal.id),
         )
         .unwrap();
-        tagged(&conn, deck_b, "llanowar-lea", elsewhere.id, 9);
+        labelled(&conn, deck_b, "llanowar-lea", elsewhere.id, 9);
 
-        let rows = list_tags(&conn, deck_a, "live").unwrap();
+        let rows = list_labels(&conn, deck_a, "live").unwrap();
         let seen: Vec<(&str, i64)> = rows
             .iter()
             .map(|t| (t.name.as_str(), t.card_count))
@@ -3554,29 +3560,29 @@ mod tests {
     }
 
     #[test]
-    fn deck_tag_list_treats_the_two_variants_as_different_decks() {
+    fn deck_label_list_treats_the_two_variants_as_different_decks() {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
-        let live_only = create_tag(&conn, deck_id, "Live only", "red").unwrap();
-        let theory_only = create_tag(&conn, deck_id, "Theory only", "blue").unwrap();
-        let cat = tagged(&conn, deck_id, "bolt-lea", live_only.id, 1);
+        let live_only = create_label(&conn, deck_id, "Live only", "red").unwrap();
+        let theory_only = create_label(&conn, deck_id, "Theory only", "blue").unwrap();
+        let cat = labelled(&conn, deck_id, "bolt-lea", live_only.id, 1);
 
         crate::schema::tests::seed_card(&conn, "swords-lea", "lea", "161");
         conn.execute(
             "INSERT INTO deck_cards
                 (deck_id, category_id, variant, card_id, set_code, collector_number, lang,
-                 name, tag_id, quantity, created_at, updated_at)
+                 name, label_id, quantity, created_at, updated_at)
              VALUES (?1, ?2, 'theory', 'swords-lea', 'lea', '161', 'en', 'Swords', ?3, 1, 0, 0)",
             params![deck_id, cat, theory_only.id],
         )
         .unwrap();
 
-        let live: Vec<String> = list_tags(&conn, deck_id, "live")
+        let live: Vec<String> = list_labels(&conn, deck_id, "live")
             .unwrap()
             .into_iter()
             .map(|t| t.name)
             .collect();
-        let theory: Vec<String> = list_tags(&conn, deck_id, "theory")
+        let theory: Vec<String> = list_labels(&conn, deck_id, "theory")
             .unwrap()
             .into_iter()
             .map(|t| t.name)
@@ -3586,38 +3592,41 @@ mod tests {
     }
 
     #[test]
-    fn removing_a_tag_from_a_deck_untags_that_list_and_leaves_the_tag_and_every_other_deck() {
+    fn removing_a_label_from_a_deck_unlabels_that_list_and_leaves_the_label_and_every_other_deck() {
         let conn = conn();
         let deck_a = deck(&conn, "Burn");
         let deck_b = deck(&conn, "Control");
-        let tag = create_tag(&conn, deck_a, "Removal", "red").unwrap();
-        tagged(&conn, deck_a, "bolt-lea", tag.id, 4);
-        tagged(&conn, deck_b, "swords-lea", tag.id, 3);
+        let label = create_label(&conn, deck_a, "Removal", "red").unwrap();
+        labelled(&conn, deck_a, "bolt-lea", label.id, 4);
+        labelled(&conn, deck_b, "swords-lea", label.id, 3);
 
-        let cleared = remove_tag_from_deck(&conn, deck_a, tag.id, "live").unwrap();
+        let cleared = remove_label_from_deck(&conn, deck_a, label.id, "live").unwrap();
 
         assert_eq!(cleared, 1, "one row lost the label");
-        assert!(list_tags(&conn, deck_a, "live").unwrap().is_empty());
+        assert!(list_labels(&conn, deck_a, "live").unwrap().is_empty());
         assert_eq!(
-            list_tags(&conn, deck_b, "live").unwrap().len(),
+            list_labels(&conn, deck_b, "live").unwrap().len(),
             1,
             "the other deck is untouched"
         );
-        let all = list_all_tags(&conn).unwrap();
-        assert_eq!(all.len(), 1, "and the tag itself is still there");
+        let all = list_all_labels(&conn).unwrap();
+        assert_eq!(all.len(), 1, "and the label itself is still there");
         assert_eq!(all[0].deck_count, 1);
     }
 
     #[test]
-    fn removing_a_tag_no_card_here_wears_is_a_success_that_writes_nothing() {
+    fn removing_a_label_no_card_here_wears_is_a_success_that_writes_nothing() {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
-        let tag = create_tag(&conn, deck_id, "Removal", "red").unwrap();
+        let label = create_label(&conn, deck_id, "Removal", "red").unwrap();
         let before: i64 = conn
             .query_row("SELECT count(*) FROM deck_audit", [], |r| r.get(0))
             .unwrap();
 
-        assert_eq!(remove_tag_from_deck(&conn, deck_id, tag.id, "live"), Ok(0));
+        assert_eq!(
+            remove_label_from_deck(&conn, deck_id, label.id, "live"),
+            Ok(0)
+        );
 
         let after: i64 = conn
             .query_row("SELECT count(*) FROM deck_audit", [], |r| r.get(0))
@@ -3626,53 +3635,53 @@ mod tests {
     }
 
     #[test]
-    fn deleting_a_tag_takes_it_off_every_deck_and_deletes_no_card() {
+    fn deleting_a_label_takes_it_off_every_deck_and_deletes_no_card() {
         let conn = conn();
         let deck_a = deck(&conn, "Burn");
         let deck_b = deck(&conn, "Control");
-        let tag = create_tag(&conn, deck_a, "Removal", "red").unwrap();
-        tagged(&conn, deck_a, "bolt-lea", tag.id, 4);
-        tagged(&conn, deck_b, "swords-lea", tag.id, 3);
+        let label = create_label(&conn, deck_a, "Removal", "red").unwrap();
+        labelled(&conn, deck_a, "bolt-lea", label.id, 4);
+        labelled(&conn, deck_b, "swords-lea", label.id, 3);
 
-        delete_tag(&conn, deck_a, tag.id).unwrap();
+        delete_label(&conn, deck_a, label.id).unwrap();
 
-        assert!(list_all_tags(&conn).unwrap().is_empty());
+        assert!(list_all_labels(&conn).unwrap().is_empty());
         let cards: i64 = conn
             .query_row("SELECT count(*) FROM deck_cards", [], |r| r.get(0))
             .unwrap();
         assert_eq!(cards, 2, "both cards are still in their decks");
-        let tagged_rows: i64 = conn
+        let labelled_rows: i64 = conn
             .query_row(
-                "SELECT count(*) FROM deck_cards WHERE tag_id IS NOT NULL",
+                "SELECT count(*) FROM deck_cards WHERE label_id IS NOT NULL",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(tagged_rows, 0, "and neither is wearing anything");
+        assert_eq!(labelled_rows, 0, "and neither is wearing anything");
     }
 
-    // -- Rule 5: a card carries 0 or 1 tags --------------------------------------------------
+    // -- Rule 5: a card carries 0 or 1 labels --------------------------------------------------
 
     #[test]
-    fn a_card_carries_zero_or_one_tags() {
+    fn a_card_carries_zero_or_one_labels() {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
         let cat = category(&conn, deck_id, "main", "Main deck");
         crate::schema::tests::seed_card(&conn, "bolt-lea", "lea", "161");
         deck_card(&conn, deck_id, "bolt-lea", cat, 4);
-        let removal = create_tag(&conn, deck_id, "Removal", "red").unwrap();
-        let ramp = create_tag(&conn, deck_id, "Ramp", "green").unwrap();
+        let removal = create_label(&conn, deck_id, "Removal", "red").unwrap();
+        let ramp = create_label(&conn, deck_id, "Ramp", "green").unwrap();
 
-        let tag_of = |conn: &Connection| -> Option<i64> {
+        let label_of = |conn: &Connection| -> Option<i64> {
             conn.query_row(
-                "SELECT tag_id FROM deck_cards WHERE deck_id = ?1 AND card_id = 'bolt-lea'",
+                "SELECT label_id FROM deck_cards WHERE deck_id = ?1 AND card_id = 'bolt-lea'",
                 params![deck_id],
                 |r| r.get(0),
             )
             .unwrap()
         };
 
-        set_card_tag(
+        set_card_label(
             &conn,
             deck_id,
             "bolt-lea",
@@ -3682,30 +3691,30 @@ mod tests {
             Some(removal.id),
         )
         .unwrap();
-        assert_eq!(tag_of(&conn), Some(removal.id));
+        assert_eq!(label_of(&conn), Some(removal.id));
 
-        // Setting a second tag replaces the first — never both.
-        set_card_tag(&conn, deck_id, "bolt-lea", cat, "live", None, Some(ramp.id)).unwrap();
-        assert_eq!(tag_of(&conn), Some(ramp.id));
+        // Setting a second label replaces the first — never both.
+        set_card_label(&conn, deck_id, "bolt-lea", cat, "live", None, Some(ramp.id)).unwrap();
+        assert_eq!(label_of(&conn), Some(ramp.id));
 
-        set_card_tag(&conn, deck_id, "bolt-lea", cat, "live", None, None).unwrap();
-        assert_eq!(tag_of(&conn), None);
+        set_card_label(&conn, deck_id, "bolt-lea", cat, "live", None, None).unwrap();
+        assert_eq!(label_of(&conn), None);
     }
 
-    /// The refusal this replaced was `set_card_tag_refuses_a_tag_from_a_different_deck`, and
-    /// its disappearance is the feature rather than a regression: there is no other deck's tag
-    /// any more. A tag made while standing in one deck goes straight onto a card in another.
+    /// The refusal this replaced was `set_card_label_refuses_a_label_from_a_different_deck`, and
+    /// its disappearance is the feature rather than a regression: there is no other deck's label
+    /// any more. A label made while standing in one deck goes straight onto a card in another.
     #[test]
-    fn set_card_tag_accepts_a_tag_made_in_another_deck() {
+    fn set_card_label_accepts_a_label_made_in_another_deck() {
         let conn = conn();
         let deck_a = deck(&conn, "Burn");
         let deck_b = deck(&conn, "Control");
         let cat = category(&conn, deck_a, "main", "Main deck");
         crate::schema::tests::seed_card(&conn, "bolt-lea", "lea", "161");
         deck_card(&conn, deck_a, "bolt-lea", cat, 4);
-        let made_elsewhere = create_tag(&conn, deck_b, "Removal", "red").unwrap();
+        let made_elsewhere = create_label(&conn, deck_b, "Removal", "red").unwrap();
 
-        set_card_tag(
+        set_card_label(
             &conn,
             deck_a,
             "bolt-lea",
@@ -3716,30 +3725,30 @@ mod tests {
         )
         .unwrap();
 
-        let rows = list_tags(&conn, deck_a, "live").unwrap();
+        let rows = list_labels(&conn, deck_a, "live").unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, made_elsewhere.id);
     }
 
     #[test]
-    fn set_card_tag_refuses_a_tag_id_that_resolves_to_nothing() {
+    fn set_card_label_refuses_a_label_id_that_resolves_to_nothing() {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
         let cat = category(&conn, deck_id, "main", "Main deck");
         crate::schema::tests::seed_card(&conn, "bolt-lea", "lea", "161");
         deck_card(&conn, deck_id, "bolt-lea", cat, 4);
 
-        let err =
-            set_card_tag(&conn, deck_id, "bolt-lea", cat, "live", None, Some(999_999)).unwrap_err();
-        assert_eq!(err, TAG_GONE);
+        let err = set_card_label(&conn, deck_id, "bolt-lea", cat, "live", None, Some(999_999))
+            .unwrap_err();
+        assert_eq!(err, LABEL_GONE);
     }
 
     #[test]
-    fn set_card_tag_refuses_a_card_not_in_that_category() {
+    fn set_card_label_refuses_a_card_not_in_that_category() {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
         let cat = category(&conn, deck_id, "main", "Main deck");
-        let err = set_card_tag(&conn, deck_id, "bolt-lea", cat, "live", None, None).unwrap_err();
+        let err = set_card_label(&conn, deck_id, "bolt-lea", cat, "live", None, None).unwrap_err();
         assert_eq!(err, CARD_NOT_IN_CATEGORY);
     }
 
@@ -3772,7 +3781,7 @@ mod tests {
     }
 
     #[test]
-    fn every_tag_and_card_tag_write_touches_the_deck_the_gallery_sorts_by() {
+    fn every_label_and_card_label_write_touches_the_deck_the_gallery_sorts_by() {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
         let cat = category(&conn, deck_id, "main", "Main deck");
@@ -3780,27 +3789,39 @@ mod tests {
         deck_card(&conn, deck_id, "bolt-lea", cat, 4);
 
         backdate(&conn, deck_id);
-        let tag = create_tag(&conn, deck_id, "Removal", "red").unwrap();
-        assert!(updated_at(&conn, deck_id) > 0, "tag create moved the deck");
+        let label = create_label(&conn, deck_id, "Removal", "red").unwrap();
+        assert!(
+            updated_at(&conn, deck_id) > 0,
+            "label create moved the deck"
+        );
 
         backdate(&conn, deck_id);
-        update_tag(&conn, deck_id, tag.id, "Interaction", "red").unwrap();
-        assert!(updated_at(&conn, deck_id) > 0, "so does tag update");
+        update_label(&conn, deck_id, label.id, "Interaction", "red").unwrap();
+        assert!(updated_at(&conn, deck_id) > 0, "so does label update");
 
         backdate(&conn, deck_id);
-        set_card_tag(&conn, deck_id, "bolt-lea", cat, "live", None, Some(tag.id)).unwrap();
-        assert!(updated_at(&conn, deck_id) > 0, "and tagging a card");
+        set_card_label(
+            &conn,
+            deck_id,
+            "bolt-lea",
+            cat,
+            "live",
+            None,
+            Some(label.id),
+        )
+        .unwrap();
+        assert!(updated_at(&conn, deck_id) > 0, "and labelling a card");
 
         backdate(&conn, deck_id);
-        remove_tag_from_deck(&conn, deck_id, tag.id, "live").unwrap();
+        remove_label_from_deck(&conn, deck_id, label.id, "live").unwrap();
         assert!(
             updated_at(&conn, deck_id) > 0,
             "and taking it off this deck"
         );
 
         backdate(&conn, deck_id);
-        delete_tag(&conn, deck_id, tag.id).unwrap();
-        assert!(updated_at(&conn, deck_id) > 0, "and tag delete");
+        delete_label(&conn, deck_id, label.id).unwrap();
+        assert!(updated_at(&conn, deck_id) > 0, "and label delete");
     }
 
     #[test]

@@ -187,7 +187,7 @@ are resolutions a later reader has to be able to tell apart:
    it rather than branching.
 3. **Table view starves the card name.** Seven fixed columns take **696px of 963px**, leaving the
    two `fr` columns 147px between them: **Card name gets 84px** (`minmax(0,2fr)`) and Type 63px,
-   truncating names to ~10 characters, while the empty Tags column holds 112px and Owned 64px.
+   truncating names to ~10 characters, while the empty Labels column holds 112px and Owned 64px.
 
 **Unverified, and not by choice:**
 
@@ -990,7 +990,7 @@ Driven against the `Azula` deck — 122 rows across 13 piles — and the search 
 | Drag one picked card onto another pile | all **3** moved, `41 → 39`, one gesture |
 | After the drop | `cardSelection` `null`, one ring left (the pane's own card) |
 | The drag preview | a chip reading **`3 cards`**, `color: oklch(0.75 0.12 85)` — `--color-accent` exactly |
-| Right-click a picked card | `Add 2 cards to · Move 2 cards to · Tag 2 cards · Remove 2 cards`, with `Copy card name`, `Copy card image`, `Open on`, `View all printings`, `Set as commander`, `Set as companion`, `Set as foil` singular |
+| Right-click a picked card | `Add 2 cards to · Move 2 cards to · Label 2 cards · Remove 2 cards`, with `Copy card name`, `Copy card image`, `Open on`, `View all printings`, `Set as commander`, `Set as companion`, `Set as foil` singular |
 | `Delete` with 2 picked | `122 → 120` rows, both named cards gone, set stood down |
 | `Delete` with the caret in **Deck name** | `118 → 118`, the set of 2 survived |
 | Ctrl-click in Stacks / Table / Grid | `2` keys and `2` marked in all three |
@@ -1163,6 +1163,14 @@ At **1920** (editor column 1657) the actions block is seven children on one line
 | `Tags` | 70 × 36 | 1597 |
 | `History` | 83 × 36 | 1675 |
 | `Deck settings` | 119 × 36 | 1766 |
+
+⚠️ **That row's fourth button says `Labels` now, and three of these numbers moved with the
+word.** The pass above was driven while it read `Tags`; the rename is two characters longer, so
+that button's **70px** and the `x` of everything to its right of it are the old word's and are
+owed a re-measure. Every height, every `y` and everything left of it stand — they are not
+functions of the text — and the shape of the finding, which is about the gap and the group, is
+untouched. The table is left as it was read rather than adjusted by arithmetic, because a
+measured figure nobody re-took is worth less than one nobody wrote down.
 
 The group ends at 1210 and `Compare` starts at 1217 — **the row's own `gap-2`**, 8px, the same
 distance as every other pair on the line, which is the whole of the spacing decision. Inside the

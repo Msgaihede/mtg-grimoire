@@ -17,6 +17,9 @@ _shows_ (`forest`, `dragon`, `dog`), which is what the Tags page browses by; a d
 has never fetched them has a Tags page that says so and still answers from the oracle side.
 ~5.85 MB and ~12.5 MB — [the oracle research](docs/superpowers/research/2026-08-14-scryfall-oracle-tags.md)
 and [the art one](docs/superpowers/research/2026-08-20-scryfall-art-tags.md).
+**A _tag_ in this app is one of those two and nothing else.** The deckbuilder's own coloured
+per-card mark is a **label** — `deck_labels`, `deck_cards.label_id`, the `Labels` dialog — and the
+collection's free-text `tags` column is a third thing again. Never let the words trade places.
 
 **Both files regenerate _daily_; _weekly_ is this app's refresh interval, and the two must not be
 blurred.** Scryfall's `docs/api/tags` says the bulk files are updated daily, and both `updated_at`

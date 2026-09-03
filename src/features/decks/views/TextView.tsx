@@ -15,8 +15,8 @@ import { cn } from "@/lib/utils";
 import {
   DeckFinishMark,
   GameChangerBadge,
+  LabelDot,
   rowMarkColor,
-  TagDot,
   TheoryMatchBadge,
 } from "../CardMarks";
 import {
@@ -458,7 +458,7 @@ function TextRow({
             `aria-label`, so the word is `deckCardName`'s. `TableView` is the one view that says
             it in text, because a cell is not swallowed by a label. */}
         {theoryDelta !== null && <TheoryMatchBadge delta={theoryDelta} />}
-        {card.tagName !== null && <TagDot name={card.tagName} color={card.tagColor} />}
+        {card.labelName !== null && <LabelDot name={card.labelName} color={card.labelColor} />}
         <ManaText source={card.manaCost} className="shrink-0 text-[0.625rem]" />
       </button>
 

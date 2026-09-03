@@ -9,7 +9,7 @@
  * Set as commander        (only where the format has a command zone)
  * Set as companion        (only where the format has a slot for one)
  * Set as foil             (or a `Finish ▸` submenu where the printing is sold in three)
- * Tag card             ▸  None / the deck's tags / New tag…
+ * Label card           ▸  None / the deck's labels / New label…
  * ─────────────────────
  * Remove card             every copy, out of this pile
  * ```
@@ -17,8 +17,9 @@
  * **A pure builder whose dependencies are an argument**, exactly as `cardMenu`'s and
  * `categoryMenu`'s are: every write arrives as a callback, so this file is testable with no
  * provider, no query client and no window. It has **no component in it at all** since
- * 2026-08-20, when "New tag…" stopped being a text field inside the panel and became a row that
- * opens `NewTagDialog` — the tag rows are a `MenuItem[]` built from `deps.tags`, which
+ * 2026-08-20, when "New label…" stopped being a text field inside the panel and became a row
+ * that opens a dialog (`NewTagDialog` on the day; `AddLabelDialog` now) — the label rows are a
+ * `MenuItem[]` built from `deps.labels`, which
  * `DeckEditor` already holds from `deck_get`, so the whole submenu is `submenu` rather than
  * `lazy` and nothing here mounts, queries or holds state.
  *
@@ -34,13 +35,13 @@
  *
  * **Built once by `DeckEditor` and handed to the four views as one function.** A view that
  * assembled its own would be four copies of one rule, and the rule reads the deck's categories,
- * its format spec and its tags — three facts no view has.
+ * its format spec and its labels — three facts no view has.
  */
 import { CircleMinus, Crown, FolderInput, Plus, Sparkles, Tag, UserRound } from "lucide-react";
 import type { MenuAction, MenuItem } from "@/components/menu/types";
 import { buildCardMenu, type CardMenuDeps, type CardMenuTarget } from "@/features/card/cardMenu";
 import { FINISH_LABEL, parseFinishes } from "@/lib/finish";
-import type { DeckCard, DeckCategory, DeckFinish, DeckTag, FormatSpec } from "@/lib/ipc";
+import type { DeckCard, DeckCategory, DeckFinish, DeckLabel, FormatSpec } from "@/lib/ipc";
 import { commanderIneligibility } from "./validation/commanders";
 import { companionIssues } from "./validation/companions";
 
@@ -100,33 +101,34 @@ export interface DeckCardMenuDeps {
   /** `useDeck.moveCard`, addressed by the row rather than by a slot: the caller knows which
    *  pile the card is leaving. */
   moveTo: (card: DeckCard, categoryId: number) => void;
-  /** `useDeck.setTag`. `null` takes the label off. */
-  setTag: (card: DeckCard, tagId: number | null) => void;
+  /** `useDeck.setLabel`. `null` takes the label off. */
+  setLabel: (card: DeckCard, labelId: number | null) => void;
   /** `useDeck.setCardFinish`. `null` is the regular copy — see {@link finishItem}. */
   setFinish: (card: DeckCard, to: DeckFinish) => void;
   /** The labels **this list is wearing**, already in hand from `deck_get`, most-used first —
-   *  the tag rows are built from these rather than from a second `deck_tag_list`, which is what
-   *  lets the submenu be `submenu`
+   *  the label rows are built from these rather than from a second `deck_label_list`, which is
+   *  what lets the submenu be `submenu`
    *  rather than `lazy`. */
-  tags: readonly DeckTag[];
+  labels: readonly DeckLabel[];
   /**
-   * **"New tag…"** — open the surface's `NewTagDialog` on this card. It writes nothing itself.
+   * **"New label…"** — open the surface's `AddLabelDialog` on this card. It writes nothing
+   * itself.
    *
    * This row used to be a text field inside the panel, and the field used to *be* the write:
-   * `createTag(card, name)`, in {@link DEFAULT_TAG_COLOR}, because a menu has no room for a
-   * colour picker. Both halves of that changed on 2026-08-20 — a tag's colour is the reader's
-   * own now (`tagColors.ts`) and picking gold silently for every label born from a menu would
+   * `createLabel(card, name)`, in {@link DEFAULT_LABEL_COLOR}, because a menu has no room for a
+   * colour picker. Both halves of that changed on 2026-08-20 — a label's colour is the reader's
+   * own now (`labelColors.ts`) and picking gold silently for every label born from a menu would
    * make them all alike, so the row opens a dialog with a name and a colour in it.
    *
    * **The write is still the surface's, and the two reasons are unchanged.** It keeps this
    * file's purity contract — every write arrives as an argument, so the builder is testable with
    * no provider and no query client — and, the one that is a defect rather than a preference, a
    * `mutate`-scoped `onSuccess` belongs to the *observer*, and TanStack drops it when the
-   * observer unmounts. A create started in a panel and chained to `setTag` there loses its
+   * observer unmounts. A create started in a panel and chained to `setLabel` there loses its
    * second half to an Escape landing during the round trip: the label made and silently never
    * attached. The editor's observer outlives both the menu and the dialog.
    */
-  addTag: (card: DeckCard) => void;
+  addLabel: (card: DeckCard) => void;
   /**
    * **Remove card** — take this row out of the pile it is in.
    *
@@ -183,8 +185,8 @@ function manyCards(n: number): string {
  *
  * ## Which rows go plural, and which cannot
  *
- * `Move to`, `Tag` and `Remove` act on **every** picked card when the right-clicked one is in the
- * set (issue #214). All three are per-row writes over an address the row already carries, so
+ * `Move to`, `Label` and `Remove` act on **every** picked card when the right-clicked one is
+ * in the set (issue #214). All three are per-row writes over an address the row already carries, so
  * plural is a loop and the label is the only thing that has to change.
  *
  * **`Finish`, `Set as commander` and `Set as companion` stay about the one card, and that is a
@@ -218,27 +220,27 @@ export function buildDeckCardMenu(card: DeckCard, deps: DeckCardMenuDeps): MenuI
     finishItem(card, deps),
     {
       kind: "submenu",
-      id: "tag-card",
-      label: many ? `Tag ${manyCards(rows.length)}` : "Tag card",
+      id: "label-card",
+      label: many ? `Label ${manyCards(rows.length)}` : "Label card",
       Icon: Tag,
       items: [
-        ...deckCardTagRows(card, deps.tags, (_card, tagId) => {
-          for (const row of rows) deps.setTag(row, tagId);
+        ...deckCardLabelRows(card, deps.labels, (_card, labelId) => {
+          for (const row of rows) deps.setLabel(row, labelId);
         }),
         // The line between putting a label on and making one. Above it every row is a press and
-        // the card is tagged; below it the menu closes and a dialog opens, which is a different
-        // kind of act and is drawn as one.
-        { kind: "separator", id: "sep-new-tag" },
+        // the card is labelled; below it the menu closes and a dialog opens, which is a
+        // different kind of act and is drawn as one.
+        { kind: "separator", id: "sep-new-label" },
         {
           kind: "action",
-          id: "tag-new",
-          // **"More tags…" rather than "New tag…", because there are more.** A tag is one
-          // app-wide row since schema v21, so the rows above this line are the tags *this list
+          id: "label-new",
+          // **"More labels…" rather than "New label…", because there are more.** A label is one
+          // app-wide row since schema v21, so the rows above this line are the labels *this list
           // is wearing* and every other label the reader owns is behind this one — along with
           // making a genuinely new one, which is what the row used to be for alone.
-          label: "More tags…",
+          label: "More labels…",
           Icon: Plus,
-          onSelect: () => deps.addTag(card),
+          onSelect: () => deps.addLabel(card),
         },
       ],
     },
@@ -534,22 +536,22 @@ function finishChoices(finishes: string | null): DeckFinish[] {
 const REGULAR = "Regular";
 
 /**
- * The tag choices, as rows.
+ * The label choices, as rows.
  *
- * **Radios, and "None" first, because a deck card wears at most one tag** — `setTag` takes
- * `tagId: number | null`, and `deck_cards.tag_id` is a single column. A checkbox list would be
- * a control promising something the model cannot store.
+ * **Radios, and "None" first, because a deck card wears at most one label** — `setLabel` takes
+ * `labelId: number | null`, and `deck_cards.label_id` is a single column. A checkbox list would
+ * be a control promising something the model cannot store.
  *
- * **Only the tags this list is already wearing, and the backend's order is kept.** Both halves
- * changed with schema v21 and both are the issue's own request. `deck_get` answers the tags
+ * **Only the labels this list is already wearing, and the backend's order is kept.** Both halves
+ * changed with schema v21 and both are the issue's own request. `deck_get` answers the labels
  * *worn by cards in this deck and variant*, most-used first — so the row a reader reaches for
  * is near the top, and a menu no longer fills with every label they have ever made. The rest
- * are behind "More tags…".
+ * are behind "More labels…".
  *
  * **This list is therefore not `sortOptions`'d, and that reverses a fix made on 2026-08-14.**
  * The reasoning then was sound and its premise is gone: `deck_get` answered
  * `ORDER BY t.name` over a `TEXT` column with no `COLLATE NOCASE`, which is byte order, so a
- * deck tagged `Cut`, `budget` and `Ramp` drew `Cut, Ramp, budget` and a reader looking for
+ * deck labelled `Cut`, `budget` and `Ramp` drew `Cut, Ramp, budget` and a reader looking for
  * "budget" under B found it below every capitalised label. An alphabet the reader could not
  * predict is worth replacing with one they can. But the order is not an alphabet any more: it
  * is **use**, which is the first of the two exemptions this app grants — an order that *is* the
@@ -560,26 +562,26 @@ const REGULAR = "Regular";
  *
  * Exported so the rule above can be pinned without mounting a menu.
  */
-export function deckCardTagRows(
+export function deckCardLabelRows(
   card: DeckCard,
-  tags: readonly DeckTag[],
-  setTag: (card: DeckCard, tagId: number | null) => void,
+  labels: readonly DeckLabel[],
+  setLabel: (card: DeckCard, labelId: number | null) => void,
 ): MenuItem[] {
   return [
     {
       kind: "radio",
-      id: "tag-none",
+      id: "label-none",
       label: "None",
-      checked: card.tagId === null,
-      onSelect: () => setTag(card, null),
+      checked: card.labelId === null,
+      onSelect: () => setLabel(card, null),
     },
-    ...tags.map(
-      (tag): MenuItem => ({
+    ...labels.map(
+      (label): MenuItem => ({
         kind: "radio",
-        id: `tag-${tag.id}`,
-        label: tag.name,
-        checked: card.tagId === tag.id,
-        onSelect: () => setTag(card, tag.id),
+        id: `label-${label.id}`,
+        label: label.name,
+        checked: card.labelId === label.id,
+        onSelect: () => setLabel(card, label.id),
       }),
     ),
   ];

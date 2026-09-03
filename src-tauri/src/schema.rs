@@ -58,7 +58,7 @@
 //!
 //! SET NULL is the other four — `decks.folder_id` (a folder is
 //! a filing decision, and the decks inside it are the user's work, not the folder's to take
-//! down with it), `deck_cards.tag_id` (deleting a tag must never delete a card),
+//! down with it), `deck_cards.label_id` (deleting a label must never delete a card),
 //! `wishlist_entries.folder_id` (`decks.folder_id`'s argument one list over: a wish is the
 //! reader's shopping list, so deleting the cabinet surfaces it at the root rather than
 //! throwing it away) and `collection_entries.folder_id` (the same argument again, and the
@@ -79,9 +79,11 @@
 //! each — a rung that adds one and forgets the other is what these two paragraphs exist to
 //! catch, since a prose-only edit routes to neither CI job and nothing here can go red.
 //!
-//! **`deck_tags` left the CASCADE list at v21** and has no key of its own at all: a tag belongs
-//! to no deck, so deleting the deck a label was first typed in must not take it off the others
-//! wearing it. [`crate::reset::clear_decks`] sweeps that table by hand, which is the one case —
+//! **`deck_labels` left the CASCADE list at v21** and has no key of its own at all: a label
+//! belongs to no deck, so deleting the deck a label was first typed in must not take it off the
+//! others wearing it. (It was `deck_tags` until schema v33 renamed it, the table and the word
+//! together; the rung below it is history and still names the old table, because that is what it
+//! built.) [`crate::reset::clear_decks`] sweeps that table by hand, which is the one case —
 //! every deck at once — where clearing it is right.
 
 use crate::db::CORPUS;
@@ -300,9 +302,12 @@ pub const LEGACY_SINGLE_FILE_VERSION: i64 = 26;
 /// `device_names` — what each device in the group is called, and the only thing about a peer
 /// that travels, because the roster that holds the keys must never itself sync. 32 is the
 /// first rung here that writes no shape at all: it flips every `decks.cover_kind` that still
-/// says `'custom'` to `'card_art'`, because the reader-picked cover picture is gone. The
+/// says `'custom'` to `'card_art'`, because the reader-picked cover picture is gone. 33 is the
+/// deck label's rename — `deck_tags` becomes `deck_labels`, `deck_cards.tag_id` becomes
+/// `label_id`, and the `deck_audit` rows that recorded one say `label` instead of `tag` — the
+/// storage half of a word this app changed everywhere at once. The
 /// user's ladder can never restart, because its rungs describe rows nothing else can produce.
-pub const USER_SCHEMA_VERSION: i64 = 32;
+pub const USER_SCHEMA_VERSION: i64 = 33;
 
 /// `corpus.db`'s version, on a number line of its own.
 ///
@@ -346,8 +351,9 @@ pub const TABLES: &[(&str, Side)] = &[
     ("deck_cards", Side::User),
     ("deck_categories", Side::User),
     ("deck_folders", Side::User),
-    // One app-wide list keyed on `name_key` since v21 — no `deck_id`.
-    ("deck_tags", Side::User),
+    // One app-wide list keyed on `name_key` since v21 — no `deck_id`. `deck_tags` until v33,
+    // which renamed the table with the word.
+    ("deck_labels", Side::User),
     ("deck_undo", Side::User),
     ("decks", Side::User),
     // A name is something a person typed, and nothing rebuilds it: no feed knows what the
@@ -454,7 +460,7 @@ pub const SYNCED_TABLES: [&str; 12] = [
     "deck_cards",
     "deck_categories",
     "deck_folders",
-    "deck_tags",
+    "deck_labels",
     "decks",
     // What each device in the group is called (user schema v31). The twelfth, and the one
     // that is here while `sync_devices` — the roster beside it, holding the public keys —
@@ -644,24 +650,24 @@ pub const DECK_CARD_GRAIN: &str = "deck_id, variant, category_id, card_id, coale
 /// and for the test that keeps this constant honest about what that index holds.
 pub const DECK_CATEGORY_GRAIN: &str = "deck_id, name";
 
-/// What makes two tag rows the same row: **one name, app-wide** — no deck in it at all.
+/// What makes two label rows the same row: **one name, app-wide** — no deck in it at all.
 ///
 /// It was `deck_id, name` until schema v21, which is the shape [`DECK_CATEGORY_GRAIN`] still
 /// has and the reason the two used to read alike. A category says *where in a deck* a card
-/// lives, so it is a thing the deck owns; a tag says what the reader thinks of a card, and a
-/// reader who has decided what "Cut candidate" means did not decide it per deck. So a tag is
+/// lives, so it is a thing the deck owns; a label says what the reader thinks of a card, and a
+/// reader who has decided what "Cut candidate" means did not decide it per deck. So a label is
 /// one row shared by every deck that uses it, and recolouring it recolours it everywhere.
 ///
 /// **`name_key` rather than `name`**, because the answer this grain has to give is "is that the
-/// same label", and two spellings of one word are. The key is [`tag_name_key`]'s: NFC, Unicode
+/// same label", and two spellings of one word are. The key is [`label_name_key`]'s: NFC, Unicode
 /// lowercase, NFC again. It is computed in Rust and stored because SQLite cannot answer it —
 /// `COLLATE NOCASE` folds ASCII and nothing else, and the bundled build carries no Unicode
 /// normalisation at all.
 ///
 /// Read by no SQL at all, like [`DECK_CATEGORY_GRAIN`].
-pub const DECK_TAG_GRAIN: &str = "name_key";
+pub const DECK_LABEL_GRAIN: &str = "name_key";
 
-/// What makes two tag names the same name — [`DECK_TAG_GRAIN`]'s value, computed.
+/// What makes two label names the same name — [`DECK_LABEL_GRAIN`]'s value, computed.
 ///
 /// Three passes, and each one answers a way two labels a reader cannot tell apart would
 /// otherwise be two rows:
@@ -680,9 +686,9 @@ pub const DECK_TAG_GRAIN: &str = "name_key";
 /// whitespace they did not mean.
 ///
 /// **Not a colour and not a display name.** The key is never shown and never written back to
-/// `deck_tags.name`, which keeps whatever capitals the reader chose — this answers only
+/// `deck_labels.name`, which keeps whatever capitals the reader chose — this answers only
 /// "is that the same label", which is a question about identity rather than about spelling.
-pub fn tag_name_key(name: &str) -> String {
+pub fn label_name_key(name: &str) -> String {
     use unicode_normalization::UnicodeNormalization;
     name.trim()
         .nfc()
@@ -757,8 +763,13 @@ pub const FINISHES: [&str; 3] = ["nonfoil", "foil", "etched"];
 /// which of these happened and the facts a sentence needs (`payload`, `delta`); TypeScript
 /// owns turning that into the sentence a person reads on the history drawer, because a
 /// sentence is domain logic and this table has to survive the day the wording changes.
+///
+/// **`label` was `tag` until schema v33**, and the word had to move in the stored rows as well
+/// as in the CHECK — the v33 rung rewrites both, because a history that reads `tag` on rows
+/// written before the rename and `label` on rows written after it is one vocabulary pretending
+/// to be two.
 pub const AUDIT_KINDS: [&str; 9] = [
-    "add", "remove", "quantity", "move", "swap", "tag", "category", "folder", "deck",
+    "add", "remove", "quantity", "move", "swap", "label", "category", "folder", "deck",
 ];
 
 // `ALLOCATION_GRAIN` — `deck_id, collection_entry_id`, one deck's claim on one collection
@@ -921,11 +932,17 @@ const FORMAT_SPECS_SEED: &str = "INSERT OR REPLACE INTO format_specs
 /// The v1 `CREATE` describes what version 1 built; a fresh install replays the whole
 /// history, so a column added to v1 would make the later `ALTER` fail on new machines
 /// only.
-/// Schema v21's whole body: fold every deck's private tag list into one app-wide one.
+/// Schema v21's whole body: fold every deck's private label list into one app-wide one.
+///
+/// **Every table this rung names was called `deck_tags…` on the day it shipped and still is
+/// here**, v33's rename notwithstanding: a step is history, and one edited to read `deck_labels`
+/// would build a table no database between v21 and v33 ever had. Only the Rust identifiers move
+/// with the crate — [`DECK_LABEL_GRAIN`], [`label_name_key`] — because those are this build's
+/// names for a rule, not the rung's record of a shape.
 ///
 /// ## What comes out
 ///
-/// `deck_tags` loses `deck_id` and gains `name_key`, and its grain becomes [`DECK_TAG_GRAIN`]
+/// `deck_tags` loses `deck_id` and gains `name_key`, and its grain becomes [`DECK_LABEL_GRAIN`]
 /// — one row per name, app-wide. Two decks that both wrote "Removal" had two rows and have one
 /// now, so every card that wore either wears the survivor.
 ///
@@ -944,9 +961,10 @@ const FORMAT_SPECS_SEED: &str = "INSERT OR REPLACE INTO format_specs
 ///
 /// ## The rebuild, and the trap in it
 ///
-/// `deck_cards.tag_id` is `REFERENCES deck_tags(id) ON DELETE SET NULL`, and under
+/// `deck_cards.tag_id` — `label_id` since v33 — is `REFERENCES deck_tags(id) ON DELETE SET
+/// NULL`, and under
 /// `PRAGMA foreign_keys=ON` **`DROP TABLE` on a parent runs an implicit `DELETE FROM` that
-/// fires exactly that action** — so the obvious build-swap-rename would untag every card in
+/// fires exactly that action** — so the obvious build-swap-rename would unlabel every card in
 /// every deck and leave a perfectly-shaped empty answer behind it. The pragma cannot be turned
 /// off to dodge that: toggling `foreign_keys` is a documented no-op inside a transaction and
 /// `migrate_single_file` is always inside one. (The v8 step says the same sentence from the other side,
@@ -959,11 +977,11 @@ const FORMAT_SPECS_SEED: &str = "INSERT OR REPLACE INTO format_specs
 ///
 /// ## Every undo step is discarded, and that is not collateral
 ///
-/// `deck_undo` rows name tag ids — `Op::Tags` directly, and every *card* step through
-/// `CardRow::tag_id`, which is how undoing a move puts a card's label back. This rung deletes
+/// `deck_undo` rows name label ids — `Op::Labels` directly, and every *card* step through
+/// `CardRow::label_id`, which is how undoing a move puts a card's label back. This rung deletes
 /// the ids of merged-away rows, so such a step would restore a card's label as a foreign key
 /// resolving to nothing. Worse, and reachable even where nothing merged at all: a step that
-/// *restores* a deleted tag re-inserts a name another deck now holds, which the new grain
+/// *restores* a deleted label re-inserts a name another deck now holds, which the new grain
 /// refuses — so the step fails at the moment the reader presses Ctrl+Z, having already applied
 /// the ops recorded before it.
 ///
@@ -992,10 +1010,10 @@ fn globalise_tags(tx: &Connection) -> rusqlite::Result<()> {
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
     // key -> the winning row so far. A `HashMap` rather than SQL because the key is
-    // `tag_name_key`'s, which no SQLite build in this app can compute.
+    // `label_name_key`'s, which no SQLite build in this app can compute.
     let mut winner: HashMap<String, (i64, String, String, i64, i64, i64)> = HashMap::new();
     for row in rows.iter().cloned() {
-        let key = tag_name_key(&row.1);
+        let key = label_name_key(&row.1);
         match winner.get(&key) {
             // Copies, then `updated_at`, then the *lowest* id — hence the negation, so that one
             // comparison spells all three and they cannot drift apart.
@@ -1031,7 +1049,7 @@ fn globalise_tags(tx: &Connection) -> rusqlite::Result<()> {
     for row in &rows {
         tx.execute(
             "INSERT INTO deck_tags_merge (old_id, new_id) VALUES (?1, ?2)",
-            params![row.0, winner[&tag_name_key(&row.1)].0],
+            params![row.0, winner[&label_name_key(&row.1)].0],
         )?;
     }
 
@@ -2414,7 +2432,7 @@ pub fn migrate_single_file(conn: &Connection) -> rusqlite::Result<()> {
     }
     if v < 21 {
         let tx = conn.unchecked_transaction()?;
-        // **`deck_tags` stops being a deck's and becomes the app's.** [`DECK_TAG_GRAIN`] holds
+        // **`deck_tags` stops being a deck's and becomes the app's.** [`DECK_LABEL_GRAIN`] holds
         // the argument; [`globalise_tags`] is what it costs to carry out on a database that has
         // been filing labels per deck since v8.
         globalise_tags(&tx)?;
@@ -3272,11 +3290,20 @@ const COMBO_INDEXES_SQL: &str = "
 ///
 /// **Copied verbatim out of a migrated database's own `sqlite_master`, not retyped from the
 /// rungs**, which is why it reads oddly in places: `decks` carries its later columns as one
-/// long `ALTER TABLE` tail, and `deck_cards` and `deck_tags` wear the quotes a
+/// long `ALTER TABLE` tail, and `deck_cards`, `deck_labels` and `deck_audit` wear the quotes a
 /// `RENAME TO` left on their names. Every one of those artefacts is load-bearing here —
 /// `the_user_schema_is_byte_identical_to_what_the_ladder_builds` compares this against the
 /// ladder's answer string for string, and a tidied-up transcription would be a shape that
 /// merely looks the same.
+///
+/// **Two comments inside this DDL say `tag` and must go on saying it**, which reads as an
+/// oversight and is the opposite of one: `deck_cards`' *"deleting a tag must never delete a
+/// card"* is v8's own text and `deck_labels`' *"see `tag_name_key`"* is v21's, and v33 renamed
+/// the table and the column with `ALTER TABLE … RENAME`, which rewrites identifiers and never
+/// touches a comment. Correcting either word here is a red build with no other symptom — the
+/// stored text on every upgraded database still carries the old one. The frozen halves of the
+/// rungs that wrote them ([`globalise_tags`], the v8 step) are where the same words are frozen
+/// for the ordinary reason.
 ///
 /// **A `{schema}.` prefix does not survive into `sqlite_master`** — measured: SQLite
 /// re-renders the name token and stores the rest of the statement verbatim, so
@@ -3435,14 +3462,14 @@ CREATE TABLE {schema}.deck_categories (
                 updated_at INTEGER NOT NULL
              , origin TEXT NOT NULL DEFAULT 'user', sync_uid TEXT);
 
-CREATE TABLE {schema}.deck_audit (
+CREATE TABLE {schema}."deck_audit" (
                 id INTEGER PRIMARY KEY,
                 deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
                 at INTEGER NOT NULL,
                 variant TEXT NOT NULL DEFAULT 'live'
                     CHECK (variant IN ('live','theory')),
                 kind TEXT NOT NULL CHECK (kind IN
-                    ('add','remove','quantity','move','swap','tag','category','folder','deck')),
+                    ('add','remove','quantity','move','swap','label','category','folder','deck')),
                 -- Soft, like every card id in a user table, and nullable: a category rename
                 -- is about no card at all.
                 card_id TEXT,
@@ -3452,8 +3479,9 @@ CREATE TABLE {schema}.deck_audit (
                 -- table has to survive the day the wording changes.
                 payload TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(payload)),
                 -- Signed copies, for the day header's '+7 / -6' roll-up.
-                delta INTEGER NOT NULL DEFAULT 0
-             , sync_uid TEXT);
+                delta INTEGER NOT NULL DEFAULT 0,
+                sync_uid TEXT
+             );
 
 CREATE TABLE {schema}."deck_cards" (
                 id INTEGER PRIMARY KEY,
@@ -3471,7 +3499,7 @@ CREATE TABLE {schema}."deck_cards" (
                 lang TEXT NOT NULL DEFAULT 'en',
                 name TEXT NOT NULL,
                 -- SET NULL, not CASCADE: deleting a tag must never delete a card.
-                tag_id INTEGER REFERENCES deck_tags(id) ON DELETE SET NULL,
+                label_id INTEGER REFERENCES "deck_labels"(id) ON DELETE SET NULL,
                 quantity INTEGER NOT NULL CHECK (quantity > 0),
                 needs_review TEXT,
                 created_at INTEGER NOT NULL,
@@ -3542,7 +3570,7 @@ CREATE TABLE {schema}.wishlist_folders (
                 updated_at INTEGER NOT NULL
              , sync_uid TEXT, needs_review TEXT);
 
-CREATE TABLE {schema}."deck_tags" (
+CREATE TABLE {schema}."deck_labels" (
             id INTEGER PRIMARY KEY,
             name TEXT NOT NULL,
             -- The uniqueness grain, and never shown to anyone: see `tag_name_key`.
@@ -3704,7 +3732,7 @@ CREATE UNIQUE INDEX {schema}.idx_deck_categories_grain
 CREATE UNIQUE INDEX {schema}.idx_deck_categories_kind
                 ON deck_categories (deck_id, kind) WHERE kind <> 'main';
 
-CREATE UNIQUE INDEX {schema}.idx_deck_tags_grain ON deck_tags (name_key);
+CREATE UNIQUE INDEX {schema}.idx_deck_labels_grain ON deck_labels (name_key);
 
 CREATE INDEX {schema}.idx_wishlist_folder ON wishlist_entries (folder_id);
 
@@ -3744,7 +3772,7 @@ CREATE UNIQUE INDEX {schema}.idx_deck_categories_uid ON deck_categories (sync_ui
 
 CREATE UNIQUE INDEX {schema}.idx_deck_folders_uid ON deck_folders (sync_uid);
 
-CREATE UNIQUE INDEX {schema}.idx_deck_tags_uid ON deck_tags (sync_uid);
+CREATE UNIQUE INDEX {schema}.idx_deck_labels_uid ON deck_labels (sync_uid);
 
 CREATE UNIQUE INDEX {schema}.idx_decks_uid ON decks (sync_uid);
 
@@ -4501,8 +4529,9 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
         // in `ErrorLogPanel.tsx` is total and a new Rust arm is a type error there by design.
         //
         // The `RENAME TO` is what leaves the quotes on the name in `sqlite_master`, which
-        // [`USER_SCHEMA_SQL`] then has to wear too — `deck_cards` and `deck_tags` wear a pair
-        // each for the same reason.
+        // [`USER_SCHEMA_SQL`] then has to wear too — `deck_cards`, `deck_labels` and (since v33
+        // rebuilt it the same way this rebuilds `error_log`) `deck_audit` wear a pair each for
+        // the same reason.
         tx.execute_batch(
             "CREATE TABLE error_log_v29 (
                 id INTEGER PRIMARY KEY,
@@ -4643,6 +4672,159 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
         // Literal `32`, for the reason every step before it writes its own: this step is what
         // *makes* a database version 32.
         tx.execute_batch("PRAGMA main.user_version = 32;")?;
+        tx.commit()?;
+    }
+
+    // v33: the deck tag becomes the deck **label**, in the storage as well as in the words.
+    //
+    // A pure rename, and the whole of it is here because a name is not a thing half the app can
+    // change: `deck_tags` → `deck_labels`, `deck_cards.tag_id` → `label_id`, both indexes,
+    // `deck_audit`'s `kind` vocabulary and the `payload` key those rows carry. What TypeScript
+    // and the commands call it is a sibling's edit; what SQLite calls it is this rung, and the
+    // two have to land together or every deck-label read is `no such column`.
+    //
+    // **`ALTER TABLE … RENAME TO` rewrites the `REFERENCES` clause in `deck_cards`, and it does
+    // so whatever `PRAGMA foreign_keys` says.** The documented rule reads as though the rewrite
+    // were conditional on that pragma; driven on the bundled build (SQLite 3.53, `node:sqlite`
+    // 3.53.0 against `libsqlite3-sys` 0.38.1's 3.53.2, 2026-09-03) it is not — `foreign_keys` ON
+    // and OFF produce byte-identical `sqlite_master` here. That matters because the app always
+    // runs with the pragma ON ([`crate::db::open_write`]) and every test in this file walks the
+    // ladder over a bare `Connection::open_in_memory`, which is OFF: a rewrite that happened on
+    // only one of the two would be a dangling foreign key that no test could ever see.
+    //
+    // **What the rename cannot touch is a comment**, so `deck_cards` keeps v8's *"deleting a tag
+    // must never delete a card"* and `deck_labels` keeps v21's *"see `tag_name_key`"* — stored
+    // text, and [`USER_SCHEMA_SQL`] wears both words for the same reason it wears the quotes.
+    //
+    // **The capture triggers come off first.** They are persistent (`crate::sync_engine::capture`
+    // writes real `CREATE TRIGGER`s, not temp ones), and `ALTER TABLE` *rewrites* a trigger the
+    // way it rewrites a reference — so `sync_ins_deck_tags` would survive as a second, older
+    // trigger firing on `deck_labels` beside the `sync_ins_deck_labels` that
+    // [`crate::sync_engine::capture::install`] then creates, and every insert would emit two ops.
+    // Dropping them is free: `prepare_database` calls `install` immediately after this function,
+    // on every target, so the gap is closed before anything can write. The `deck_cards` three go
+    // for the narrower reason that `RENAME COLUMN` has to rewrite their `OF` lists and bodies,
+    // and a rebuild that is happening anyway is cheaper to reason about than a rewrite that is.
+    //
+    // **`deck_audit` is a full rebuild**, v29's `error_log` exactly: `kind` is inside a CHECK and
+    // SQLite has no `ALTER … CHECK`. The rows are rewritten on the way across — `'tag'` becomes
+    // `'label'`, and the `payload` key `"tag"` becomes `"label"` through JSON1, which is the same
+    // extension `json_valid` in this table's own CHECK depends on. Both halves of the kind write
+    // that key: the deck-level row (`{"action":…,"tag":…}`) and the card-level one
+    // (`{"tag":…,"previous":…}`), and `"tag": null` — a card that had its label taken off — is a
+    // value rather than an absence, so the guard is `json_type(…) IS NOT NULL` and not the value.
+    //
+    // **The trap is `deck_undo`, and it is [`globalise_tags`]' trap one table over.**
+    // `deck_undo.audit_id` is `REFERENCES deck_audit(id) ON DELETE CASCADE`, and `DROP TABLE` on
+    // a parent under `foreign_keys=ON` runs an implicit `DELETE FROM` that fires it — so the
+    // rebuild would silently empty the undo stack on every real launch while leaving it intact
+    // in every test, which is the worst shape a bug can have. Unlike v21 there is nothing here
+    // that *invalidates* a step: audit ids are carried across unchanged and no label id moves.
+    //
+    // **What does move is what the keys are called**, and that is the second half of the reason
+    // rather than a footnote to it. A step is JSON, `Op` is tagged `op` and every struct in it is
+    // `rename_all = "camelCase"`, so a step written before this rung says `{"op":"tags"}` and
+    // `tagId` where a v33 build writes `labels` and `labelId`. **Three `#[serde(alias)]`es in
+    // [`crate::deck_undo`] are what make keeping these rows mean anything** — `"tags"` on
+    // `Op::Labels`, `"tagId"` on `CardRow::label_id` and on `Carrier::label_id` — and
+    // `a_step_written_before_v33_still_reads_and_still_undoes` is the fence. Without them the
+    // `Op` half fails *loudly* (unknown variant) and the card half fails *silently*: serde reads
+    // a missing `Option` as `None`, so `tagId` would be discarded as unknown and every card
+    // restored **unlabelled** while Ctrl+Z reported success — and `tagId` is on every
+    // card-shaped step, a quantity change and a move between piles included, not only the label
+    // ones. That is the same shape as the CASCADE above, one layer up.
+    //
+    // So the rows are held by hand across the drop, and `deck_undo` is emptied explicitly first
+    // so that the two pragma settings arrive at the same state rather than at one duplicate-key
+    // failure.
+    if v < 33 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "-- Off before the rename, so nothing is rewritten onto the new names behind our
+             -- back. `capture::install` puts the current set back, right after this function.
+             DROP TRIGGER IF EXISTS sync_ins_deck_tags;
+             DROP TRIGGER IF EXISTS sync_upd_deck_tags;
+             DROP TRIGGER IF EXISTS sync_del_deck_tags;
+             DROP TRIGGER IF EXISTS sync_ins_deck_cards;
+             DROP TRIGGER IF EXISTS sync_upd_deck_cards;
+             DROP TRIGGER IF EXISTS sync_del_deck_cards;
+
+             -- The table and the column. The second of these is what carries the rename into
+             -- every `deck_cards` read in the crate; the first is what makes the `REFERENCES`
+             -- clause the second one keeps still point at something.
+             ALTER TABLE deck_tags RENAME TO deck_labels;
+             ALTER TABLE deck_cards RENAME COLUMN tag_id TO label_id;
+
+             -- SQLite has no `ALTER INDEX`. Both of these followed the table across the rename
+             -- under their old names, so they come down and go back up — after the rename, so
+             -- that the stored text reads `ON deck_labels` unquoted, which is what
+             -- [`USER_SCHEMA_SQL`] carries.
+             DROP INDEX IF EXISTS idx_deck_tags_grain;
+             DROP INDEX IF EXISTS idx_deck_tags_uid;
+             CREATE UNIQUE INDEX IF NOT EXISTS idx_deck_labels_grain ON deck_labels (name_key);
+             CREATE UNIQUE INDEX IF NOT EXISTS idx_deck_labels_uid ON deck_labels (sync_uid);",
+        )?;
+        tx.execute_batch(
+            "CREATE TABLE deck_audit_v33 (
+                id INTEGER PRIMARY KEY,
+                deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+                at INTEGER NOT NULL,
+                variant TEXT NOT NULL DEFAULT 'live'
+                    CHECK (variant IN ('live','theory')),
+                kind TEXT NOT NULL CHECK (kind IN
+                    ('add','remove','quantity','move','swap','label','category','folder','deck')),
+                -- Soft, like every card id in a user table, and nullable: a category rename
+                -- is about no card at all.
+                card_id TEXT,
+                card_name TEXT,
+                -- The facts the sentence is built from. Rust records WHAT happened; the
+                -- webview writes the sentence, because a sentence is domain logic and this
+                -- table has to survive the day the wording changes.
+                payload TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(payload)),
+                -- Signed copies, for the day header's '+7 / -6' roll-up.
+                delta INTEGER NOT NULL DEFAULT 0,
+                sync_uid TEXT
+             );
+
+             -- The kind and the payload key in one pass. `json_insert` then `json_remove`
+             -- rather than a text substitution: the value is a label NAME the reader typed,
+             -- and a reader who calls a label `\"tag\"` must not have their history rewritten.
+             INSERT INTO deck_audit_v33
+                 (id, deck_id, at, variant, kind, card_id, card_name, payload, delta, sync_uid)
+                 SELECT id, deck_id, at, variant,
+                        CASE WHEN kind = 'tag' THEN 'label' ELSE kind END,
+                        card_id, card_name,
+                        CASE WHEN kind = 'tag' AND json_type(payload, '$.tag') IS NOT NULL
+                             THEN json_remove(
+                                      json_insert(payload, '$.label',
+                                                  json_extract(payload, '$.tag')),
+                                      '$.tag')
+                             ELSE payload END,
+                        delta, sync_uid
+                   FROM deck_audit;
+
+             -- The undo stack, held by hand across the drop. See this rung's doc: the drop
+             -- below fires `deck_undo.audit_id`'s CASCADE under `foreign_keys=ON` and nothing
+             -- inside a transaction can turn that pragma off. The `DELETE` is what makes the
+             -- two pragma settings agree — with foreign keys off the cascade never fires and
+             -- the re-insert below would collide with the rows that are still there.
+             CREATE TABLE deck_undo_v33 AS SELECT * FROM deck_undo;
+             DELETE FROM deck_undo;
+
+             DROP TABLE deck_audit;
+             ALTER TABLE deck_audit_v33 RENAME TO deck_audit;
+
+             INSERT INTO deck_undo (audit_id, deck_id, step, undone_at)
+                 SELECT audit_id, deck_id, step, undone_at FROM deck_undo_v33;
+             DROP TABLE deck_undo_v33;
+
+             -- Both went down with the table. Frozen literals, [`globalise_tags`]' rule.
+             CREATE INDEX IF NOT EXISTS idx_deck_audit_deck ON deck_audit (deck_id, at DESC);
+             CREATE UNIQUE INDEX IF NOT EXISTS idx_deck_audit_uid ON deck_audit (sync_uid);",
+        )?;
+        // Literal `33`, for the reason every step before it writes its own: this step is what
+        // *makes* a database version 33.
+        tx.execute_batch("PRAGMA main.user_version = 33;")?;
         tx.commit()?;
     }
 
@@ -5629,7 +5811,7 @@ pub(crate) mod tests {
                 "deck_cards",
                 "deck_categories",
                 "deck_folders",
-                "deck_tags",
+                "deck_labels",
                 "deck_undo",
                 "decks",
                 "device_names",
@@ -5755,13 +5937,77 @@ pub(crate) mod tests {
     /// `idx_device_names_uid` with it.
     const UNDO_V31: &str = "DROP TABLE IF EXISTS device_names;";
 
+    /// And v33's rename, back to the tag the label used to be.
+    ///
+    /// **It runs first, before [`UNDO_V31`]**, for that constant's stated reason: a rewind walks
+    /// the ladder backwards. There is no `UNDO_V32` between them — v32 writes no shape at all,
+    /// which [`user_file_at_31`] explains — so this is the newest rewind on the user ladder and
+    /// every chain below starts with it.
+    ///
+    /// **It is owed for [`UNDO_V13`]'s loud reason twice over.** `ALTER TABLE deck_tags RENAME
+    /// TO deck_labels` on a database that already has `deck_labels` is `no such table`, and
+    /// `ALTER TABLE deck_cards RENAME COLUMN tag_id` on one that already says `label_id` is the
+    /// same failure a column over — so a fixture that skipped this would not quietly test
+    /// nothing, it would take every test in the chain down with an error about a table the test
+    /// is not about. `UNDO_V29`'s `deck_tags` lines are what make the ordering visible: they are
+    /// correct exactly because this ran first.
+    ///
+    /// **`deck_audit` is rebuilt narrow again**, which is [`UNDO_V29`]'s `error_log` argument
+    /// verbatim: a fixture below v33 that kept the widened CHECK would accept a `'label'` row
+    /// while claiming to be a version that never had one, and the rung above it would then be
+    /// tested against a shape no reader has. The rows are carried back the same way, `'label'`
+    /// to `'tag'` and the payload key with them.
+    ///
+    /// **No `deck_undo` carry, unlike the rung this reverses**, and the difference is the
+    /// fixtures rather than the pragma: every caller rewinds a database `create_user_schema`
+    /// built moments earlier, so `deck_undo` is empty and there is nothing for
+    /// `deck_audit`'s CASCADE to take. A fixture that seeds an undo step *before* rewinding
+    /// would need the dance the rung does; none does, and this note is the fence.
+    const UNDO_V33: &str = "ALTER TABLE deck_labels RENAME TO deck_tags;
+         ALTER TABLE deck_cards RENAME COLUMN label_id TO tag_id;
+         DROP INDEX IF EXISTS idx_deck_labels_grain;
+         DROP INDEX IF EXISTS idx_deck_labels_uid;
+         CREATE UNIQUE INDEX idx_deck_tags_grain ON deck_tags (name_key);
+         CREATE UNIQUE INDEX idx_deck_tags_uid ON deck_tags (sync_uid);
+         CREATE TABLE deck_audit_pre33 (
+             id INTEGER PRIMARY KEY,
+             deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+             at INTEGER NOT NULL,
+             variant TEXT NOT NULL DEFAULT 'live'
+                 CHECK (variant IN ('live','theory')),
+             kind TEXT NOT NULL CHECK (kind IN
+                 ('add','remove','quantity','move','swap','tag','category','folder','deck')),
+             card_id TEXT,
+             card_name TEXT,
+             payload TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(payload)),
+             delta INTEGER NOT NULL DEFAULT 0,
+             sync_uid TEXT
+         );
+         INSERT INTO deck_audit_pre33
+             (id, deck_id, at, variant, kind, card_id, card_name, payload, delta, sync_uid)
+             SELECT id, deck_id, at, variant,
+                    CASE WHEN kind = 'label' THEN 'tag' ELSE kind END,
+                    card_id, card_name,
+                    CASE WHEN kind = 'label' AND json_type(payload, '$.label') IS NOT NULL
+                         THEN json_remove(
+                                  json_insert(payload, '$.tag',
+                                              json_extract(payload, '$.label')),
+                                  '$.label')
+                         ELSE payload END,
+                    delta, sync_uid
+               FROM deck_audit;
+         DROP TABLE deck_audit;
+         ALTER TABLE deck_audit_pre33 RENAME TO deck_audit;
+         CREATE INDEX idx_deck_audit_deck ON deck_audit (deck_id, at DESC);
+         CREATE UNIQUE INDEX idx_deck_audit_uid ON deck_audit (sync_uid);";
+
     /// A user file at 28 — the shape every machine that upgraded before sync landed carries,
     /// and the only population the v29 rung is *for*.
     fn user_file_at_28() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V31} {UNDO_V30} {UNDO_V29} PRAGMA main.user_version = 28;"
+            "{UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} PRAGMA main.user_version = 28;"
         ))
         .unwrap();
         conn
@@ -5776,15 +6022,91 @@ pub(crate) mod tests {
     /// schema and renumbering is the whole of the difference. There is no `UNDO_V32` for the
     /// same reason, and no fixture below owes it a line.
     ///
+    /// **[`UNDO_V33`] is the line it does owe**, and it was added the day v33 landed: this
+    /// function said "head wearing the previous number" while head had moved a rung further,
+    /// and a v31 database that still carried `deck_labels` would meet `ALTER TABLE deck_tags
+    /// RENAME TO` on the way back up. That is the whole hazard the sentence above describes,
+    /// which v32 happened to be exempt from and v33 is not.
+    ///
     /// What makes a test built on this a real upgrade and not a fresh install is what the test
     /// seeds afterwards: a `decks` row saying `'custom'`, which no database created at head can
     /// ever come to hold, because nothing writes that value any more.
     fn user_file_at_31() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
-        conn.execute_batch("PRAGMA main.user_version = 31;")
+        conn.execute_batch(&format!("{UNDO_V33} PRAGMA main.user_version = 31;"))
             .unwrap();
         conn
+    }
+
+    /// A user file at 32 — the shape every machine carries the day before the deck tag becomes
+    /// the deck label, and the only population the v33 rung is *for*.
+    ///
+    /// The same rewind as [`user_file_at_31`] wearing the next number, because v32 writes no
+    /// shape: a v31 file and a v32 one are one schema, and the two fixtures differ only in
+    /// which rung the file is asking to be climbed.
+    ///
+    /// **`foreign_keys` is a parameter and no other fixture here takes one**, because v33 is
+    /// the first user rung whose correctness turns on the pragma: `DROP TABLE deck_audit`
+    /// fires `deck_undo.audit_id`'s CASCADE when it is on and does nothing when it is off, and
+    /// the app always runs it on ([`crate::db::open_write`]) while every other test in this
+    /// module runs it off. A rung tested only under the second is a rung tested on the
+    /// population that does not exist.
+    fn user_file_at_32(foreign_keys: bool) -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        // Before the schema and before any transaction: `PRAGMA foreign_keys` is a documented
+        // no-op inside one, which is `globalise_tags`' whole difficulty read from the setup.
+        conn.pragma_update(
+            None,
+            "foreign_keys",
+            if foreign_keys { "ON" } else { "OFF" },
+        )
+        .unwrap();
+        create_user_schema(&conn, "main").unwrap();
+        conn.execute_batch(&format!("{UNDO_V33} PRAGMA main.user_version = 32;"))
+            .unwrap();
+        conn
+    }
+
+    /// One deck, one category, one label, one card wearing it, one `tag` history row of each
+    /// half of that kind, and one undo step — the whole of what v33 has to carry across, in
+    /// the shape a v32 database holds it.
+    ///
+    /// The audit row ids are chosen so the undo step hangs off the row v33 does **not**
+    /// rewrite: an undo step that survived only because its audit row was untouched would
+    /// prove nothing, and this one's parent is `4`, an `add`.
+    fn seed_v32_labels(conn: &Connection) {
+        conn.execute_batch(
+            "INSERT INTO decks (id, name, format_key, created_at, updated_at)
+                 VALUES (1, 'Burn', 'modern', 0, 0);
+             INSERT INTO deck_categories (id, deck_id, name, kind, sort_order,
+                                          created_at, updated_at)
+                 VALUES (1, 1, 'Main deck', 'main', 0, 0, 0);
+             INSERT INTO deck_tags (id, name, name_key, color, created_at, updated_at)
+                 VALUES (7, 'Cut candidate', 'cut candidate', 'amber', 0, 0);
+             INSERT INTO deck_cards (id, deck_id, category_id, variant, card_id, set_code,
+                                     collector_number, lang, name, tag_id, quantity,
+                                     created_at, updated_at)
+                 VALUES (1, 1, 1, 'live', 'bolt', 'lea', '161', 'en', 'Lightning Bolt',
+                         7, 4, 0, 0);
+             INSERT INTO deck_audit (id, deck_id, at, variant, kind, card_id, card_name,
+                                     payload, delta)
+                 VALUES
+                 -- The label's own half: an `action` verb and no card.
+                 (1, 1, 10, 'live', 'tag', NULL, NULL,
+                  '{\"action\":\"create\",\"tag\":\"Cut candidate\",\"previous\":null}', 0),
+                 -- The card's half, applying it...
+                 (2, 1, 11, 'live', 'tag', 'bolt', 'Lightning Bolt',
+                  '{\"tag\":\"Cut candidate\",\"previous\":null}', 0),
+                 -- ...and taking it off, where `tag` is JSON null rather than absent.
+                 (3, 1, 12, 'live', 'tag', 'bolt', 'Lightning Bolt',
+                  '{\"tag\":null,\"previous\":\"Cut candidate\"}', 0),
+                 -- A kind the rung must not touch at all.
+                 (4, 1, 13, 'live', 'add', 'bolt', 'Lightning Bolt', '{\"quantity\":4}', 4);
+             INSERT INTO deck_undo (audit_id, deck_id, step, undone_at)
+                 VALUES (4, 1, '{\"undo\":[],\"redo\":[]}', NULL);",
+        )
+        .unwrap();
     }
 
     /// A user file at 27 — the shape [`crate::split::convert`] left on every machine that
@@ -5797,7 +6119,8 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} PRAGMA main.user_version = 27;"
+            "{UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} \
+             PRAGMA main.user_version = 27;"
         ))
         .unwrap();
         conn
@@ -6174,7 +6497,7 @@ pub(crate) mod tests {
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, USER_SCHEMA_VERSION);
-        assert_eq!(USER_SCHEMA_VERSION, 32);
+        assert_eq!(USER_SCHEMA_VERSION, 33);
     }
 
     /// **It is synced, and `sync_devices` still is not.** The whole point is that a NAME
@@ -6307,26 +6630,31 @@ pub(crate) mod tests {
         );
     }
 
-    /// The v31 fixture really sits one step below head, and that is the whole of what makes
-    /// the two tests above upgrade tests.
+    /// The v31 fixture really sits below the rung it exercises, and that is the whole of what
+    /// makes the two tests above upgrade tests.
     ///
     /// `the_v27_fixture_carries_none_of_v28`'s job, and it has to be done differently here: v32
     /// creates no table and no column, so there is nothing absent to look for and no shape to
-    /// compare. **The version is the only thing that distinguishes a v31 file from a v32 one**,
-    /// so it is asserted against [`USER_SCHEMA_VERSION`] rather than against the literal the
-    /// fixture itself writes — a fixture stamped at head would leave `migrate_user` with no
-    /// rung to run, the seeded row would keep whatever it was given, and both tests above would
-    /// pass while testing nothing.
+    /// compare. **The version is the only thing that distinguishes a v31 file from a v32 one**
+    /// — a fixture stamped at head would leave `migrate_user` with no rung to run, the seeded
+    /// row would keep whatever it was given, and both tests above would pass while testing
+    /// nothing.
+    ///
+    /// **It read `USER_SCHEMA_VERSION - 1` until v33, and that arithmetic was only ever true
+    /// while v32 was head.** "One below head" and "below the rung under test" are the same
+    /// sentence for exactly as long as no rung lands above the one a fixture is named for, and
+    /// v33 is the rung that made them different. The literal is the fixture's own number, and
+    /// the assertion that carries the argument is the `<` beside it.
     #[test]
-    fn the_v31_fixture_really_sits_one_step_below_head() {
+    fn the_v31_fixture_really_sits_below_the_rung_it_tests() {
         let conn = user_file_at_31();
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(
-            version,
-            USER_SCHEMA_VERSION - 1,
-            "one step below head, or the rung under test never runs"
+        assert_eq!(version, 31, "the fixture is a v31 file");
+        assert!(
+            version < USER_SCHEMA_VERSION,
+            "below head, or the rung under test never runs"
         );
     }
 
@@ -6370,6 +6698,230 @@ pub(crate) mod tests {
             version, USER_SCHEMA_VERSION,
             "every rung ran, and each stamped after the one below it"
         );
+    }
+
+    // ---- v33: the deck tag becomes the deck label -----------------------------------
+
+    /// The v32 fixture really carries none of v33, which is what makes the tests below
+    /// upgrade tests rather than assertions about head.
+    ///
+    /// `the_v27_fixture_carries_none_of_v28`'s job, and here it can be done the loud way:
+    /// v33 renames a table, a column and two indexes, so every one of them is a name that
+    /// must be present under its old spelling and absent under its new one. A rewind that
+    /// forgot a line would not fail quietly — the rung would die on `no such table` — but it
+    /// could also *half* work, and this is what says which half.
+    #[test]
+    fn the_v32_fixture_carries_none_of_v33() {
+        let conn = user_file_at_32(false);
+
+        assert_eq!(table_count(&conn, "deck_tags"), 1, "the old table");
+        assert_eq!(table_count(&conn, "deck_labels"), 0, "and not the new one");
+        assert_eq!(has_column(&conn, "deck_cards", "tag_id"), 1);
+        assert_eq!(has_column(&conn, "deck_cards", "label_id"), 0);
+        for (old, new) in [
+            ("idx_deck_tags_grain", "idx_deck_labels_grain"),
+            ("idx_deck_tags_uid", "idx_deck_labels_uid"),
+        ] {
+            let present = |name: &str| -> i64 {
+                conn.query_row(
+                    "SELECT count(*) FROM main.sqlite_master
+                      WHERE type = 'index' AND name = ?1",
+                    rusqlite::params![name],
+                    |r| r.get(0),
+                )
+                .unwrap()
+            };
+            assert_eq!(present(old), 1, "{old} must be there");
+            assert_eq!(present(new), 0, "{new} must not");
+        }
+
+        // And the audit CHECK is the narrow one: a v32 database has never had a `label` row.
+        let err = conn
+            .execute(
+                "INSERT INTO deck_audit (deck_id, at, variant, kind, payload, delta)
+                 VALUES (1, 0, 'live', 'label', '{}', 0)",
+                [],
+            )
+            .expect_err("a v32 `deck_audit` must refuse 'label'");
+        assert!(
+            matches!(&err, rusqlite::Error::SqliteFailure(e, _)
+                     if e.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_CHECK),
+            "'label' was refused, but not by the CHECK: {err}"
+        );
+    }
+
+    /// The rung itself: every name moves, and the cards keep the labels they were wearing.
+    ///
+    /// **The label on the card is the assertion that matters**, and it is the one
+    /// [`globalise_tags`] had to work for. `ALTER TABLE … RENAME COLUMN` rewrites a column in
+    /// place rather than rebuilding the table, so nothing here can fire
+    /// `ON DELETE SET NULL` — but that is a fact about *this* rung's method, not about the
+    /// problem, and a later rung that reached for a rebuild instead would silently unlabel
+    /// every card in every deck. So it is asserted rather than argued.
+    #[test]
+    fn the_v33_rung_renames_the_label_store_and_keeps_every_card_wearing_one() {
+        let conn = user_file_at_32(false);
+        seed_v32_labels(&conn);
+
+        migrate_user(&conn).unwrap();
+
+        assert_eq!(table_count(&conn, "deck_labels"), 1, "the table moved");
+        assert_eq!(table_count(&conn, "deck_tags"), 0, "and nothing was left");
+        assert_eq!(has_column(&conn, "deck_cards", "label_id"), 1);
+        assert_eq!(has_column(&conn, "deck_cards", "tag_id"), 0);
+
+        let indexes: Vec<String> = conn
+            .prepare(
+                "SELECT name FROM main.sqlite_master
+                  WHERE type = 'index' AND tbl_name = 'deck_labels' ORDER BY name",
+            )
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(indexes, ["idx_deck_labels_grain", "idx_deck_labels_uid"]);
+
+        // The row is the one it always was, id included — every `deck_cards.label_id` and
+        // every audit row that named it still resolves.
+        let (id, name, key): (i64, String, String) = conn
+            .query_row("SELECT id, name, name_key FROM deck_labels", [], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .unwrap();
+        assert_eq!(
+            (id, name.as_str(), key.as_str()),
+            (7, "Cut candidate", "cut candidate")
+        );
+
+        let worn: Option<i64> = conn
+            .query_row("SELECT label_id FROM deck_cards WHERE id = 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(worn, Some(7), "the card was unlabelled by the rename");
+    }
+
+    /// The history comes across saying `label`, in the `kind` and in the payload key alike.
+    ///
+    /// **Both halves of the kind are seeded, and the third row is the one worth having**:
+    /// `"tag": null` is how a row records a card that had its label *taken off*, so the value
+    /// is JSON null rather than the key being absent — and a rewrite that tested the value
+    /// instead of `json_type` would leave exactly those rows behind, saying `tag` in a
+    /// vocabulary that no longer has the word.
+    #[test]
+    fn the_v33_rung_rewrites_every_tag_row_into_a_label_one() {
+        let conn = user_file_at_32(false);
+        seed_v32_labels(&conn);
+
+        migrate_user(&conn).unwrap();
+
+        let rows: Vec<(i64, String, String)> = conn
+            .prepare("SELECT id, kind, payload FROM deck_audit ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(rows.len(), 4, "no history row was lost");
+
+        for (id, kind, _) in &rows[..3] {
+            assert_eq!(kind, "label", "row {id} still says tag");
+        }
+        assert_eq!(rows[3].1, "add", "a kind the rung had no business touching");
+        assert_eq!(
+            rows[3].2, r#"{"quantity":4}"#,
+            "and its payload is untouched"
+        );
+
+        let key = |id: i64, path: &str| -> Option<String> {
+            conn.query_row(
+                "SELECT json_extract(payload, ?2) FROM deck_audit WHERE id = ?1",
+                rusqlite::params![id, path],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(key(1, "$.label").as_deref(), Some("Cut candidate"));
+        assert_eq!(key(2, "$.label").as_deref(), Some("Cut candidate"));
+        // Row 3's label is JSON null: the key is there and the value is not.
+        assert_eq!(key(3, "$.label"), None);
+        for id in 1..=3 {
+            let present: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM deck_audit
+                      WHERE id = ?1 AND json_type(payload, '$.label') IS NOT NULL",
+                    rusqlite::params![id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(present, 1, "row {id} has no `label` key at all");
+            let stale: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM deck_audit
+                      WHERE id = ?1 AND json_type(payload, '$.tag') IS NOT NULL",
+                    rusqlite::params![id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(stale, 0, "row {id} kept its `tag` key");
+        }
+        // Everything else the payload carried is still there.
+        assert_eq!(key(1, "$.action").as_deref(), Some("create"));
+        assert_eq!(key(3, "$.previous").as_deref(), Some("Cut candidate"));
+    }
+
+    /// **The undo stack survives the `deck_audit` rebuild with `foreign_keys=ON`**, which is
+    /// the one thing about this rung that no test run with the pragma off can see.
+    ///
+    /// `deck_undo.audit_id` is `REFERENCES deck_audit(id) ON DELETE CASCADE`, and `DROP TABLE`
+    /// on a parent under that pragma runs an implicit `DELETE FROM` that fires it. The app
+    /// always runs with foreign keys on and every other test in this module runs with them
+    /// off, so a rung that lost the stack would be green here and destructive in the field —
+    /// [`globalise_tags`]' trap, one table over and with the opposite conclusion, because v33
+    /// invalidates no step and losing them would buy nothing.
+    ///
+    /// **Driven both ways from one body**, because the other half of the claim is that the two
+    /// pragma settings land on the same database: the rung deletes `deck_undo` explicitly
+    /// before the drop precisely so that the cascade that does not fire cannot leave a
+    /// duplicate for the re-insert to collide with.
+    #[test]
+    fn the_v33_rung_keeps_the_undo_stack_whatever_the_foreign_key_pragma_says() {
+        for foreign_keys in [true, false] {
+            let conn = user_file_at_32(foreign_keys);
+            seed_v32_labels(&conn);
+
+            migrate_user(&conn).unwrap();
+
+            let steps: Vec<(i64, i64, String)> = conn
+                .prepare("SELECT audit_id, deck_id, step FROM deck_undo ORDER BY audit_id")
+                .unwrap()
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            assert_eq!(
+                steps,
+                vec![(4, 1, r#"{"undo":[],"redo":[]}"#.to_owned())],
+                "the undo stack did not survive with foreign_keys={foreign_keys}"
+            );
+
+            // And the scaffolding is gone rather than left in a reader's database.
+            for table in ["deck_audit_v33", "deck_undo_v33"] {
+                assert_eq!(
+                    table_count(&conn, table),
+                    0,
+                    "{table} was left behind with foreign_keys={foreign_keys}"
+                );
+            }
+
+            let broken: i64 = conn
+                .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| {
+                    r.get(0)
+                })
+                .unwrap();
+            assert_eq!(broken, 0, "the rung left a dangling key");
+        }
     }
 
     /// A v28 file walks up keeping every row it had, and twice is the same as once.
@@ -6421,11 +6973,16 @@ pub(crate) mod tests {
     ///
     /// Point `MTG_SPLIT_FIXTURE` at a **copy** of a real `mtg.db` — the escape hatch
     /// [`crate::split::tests::the_real_database_converts_with_every_row_intact`] already uses —
-    /// and this converts it, winds the user file back to 28 with [`UNDO_V31`], [`UNDO_V30`]
-    /// and [`UNDO_V29`],
+    /// and this converts it, winds the user file back to 28 with [`UNDO_V33`], [`UNDO_V31`],
+    /// [`UNDO_V30`] and [`UNDO_V29`],
     /// and climbs the rungs over the reader's own rows. **Winding back is the whole trick**:
     /// `split::convert` stamps head, so a converted file never climbs anything and a test that
     /// only converted would prove nothing about the rung.
+    ///
+    /// **The counts are taken before the rewind and not after it**, which they were until v33:
+    /// [`SYNCED_TABLES`] names `deck_labels`, a rewound file calls that table `deck_tags`, and a
+    /// snapshot taken between the two would fail on the table it is most about. A rename moves
+    /// no rows, so the number is the same on either side of it.
     ///
     /// `cargo test --lib -- --ignored migrate_the_real_database --nocapture`
     #[test]
@@ -6440,10 +6997,6 @@ pub(crate) mod tests {
         crate::split::convert(dir.path()).unwrap();
 
         let conn = crate::db::open_write(dir.path()).unwrap();
-        conn.execute_batch(&format!(
-            "{UNDO_V31} {UNDO_V30} {UNDO_V29} PRAGMA main.user_version = 28;"
-        ))
-        .unwrap();
         let before: Vec<(String, i64)> = SYNCED_TABLES
             .iter()
             .map(|t| {
@@ -6453,6 +7006,10 @@ pub(crate) mod tests {
                 ((*t).to_owned(), n)
             })
             .collect();
+        conn.execute_batch(&format!(
+            "{UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} PRAGMA main.user_version = 28;"
+        ))
+        .unwrap();
 
         let started = std::time::Instant::now();
         migrate_user(&conn).unwrap();
@@ -6639,7 +7196,7 @@ pub(crate) mod tests {
     /// Every grain index in the DDL is now a **literal**, because a migration step is history
     /// and must keep building the index it built the day it shipped. The price is that two
     /// of the five grain constants — [`DECK_CATEGORY_GRAIN`] and
-    /// [`DECK_TAG_GRAIN`] — are read by no SQL at all any more, and a constant nothing reads
+    /// [`DECK_LABEL_GRAIN`] — are read by no SQL at all any more, and a constant nothing reads
     /// is a constant that can drift from the index it claims to describe without anything
     /// saying so. [`COLLECTION_GRAIN`], [`WISHLIST_GRAIN`] and [`DECK_CARD_GRAIN`] are held
     /// to their indexes by their `ON CONFLICT` targets (the test above, and every deck-card
@@ -6654,14 +7211,21 @@ pub(crate) mod tests {
     /// it; it left this list rather than losing its fence, since every
     /// `ON CONFLICT ({DECK_CARD_GRAIN})` in [`crate::deck`], [`crate::deck_meta`] and
     /// [`crate::deck_theory`] still fails loudly at the first write if it drifts.
+    ///
+    /// **Both ladders are walked, and that is v33's doing.** This climbed only
+    /// [`migrate_single_file`] while every index it names was built below
+    /// [`LEGACY_SINGLE_FILE_VERSION`] — v33 renames one of them, so "the head schema" is now
+    /// the two ladders in order, exactly as
+    /// `the_user_schema_is_byte_identical_to_what_the_ladder_builds` means it.
     #[test]
     fn every_plain_grain_constant_names_the_index_the_head_schema_carries() {
         let conn = Connection::open_in_memory().unwrap();
         migrate_single_file(&conn).unwrap();
+        migrate_user(&conn).unwrap();
 
         for (index, grain) in [
             ("idx_deck_categories_grain", DECK_CATEGORY_GRAIN),
-            ("idx_deck_tags_grain", DECK_TAG_GRAIN),
+            ("idx_deck_labels_grain", DECK_LABEL_GRAIN),
         ] {
             let mut stmt = conn
                 .prepare(&format!("PRAGMA index_info({index})"))

@@ -532,7 +532,7 @@ fn grouped_diff(
 /// hold. So this is a seed that can also top up — idempotent, never destructive, and returning
 /// how many rows it actually wrote.
 ///
-/// `tag_id` and `needs_review` travel with the copy. A label is the user's word about this card
+/// `label_id` and `needs_review` travel with the copy. A label is the user's word about this card
 /// in this deck and a plan inherits it; the flag says the printing left the card database, which
 /// is as true of the copy as of the original.
 ///
@@ -551,9 +551,9 @@ pub(crate) fn seed_from_live(tx: &Connection, deck_id: i64) -> Result<usize, Str
         // it was copied from.
         "INSERT INTO deck_cards
             (deck_id, category_id, variant, card_id, set_code, collector_number, lang, name,
-             tag_id, quantity, needs_review, finish, created_at, updated_at)
+             label_id, quantity, needs_review, finish, created_at, updated_at)
          SELECT deck_id, category_id, ?2, card_id, set_code, collector_number, lang, name,
-                tag_id, quantity, needs_review, finish, unixepoch(), unixepoch()
+                label_id, quantity, needs_review, finish, unixepoch(), unixepoch()
            FROM deck_cards
           WHERE deck_id = ?1 AND variant = ?3
          ON CONFLICT({grain}) DO NOTHING",

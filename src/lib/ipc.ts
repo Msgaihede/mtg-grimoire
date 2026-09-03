@@ -1582,40 +1582,40 @@ export interface DeckCategory {
 }
 
 /**
- * A tag's stored colour: `#rrggbb`, the colour itself.
+ * A label's stored colour: `#rrggbb`, the colour itself.
  *
  * **It was a palette token — `gold`, `ember`, … — until 2026-08-20**, and rows written before
- * then still hold one. `features/decks/tagColors.ts` owns both ends of that: what the picker
+ * then still hold one. `features/decks/labelColors.ts` owns both ends of that: what the picker
  * writes, and the six retired words it still reads. Nothing here changed shape, because nothing
  * here ever described one.
  *
  * **Deliberately `string` and not a union**, which is the one place this file declines to
- * narrow a Rust `String`. `deck_tags.color` carries no CHECK — the backend validates only
+ * narrow a Rust `String`. `deck_labels.color` carries no CHECK — the backend validates only
  * that it is non-empty, because picking what a colour *is* belongs to the webview
  * (CLAUDE.md's Rust/TS boundary). A union here would make a colour written by a newer build a
  * **type error at the read**, when the behaviour that was actually designed is a fallback:
- * `tagColorCss` answers the default for any string it cannot read, so an unknown colour is a
+ * `labelColorCss` answers the default for any string it cannot read, so an unknown colour is a
  * visible dot rather than a crash. The alias exists to say all of that at every field that
  * holds one.
  */
-export type TagColor = string;
+export type LabelColor = string;
 
 /**
- * One tag **in use in one list of one deck** — a label a card can carry, at most one per card.
+ * One label **in use in one list of one deck** — a mark a card can carry, at most one per card.
  *
- * The "at most one" is the `deck_cards.tag_id` column itself and nothing else — there is no
+ * The "at most one" is the `deck_cards.label_id` column itself and nothing else — there is no
  * join table and no constraint to relax if that ever changes.
  *
  * **It carried a `deckId` until schema v21 and no longer can**, because there is no such fact:
- * a tag is one app-wide row ({@link GlobalTag}) and what a deck has is not a list of tags but a
- * list of cards, some of which wear one. So this row is a tag *and* a fact about the deck and
- * variant it was read by — which is why `deckTagList` cannot answer a tag nothing is wearing,
- * and why `deckTagAll` exists.
+ * a label is one app-wide row ({@link GlobalLabel}) and what a deck has is not a list of labels
+ * but a list of cards, some of which wear one. So this row is a label *and* a fact about the
+ * deck and variant it was read by — which is why `deckLabelList` cannot answer a label nothing
+ * is wearing, and why `deckLabelAll` exists.
  */
-export interface DeckTag {
+export interface DeckLabel {
   id: number;
   name: string;
-  color: TagColor;
+  color: LabelColor;
   /** Copies carrying it, `sum(quantity)` like {@link DeckCategory.cardCount}, and scoped to
    *  the same deck **and variant** the read asked by. Never zero: a zero would mean the row is
    *  not in this list at all, and then it is not in the answer. */
@@ -1623,23 +1623,25 @@ export interface DeckTag {
 }
 
 /**
- * One tag as a thing in itself — every tag there is, worn or not.
+ * One label as a thing in itself — every label there is, worn or not.
  *
- * **The whole list is app-wide, and that is the feature rather than a convenience.** A tag was
- * per-deck until schema v21: `Cut candidate` in four decks was four rows, four colours and four
- * things to rename. It is one row now, so recolouring it recolours it everywhere, and a name a
- * tag already holds cannot be taken by a second one — compared with
- * {@link tagNameKey}'s normalisation, not by the word.
+ * **The whole list is app-wide, and that is the feature rather than a convenience.** A label
+ * was per-deck until schema v21: `Cut candidate` in four decks was four rows, four colours and
+ * four things to rename. It is one row now, so recolouring it recolours it everywhere, and a
+ * name a label already holds cannot be taken by a second one — compared with
+ * {@link labelNameKey}'s normalisation, not by the word.
  *
  * This replaced `TagSuggestion`, which had a name and a colour and no id, because picking one
- * *copied* it into the deck you were in. Picking one now **uses** that very tag.
+ * *copied* it into the deck you were in. Picking one now **uses** that very label. That name is
+ * left spelled as it was: the type was deleted at schema v21 and never carried the newer word,
+ * so `TagSuggestion` is what a reader digging for it in the history will actually find.
  */
-export interface GlobalTag {
+export interface GlobalLabel {
   id: number;
   name: string;
-  color: TagColor;
-  /** Copies wearing it anywhere — every deck, both variants. `0` for a tag nothing wears,
-   *  which is a row this list can answer and {@link DeckTag} never can. */
+  color: LabelColor;
+  /** Copies wearing it anywhere — every deck, both variants. `0` for a label nothing wears,
+   *  which is a row this list can answer and {@link DeckLabel} never can. */
   cardCount: number;
   /** Decks with at least one card wearing it — what a delete confirmation quotes, because the
    *  reach of that press is the app's and not the open deck's. */
@@ -2012,15 +2014,15 @@ export interface TheoryDiffRow {
  * `add`/`remove`/`quantity`/`move`/`swap` are about **one card**; `category` and `folder` are
  * about a pile or a filing cabinet; `deck` is about the deck itself.
  *
- * **`tag` is on both sides of that line**, which is the trap: one kind covers a card wearing
+ * **`label` is on both sides of that line**, which is the trap: one kind covers a card wearing
  * a label (`cardId` set) *and* the label itself being created, renamed or deleted (`cardId`
  * `null`, plus an `action` verb in the payload). They share a kind because they share a
- * subject. A renderer that could not see the verb reports "deleted the Cut candidate tag" as
- * "tagged as Cut candidate" — `auditText.ts` switches on `action` first for exactly that
+ * subject. A renderer that could not see the verb reports "deleted the Cut candidate label" as
+ * "labelled as Cut candidate" — `auditText.ts` switches on `action` first for exactly that
  * reason.
  */
 export type DeckAuditKind =
-  "add" | "remove" | "quantity" | "move" | "swap" | "tag" | "category" | "folder" | "deck";
+  "add" | "remove" | "quantity" | "move" | "swap" | "label" | "category" | "folder" | "deck";
 
 /**
  * One line of a deck's history — **what happened, not how to say it.**
@@ -2063,8 +2065,9 @@ export interface DeckAuditEntry {
    * list at all.** `deck_audit.variant` is `NOT NULL` with a CHECK over the two, so every row
    * has to carry *something*, and for four kinds that something is filler.
    *
-   * It is a fact for `add`/`remove`/`quantity`/`move`/`swap`, for the card-side half of `tag`,
-   * and for the one `deck` row that records a theory copy (which deliberately says `theory`).
+   * It is a fact for `add`/`remove`/`quantity`/`move`/`swap`, for the card-side half of
+   * `label`, and for the one `deck` row that records a theory copy (which deliberately says
+   * `theory`).
    * It is **filler for the rest**: a category write, a folder filing, a label being created or
    * deleted and every other `deck` field all record the column's DDL default, `live`, because
    * none of them is a fact about one variant's cards. `deck_audit::DECK_LEVEL` is literally
@@ -2080,7 +2083,8 @@ export interface DeckAuditEntry {
   /**
    * The card the change was about, **softly** referenced like every card id in a user table
    * — and `null` for the three kinds that are about no card at all (`category`, `folder`,
-   * `deck`), and for the half of `tag` that is about the label rather than a card wearing it.
+   * `deck`), and for the half of `label` that is about the label itself rather than a card
+   * wearing it.
    */
   cardId: string | null;
   /** Denormalized at write time, for the reason `deck_cards.name` is: a history line still
@@ -2103,7 +2107,7 @@ export interface DeckAuditEntry {
    * | `quantity` | `{ category, from, to }` |
    * | `move` | `{ from, to }` — category **names**, not ids |
    * | `swap` | `{ category, fromSet, toSet, folded }` |
-   * | `tag` | `{ tag, previous }` on a card; `{ action, tag, previous }` on the label |
+   * | `label` | `{ label, previous }` on a card; `{ action, label, previous }` on the label |
    * | `category` | `{ action, name, previousName, cards }` |
    * | `folder` | `{ action, folder }` — `folder` is `null` for the root |
    * | `deck` | `{ field, from, to }`, or `{ field: "theory", copied }` |
@@ -2133,7 +2137,7 @@ export interface DeckAuditEntry {
    * on a row that can move it by ninety-nine.
    *
    * Zero is the common case and means "this changed no card count", never "nothing
-   * happened" — a rename, a reorder, a move, a tag and a printing swap all record `0`.
+   * happened" — a rename, a reorder, a move, a labelling and a printing swap all record `0`.
    */
   delta: number;
 }
@@ -2653,12 +2657,12 @@ export interface DeckCard {
   /** Which of the deck's two lists this row is in. Every row of one read carries the same
    *  value; it is here so a caller holding a row can write it back. */
   variant: DeckVariant;
-  /** The one tag this row carries, resolved so a row can be drawn without a second lookup.
-   *  All three are `null` together — deleting a tag untags its cards rather than deleting
+  /** The one label this row carries, resolved so a row can be drawn without a second lookup.
+   *  All three are `null` together — deleting a label unlabels its cards rather than deleting
    *  them. */
-  tagId: number | null;
-  tagName: string | null;
-  tagColor: TagColor | null;
+  labelId: number | null;
+  labelName: string | null;
+  labelColor: LabelColor | null;
   quantity: number;
   /** Denormalized at write time, and the one name an orphaned row still has. */
   name: string;
@@ -2855,9 +2859,9 @@ export interface DeckDetail {
    * there are.
    */
   categories: DeckCategory[];
-  /** Every tag of the deck, alphabetically — the palette a row's label is picked from, which
+  /** Every label of the deck, alphabetically — the palette a row's mark is picked from, which
    *  exists whether or not any row is wearing it. */
-  tags: DeckTag[];
+  labels: DeckLabel[];
 }
 
 /**
@@ -3099,31 +3103,31 @@ export interface ImportItem {
    * The label to put on this card — Archidekt's `^Keeper,#4aab08^`, name half.
    *
    * **A name, not an id**, for {@link ImportItem.categoryName}'s reason exactly: an imported list
-   * names labels the app may not have yet. Found-or-created by `schema::tag_name_key`, which is
-   * `deck_tags.name_key`'s own grain — so `keeper` and `Keeper` are one row and the reader's
+   * names labels the app may not have yet. Found-or-created by `schema::label_name_key`, which is
+   * `deck_labels.name_key`'s own grain — so `keeper` and `Keeper` are one row and the reader's
    * capitals win, because the row that is already there is not renamed.
    *
    * **Absent is "say nothing about this card's label"**, and that is load-bearing rather than an
    * encoding detail. It is what an unticked label sends, and it is what makes a `merge` onto a
-   * card the reader already tagged by hand keep their tag: the write is
-   * `tag_id = coalesce(deck_cards.tag_id, excluded.tag_id)`, so a row that has one keeps it and a
-   * row that has none takes the file's.
+   * card the reader already labelled by hand keep their label: the write is
+   * `label_id = coalesce(deck_cards.label_id, excluded.label_id)`, so a row that has one keeps it
+   * and a row that has none takes the file's.
    */
-  tagName?: string;
+  labelName?: string;
   /**
    * That label's colour, `#rrggbb`. Ignored unless the import has to **make** the row.
    *
    * A name the app already knows keeps the colour the reader gave it — {@link ImportItem.inactive}'s
    * rule over a different table, and for the same reason: an import must not reach into a
-   * decision somebody made by hand. `deck_tags.color` has held hex rather than a palette token
-   * since 2026-08-20 (`features/decks/tagColors.ts`), which is what lets Archidekt's own colour be
-   * stored verbatim instead of snapped to a palette of six.
+   * decision somebody made by hand. `deck_labels.color` has held hex rather than a palette token
+   * since 2026-08-20 (`features/decks/labelColors.ts`), which is what lets Archidekt's own colour
+   * be stored verbatim instead of snapped to a palette of six.
    *
-   * Required by the backend whenever {@link ImportItem.tagName} is present, since `deck_tags.color`
-   * is `NOT NULL` and `valid_color` refuses a blank. `toImportItems` sends the two together or
-   * neither.
+   * Required by the backend whenever {@link ImportItem.labelName} is present, since
+   * `deck_labels.color` is `NOT NULL` and `valid_color` refuses a blank. `toImportItems` sends
+   * the two together or neither.
    */
-  tagColor?: string;
+  labelColor?: string;
 }
 
 /**
@@ -3143,14 +3147,14 @@ export interface ImportOutcome {
   categoriesCreated: number;
   /**
    * The labels the import had to make — {@link ImportOutcome.categoriesCreated}'s question over
-   * `deck_tags`, and a number the reader is owed for a sharper reason than that one: a tag is
+   * `deck_labels`, and a number the reader is owed for a sharper reason than that one: a label is
    * **app-wide**, so an import that invents three of them has changed a list every other deck of
    * theirs reads from.
    *
    * A name they already had costs nothing and is not counted, which is the same sentence the
    * picker on the import step prints before the press.
    */
-  tagsCreated: number;
+  labelsCreated: number;
 }
 
 /**
@@ -4668,8 +4672,8 @@ export const ipc = {
    * One deck and everything in it, or `null` when no deck has that id — a gallery that has
    * not refreshed since another view deleted it asks for a deck that is not there.
    *
-   * `variant` scopes the **cards, and the two counts on every category and tag row** — it is
-   * threaded into all three reads. What it does *not* scope is which categories and tags come
+   * `variant` scopes the **cards, and the two counts on every category and label row** — it is
+   * threaded into all three reads. What it does *not* scope is which categories and labels come
    * back: every one of them does either way, so switching between the two lists changes the
    * numbers in the column headings and never the columns themselves.
    *
@@ -4721,7 +4725,7 @@ export const ipc = {
    *  is `deckUpdate(id, { archived: true })`, and it is what a gallery's "remove" wants.
    *  An id that resolves to nothing is a success: the caller wanted that deck gone. */
   deckDelete: (id: number) => invoke<void>("deck_delete", { id }),
-  /** Copy the deck: its categories and tags as new rows, its cards in **both** variants
+  /** Copy the deck: its categories and labels as new rows, its cards in **both** variants
    *  remapped onto them — never `archived`. A copy is a draft. */
   deckDuplicate: (id: number) => invoke<DeckRow>("deck_duplicate", { id }),
   /**
@@ -4814,50 +4818,52 @@ export const ipc = {
    */
   deckCategoryDelete: (id: number, moveToCategoryId: number | null) =>
     invoke<void>("deck_category_delete", { id, moveToCategoryId }),
-  /** The tags **this deck's list is wearing**, most-used first — `deckGet` carries the same
+  /** The labels **this deck's list is wearing**, most-used first — `deckGet` carries the same
    *  list. `variant` scopes membership as well as the counts, because the live list and the
    *  theory list are treated as separate decks where labels are concerned. */
-  deckTagList: (deckId: number, variant: DeckVariant) =>
-    invoke<DeckTag[]>("deck_tag_list", { deckId, variant }),
+  deckLabelList: (deckId: number, variant: DeckVariant) =>
+    invoke<DeckLabel[]>("deck_label_list", { deckId, variant }),
   /** A new label, **app-wide**. `deckId` is where the reader was standing — it goes in the
-   *  history row and is not stored on the tag. Refuses a name any tag already holds; the
+   *  history row and is not stored on the label. Refuses a name any label already holds; the
    *  colour is `#rrggbb` and the backend checks only that it is non-empty — see
-   *  {@link TagColor}. */
-  deckTagCreate: (deckId: number, name: string, color: TagColor) =>
-    invoke<GlobalTag>("deck_tag_create", { deckId, name, color }),
+   *  {@link LabelColor}. */
+  deckLabelCreate: (deckId: number, name: string, color: LabelColor) =>
+    invoke<GlobalLabel>("deck_label_create", { deckId, name, color }),
   /** Rename **and** recolour, **in every deck at once**: one command, both arguments required.
    *  There is no patch shape here, so a caller changing one sends the other back unchanged. */
-  deckTagUpdate: (deckId: number, id: number, name: TagColor, color: TagColor) =>
-    invoke<GlobalTag>("deck_tag_update", { deckId, id, name, color }),
-  /** Delete a label **from the whole app**. It **untags its cards rather than deleting them**
-   *  — `deck_cards.tag_id` is `ON DELETE SET NULL` — in every deck wearing it, which is what
-   *  {@link GlobalTag.deckCount} exists for a confirm dialog to say first. */
-  deckTagDelete: (deckId: number, id: number) => invoke<void>("deck_tag_delete", { deckId, id }),
-  /** Take a label off **this deck's cards in one list**, leaving the tag itself alone —
+  deckLabelUpdate: (deckId: number, id: number, name: string, color: LabelColor) =>
+    invoke<GlobalLabel>("deck_label_update", { deckId, id, name, color }),
+  /** Delete a label **from the whole app**. It **unlabels its cards rather than deleting them**
+   *  — `deck_cards.label_id` is `ON DELETE SET NULL` — in every deck wearing it, which is what
+   *  {@link GlobalLabel.deckCount} exists for a confirm dialog to say first. */
+  deckLabelDelete: (deckId: number, id: number) =>
+    invoke<void>("deck_label_delete", { deckId, id }),
+  /** Take a label off **this deck's cards in one list**, leaving the label itself alone —
    *  the row-level act the app-wide list needed and the per-deck one never did. Answers how
    *  many rows lost it; zero is a success. */
-  deckTagRemoveFromDeck: (deckId: number, tagId: number, variant: DeckVariant) =>
-    invoke<number>("deck_tag_remove_from_deck", { deckId, tagId, variant }),
-  /** Every tag there is, most-used first — the only list that can answer a tag no card is
-   *  wearing. Takes no deck id at all; see {@link GlobalTag}. */
-  deckTagAll: () => invoke<GlobalTag[]>("deck_tag_all"),
+  deckLabelRemoveFromDeck: (deckId: number, labelId: number, variant: DeckVariant) =>
+    invoke<number>("deck_label_remove_from_deck", { deckId, labelId, variant }),
+  /** Every label there is, most-used first — the only list that can answer a label no card is
+   *  wearing. Takes no deck id at all; see {@link GlobalLabel}. */
+  deckLabelAll: () => invoke<GlobalLabel[]>("deck_label_all"),
   /**
-   * Put the one tag a deck card carries on it, or take it off with `tagId: null`.
+   * Put the one label a deck card carries on it, or take it off with `labelId: null`.
    *
-   * A **card** write wearing a tag command's name: it addresses the slot by the full grain
+   * A **card** write wearing a label command's name: it addresses the slot by the full grain
    * `(deckId, cardId, categoryId, variant)` like every other card write, and answers "that
    * card is not in this deck's category any more" for a row that has since moved, folded or
-   * been stepped to zero. A `tagId` belonging to another deck is refused before anything is
+   * been stepped to zero. A `labelId` belonging to another deck is refused before anything is
    * written.
    */
-  deckCardSetTag: (
+  deckCardSetLabel: (
     deckId: number,
     cardId: string,
     categoryId: number,
     variant: DeckVariant,
     finish: DeckFinish,
-    tagId: number | null,
-  ) => invoke<void>("deck_card_set_tag", { deckId, cardId, categoryId, variant, finish, tagId }),
+    labelId: number | null,
+  ) =>
+    invoke<void>("deck_card_set_label", { deckId, cardId, categoryId, variant, finish, labelId }),
   /** Every folder there is, flat — the tree is the reader's to build from `parentId`. No deck
    *  scoping, because a folder belongs to no deck: it files them. */
   deckFolderList: () => invoke<DeckFolder[]>("deck_folder_list"),

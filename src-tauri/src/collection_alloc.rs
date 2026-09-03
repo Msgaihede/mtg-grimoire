@@ -486,7 +486,7 @@ pub fn collection_to_deck(
     }
 
     // The conflict target is `DECK_CARD_GRAIN` verbatim — the same text the unique index was
-    // created from, [`crate::deck::add_card`]'s discipline. `tag_id` and `needs_review` are
+    // created from, [`crate::deck::add_card`]'s discipline. `label_id` and `needs_review` are
     // left alone: the row already there is the one the user labelled.
     //
     // **`RETURNING id` rather than `last_insert_rowid`**, and that is the whole of why the id is

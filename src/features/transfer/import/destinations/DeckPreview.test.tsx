@@ -35,7 +35,7 @@ const deckGet = vi.hoisted(() => vi.fn());
 const formatSpecs = vi.hoisted(() => vi.fn());
 const syncStatus = vi.hoisted(() => vi.fn());
 const collectionFolderList = vi.hoisted(() => vi.fn());
-const deckTagAll = vi.hoisted(() => vi.fn());
+const deckLabelAll = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -47,7 +47,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     formatSpecs,
     syncStatus,
     collectionFolderList,
-    deckTagAll,
+    deckLabelAll,
   },
 }));
 
@@ -141,7 +141,7 @@ const DECK: DeckRow = {
   updatedAt: 1_800_000_000,
 };
 
-const DETAIL: DeckDetail = { deck: DECK, cards: [] as DeckCard[], categories: [], tags: [] };
+const DETAIL: DeckDetail = { deck: DECK, cards: [] as DeckCard[], categories: [], labels: [] };
 
 /**
  * One row of the deck being imported into, filled in rather than cast — `ImportDialog.test.tsx`'s
@@ -162,9 +162,9 @@ function deckCard(over: Partial<DeckCard> & { quantity: number }): DeckCard {
     categoryActive: true,
     finish: null,
     variant: "live",
-    tagId: null,
-    tagName: null,
-    tagColor: null,
+    labelId: null,
+    labelName: null,
+    labelColor: null,
     name: "Sol Ring",
     setCode: "lea",
     setName: "Limited Edition Alpha",
@@ -201,7 +201,7 @@ const HOLDING: DeckDetail = {
   cards: [deckCard({ quantity: 40 }), deckCard({ id: 2, cardId: "bolt", quantity: 2 })],
 };
 
-const OUTCOME: ImportOutcome = { added: 3, removed: 0, categoriesCreated: 1, tagsCreated: 0 };
+const OUTCOME: ImportOutcome = { added: 3, removed: 0, categoriesCreated: 1, labelsCreated: 0 };
 const OWNED: ImportCommitOutcome = { added: 2, updated: 0, removed: 0 };
 
 const IDLE: SyncStatus = {
@@ -235,9 +235,9 @@ beforeEach(() => {
   formatSpecs.mockReset().mockResolvedValue([spec("commander")]);
   syncStatus.mockReset().mockResolvedValue(IDLE);
   collectionFolderList.mockReset().mockResolvedValue(FOLDERS);
-  // The app-wide tag list. Empty by default, so every label a list carries reads as new — the
-  // one case about an existing tag overrides it.
-  deckTagAll.mockReset().mockResolvedValue([]);
+  // The app-wide label list. Empty by default, so every label a list carries reads as new — the
+  // one case about an existing label overrides it.
+  deckLabelAll.mockReset().mockResolvedValue([]);
   onDone.mockReset();
   onBack.mockReset();
 });
@@ -390,11 +390,11 @@ describe("Add cards to collection, on a new deck", () => {
  * and `deck_import_commit`'s items.
  *
  * **Mounted in the real preview rather than on its own**, which is this file's own argument one
- * control over: `ImportTags` could be perfect and unreached, exactly as the collection box was
+ * control over: `ImportLabels` could be perfect and unreached, exactly as the collection box was
  * fully tested at the hook and completely unwired at the surface. What is under test here is
  * that a tick reaches the command.
  */
-describe("Archidekt tags", () => {
+describe("Archidekt labels", () => {
   /** Three labelled lines and one bare one — two distinct labels, and one of them on two copies
    *  so the count on the row is visibly copies. */
   const LABELLED = parseDecklist(
@@ -422,15 +422,15 @@ describe("Archidekt tags", () => {
   }
 
   /** The items the press sent — the only thing that decides what lands. */
-  const sentItems = () => deckImportCommit.mock.calls[0][3] as { tagName?: string }[];
+  const sentItems = () => deckImportCommit.mock.calls[0][3] as { labelName?: string }[];
 
   const MY_KEEPER = { id: 9, name: "KEEPER", color: "#d9b95c", cardCount: 4, deckCount: 2 };
 
   it("draws nothing at all for a list carrying no labels", () => {
     deckPreview();
-    expect(screen.queryByRole("heading", { name: "Tags" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Labels" })).toBeNull();
     // And makes no read either: a paste with no labels has no question to ask.
-    expect(deckTagAll).not.toHaveBeenCalled();
+    expect(deckLabelAll).not.toHaveBeenCalled();
   });
 
   it("offers one box per distinct label, ticked", async () => {
@@ -445,7 +445,7 @@ describe("Archidekt tags", () => {
     await userEvent.click(importButton());
 
     await waitFor(() => expect(deckImportCommit).toHaveBeenCalled());
-    expect(sentItems().map((i) => i.tagName)).toEqual(["Keeper", "Fence", undefined]);
+    expect(sentItems().map((i) => i.labelName)).toEqual(["Keeper", "Fence", undefined]);
   });
 
   it("drops a label the reader unticks and keeps the rest", async () => {
@@ -454,7 +454,7 @@ describe("Archidekt tags", () => {
     await userEvent.click(importButton());
 
     await waitFor(() => expect(deckImportCommit).toHaveBeenCalled());
-    expect(sentItems().map((i) => i.tagName)).toEqual([undefined, "Fence", undefined]);
+    expect(sentItems().map((i) => i.labelName)).toEqual([undefined, "Fence", undefined]);
   });
 
   it("still imports every card when every label is unticked", async () => {
@@ -465,7 +465,7 @@ describe("Archidekt tags", () => {
 
     await waitFor(() => expect(deckImportCommit).toHaveBeenCalled());
     expect(sentItems()).toHaveLength(3);
-    expect(sentItems().every((i) => i.tagName === undefined)).toBe(true);
+    expect(sentItems().every((i) => i.labelName === undefined)).toBe(true);
   });
 
   /**
@@ -473,36 +473,36 @@ describe("Archidekt tags", () => {
    * whole of "show what you'll actually get". Their capitals, not the file's.
    */
   it("draws an existing label as the reader spelled it, and says it is theirs", async () => {
-    deckTagAll.mockResolvedValue([MY_KEEPER]);
+    deckLabelAll.mockResolvedValue([MY_KEEPER]);
     labelledPreview();
 
-    // `KEEPER` and not the file's `Keeper` — matched through `tagNameKey`, which is what
+    // `KEEPER` and not the file's `Keeper` — matched through `labelNameKey`, which is what
     // `commit_import` matches on.
     await screen.findByRole("checkbox", { name: "KEEPER" });
     expect(screen.getByText("already yours")).toBeInTheDocument();
-    expect(screen.getByText("new tag")).toBeInTheDocument();
+    expect(screen.getByText("new label")).toBeInTheDocument();
   });
 
   /** The colour still rides along: whether to ignore it is `commit_import`'s decision, and
    *  nothing in the webview may make it on the backend's behalf. */
   it("sends the file's colour even for a label the reader already has", async () => {
-    deckTagAll.mockResolvedValue([MY_KEEPER]);
+    deckLabelAll.mockResolvedValue([MY_KEEPER]);
     labelledPreview();
     await screen.findByRole("checkbox", { name: "KEEPER" });
     await userEvent.click(importButton());
 
     await waitFor(() => expect(deckImportCommit).toHaveBeenCalled());
-    expect(sentItems()[0]).toMatchObject({ tagName: "Keeper", tagColor: "#4aab08" });
+    expect(sentItems()[0]).toMatchObject({ labelName: "Keeper", labelColor: "#4aab08" });
   });
 
-  it("says how many new tags landed when the import made some", async () => {
-    deckImportCommit.mockResolvedValue({ ...OUTCOME, tagsCreated: 2 });
+  it("says how many new labels landed when the import made some", async () => {
+    deckImportCommit.mockResolvedValue({ ...OUTCOME, labelsCreated: 2 });
     labelledPreview();
     await screen.findByRole("checkbox", { name: "Keeper" });
     await userEvent.click(importButton());
 
     await waitFor(() => expect(onDone).toHaveBeenCalled());
-    expect(onDone.mock.calls[0][0]).toBe("3 cards imported, 2 new tags.");
+    expect(onDone.mock.calls[0][0]).toBe("3 cards imported, 2 new labels.");
   });
 });
 

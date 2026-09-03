@@ -20,7 +20,7 @@ const deckClear = vi.hoisted(() => vi.fn());
 const deckMoveCard = vi.hoisted(() => vi.fn());
 const deckMissingToWishlist = vi.hoisted(() => vi.fn());
 const deckSwapPrinting = vi.hoisted(() => vi.fn());
-const deckCardSetTag = vi.hoisted(() => vi.fn());
+const deckCardSetLabel = vi.hoisted(() => vi.fn());
 const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
 const deckSetViewState = vi.hoisted(() => vi.fn());
 // **`collection_list` is mocked so that a test can assert it was _not_ called.** The deleted
@@ -41,7 +41,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckMoveCard,
     deckMissingToWishlist,
     deckSwapPrinting,
-    deckCardSetTag,
+    deckCardSetLabel,
     oracleTagsForPrintings,
     deckSetViewState,
     collectionList,
@@ -145,9 +145,9 @@ const BOLT: DeckCard = {
   categoryKind: MAIN.kind,
   categoryActive: MAIN.isActive,
   variant: "live",
-  tagId: null,
-  tagName: null,
-  tagColor: null,
+  labelId: null,
+  labelName: null,
+  labelColor: null,
   quantity: 4,
   name: "Lightning Bolt",
   setCode: "lea",
@@ -175,7 +175,7 @@ const BOLT: DeckCard = {
   ownedQuantity: 2,
 };
 
-const DETAIL: DeckDetail = { deck: DECK, cards: [BOLT], categories: [MAIN, SIDE, MAYBE], tags: [] };
+const DETAIL: DeckDetail = { deck: DECK, cards: [BOLT], categories: [MAIN, SIDE, MAYBE], labels: [] };
 
 let client: QueryClient;
 function wrapper({ children }: { children: ReactNode }) {
@@ -202,7 +202,7 @@ beforeEach(() => {
   deckMoveCard.mockReset().mockResolvedValue(undefined);
   deckMissingToWishlist.mockReset().mockResolvedValue(2);
   deckSwapPrinting.mockReset().mockResolvedValue({ folded: false, quantity: 4 });
-  deckCardSetTag.mockReset().mockResolvedValue(undefined);
+  deckCardSetLabel.mockReset().mockResolvedValue(undefined);
   // A database that has never fetched the taxonomy — every card answers "no tags", which is
   // the state the app ships in and files every add by its type line. The tests that are about
   // the tags say so themselves.
@@ -259,14 +259,14 @@ describe("useDeck", () => {
 
     await waitFor(() => expect(result.current.deck).toEqual(DECK));
     // `live` is the **default argument**, not a constant: a caller with no Live/Theory control
-    // gets the deck as it stands. The variant scopes the **cards** — the categories and tags
+    // gets the deck as it stands. The variant scopes the **cards** — the categories and labels
     // come back either way.
     expect(deckGet).toHaveBeenCalledWith(4, "live", "tcgplayer");
     expect(result.current.cards).toEqual([BOLT]);
     // Every category, including the two holding nothing: the editor's columns are this list
     // rather than the piles that happen to be full.
     expect(result.current.categories).toEqual([MAIN, SIDE, MAYBE]);
-    expect(result.current.tags).toEqual([]);
+    expect(result.current.labels).toEqual([]);
     expect(client.getQueryData(["decks", "detail", 4, "live", "tcgplayer"])).toEqual(DETAIL);
   });
 
@@ -498,7 +498,7 @@ describe("useDeck", () => {
     expect(result.current.deck).toBeNull();
     expect(result.current.cards).toEqual([]);
     expect(result.current.categories).toEqual([]);
-    expect(result.current.tags).toEqual([]);
+    expect(result.current.labels).toEqual([]);
   });
 
   /**
@@ -1176,22 +1176,22 @@ describe("useDeck", () => {
   });
 
   /**
-   * The one tag a deck card carries — a **card** write, addressed by the same slot as the
-   * stepper and the move, which is why it lives here rather than beside the tag CRUD in
+   * The one label a deck card carries — a **card** write, addressed by the same slot as the
+   * stepper and the move, which is why it lives here rather than beside the label CRUD in
    * `useDeckMeta`. The label is per-deck data; a card *wearing* one is a fact about a row.
    *
-   * `null` is not a second command: untagging is a write to a nullable column.
+   * `null` is not a second command: unlabelling is a write to a nullable column.
    */
-  it("tags and untags a card through the slot the row lives in", async () => {
+  it("labels and unlabels a card through the slot the row lives in", async () => {
     const { result } = renderHook(() => useDeck(4), { wrapper });
     await waitFor(() => expect(result.current.deck).toEqual(DECK));
     const invalidate = vi.spyOn(client, "invalidateQueries");
 
-    await result.current.setTag.mutateAsync({ cardId: "p1", categoryId: MAIN.id, finish: null, tagId: 8 });
-    expect(deckCardSetTag).toHaveBeenCalledWith(4, "p1", MAIN.id, "live", null, 8);
+    await result.current.setLabel.mutateAsync({ cardId: "p1", categoryId: MAIN.id, finish: null, labelId: 8 });
+    expect(deckCardSetLabel).toHaveBeenCalledWith(4, "p1", MAIN.id, "live", null, 8);
 
-    await result.current.setTag.mutateAsync({ cardId: "p1", categoryId: MAIN.id, finish: null, tagId: null });
-    expect(deckCardSetTag).toHaveBeenCalledWith(4, "p1", MAIN.id, "live", null, null);
+    await result.current.setLabel.mutateAsync({ cardId: "p1", categoryId: MAIN.id, finish: null, labelId: null });
+    expect(deckCardSetLabel).toHaveBeenCalledWith(4, "p1", MAIN.id, "live", null, null);
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
   });
 });

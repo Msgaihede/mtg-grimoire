@@ -184,7 +184,8 @@ function collectionEntry(
 }
 
 /** Two entries the collection surface can carry every field of — a foil, graded and altered
- *  Lightning Bolt and a played, tagged Sol Ring — via `fromCollectionRow`, the same adapter
+ *  Lightning Bolt and a played Sol Ring with the collection's own free-text tags on it — via
+ *  `fromCollectionRow`, the same adapter
  *  `CollectionPage` reads its export scope through. */
 const COLLECTION_CARDS: TransferCard[] = [
   fromCollectionRow(
@@ -442,14 +443,14 @@ export const Archidekt: Story = {
 };
 
 /**
- * The same pile with the reader's own **labels** on it — `deck_tags` rows, one per card.
+ * The same pile with the reader's own **labels** on it — `deck_labels` rows, one per card.
  *
  * Two of them, because one box is not a choice: the Bolt is a keeper and the Sol Ring is a cut
  * candidate, in the two colours the reader gave them.
  */
 const LABELLED_CARDS: TransferCard[] = [
-  transferCard({ ...CARDS[0], tagName: "Keeper", tagColor: "#4aab08" }),
-  transferCard({ ...CARDS[1], tagName: "Cut candidate", tagColor: "#d3202a" }),
+  transferCard({ ...CARDS[0], labelName: "Keeper", labelColor: "#4aab08" }),
+  transferCard({ ...CARDS[1], labelName: "Cut candidate", labelColor: "#d3202a" }),
 ];
 
 /**
@@ -459,7 +460,7 @@ const LABELLED_CARDS: TransferCard[] = [
  *
  * **It is on by default here and nowhere else.** Archidekt's other four optional fields are on
  * too: this format's defaults are everything Archidekt can say, and the caret group is something
- * Archidekt itself emits. The reader unticking Tag is what the box is for — a deck exported to
+ * Archidekt itself emits. The reader unticking Label is what the box is for — a deck exported to
  * share is often a deck whose private "cut candidate" notes should stay at home.
  *
  * **There is no colour checkbox on this format, and that is not an omission.** The colour rides
@@ -479,7 +480,7 @@ export const DeckLabels: Story = {
     );
 
     await userEvent.click(canvas.getByRole("radio", { name: "Archidekt" }));
-    await expect(canvas.getByRole("checkbox", { name: "Tag" })).toBeChecked();
+    await expect(canvas.getByRole("checkbox", { name: "Label" })).toBeChecked();
     await expand(canvasElement);
     await expect(preview(canvasElement)).toHaveTextContent(
       "Ramp 2x Lightning Bolt (2x2) 117 [Ramp] ^Keeper,#4aab08^ " +
@@ -488,7 +489,7 @@ export const DeckLabels: Story = {
 
     // Unticked, the lines are what they were before labels existed — the box is a real control
     // over the file rather than a decoration on the panel.
-    await userEvent.click(canvas.getByRole("checkbox", { name: "Tag" }));
+    await userEvent.click(canvas.getByRole("checkbox", { name: "Label" }));
     await expect(preview(canvasElement)).toHaveTextContent(
       "Ramp 2x Lightning Bolt (2x2) 117 [Ramp] 1x Sol Ring (c21) 263 [Ramp]",
     );

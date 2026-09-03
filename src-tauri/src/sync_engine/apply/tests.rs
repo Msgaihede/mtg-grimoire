@@ -331,15 +331,15 @@ fn a_delete_with_nothing_against_it_deletes() {
     assert_eq!(report.resurrected, 0);
 }
 
-/// **Two devices typing "Ramp" end with one `deck_tags` row.** `idx_deck_tags_grain` is
+/// **Two devices typing "Ramp" end with one `deck_labels` row.** `idx_deck_labels_grain` is
 /// `UNIQUE (name_key)`, so a second row is not a duplicate, it is a constraint failure at apply
-/// time — and the tag is one app-wide list since schema v21, so it genuinely is one label.
+/// time — and the labels are one app-wide list since schema v21, so it genuinely is one label.
 #[test]
-fn two_devices_typing_ramp_end_with_one_tag() {
+fn two_devices_typing_ramp_end_with_one_label() {
     let (a, b) = (paired("dev-a"), paired("dev-b"));
     for (c, name) in [(&a, "Ramp"), (&b, "ramp")] {
         c.execute(
-            "INSERT INTO deck_tags (name, name_key, color, created_at, updated_at)
+            "INSERT INTO deck_labels (name, name_key, color, created_at, updated_at)
              VALUES (?1, 'ramp', '#0f0', unixepoch(), unixepoch())",
             [name],
         )
@@ -350,14 +350,14 @@ fn two_devices_typing_ramp_end_with_one_tag() {
 
     for (who, c) in [("a", &a), ("b", &b)] {
         let n: i64 = c
-            .query_row("SELECT count(*) FROM deck_tags", [], |r| r.get(0))
+            .query_row("SELECT count(*) FROM deck_labels", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1, "{who} has two rows for one label");
     }
     let (ua, ub): (String, String) = (
-        a.query_row("SELECT sync_uid FROM deck_tags", [], |r| r.get(0))
+        a.query_row("SELECT sync_uid FROM deck_labels", [], |r| r.get(0))
             .unwrap(),
-        b.query_row("SELECT sync_uid FROM deck_tags", [], |r| r.get(0))
+        b.query_row("SELECT sync_uid FROM deck_labels", [], |r| r.get(0))
             .unwrap(),
     );
     assert_eq!(ua, ub);
@@ -823,22 +823,22 @@ fn a_deferred_op_holds_the_watermark_below_the_ops_that_follow_it() {
     )
     .unwrap();
     a.execute(
-        "INSERT INTO deck_tags (name, name_key, color, created_at, updated_at)
+        "INSERT INTO deck_labels (name, name_key, color, created_at, updated_at)
          VALUES ('Ramp', 'ramp', '#0f0', unixepoch(), unixepoch())",
         [],
     )
     .unwrap();
     let rest = since(&a, &mut ma);
 
-    // The deck stalls on a folder `b` has never heard of, and the tag behind it waits its turn
-    // even though nothing about the tag is unresolvable.
+    // The deck stalls on a folder `b` has never heard of, and the label behind it waits its
+    // turn even though nothing about the label is unresolvable.
     let report = apply(&b, &rest).unwrap();
     assert!(report.deferred > 0, "the deck should not have applied");
-    let tags: i64 = b
-        .query_row("SELECT count(*) FROM deck_tags", [], |r| r.get(0))
+    let labels: i64 = b
+        .query_row("SELECT count(*) FROM deck_labels", [], |r| r.get(0))
         .unwrap();
     assert_eq!(
-        tags, 0,
+        labels, 0,
         "the stream is stalled, so nothing behind the block may land"
     );
     let peers: i64 = b
@@ -853,14 +853,18 @@ fn a_deferred_op_holds_the_watermark_below_the_ops_that_follow_it() {
     apply(&b, &folder_ops).unwrap();
     let report = apply(&b, &rest).unwrap();
     assert_eq!(report.deferred, 0);
-    let (decks, tags): (i64, i64) = b
+    let (decks, labels): (i64, i64) = b
         .query_row(
-            "SELECT (SELECT count(*) FROM decks), (SELECT count(*) FROM deck_tags)",
+            "SELECT (SELECT count(*) FROM decks), (SELECT count(*) FROM deck_labels)",
             [],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
         .unwrap();
-    assert_eq!((decks, tags), (1, 1), "the whole stream lands once it can");
+    assert_eq!(
+        (decks, labels),
+        (1, 1),
+        "the whole stream lands once it can"
+    );
 }
 
 /// **`muted_tags` travels at all**, which it could not while its own primary key was on no
@@ -1346,8 +1350,8 @@ fn every_unique_index_on_a_synced_table_has_been_decided_about() {
             "deck_categories.idx_deck_categories_grain",
             // Partial: one Sideboard, Commander, Companion and Maybeboard per deck.
             "deck_categories.idx_deck_categories_kind",
-            // `DECK_TAG_GRAIN` — one app-wide list since v21.
-            "deck_tags.idx_deck_tags_grain",
+            // `DECK_LABEL_GRAIN` — one app-wide list since v21.
+            "deck_labels.idx_deck_labels_grain",
             // **The second of the two that are not a `CREATE INDEX` at all.** `device_names`
             // is `WITHOUT ROWID` on `device_id` (user schema v31), so its primary key IS the
             // table and SQLite reports it here under a generated name. It is the table's

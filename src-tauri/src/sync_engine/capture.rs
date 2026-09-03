@@ -216,9 +216,9 @@ pub const TABLES: [Spec; 12] = [
                 soft: false,
             },
             Parent {
-                key: "tag",
-                col: "tag_id",
-                table: "deck_tags",
+                key: "label",
+                col: "label_id",
+                table: "deck_labels",
                 absent: Absent::Null,
                 soft: false,
             },
@@ -254,7 +254,7 @@ pub const TABLES: [Spec; 12] = [
         append_only: false,
     },
     Spec {
-        table: "deck_tags",
+        table: "deck_labels",
         keys: &["id"],
         fields: &["name", "name_key", "color"],
         counters: &[],

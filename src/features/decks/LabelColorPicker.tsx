@@ -1,15 +1,15 @@
 /**
- * The control a tag's colour is chosen with, in the two densities the dialog needs.
+ * The control a label's colour is chosen with, in the two densities the dialog needs.
  *
- * **One picker, two frames.** {@link TagColorPanel} is the box that drops out of the "Add tag"
- * row; {@link TagColorRow} is the strip that opens inside a tag's own row, ruled off from it and
- * ending in a Done. What is inside them is the same three controls in the same order, and that is
- * the point: a reader who has learned to pick a colour once has learned it for both.
+ * **One picker, two frames.** {@link LabelColorPanel} is the box that drops out of the "Add label"
+ * row; {@link LabelColorRow} is the strip that opens inside a label's own row, ruled off from it
+ * and ending in a Done. What is inside them is the same three controls in the same order, and that
+ * is the point: a reader who has learned to pick a colour once has learned it for both.
  *
  * ## The three, and why each one is there
  *
  * **The wheel** is the platform's `input[type=color]`, which is what makes an arbitrary colour
- * reachable at all — see `tagColors.ts` for what changed in storage to allow it. It is the
+ * reachable at all — see `labelColors.ts` for what changed in storage to allow it. It is the
  * platform's dialog rather than a hand-rolled one on purpose: colour pickers are a solved control
  * with an eyedropper, a recent-colours row and OS-level accessibility that no in-app square
  * matches.
@@ -17,12 +17,12 @@
  * **The hex field** is the one a reader arrives at with a colour already in mind — from a
  * proxy-printing sheet, a playgroup's convention, a brand. It takes six digits or three, with or
  * without a `#`, and holds what is typed until it makes a colour: a field that snapped back on
- * every keystroke would be untypeable, so {@link normalizeTagColor} answering `null` mid-word is
+ * every keystroke would be untypeable, so {@link normalizeLabelColor} answering `null` mid-word is
  * a state this component sits in rather than an error it reports.
  *
  * **The six swatches** are the app's own identity deeps, one press each. They are the fast path
  * and the common answer, which is why they sit in both frames — the redesign drew them only in
- * the create box, and a reader recolouring an existing tag would then have had to reach the
+ * the create box, and a reader recolouring an existing label would then have had to reach the
  * sanctioned six through a wheel. The row is wide enough for them; there was no other reason to
  * leave them out.
  *
@@ -30,8 +30,8 @@
  *
  * **When a colour is written.** Both frames are controlled, and the caller holds the value —
  * because the wheel fires continuously while the OS dialog is being dragged, and a row that wrote
- * on every one of those would be a `deck_tag_update` per pixel of travel. The create form's value
- * is state that has not been written yet, and the row's is a draft its Done commits. Neither
+ * on every one of those would be a `deck_label_update` per pixel of travel. The create form's
+ * value is state that has not been written yet, and the row's is a draft its Done commits. Neither
  * decision belongs here.
  */
 import { useState, type JSX } from "react";
@@ -39,30 +39,30 @@ import { Palette } from "lucide-react";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FOCUS } from "@/lib/focus";
 import { cn } from "@/lib/utils";
-import { normalizeTagColor, TAG_COLORS, tagColorCss, tagColorHex } from "./tagColors";
+import { normalizeLabelColor, LABEL_COLORS, labelColorCss, labelColorHex } from "./labelColors";
 
-/** A tag's colour as a square of it. `aria-hidden`: the colour is never the only carrier of
- *  anything, and the tag's name is always beside it. */
-export function TagSwatch({ color, className }: { color: string | null; className?: string }) {
+/** A label's colour as a square of it. `aria-hidden`: the colour is never the only carrier of
+ *  anything, and the label's name is always beside it. */
+export function LabelSwatch({ color, className }: { color: string | null; className?: string }) {
   return (
     <span
       aria-hidden="true"
-      style={{ backgroundColor: tagColorCss(color) }}
+      style={{ backgroundColor: labelColorCss(color) }}
       className={cn("size-2.5 shrink-0 rounded-[2px]", className)}
     />
   );
 }
 
 /**
- * The "Add tag" row's colour control: an icon, the colour it is currently on, and nothing else.
+ * The "Add label" row's colour control: an icon, the colour it is currently on, and nothing else.
  *
  * A **trigger** rather than the picker itself, because the row it sits in is a name, a colour and
  * a submit on one line and a wheel with a hex field is not a thing that fits on it. `aria-expanded`
  * is what says the press opens something, and the swatch is what says what it is set to now — a
- * button that only said "Choose tag colour" would make the current colour unreadable until the
+ * button that only said "Choose label colour" would make the current colour unreadable until the
  * panel was open.
  */
-export function TagColorButton({
+export function LabelColorButton({
   color,
   open,
   onToggle,
@@ -77,8 +77,8 @@ export function TagColorButton({
       type="button"
       onClick={onToggle}
       aria-expanded={open}
-      aria-label="Choose tag colour"
-      {...tip("Choose tag colour", { describes: false })}
+      aria-label="Choose label colour"
+      {...tip("Choose label colour", { describes: false })}
       className={cn(
         "inline-flex h-8 shrink-0 items-center gap-[0.4375rem] rounded-md border border-border",
         "bg-surface px-2.5 text-dim transition-colors duration-150",
@@ -87,15 +87,15 @@ export function TagColorButton({
       )}
     >
       <Palette className="size-[0.9375rem]" aria-hidden="true" />
-      <TagSwatch color={color} className="size-3 rounded-[3px]" />
+      <LabelSwatch color={color} className="size-3 rounded-[3px]" />
     </button>
   );
 }
 
-/** The panel {@link TagColorButton} opens: the picker in a box of its own. It carries no margin
+/** The panel {@link LabelColorButton} opens: the picker in a box of its own. It carries no margin
  *  of its own — where it sits is the layout's question, and its two callers answer it
  *  differently. */
-export function TagColorPanel({
+export function LabelColorPanel({
   value,
   onChange,
 }: {
@@ -105,7 +105,7 @@ export function TagColorPanel({
   return (
     <div
       role="group"
-      aria-label="Tag colour"
+      aria-label="Label colour"
       className="flex items-center gap-3 rounded-lg border border-border bg-surface px-3 py-2.5"
     >
       <PickerControls value={value} onChange={onChange} wheel="size-[2.125rem]" />
@@ -114,15 +114,15 @@ export function TagColorPanel({
 }
 
 /**
- * The picker inside a tag's row: ruled off from the row above it, and ending in a Done.
+ * The picker inside a label's row: ruled off from the row above it, and ending in a Done.
  *
  * **Done is the write**, which is why this frame has a button and the create box does not. There
- * is nothing to press in the create form because "Add tag" is already the press that commits;
+ * is nothing to press in the create form because "Add label" is already the press that commits;
  * here the reader is editing a row that exists, so something has to say when the editing stopped.
  * It is the same control that opened the panel — the row's swatch — said a second time where the
  * reader's hands are.
  */
-export function TagColorRow({
+export function LabelColorRow({
   value,
   onChange,
   onDone,
@@ -134,7 +134,7 @@ export function TagColorRow({
   return (
     <div
       role="group"
-      aria-label="Tag colour"
+      aria-label="Label colour"
       className="mt-2 flex items-center gap-2.5 border-t border-border pt-2"
     >
       <PickerControls value={value} onChange={onChange} wheel="size-[1.875rem]" />
@@ -174,12 +174,12 @@ function PickerControls({
   onChange: (color: string) => void;
   wheel: string;
 }) {
-  const [text, setText] = useState(() => tagColorHex(value));
+  const [text, setText] = useState(() => labelColorHex(value));
   const tip = useTooltip();
 
   /** A colour chosen by anything that is not the hex field: the field follows it. */
   const set = (color: string) => {
-    setText(tagColorHex(color));
+    setText(labelColorHex(color));
     onChange(color);
   };
 
@@ -192,7 +192,7 @@ function PickerControls({
         type="color"
         value={value}
         onChange={(e) => set(e.target.value)}
-        aria-label="Tag colour picker"
+        aria-label="Label colour picker"
         className={cn(
           "shrink-0 cursor-pointer appearance-none border-0 bg-transparent p-0",
           "[&::-webkit-color-swatch-wrapper]:p-0",
@@ -204,11 +204,11 @@ function PickerControls({
       />
       <HexField text={text} onText={setText} onColor={onChange} />
       <div className="ml-auto flex shrink-0 gap-[0.3125rem]">
-        {TAG_COLORS.map((c) => (
+        {LABEL_COLORS.map((c) => (
           <button
             key={c.hex}
             type="button"
-            aria-pressed={tagColorCss(value) === c.hex}
+            aria-pressed={labelColorCss(value) === c.hex}
             aria-label={c.label}
             {...tip(c.label, { describes: false })}
             onClick={() => set(c.hex)}
@@ -216,7 +216,9 @@ function PickerControls({
             className={cn(
               "size-[1.125rem] rounded-[3px] border",
               "transition-colors duration-150 motion-reduce:transition-none",
-              tagColorCss(value) === c.hex ? "border-text" : "border-transparent hover:border-text",
+              labelColorCss(value) === c.hex
+                ? "border-text"
+                : "border-transparent hover:border-text",
               FOCUS,
             )}
           />
@@ -258,10 +260,10 @@ function HexField({
             .slice(0, 6)
             .toUpperCase();
           onText(next);
-          const color = normalizeTagColor(next);
+          const color = normalizeLabelColor(next);
           if (color) onColor(color);
         }}
-        aria-label="Tag colour hex"
+        aria-label="Label colour hex"
         maxLength={6}
         spellCheck={false}
         className={cn(

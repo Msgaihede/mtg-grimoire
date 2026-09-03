@@ -18,7 +18,7 @@ import { formatPrice } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
 import { cn } from "@/lib/utils";
-import { RuleBreakMark, TagDot, TheoryMatchMark } from "../CardMarks";
+import { LabelDot, RuleBreakMark, TheoryMatchMark } from "../CardMarks";
 import {
   DECK_CARD_VARIANT,
   deckCardBodyProps,
@@ -268,8 +268,8 @@ function GridGroup({
  * surface that had opted out.
  *
  * What stays this view's own is what a card *in a deck* says and a card in a wall does not: the
- * copy count, the reader's tag, the rule break, the landed flash and the stepper. They are laid
- * in the corners the wall leaves free — see the tile's body.
+ * copy count, the reader's label, the rule break, the landed flash and the stepper. They are
+ * laid in the corners the wall leaves free — see the tile's body.
  *
  * **No name line, and that is the app's existing answer rather than a new one.** A 150px card's
  * printed name is a few pixels tall — but `CardGrid`'s search wall already draws whole `grid`
@@ -325,9 +325,9 @@ function GridCard({
       // interpolated one emits no rule and the tile collapses to its content.
       //
       // The two variables beside it are the other half of that geometry: everything drawn *on* the
-      // card — the copy count, the tag, the rule break, the gem, the stepper — sizes itself against
-      // them rather than taking a prop, because each of those marks is also drawn in the table and
-      // text views, where nothing zooms. See `MARK_SCALE_VAR` in `lib/cardZoom.ts`.
+      // card — the copy count, the label, the rule break, the gem, the stepper — sizes itself
+      // against them rather than taking a prop, because each of those marks is also drawn in the
+      // table and text views, where nothing zooms. See `MARK_SCALE_VAR` in `lib/cardZoom.ts`.
       style={{ width: scaled(TILE_WIDTH, zoom), ...cardScaleVars(zoom) }}
       // The tile is the card's whole body, so a press on the chin under the card or on the
       // control bar over it — both siblings of the button rather than part of it — does not read
@@ -425,8 +425,8 @@ function GridCard({
               "gap-[calc(0.25rem*var(--mark-scale,1))]",
             )}
           >
-            {card.tagName !== null && <TagDot name={card.tagName} color={card.tagColor} />}
-            {/* The copy count, at the size it is on a card at 100% zoom. `TagDot` beside it reads
+            {card.labelName !== null && <LabelDot name={card.labelName} color={card.labelColor} />}
+            {/* The copy count, at the size it is on a card at 100% zoom. `LabelDot` beside it reads
                 the same variable from inside its own component; this one is the view's own chip,
                 so it says so here. */}
             <span

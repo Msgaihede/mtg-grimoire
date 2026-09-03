@@ -269,51 +269,51 @@ describe("auditSentence", () => {
     ).toBe("CMM → 3ED");
   });
 
-  it("says what a card was tagged, and what it was wearing before", () => {
-    expect(auditSentence(entry("tag", { tag: "Cut candidate", previous: null }))).toEqual({
-      text: "Tagged Sol Ring",
+  it("says what a card was labelled, and what it was wearing before", () => {
+    expect(auditSentence(entry("label", { label: "Cut candidate", previous: null }))).toEqual({
+      text: "Labelled Sol Ring",
       detail: "Cut candidate",
     });
-    expect(auditSentence(entry("tag", { tag: "Wincon", previous: "Cut candidate" }))).toEqual({
-      text: "Tagged Sol Ring",
+    expect(auditSentence(entry("label", { label: "Wincon", previous: "Cut candidate" }))).toEqual({
+      text: "Labelled Sol Ring",
       detail: "Cut candidate → Wincon",
     });
-    expect(auditSentence(entry("tag", { tag: null, previous: "Wincon" }))).toEqual({
-      text: "Untagged Sol Ring",
+    expect(auditSentence(entry("label", { label: null, previous: "Wincon" }))).toEqual({
+      text: "Unlabelled Sol Ring",
       detail: "was Wincon",
     });
   });
 
   /**
    * The same kind wears two different events, and `action` is what tells them apart. Without
-   * this branch, deleting the "Cut candidate" label renders as "Tagged a card" — a sentence
-   * about a card the row does not have, since a tag CRUD row names none.
+   * this branch, deleting the "Cut candidate" label renders as "Labelled a card" — a sentence
+   * about a card the row does not have, since a label CRUD row names none.
    */
-  it("says what happened to a tag itself, not to a card wearing it", () => {
-    const label = (payload: Record<string, unknown>) =>
-      auditSentence(entry("tag", payload, { cardId: null, cardName: null }));
+  it("says what happened to a label itself, not to a card wearing it", () => {
+    const labelEvent = (payload: Record<string, unknown>) =>
+      auditSentence(entry("label", payload, { cardId: null, cardName: null }));
 
-    expect(label({ action: "create", tag: "Cut candidate" })).toEqual({
-      text: "Created tag Cut candidate",
+    expect(labelEvent({ action: "create", label: "Cut candidate" })).toEqual({
+      text: "Created label Cut candidate",
       detail: null,
     });
-    expect(label({ action: "rename", tag: "Wincon", previous: "Win", cards: 4 })).toEqual({
-      text: "Renamed tag Win to Wincon",
+    expect(labelEvent({ action: "rename", label: "Wincon", previous: "Win", cards: 4 })).toEqual({
+      text: "Renamed label Win to Wincon",
       detail: "4 cards carry it",
     });
-    expect(label({ action: "recolour", tag: "Wincon", color: "moss" })).toEqual({
-      text: "Recoloured tag Wincon",
+    expect(labelEvent({ action: "recolour", label: "Wincon", color: "moss" })).toEqual({
+      text: "Recoloured label Wincon",
       detail: "moss",
     });
-    // Deleting a tag untags its cards rather than deleting them, which is the half of the
+    // Deleting a label unlabels its cards rather than deleting them, which is the half of the
     // sentence a reader would otherwise have to go and check.
-    expect(label({ action: "delete", tag: "Wincon", cards: 1 })).toEqual({
-      text: "Deleted tag Wincon",
-      detail: "1 card untagged",
+    expect(labelEvent({ action: "delete", label: "Wincon", cards: 1 })).toEqual({
+      text: "Deleted label Wincon",
+      detail: "1 card unlabelled",
     });
     // An action this build has never heard of still reads as a line of history.
-    expect(label({ action: "reticulate", tag: "Wincon" })).toEqual({
-      text: "Changed tag Wincon",
+    expect(labelEvent({ action: "reticulate", label: "Wincon" })).toEqual({
+      text: "Changed label Wincon",
       detail: null,
     });
   });
@@ -578,20 +578,20 @@ describe("auditSentence", () => {
 
   /**
    * The labels an import **made**, in the detail — news exactly when it is not zero, and
-   * app-wide news, since `deck_tags` has no `deck_id` since schema v21.
+   * app-wide news, since `deck_labels` has no `deck_id` since schema v21.
    *
-   * The zero arm and the absent arm are one branch on purpose: `tagsCreated` is written on every
-   * import row from 2026-08-24, so an absent key is a row from before that date and a list that
-   * carried no labels reads the same either way. Neither draws a detail.
+   * The zero arm and the absent arm are one branch on purpose: `labelsCreated` is written on
+   * every import row from 2026-08-24, so an absent key is a row from before that date and a list
+   * that carried no labels reads the same either way. Neither draws a detail.
    */
   it("says how many labels an import invented, and nothing when it invented none", () => {
     const imported = (payload: Record<string, unknown>) =>
       auditSentence(entry("add", { import: payload }, { cardId: null, cardName: null }));
     const base = { mode: "merge", lines: 105, cards: 117, categories: 9 };
 
-    expect(imported({ ...base, tagsCreated: 2 }).detail).toBe("2 new tags");
-    expect(imported({ ...base, tagsCreated: 1 }).detail).toBe("1 new tag");
-    expect(imported({ ...base, tagsCreated: 0 }).detail).toBeNull();
+    expect(imported({ ...base, labelsCreated: 2 }).detail).toBe("2 new labels");
+    expect(imported({ ...base, labelsCreated: 1 }).detail).toBe("1 new label");
+    expect(imported({ ...base, labelsCreated: 0 }).detail).toBeNull();
     // A row written before the field existed.
     expect(imported(base).detail).toBeNull();
   });

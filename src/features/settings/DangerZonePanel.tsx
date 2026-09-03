@@ -56,10 +56,10 @@ const ROWS: readonly Row[] = [
   {
     key: "decks",
     label: "Clear decks",
-    summary: "Every deck and folder, with its cards, piles, tags, cover and history.",
+    summary: "Every deck and folder, with its cards, piles, labels, cover and history.",
     warning: (
       <>
-        Deletes every deck and every folder — the cards in each deck, its piles, its tags, its
+        Deletes every deck and every folder — the cards in each deck, its piles, its labels, its
         cover picture and its whole edit history. Your collection and wishlist are kept. This
         cannot be undone.
       </>

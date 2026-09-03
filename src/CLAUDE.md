@@ -115,7 +115,7 @@ Every one of these has its measurement and its story in
   the confusion `CardMarks.tsx`'s four separations exist to prevent.
 - **A bare number laid _on_ a card is `components/CountTag`, and it draws that number with no
   `×`** — filled and cut off at a slant, since a square chip on art reads as something to press;
-  **grey unless something colours it**, so gold stays a thing a deck _tag_ means. It is
+  **grey unless something colours it**, so gold stays a thing a deck _label_ means. It is
   `aria-hidden` for `FoilOverlay`'s reason, so its `title` is the whole of what a pointer gets and
   the words belong to whatever names the card. **A count laid _beside_ a card keeps its `×`** —
   `OwnedBadge` in a caption, the search table's `×132 printings` — where the sign is what tells a
@@ -217,7 +217,7 @@ Every one of these has its measurement and its story in
   the deck editor's desk row measures **602px** at the app's own 1280×800 with the card pane
   docked, so a 384px docked column leaves the deck **202px** — one stack column — and it is
   subtracted from the work whether or not it is being used. A surface that is _consulted_
-  (history, categories, tags, deck settings) is therefore a
+  (history, categories, labels, deck settings) is therefore a
   **`src/components/Dialog.tsx`**: `LAYER.overlay`, a scrim, `aria-modal`, `trapTab`, and
   the `"inner"` Escape rung registered **on the open flag** rather than on the panel's mount,
   because the panel outlives the flag by the length of its fade. **A new modal in the deck
@@ -490,7 +490,7 @@ Every one of these has its measurement and its story in
   two inherited custom properties** — `--mark-scale` and `--control-scale`, published by
   `cardScaleVars(zoom)` in `src/lib/cardZoom.ts` and set on exactly three elements (`CardGrid`'s
   tile, `GridView`'s tile, `CardStack`'s card). **A variable rather than a prop, because the marks
-  are shared**: `RarityGem`, `OwnedBadge`, `FinishMark`, `TagDot`, `CountTag` and `QuantityStepper`
+  are shared**: `RarityGem`, `OwnedBadge`, `FinishMark`, `LabelDot`, `CountTag` and `QuantityStepper`
   are each drawn on a card face _and_ in one of the three tables or the card pane, so a prop would
   be threaded to every one and defaulted at the ones that must hold still — "does this scale?"
   answered fifteen times by whoever adds the newest call site. A mark reads `var(--mark-scale, 1)`
