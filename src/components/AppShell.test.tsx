@@ -259,7 +259,12 @@ function stubWindowWidth(narrow: boolean) {
 beforeEach(() => {
   // The open deck decides whether the Decks entry can take a card, so it is reset with the
   // view — a deck left open by one test would make the next one's inert case a lie.
-  useAppStore.setState({ activeView: "search", openDeckId: null });
+  //
+  // `keyMapOpen` joins them for a sharper version of the same reason: the shell's `F1` binding
+  // toggles it, so the two cases below that press the key would otherwise hand the next test a
+  // caption row with a panel hanging off it — and `getAllByRole("button")` inside the title bar
+  // is exactly the kind of assertion that would then start counting somebody else's rows.
+  useAppStore.setState({ activeView: "search", openDeckId: null, keyMapOpen: false });
   queryClient.clear();
   invalidate.mockClear();
   syncStatus.mockReset().mockResolvedValue(status());
@@ -1602,5 +1607,90 @@ describe("the shell's choice of navigation", () => {
     expect(await screen.findByRole("button", { name: /refresh/i })).toHaveTextContent(
       "Refresh data",
     );
+  });
+});
+
+/**
+ * The two chords the shell itself binds — the only keyboard bindings in this app that are live
+ * whatever is on screen.
+ *
+ * Both are asserted through the **store** rather than only through what is drawn, and that is
+ * deliberate on either side: `activeView` is what the six destinations, the ribbon's title and
+ * `App`'s view swap all read, so it is the fact the binding is actually for; and `keyMapOpen`'s
+ * panel is drawn by `TitleBar`, whose own file tests it — a shell test that went looking for the
+ * panel would be asserting somebody else's component through this one. The first case checks the
+ * heading as well, because a view that changed in the store and nowhere on screen is the failure
+ * a store-only assertion cannot see.
+ */
+describe("the shell's keyboard bindings", () => {
+  it("switches view on Ctrl+3", async () => {
+    const user = userEvent.setup();
+    render(
+      <AppShell update={noUpdate}>
+        <div>content</div>
+      </AppShell>,
+    );
+
+    await user.keyboard("{Control>}3{/Control}");
+
+    // Decks and not something else, which is the whole of what "by index" buys: the third chord
+    // activates the third entry in `NAV`, so the rail's order is the binding rather than a list
+    // of six ids restated in the handler. Written out as the word a reader would say rather
+    // than as `NAV[2].id`, per the rule that an assertion must not read its own constant.
+    expect(useAppStore.getState().activeView).toBe("decks");
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Decks");
+  });
+
+  it("does not switch view while a modal is open", async () => {
+    const user = userEvent.setup();
+    render(
+      <AppShell update={noUpdate}>
+        {/* `Dialog` is the one modal chrome in this app and always sets this attribute; what the
+            shell's guard actually asks is the document, so standing one in is the honest fixture
+            and needs none of `Dialog`'s scrim, focus trap or portal. */}
+        <div role="dialog" aria-modal="true">
+          content
+        </div>
+      </AppShell>,
+    );
+
+    await user.keyboard("{Control>}3{/Control}");
+
+    // Still where it started. A dialog is drawn over whatever asked for it, so a view that
+    // switched underneath would leave it sitting on a page it has no relationship to.
+    expect(useAppStore.getState().activeView).toBe("search");
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Search");
+  });
+
+  it("opens the keyboard map on F1", async () => {
+    const user = userEvent.setup();
+    render(
+      <AppShell update={noUpdate}>
+        <div>content</div>
+      </AppShell>,
+    );
+
+    await user.keyboard("{F1}");
+
+    expect(useAppStore.getState().keyMapOpen).toBe(true);
+  });
+
+  it("closes the keyboard map on a second F1", async () => {
+    const user = userEvent.setup();
+    render(
+      <AppShell update={noUpdate}>
+        <div>content</div>
+      </AppShell>,
+    );
+
+    // The first press is asserted here as well as in the case above, and it is not a duplicate:
+    // it is what stops this test passing on a binding that does nothing at all. What only this
+    // case can catch is a handler that *sets* rather than toggles — the flag would arrive at
+    // `true` on both presses, and every assertion but the last would still be green.
+    await user.keyboard("{F1}");
+    expect(useAppStore.getState().keyMapOpen).toBe(true);
+
+    await user.keyboard("{F1}");
+    expect(useAppStore.getState().keyMapOpen).toBe(false);
   });
 });
