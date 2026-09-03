@@ -203,6 +203,24 @@ export interface ExportPrefs {
 interface AppState {
   activeView: ViewId;
   setActiveView: (view: ViewId) => void;
+  /**
+   * Whether the keyboard map is showing.
+   *
+   * **Here because its two halves are in different components.** `F1` is bound in `AppShell`'s
+   * one `keydown` effect — the shortcut is live wherever the caret is, so it cannot belong to
+   * the thing it opens — while the panel it opens is drawn by `TitleBar`, which is the shell's
+   * child rather than the effect's. A `useState` in either is unreachable from the other, and
+   * lifting it to the one component they share is this store with a prop drilled through the
+   * caption row: `AppShell` has no other reason to hold the flag, and would be passing it
+   * straight back down.
+   *
+   * **In memory only, like every other field here**, and it opens `false` on every launch for a
+   * sharper reason than most of them: a panel that answers "what can I press *here*" is asked
+   * and then dismissed, so a window that came back with it up would be remembering an answer
+   * rather than a preference.
+   */
+  keyMapOpen: boolean;
+  setKeyMapOpen: (open: boolean) => void;
   searchView: SearchView;
   setSearchView: (view: SearchView) => void;
   /** How the collection is laid out. Separate from `searchView` on purpose — the search is
@@ -938,6 +956,14 @@ export const useAppStore = create<AppState>((set) => ({
         returnToDeckId: null,
       };
     }),
+  // Closed on launch, and deliberately not cleared by `setActiveView` above the way the card
+  // pane and the open deck are: those two are *about* the view that is going away, while this
+  // panel's whole subject is the view being arrived at. A reader who pressed `Ctrl+3` with the
+  // map up is looking at the map to find out what `Ctrl+3` did, and shutting it would take the
+  // answer away in the same frame it became true. See the interface for why the flag is in the
+  // store at all rather than in either of the two components that use it.
+  keyMapOpen: false,
+  setKeyMapOpen: (keyMapOpen) => set({ keyMapOpen }),
   // Art by default: this is a card app, and the table is the view you switch to when you
   // are comparing prices rather than looking at cards.
   //
