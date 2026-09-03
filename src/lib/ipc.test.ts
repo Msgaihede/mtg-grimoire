@@ -822,22 +822,22 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
-   * The six tag commands, and the two that break the module's own pattern.
+   * The seven label commands, and the two that break the module's own pattern.
    *
-   * `deck_tag_suggestions` takes **no deck id at all** — the palette is a property of the
-   * app's whole history rather than of one deck — so an argument object here is a
-   * deserialization error, `prewarm_collection`'s trap again. And `deck_card_set_tag` is a
-   * *card* write wearing a tag command's name: it addresses the slot by the full grain, like
-   * every other card write, and not by the tag.
+   * `deck_label_all` takes **no deck id at all** — the palette is a property of the app's whole
+   * history rather than of one deck — so an argument object here is a deserialization error,
+   * `prewarm_collection`'s trap again. And `deck_card_set_label` is a *card* write wearing a
+   * label command's name: it addresses the slot by the full grain, like every other card write,
+   * and not by the label.
    */
-  it("sends every tag command under the name its command declares", async () => {
+  it("sends every label command under the name its command declares", async () => {
     invoke.mockResolvedValue([]);
-    await ipc.deckTagList(4, "live");
-    expect(invoke).toHaveBeenCalledWith("deck_tag_list", { deckId: 4, variant: "live" });
+    await ipc.deckLabelList(4, "live");
+    expect(invoke).toHaveBeenCalledWith("deck_label_list", { deckId: 4, variant: "live" });
 
     invoke.mockResolvedValue({ id: 3 });
-    await ipc.deckTagCreate(4, "Cut candidate", "ember");
-    expect(invoke).toHaveBeenCalledWith("deck_tag_create", {
+    await ipc.deckLabelCreate(4, "Cut candidate", "ember");
+    expect(invoke).toHaveBeenCalledWith("deck_label_create", {
       deckId: 4,
       name: "Cut candidate",
       color: "ember",
@@ -846,8 +846,8 @@ describe("ipc argument names match the Rust command signatures", () => {
     // One command for the rename **and** the recolour, and both are required: there is no
     // patch shape here, so a caller changing one sends the other back unchanged. `deckId` is
     // where the reader was standing — the write itself is app-wide.
-    await ipc.deckTagUpdate(4, 3, "Cut", "moss");
-    expect(invoke).toHaveBeenCalledWith("deck_tag_update", {
+    await ipc.deckLabelUpdate(4, 3, "Cut", "moss");
+    expect(invoke).toHaveBeenCalledWith("deck_label_update", {
       deckId: 4,
       id: 3,
       name: "Cut",
@@ -855,46 +855,46 @@ describe("ipc argument names match the Rust command signatures", () => {
     });
 
     invoke.mockResolvedValue(undefined);
-    await ipc.deckTagDelete(4, 3);
-    expect(invoke).toHaveBeenCalledWith("deck_tag_delete", { deckId: 4, id: 3 });
+    await ipc.deckLabelDelete(4, 3);
+    expect(invoke).toHaveBeenCalledWith("deck_label_delete", { deckId: 4, id: 3 });
 
     // The other destructive one, and the distinction the app-wide list needed: this takes the
-    // label off one deck's one list and leaves the tag standing.
+    // label off one deck's one list and leaves the label standing.
     invoke.mockResolvedValue(2);
-    expect(await ipc.deckTagRemoveFromDeck(4, 3, "theory")).toBe(2);
-    expect(invoke).toHaveBeenCalledWith("deck_tag_remove_from_deck", {
+    expect(await ipc.deckLabelRemoveFromDeck(4, 3, "theory")).toBe(2);
+    expect(invoke).toHaveBeenCalledWith("deck_label_remove_from_deck", {
       deckId: 4,
-      tagId: 3,
+      labelId: 3,
       variant: "theory",
     });
 
     const every = [{ id: 3, name: "Cut candidate", color: "ember", cardCount: 9, deckCount: 2 }];
     invoke.mockResolvedValue(every);
-    const palette = await ipc.deckTagAll();
-    expect(invoke).toHaveBeenCalledWith("deck_tag_all");
+    const palette = await ipc.deckLabelAll();
+    expect(invoke).toHaveBeenCalledWith("deck_label_all");
     expect(palette).toEqual(every);
 
     invoke.mockResolvedValue(undefined);
-    await ipc.deckCardSetTag(4, "p1", 7, "live", null, 3);
-    expect(invoke).toHaveBeenCalledWith("deck_card_set_tag", {
+    await ipc.deckCardSetLabel(4, "p1", 7, "live", null, 3);
+    expect(invoke).toHaveBeenCalledWith("deck_card_set_label", {
       deckId: 4,
       cardId: "p1",
       categoryId: 7,
       variant: "live",
       finish: null,
-      tagId: 3,
+      labelId: 3,
     });
 
-    // Untagging is the same command with `null`, not a second one — `deck_cards.tag_id` is a
-    // nullable column and clearing it is a write to it.
-    await ipc.deckCardSetTag(4, "p1", 7, "live", null, null);
-    expect(invoke).toHaveBeenCalledWith("deck_card_set_tag", {
+    // Unlabelling is the same command with `null`, not a second one — `deck_cards.label_id` is
+    // a nullable column and clearing it is a write to it.
+    await ipc.deckCardSetLabel(4, "p1", 7, "live", null, null);
+    expect(invoke).toHaveBeenCalledWith("deck_card_set_label", {
       deckId: 4,
       cardId: "p1",
       categoryId: 7,
       variant: "live",
       finish: null,
-      tagId: null,
+      labelId: null,
     });
   });
 

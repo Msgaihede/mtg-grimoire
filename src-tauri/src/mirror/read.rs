@@ -198,8 +198,8 @@ fn from_deck_card(row: &crate::deck::DeckCardRow) -> Card {
         unit_price: row.unit_price,
         // The one surface that has a label, and `deck_get` carries both halves on the row, so
         // this costs no second read.
-        tag_name: row.tag_name.clone(),
-        tag_color: row.tag_color.clone(),
+        label_name: row.label_name.clone(),
+        label_color: row.label_color.clone(),
         legalities: row.legalities.clone(),
     }
 }
@@ -240,8 +240,8 @@ fn from_collection_row(row: &crate::collection::CollectionRow) -> Card {
         rarity: row.rarity.clone(),
         type_line: row.type_line.clone(),
         unit_price: row.unit_price,
-        tag_name: None,
-        tag_color: None,
+        label_name: None,
+        label_color: None,
         legalities: row.legalities.clone(),
     }
 }
@@ -282,8 +282,8 @@ fn from_wish_row(row: &crate::wishlist::WishRow) -> Card {
         rarity: row.rarity.clone(),
         type_line: row.type_line.clone(),
         unit_price: row.unit_price,
-        tag_name: None,
-        tag_color: None,
+        label_name: None,
+        label_color: None,
         legalities: row.legalities.clone(),
     }
 }
@@ -590,7 +590,10 @@ mod tests {
         // is a *label* and the two are one field apart.
         assert_eq!(collection[0].tags.as_deref(), Some("[]"));
         assert_eq!(collection[0].category_name, None, "a binder has no piles");
-        assert_eq!(collection[0].tag_name, None, "a binder has no deck labels");
+        assert_eq!(
+            collection[0].label_name, None,
+            "a binder has no deck labels"
+        );
 
         let (wish_conn, _) = db_with_two_wishes_one_filed();
         let wishes = cards_for(&wish_conn, &Source::WholeWishlist, shop()).unwrap();

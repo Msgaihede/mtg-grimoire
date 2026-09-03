@@ -570,7 +570,7 @@ commands and failing all along.
 
 ```
 deck_list          deck_get            deck_folder_list   deck_category_list
-deck_tag_list      deck_tag_all        format_specs_list  deck_last_format
+deck_label_list    deck_label_all      format_specs_list  deck_last_format
 deck_search_open   deck_audit_list     deck_theory_slots  deck_theory_diff
 deck_undo_state
 ```

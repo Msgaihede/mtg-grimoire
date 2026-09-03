@@ -250,7 +250,7 @@ function deckCard(
     categoryId: categoryId(deckId, categoryKind ?? "main"),
     variant: "live",
     cardId: BOLT.id,
-    tagId: null,
+    labelId: null,
     quantity: 1,
     name: card?.name ?? "Gone",
     setCode: card?.setCode ?? "xxx",
@@ -2111,37 +2111,37 @@ describe("the deck read", () => {
     expect(
       readHandlers(db).deck_get({ id: 1, variant: "theory" })!.categories[2].cardCountAllVariants,
     ).toBe(9);
-    // No tag has been made, so the palette is empty — and it is a list, not a null.
-    expect(detail.tags).toEqual([]);
+    // No label has been made, so the palette is empty — and it is a list, not a null.
+    expect(detail.labels).toEqual([]);
   });
 
   /**
-   * A tag's `cardCount` is scoped to the variant asked for, exactly as a category's is.
+   * A label's `cardCount` is scoped to the variant asked for, exactly as a category's is.
    *
    * They are answered by one read and describe one list of cards, so scoping one and not the
    * other is a read that contradicts itself — which is what the Rust did once: `get_deck`
-   * threaded its variant into `list_categories` and not into `list_tags`, so a Theory read
-   * came back with Theory category counts beside Live tag counts.
+   * threaded its variant into `list_categories` and not into `list_labels`, so a Theory read
+   * came back with Theory category counts beside Live label counts.
    */
-  it("counts a tag over the variant that was asked for, like a category", () => {
+  it("counts a label over the variant that was asked for, like a category", () => {
     const db = makeDeckDb({
       decks: [deck({ id: 1 })],
-      deckTags: [{ id: 1, name: "Flex", color: "amber" }],
+      deckLabels: [{ id: 1, name: "Flex", color: "amber" }],
       deckCards: [
-        deckCard({ id: 1, cardId: BOLT.id, categoryKind: "main", quantity: 3, tagId: 1 }),
+        deckCard({ id: 1, cardId: BOLT.id, categoryKind: "main", quantity: 3, labelId: 1 }),
         deckCard({
           id: 2,
           cardId: BOLT.id,
           categoryKind: "main",
           variant: "theory",
           quantity: 7,
-          tagId: 1,
+          labelId: 1,
         }),
       ],
     });
 
-    expect(liveDeck(db)!.tags).toEqual([{ id: 1, name: "Flex", color: "amber", cardCount: 3 }]);
-    expect(readHandlers(db).deck_get({ id: 1, variant: "theory" })!.tags[0].cardCount).toBe(7);
+    expect(liveDeck(db)!.labels).toEqual([{ id: 1, name: "Flex", color: "amber", cardCount: 3 }]);
+    expect(readHandlers(db).deck_get({ id: 1, variant: "theory" })!.labels[0].cardCount).toBe(7);
   });
 
   it("prices a deck card in the finish it is sold in, and leaves the piles beside the deck out of its size", () => {
@@ -5279,18 +5279,18 @@ describe("the deck row itself", () => {
   });
 
   /**
-   * **The tags stay, and that is the change rather than a leak.** A tag carried
+   * **The labels stay, and that is the change rather than a leak.** A label carried
    * `deck_id … ON DELETE CASCADE` until schema v21 and went with the deck that made it, which
    * was right while it belonged to one. It belongs to the app now: deleting the deck where
    * "Removal" was first typed must not take the label off the nine other decks wearing it, so
    * the delete unclaims it here — through `deck_cards` — and leaves it standing. `reset_decks`,
    * which is every deck at once, is the one thing that sweeps the table.
    */
-  it("deletes the deck's cards and categories with it, and leaves the app's tags alone", () => {
+  it("deletes the deck's cards and categories with it, and leaves the app's labels alone", () => {
     const db = makeDeckDb({
       decks: [deck({ id: 1 }), deck({ id: 2 })],
       deckCards: [deckCard({ id: 1, deckId: 1 }), deckCard({ id: 2, deckId: 2 })],
-      deckTags: [
+      deckLabels: [
         { id: 1, name: "Removal", color: "red" },
         { id: 2, name: "Ramp", color: "green" },
       ],
@@ -5299,7 +5299,7 @@ describe("the deck row itself", () => {
     expect(db.decks.map((d) => d.id)).toEqual([2]);
     expect(db.deckCards.map((dc) => dc.deckId)).toEqual([2]);
     expect(new Set(db.deckCategories.map((c) => c.deckId))).toEqual(new Set([2]));
-    expect(db.deckTags.map((t) => t.id)).toEqual([1, 2]);
+    expect(db.deckLabels.map((t) => t.id)).toEqual([1, 2]);
   });
 
   /**
@@ -5356,14 +5356,14 @@ describe("the deck row itself", () => {
    * `ON DELETE CASCADE`. Both variants come across, because a copy made to try something out
    * is exactly the copy that wants the plan.
    */
-  it("copies categories as new rows, keeps the app's tag ids, and takes both variants", () => {
+  it("copies categories as new rows, keeps the app's label ids, and takes both variants", () => {
     const db = makeDeckDb({
       decks: [deck({ id: 1, name: "Burn" })],
       deckCards: [
-        deckCard({ id: 1, deckId: 1, categoryKind: "main", quantity: 4, tagId: 1 }),
+        deckCard({ id: 1, deckId: 1, categoryKind: "main", quantity: 4, labelId: 1 }),
         deckCard({ id: 2, deckId: 1, categoryKind: "side", variant: "theory", quantity: 2 }),
       ],
-      deckTags: [{ id: 1, name: "Removal", color: "red" }],
+      deckLabels: [{ id: 1, name: "Removal", color: "red" }],
     });
     const copy = writeHandlers(db).deck_duplicate({ id: 1 });
     const theirs = db.deckCategories.filter((c) => c.deckId === copy.id);
@@ -5377,12 +5377,12 @@ describe("the deck row itself", () => {
     for (const row of copied) {
       expect(theirs.map((c) => c.id)).toContain(row.categoryId);
     }
-    // **The tag is not copied, because since schema v21 there is nothing to copy.** A duplicate
-    // used to get its own `deck_tags` rows and a remap onto them; a tag is one app-wide row now,
-    // so the copied card keeps the very id it had — the duplicate wears the same labels as its
-    // original, which is what a reader duplicating a deck means by "the same deck".
-    expect(db.deckTags.map((t) => t.id)).toEqual([1]);
-    expect(copied[0].tagId).toBe(1);
+    // **The label is not copied, because since schema v21 there is nothing to copy.** A duplicate
+    // used to get its own `deck_labels` rows and a remap onto them; a label is one app-wide row
+    // now, so the copied card keeps the very id it had — the duplicate wears the same labels as
+    // its original, which is what a reader duplicating a deck means by "the same deck".
+    expect(db.deckLabels.map((t) => t.id)).toEqual([1]);
+    expect(copied[0].labelId).toBe(1);
     // Which is the whole point: deleting the original leaves the copy whole.
     writeHandlers(db).deck_delete({ id: 1 });
     expect(db.deckCards.filter((dc) => dc.deckId === copy.id)).toHaveLength(2);
@@ -5594,7 +5594,7 @@ describe("the decklist import", () => {
       ],
     });
     // `added` is what the list **asked for**, not what the deck landed on.
-    expect(out).toEqual({ added: 5, removed: 0, categoriesCreated: 0, tagsCreated: 0 });
+    expect(out).toEqual({ added: 5, removed: 0, categoriesCreated: 0, labelsCreated: 0 });
     expect(db.deckCards).toHaveLength(1);
     expect(db.deckCards[0].quantity).toBe(6);
   });
@@ -5614,7 +5614,7 @@ describe("the decklist import", () => {
       items: [{ cardId: BOLT_B.id, quantity: 1, categoryName: "Main deck" }],
     });
     // Copies, not rows — the number the history's `delta` carries.
-    expect(out).toEqual({ added: 1, removed: 4, categoriesCreated: 0, tagsCreated: 0 });
+    expect(out).toEqual({ added: 1, removed: 4, categoriesCreated: 0, labelsCreated: 0 });
     // Replacing what is sleeved up never touches the plan.
     expect(db.deckCards.filter((dc) => dc.variant === "theory")).toHaveLength(1);
     expect(db.deckCards.filter((dc) => dc.variant === "live")).toHaveLength(1);
@@ -5735,13 +5735,13 @@ describe("the decklist import", () => {
 
   /**
    * Archidekt's `^Keeper,#4aab08^` through the fake, which is what the import dialog's stories
-   * run against — so the three rules `import::tag_for_name` holds have to hold here too, or a
+   * run against — so the three rules `import::label_for_name` holds have to hold here too, or a
    * play would pass over behaviour the app does not have.
    */
   it("finds or makes the label an item names, and never touches one it finds", () => {
     const db = makeDeckDb({
       decks: [deck({ id: 1 })],
-      deckTags: [{ id: 7, name: "Keeper", color: "#d9b95c" }],
+      deckLabels: [{ id: 7, name: "Keeper", color: "#d9b95c" }],
     });
     const out = writeHandlers(db).deck_import_commit({
       deckId: 1,
@@ -5749,30 +5749,42 @@ describe("the decklist import", () => {
       mode: "merge",
       items: [
         // A different case *and* a different colour, so neither match could be a coincidence.
-        { cardId: BOLT_A.id, quantity: 1, categoryName: "Ramp", tagName: "KEEPER", tagColor: "#4aab08" },
-        { cardId: BOLT_B.id, quantity: 1, categoryName: "Ramp", tagName: "Fence", tagColor: "#fffc19" },
+        {
+          cardId: BOLT_A.id,
+          quantity: 1,
+          categoryName: "Ramp",
+          labelName: "KEEPER",
+          labelColor: "#4aab08",
+        },
+        {
+          cardId: BOLT_B.id,
+          quantity: 1,
+          categoryName: "Ramp",
+          labelName: "Fence",
+          labelColor: "#fffc19",
+        },
         { cardId: SOL_NEW.id, quantity: 1, categoryName: "Ramp" },
       ],
     });
 
-    expect(out.tagsCreated).toBe(1);
-    expect(db.deckTags).toEqual([
-      // Used as it stands: `tagKey` matched it, so neither the name nor the colour moved.
+    expect(out.labelsCreated).toBe(1);
+    expect(db.deckLabels).toEqual([
+      // Used as it stands: `labelKey` matched it, so neither the name nor the colour moved.
       { id: 7, name: "Keeper", color: "#d9b95c" },
       { id: 8, name: "Fence", color: "#fffc19" },
     ]);
-    expect(db.deckCards.map((dc) => dc.tagId)).toEqual([7, 8, null]);
+    expect(db.deckCards.map((dc) => dc.labelId)).toEqual([7, 8, null]);
   });
 
-  /** `tag_id = coalesce(deck_cards.tag_id, excluded.tag_id)` — the copies sum and the label
+  /** `label_id = coalesce(deck_cards.label_id, excluded.label_id)` — the copies sum and the label
    *  does not, because a label the reader put on a row by hand is a decision an import may not
    *  overturn. */
   it("keeps a label the deck card already wore through a merge", () => {
     const db = makeDeckDb({
       decks: [deck({ id: 1 })],
-      deckTags: [{ id: 3, name: "Cut candidate", color: "#d3202a" }],
+      deckLabels: [{ id: 3, name: "Cut candidate", color: "#d3202a" }],
       deckCards: [
-        deckCard({ id: 1, cardId: BOLT.id, categoryKind: "main", quantity: 1, tagId: 3 }),
+        deckCard({ id: 1, cardId: BOLT.id, categoryKind: "main", quantity: 1, labelId: 3 }),
       ],
     });
     writeHandlers(db).deck_import_commit({
@@ -5780,13 +5792,19 @@ describe("the decklist import", () => {
       variant: "live",
       mode: "merge",
       items: [
-        { cardId: BOLT.id, quantity: 2, categoryName: "Main deck", tagName: "Keeper", tagColor: "#4aab08" },
+        {
+          cardId: BOLT.id,
+          quantity: 2,
+          categoryName: "Main deck",
+          labelName: "Keeper",
+          labelColor: "#4aab08",
+        },
       ],
     });
 
-    expect(db.deckCards[0]).toMatchObject({ quantity: 3, tagId: 3 });
+    expect(db.deckCards[0]).toMatchObject({ quantity: 3, labelId: 3 });
     // The file's label is still made — it is only this row it may not claim.
-    expect(db.deckTags.map((t) => t.name)).toEqual(["Cut candidate", "Keeper"]);
+    expect(db.deckLabels.map((t) => t.name)).toEqual(["Cut candidate", "Keeper"]);
   });
 
   it("creates the categories the items name", () => {
@@ -5975,14 +5993,14 @@ describe("the busy fault", () => {
       wish: { cardId: BOLT.id, quantity: 1 },
       deck: { name: "Burn", formatKey: "modern" },
       patch: {},
-      // Schema v8's writes: a category, a tag, a folder and a cover each name their own
+      // Schema v8's writes: a category, a label, a folder and a cover each name their own
       // arguments, and every one of them is here because `invoke` matches by name.
       name: "Ramp",
       color: "ember",
       isActive: false,
       ids: [categoryId(1, "main")],
       moveToCategoryId: null,
-      tagId: null,
+      labelId: null,
       parentId: null,
       folderId: null,
       sourcePath: "C:\\Users\\Reader\\Pictures\\sleeve.png",
@@ -6095,9 +6113,9 @@ describe("the busy fault", () => {
     //
     // So the number below is measured, not reasoned about: it is what `Object.keys` answers on
     // the merged table. Re-measure it after the next merge rather than adding one to it.
-    // **And it happened again, on the very next merge.** Schema v21's global tags added
-    // `deck_tag_remove_from_deck` — the write that takes a label off one deck's list and leaves
-    // the tag standing — while the remembered card zoom added `set_card_zoom`. Each branch wrote
+    // **And it happened again, on the very next merge.** Schema v21's global labels added
+    // `deck_label_remove_from_deck` — the write that takes a label off one deck's list and leaves
+    // the label standing — while the remembered card zoom added `set_card_zoom`. Each branch wrote
     // 49 → 50 and was right about the tree it was in; the merged table holds both, so it is 51.
     // Re-measure after the next merge rather than adding one to whichever figure you find here.
     //
@@ -8108,7 +8126,7 @@ describe("the update state", () => {
  * decision the DTO does not force — a count that is variant-scoped, a delete that folds, a
  * cascade that reaches sideways, a comparison that is by oracle card rather than by printing.
  */
-describe("categories, tags, folders, history and the plan", () => {
+describe("categories, labels, folders, history and the plan", () => {
   /** The row a write just appended. `Array.prototype.at` is out of `.storybook`'s lib target,
    *  which `tsc -p .storybook` enforces and the app's own program does not. */
   const lastAudit = (db: FakeDb) => db.deckAudit[db.deckAudit.length - 1];
@@ -8249,56 +8267,59 @@ describe("categories, tags, folders, history and the plan", () => {
     ]);
   });
 
-  it("untags a deleted tag's cards rather than deleting them", () => {
+  it("unlabels a deleted label's cards rather than deleting them", () => {
     const { db, w } = testbed();
-    const tag = db.deckTags.find((t) => t.name === "Cut candidate")!;
-    expect(db.deckCards.filter((dc) => dc.tagId === tag.id).length).toBeGreaterThan(0);
+    const label = db.deckLabels.find((l) => l.name === "Cut candidate")!;
+    expect(db.deckCards.filter((dc) => dc.labelId === label.id).length).toBeGreaterThan(0);
 
-    w.deck_tag_delete({ deckId: 4, id: tag.id });
+    w.deck_label_delete({ deckId: 4, id: label.id });
 
-    expect(db.deckCards.filter((dc) => dc.tagId === tag.id)).toHaveLength(0);
+    expect(db.deckCards.filter((dc) => dc.labelId === label.id)).toHaveLength(0);
     expect(db.deckCards.filter((dc) => dc.deckId === 4)).not.toHaveLength(0);
-    // An id that resolves to nothing is a success: the caller wanted that tag gone.
-    expect(() => w.deck_tag_delete({ deckId: 4, id: tag.id })).not.toThrow();
+    // An id that resolves to nothing is a success: the caller wanted that label gone.
+    expect(() => w.deck_label_delete({ deckId: 4, id: label.id })).not.toThrow();
   });
 
   /**
    * **Taking a label off one deck is not deleting it**, and the distinction is what the app-wide
-   * list needed: while a tag belonged to a deck the two were one press, and conflating them now
+   * list needed: while a label belonged to a deck the two were one press, and conflating them now
    * would mean a reader tidying one deck stripping the label off every other deck wearing it.
    */
-  it("takes a tag off one deck's list and leaves the tag itself standing", () => {
+  it("takes a label off one deck's list and leaves the label itself standing", () => {
     const { db, w } = testbed();
-    const tag = db.deckTags.find((t) => t.name === "Cut candidate")!;
+    const label = db.deckLabels.find((l) => l.name === "Cut candidate")!;
     const before = db.deckCards.filter(
-      (dc) => dc.tagId === tag.id && dc.deckId === 4 && dc.variant === "live",
+      (dc) => dc.labelId === label.id && dc.deckId === 4 && dc.variant === "live",
     ).length;
     expect(before).toBeGreaterThan(0);
 
-    expect(w.deck_tag_remove_from_deck({ deckId: 4, tagId: tag.id, variant: "live" })).toBe(before);
+    expect(w.deck_label_remove_from_deck({ deckId: 4, labelId: label.id, variant: "live" })).toBe(
+      before,
+    );
 
-    expect(db.deckCards.filter((dc) => dc.tagId === tag.id && dc.deckId === 4)).toHaveLength(0);
-    expect(db.deckTags.some((t) => t.id === tag.id)).toBe(true);
+    expect(db.deckCards.filter((dc) => dc.labelId === label.id && dc.deckId === 4)).toHaveLength(0);
+    expect(db.deckLabels.some((l) => l.id === label.id)).toBe(true);
     // Nothing left to take off: a success that writes nothing, never a refusal.
     const audit = db.deckAudit.length;
-    expect(w.deck_tag_remove_from_deck({ deckId: 4, tagId: tag.id, variant: "live" })).toBe(0);
+    expect(w.deck_label_remove_from_deck({ deckId: 4, labelId: label.id, variant: "live" })).toBe(0);
     expect(db.deckAudit).toHaveLength(audit);
   });
 
   /**
-   * Every tag there is, most-used first — the one command in the deck surface with no deck id at
-   * all, and the only list that can answer a label no card is wearing.
+   * Every label there is, most-used first — the one command in the deck surface with no deck id
+   * at all, and the only list that can answer a label no card is wearing.
    *
-   * It replaced `deck_tag_suggestions`, which grouped on `(name, color)` and answered names
-   * without ids because two decks could hold two rows spelling one word. There is one row per
-   * name now, so this answers ids and picking one **uses** that tag rather than copying it.
+   * It replaced `deck_tag_suggestions` — the label was called a tag then — which grouped on
+   * `(name, color)` and answered names without ids because two decks could hold two rows spelling
+   * one word. There is one row per name now, so this answers ids and picking one **uses** that
+   * label rather than copying it.
    */
-  it("answers every tag there is, most-used first, with no deck id in the call", () => {
+  it("answers every label there is, most-used first, with no deck id in the call", () => {
     const { r } = testbed();
-    expect(r.deck_tag_all()).toEqual([
+    expect(r.deck_label_all()).toEqual([
       // Worn by the two copies on deck 4's live Ramp row, and by nothing in its plan.
       { id: 1, name: "Cut candidate", color: "ember", cardCount: 2, deckCount: 1 },
-      // Worn by nothing at all, which is the row `deck_tag_list` can never answer. Ties break
+      // Worn by nothing at all, which is the row `deck_label_list` can never answer. Ties break
       // on the name.
       { id: 2, name: "Budget swap", color: "moss", cardCount: 0, deckCount: 0 },
       { id: 3, name: "Combo piece", color: "gold", cardCount: 0, deckCount: 0 },
@@ -8307,31 +8328,31 @@ describe("categories, tags, folders, history and the plan", () => {
 
   /**
    * **The wrong-deck refusal is gone and its disappearance is the feature**: there is no other
-   * deck's tag any more, so a label made while standing in one deck goes straight onto a card in
+   * deck's label any more, so a label made while standing in one deck goes straight onto a card in
    * another. What is left is the stale editor's case, which is unchanged.
    */
-  it("accepts any tag on a card, and refuses a card that has moved", () => {
+  it("accepts any label on a card, and refuses a card that has moved", () => {
     const { db, w } = testbed();
-    const anyTag = db.deckTags.find((t) => t.name === "Budget swap")!;
+    const anyLabel = db.deckLabels.find((l) => l.name === "Budget swap")!;
     const row = db.deckCards.find((dc) => dc.deckId === 4 && dc.variant === "live")!;
 
-    w.deck_card_set_tag({
+    w.deck_card_set_label({
       deckId: 4,
       cardId: row.cardId,
       categoryId: row.categoryId,
       variant: "live",
-      tagId: anyTag.id,
+      labelId: anyLabel.id,
     });
-    expect(row.tagId).toBe(anyTag.id);
+    expect(row.labelId).toBe(anyLabel.id);
 
     expect(() =>
-      w.deck_card_set_tag({
+      w.deck_card_set_label({
         deckId: 4,
         cardId: row.cardId,
         // A category of this deck that this card is not in — the stale editor's case.
         categoryId: db.deckCategories.find((c) => c.deckId === 4 && c.name === "Sideboard")!.id,
         variant: "live",
-        tagId: anyTag.id,
+        labelId: anyLabel.id,
       }),
     ).toThrow(/not in this deck's category any more/);
   });
@@ -8712,8 +8733,8 @@ describe("categories, tags, folders, history and the plan", () => {
     const r = readHandlers(db);
 
     expect(() => r.deck_category_list({ deckId: 4, variant: "live" })).toThrow(/categories/);
-    expect(() => r.deck_tag_list({ deckId: 4, variant: "live" })).toThrow(/tags/);
-    expect(() => r.deck_tag_all()).toThrow(/tag list/);
+    expect(() => r.deck_label_list({ deckId: 4, variant: "live" })).toThrow(/labels/);
+    expect(() => r.deck_label_all()).toThrow(/label list/);
     expect(() => r.deck_folder_list()).toThrow(/folders/);
     expect(() => r.deck_audit_list({ deckId: 4, limit: 10 })).toThrow(/history/);
     expect(() => r.deck_theory_diff({ deckId: 4 })).toThrow(/theory list/);
@@ -8799,7 +8820,7 @@ describe("the four clears", () => {
     expect(db.deckFolders).toHaveLength(0);
     expect(db.deckCards).toHaveLength(0);
     expect(db.deckCategories).toHaveLength(0);
-    expect(db.deckTags).toHaveLength(0);
+    expect(db.deckLabels).toHaveLength(0);
     expect(db.deckAudit).toHaveLength(0);
     // A deck is not the collection's owner. The reader still owns every card.
     expect(db.collectionEntries).toHaveLength(entries);

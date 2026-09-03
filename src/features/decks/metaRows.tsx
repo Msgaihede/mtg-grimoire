@@ -2,7 +2,7 @@
  * The row grammar the deck's two meta dialogs share — a pile is a row, a label is a row, and
  * both are rows of the same family.
  *
- * `CategoriesDialog` and `TagsDialog` ask about different things: one is what a column of the
+ * `CategoriesDialog` and `LabelsDialog` ask about different things: one is what a column of the
  * deck is called and whether it counts, the other is what a card is marked with. But a reader
  * meets them as the same list: a strip with the thing's name in it, two small words at the right
  * end that open something in place, a field that renames it, and one line at the foot when a
@@ -12,7 +12,7 @@
  *
  * **One module rather than two copies, and the reason is the split that made this file.** These
  * three lived in `CategoriesPanel.tsx` beside both halves, where a change to `RenameField`'s
- * caret handling was visibly a change to categories *and* tags. Split into two dialogs, a copy
+ * caret handling was visibly a change to categories *and* labels. Split into two dialogs, a copy
  * each would be two definitions of one rule with nothing keeping them in step — and this one in
  * particular has a bug behind it: `RenameField`'s `focus()` before its `select()` (see the
  * component) was found from outside, in `FolderTree`, which had written the identical line and
@@ -27,9 +27,9 @@
  *
  * **The `CONFIRM_*` recipes below have a third consumer and it is not a meta dialog.**
  * `ClearCategory.tsx` is the deck editor's, opened from a category heading's right-click, and it
- * draws the same ruled-off box and the same two buttons as `DeleteCategory` and `DeleteTag`. The
- * three questions stay three components on purpose — see {@link CONFIRM_BOX} — so what is shared
- * is the chrome and nothing else, which is exactly what a class recipe carries and a shell
+ * draws the same ruled-off box and the same two buttons as `DeleteCategory` and `DeleteLabel`.
+ * The three questions stay three components on purpose — see {@link CONFIRM_BOX} — so what is
+ * shared is the chrome and nothing else, which is exactly what a class recipe carries and a shell
  * component would not.
  */
 import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
@@ -46,8 +46,8 @@ export const META_FIELD = cn(
   "placeholder:text-dim focus:border-accent focus:outline-none",
 );
 
-/** The affirmative button at the end of such a row — Add, Add tag, Save. Gold outline filling on
- *  hover, and greyed while there is nothing to send. */
+/** The affirmative button at the end of such a row — Add, Add label, Save. Gold outline filling
+ *  on hover, and greyed while there is nothing to send. */
 export const META_SUBMIT = cn(
   "h-8 shrink-0 rounded-md border border-accent px-3 text-xs text-accent",
   "transition-colors duration-150 hover:bg-accent hover:text-accent-foreground",
@@ -145,7 +145,7 @@ export const CONFIRM_CANCEL = cn(
   FOCUS,
 );
 
-/** The two words a row offers, in one shape, so a category row and a tag row read as one
+/** The two words a row offers, in one shape, so a category row and a label row read as one
  *  family. */
 export function RowAction({
   children,
@@ -253,7 +253,7 @@ export function RenameField({
  * The refusal a dialog is still owed a sentence about.
  *
  * One line per dialog rather than one per control: every refusal here is either a busy database
- * or a category, tag or deck another surface has deleted, and both are facts about the list
+ * or a category, label or deck another surface has deleted, and both are facts about the list
  * rather than about the button that happened to hit them.
  *
  * **The newest write, never the first one still holding an error** — {@link writeFailure}, the
@@ -268,11 +268,11 @@ export function RenameField({
  */
 export function sectionFailure(
   writes: readonly [Write, ...Write[]],
-  // **Any number of reads, because the tags dialog grew a second one.** It draws two lists off
-  // two commands — what this deck's list wears, and every tag there is — and either can be
-  // refused on its own. One argument would have made the caller pick which failure the reader
-  // is told about, which is a choice with no right answer. The first one that failed wins, in
-  // the order the caller lists them: that is the order they are drawn in.
+  // **Any number of reads, because the labels dialog grew a second one.** It draws two lists
+  // off two commands — what this deck's list wears, and every label there is — and either can be
+  // refused on its own. One argument would have made the caller pick which failure the reader is
+  // told about, which is a choice with no right answer. The first one that failed wins, in the
+  // order the caller lists them: that is the order they are drawn in.
   ...reads: readonly { isError: boolean; error: unknown }[]
 ): string | null {
   const refused = reads.find((r) => r.isError);

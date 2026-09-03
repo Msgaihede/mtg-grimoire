@@ -255,8 +255,8 @@ beforeEach(() => {
   vi.mocked(isWebTarget).mockReturnValue(false);
   deckList.mockReset().mockResolvedValue([BURN, DRAFT, FILED]);
   // The hosted settings dialog's own read. Empty lists: this screen's cases are about the deck
-  // row, and what the form does with cards, categories and tags is its own suite's.
-  deckGet.mockReset().mockResolvedValue({ deck: BURN, cards: [], categories: [], tags: [] });
+  // row, and what the form does with cards, categories and labels is its own suite's.
+  deckGet.mockReset().mockResolvedValue({ deck: BURN, cards: [], categories: [], labels: [] });
   deckCreate.mockReset().mockResolvedValue({ ...BURN, id: 9, name: "Sunday burn" });
   deckUpdate.mockReset().mockResolvedValue({ ...BURN, archived: true });
   deckDelete.mockReset().mockResolvedValue(undefined);

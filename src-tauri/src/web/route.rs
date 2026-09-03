@@ -43,8 +43,8 @@ pub const COMMANDS: &[&str] = &[
     "deck_get",
     "deck_folder_list",
     "deck_category_list",
-    "deck_tag_list",
-    "deck_tag_all",
+    "deck_label_list",
+    "deck_label_all",
     "format_specs_list",
     "deck_last_format",
     "deck_search_open",
@@ -80,11 +80,11 @@ pub const COMMANDS: &[&str] = &[
     "deck_category_set_active",
     "deck_category_reorder",
     "deck_category_delete",
-    "deck_tag_create",
-    "deck_tag_update",
-    "deck_tag_delete",
-    "deck_tag_remove_from_deck",
-    "deck_card_set_tag",
+    "deck_label_create",
+    "deck_label_update",
+    "deck_label_delete",
+    "deck_label_remove_from_deck",
+    "deck_card_set_label",
     "deck_folder_create",
     "deck_folder_rename",
     "deck_folder_move",
@@ -348,22 +348,22 @@ pub fn call(
             )
         }
 
-        "deck_tag_list" => {
+        "deck_label_list" => {
             let deck_id: i64 = field(command, args, "deckId")?;
             let variant: String = field(command, args, "variant")?;
             let conn = crate::sync::lock_db_read(state);
             encode(
                 command,
-                crate::deck_meta::list_tags(&conn, deck_id, &variant)
+                crate::deck_meta::list_labels(&conn, deck_id, &variant)
                     .map_err(RouteError::Failed)?,
             )
         }
 
-        "deck_tag_all" => {
+        "deck_label_all" => {
             let conn = crate::sync::lock_db_read(state);
             encode(
                 command,
-                crate::deck_meta::list_all_tags(&conn).map_err(RouteError::Failed)?,
+                crate::deck_meta::list_all_labels(&conn).map_err(RouteError::Failed)?,
             )
         }
 
@@ -694,7 +694,7 @@ pub fn call(
             )
         }
 
-        // ── Categories, tags and folders ────────────────────────────────────────────
+        // ── Categories, labels and folders ──────────────────────────────────────────
         "deck_category_create" => {
             let deck_id: i64 = field(command, args, "deckId")?;
             let name: String = field(command, args, "name")?;
@@ -753,20 +753,20 @@ pub fn call(
             )
         }
 
-        "deck_tag_create" => {
+        "deck_label_create" => {
             let deck_id: i64 = field(command, args, "deckId")?;
             let name: String = field(command, args, "name")?;
             let color: String = field(command, args, "color")?;
             encode(
                 command,
                 crate::sync::with_write(state, |c| {
-                    crate::deck_meta::create_tag(c, deck_id, &name, &color)
+                    crate::deck_meta::create_label(c, deck_id, &name, &color)
                 })
                 .map_err(RouteError::Failed)?,
             )
         }
 
-        "deck_tag_update" => {
+        "deck_label_update" => {
             let deck_id: i64 = field(command, args, "deckId")?;
             let id: i64 = field(command, args, "id")?;
             let name: String = field(command, args, "name")?;
@@ -774,55 +774,55 @@ pub fn call(
             encode(
                 command,
                 crate::sync::with_write(state, |c| {
-                    crate::deck_meta::update_tag(c, deck_id, id, &name, &color)
+                    crate::deck_meta::update_label(c, deck_id, id, &name, &color)
                 })
                 .map_err(RouteError::Failed)?,
             )
         }
 
-        "deck_tag_delete" => {
+        "deck_label_delete" => {
             let deck_id: i64 = field(command, args, "deckId")?;
             let id: i64 = field(command, args, "id")?;
             encode(
                 command,
-                crate::sync::with_write(state, |c| crate::deck_meta::delete_tag(c, deck_id, id))
+                crate::sync::with_write(state, |c| crate::deck_meta::delete_label(c, deck_id, id))
                     .map_err(RouteError::Failed)?,
             )
         }
 
-        "deck_tag_remove_from_deck" => {
+        "deck_label_remove_from_deck" => {
             let deck_id: i64 = field(command, args, "deckId")?;
-            let tag_id: i64 = field(command, args, "tagId")?;
+            let label_id: i64 = field(command, args, "labelId")?;
             let variant: String = field(command, args, "variant")?;
             encode(
                 command,
                 crate::sync::with_write(state, |c| {
-                    crate::deck_meta::remove_tag_from_deck(c, deck_id, tag_id, &variant)
+                    crate::deck_meta::remove_label_from_deck(c, deck_id, label_id, &variant)
                 })
                 .map_err(RouteError::Failed)?,
             )
         }
 
-        "deck_card_set_tag" => {
+        "deck_card_set_label" => {
             let deck_id: i64 = field(command, args, "deckId")?;
             let card_id: String = field(command, args, "cardId")?;
             let category_id: i64 = field(command, args, "categoryId")?;
             let variant: String = field(command, args, "variant")?;
-            let tag_id: Option<i64> = optional(command, args, "tagId")?;
+            let label_id: Option<i64> = optional(command, args, "labelId")?;
             encode(
                 command,
                 // `None` for the finish, exactly as the wrapper passes: `finish` reaches this
                 // command and is not forwarded, which is the desktop's behaviour and not a
                 // dropped argument to be "fixed" here.
                 crate::sync::with_write(state, |c| {
-                    crate::deck_meta::set_card_tag(
+                    crate::deck_meta::set_card_label(
                         c,
                         deck_id,
                         &card_id,
                         category_id,
                         &variant,
                         None,
-                        tag_id,
+                        label_id,
                     )
                 })
                 .map_err(RouteError::Failed)?,

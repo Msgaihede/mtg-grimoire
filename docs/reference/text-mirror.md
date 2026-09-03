@@ -147,7 +147,7 @@ that true rather than a claim about SQLite's release notes.
 
 | Tables | Dirties |
 | --- | --- |
-| `deck_cards`, `deck_categories`, `deck_tags`, `deck_folders` | Decks |
+| `deck_cards`, `deck_categories`, `deck_labels`, `deck_folders` | Decks |
 | `decks` | Decks **and** Collection |
 | `collection_entries`, `collection_folders` | Collection |
 | `wishlist_entries`, `wishlist_folders` | Wishlist |
