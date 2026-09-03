@@ -415,8 +415,15 @@ describe("useCollectionSearch", () => {
    * came out of another deck's group that deck's live list is one shorter too. `invalidateQueries`
    * matches by key **prefix**, so `["collection"]` reaches the list, the summary, the folder
    * census and the per-folder subtotals together, and `["decks"]` reaches every deck's detail.
+   *
+   * **The card search is the third and joined on 2026-09-03** (issue #349). It used to move
+   * nothing — that wall counted every copy the reader owned wherever it was filed — but the tab
+   * one press away now counts what *this deck* can use, and a copy taken out of another deck's
+   * group is exactly the case that changes: spoken for before the press, this deck's after it.
+   * `lib/query.ts` caches 30 s, so a missing root here is a badge that reads from before the
+   * press with nothing on screen to say so.
    */
-  it("invalidates the collection and every deck", async () => {
+  it("invalidates the collection, every deck and the card search", async () => {
     const invalidate = vi.spyOn(client, "invalidateQueries");
     const { result } = mount();
     await waitFor(() => expect(collectionList).toHaveBeenCalled());
@@ -428,6 +435,7 @@ describe("useCollectionSearch", () => {
     const keys = invalidate.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey));
     expect(keys).toContain(JSON.stringify(["collection"]));
     expect(keys).toContain(JSON.stringify(["decks"]));
+    expect(keys).toContain(JSON.stringify(["cards", "search"]));
   });
 
   /**

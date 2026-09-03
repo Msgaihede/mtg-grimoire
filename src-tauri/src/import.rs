@@ -301,7 +301,15 @@ fn match_columns(conn: &Connection) -> String {
         EXISTS(SELECT 1 FROM cards u
                 WHERE u.oracle_id = c.oracle_id AND u.rarity = 'uncommon') AS ever_uncommon,
         {owned} AS owned_quantity",
-        owned = crate::collection_source::copies_of_printing(conn, "c.id")
+        // Every copy, wherever it is filed: an import is matching a pasted line to a printing,
+        // and "the one you already own" is the right tie-break whichever drawer it is in — this
+        // ranking runs for a collection import as readily as a deck's, and neither has a deck to
+        // be relative to at the point the printing is chosen.
+        owned = crate::collection_source::copies_of_printing(
+            conn,
+            "c.id",
+            crate::collection_source::Availability::Everything,
+        )
     )
 }
 

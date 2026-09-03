@@ -547,7 +547,15 @@ shared_cell` walks both into two databases and compares them column by column.
 - **"Does the reader own this?" is `collection_source`, and four fragments plus one write
   wrapper is all that module owns.** `owns_printing`/`copies_of_printing`/`copies_of_oracle`/
   `owned_rowids` are correlated SQL a caller splices into its own statement; `with_write_owned`
-  is `sync::with_write` plus the facet index's `owned` rebuild, on success only. **Three
+  is `sync::with_write` plus the facet index's `owned` rebuild, on success only.
+  **The first three take an `Availability`, and it is not a fourth filter**: it narrows no rows,
+  it decides *whose* copies count. `Everything` emits no SQL and is what every caller asks;
+  `ForDeck(id)` is the deck builder's card search alone (`SearchRequest::available_for_deck`,
+  issue #349), and drops another deck's group and every locked drawer while keeping the asking
+  deck's own group, the root and `Recently removed`. **Both halves of "owned" must take the same
+  scope** — the `owned` filter and the badge — or a card sits under the Owned chip reading `×0`.
+  The facet index has no deck axis and deliberately does not follow, so those two counts read
+  high there; `useCardFacets` carries the argument. **Three
   statements name `collection_entries` themselves and are the sites to check whenever that
   table's shape moves**: `collection::from_sql`, which reads the entries as its `FROM` rather
   than asking a question about them, and `wishlist::OWNED_SQL` and

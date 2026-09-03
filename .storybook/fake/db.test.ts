@@ -338,6 +338,108 @@ describe("the three ownedQuantity derivations", () => {
   });
 });
 
+/**
+ * `SearchRequest.availableForDeck` — the fourth derivation, and the only one whose answer
+ * depends on **who is asking** (issue #349).
+ *
+ * A badge reading `×4` over a card whose four copies are all sleeved into other decks told the
+ * reader they had something they could not use, while the Collection tab in the same panel —
+ * which has sent `allocation: "unallocated"` since folders landed — showed none of them. The
+ * field is not a filter: it narrows no rows and reorders nothing, it decides what the word
+ * *owned* means for the request.
+ */
+describe("the deck a search counts copies for", () => {
+  const DECKS = [deck({ id: 1 }), deck({ id: 2, name: "Theirs" })];
+  /** Well clear of {@link groupId}'s hundreds, so the two cabinets in one store do not collide. */
+  const CASE_FOLDER = 1;
+
+  /**
+   * One Bolt in each of the four places that decide the answer, and a second printing whose
+   * only copy is in the *other* deck — the row the Owned chip must stop offering.
+   */
+  const filedAcrossTwoDecks = () =>
+    makeDeckDb({
+      decks: DECKS,
+      collectionFolders: [
+        ...groupsOf(DECKS),
+        { id: CASE_FOLDER, parentId: null, name: "Display case", kind: "user", deckId: null,
+          sortOrder: 0, locked: true },
+      ],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT.id, folderId: null }),
+        entry({ id: 2, cardId: BOLT.id, folderId: groupId(1) }),
+        entry({ id: 3, cardId: BOLT.id, folderId: groupId(2) }),
+        entry({ id: 4, cardId: BOLT.id, folderId: CASE_FOLDER }),
+        entry({ id: 5, cardId: BOLT_2X2.id, folderId: groupId(2) }),
+      ],
+    });
+
+  const search = (db: FakeDb, req: Partial<SearchRequest>) =>
+    readHandlers(db).search_cards({ req: { limit: 200, offset: 0, ...req } }) as {
+      items: CardSummary[];
+    };
+  const ownedOf = (page: { items: CardSummary[] }, id: string) =>
+    page.items.find((i) => i.id === id)!.ownedQuantity;
+
+  /**
+   * Unscoped is what every wall outside the deck builder must go on saying: the reader does own
+   * four. Asked for deck 1 the answer is two — the copy on the desk and the copy in **this
+   * deck's own group**, which is the arm {@link ownedSpare} does not have and the reason the two
+   * are not one helper.
+   */
+  it("counts every copy unscoped, and only the reachable ones for a named deck", () => {
+    const db = filedAcrossTwoDecks();
+
+    expect(ownedOf(search(db, {}), BOLT.id)).toBe(4);
+    expect(ownedOf(search(db, { availableForDeck: 1 }), BOLT.id)).toBe(2);
+    // Deck 2's answer is not deck 1's: its own group's copy counts for it and not for the other.
+    expect(ownedOf(search(db, { availableForDeck: 2 }), BOLT_2X2.id)).toBe(1);
+    expect(ownedOf(search(db, { availableForDeck: 1 }), BOLT_2X2.id)).toBe(0);
+  });
+
+  /** A deck with no group yet — every deck until a copy is filed into it — still counts the
+   *  desk. A missing group is not a reason to answer zero everywhere. */
+  it("still counts the desk for a deck whose group holds nothing", () => {
+    const db = filedAcrossTwoDecks();
+    db.collectionEntries = db.collectionEntries.filter((e) => e.folderId !== groupId(1));
+
+    expect(ownedOf(search(db, { availableForDeck: 1 }), BOLT.id)).toBe(1);
+  });
+
+  /**
+   * The half that is easy to leave behind. A card whose only copy is in another deck has to
+   * drop out of `owned: true` for *this* deck, or the chip offers a row the badge then marks
+   * `×0` — the one refusal a reader cannot act on.
+   */
+  it("narrows the Owned chip by the same scope, so no row is offered at zero", () => {
+    const db = filedAcrossTwoDecks();
+    const ids = (req: Partial<SearchRequest>) => search(db, req).items.map((i) => i.id);
+
+    expect(ids({ owned: true })).toContain(BOLT_2X2.id);
+    expect(ids({ owned: true, availableForDeck: 1 })).not.toContain(BOLT_2X2.id);
+    expect(ids({ owned: true, availableForDeck: 1 })).toContain(BOLT.id);
+    // And it is therefore on the Missing side of the same chip rather than nowhere at all.
+    expect(ids({ owned: false, availableForDeck: 1 })).toContain(BOLT_2X2.id);
+  });
+
+  /**
+   * **The facets deliberately do not follow**, and the crate is why: `CardIndex` has one global
+   * `owned` bitset and no deck-relative dimension. So the Owned/Missing counts in that panel's
+   * filter row read **high** — over-reading only ever leaves a control live, which is the
+   * direction the whole row fails in, and those two numbers reach a `title` rather than a
+   * greying. Pinned so the asymmetry is a decision on the record instead of a surprise.
+   */
+  it("leaves the Owned facet counting every copy, which is the index's own answer", () => {
+    const db = filedAcrossTwoDecks();
+    const facets = readHandlers(db).facet_cards({ req: { limit: 0, offset: 0 } });
+    const scoped = readHandlers(db).facet_cards({
+      req: { limit: 0, offset: 0, availableForDeck: 1 },
+    });
+
+    expect(scoped.owned.owned).toBe(facets.owned.owned);
+  });
+});
+
 describe("zero", () => {
   it("keeps a collection row, with its condition and its purchase price", () => {
     const db = makeDb({
@@ -3670,8 +3772,13 @@ describe("the collection's folders", () => {
   });
 
   /**
-   * Spec §4.2 — the **one** ownership-shaped figure a lock moves — with §4.3's fence beside it in
-   * the same test, so neither can be changed without the other being read.
+   * Spec §4.2 — the figures a lock moves are the ones that mean **spare** — with §4.3's fence
+   * beside it in the same test, so neither can be changed without the other being read.
+   *
+   * `ownedSpare` was the only one until issue #349 added a second that is a spare count in an
+   * owned count's clothes: a search asked `availableForDeck` drops a locked drawer's copies for
+   * this test's own reason. That one is pinned in *the deck a search counts copies for*; every
+   * figure named below still counts a locked copy and this is what says so.
    *
    * `ownedSpare` is what a plan can count on, and `deck_theory`'s own doc is the argument: a deck
    * on a table has its cards, so a copy in its group is not spare — and a card in a display case
@@ -3696,9 +3803,11 @@ describe("the collection's folders", () => {
     expect(lotus().ownedSpare).toBe(0);
 
     // §4.3: the folder's own tile still counts both copies in it. Every other figure on that
-    // list is the crate's to fence — the search's owned pip, both owned badges, the
+    // list is the crate's to fence — an unscoped search's owned pip, both owned badges, the
     // Owned/Missing facet, a wish's filled quantity — and every one of them counts a locked
-    // copy, because a graded card in a case is still cardboard on the reader's shelf.
+    // copy, because a graded card in a case is still cardboard on the reader's shelf. The deck
+    // builder's card search is the one that asks a narrower question, and it has to name a deck
+    // to get the narrower answer.
     const tile = readHandlers(db)
       .collection_folder_summary({})
       .find((t) => t.folderId === 2)!;

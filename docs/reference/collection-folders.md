@@ -460,9 +460,20 @@ to let the root through on its own.
 deliberate rather than an oversight.** No backup and no export reads this figure. `owned_spare` is
 a **display** field — "for a reader, beside a price", forbidden by its own doc from being a term in
 any arithmetic — so widening it cannot move a number anywhere else, where widening a *list* read is
-precisely how a whole-collection backup silently loses rows. It is the one ownership-shaped
+precisely how a whole-collection backup silently loses rows. It was the one ownership-shaped
 statement in the crate that changed, and it could change because it was never an ownership
 statement.
+
+**A second one joined it a month later, and it is the same sentence read from another chair.**
+`collection_source::Availability::ForDeck` — the deck builder's card search, issue #349 — drops a
+locked drawer's copies from the `×N` on every tile and from the Owned chip beside them, for
+`owned_spare`'s reason exactly: *a card in a display case is not one this deck can count on.* It
+is a **request scope** rather than a statement, which is what keeps the rule below intact: the
+three fragments still count a locked copy for every caller that has not named a deck, and only the
+one surface whose question is "what can I build with today" gets the narrower answer. The arm it
+does **not** share with `OWNED_SPARE_SQL` is the asking deck's own group, which stays counted — a
+plan cannot count on the sleeved deck's cards, and the deck builder's own search can, because they
+are its.
 
 **Refused — one folder write, in words.** `delete_folder` refuses a folder that is **effectively**
 locked, with `FOLDER_IS_LOCKED` — *"That folder is locked. Unlock it before deleting it."* — a
@@ -495,7 +506,7 @@ goes red if somebody later "tidies" the exclusion into `collection_source`, and
 
 | Site | Why it does not change |
 | --- | --- |
-| `collection_source::owns_printing` / `copies_of_printing` / `copies_of_oracle` | The card search's owned pip and both owned badges. A graded card is a card you own; a search that stopped saying so would be the app lying about cardboard on the reader's shelf. |
+| `collection_source::owns_printing` / `copies_of_printing` / `copies_of_oracle` | The card search's owned pip and both owned badges. A graded card is a card you own; a search that stopped saying so would be the app lying about cardboard on the reader's shelf. **Unchanged in the fragments themselves** — the exclusion issue #349 added lives in the `Availability` a caller passes, so only a request naming a deck gets it, and `a_locked_folders_copies_are_still_owned` is the assertion that it stayed there. |
 | `index::CardIndex.owned`, through `collection_source::owned_rowids` | The Owned/Missing facet pair. Same reason, and it has to agree with the pip beside it or the greying contradicts the badge. |
 | `wishlist::OWNED_SQL` | How much of a wish is already filled. A locked copy fills a want — the reader has it, and buying a second is the mistake that figure exists to prevent. |
 | `deck::owned_by_oracle` | Structurally cannot see one of these folders at all — the paragraph below. |
@@ -2011,7 +2022,8 @@ build, not a description of this one.
 | `src-tauri/src/collection_alloc.rs` | `collection_to_deck` and `deck_to_collection` — the pair that moves a row across the deck boundary and back — `take_from_deck_list`, `MoveOutcome`, the cut's history row and the argument for its missing undo step, and the seven refusal sentences |
 | `src-tauri/src/deck_pull.rs` | The third crossing (2026-09-03, issue #351): `deck_pull_plan` and `deck_pull_from_collection` — filling a hole the list already declares, writing no `deck_cards` row. Candidate eligibility, the pre-pick order, the all-or-nothing batch, and the `move` history row. Recorded in [decks-storage.md](decks-storage.md#the-pull-filling-a-hole-the-list-already-has) |
 | `src-tauri/src/collection.rs` | The grain's other ten terms, `set_quantity`'s zero-delete, `update_entry`'s merge, `fold_entry`, `EntryChange`, `ENTRY_FINISH`, `Allocation`, and `CollectionQuery::exclude_locked` with `scope`'s term for it |
-| `src-tauri/src/deck_theory.rs` | `OWNED_SPARE_SQL` — "what can I build with", and the one ownership-shaped statement the lock changed, unconditionally |
+| `src-tauri/src/deck_theory.rs` | `OWNED_SPARE_SQL` — "what can I build with", and the first ownership-shaped statement the lock changed, unconditionally |
+| `src-tauri/src/collection_source.rs` | The three fragments and `Availability` — the second thing the lock reaches, as a **scope a caller passes** rather than a statement: `ForDeck` is the deck builder's card search alone (issue #349) and drops another deck's group and every locked drawer, keeping the asking deck's own group |
 | `src-tauri/src/deck.rs` | `owned_by_oracle` and `attribute_owned` — owned/missing as a sum over the group — `delete_deck`, which re-files into `Recently removed`, and `release_group_copies`, the crate's one walk over a group's rows — oracle-matched, exact printing first — which `deck_to_collection` calls for its one row and `release_live_copies` loops for the four bulk sites (`clear_category`, `clear_variant`, `deck_meta::delete_category`'s cascade arm, `import::commit_import`'s `replace` arm), carrying the `live` fence for all of them |
 | `src-tauri/src/reset.rs` | `clear_collection` — entries, then folders |
 | `src-tauri/src/reconcile.rs` | `fold_into_existing`, which calls `fold_entry` as `merge_entry` does, and `collision_target`, the crate's other eleven-term probe |

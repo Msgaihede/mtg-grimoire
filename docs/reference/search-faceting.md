@@ -266,6 +266,17 @@ using it.
   "an absent `after` fails open" arm fires before it is read; `owned` feeds a tooltip on the one
   chip that is **never** greyed. X is the only scalar on the response that decides paint, which
   is exactly why the guard has to hold for it.
+- **`owned` has one dimension and it is not deck-relative, so in the deck builder it reads high.**
+  The bitset is "one bit per card the reader owns a copy of, anywhere" (`collection_source::
+  owned_rowids`). Since [issue #349](https://github.com/Msgaihede/mtg-grimoire/issues/349) the
+  deck builder's card search counts a narrower thing — copies this deck can use, dropping another
+  deck's group and every locked drawer, through `SearchRequest::available_for_deck` — and the
+  index cannot answer that without a per-deck bitset rebuilt on every folder lock, folder move and
+  deck-group write. So `FacetRequest` **omits the field** and those two counts describe the wider
+  corpus in that one panel. It is the price band's asymmetry exactly: the count reads high, an
+  over-read count only ever leaves a control live, and the pair reaches a `title` rather than a
+  greying — so the cost is a tooltip that can exceed the wall under it, and the fix would buy a
+  tooltip.
 - **The greying rule itself is `countDisabled(count, selected)`, and `optionDisabled` is a lookup
   in front of it.** Two arms over the one count a control was handed — a _selected_ option is
   never greyed, an _absent_ count fails open — and the lookup adds the third, that a key missing
