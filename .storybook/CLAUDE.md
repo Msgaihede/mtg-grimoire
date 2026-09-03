@@ -197,8 +197,18 @@ deliberately**: no screenshots are stored.
   with the card would leave a reader unable to tell a re-filing from a disappearance.
 - **Art is synthetic by default**, with a Live toolbar switch, so a checkout with no network
   renders every story exactly as one with it. **No card image bytes are committed.**
-- Note for searching: ripgrep treats `.storybook/fake/db.ts` as binary, so "no matches" there is a
-  lie — Read it instead.
+- **Searching `.storybook/fake/db.ts` works, and this line said the opposite for over a year of
+  commits.** ripgrep classified it as **binary** — so Grep answered "no matches" for strings
+  plainly in it, and a session acted on that once, adding handlers the file already had until
+  `tsc -p .storybook` caught it with `TS1117`. **The cause was never the size**: it was a single
+  NUL byte, from `deck_tag_suggestions` building a group key as `` `${t.name}\0${t.color}` ``.
+  Schema v21 replaced that function with `deck_tag_all` and the byte went with it on 2026-08-22.
+  Verified 2026-09-03 — zero NULs in the file (717 KB) and Grep returns real counts.
+  **The rule that outlives the fix**: a NUL is invisible in every editor, eslint and `tsc` stay
+  green over one, and a `\0` separator in a template literal is the plausible way one gets in.
+  So if Grep ever calls a file here binary again, suspect that rather than the length —
+  `python -c "print(open(p,'rb').read().count(b'\x00'))"` finds it, and Bash `grep` saying
+  "Binary file … matches" is the tell.
 
 ## Rules for stories
 

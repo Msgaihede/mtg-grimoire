@@ -30,7 +30,12 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   },
 }));
 
-import { copySource, playStateFor, useCollectionSearch } from "./useCollectionSearch";
+import {
+  copySource,
+  DEFAULT_EXCLUDE_LOCKED,
+  playStateFor,
+  useCollectionSearch,
+} from "./useCollectionSearch";
 
 /** The deck this panel is docked beside — the one a move files *into*. */
 const DECK_ID = 4;
@@ -531,6 +536,43 @@ describe("copySource", () => {
   it("treats a folder it cannot place as spoken for", () => {
     const source = copySource(row({ folderId: 99, folderName: "Somewhere" }), [], DECK_ID);
     expect(source).toEqual({ kind: "otherDeck", deckName: "Somewhere" });
+  });
+
+  /**
+   * **The coupling, not the behaviour** ([#365](https://github.com/Msgaihede/mtg-grimoire/issues/365)).
+   *
+   * A locked drawer is `kind: "user"`, so a copy in one falls through to `desk` — *freely
+   * movable, nothing asked*. Read on its own that is the wrong answer by this module's own
+   * rule: an unclassifiable copy is treated as **spoken for** precisely so an add cannot slip
+   * past the confirmation, and a drawer the reader deliberately set aside is that copy.
+   *
+   * **It is nevertheless correct today, and this test is why it stays correct.** The tab sends
+   * `excludeLocked: true` unconditionally, so a locked row never reaches `copySource` at all —
+   * the answer below is unreachable rather than wrong. The two halves are asserted **in one
+   * test on purpose**: the `desk` answer is only sound while the exclusion holds, and a test
+   * that pinned the classification alone would go on passing, green and meaningless, the day
+   * somebody put those rows back.
+   *
+   * So if this fails, do not "fix" the expectation. It means locked copies can now reach this
+   * function, and `copySource` owes them a real answer — see its doc comment, and note that a
+   * fourth arm is a fourth press, so `pickCopy` and `CollectionSearchTab` owe one too.
+   *
+   * **It reads `DEFAULT_EXCLUDE_LOCKED` where the payload test above deliberately writes `true`
+   * out, and the two are not in disagreement.** That one asks *what went on the wire*, so
+   * reading the constant would let it pass against a hook that had stopped sending the field —
+   * the defect it exists for. This one asks *what the decision is*, and the constant **is** the
+   * decision: flipping it to `false` has to fail something, and this is the something.
+   */
+  it("has no answer for a locked copy, which is why the tab must never send it one", () => {
+    const locked: CollectionFolder = { ...BINDER, id: 14, name: "Graded", locked: true };
+
+    // Half one: unreachable-by-construction. `DEFAULT_ALLOCATION`'s neighbour on the wire.
+    expect(DEFAULT_EXCLUDE_LOCKED).toBe(true);
+
+    // Half two: what it *would* say if it ever saw one — the absence of a considered answer.
+    expect(copySource(row({ folderId: locked.id }), [...FOLDERS, locked], DECK_ID).kind).toBe(
+      "desk",
+    );
   });
 });
 
