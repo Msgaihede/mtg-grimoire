@@ -709,7 +709,7 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
   });
 
   /**
-   * Empty **one whole list** of this deck — Deck settings' **Clear live list…** and
+   * Empty **one whole list** of this deck — Deck settings' **Clear actual list…** and
    * **Clear theory list…** — and answer the copies
    * it removed.
    *

@@ -130,8 +130,9 @@ export function LabelsDialog({
 const SECTION = "mb-1.5 text-[0.6875rem] uppercase tracking-[0.04em] text-dim";
 
 /** What the first section's heading calls the list on screen. The word is the reader's own —
- *  the editor's Live/Theory switch says exactly these two. */
-const LIST_NAME: Record<DeckVariant, string> = { live: "live", theory: "theory" };
+ *  the editor's Theory/Actual switch says exactly these two, so `live` (the stored variant, and
+ *  still the stored variant) reads as `actual` here. */
+const LIST_NAME: Record<DeckVariant, string> = { live: "actual", theory: "theory" };
 
 /**
  * **This body reads no marketplace and no deck, and both absences are deliberate.** A label

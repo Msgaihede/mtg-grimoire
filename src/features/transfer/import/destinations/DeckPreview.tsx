@@ -756,7 +756,7 @@ function Mode({
           same sentence word for word, because since issue #336 this press makes the same
           movement: a `replace` on the live list deletes the variant's `deck_cards` rows and
           `release_live_copies` files the copies behind them into `Recently removed`. A reader
-          who has met that promise behind Clear live list… must meet it here rather than being
+          who has met that promise behind Clear actual list… must meet it here rather than being
           left to discover that an import moved their collection.
 
           **Under the radios and not appended to the Replace label**, for two reasons that

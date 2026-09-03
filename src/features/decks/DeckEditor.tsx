@@ -635,7 +635,7 @@ type Layer =
   | { kind: "import"; forcedCategoryName?: string }
   /**
    * What is being exported. **The id and not the cards**: the deck is re-read after every write
-   * and this editor already holds the answer, so the dialog is fed from the live list rather
+   * and this editor already holds the answer, so the dialog is fed from the actual list rather
    * than from an array frozen at the moment a control was pressed.
    *
    * **`null` is the whole deck**, which is the header's `Export deck`; a number is one pile,

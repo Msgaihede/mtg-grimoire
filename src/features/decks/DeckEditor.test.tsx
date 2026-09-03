@@ -5321,7 +5321,7 @@ describe("DeckEditor — a category's menu", () => {
 
     const dialog = await screen.findByRole("dialog", { name: /Clear “Main deck”/ });
     await waitFor(() =>
-      expect(within(dialog).getByText(/4 cards in it leave the live list/)).toBeVisible(),
+      expect(within(dialog).getByText(/4 cards in it leave the actual list/)).toBeVisible(),
     );
     // **Through the verb, not up to it.** `/1 card filed here in the other list/` passed against
     // "…other list are untouched" as readily as against the "is" that agrees with one card, so

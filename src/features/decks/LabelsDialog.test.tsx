@@ -187,7 +187,7 @@ describe("LabelsDialog", () => {
     expect(await screen.findByText(/A card carries at most one/)).toHaveTextContent(
       "Labels are shared by all your decks",
     );
-    expect(screen.getByText("On cards in this live list")).toBeInTheDocument();
+    expect(screen.getByText("On cards in this actual list")).toBeInTheDocument();
     expect(screen.getByText("Your other labels")).toBeInTheDocument();
   });
 

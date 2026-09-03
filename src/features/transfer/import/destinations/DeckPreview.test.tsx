@@ -511,7 +511,7 @@ describe("Archidekt labels", () => {
  *
  * A replace deletes every `deck_cards` row of the variant, and since #336's Rust half the copies
  * behind those rows are released into `Recently removed` rather than left stranded in the deck's
- * own group. That is the same movement `Clear live list…` makes, so this step says the same
+ * own group. That is the same movement `Clear actual list…` makes, so this step says the same
  * sentence `ClearDeck` and `ClearCategory` say — one wording across every bulk live removal in
  * the app, because a reader meeting the fourth one has read the first three.
  *

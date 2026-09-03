@@ -373,7 +373,7 @@ describe("DeckSettingsForm", () => {
     const toggle = screen.getByRole("switch", { name: "Theory deck Disabled" });
     expect(toggle).toHaveAttribute("aria-checked", "false");
     expect(
-      screen.getByText(/makes the deck you have the plan and starts the live list empty/),
+      screen.getByText(/makes the deck you have the plan and starts the actual list empty/),
     ).toBeInTheDocument();
     // The sentence it must no longer make: nothing is copied any more.
     expect(screen.queryByText(/copies the live deck/)).not.toBeInTheDocument();

@@ -990,7 +990,7 @@ export function DeckSearchPanel({
  * **`aria-pressed` over a `.map`, and deliberately not `role="tab"`.** That role is a contract
  * rather than a name: roving focus on the arrow keys, `aria-controls` pointing at a `tabpanel`,
  * and a panel that takes the caret. Nothing else in this app implements it — `DeckEditor`'s
- * Theory/Live switch, `FilterChips`' layout pair and the card pane's toggles are all pressed
+ * Theory/Actual switch, `FilterChips`' layout pair and the card pane's toggles are all pressed
  * buttons — so adopting it here would either be half-built (a `tab` role with no keyboard
  * behaviour is worse than no role at all, because a screen reader announces a contract the control
  * does not honour) or would make the one control that picks a *search* behave unlike the control
@@ -998,7 +998,7 @@ export function DeckSearchPanel({
  * a claim that it is one** — the words say which search you are in either way, and what a screen
  * reader is told is the pressed state, which is honoured.
  *
- * **The words are written out rather than derived**, for the reason the Theory/Live switch gives:
+ * **The words are written out rather than derived**, for the reason the Theory/Actual switch gives:
  * `text-transform` changes what is drawn and not what a control is *called*, so a capitalised
  * label is one voice control has to be asked for in the uncapitalised word (WCAG 2.5.3).
  *

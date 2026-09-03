@@ -168,7 +168,7 @@ export const DeletingACategory: Story = {
 
     const dialog = await canvas.findByRole("group", { name: "Delete Ramp" });
     await expect(within(dialog).getByText(/Nothing is lost/)).toHaveTextContent(
-      "both the live and theory lists",
+      "both the theory and actual lists",
     );
     await expect(
       within(dialog).getByRole("button", { name: "Move 7 cards and delete" }),

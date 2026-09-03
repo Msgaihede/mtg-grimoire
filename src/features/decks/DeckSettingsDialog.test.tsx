@@ -567,7 +567,7 @@ describe("DeckSettingsDialog", () => {
     expect(toggle).toHaveAttribute("aria-checked", "false");
     expect(screen.getByText(/keeps every row/)).toBeInTheDocument();
     expect(
-      screen.getByText(/makes the deck you have the plan and starts the live list empty/),
+      screen.getByText(/makes the deck you have the plan and starts the actual list empty/),
     ).toBeInTheDocument();
     // The sentence it must no longer make: nothing is copied any more.
     expect(screen.queryByText(/copies the live deck/)).not.toBeInTheDocument();
@@ -681,7 +681,7 @@ describe("DeckSettingsDialog", () => {
    * **Emptying a list**, the one thing in this dialog that is not a setting.
    *
    * The names are matched on a **pattern** throughout, because a greyed button's name carries
-   * the reason it is greyed — `getByRole("button", { name: "Clear live list…" })` finds nothing
+   * the reason it is greyed — `getByRole("button", { name: "Clear actual list…" })` finds nothing
    * on the empty deck and reads exactly like the control never being drawn.
    */
 
@@ -691,7 +691,7 @@ describe("DeckSettingsDialog", () => {
     open();
     await loaded();
 
-    expect(screen.getByRole("button", { name: /Clear live list/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Clear actual list/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Clear theory list/ })).toBeInTheDocument();
   });
 
@@ -701,7 +701,7 @@ describe("DeckSettingsDialog", () => {
     open();
     await loaded();
 
-    expect(screen.getByRole("button", { name: /Clear live list/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Clear actual list/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Clear theory list/ })).toBeNull();
   });
 
@@ -733,7 +733,7 @@ describe("DeckSettingsDialog", () => {
       expect(screen.queryByRole("group", { name: "Clear the theory list" })).toBeNull(),
     );
     // And the reader is back to the one list the deck now has, not to an empty section.
-    expect(screen.getByRole("button", { name: /Clear live list/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Clear actual list/ })).toBeInTheDocument();
   });
 
   /** One question at a time, and it is about the list whose button was pressed — the group's
@@ -746,9 +746,9 @@ describe("DeckSettingsDialog", () => {
     await userEvent.click(screen.getByRole("button", { name: /Clear theory list/ }));
 
     expect(screen.getByRole("group", { name: "Clear the theory list" })).toBeInTheDocument();
-    expect(screen.queryByRole("group", { name: "Clear the live list" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Clear the actual list" })).toBeNull();
     // The buttons are replaced by the question rather than sitting under it.
-    expect(screen.queryByRole("button", { name: /Clear live list/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Clear actual list/ })).toBeNull();
   });
 
   /**
@@ -766,8 +766,8 @@ describe("DeckSettingsDialog", () => {
     await loaded();
     const user = userEvent.setup();
 
-    await user.click(screen.getByRole("button", { name: /Clear live list/ }));
-    const live = screen.getByRole("group", { name: "Clear the live list" });
+    await user.click(screen.getByRole("button", { name: /Clear actual list/ }));
+    const live = screen.getByRole("group", { name: "Clear the actual list" });
     expect(within(live).getByRole("button", { name: "Remove 7 cards" })).toBeInTheDocument();
     expect(within(live).getByText(/8 cards in the other list/)).toBeInTheDocument();
 
@@ -805,13 +805,13 @@ describe("DeckSettingsDialog", () => {
     open();
     await loaded();
 
-    await userEvent.click(screen.getByRole("button", { name: /Clear live list/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Clear actual list/ }));
     await userEvent.click(screen.getByRole("button", { name: "Remove 7 cards" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Could not save that change — Database is busy.",
     );
-    expect(screen.getByRole("group", { name: "Clear the live list" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Clear the actual list" })).toBeInTheDocument();
   });
 
   /**
@@ -842,9 +842,9 @@ describe("DeckSettingsDialog", () => {
     open();
     await loaded();
 
-    const live = screen.getByRole("button", { name: /Clear live list/ });
+    const live = screen.getByRole("button", { name: /Clear actual list/ });
     expect(live).toBeDisabled();
-    expect(live).toHaveAccessibleName("Clear live list… (already empty)");
+    expect(live).toHaveAccessibleName("Clear actual list… (already empty)");
     expect(screen.getByRole("button", { name: /Clear theory list/ })).toBeDisabled();
     expect(deckClear).not.toHaveBeenCalled();
   });

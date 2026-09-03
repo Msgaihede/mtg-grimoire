@@ -1220,8 +1220,15 @@ describe("DecksPage", () => {
 
   /**
    * Which of a deck's two lists exist, on the tile — derived from the two fields `deck_list`
-   * already answers rather than stored, so the badge and the editor's Live/Theory switch can
-   * never disagree. A theory list beside an empty live one is a plan, not a deck.
+   * already answers rather than stored, so the badge and the editor's Theory/Actual switch can
+   * never disagree. A theory list beside an empty actual one is a plan, not a deck.
+   *
+   * **The deck with one list is asserted to wear _no_ badge**, which is the half of issue #357
+   * a reworded string would not have covered: a word every deck in the gallery carries says
+   * nothing about any of them. The pattern is the badge's whole **vocabulary** — the two words
+   * it can hold now and the one it used to — rather than the two current ones, because the claim
+   * is that this tile is unmarked and a badge reading `ACTUAL` would satisfy a narrower regex
+   * while being the exact thing that was deleted.
    */
   it("badges a deck by which of its two lists exist", async () => {
     deckList.mockResolvedValue([
@@ -1233,9 +1240,9 @@ describe("DecksPage", () => {
     wrap(<DecksPage />);
 
     const burn = (await tileFor("Burn")).closest("li")!;
-    expect(within(burn).getByText("LIVE")).toBeInTheDocument();
+    expect(within(burn).queryByText(/THEORY|ACTUAL|LIVE/)).not.toBeInTheDocument();
     const kenrith = (await tileFor("Kenrith Two-Drops")).closest("li")!;
-    expect(within(kenrith).getByText("LIVE + THEORY")).toBeInTheDocument();
+    expect(within(kenrith).getByText("THEORY + ACTUAL")).toBeInTheDocument();
     const sketch = (await tileFor("Sketch")).closest("li")!;
     expect(within(sketch).getByText("THEORY ONLY")).toBeInTheDocument();
   });

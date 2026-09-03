@@ -49,7 +49,7 @@ export const Default: Story = {
     await waitFor(async () => await expect(await canvas.findByText("Cut candidate")).toBeVisible(), {
       timeout: FRAME_WAIT,
     });
-    await expect(canvas.getByText("On cards in this live list")).toBeVisible();
+    await expect(canvas.getByText("On cards in this actual list")).toBeVisible();
     await expect(canvas.getByText("Your other labels")).toBeVisible();
     // Worn by nothing anywhere: the row `deck_label_list` could never answer, and the reason the
     // app-wide read exists.
