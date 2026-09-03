@@ -1658,7 +1658,15 @@ price | type`). An **inactive category stays its own group in all three grouping
   shorthand before the `padding-bottom` longhand (`.p-1\.5` at 29 557 against `.pb-2` at 31 795 in
   the built sheet), whatever order the two classes are written in. **`TableView` needs none of it**
   — its rows are absolutely positioned inside a virtualiser, so it draws `ring-inset` and always
-  has. Photographed before and after against the built stylesheet; the sweep that keeps it is
+  has.
+  **`TableView` was right first, and on 2026-09-03 its answer became everybody's**: `DROP_RING` is
+  `ring-1 ring-inset ring-accent/45` now, so the ring is painted *within* the border box and the
+  clip described above cannot reach it on any of the three roots either. `DROP_MARK_ROOM` stays on
+  all three regardless — the paragraph's own arithmetic says why, and it is `FOCUS`'s 4px rather
+  than the ring's 2 that set the number. What prompted the change was a reader reporting the marks
+  as bulky and as overlapping neighbouring content, which is this same defect seen from the other
+  side: a ring painted outside its box intrudes on whatever is next to it whether or not a scroller
+  clips it. `src/lib/dropMarks.ts` carries it in full. Photographed before and after against the built stylesheet; the sweep that keeps it is
   `views.test.tsx`'s `leaves its drop marks room inside the box that clips them`, written as a
   class assertion because **jsdom has no layout engine and therefore no clip at all**.
   **`TableView` is the exception and is a difference in kind, not a case to tidy away.**
@@ -2032,6 +2040,25 @@ price | type`). An **inactive category stays its own group in all three grouping
   finish through `FinishMark`'s SVG `<title>`. **The seventh is missing on purpose**: the canvas
   wants the set _name_ behind the printing code, and `DeckCard` carries only `setCode` —
   `cards.set_name` exists but `deck_card_select` does not select it.
+- **The shortage is a mark of the _live_ list only, and `deckCardShort` is the whole of the rule**
+  (2026-09-03, [issue #354](https://github.com/Msgaihede/mtg-grimoire/issues/354)). The red `3/4`
+  in a stacked card's chin, and the `you own 3 of 4` clause `deckCardName` says on all four views,
+  are one predicate in `cardControl.tsx` — because a figure and the words it is announced by must
+  never disagree about whether there is a shortage at all. It guards on **two** ways
+  `ownedQuantity` reads `0` without the shelf being empty, and the second is new: an inactive
+  category (the allocator claims no copy for a switched-off pile) and **the theory list**, where
+  `deck.rs`'s rule 2 is that _a plan holds nothing_ — the copies in the deck's group belong to what
+  is sleeved up, so a theory row reads 0 owned however full the collection is. That drew `0/1` on
+  **every card of a plan**: a hundred red marks all saying the same untrue thing, which is what was
+  reported. **The comparison a plan can honestly make is the shopping list's** —
+  `deck_theory_diff` subtracts _quantities_ and is one press away on `Compare` — and the
+  **deck-level figure is untouched**: `DeckLedger`'s `Owned` term is a fact about the whole list
+  and was explicitly kept.
+  **The other three views needed no change, and it is worth knowing why rather than assuming they
+  were missed.** `GridView` and `TextView` draw `card.quantity` alone, which is the deck's own
+  count and no comparison; `TableView`'s `Owned` column hands `OwnedBadge` a theory row's `0`, and
+  that component's own guard (`owned <= 0 && !wishlisted`) already returned `null`. So the column
+  was blank on a plan before this and is blank after it, for a reason of its own.
 - **A card carries two marks beyond its own facts — _picked_ and _landed_ — and they are one
   vocabulary across all four views** (`cardControl.tsx`, 2026-08-14). Picked is the card the detail
   pane is open on: `SELECTED_CARD`, which is `ring-2 ring-accent`, character for character

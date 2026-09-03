@@ -189,7 +189,10 @@ const tileFinish = (row: PrintingRow) => soleFinish(row.finishes);
  *
  * Elesh Norn is the card in that report: three of its eleven printings drew the identical
  * `Sparkles`, and they are a Halo Foil (`mul 133`), a serialized Double Rainbow (`mul 133z`)
- * and an ordinary Secret Lair foil (`sld 811`). This is what tells them apart.
+ * and an ordinary Secret Lair foil (`sld 811`). This is what tells them apart — **in words,
+ * and no longer in the picture**: since issue #353 the glyph is the finish on every surface,
+ * so all three still draw that `Sparkles` and it is the mark's label, its tooltip and the
+ * tile's caption that answer *which* foil.
  *
  * Paired with {@link tileFinish} rather than read off the printing alone, so a foil word is
  * withheld from a printing that is also sold plain — see `finishTreatments`. Module scope for

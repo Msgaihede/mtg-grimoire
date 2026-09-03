@@ -259,14 +259,36 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   claim `soleFinish` above already refuses to make; a trait outlives the finish, which is what
   lets **1 718 printings that draw nothing today** carry a mark at all. `oilslick` + `raisedfoil`
   collapses to the one name a player says.
-  **The glyph is `Aperture` and it replaces the finish's**, so the corner chip still holds at
-  most a crown and one finish mark — the rule in `src/CLAUDE.md` that a third mark wanting that
-  corner means the corner is full. Iris blades because they have to be told from `Sparkles` and
-  `Gem` at 12px, where `Sparkle` is `Sparkles` minus two points and `Diamond` is `Gem` without
-  its facets. The **words** follow the same rule the chip already had: joined with ` · ` where
+  **A treatment renames the mark and never redraws it** (2026-09-03, issue #353 — the
+  correction to how this shipped). The glyph is the **finish**, always: `Sparkles` for foil,
+  `Gem` for etched, and a Surge Foil is the same `Sparkles` as an ordinary one. It was
+  `Aperture` for every named copy for a fortnight, and that was the bug — the glyph swap only
+  reached the surfaces that pass `treatments`, so one Surge Foil was an `Aperture` on the
+  printings wall and a `Sparkles` in the card pane's foil toggle, the deck card menu and the
+  theory diff, which draw a finish and have never seen a promo type. One fact, two pictures,
+  and no way for a reader to know they meant the same thing. Standardising on the finish is
+  what makes the icon standardisable at all: there are three finishes and a treatment table
+  that grows whenever Scryfall names a promo type, so only the finish can have a picture each,
+  and what #160 actually asked for — tell a Halo Foil from a plain one — is the word's job on
+  every surface anyway.
+  **`Aperture` survives in exactly one slot**: a **nonfoil** copy with a trait, where there is
+  no finish glyph to keep and the alternative is the 1 718 unusual-but-not-shiny printings
+  drawing nothing at all. Iris blades because it has to be told from `Sparkles` and `Gem` at
+  12px, where `Sparkle` is `Sparkles` minus two points and `Diamond` is `Gem` without its
+  facets. At most one glyph either way, so the corner chip still holds at most a crown and one
+  finish mark — the rule in `src/CLAUDE.md` that a third mark wanting that corner means the
+  corner is full.
+  Two call sites moved with it. The **collection table's** mark was gated on the copy having a
+  treatment name, which was right while a treatment had its own glyph and became the same
+  one-fact-two-pictures defect inside one table once it did not — it is ungated now, and
+  `FinishMark`'s own `null` for a plain copy is what keeps the unmarked case unmarked. The
+  **deck card menu's** finish row drew `Sparkles` even when it read `Set as etched`; it takes
+  the same two glyphs the marks do, with `Sparkles` standing for the control itself on the
+  regular row and the submenu head, since nonfoil has no glyph anywhere in the app.
+  The **words** follow the same rule the chip already had: joined with ` · ` where
   there is room for a sentence (a tooltip, an accessible name — "Double Rainbow Foil ·
   Serialized"), and the first one alone where there is room for a column (the pane's per-finish
-  price rows, which read `Halo Foil  $95.79`). The collection table keeps the glyph in its
+  price rows, which read `Halo Foil  $95.79`). The collection table keeps the mark in its
   **Name** cell rather than lengthening `Finish · condition`, which is 5.5rem and truncates
   "Nonfoil · NM" as it stands.
 - **`mix-blend-mode: overlay` is invisible over card art, and only a screenshot says so.**
@@ -735,7 +757,12 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   drawn with no chrome whatever. Two things did **not** have to change and each is a rule worth
   keeping: `DROP_RING`/`DROP_OVER` are `ring-2 ring-accent` and `bg-accent/10`, and a ring is a box
   shadow **outside** the border box, so the drag highlight never read the border it appears to sit
-  on; and the border is transparent rather than absent, for the arithmetic above. `opacity-60` also
+  on; and the border is transparent rather than absent, for the arithmetic above.
+  **Both of those values changed on 2026-09-03, and the second half of that first clause is now
+  the opposite of what it says**: the ring is `ring-1 ring-inset ring-accent/45` and the wash
+  `bg-accent/15`, and an inset ring is painted *within* the border box. What stands above is what
+  was measured on the day and is left as measured — the marks section below carries the change and
+  the reader report behind it. `opacity-60` also
   makes that `<ul>` a stacking context, and the `<ul>` is what takes `LAYER.raised` when a card
   opens — the first thing to check if the lift ever regresses in inactive piles alone.
   **All of it is now measured in the shipped window — 2026-08-14, `npm run tauri dev`, a debug
@@ -1063,6 +1090,21 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
 - A layer that Escape dismissed hands focus back to whatever opened it, _before_ React
   flushes the close (the element is still mounted). An outside-click deliberately does not
   — the reader is already somewhere else.
+  **One kind of layer breaks that parenthetical without breaking the rule, and it arrived on
+  2026-09-03 with the folder wall's naming tiles.** Where a layer *replaces* its own opener —
+  `New folder`'s tile becoming the field it used to raise, a folder card becoming the field its
+  `⋯` used to raise — the opener is **not** still mounted, so focusing the remembered element is
+  a call on a detached node: a silent no-op, with nothing on screen and nothing in the console to
+  say the caret went to `<body>`. The element that should take it is the one React has just
+  rendered in the opener's place, and only the host knows which that is; `useFolderFieldReturn`
+  in `components/FolderNameField.tsx` refs it and restores on the close. **What keeps that from
+  becoming an exception to the second sentence as well is a test on
+  `document.activeElement`** — it restores only where the caret is `null` or `document.body`,
+  which is exactly the state Escape, the ✕ and a committed write all leave behind, so an outside
+  click that landed on something else keeps its own. **That last clause is reasoned and not
+  observed**: the last section on this page measured the tiles' geometry over the built CSS, but
+  where the caret actually lands after each of the four exits is one of the three things it still
+  owes, and only the shipped window can answer it.
 - **Z-indexes come from `LAYER` in `src/lib/layers.ts`, and `src/lib/layers.test.ts` sweeps
   `src/` to keep it the only place they are written.** The bug it closed is worth the
   paragraph: the search view's set picker (`absolute z-20`) was painted over by the results
@@ -2139,6 +2181,14 @@ everything drawn outside its own border box painted in the clipped region:
 | `FOCUS` (`outline-2 outline-offset-2`) | 2px of outline standing 2px off the edge | the whole side, gone |
 | `DROP_OVER` (`bg-accent/10`)           | inside                                   | untouched            |
 
+**The first row stopped being true on 2026-09-03**, and the table is left as it was because it is
+the record of the defect rather than a description of today. `DROP_RING` is `ring-1 ring-inset
+ring-accent/45` now, and an inset ring is painted *within* the border box — so it joins
+`DROP_OVER` in the "untouched" column and cannot be clipped by a scroller at all. **`DROP_MARK_ROOM`
+did not change and must not**: the middle row is the one that always asked for the larger number,
+a clipped focus indicator is a WCAG 2.4.7 failure rather than a cosmetic one, and 6px is still
+`FOCUS`'s 4 plus two to spare.
+
 Three surfaces, one defect, and the shape of it differs by view: Stacks loses the left edge of the
 first pile in every line and the right edge of the rail, Text the same plus the top of its first
 line, and **Grid loses the ring down both sides of every group at once** — a group there is as wide
@@ -2170,6 +2220,86 @@ rect is zero, and a rendering assertion passes just as happily against a view th
 padding again. `views.test.tsx` sweeps the class pair instead — `overflow-x-auto` **and**
 `DROP_MARK_ROOM` on each of the three roots — because the padding is only load-bearing on account
 of the `overflow`.
+
+## The drop marks, made quiet and made to agree (2026-09-03)
+
+**The report.** Three sentences from the reader, and they turned out to be one defect and two
+consequences of it: the highlights are "huge bulky outlines", they "often overlap with other
+content", and they "don't align with the dotted outline and faint highlight appearing when
+actually hovering over a dropzone in most cases". A fourth, separate: a dragged card "occludes a
+lot of content".
+
+**The cause of the first three.** `DROP_RING` was `ring-2 ring-accent`, and a Tailwind ring is a
+box shadow painted **outside** the border box. It went up on *every* eligible target for the whole
+length of a drag, so a wall of drawers became a dozen hard 2px rectangles each intruding 2px into
+its neighbour's gap — bulk and overlap from one property. The misalignment was the same fact seen
+from the third side: on all four folder cards the ring was on the wrapping `<li>` and the card's
+dashed border and `DROP_OVER` wash were on the `<button>` inside, so the gold stood 2px proud of a
+dash it never touched. `features/decks/FolderCard.tsx` was the worst case — a ring on the `<li>`
+for the deck drag, a second on an inner `<div>` for the folder drag, and the button's dash inside
+both: **three concentric outlines for one landing**.
+
+**The fix, in three parts.**
+
+| | before | after |
+| --- | --- | --- |
+| `DROP_RING` — borderless targets | `ring-2 ring-accent` | `ring-1 ring-inset ring-accent/45` |
+| `DROP_EDGE` — targets with an edge | *(did not exist)* | `border-accent/45 transition-none` |
+| `DROP_OVER` | `bg-accent/10` | `bg-accent/15 ring-accent transition-none` |
+
+`ring-inset` is the load-bearing word: an inset ring is painted *within* the border box, so the
+overlap is impossible by construction rather than tuned away. `DROP_EDGE` is the alignment fix and
+it works by removing the second line rather than by lining two up — a card that already owns a
+dashed outline turns *that* outline gold, so there is no pair of edges left to disagree. And the
+over state escalates by **colour, never by width**: both tokens land in one `cn()`, so a `ring-2`
+here would sit in the same `tailwind-merge` width group as the other's `ring-1` and the mark's
+thickness would depend on argument order. Width lives in one token; this one raises
+`ring-accent/45` to `ring-accent` in the ring-*colour* group, where overriding is the point.
+
+**The `transition-none` on two of them is not tidiness.** Those buttons already tween their
+colours over 150ms for hover, and moving the mark onto the button would have put a drop affordance
+behind that tween — the rule `DROP_RING` gets for free by being a box shadow. It costs nothing,
+since the class is only applied during a drag and `:hover` does not update while the pointer is
+holding something. It also keeps the two marks arriving *together*, which matters now that they
+share an element: a border that snapped while its wash faded would be a second misalignment, in
+time rather than in space, introduced by the fix for the first.
+
+**The occlusion is a separate, one-line change.** There was no `opacity` anywhere on
+`[data-dnd-dragging]` — the preview is a clone of the source drawn at full size and full opacity,
+and on a deck that is ~293px of card art laid over the heading the reader is aiming at.
+`src/index.css` now carries `[data-dnd-dragging] { opacity: 0.75 }` as an **app-owned rule kept
+separate from the copied library block**, which is a verbatim copy the fence in
+`lib/dndManager.test.ts` checks the library against; that fence runs one way (library ⊆ ours), so
+an extra rule of the app's own is legal and does not read as drift in a copy the app does not own.
+
+**Verified against the built stylesheet, not the source** — `dist/assets/index-BDP3Px9q.css`,
+2026-09-03, because a mistyped Tailwind utility emits **nothing** and source still reads correctly.
+All five present: `.border-accent\/45`, `.bg-accent\/15`, `.ring-accent\/45`,
+`.ring-inset{--tw-ring-inset:inset}` and `[data-dnd-dragging]{opacity:.75}`. Then photographed
+lock-free — a `file://` page against that sheet, headless Edge at `--force-device-scale-factor=2`,
+with the **old** `ring-2 ring-accent` drawn in the same frame for comparison. The old ring reads
+visibly wider than the element it is on; the new hairline hugs the inside of the rounded rect; the
+folder card's three states are one dash going grey → warm → solid-gold-with-wash; and a
+`data-dnd-dragging` tile is plainly faded beside an identically-classed one. The app lock was held
+by another worktree, which is what the dist-CSS route is for.
+
+**What did not change, and must not.** `DROP_MARK_ROOM` stays `p-1.5`. The ring no longer needs it
+— it cannot be clipped — but `FOCUS` still stands 4px proud, and half a focus indicator is a WCAG
+2.4.7 failure rather than a cosmetic one. The 6px was always sized for `FOCUS` rather than for the
+ring, so the number is unchanged and only its justification narrowed. `TableView` had reached the
+inset answer on its own long before, for rows absolutely positioned inside a virtualiser; its
+local `ring-inset` is now a duplicate of what the token says and was removed.
+
+**Three test holes the change opened, all of which would have gone green.** Worth recording
+because each is the same shape: an assertion written against a literal that no longer exists
+anywhere passes for *every* state. `CollectionPage`/`WishlistPage` had eight
+`classList.contains("ring-2")` refusal checks — the ones proving a target that lights up never
+then refuses the drop — replaced by a `wearsDropMark` subtree helper. `DecksPage`'s `ringed`/
+`washed` helpers hardcoded `ring-2`/`bg-accent/10` against **`FolderTree`** rows, and now ask for
+the ring's *width*, since the two tokens deliberately share the colour group and an all-classes
+test would call a correctly marked row unringed at exactly the moment it is most marked. And
+`AppShell` had four `not.toHaveClass("ring-accent")` absence checks: `toHaveClass` matches whole
+tokens, so an entry wrongly armed with `ring-accent/45` would have sailed through.
 
 ## The format check that changed width with the deck
 
@@ -4658,3 +4788,147 @@ tab through `http://localhost:9333/json/close/<id>` before reloading, and take t
 **And `vite preview` needs `--host`.** Without it the PC gets 200 and the phone gets `000` through
 `adb reverse` — the server binds too narrowly for the tunnel to reach, and the failure looks like
 a broken tunnel rather than a bound socket.
+
+## The folder wall names its own folders (2026-09-03) — measured over the built CSS, not in the window
+
+The Collection and Wishlist walls were rearranged from a Claude Design mock, and **the geometry it
+promised was measured the same day**: 2026-09-03, in **headless Edge** (`msedge --headless=new`)
+over the **built stylesheet** — `dist/assets/*.css` from an `npx vite build` — on a `file://` page
+reproducing the wall's real markup. That is this repo's lock-free method, and it is what was
+available: the app lock was held by another worktree for the whole session.
+
+**So say the honest half first. This is not the shipped WebView2 window.** Nobody has driven the
+change in the real app. What headless Edge over the real CSS *can* settle is what the boxes do,
+and it settled it; what it cannot touch is anything with a reader's hand in it. A live pass still
+owes this section three things, and only three:
+
+- **Where the caret actually is** after each of the four ways out of the field — Escape, the ✕, a
+  committed write, and an outside click that lands on something else. `useFolderFieldReturn`'s
+  `document.body` test is reasoned, not observed.
+- **The blur discard against a real pointer**, rather than against a synthesised `relatedTarget`.
+- **A name long enough to need the truncation**, and how the field behaves under one.
+
+### The wall does not reflow, and that is the central claim
+
+The scroller was set at a **1032px content column** with `p-1.5` and the wall's own
+`grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-2` — five columns of ~197.6px — with one row
+holding all four states side by side: the resting `New folder` tile, that tile naming, a resting
+folder card, and a folder card renaming.
+
+| Read back | Figure |
+| --- | --- |
+| Height, all four tiles | **62px** |
+| `top`, all four | **30** |
+| Width, all four | **197.59** (the resting folder card reads 197.61 — sub-pixel rounding of its own content) |
+| The single-row scroller | **74px** — 62 plus `p-1.5` either side |
+
+A tile becoming a field, and a card becoming a field, each keep the track and the row height
+**exactly**. The 74px agrees with the rule `WishlistPage.tsx` already states about the band around
+the wall — `max-h-44` is a **ceiling and not a height**, which is what lets a wall holding one row
+be one row tall.
+
+### The corner pair lands where the `⋯` lands
+
+The folder card's `⋯` and both `✓ / ✕` pairs sit at **y = 34** — 4px down from the tile's own top,
+which is `right-1 top-1` resolving against the `<li>` and not against the form. The pair is
+**58px** wide (28 + a 2px gap + 28) against the `⋯`'s 28.
+
+**And a name stops short of the tick rather than running under it**, on both shapes and by the
+same margin: on the naming tile the input's right edge reads **366.19** against the tick's left
+edge at **371.19**, and on the renaming card **777.39** against **782.39** — **5px** clear each
+time. That is what `pr-[4.125rem]` buys: 66px = `right-1`'s 4 + 28 + 2 + 28 + 4. It is the figure
+that would go wrong first if anyone rewrote that literal as arithmetic, which Tailwind would
+answer by emitting no rule at all.
+
+### The vocabulary rule holds in computed style, not only in source
+
+`border-style` computes **`solid`** on the resting `New folder` tile *and* on the naming tile, and
+**`dashed`** on the resting folder card *and* on the renaming card. The dashed-means-provisional
+rule is therefore a fact about the built CSS rather than about the classes somebody wrote.
+
+Two utilities were confirmed to **emit**, by grepping the built CSS: `caret-accent` resolves to
+the gold `oklch(0.75 0.12 85)`, and `pr-[4.125rem]` emits `padding-right:4.125rem`. Worth
+recording only because a Tailwind utility that emits nothing fails completely silently — which is
+this page's standing reason for checking `dist/` rather than source.
+
+### What it replaced, and why the old arrangement was wrong
+
+Both pages used to answer `New folder` and `⋯ → Rename…` in a **bordered strip under the
+breadcrumb**: a box with its own edge and its own background, an input, `Create folder` and
+`Cancel` spelled out in words, and — on a create — a line reading *in Collection* (or
+*in Wishlist*) to say which level the strip was about.
+
+Every one of those pieces re-established a context the reader could already see. The level is the
+wall they are looking at; the thing being named is going to appear in it; the thing being renamed
+is a tile with its name printed on it. So the strip spent a second panel's worth of screen saying
+what the wall says by being on screen — and it said it **somewhere else**, one navigation band
+away from the tile the press came from. It could also outlive its own subject: a create panel
+opened at one level survived a walk into another, and both pages already carried a
+`flatten ? null : panel` clause precisely because the same staleness had been found once before.
+
+### The tile says it by being the tile
+
+`components/FolderNameField.tsx` is the one field, drawn **as** the tile. The name is typed on the
+line the folder's name will occupy; `⋯`'s corner takes ✓ and ✕, which is the one place on a card a
+reader has been taught to find its controls; nothing above the wall opens and nothing in the wall
+moves. Neither shape draws a heading, a hint or a word on its buttons — an input on a folder tile
+with a tick beside it is not a sentence that needs writing out — and the *in …* line is gone
+because the wall the field is drawn in **is** that sentence.
+
+**Two shapes, and the border is the whole of what tells them apart.** The app's
+dashed-means-provisional rule decides which: `create` stays **solid**, because the tile is still a
+control and holds no folder yet; `rename` stays **dashed**, because the thing being renamed is
+already a container. Both wear `border-accent` while open, and that colour is the whole of what
+says *this tile is live*. A rename also keeps its **figures line** under the field, which is why a
+rename is not simply the create tile with a different label: a reader renaming *Trade binder* is
+looking at the drawer holding 240 cards, and a box that dropped the count would make them check
+they had the right one.
+
+### The footprint is inherited, and the row above is what re-proved it
+
+`FOLDER_CARD_HEIGHT` — `min-h-[calc(3.75rem+2px)]` — **moved out of `NewFolderCard.tsx` into
+`FolderNameField.tsx`**, because the naming tile needs it too: a tile that shrank the moment it
+became a field would reflow the wall on every press, which is the one thing the whole arrangement
+promises not to do. Its derivation is the older measurement and is unchanged — a folder card's
+button computes **62px** in headless Chromium over Tailwind's compiled utilities at the wall's
+real track, and `calc(3.75rem + 2px)` rather than a flat `3.875rem` because the two 1px borders
+are the one term in that sum that does not scale. The four-state row above is that number read
+back a second time, in a second browser, with the field open — which is the reading the move
+needed. The constant travels **to** the field rather than from it because the tile renders the
+field, so the other direction would be a cycle.
+
+Two geometry decisions ride on it and the same pass settled both. The ✓ / ✕ pair is absolute
+against the **`<li>`** rather than against the form, since a `<form>` with no positioning
+establishes no containing block — and the pair lands at the same `y = 34` on a naming tile as on a
+renaming card, whose boxes are different heights, which is the thing that would have failed had it
+resolved against the form. And `h-full` is on the **create** shape alone: the `<li>` is the grid
+item and stretches to the tallest card in its row, so a naming tile sized only by its own floor
+would shrink beside a card with a long wrapped name, while a rename must *not* stretch, because
+the folder card it replaces is content-height. The row's four equal heights are that arrangement
+holding at one row's worth of content; a **wrapped** name in the row is one of the things the
+pass did not put in front of it.
+
+### What it costs
+
+**A layer whose opener does not survive it**, which is the focus-return entry earlier on this page
+and the one genuinely new mechanism here.
+
+**A level clause on both pages' `openPanel`.** `flatten ? null : panel` became
+`flatten || (panel?.kind === "newFolder" && panel.parentId !== folderId) ? null : panel`. Without
+it, walking into another folder with the field open leaves a layer with no field on screen at all
+— invisible, and still swallowing the Escape that should have walked the reader back out. Where
+the strip was merely *confusing* about which level it meant, nothing is worse.
+
+**A drag source that has to stop being one while it is a field.** The renaming card's `<li>` is a
+folder drag source, so the field's `<form>` carries `data-no-drag` on its root — `NOT_A_DRAG` is
+matched with `closest()`, so one mark covers the input, the tick and the cross. Without it,
+pressing into the name and moving five pixels files the folder somewhere instead of placing the
+caret, and the press that was meant is never delivered. The card's **drop** targets are left
+registered on purpose: a copy dropped onto a folder whose name is being edited files perfectly
+well, and tearing the targets down would make the wall answer a drag differently depending on a
+state the dragger cannot see.
+
+**And the strip does not go away.** It survives for `Move to folder…` and `Delete…`, which is the
+right residue rather than a leftover: the answer to "into which folder" is a list of the *other*
+folders, and the answer to "delete this?" is a sentence about what happens to the cards inside.
+Neither is a name typed on a line, neither has a tile of its own, and neither fits on a 62px card.

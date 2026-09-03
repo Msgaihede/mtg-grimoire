@@ -1656,10 +1656,28 @@ async function dropOn(
 const dropLine = (target: HTMLElement) =>
   target.querySelector(`[${FOLDER_DROP_LINE_ATTR}]`)?.getAttribute(FOLDER_DROP_LINE_ATTR) ?? null;
 
-/** `DROP_RING` and `DROP_OVER`, asked of the class list rather than of the class string: a
- *  substring test would pass on any class that merely contains these. */
-const ringed = (element: HTMLElement) => element.classList.contains("ring-2");
-const washed = (element: HTMLElement) => element.classList.contains("bg-accent/10");
+/**
+ * `DROP_RING` and `DROP_OVER`, asked of the class list rather than of the class string: a
+ * substring test would pass on any class that merely contains these.
+ *
+ * **These are the tree rows** — `folderRow`, i.e. `features/decks/FolderTree.tsx` — and not the
+ * gallery's folder cards, which is why they still ask about a ring at all. A card's marks moved
+ * onto its own dashed edge on 2026-09-03 (`DROP_EDGE`); a tree row has no border to recolour, so
+ * it keeps the ring and only the ring's *values* changed under it.
+ *
+ * **The width rather than the whole token**, and that is load-bearing. The two marks deliberately
+ * share the ring-*colour* group so they cannot fight over width (see `lib/dropMarks.ts`), so a row
+ * that is both eligible **and** under the pointer carries `DROP_OVER`'s `ring-accent` in place of
+ * `DROP_RING`'s `ring-accent/45` — an all-classes test would call such a row unringed at exactly
+ * the moment it is most marked. The width is the half that says a ring is drawn at all, and it
+ * belongs to `DROP_RING` alone.
+ *
+ * Spelled as literals rather than imported from `dropMarks.ts` on purpose: an assertion that reads
+ * the constant it is checking passes for any value that constant takes, including a wrong one.
+ */
+const ringed = (element: HTMLElement) =>
+  element.classList.contains("ring-1") && element.classList.contains("ring-inset");
+const washed = (element: HTMLElement) => element.classList.contains("bg-accent/15");
 
 describe("dragging a folder", () => {
   beforeEach(() => {
@@ -2219,7 +2237,7 @@ describe("the folder row's menu", () => {
    *
    * The menu focuses that row as it closes and that is *not* enough — the same fact the tile's
    * three cases are here for. Every layer on this screen moves the caret into itself on mount
-   * (`FolderNameField`'s effect, `DeleteFolderConfirm`'s, `Dialog`'s panel), so the menu's
+   * (`TreeNameField`'s effect, `DeleteFolderConfirm`'s, `Dialog`'s panel), so the menu's
    * hand-back is overwritten a moment later and `dismiss()` is the only thing that can put it
    * right. It puts it on `openerRef` — so a menu row that passed no opener leaves the caret on a
    * panel about to unmount, and this codebase's own rule says what follows: focus drops to

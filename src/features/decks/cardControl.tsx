@@ -312,6 +312,30 @@ export function keepsSelection(target: EventTarget | null): boolean {
 }
 
 /**
+ * Whether this row is short of the copies the deck wants — the one fact the red `3/4` figure in a
+ * stacked card's chin draws, and the one clause {@link deckCardName} says in words.
+ *
+ * Two guards, and each is about an `ownedQuantity` that reads `0` for a reason other than an empty
+ * shelf:
+ *
+ * - **An inactive category.** The allocator claims no copy for a switched-off pile, so every row
+ *   in one reads 0 owned by construction — a shortage there is one the reader does not have.
+ * - **The theory list.** `deck.rs`'s rule 2 is that *a plan holds nothing*: the copies in the
+ *   deck's group belong to what is sleeved up, so a theory row reads 0 owned however full the
+ *   shelf is. That drew `0/1` on **every card of a plan** — a hundred red marks all saying the
+ *   same untrue thing, which is
+ *   [issue #354](https://github.com/Msgaihede/mtg-grimoire/issues/354). The comparison a plan
+ *   *can* honestly make is the shopping list's (`TheoryDiffDialog`), which subtracts quantities
+ *   and is one press away on `Compare`; the deck-level figure in `DeckLedger` is untouched.
+ *
+ * One predicate rather than two spellings, because the mark and the name it is announced by must
+ * never disagree about whether there is a shortage at all.
+ */
+export function deckCardShort(card: DeckCard): boolean {
+  return card.categoryActive && card.variant !== "theory" && card.ownedQuantity < card.quantity;
+}
+
+/**
  * What a deck card's control is called.
  *
  * It begins with the card's **name**, which is the visible label — WCAG 2.5.3 asks that of any
@@ -344,9 +368,9 @@ export function deckCardName(
    */
   theoryDelta: number | null = null,
 ): string {
-  // The allocator claims no copy for an inactive category, so every card in one reads 0 owned
-  // by construction — announcing a shortage there would report one the reader does not have.
-  const short = card.categoryActive && card.ownedQuantity < card.quantity;
+  // Both of {@link deckCardShort}'s guards, said in words exactly where the figure is drawn —
+  // one predicate, so the name and the mark cannot come to disagree.
+  const short = deckCardShort(card);
   // Which object this row plays. Three of the four views draw it as `FoilOverlay`'s chip and
   // the text columns as a glyph, and on every one of them it is decoration once the button is
   // named — so this is where it is said. `null` for the regular copy, which is the finish a

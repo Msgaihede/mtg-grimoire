@@ -339,6 +339,32 @@ const upTile = (label: string): HTMLElement =>
   screen.getByRole("button", { name: `Up one level to ${label}` }).closest("li")!;
 
 /**
+ * Whether a card on the wall is wearing either drop mark.
+ *
+ * **Both marks moved onto the card's own `<button>` face on 2026-09-03**, off the `<li>` around
+ * it — `lib/dropMarks.ts` carries the reason (a ring is a box shadow painted *outside* the border
+ * box, so on the wrapper it stood 2px proud of the dashed edge it was meant to agree with, which
+ * is the misalignment a reader reported). The drop *registrations* did not move and could not;
+ * only the `className` did.
+ *
+ * **This helper exists because the assertion it replaces would otherwise have gone quietly
+ * vacuous.** It read `classList.contains("ring-2")` on the `<li>` and asserts `false` — a target
+ * that lights up and then refuses the drop is a promise this page cannot keep. Nothing on this
+ * page draws a `ring-2` any more, so left alone it would pass in every state and prove nothing.
+ *
+ * It asks the whole subtree rather than the face alone, so it goes on answering if a card ever
+ * carries its edge somewhere else. The two marks are checked separately because `tailwind-merge`
+ * replaces one with the other rather than stacking them: an armed card reads `DROP_EDGE`'s
+ * `border-accent/45`, and the one actually under the pointer reads a solid `border-accent` beside
+ * `DROP_OVER`'s `bg-accent/15`.
+ */
+const wearsDropMark = (card: HTMLElement): boolean =>
+  [card, ...card.querySelectorAll("*")].some(
+    (box) =>
+      box.classList.contains("border-accent/45") || box.classList.contains("bg-accent/15"),
+  );
+
+/**
  * A wish carried out of the list and onto one of the two places it can be filed — a folder card,
  * or a segment of the breadcrumb.
  *
@@ -410,7 +436,9 @@ beforeEach(() => {
   wishlistImportCommit.mockReset().mockResolvedValue({ added: 1, updated: 0, removed: 0 });
   oracleTagsForPrintings.mockReset().mockResolvedValue([]);
   // **A wishlist nobody has filed, which is the case every block but the last one is about.** The
-  // cabinet draws nothing at all without folders — no breadcrumb, no cards, no strip — so this
+  // cabinet draws no breadcrumb, no folder card and nothing above the wall without folders — all
+  // that is left of it is the `New folder` tile, which is drawn over an empty cabinet on purpose
+  // (see `the folders`' trap-door case) and reaches nothing unless a test presses it — so this
   // default is what keeps the rest of this file a test of the list rather than of the tree.
   wishlistFolderList.mockReset().mockResolvedValue([]);
   wishlistFolderSummary.mockReset().mockResolvedValue([]);
@@ -1694,6 +1722,24 @@ describe("the folders", () => {
   const crumbs = () => screen.getByRole("navigation", { name: "Wishlist folders" });
 
   /**
+   * Whether a folder layer is drawn **in the strip above the wall** rather than in the wall
+   * itself — the two facts the strip is, now that naming and renaming have left it for the tiles:
+   * outside the `<ul>` of folder cards, and before it in document order.
+   *
+   * Structural rather than a class assertion, which is the only form of this that can go red for
+   * the right reason: `rounded-lg border bg-surface` matches a dozen boxes on this page, jsdom
+   * paints none of them, and a panel that had wandered into the wall would still be wearing the
+   * classes. Containment and order are the whole of what "above the wall" means to a reader.
+   */
+  const drawnAboveTheWall = (panel: HTMLElement): boolean => {
+    const wall = screen.getByRole("list", { name: "Folders" });
+    return (
+      !wall.contains(panel) &&
+      (panel.compareDocumentPosition(wall) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+    );
+  };
+
+  /**
    * A real Escape at `document.body`, reporting whether **anything consumed it** —
    * `useDismissOnEscape.test.tsx`'s own helper, here because `userEvent.keyboard` throws the
    * answer away and the answer is the whole of what the three "does nothing" tests below assert.
@@ -2031,22 +2077,37 @@ describe("the folders", () => {
 
     await userEvent.click(within(wall).getByRole("button", { name: "New folder" }));
 
-    expect(await screen.findByLabelText("New folder name")).toBeInTheDocument();
-    // At the top of the cabinet, so the folder lands at the root rather than inside anything.
-    expect(screen.getByText("in Wishlist")).toBeInTheDocument();
+    // **The tile becomes the field**, which is what makes the empty cabinet the case worth
+    // pressing rather than a second copy of the case below: there is no folder card beside it to
+    // stretch against, so this one `<li>` is both the control and the answer to it.
+    const field = await screen.findByLabelText("New folder name");
+    expect(within(wall).getAllByRole("listitem")[0]).toContainElement(field);
+    // And nothing above the wall says which level this is, because the wall the field is standing
+    // in already does. The strip used to print `in Wishlist` here for a reader who could not see
+    // which level it was drawn over; there is no strip to be unsure about now.
+    expect(screen.queryByText("in Wishlist")).toBeNull();
   });
 
   /**
-   * **The tile hands the caret back**, which is the whole reason `NewFolderCard` passes its own
-   * button up rather than a `MouseEvent`: `open(next, opener)` latches the element and `dismiss`
-   * focuses it before the panel unmounts, because an element that unmounts with the caret on it
-   * drops focus to `<body>` and the next Tab restarts from the top of the app.
+   * **The tile hands the caret back, and it no longer does it the way the rest of this app
+   * does.** The page's `dismiss` still runs and still focuses the element `open(next, opener)`
+   * latched — but that element is the `New folder` button, and the button is what the field
+   * *replaced*, so by the time the page focuses it it is a detached node and the call is a silent
+   * no-op. The element that should take the caret is the one React has just rendered in its
+   * place, which only the tile knows: `useFolderFieldReturn` is that half, and it restores only
+   * where `document.activeElement` is `<body>` — the state a caret dropped by an unmounting
+   * element leaves behind, and the state an outside click that landed on something else does not.
+   *
+   * **Both ways out, because they are two different mechanisms arriving at one place.** The ✕ is
+   * the field's own button and unmounts under the caret; Escape is the page's `"inner"` rung,
+   * fired at the input. A restore written for one of them and not the other would leave half the
+   * gesture dropping focus to the top of the app, and nothing on screen would say so.
    *
    * **Driven by a click, never by `el.focus()`.** A past session found that starting a keyboard
    * flow from a programmatically focused element tests a caret a reader cannot produce — and the
    * caret this asserts about is one a *pointer* creates, so the pointer is what has to make it.
    */
-  it("gives the caret back to the New folder tile when its panel is cancelled", async () => {
+  it("gives the caret back to the New folder tile, by the ✕ and by Escape", async () => {
     wrap(<WishlistPage />);
     const wall = await screen.findByRole("list", { name: "Folders" });
 
@@ -2060,6 +2121,70 @@ describe("the folders", () => {
       expect(screen.queryByLabelText("New folder name")).not.toBeInTheDocument(),
     );
     expect(screen.getByRole("button", { name: "New folder" })).toHaveFocus();
+
+    await userEvent.click(screen.getByRole("button", { name: "New folder" }));
+    expect(await screen.findByLabelText("New folder name")).toHaveFocus();
+
+    await userEvent.keyboard("{Escape}");
+
+    await waitFor(() =>
+      expect(screen.queryByLabelText("New folder name")).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole("button", { name: "New folder" })).toHaveFocus();
+  });
+
+  /**
+   * **And the third way out, which is the one that succeeds** — the caret has to come back from a
+   * committed write as well as from an abandoned one, or a reader who makes three folders in a
+   * row is thrown to the top of the app after each.
+   *
+   * It is a different route to the same place and that is why it is its own case: pressing ✓
+   * greys the tick *while the write is in flight*, so the browser blurs the control under the
+   * reader's own hand and the caret is already at `<body>` before the field unmounts. Nothing in
+   * the ✕ path exercises that, and a restore guarded on the wrong element would pass there and
+   * fail here.
+   */
+  it("gives the caret back to the tile when the create commits", async () => {
+    wrap(<WishlistPage />);
+    const wall = await screen.findByRole("list", { name: "Folders" });
+
+    await userEvent.click(within(wall).getByRole("button", { name: "New folder" }));
+    await userEvent.type(await screen.findByLabelText("New folder name"), "Paid for");
+    await userEvent.click(screen.getByRole("button", { name: "Create folder" }));
+
+    expect(wishlistFolderCreate).toHaveBeenCalledWith(null, "Paid for");
+    await waitFor(() =>
+      expect(screen.queryByLabelText("New folder name")).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole("button", { name: "New folder" })).toHaveFocus();
+  });
+
+  /**
+   * **The field stands in the wall, in the tile's own place** — the whole claim of moving it off
+   * the strip, and the one a test that merely found the input would pass without.
+   *
+   * Three facts together, because any one of them alone is satisfied by an arrangement nobody
+   * wanted: the input is inside *this* `<li>` (a field in a strip above is not), the `New folder`
+   * button has left the tree (a field drawn *beside* the tile would leave it), and the wall is
+   * still three cards long with the drawers in their own positions (a field appended as a fourth
+   * `<li>` would pass the first two and reflow the row).
+   */
+  it("draws the naming field in the wall, in the tile's own place", async () => {
+    wrap(<WishlistPage />);
+    const wall = await screen.findByRole("list", { name: "Folders" });
+    await screen.findByRole("button", { name: /^Someday folder/ });
+
+    await userEvent.click(within(wall).getByRole("button", { name: "New folder" }));
+
+    const field = await screen.findByLabelText("New folder name");
+    const cards = within(wall).getAllByRole("listitem");
+    expect(cards).toHaveLength(3);
+    expect(cards[0]).toContainElement(field);
+    expect(within(wall).queryByRole("button", { name: "New folder" })).toBeNull();
+    // The drawers behind it are where they were, and are still drawers rather than fields: one
+    // open field across the whole wall is what `openPanel` naming exactly one thing buys.
+    expect(within(cards[1]).getByRole("button", { name: /^Ordered folder/ })).toBeInTheDocument();
+    expect(within(cards[2]).getByRole("button", { name: /^Someday folder/ })).toBeInTheDocument();
   });
 
   /**
@@ -2182,6 +2307,10 @@ describe("the folders", () => {
    *
    * `"New folder"` and no longer `"+ New folder"` — the plus was a control's decoration and the
    * tile draws a `FolderPlus` glyph instead, so the accessible name is the words alone.
+   *
+   * **The whole trip, from a tile inside a drawer.** The press turns that tile into the field, the
+   * name is typed on the line the folder's own name will occupy, and ✓ is what commits it — so
+   * this is also the case that would go red if the tile opened something that reached no write.
    */
   it("creates a folder inside the one the reader is standing in", async () => {
     wrap(<WishlistPage />);
@@ -2199,6 +2328,14 @@ describe("the folders", () => {
    * The `⋯` trigger is the app's first click-opened menu, and it reaches the three things a
    * folder can have done to it. The delete question is the one a reader guesses wrong: the two
    * cascades point opposite ways, and the sentence says both with the reassuring half first.
+   *
+   * **The strip is what answers two of those three, and this is where that survives.** Naming and
+   * renaming left it for the tiles on 2026-09-03; moving and deleting could not follow, because
+   * the answer to "into which folder" is a list of the *other* folders and the answer to "delete
+   * this?" is a sentence about what happens to the wishes inside — neither of which is a name
+   * typed on a 62px card's own line. So the question is asserted to be drawn where it always was:
+   * outside the wall and above it. Emptying the strip entirely is the plausible next edit, and
+   * this line is what would go red for it.
    */
   it("reaches Rename, Move and Delete from a folder card, and says what a delete takes", async () => {
     wrap(<WishlistPage />);
@@ -2211,19 +2348,22 @@ describe("the folders", () => {
 
     await userEvent.click(within(menu).getByRole("menuitem", { name: /Delete/ }));
 
-    expect(
-      await screen.findByText(
-        "Its wishes move back to your wishlist; folders inside it are deleted.",
-      ),
-    ).toBeInTheDocument();
+    const question = await screen.findByText(
+      "Its wishes move back to your wishlist; folders inside it are deleted.",
+    );
+    expect(drawnAboveTheWall(question)).toBe(true);
 
     await userEvent.click(screen.getByRole("button", { name: "Delete folder" }));
 
     expect(wishlistFolderDelete).toHaveBeenCalledWith(1);
   });
 
-  /** The rename field is the same one field the create uses, doing its other job. */
-  it("renames a folder from the same field", async () => {
+  /**
+   * **A rename is answered on the card**, by the same `FolderNameField` the `New folder` tile
+   * becomes — its other job, and the one that keeps the dashed border because the thing being
+   * renamed is already a container.
+   */
+  it("renames a folder from the card's own field", async () => {
     wrap(<WishlistPage />);
 
     await userEvent.click(await screen.findByRole("button", { name: "Manage Ordered" }));
@@ -2245,6 +2385,129 @@ describe("the folders", () => {
   });
 
   /**
+   * **The field opens on the drawer it is about, and every other drawer goes on resting.**
+   *
+   * This is the half a rename has that a create does not: there are twelve cards on a full wall
+   * and one of them is being renamed, so "the field is on screen" is not the claim — "the field
+   * is on *that* card" is. `openPanel` names exactly one folder and `WishFolderCard` compares
+   * against it, which is what keeps a wall from turning into a wall of fields; a card holding its
+   * own flag could not know another card's `Rename…` had been pressed.
+   *
+   * The figures line is asserted with it, because it is the whole reason a rename is not simply
+   * the `New folder` tile with a different label: a reader renaming a drawer is looking at what
+   * is in it, and a box that dropped the count would make them check they had the right one.
+   */
+  it("renames on the card itself, and leaves every other drawer alone", async () => {
+    wrap(<WishlistPage />);
+    await screen.findByRole("button", { name: /^Someday folder/ });
+
+    await userEvent.click(screen.getByRole("button", { name: "Manage Ordered" }));
+    await userEvent.click(
+      within(await screen.findByRole("menu")).getByRole("menuitem", { name: /Rename/ }),
+    );
+
+    const field = await screen.findByLabelText("Rename Ordered");
+    const cards = within(screen.getByRole("list", { name: "Folders" })).getAllByRole("listitem");
+    // The tile, `Ordered`, `Someday` — and the field is on the second of them.
+    expect(cards[1]).toContainElement(field);
+    expect(within(cards[1]).getByText("3 wishes · $30.00")).toBeInTheDocument();
+    // The card's own door and its `⋯` are out of the tree while the field stands in their place:
+    // a drawer that could still be opened underneath its own name field is two controls for one
+    // press.
+    expect(screen.queryByRole("button", { name: /^Ordered folder/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Manage Ordered" })).toBeNull();
+    // Everything else on the wall is untouched — one field at a time, tile included.
+    expect(within(cards[0]).getByRole("button", { name: "New folder" })).toBeInTheDocument();
+    expect(within(cards[2]).getByRole("button", { name: /^Someday folder/ })).toBeInTheDocument();
+    expect(within(cards[2]).getByRole("button", { name: "Manage Someday" })).toBeInTheDocument();
+  });
+
+  /**
+   * **And the card's `⋯` takes the caret back**, by both ways out and for
+   * `useFolderFieldReturn`'s reason: the trigger the page latched when the menu was opened is the
+   * `⋯` the field replaced, so it is a detached node by the time `dismiss` focuses it and the
+   * element that should have the caret is the one this render has just built.
+   *
+   * A committed rename as well as an abandoned one, because they leave the caret in different
+   * places on the way: Escape fires at the input, and ✓ greys itself while the write is in flight
+   * so the browser blurs it first.
+   */
+  it("gives the caret back to the folder's ⋯, by Escape and by a committed rename", async () => {
+    wrap(<WishlistPage />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Manage Ordered" }));
+    await userEvent.click(
+      within(await screen.findByRole("menu")).getByRole("menuitem", { name: /Rename/ }),
+    );
+    expect(await screen.findByLabelText("Rename Ordered")).toHaveFocus();
+
+    await userEvent.keyboard("{Escape}");
+
+    await waitFor(() => expect(screen.queryByLabelText("Rename Ordered")).toBeNull());
+    expect(screen.getByRole("button", { name: "Manage Ordered" })).toHaveFocus();
+
+    await userEvent.click(screen.getByRole("button", { name: "Manage Ordered" }));
+    await userEvent.click(
+      within(await screen.findByRole("menu")).getByRole("menuitem", { name: /Rename/ }),
+    );
+    await screen.findByLabelText("Rename Ordered");
+    await userEvent.keyboard("On its way");
+    await userEvent.click(screen.getByRole("button", { name: "Rename folder" }));
+
+    // The mock answers `Ordered` and the refetched list still holds that name, so the card the
+    // caret lands back on is the one that was renamed rather than a different drawer.
+    await waitFor(() => expect(screen.queryByLabelText("Rename Ordered")).toBeNull());
+    expect(screen.getByRole("button", { name: "Manage Ordered" })).toHaveFocus();
+  });
+
+  /**
+   * **Walking into another folder puts the naming field away**, and the clause that does it
+   * (`openPanel`'s `panel.parentId !== folderId`) is the one thing here a blur cannot cover.
+   *
+   * The ordinary pointer gesture never reaches it: clicking a folder card moves focus out of the
+   * field, and the field discards its draft on blur, so the panel is already gone before the
+   * level changes. The one state where that route is switched off is a **write in flight** — the
+   * field holds itself open through the round trip, precisely so a slow create cannot be
+   * cancelled by the browser blurring the tick it has just greyed — and a reader who gives up
+   * waiting and opens a drawer is exactly the reader this clause is for. So the create below
+   * never answers.
+   *
+   * What it would cost is asserted rather than described: without the clause the panel is still
+   * open at the new level, which means `useDismissOnEscape`'s `"inner"` rung is still armed and
+   * takes the press in the capture phase — so Escape stops walking the reader back out of the
+   * folder they have just opened, and nothing on screen says why. The field being gone and the
+   * press reaching the `"navigation"` rung are the two halves of the same fact.
+   */
+  it("closes the naming field when the reader walks into another folder", async () => {
+    // Never answers: the field stays open, which is what takes the blur discard out of the way.
+    wishlistFolderCreate.mockImplementation(() => new Promise(() => {}));
+    wrap(<WishlistPage />);
+    const wall = await screen.findByRole("list", { name: "Folders" });
+
+    await userEvent.click(within(wall).getByRole("button", { name: "New folder" }));
+    await userEvent.type(await screen.findByLabelText("New folder name"), "Paid for");
+    await userEvent.click(screen.getByRole("button", { name: "Create folder" }));
+    expect(wishlistFolderCreate).toHaveBeenCalledWith(null, "Paid for");
+    // Held open by the write rather than by the caret, which is what puts the blur discard out of
+    // reach: the tick greyed itself on the press, so nothing inside the field holds focus and the
+    // click below fires no `focusout` the form could cancel on.
+    expect(screen.getByLabelText("New folder name")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /^Ordered folder/ }));
+
+    await waitFor(() => expect(lastQuery().folderId).toBe(1));
+    // Gone, and the tile is a tile again — naming *this* level, not the one that was left.
+    await waitFor(() => expect(screen.queryByLabelText("New folder name")).toBeNull());
+    expect(screen.getByRole("button", { name: "New folder" })).toBeInTheDocument();
+
+    // And the press the invisible layer would have eaten walks the reader back out.
+    await userEvent.keyboard("{Escape}");
+
+    expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
+    expect(within(crumbs()).getByText("Wishlist")).toHaveAttribute("aria-current", "page");
+  });
+
+  /**
    * A folder may not go inside itself or inside anything it holds — `wishlist_folders.parent_id`
    * cascades onto itself, so a cycle is a graph SQLite would walk forever the day the folder is
    * deleted. The backend refuses it in words; this is the fence drawn before the reader can ask.
@@ -2258,6 +2521,9 @@ describe("the folders", () => {
     );
 
     const list = await screen.findByRole("group", { name: "Move Ordered into a folder" });
+    // The other half of the strip that survived the naming forms moving into the wall: a list of
+    // every other drawer has nowhere to be drawn on a 62px card.
+    expect(drawnAboveTheWall(list)).toBe(true);
     // Its own row and its child's are inert; the third folder is a live destination.
     expect(within(list).getByRole("button", { name: /Ordered/ })).toBeDisabled();
     expect(within(list).getByRole("button", { name: /Backordered/ })).toBeDisabled();
@@ -2644,7 +2910,7 @@ describe("rearranging the wishlist's cabinet", () => {
     for (const at of [AT_START, AT_MIDDLE, AT_END]) {
       stand("Backordered");
       const held = await startPointerDrag(source);
-      expect(folderCard("Backordered").classList.contains("ring-2")).toBe(false);
+      expect(wearsDropMark(folderCard("Backordered"))).toBe(false);
       await held.over(folderSlot("Backordered"), at);
       await held.drop();
     }

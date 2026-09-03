@@ -37,7 +37,7 @@
  * assembled its own would be four copies of one rule, and the rule reads the deck's categories,
  * its format spec and its labels — three facts no view has.
  */
-import { CircleMinus, Crown, FolderInput, Plus, Sparkles, Tag, UserRound } from "lucide-react";
+import { CircleMinus, Crown, FolderInput, Gem, Plus, Sparkles, Tag, UserRound } from "lucide-react";
 import type { MenuAction, MenuItem } from "@/components/menu/types";
 import { buildCardMenu, type CardMenuDeps, type CardMenuTarget } from "@/features/card/cardMenu";
 import { FINISH_LABEL, parseFinishes } from "@/lib/finish";
@@ -468,6 +468,14 @@ function finishItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem {
   const choices = finishChoices(card.finishes);
   const label = (f: DeckFinish) =>
     `Set as ${f === null ? REGULAR.toLowerCase() : FINISH_LABEL[f].toLowerCase()}`;
+  /**
+   * **The same two glyphs `FinishMark` draws**, because a menu row that names a finish is
+   * naming the same finish the mark on the card is — issue #353. `Sparkles` is the app's one
+   * foil icon and doubles as the finish control's own picture, which is what the regular row
+   * and the submenu head get: nonfoil has no glyph of its own anywhere in the app, and foil is
+   * the finish a reader opening this row came looking for.
+   */
+  const icon = (f: DeckFinish) => (f === "etched" ? Gem : Sparkles);
 
   // Nothing to pick. The label names foil rather than the finish the printing *is*, because
   // what the greyed row is saying is "this card has no other finish", and foil is the one a
@@ -477,7 +485,7 @@ function finishItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem {
       kind: "action",
       id: "finish",
       label: label("foil"),
-      Icon: Sparkles,
+      Icon: icon("foil"),
       disabled: true,
       onSelect: () => {},
     };
@@ -490,7 +498,7 @@ function finishItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem {
       kind: "action",
       id: "finish",
       label: label(other),
-      Icon: Sparkles,
+      Icon: icon(other),
       onSelect: () => deps.setFinish(card, other),
     };
   }
