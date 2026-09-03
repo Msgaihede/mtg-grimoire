@@ -30,12 +30,32 @@ function folder(over: Partial<WishlistFolder> & { id: number; name: string }): W
 /** The drawer every story below draws, and the one a wish is dropped into. */
 const EXPENSIVE = folder({ id: 3, name: "Expensive" });
 
+/** Two neighbours, so {@link Renaming} has drawers to stand its field among. */
+const SOMEDAY = folder({ id: 8, name: "Someday" });
+const TRADES = folder({ id: 11, name: "Trade binder" });
+
 function node(
   f: WishlistFolder,
   over: Partial<FolderNode<WishlistFolder>> = {},
 ): FolderNode<WishlistFolder> {
   return { folder: f, depth: 0, count: 0, children: [], ...over };
 }
+
+/**
+ * The card at rest — the field closed, nothing in flight.
+ *
+ * **`rename` is the page's state rather than the card's**: one field is open at a time across the
+ * whole wall, since pressing `New folder` has to close a rename already in progress and a card
+ * holding its own flag could not know that had happened. So it arrives as a prop, and this is what
+ * every story but one passes — including each neighbour in {@link Renaming}, which is what keeps
+ * the wall to the one open field the page allows.
+ */
+const RESTING: ComponentProps<typeof WishFolderCard>["rename"] = {
+  active: false,
+  pending: false,
+  onSubmit: fn(),
+  onCancel: fn(),
+};
 
 /**
  * The card as the page draws it: inside the `<ul>` the wall is, inside the scroller that wall
@@ -58,8 +78,24 @@ function node(
  */
 function Wall({
   act,
+  beside = [],
   ...card
-}: Omit<ComponentProps<typeof WishFolderCard>, "rowMenu"> & { act: (what: string) => void }) {
+}: Omit<ComponentProps<typeof WishFolderCard>, "rowMenu"> & {
+  act: (what: string) => void;
+  /**
+   * Drawers drawn after the subject, at rest.
+   *
+   * **Only {@link Renaming} passes any, and the reason is that its whole claim is a
+   * comparison.** A field with a dashed *accent* edge is only legible against the dashed *border*
+   * edges of the tiles it stands among — one on its own is a tile with a coloured outline and
+   * nothing to be coloured against. They share the subject's handlers because no story presses
+   * one; what is their own is the drawer and its figures.
+   */
+  beside?: readonly {
+    node: FolderNode<WishlistFolder>;
+    summary: ComponentProps<typeof WishFolderCard>["summary"];
+  }[];
+}) {
   const { menu, menuKey, menuClick } = useContextMenu();
   const build = (): MenuItem[] => [
     { kind: "action", id: "rename", label: "Rename…", onSelect: () => act("rename") },
@@ -67,20 +103,28 @@ function Wall({
     { kind: "separator", id: "before-delete" },
     { kind: "action", id: "delete", label: "Delete…", onSelect: () => act("delete") },
   ];
+  const rowMenu = {
+    onContextMenu: menu(build),
+    onKeyDown: menuKey(build),
+    onClick: menuClick(build),
+  };
   return (
     <div className={cn("relative max-h-44 overflow-y-auto", DROP_MARK_ROOM)}>
       <ul
         aria-label="Folders"
         className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-2"
       >
-        <WishFolderCard
-          {...card}
-          rowMenu={{
-            onContextMenu: menu(build),
-            onKeyDown: menuKey(build),
-            onClick: menuClick(build),
-          }}
-        />
+        <WishFolderCard {...card} rowMenu={rowMenu} />
+        {beside.map((other) => (
+          <WishFolderCard
+            {...card}
+            key={other.node.folder.id}
+            node={other.node}
+            summary={other.summary}
+            rename={RESTING}
+            rowMenu={rowMenu}
+          />
+        ))}
       </ul>
     </div>
   );
@@ -95,6 +139,7 @@ const meta = {
     summary: { wishes: 6, missing: 6, cost: 312, unpriced: 0 },
     currency: "usd",
     onOpen: fn(),
+    rename: RESTING,
     onDropWish: fn(),
     // The page's own answer, verbatim — spec §9: a folder takes any wish that is not already
     // filed in it. Stated once here rather than per story, because it is the rule rather than a
@@ -243,6 +288,56 @@ export const Unpriced: Story = {
     await expect(canvas.getByRole("button", { name: /^Expensive folder/ })).toHaveTextContent(
       "4 wishes · $88.00 · 2 unpriced",
     );
+  },
+};
+
+/**
+ * `Rename…`, answered **on the card** — and drawn beside two drawers at rest, because the whole
+ * claim here is a comparison.
+ *
+ * **What this replaced was a bordered strip above the wall**, with its own edge, its own
+ * background, `Create folder` and `Cancel` written out, and a line saying which level it was
+ * about. Every one of those pieces re-established a context the reader could already see: the
+ * level is the wall in front of them, and the drawer being renamed is the tile they pressed. So
+ * the tile says it by being the tile — the name is typed on the line the name already occupies, at
+ * the same track and the same footprint, and ✓ / ✕ take the corner the `⋯` was in.
+ *
+ * **The border is the part to look at, and it needs the neighbours to be legible.** The dash
+ * stays, because a folder being renamed is still a container and dashed is this app's word for
+ * that; only the *colour* moves, to `border-accent`, which is the whole of what says this tile is
+ * live. One field on its own is a tile with a coloured outline — against the two dashed grey edges
+ * either side of it, it is obviously the same kind of thing, mid-edit.
+ *
+ * **The figures line stays under the field**, which is the reason a rename is not the create tile
+ * with another word on the tick: a reader renaming *Expensive* is looking at the drawer holding
+ * six wishes worth $312, and a box that dropped the count would make them stop and check they had
+ * the right one — with the name, the only other thing to check by, the thing they are replacing.
+ *
+ * Both drop targets are deliberately left registered while the field is open: a wish let go here
+ * files perfectly well, and the reader dragging it cannot see the field. What the field does
+ * suppress is this card as a drag *source*, through one `data-no-drag` on its `<form>`.
+ */
+export const Renaming: Story = {
+  args: {
+    rename: { active: true, pending: false, onSubmit: fn(), onCancel: fn() },
+    beside: [
+      { node: node(SOMEDAY), summary: { wishes: 2, missing: 2, cost: 41, unpriced: 0 } },
+      { node: node(TRADES), summary: { wishes: 9, missing: 4, cost: 118, unpriced: 1 } },
+    ],
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const field = canvas.getByRole("textbox", { name: "Rename Expensive" });
+    // Named for the drawer rather than "Folder name": a wall of these is otherwise a row of
+    // identically-named boxes, and only one of them is open at a time for a sighted reader.
+    await expect(field).toHaveValue("Expensive");
+    await expect(field.closest("form")).toHaveTextContent("6 wishes · $312.00");
+
+    // The field is *instead of* the tile's two controls, not beside them — and only on this one
+    // card, which is what the neighbours are here to say.
+    await expect(canvas.queryByRole("button", { name: "Manage Expensive" })).toBeNull();
+    await expect(canvas.getByRole("button", { name: "Manage Someday" })).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: /^Trade binder folder/ })).toBeInTheDocument();
   },
 };
 
