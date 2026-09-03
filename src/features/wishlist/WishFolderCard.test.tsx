@@ -156,6 +156,7 @@ function MenuHost() {
           onKeyDown: menuKey(build),
           onClick: menuClick(build),
         }}
+        rename={RESTING}
         canDrop={() => false}
         onDropWish={onDropWish}
         canDropFolder={() => false}
@@ -171,6 +172,24 @@ const onDropFolder = vi.fn();
 const onContextMenu = vi.fn();
 const onKeyDown = vi.fn();
 const onClickMenu = vi.fn();
+const onRenameSubmit = vi.fn();
+const onRenameCancel = vi.fn();
+
+/**
+ * The card at rest: no field open, nothing in flight.
+ *
+ * **Written once because `rename` is the *page's* state rather than the card's.** One field is
+ * open at a time across the whole wall — pressing `New folder` has to close a rename already in
+ * progress, and a card holding its own flag could not know that had happened — so it arrives as a
+ * prop, and every test that is not about the rename says so by passing this rather than by
+ * re-deciding it a case at a time.
+ */
+const RESTING = {
+  active: false,
+  pending: false,
+  onSubmit: onRenameSubmit,
+  onCancel: onRenameCancel,
+};
 
 beforeEach(() => {
   onOpen.mockReset();
@@ -179,6 +198,8 @@ beforeEach(() => {
   onContextMenu.mockReset();
   onKeyDown.mockReset();
   onClickMenu.mockReset();
+  onRenameSubmit.mockReset();
+  onRenameCancel.mockReset();
 });
 
 // The stated viewport and the stated trigger box below are `vi.spyOn`s on real getters; nothing
@@ -186,28 +207,34 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("WishFolderCard", () => {
-  function mount({
-    on = node(EXPENSIVE),
-    summary = { wishes: 6, missing: 6, cost: 312, unpriced: 0 },
-    currency = "usd" as const,
-    canDrop = () => true,
-    canDropFolder = () => true,
-    withSource = false,
-    withFolder = false,
-    folderDrag,
-  }: {
+  interface MountOptions {
     /** Which drawer this card draws. Only the payload test below changes it. */
     on?: FolderNode<WishlistFolder>;
     summary?: { wishes: number; missing: number; cost: number; unpriced: number } | null;
     currency?: "usd" | "eur";
+    /** The page's rename state, laid over {@link RESTING} — so a case that is about the field
+     *  says only the part of it that is its own. */
+    rename?: Partial<typeof RESTING>;
     canDrop?: (drag: WishDrag) => boolean;
     canDropFolder?: (drag: FolderDrag, edge: FolderEdge) => boolean;
     withSource?: boolean;
     /** A sibling drawer in the air — the second payload this card reads, under its own key. */
     withFolder?: boolean;
     folderDrag?: FolderDrag;
-  } = {}) {
-    render(
+  }
+
+  function tree({
+    on = node(EXPENSIVE),
+    summary = { wishes: 6, missing: 6, cost: 312, unpriced: 0 },
+    currency = "usd",
+    rename = {},
+    canDrop = () => true,
+    canDropFolder = () => true,
+    withSource = false,
+    withFolder = false,
+    folderDrag,
+  }: MountOptions) {
+    return (
       <>
         {withSource && <Source />}
         {withFolder && <FolderSource drag={folderDrag} />}
@@ -220,14 +247,29 @@ describe("WishFolderCard", () => {
             currency={currency}
             onOpen={onOpen}
             rowMenu={{ onContextMenu, onKeyDown, onClick: onClickMenu }}
+            rename={{ ...RESTING, ...rename }}
             canDrop={canDrop}
             onDropWish={onDropWish}
             canDropFolder={canDropFolder}
             onDropFolder={onDropFolder}
           />
         </ul>
-      </>,
+      </>
     );
+  }
+
+  function mount(opts: MountOptions = {}) {
+    const view = render(tree(opts));
+    return {
+      /**
+       * Draw the same card again with something changed.
+       *
+       * **The rename ending is a *prop* going false**, since the flag is the page's — so it is
+       * the only way `useFolderFieldReturn`'s effect can ever fire, and the only way the caret
+       * test below can drive what a reader drives.
+       */
+      update: (next: MountOptions) => view.rerender(tree({ ...opts, ...next })),
+    };
   }
 
   /** The card's own box — the element the ring is drawn on, the one registered as a wish target,
@@ -235,6 +277,15 @@ describe("WishFolderCard", () => {
   function card(name = "Expensive"): HTMLElement {
     return screen.getByRole("button", { name: new RegExp(`^${name} folder`) }).closest("li")!;
   }
+
+  /**
+   * The same `<li>`, reached without going through the face.
+   *
+   * **The face is gone while the name is being edited**, so every claim about the card's boxes —
+   * the ring, the two drop targets, the drag source — needs a handle that survives the field
+   * replacing it. One card per mount, so the list item is unambiguous.
+   */
+  const item = () => screen.getByRole("listitem");
 
   /** The face inside it, which is what wears the wash — and the element a real pointer is over
    *  for all but the `⋯`'s corner, so it is where the folder drags below are aimed. */
@@ -251,7 +302,7 @@ describe("WishFolderCard", () => {
    * reason it always did — the folder target is the box `folderEdge` measures the three landings
    * against, and the `<li>` is the one every existing wish target, test and story already addresses.
    */
-  const slot = () => card().firstElementChild as HTMLElement;
+  const slot = () => item().firstElementChild as HTMLElement;
 
   /**
    * Which end the drop line is on, or `null` for no line at all.
@@ -274,7 +325,7 @@ describe("WishFolderCard", () => {
    * wish drag at its middle.
    */
   const stand = () => {
-    card().getBoundingClientRect = () => CARD_BOX;
+    item().getBoundingClientRect = () => CARD_BOX;
     slot().getBoundingClientRect = () => CARD_BOX;
   };
 
@@ -645,6 +696,150 @@ describe("WishFolderCard", () => {
     await drawer.drop();
     expect(onDropFolder).toHaveBeenCalledWith(OTHER_FOLDER, "inside");
     expect(onDropWish).not.toHaveBeenCalled();
+  });
+
+  /* ---------------------------------------------------------- the rename ------- */
+
+  /**
+   * **`Rename…` is answered on the card, and the field takes the tile's place rather than
+   * standing beside it.**
+   *
+   * The two controls it replaces are the whole of the card's own surface: the face a press opens
+   * the drawer by, and the `⋯` the rename was chosen from. A field rendered *beside* them would
+   * leave both live over a tile that has stopped being one — a reader could click into the folder
+   * they are half way through naming, or reopen the menu the field came out of — and neither is
+   * something the wall could tell them had happened. Nothing in the DOM is wrong in that build,
+   * which is why the absence is worth pinning rather than the presence alone.
+   */
+  it("puts the field in the tile's place rather than beside it", () => {
+    mount({ rename: { active: true } });
+    expect(screen.getByRole("textbox", { name: "Rename Expensive" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Expensive folder/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Manage Expensive" })).not.toBeInTheDocument();
+  });
+
+  /**
+   * **The name arrives selected, not merely present** — the commonest rename replaces the word
+   * rather than edits inside it, so a reader who opens the field and types `Trades` should get
+   * `Trades` rather than `ExpensiveTrades`.
+   *
+   * Both halves are asserted because each passes without the other. `focus()` alone leaves the
+   * caret at the *end* of the value — setting an input's `value` moves it there, which is the
+   * spec and what jsdom implements — so the selection is the only thing that can tell the two
+   * builds apart; and `select()` alone marks a range on an element nobody is typing into. The
+   * pair, in that order, is what `FolderNameField` writes and what this card's `initial` feeds.
+   */
+  it("opens the field on the folder's own name, selected", () => {
+    mount({ rename: { active: true } });
+    const field = screen.getByRole<HTMLInputElement>("textbox", { name: "Rename Expensive" });
+    expect(field).toHaveValue("Expensive");
+    expect(field).toHaveFocus();
+    expect(field.selectionStart).toBe(0);
+    expect(field.selectionEnd).toBe("Expensive".length);
+  });
+
+  /**
+   * **The drawer goes on saying what is in it while its name is being edited**, and that is the
+   * whole reason a rename is not the create tile with another word on the tick.
+   *
+   * A reader renaming *Expensive* is looking at the drawer holding six wishes worth $312. A box
+   * that dropped the figures would make them stop and check they had the right one — and there is
+   * nothing else on the tile to check it by, since the name is the thing they are in the middle of
+   * replacing.
+   */
+  it("keeps its figures line under the field", () => {
+    mount({ rename: { active: true } });
+    expect(screen.getByText("6 wishes · $312.00")).toBeInTheDocument();
+  });
+
+  /**
+   * **The caret's way back, and the reason the page's usual one cannot do it.** Every other layer
+   * in this app hands focus to the element it remembered as the opener, which works because that
+   * element is still mounted behind the layer. Here the opener *is* what the field replaced, so
+   * the `⋯` the page is holding is a detached node by the time it is focused and `focus()` is a
+   * silent no-op — a reader ends the rename and the caret is at the top of the app.
+   * `useFolderFieldReturn` takes a ref on the `⋯` React has just drawn in its place.
+   *
+   * Driven the way a reader ends one — press ✕, the page turns its flag off — rather than by
+   * calling `focus()` on anything: a caret put there programmatically is one a reader cannot
+   * produce, and it is the shape of setup that has hidden a real entry point in this repo before.
+   * The ✕ is where the caret is when the field goes, and removing a focused element drops it to
+   * `<body>`, which is the one state the restore is allowed to act on.
+   */
+  it("hands the caret back to the manage trigger when the rename ends", async () => {
+    const user = userEvent.setup();
+    const view = mount({ rename: { active: true } });
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onRenameCancel).toHaveBeenCalledTimes(1);
+
+    view.update({ rename: { active: false } });
+    expect(screen.getByRole("button", { name: "Manage Expensive" })).toHaveFocus();
+  });
+
+  /**
+   * **Both drop targets stay registered while the name is being edited, and that is a decision
+   * rather than an oversight.**
+   *
+   * A wish let go on a drawer whose name is half typed files perfectly well, and the reader
+   * dragging it cannot see the field at all — the drag may have started before it opened. Tearing
+   * the targets down would make the wall answer one gesture two ways depending on a state at the
+   * other end of the screen, which is worse than either answer.
+   *
+   * The ring is what says a target is registered and the callback is what says it took the drop.
+   * The wash is deliberately not asserted: it is drawn on the face, and the face is the thing the
+   * field replaced.
+   */
+  it("still takes both drags while its name is being edited", async () => {
+    mount({ rename: { active: true }, withSource: true, withFolder: true });
+    stand();
+
+    const wish = await startPointerDrag(screen.getByText("the wish"));
+    expect(marked(item(), DROP_RING)).toBe(true);
+    await wish.over(item());
+    await wish.drop();
+    expect(onDropWish).toHaveBeenCalledWith(WISH);
+
+    const drawer = await startPointerDrag(screen.getByText("the folder"));
+    expect(marked(item(), DROP_RING)).toBe(true);
+    await drawer.over(slot(), INSIDE);
+    await drawer.drop();
+    expect(onDropFolder).toHaveBeenCalledWith(OTHER_FOLDER, "inside");
+  });
+
+  /**
+   * **What the field does suppress is the card as a drag _source_, and one mark on the `<form>` is
+   * the whole of it.** Without it, pressing into the name and moving five pixels files the drawer
+   * somewhere instead of placing a caret — and the press that was meant is never delivered.
+   *
+   * **`closest(NOT_A_DRAG)` from the input is vacuous on its own**: that selector names `input`
+   * outright, so a field with no guard anywhere above it still answers itself and the assertion
+   * reads exactly like a real one. So the mark is asserted as an *element* — the form both
+   * controls sit in — and then the press is made on the **tick**, which is a `<button>` the
+   * selector does not name and which the sensor therefore refuses only because of the form's
+   * `data-no-drag`. The card's face is still a grab handle at rest (see the trigger test above),
+   * so nothing else in the tree could be doing the refusing.
+   */
+  it("is not a drag source while its name is being edited", async () => {
+    mount({ rename: { active: true } });
+    const field = screen.getByRole("textbox", { name: "Rename Expensive" });
+    const form = field.closest("form");
+    expect(form).not.toBeNull();
+    expect(field.closest("[data-no-drag]")).toBe(form);
+
+    stand();
+    const refused = await startPointerDrag(item(), {
+      pressOn: screen.getByRole("button", { name: "Rename folder" }),
+    });
+    expect(refused.started).toBe(false);
+    await refused.cancel();
+
+    // And the source is still registered underneath — a press on the `<li>` outside the field
+    // starts a drag — so the refusal above is the mark doing its job rather than a card that had
+    // stopped being draggable and would have refused any press at all.
+    const still = await startPointerDrag(item());
+    expect(still.started).toBe(true);
+    await still.cancel();
   });
 });
 

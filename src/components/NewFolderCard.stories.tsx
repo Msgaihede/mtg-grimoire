@@ -34,6 +34,10 @@ function Wall({ children }: { children: ReactNode }) {
  * the component: that the tile is **the same height and width as the cards it stands among**, and
  * **the one thing it is not** is dashed. Both are comparisons, so both need something to compare
  * to. The real cards have stories of their own on their own pages.
+ *
+ * **`FolderNameField.stories.tsx` carries a second copy of this**, for the same reason and with
+ * the same caveat: a CSF file cannot export a helper — every non-default export is indexed as a
+ * story — so the two are kept in step by hand. Change one and change the other.
  */
 function FolderTile({ name, face }: { name: string; face: string }) {
   return (
@@ -60,7 +64,7 @@ const meta = {
   title: "Primitives/NewFolderCard",
   component: NewFolderCard,
   tags: ["autodocs"],
-  args: { onClick: fn() },
+  args: { naming: false, pending: false, onClick: fn(), onSubmit: fn(), onCancel: fn() },
   parameters: {
     docs: {
       description: {
@@ -80,9 +84,16 @@ const meta = {
           "and no figure here and a label hugging the top-left of an otherwise empty tile reads " +
           "as a folder whose second line failed to load. `FolderPlus` is the glyph the deck " +
           "tree already presses to make a folder.\n\n" +
+          "**Pressing it opens the field _here_**: the tile becomes a `FolderNameField`, so the " +
+          "name is typed on the line the folder's name will occupy, at the same track and the " +
+          "same footprint. It used to raise a bordered strip under the breadcrumb — an input, " +
+          "`Create folder` and `Cancel` spelled out in words, and a line reading *in Collection* " +
+          "to say which level the strip was about — every piece of which re-established a context " +
+          "the wall on screen already carried.\n\n" +
           "It renders an `<li>`, so a caller drops it straight into the wall's existing " +
           "`<ul aria-label=\"Folders\">`. `onClick` is handed **the button element itself**, " +
-          "because both callers anchor a naming panel's focus return on the trigger.",
+          "for anything a caller anchors on the press; the caret's own way back out of the field " +
+          "is `useFolderFieldReturn`, because the trigger unmounts while the field is open.",
       },
     },
   },
@@ -107,8 +118,8 @@ export const AloneInAnEmptyCabinet: Story = {
     const button = canvas.getByRole("button", { name: "New folder" });
     await userEvent.click(button);
 
-    // The contract both pages depend on: the **element**, so a naming panel can hand the caret
-    // back to the tile that opened it.
+    // The contract both pages depend on: the **element**, for anything a caller anchors on the
+    // press.
     await expect(args.onClick).toHaveBeenCalledTimes(1);
     await expect(args.onClick).toHaveBeenCalledWith(button);
   },
@@ -153,9 +164,52 @@ export const FirstInTheWall: Story = {
 };
 
 /**
+ * **The tile _being_ the field, in the wall, beside the cards it has to leave alone.**
+ *
+ * This is the story the whole change is for. The field is drawn **in the tile's own slot** rather
+ * than in a strip above the wall, so the two folders beside it do not move, the track does not
+ * re-flow, and the name is typed on the line the folder's name is about to occupy. The ✓ and the
+ * ✕ take the corner a folder card gives its `⋯`, which is the one place on a card a reader has
+ * already been taught to look for its controls.
+ *
+ * On the canvas the field takes the caret as it mounts, with any existing text selected — that is
+ * `FolderNameField`'s doing and its own page shows it in both shapes.
+ *
+ * The play holds the *structural* half of "nothing reflows", which is all jsdom can see: three
+ * `<li>`s before and after, and the naming box still carrying the folder-card floor. The pixels
+ * were driven in headless Chromium and the figures are in `FolderNameField`'s doc.
+ */
+export const NamingInTheWall: Story = {
+  args: { naming: true },
+  render: (args) => (
+    <Wall>
+      <NewFolderCard {...args} />
+      <FolderTile name="Trade binder" face="240 cards · $1,304.00" />
+      <FolderTile name="Standard staples" face="18 cards · $92.40" />
+    </Wall>
+  ),
+  play: async ({ canvas }) => {
+    const wall = canvas.getByRole("list", { name: "Folders" });
+    await expect([...wall.children]).toHaveLength(3);
+
+    // The tile is *gone*, not covered: a field drawn under a button that stayed put is exactly
+    // the reflow this arrangement promises not to do.
+    await expect(canvas.queryByRole("button", { name: "New folder" })).toBeNull();
+    await expect(canvas.getByRole("textbox", { name: "New folder name" })).toBeInTheDocument();
+
+    const box = wall.children[0]?.querySelector("form")?.firstElementChild;
+    await expect(box?.classList.contains("min-h-[calc(3.75rem+2px)]")).toBe(true);
+    // Solid where the two cards beside it are dashed — the naming tile is still a control, and
+    // the vocabulary does not change because it grew an input.
+    await expect(box?.classList.contains("border-dashed")).toBe(false);
+  },
+};
+
+/**
  * A caller names the level in that level's own word. The label is the **visible** text and the
  * accessible name at once (WCAG 2.5.3) — there is no `aria-label` here that could disagree with
- * what is printed.
+ * what is printed — and the **field's** name is built from it, so `New binder` is typed into a box
+ * called `New binder name` and the two cannot drift.
  */
 export const ALabelOfItsOwn: Story = {
   args: { label: "New binder" },

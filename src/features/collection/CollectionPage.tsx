@@ -1197,8 +1197,17 @@ export function CollectionPage() {
    * with nothing on screen explaining what it is about. The derived value is what the whole page
    * reads, {@link panel} itself only what the setters write, so pressing Flatten and pressing it
    * back does not resurrect the layer. `WishlistPage`'s twin, verbatim.
+   *
+   * **The level clause arrived with the field moving into the tile.** A naming field is drawn
+   * *by* `New folder`'s tile now, so a `newFolder` panel opened at one level and left open while
+   * the reader walked into another would be a layer with no field on screen at all — invisible,
+   * and still swallowing the Escape that should have walked them back out. Where the strip was
+   * merely confusing about which level it meant, nothing is worse; so the panel goes with the
+   * level it was opened for. Nothing else in the page can produce that state, because
+   * {@link openNewFolder} always opens with the level the reader is standing in.
    */
-  const openPanel = flatten ? null : panel;
+  const openPanel =
+    flatten || (panel?.kind === "newFolder" && panel.parentId !== folderId) ? null : panel;
 
   // Focus first, then close: the opener is still mounted at this point, and an element that
   // unmounts with the caret on it drops focus to `<body>` — after which the next Tab restarts from
@@ -2150,47 +2159,23 @@ export function CollectionPage() {
           </div>
         )}
 
-        {/* **One strip for all four folder layers, and it is not a placement decision so much as
-            the only place there is.** Every other anchored layer in this app hangs off a
-            `relative` wrapper around its own trigger; both triggers here are tiles of the wall
-            below — `New folder`, and a folder card's `⋯` — and a card has nowhere to hang a panel
-            and would clip it against the scroller it sits in. So the strip sits where the thing
-            being named or moved is: directly above the row of cards, under the breadcrumb that
-            says which level they are. */}
-        {openPanel !== null && (
-          <div className="w-full max-w-sm shrink-0 rounded-lg border border-border bg-surface p-2 text-xs">
-            {(openPanel.kind === "newFolder" || openPanel.kind === "renameFolder") && (
-              <FolderNameField
-                // Remounted between two openings, so a half-typed name never survives into the
-                // next question — the field holds its own draft, and `AnchoredPopup`'s trick of
-                // unmounting the body is not available to a strip that stays.
-                key={
-                  openPanel.kind === "renameFolder"
-                    ? `rename-${openPanel.folderId}`
-                    : `new-${openPanel.parentId ?? "root"}`
-                }
-                initial={
-                  openPanel.kind === "renameFolder"
-                    ? (folderNameOf(openPanel.folderId) ?? "")
-                    : ""
-                }
-                label={
-                  openPanel.kind === "renameFolder"
-                    ? `Rename ${folderNameOf(openPanel.folderId) ?? "folder"}`
-                    : "New folder name"
-                }
-                where={
-                  openPanel.kind === "newFolder"
-                    ? `in ${folderNameOf(openPanel.parentId) ?? ROOT_LABEL}`
-                    : undefined
-                }
-                submitLabel={openPanel.kind === "renameFolder" ? "Rename folder" : "Create folder"}
-                pending={folders.create.isPending || folders.rename.isPending}
-                onCancel={dismiss}
-                onSubmit={nameFolder}
-              />
-            )}
+        {/* **One strip for the two folder layers that are still layers, and it is not a placement
+            decision so much as the only place there is.** Every other anchored layer in this app
+            hangs off a `relative` wrapper around its own trigger; the trigger here is a folder
+            card's `⋯`, and a card has nowhere to hang a panel and would clip it against the
+            scroller it sits in. So the strip sits where the thing being moved or deleted is:
+            directly above the row of cards, under the breadcrumb that says which level they are.
 
+            **The other two moved out of it on 2026-09-03 and this box is what is left.** Naming a
+            folder and renaming one are drawn *in the wall* now — `NewFolderCard` becomes the field
+            it used to raise, and a folder card becomes the field its `⋯` used to raise — because
+            in both cases the thing being named has a tile of its own on screen, and a second
+            bordered box above the wall could only repeat what that tile already says. Moving and
+            deleting have no such tile: the answer to "into which folder" is a list of the *other*
+            folders, and the answer to "delete this?" is a sentence about what happens to the cards
+            inside. Neither fits on a 62px card, and neither is a name typed on a line. */}
+        {(openPanel?.kind === "moveFolder" || openPanel?.kind === "deleteFolder") && (
+          <div className="w-full max-w-sm shrink-0 rounded-lg border border-border bg-surface p-2 text-xs">
             {openPanel.kind === "moveFolder" && (
               <MoveToFolder
                 label={`Move ${folderNameOf(openPanel.folderId) ?? "folder"} into a folder`}
@@ -2316,7 +2301,18 @@ export function CollectionPage() {
                   onDropFolder={moveFolderUp}
                 />
               )}
-              {canMakeFolder && <NewFolderCard onClick={openNewFolder} />}
+              {canMakeFolder && (
+                <NewFolderCard
+                  onClick={openNewFolder}
+                  // The tile *is* the naming field while this is on. `openPanel` rather than
+                  // `panel`, so flattening the list and walking into another folder both close it
+                  // — the derived value is what the whole page reads.
+                  naming={openPanel?.kind === "newFolder"}
+                  pending={folders.create.isPending}
+                  onSubmit={nameFolder}
+                  onCancel={dismiss}
+                />
+              )}
               {wall.map((node) => (
                 <CollectionFolderCard
                   key={node.folder.id}
@@ -2341,6 +2337,16 @@ export function CollectionPage() {
                   currency={marketplace.currency}
                   onOpen={() => collection.openFolder(node.folder.id)}
                   rowMenu={folderRowMenu(node.folder)}
+                  // `Rename…` is answered on the card itself. One `openPanel` naming exactly one
+                  // folder is what keeps a wall of twelve drawers to one open field.
+                  rename={{
+                    active:
+                      openPanel?.kind === "renameFolder" &&
+                      openPanel.folderId === node.folder.id,
+                    pending: folders.rename.isPending,
+                    onSubmit: nameFolder,
+                    onCancel: dismiss,
+                  }}
                   canDrop={(drag) => canFile(drag, node.folder.id)}
                   onDropCard={(drag) => fileCard(drag, node.folder.id)}
                   // The card asks about the folder in the air and where on itself it is; the
@@ -2716,116 +2722,6 @@ export function CollectionPage() {
         onDone={() => setImporting(false)}
       />
     </section>
-  );
-}
-
-/**
- * The one field the cabinet has, doing whichever of its two jobs the open `Panel` says.
- *
- * `WishlistPage`'s field in this page's room, and it keeps that field's two decided details: the
- * current name arrives **selected**, because the commonest rename replaces the word rather than
- * edits inside it; and both `focus()` and `select()` are called, in that order, because the spec
- * says `select()` only sets the selection and jsdom implements the spec — a browser that focuses
- * on select is what makes the missing call look sufficient.
- *
- * Escape's job stays the page's — this field is one arm of its `Panel`, so the page's single rung
- * already closes it and a rung of its own would be a second registration for one layer.
- */
-function FolderNameField({
-  initial = "",
-  label,
-  where,
-  submitLabel,
-  pending,
-  onCancel,
-  onSubmit,
-}: {
-  initial?: string;
-  /** The input's accessible name — "New folder name", or "Rename Trade binder". */
-  label: string;
-  /** "in Trade binder" / "in Collection" — where the folder will land, in words, for a reader who
-   *  cannot see which level the strip is drawn over. Absent for a rename: the folder is not going
-   *  anywhere. */
-  where?: string;
-  /** The submit control's words, which is the only place the two jobs read differently. */
-  submitLabel: string;
-  pending: boolean;
-  onCancel: () => void;
-  onSubmit: (name: string) => void;
-}) {
-  const rootRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [name, setName] = useState(initial);
-
-  useEffect(() => {
-    const input = inputRef.current;
-    if (input === null) return;
-    input.focus();
-    input.select();
-  }, []);
-
-  const trimmed = name.trim();
-
-  return (
-    <div
-      ref={rootRef}
-      // Clicking or tabbing away discards a half-typed name, exactly as every other layer in this
-      // app discards its half-made decision — and not while the write is in flight, because a
-      // control that disables itself on the press is blurred by the browser with no
-      // `relatedTarget` at all, which would read as the reader looking away.
-      onBlur={(e) => {
-        if (pending) return;
-        if (!rootRef.current?.contains(e.relatedTarget)) onCancel();
-      }}
-    >
-      <form
-        className="flex items-center gap-1.5"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (!trimmed) return;
-          onSubmit(trimmed);
-        }}
-      >
-        <input
-          ref={inputRef}
-          aria-label={label}
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          className={cn(
-            "h-7 min-w-0 flex-1 rounded-md border border-border bg-bg px-2 text-xs",
-            "focus:border-accent focus:outline-none",
-          )}
-        />
-        <button
-          type="submit"
-          // A real `disabled`, not `aria-disabled`: the house rule is about controls that grey as
-          // the reader types *and still have something to say*, and this one is a submit whose
-          // whole meaning is the field beside it. `FolderTree`'s field makes the same call.
-          disabled={!trimmed || pending}
-          className={cn(
-            "h-7 flex-none rounded-md border border-accent px-2 text-accent",
-            "transition-colors duration-150 hover:bg-accent hover:text-accent-foreground",
-            "disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-accent",
-            "motion-reduce:transition-none",
-            FOCUS,
-          )}
-        >
-          {submitLabel}
-        </button>
-        <button
-          type="button"
-          onClick={onCancel}
-          className={cn(
-            "h-7 flex-none rounded-md border border-border px-2 text-dim",
-            "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-            FOCUS,
-          )}
-        >
-          Cancel
-        </button>
-      </form>
-      {where && <p className="mt-1 text-[0.7rem] text-dim">{where}</p>}
-    </div>
   );
 }
 
