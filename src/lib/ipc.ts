@@ -5369,10 +5369,16 @@ export const ipc = {
    * Put the one label a deck card carries on it, or take it off with `labelId: null`.
    *
    * A **card** write wearing a label command's name: it addresses the slot by the full grain
-   * `(deckId, cardId, categoryId, variant)` like every other card write, and answers "that
-   * card is not in this deck's category any more" for a row that has since moved, folded or
-   * been stepped to zero. A `labelId` belonging to another deck is refused before anything is
-   * written.
+   * `(deckId, cardId, categoryId, variant, finish)` like every other card write, and answers
+   * "that card is not in this deck's category any more" for a row that has since moved, folded
+   * or been stepped to zero. A `labelId` belonging to another deck is refused before anything
+   * is written.
+   *
+   * **`finish` is the fifth term and was sent here for months without arriving.** The command
+   * declared no such parameter, Tauri drops a payload field a command does not name, and the
+   * writer behind it addressed the row without one — so no foil or etched row in any deck could
+   * be labelled at all. Fixed 2026-09-03; `ipc.test.ts` now pins the crate's parameter list
+   * against the keys sent from here, which is the only place the two spellings meet.
    */
   deckCardSetLabel: (
     deckId: number,

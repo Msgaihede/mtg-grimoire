@@ -825,12 +825,15 @@ pub fn call(
             let card_id: String = field(command, args, "cardId")?;
             let category_id: i64 = field(command, args, "categoryId")?;
             let variant: String = field(command, args, "variant")?;
+            let finish: Option<String> = optional(command, args, "finish")?;
             let label_id: Option<i64> = optional(command, args, "labelId")?;
             encode(
                 command,
-                // `None` for the finish, exactly as the wrapper passes: `finish` reaches this
-                // command and is not forwarded, which is the desktop's behaviour and not a
-                // dropped argument to be "fixed" here.
+                // `finish` is forwarded, because it is the fifth term of `DECK_CARD_GRAIN` and
+                // the row cannot be addressed without it. This arm passed `None` until
+                // 2026-09-03 and said so in a comment that called it "the desktop's behaviour" —
+                // it was, and the desktop was wrong: both sides refused to label any foil or
+                // etched row. The comment is the reason it survived a reading.
                 crate::sync::with_write(state, |c| {
                     crate::deck_meta::set_card_label(
                         c,
@@ -838,7 +841,7 @@ pub fn call(
                         &card_id,
                         category_id,
                         &variant,
-                        None,
+                        finish.as_deref(),
                         label_id,
                     )
                 })

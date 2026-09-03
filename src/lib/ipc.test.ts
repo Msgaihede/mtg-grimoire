@@ -12,6 +12,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen }));
 import collectionRs from "../../src-tauri/src/collection.rs?raw";
 import collectionFoldersRs from "../../src-tauri/src/collection_folders.rs?raw";
 import deckRs from "../../src-tauri/src/deck.rs?raw";
+import deckMetaRs from "../../src-tauri/src/deck_meta.rs?raw";
 import deckPullRs from "../../src-tauri/src/deck_pull.rs?raw";
 import deckQuickAddRs from "../../src-tauri/src/deck_quick_add.rs?raw";
 import deckTheoryRs from "../../src-tauri/src/deck_theory.rs?raw";
@@ -968,6 +969,102 @@ describe("ipc argument names match the Rust command signatures", () => {
       finish: null,
       labelId: null,
     });
+  });
+
+  /**
+   * **Every argument `ipc.ts` sends is one the command declares — for the family where a missing
+   * one is silent.**
+   *
+   * `deck_card_set_label` sent `finish` from the day the finish grain landed and the command
+   * never declared it. **Tauri drops a payload field a command does not name**, so the writer
+   * behind it was handed `None` and addressed the row on four terms of a five-term grain: every
+   * foil and etched deck row answered "that card is not in this deck's category any more" for a
+   * row the reader was looking straight at, and 148 of the 611 rows in the developer's own
+   * database are one of those. It shipped, and it survived readings on both sides, because each
+   * side is separately correct — the argument goes missing in the gap between them.
+   *
+   * Nothing else could have caught it. The type checker never sees the crate; `invoke` is typed
+   * on its return, not its payload; and the Storybook fake matched on four fields too, so the
+   * suite agreed with the bug. This is the only place the two spellings meet.
+   *
+   * **Scoped to the commands carrying a finish** rather than to all 131, because that is the
+   * term whose absence is invisible: drop `deckId` and nothing works at all, drop `finish` and
+   * three rows in four keep working. The expected list is read out of `ipc.ts` rather than
+   * written down here, so this cannot pass by agreeing with itself.
+   */
+  const snake = (s: string) => s.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+
+  /** The keys of the object literal a command is invoked with. Shorthand only, which is what
+   *  all three of these use — a `key: value` pair is read by its key just the same. */
+  const payloadKeys = (src: string, command: string): string[] => {
+    const marker = `"${command}", {`;
+    const start = src.indexOf(marker);
+    if (start === -1) return [];
+    const open = start + marker.length - 1;
+    let depth = 0;
+    let end = open;
+    for (let i = open; i < src.length; i += 1) {
+      if (src[i] === "{") depth += 1;
+      else if (src[i] === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          end = i;
+          break;
+        }
+      }
+    }
+    return src
+      .slice(open + 1, end)
+      .split(",")
+      .map((part) => (part.split(":")[0] ?? "").trim())
+      .filter((name) => /^[A-Za-z_$][\w$]*$/.test(name));
+  };
+
+  /** The parameter names of a `#[tauri::command]`, which are one per line in this crate. */
+  const commandParams = (src: string, fn: string): string[] => {
+    const marker = `pub async fn ${fn}(`;
+    const start = src.indexOf(marker);
+    if (start === -1) return [];
+    const open = start + marker.length - 1;
+    let depth = 0;
+    let end = open;
+    for (let i = open; i < src.length; i += 1) {
+      if (src[i] === "(") depth += 1;
+      else if (src[i] === ")") {
+        depth -= 1;
+        if (depth === 0) {
+          end = i;
+          break;
+        }
+      }
+    }
+    return [...src.slice(open + 1, end).matchAll(/^\s*(\w+):/gm)].map((m) => m[1] ?? "");
+  };
+
+  const finishBearing: [command: string, rustSource: string][] = [
+    ["deck_card_set_label", deckMetaRs],
+    ["deck_set_card_finish", deckRs],
+    ["deck_quick_add_wishes", deckQuickAddRs],
+  ];
+
+  it.each(finishBearing)("%s declares every argument ipc.ts sends it", (command, rustSource) => {
+    const sent = payloadKeys(ipcSource, command).map(snake);
+    const declared = commandParams(rustSource, command);
+
+    // Not `toEqual` on the two lists: the *parsers* are what a green result has to be trusted
+    // against, so a pass must never be able to mean "both found nothing". `state` is declared
+    // and never sent, which is why this is containment rather than equality.
+    expect(sent.length, `nothing parsed out of ipc.ts for \`${command}\``).toBeGreaterThan(1);
+    expect(declared.length, `nothing parsed out of the crate for \`${command}\``).toBeGreaterThan(
+      1,
+    );
+    expect(sent, `\`${command}\` sends no finish; this table is for the ones that do`).toContain(
+      sent.find((k) => k.includes("finish")) ?? "finish",
+    );
+
+    for (const key of sent) {
+      expect(declared, `\`${command}\` is sent \`${key}\` and does not declare it`).toContain(key);
+    }
   });
 
   /**

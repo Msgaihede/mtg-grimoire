@@ -12380,6 +12380,7 @@ export function writeHandlers(db: FakeDb) {
       cardId: string;
       categoryId: number;
       variant: DeckVariant;
+      finish?: DeckFinish;
       labelId: number | null;
     }): void => {
       const variant = validVariant(args.variant);
@@ -12392,13 +12393,13 @@ export function writeHandlers(db: FakeDb) {
         applied = label.name;
       }
       const deck = requireDeck(db, args.deckId);
-      const row = db.deckCards.find(
-        (dc) =>
-          dc.deckId === args.deckId &&
-          dc.cardId === args.cardId &&
-          dc.categoryId === args.categoryId &&
-          dc.variant === variant,
-      );
+      // **`deckCardAt`, the same five-term address every other card writer here uses**, rather
+      // than the four-field `find` this had until 2026-09-03. That `find` matched the first row
+      // for the card in the category *whatever its finish*, so it drew a label onto the regular
+      // copy when a foil one was asked for — and it was the reason nothing in this suite noticed
+      // that the real command dropped `finish` and could label no foil row at all.
+      const finish = normaliseFinish(args.finish);
+      const row = deckCardAt(db, args.deckId, args.cardId, args.categoryId, variant, finish);
       if (!row) throw refuse(CARD_NOT_IN_CATEGORY);
       const previous = row.labelId === null ? null : (labelById(db, row.labelId)?.name ?? null);
       row.labelId = args.labelId;

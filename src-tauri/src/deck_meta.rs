@@ -1508,10 +1508,18 @@ pub fn delete_label(conn: &Connection, deck_id: i64, id: i64) -> Result<(), Stri
 /// Set (or clear) the one label a deck card carries. **A card carries 0 or 1 labels** — the whole
 /// of that rule is the `label_id` column itself; nothing here enforces it beyond writing to it.
 ///
-/// Identifies the row by `(deckId, cardId, categoryId, variant)` —
+/// Identifies the row by `(deckId, cardId, categoryId, variant, finish)` —
 /// [`DECK_CARD_GRAIN`](crate::schema::DECK_CARD_GRAIN) exactly, so at most one row can match.
 /// A row that no longer matches — moved, folded, stepped to zero since the editor last read it
 /// — answers [`CARD_NOT_IN_CATEGORY`], `deck::card_gone`'s reason.
+///
+/// **`finish` is part of that address, and dropping it is not a harmless simplification** — which
+/// is the shape this had until 2026-09-03. The *command* declared no `finish` and handed the
+/// helper `None`, so the fence below matched only rows whose finish is null: every foil and
+/// etched row answered `CARD_NOT_IN_CATEGORY` for a row sitting right there, and 148 of the 611
+/// rows in the developer's own database are one of those. The frontend had been sending `finish`
+/// the whole time — Tauri discards a payload field the command does not declare, so neither side
+/// could say so. Nothing went red either, because the Storybook fake matched on four fields too.
 ///
 /// **The wrong-deck fence went with schema v21 and left nothing behind.** It refused a `labelId`
 /// that resolved to another deck's label, which was a real hazard while a label was per-deck: the
@@ -2088,12 +2096,21 @@ pub async fn deck_card_set_label(
     card_id: String,
     category_id: i64,
     variant: String,
+    finish: Option<String>,
     label_id: Option<i64>,
 ) -> Result<(), String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         with_write(&state, |c| {
-            set_card_label(c, deck_id, &card_id, category_id, &variant, None, label_id)
+            set_card_label(
+                c,
+                deck_id,
+                &card_id,
+                category_id,
+                &variant,
+                finish.as_deref(),
+                label_id,
+            )
         })
     })
     .await
@@ -3749,6 +3766,84 @@ mod tests {
         let deck_id = deck(&conn, "Burn");
         let cat = category(&conn, deck_id, "main", "Main deck");
         let err = set_card_label(&conn, deck_id, "bolt-lea", cat, "live", None, None).unwrap_err();
+        assert_eq!(err, CARD_NOT_IN_CATEGORY);
+    }
+
+    /// A foil row, which is the half of the grain the command used to drop.
+    ///
+    /// Written with an INSERT rather than through [`deck_card`] because no seed helper in this
+    /// module writes a `finish` — which is itself why the defect below lived here so long.
+    fn foil_deck_card(conn: &Connection, deck_id: i64, card_id: &str, category_id: i64) -> i64 {
+        conn.query_row(
+            "INSERT INTO deck_cards
+                (deck_id,category_id,variant,card_id,set_code,collector_number,lang,name,
+                 finish,quantity,created_at,updated_at)
+             VALUES (?1,?2,'live',?3,'lea','161','en','Lightning Bolt','foil',1,
+                     unixepoch(),unixepoch())
+             RETURNING id",
+            params![deck_id, category_id, card_id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// **The bug this pins shipped, and shipped invisibly.** `deck_card_set_label` declared no
+    /// `finish` and handed this helper `None`, so the fence matched only null-finish rows: a foil
+    /// row answered [`CARD_NOT_IN_CATEGORY`] for a card the reader could see in front of them.
+    /// The frontend had always sent `finish`, and Tauri drops a payload field the command does
+    /// not declare, so the argument went missing between two sides that both looked right.
+    #[test]
+    fn set_card_label_reaches_a_foil_row_when_it_is_told_the_finish() {
+        let conn = conn();
+        let deck_id = deck(&conn, "Burn");
+        let cat = category(&conn, deck_id, "main", "Main deck");
+        crate::schema::tests::seed_card(&conn, "bolt-lea", "lea", "161");
+        let row = foil_deck_card(&conn, deck_id, "bolt-lea", cat);
+        let label = create_label(&conn, deck_id, "Cut candidate", "ember").unwrap();
+
+        set_card_label(
+            &conn,
+            deck_id,
+            "bolt-lea",
+            cat,
+            "live",
+            Some("foil"),
+            Some(label.id),
+        )
+        .unwrap();
+
+        let worn: Option<i64> = conn
+            .query_row(
+                "SELECT label_id FROM deck_cards WHERE id = ?1",
+                params![row],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(worn, Some(label.id), "the foil row is wearing the label");
+    }
+
+    /// The other half, and the reason the fence itself was never the thing to change: addressed
+    /// without its finish, that same foil row is genuinely not on the grain being asked for.
+    /// A caller that drops `finish` gets this — which is exactly what the command was doing.
+    #[test]
+    fn set_card_label_cannot_reach_a_foil_row_addressed_without_its_finish() {
+        let conn = conn();
+        let deck_id = deck(&conn, "Burn");
+        let cat = category(&conn, deck_id, "main", "Main deck");
+        crate::schema::tests::seed_card(&conn, "bolt-lea", "lea", "161");
+        foil_deck_card(&conn, deck_id, "bolt-lea", cat);
+        let label = create_label(&conn, deck_id, "Cut candidate", "ember").unwrap();
+
+        let err = set_card_label(
+            &conn,
+            deck_id,
+            "bolt-lea",
+            cat,
+            "live",
+            None,
+            Some(label.id),
+        )
+        .unwrap_err();
         assert_eq!(err, CARD_NOT_IN_CATEGORY);
     }
 
