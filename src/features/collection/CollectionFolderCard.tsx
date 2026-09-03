@@ -19,9 +19,22 @@
  * attaches to pictures, and there are none here.
  *
  * **Drawn as an `<li>`, so a caller draws a wall of these inside a `<ul>`** — `FolderCard`'s
- * shape, and a row of folders genuinely is a list. The ring lives on that `<li>`, which means the
- * scroller around the wall has to carry `DROP_MARK_ROOM`; that is the wall's business rather than
- * the card's, and `dropMarks.ts` explains why padding one level in is not the same fix.
+ * shape, and a row of folders genuinely is a list. That `<li>` is a positioning box and a drop
+ * registration: it draws no mark of its own for as long as the card has a face to draw one on.
+ * The exception is a rename, where the field replaces that face and the `<li>` carries the marks
+ * for the length of the edit — its own `className` argues it. The scroller around the wall still
+ * carries `DROP_MARK_ROOM`, but no longer for the drop affordance — `FOCUS` stands 4px proud of
+ * this card's button and `overflow` clips at the padding box, which is a WCAG 2.4.7 matter rather
+ * than a cosmetic one. That constant's own note carries the whole reading.
+ *
+ * **Both drag marks are drawn on the `<button>`, because that is the element carrying this card's
+ * own edge** (2026-09-03). They were not: the eligible ring went on the `<li>` while the dashed
+ * border and the wash went on the face inside it — and a ring is a box shadow painted *outside*
+ * the border box, so what shipped was a gold rectangle standing 2px proud of a dashed rectangle it
+ * never touched. Two concentric outlines for one landing, which is the reader's report that the
+ * affordances are bulky, overlap their neighbours and "don't align with the dotted outline".
+ * Nothing about the drop *registrations* moved to fix it and nothing could — see {@link slot} —
+ * so only the `className` did.
  *
  * **Two drags reach this card and they are deliberately two.** A *copy* dropped on it is filed
  * into the drawer (`collectionDrag.ts`'s payload); a *folder* dropped on it is nested inside it
@@ -29,9 +42,12 @@
  * because the two marks live under different keys — so a card carried over a folder can never be
  * mistaken for a folder being re-filed, and neither target needs to know the other exists. Only
  * one thing is ever in the air, so the pair share the two marks `dropMarks.ts` publishes rather
- * than inventing a second vocabulary: {@link DROP_RING} on the `<li>` for "this drawer would take
- * what you are holding" and {@link DROP_OVER} on the face for "and this is where it lands". The
- * third landing is the one a copy has no equivalent of, and it is `FolderDropLine`.
+ * than inventing a second vocabulary — and because the face owns a dash all day, the eligible one
+ * is {@link DROP_EDGE} rather than the ring a borderless target wears: the card's own outline goes
+ * faintly gold for "this drawer would take what you are holding", {@link DROP_OVER} takes it to
+ * full strength beside its wash for "and this is where it lands", and at no point are there two
+ * edges to fail to line up. The third landing is the one a copy has no equivalent of, and it is
+ * `FolderDropLine`.
  */
 import {
   useEffect,
@@ -42,10 +58,11 @@ import {
 } from "react";
 import { Folder, MoreHorizontal } from "lucide-react";
 import { FolderDropLine } from "@/components/FolderDropLine";
+import { FolderNameField, useFolderFieldReturn } from "@/components/FolderNameField";
 import { ParentFolderCard } from "@/components/ParentFolderCard";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { count } from "@/lib/counts";
-import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
+import { DROP_EDGE, DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import {
   folderDraggable,
   useFolderDropTarget,
@@ -140,6 +157,7 @@ export function CollectionFolderCard({
   currency,
   onOpen,
   rowMenu,
+  rename,
   canDrop,
   onDropCard,
   canDropFolder,
@@ -167,8 +185,30 @@ export function CollectionFolderCard({
     onClick: MouseEventHandler<HTMLButtonElement>;
   };
   /**
+   * `Rename…`, answered **on the card** rather than in a strip above the wall.
+   *
+   * `active` is the page's, not the card's, because one field is open at a time across the whole
+   * cabinet: pressing `New folder` has to close a rename already in progress, and a card holding
+   * its own flag could not know that had happened. It is also what makes the draft disposable —
+   * the field is mounted by this flag and holds the half-typed name in its own state, so a
+   * cancelled rename cannot survive into the next one.
+   *
+   * **The card keeps its figures line while the field is open** (see the render), which is the
+   * whole reason a rename is not simply `NewFolderCard`'s tile with a different label: a reader
+   * renaming *Trade binder* is looking at the drawer holding 240 cards, and a box that dropped
+   * the count would make them check they had the right one.
+   */
+  rename: {
+    active: boolean;
+    /** The write is in flight — holds the field open and greys the tick. */
+    pending: boolean;
+    onSubmit: (name: string) => void;
+    onCancel: () => void;
+  };
+  /**
    * Whether *this* folder would take what is currently in the air — the folder a card is already
-   * filed in refuses it, and draws no ring rather than a ring that does nothing.
+   * filed in refuses it, and leaves its dash plain rather than lighting an edge that leads
+   * nowhere.
    *
    * **Either shape of collection drop**, a table row's single entry or a wall tile's whole shelf
    * of copies, and the card stays dumb about the difference: it hands the drop straight through
@@ -227,80 +267,153 @@ export function CollectionFolderCard({
     onDrop: onDropFolder,
   });
   const { shown, spoken } = folderFace(summary, currency);
+  // The caret's way back out of the field, and it has to be a ref taken here rather than the
+  // element the page remembered when the menu was opened: the `⋯` this restores to is a *new*
+  // element, built by the render that closed the field, so the one the page is holding is a
+  // detached node whose `focus()` is a silent no-op. See `useFolderFieldReturn`.
+  const manageRef = useFolderFieldReturn<HTMLButtonElement>(rename.active);
 
+  // No mark on the `<li>`, and that is the whole of the 2026-09-03 fix: it is where the copy drop
+  // is registered and what `FolderDropLine` is positioned against, and it sits *outside* the
+  // dashed edge the reader actually sees. Anything drawn on it is a second outline around the
+  // first. See the file header.
   return (
-    <li ref={ref} className={cn("relative rounded-xl", (armed || folderArmed) && DROP_RING)}>
+    <li
+      ref={ref}
+      className={cn(
+        "relative rounded-xl",
+        // **While the name is being edited the marks come back out here, and only then.**
+        // Both drop targets stay registered through a rename — a copy dropped on a drawer whose
+        // name is being typed files perfectly well, and a target that silently stopped
+        // advertising would make the wall answer a drag differently depending on a state the
+        // *dragger* cannot see. But the face is what carries the marks, and while the field is up
+        // there is no face: it is `FolderNameField` instead. So this box takes them for the
+        // length of the edit.
+        //
+        // **It is {@link DROP_RING} here rather than {@link DROP_EDGE}, and that is the same rule
+        // rather than an exception to it.** The rule is that the mark goes on the element wearing
+        // the card's own edge; this `<li>` has no border, so it takes the mark a borderless
+        // target wears. And the misalignment the 2026-09-03 pass fixed cannot come back in this
+        // state for the plain reason that there is only one box drawing anything — two outlines
+        // are what disagreed, and the second one is gone with the face.
+        rename.active && (armed || folderArmed) && DROP_RING,
+        rename.active && (over || edge === "inside") && DROP_OVER,
+      )}
+    >
       <div ref={slot}>
-        <button
-          type="button"
-          // Starts with the visible label and then says, in words, what the second line says in
-          // figures — WCAG 2.5.3, and `FolderCard`'s arrangement: the name is the prefix, and the
-          // count is a sentence rather than a bare number a screen reader cannot attach to
-          // anything.
-          aria-label={`${node.folder.name} folder, ${spoken}`}
-          onClick={onOpen}
-          // **The menu's two doors are on this button**, never on the `<li>` around it — the panel
-          // hands the caret back to the element a menu was opened on, and this is the focusable one.
-          // `FolderTree`'s rule, and the same reason it gives.
-          onContextMenu={rowMenu.onContextMenu}
-          onKeyDown={rowMenu.onKeyDown}
-          className={cn(
-            // `pr-9` leaves the manage trigger its corner: the trigger is a *sibling* rather than a
-            // child, because a button inside a button is not markup a browser will build.
-            "block w-full rounded-xl border border-dashed border-border p-2.5 pr-9 text-left",
-            "transition-colors duration-150 hover:border-accent motion-reduce:transition-none",
-            // One wash for both drags, because only one thing is ever in the air: a copy over this
-            // drawer and a folder over its middle are the same claim — what you are holding lands
-            // *in here*. The other two landings are a line rather than a wash, which is what keeps
-            // "inside this folder" and "beside this folder" from wearing one mark.
-            (over || edge === "inside") && cn("border-accent", DROP_OVER),
-            FOCUS,
-          )}
-        >
-          <span className="flex items-center gap-2">
-            <Folder className="size-3.5 flex-none text-dim" aria-hidden="true" />
-            <span
-              className="min-w-0 flex-1 truncate text-sm"
-              {...tip(node.folder.name, { whenClipped: true })}
+        {rename.active ? (
+          /* **The card becomes the field, and keeps its second line.** The name is edited on the
+             line it is drawn on, at the same track and inside the same dashed edge — a folder
+             being renamed is still a container, so the dash stays and only its colour moves to
+             `border-accent`. The figures line goes on saying what is in the drawer, which is what
+             a reader checks they have the right one by.
+
+             The two drop targets above are left registered on purpose: a copy dropped onto a
+             folder whose name is being edited files perfectly well, and tearing the targets down
+             would make the wall answer a drag differently depending on a state the dragger cannot
+             see. What the field *does* suppress is this card as a drag **source** — its `<form>`
+             carries `data-no-drag`, so pressing into the name places a caret instead of picking
+             the folder up. */
+          <FolderNameField
+            mode="rename"
+            label={`Rename ${node.folder.name}`}
+            initial={node.folder.name}
+            submitLabel="Rename folder"
+            pending={rename.pending}
+            footer={
+              <span className="mt-1 block truncate text-xs tabular-nums text-dim">{shown}</span>
+            }
+            onSubmit={rename.onSubmit}
+            onCancel={rename.onCancel}
+          />
+        ) : (
+          <>
+            <button
+              type="button"
+              // Starts with the visible label and then says, in words, what the second line says in
+              // figures — WCAG 2.5.3, and `FolderCard`'s arrangement: the name is the prefix, and
+              // the count is a sentence rather than a bare number a screen reader cannot attach to
+              // anything.
+              aria-label={`${node.folder.name} folder, ${spoken}`}
+              onClick={onOpen}
+              // **The menu's two doors are on this button**, never on the `<li>` around it — the
+              // panel hands the caret back to the element a menu was opened on, and this is the
+              // focusable one. `FolderTree`'s rule, and the same reason it gives.
+              onContextMenu={rowMenu.onContextMenu}
+              onKeyDown={rowMenu.onKeyDown}
+              className={cn(
+                // `pr-9` leaves the manage trigger its corner: the trigger is a *sibling* rather
+                // than a child, because a button inside a button is not markup a browser will
+                // build.
+                "block w-full rounded-xl border border-dashed border-border p-2.5 pr-9 text-left",
+                "transition-colors duration-150 hover:border-accent motion-reduce:transition-none",
+                // The card's own dash, gone faintly gold — one mark for both drags, because
+                // either one being in the air means the same thing about this drawer: it would
+                // take what you are holding. The eligible mark for a surface that already has an
+                // edge, so nothing is drawn *around* this one to disagree with it.
+                (armed || folderArmed) && DROP_EDGE,
+                // One wash for both drags, because only one thing is ever in the air: a copy over
+                // this drawer and a folder over its middle are the same claim — what you are
+                // holding lands *in here*. The other two landings are a line rather than a wash,
+                // which is what keeps "inside this folder" and "beside this folder" from wearing
+                // one mark.
+                //
+                // **After the line above on purpose.** `tailwind-merge` resolves a border colour
+                // by argument order, so this is what takes `border-accent/45` up to full strength
+                // on the one card the pointer is actually on — swap the two and every eligible
+                // drawer on the wall would out-shout it.
+                (over || edge === "inside") && cn("border-accent", DROP_OVER),
+                FOCUS,
+              )}
             >
-              {node.folder.name}
-            </span>
-          </span>
-          <span className="mt-1 block truncate text-xs tabular-nums text-dim">{shown}</span>
-        </button>
+              <span className="flex items-center gap-2">
+                <Folder className="size-3.5 flex-none text-dim" aria-hidden="true" />
+                <span
+                  className="min-w-0 flex-1 truncate text-sm"
+                  {...tip(node.folder.name, { whenClipped: true })}
+                >
+                  {node.folder.name}
+                </span>
+              </span>
+              <span className="mt-1 block truncate text-xs tabular-nums text-dim">{shown}</span>
+            </button>
 
-        {/* The visible way into the same menu the right-click opens — the affordance a reader who
-            does not know a card can be right-clicked has. Named for the folder, because a wall of
-            these is otherwise a row of controls all called "Manage": a screen reader reads them out
-            of context, one after another, with nothing to tell them apart.
+            {/* The visible way into the same menu the right-click opens — the affordance a reader
+                who does not know a card can be right-clicked has. Named for the folder, because a
+                wall of these is otherwise a row of controls all called "Manage": a screen reader
+                reads them out of context, one after another, with nothing to tell them apart.
 
-            `aria-haspopup="menu"` and no `aria-expanded`, which is the deliberately partial
-            declaration `WishFolderCard` argues in full: the popup *kind* is a fact about this
-            button and is free, while the expanded *state* is a fact about `ContextMenuProvider`,
-            which holds the one open menu at the app root and publishes only `openMenu`/`closeMenu`.
-            A static `aria-expanded="false"` would be an assertion, and it would be wrong for
-            exactly as long as the menu is up. */}
-        <button
-          type="button"
-          aria-label={`Manage ${node.folder.name}`}
-          aria-haspopup="menu"
-          // `data-no-drag`, and it is load-bearing from the moment the card became draggable:
-          // Chromium starts a drag from the nearest draggable *ancestor* of whatever was pressed,
-          // so without it a press on the `⋯` plus five pixels of travel files this folder somewhere
-          // instead of opening its menu — and the click that was meant is never delivered.
-          // `composedDraggable`'s capture-phase guard is what reads it; `dnd.ts` has the measurement.
-          data-no-drag=""
-          onClick={rowMenu.onClick}
-          onKeyDown={rowMenu.onKeyDown}
-          className={cn(
-            "absolute right-1 top-1 grid size-7 place-items-center rounded-md text-dim",
-            "transition-colors duration-150 hover:bg-surface hover:text-text",
-            "motion-reduce:transition-none",
-            FOCUS,
-          )}
-        >
-          <MoreHorizontal className="size-4" aria-hidden="true" />
-        </button>
+                `aria-haspopup="menu"` and no `aria-expanded`, which is the deliberately partial
+                declaration `WishFolderCard` argues in full: the popup *kind* is a fact about this
+                button and is free, while the expanded *state* is a fact about
+                `ContextMenuProvider`, which holds the one open menu at the app root and publishes
+                only `openMenu`/`closeMenu`. A static `aria-expanded="false"` would be an
+                assertion, and it would be wrong for exactly as long as the menu is up. */}
+            <button
+              ref={manageRef}
+              type="button"
+              aria-label={`Manage ${node.folder.name}`}
+              aria-haspopup="menu"
+              // `data-no-drag`, and it is load-bearing from the moment the card became draggable:
+              // Chromium starts a drag from the nearest draggable *ancestor* of whatever was
+              // pressed, so without it a press on the `⋯` plus five pixels of travel files this
+              // folder somewhere instead of opening its menu — and the click that was meant is
+              // never delivered. `composedDraggable`'s capture-phase guard is what reads it;
+              // `dnd.ts` has the measurement.
+              data-no-drag=""
+              onClick={rowMenu.onClick}
+              onKeyDown={rowMenu.onKeyDown}
+              className={cn(
+                "absolute right-1 top-1 grid size-7 place-items-center rounded-md text-dim",
+                "transition-colors duration-150 hover:bg-surface hover:text-text",
+                "motion-reduce:transition-none",
+                FOCUS,
+              )}
+            >
+              <MoreHorizontal className="size-4" aria-hidden="true" />
+            </button>
+          </>
+        )}
       </div>
 
       {/* Drawn straight off `edge`, which is `null` both when the pointer is elsewhere and when

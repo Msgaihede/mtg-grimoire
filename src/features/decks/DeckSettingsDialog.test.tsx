@@ -89,7 +89,7 @@ const CATEGORIES: DeckCategory[] = [
 
 /** The deck the dialog reads, with whatever this test needs changed about it. */
 function detail(deck: Partial<DeckRow> = {}, cards: DeckCard[] = []): DeckDetail {
-  return { deck: { ...BURN, ...deck }, cards, categories: CATEGORIES, tags: [] };
+  return { deck: { ...BURN, ...deck }, cards, categories: CATEGORIES, labels: [] };
 }
 
 /**

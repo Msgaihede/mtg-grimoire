@@ -6,7 +6,7 @@
  * `App` level, a sibling of `AppShell` and therefore **outside** `DeckEditor`, so no React
  * context reaches it; and the order cannot be recomputed on its side either, because the three
  * things that decide it are all the editor's own. `groupBy` and `sortBy` are `useState` in that
- * component, and the rows are `shown` — the deck narrowed by a live text box and a set of tag
+ * component, and the rows are `shown` — the deck narrowed by a live text box and a set of label
  * chips. Only the editor knows the order the reader is actually looking at. So the editor
  * publishes this and the modal reads it, through `useAppStore.cardWalk`, exactly as
  * `paneDeckContext` already carries the one row a card was opened from.

@@ -6,8 +6,8 @@ import {
   type DeckDetail,
   type DeckFinish,
   type DeckPatch,
+  type DeckLabel,
   type DeckPullPick,
-  type DeckTag,
   type DeckVariant,
   type DeckViewState,
   type MoveOutcome,
@@ -36,7 +36,7 @@ const NONE: readonly DeckCard[] = [];
 
 /** The same, for the two lists a deck read now also answers with. */
 const NO_CATEGORIES: readonly DeckCategory[] = [];
-const NO_TAGS: readonly DeckTag[] = [];
+const NO_LABELS: readonly DeckLabel[] = [];
 
 /**
  * The variant every surface that has no opinion reads.
@@ -308,8 +308,8 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    *
    * **And, for most writes, nothing wider than that.** Owned/missing is a sum over the rows
    * sitting in this deck's collection group, so a write that only changes the *list* — an add, a
-   * move between piles, a finish, a tag — provably leaves `collection_entries` where it was, and
-   * firing the collection's root as well would be a refetch per press of the stepper that can
+   * move between piles, a finish, a label — provably leaves `collection_entries` where it was,
+   * and firing the collection's root as well would be a refetch per press of the stepper that can
    * only answer what is already on screen. `missingToWishlist` takes `["wishlist"]` on top,
    * because it is the one command here that actually writes wishes.
    *
@@ -979,21 +979,21 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
   });
 
   /**
-   * Put the deck's one tag on a card, or take it off with `tagId: null`.
+   * Put the deck's one label on a card, or take it off with `labelId: null`.
    *
    * A **card** write, addressed by the same slot as the stepper and the move — which is why it
-   * lives here rather than in `useDeckMeta` beside the tag CRUD. The label is per-deck data; a
+   * lives here rather than in `useDeckMeta` beside the label CRUD. The label is app-wide data; a
    * card *wearing* one is a fact about a row of `deck_cards`, and a stale editor pointing at a
    * row that has since moved, folded or been stepped to zero is answered in words.
    *
-   * **No optimistic patch, and no reallocation to wait for.** A tag changes what a row is
+   * **No optimistic patch, and no reallocation to wait for.** A label changes what a row is
    * *called* and nothing about what is in the deck — the backend does not run the allocator for
    * it — so there is no number on screen that this could get wrong for a beat. It still takes
-   * the `["decks"]` root on the way out, because the tag counts on every `DeckTag` row moved.
+   * the `["decks"]` root on the way out, because the card counts on every `DeckLabel` row moved.
    */
-  const setTag = useMutation({
-    mutationFn: ({ cardId, categoryId, finish, tagId }: Slot & { tagId: number | null }) =>
-      ipc.deckCardSetTag(opened(id), cardId, categoryId, variant, finish, tagId),
+  const setLabel = useMutation({
+    mutationFn: ({ cardId, categoryId, finish, labelId }: Slot & { labelId: number | null }) =>
+      ipc.deckCardSetLabel(opened(id), cardId, categoryId, variant, finish, labelId),
     onSuccess: invalidate,
     onError: invalidate,
   });
@@ -1010,8 +1010,8 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
      *  editor's columns are this list, not the categories that happen to hold a card. The list
      *  is the same in both variants; only the counts on each row are scoped. */
     categories: query.data?.categories ?? NO_CATEGORIES,
-    /** Every tag of the deck, alphabetically — the palette a row's label is drawn from. */
-    tags: query.data?.tags ?? NO_TAGS,
+    /** Every label this list is wearing — the palette a row's mark is drawn from. */
+    labels: query.data?.labels ?? NO_LABELS,
     /** Which of the two lists this hook is reading and writing. Handed back so a caller that
      *  took the default does not have to know what it was. */
     variant,
@@ -1029,7 +1029,7 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
     refileCard,
     swapPrinting,
     setCardFinish,
-    setTag,
+    setLabel,
     missingToWishlist,
     /** The mirror of the line above — what the deck is short of **and the reader owns**, moved
      *  into its group. See the mutation's own doc for the three roots it invalidates, and for

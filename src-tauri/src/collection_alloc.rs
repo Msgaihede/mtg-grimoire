@@ -25,7 +25,23 @@
 //! for 7. Everything else it does is borrowed from here — [`take_copies`] for the move,
 //! `with_write_owned` for the lock, a history row with no undo step beside it.
 //!
-//! Four rules hold this together, and each has a test below:
+//! **Rule one below and that module are the same idea reached from two directions**, which is
+//! worth saying because they landed within a day of each other and neither knew about the
+//! other. [`NOT_IN_DECK`] fences this write down to decks that already play the card; a pull is
+//! *only ever* that case, because its plan is built from the list's own shortfall and it refuses
+//! any pick the deck is not short of. So a pull cannot reach the state rule one exists to
+//! refuse — it asks a strictly narrower question, at the printing rather than the oracle card.
+//!
+//! Five rules hold this together, and each has a test below:
+//!
+//! * **Copies may only be filed into a deck that already plays the card**
+//!   ([`NOT_IN_DECK`], [issue #358](https://github.com/Msgaihede/mtg-grimoire/issues/358)).
+//!   The arrow above runs left to right *through a list*: the deck says what it plays, and the
+//!   cardboard follows. Without the fence this write invented the `deck_cards` row as it went,
+//!   so tidying a binder into a deck group added a card the reader never chose to play — the
+//!   one door left open on the invariant [`crate::collection_folders::set_entry_folder`]
+//!   already refuses a bare drag for. It is asked on the **oracle card**
+//!   ([`crate::deck::plays_card`]), so a deck listing one printing takes another's copies.
 //!
 //! * **The move is [`crate::collection_folders::take_copies`]' and is never written a second
 //!   time.** Splitting a row, filing the half that travels and re-inserting the remainder is one
@@ -110,6 +126,26 @@ pub const NO_REMOVED_FOLDER: &str = "There is no Recently removed folder to file
 /// against copies the group already holds, and the list would say two where the folder says
 /// one.
 pub const ALREADY_HERE: &str = "Those copies are already in this deck.";
+
+/// Copies filed into a deck that does not play the card
+/// ([issue #358](https://github.com/Msgaihede/mtg-grimoire/issues/358)).
+///
+/// A deck's group is the **physical** record of what that deck holds, so a row sitting in it
+/// with no live `deck_cards` row behind it is cardboard in a drawer nothing claims: invisible on
+/// the Collection page as available, unavailable to every other deck, and reachable again only
+/// by finding the folder by hand. That is the state
+/// [`crate::collection_folders::set_entry_folder`] already refuses a bare drag for — this is the
+/// same invariant guarded at the one door that could still open it, because until now this
+/// command *wrote the `deck_cards` row itself* and would happily invent one for a card the deck
+/// had never listed.
+///
+/// **It names the way out**, which is the whole difference between a refusal and a wall: the
+/// deck list is where a card is added, and the copies follow it rather than the other way round.
+/// Matched on the **oracle card** — [`crate::deck::plays_card`] — so a deck listing the Alpha
+/// Bolt accepts the M10 copies in the binder and this sentence is never shown to a reader whose
+/// deck is looking at the same card in another frame.
+pub const NOT_IN_DECK: &str =
+    "That deck does not play this card. Add it to the deck first, then file your copies.";
 
 /// What [`Pile::from_args`] says when a caller sends a category id **and** a category name.
 ///
@@ -368,6 +404,16 @@ fn take_from_deck_list(
 /// table rather than the mistake — and `PRAGMA foreign_keys` is per-connection, so on a
 /// connection that has it off some of them would not surface at all.
 ///
+/// **The deck has to play the card already** ([`NOT_IN_DECK`], issue #358). A deck's group is
+/// the physical record of what that deck holds, and this command used to *write the `deck_cards`
+/// row itself* — so filing copies into a deck that had never listed the card made the list say
+/// so, which is a card the reader never chose to play appearing in their deck because they
+/// tidied a binder. Refused rather than treated as an add: the list is where a card is chosen,
+/// and [`crate::deck::plays_card`] is the one place the question is asked, on the **oracle card**
+/// so that a deck listing the Alpha Bolt takes the M10 copies. What is left for the write below
+/// is the arm that was always the ordinary case — the `ON CONFLICT` that raises the row the deck
+/// already has, or a second pile of the same deck holding the same card.
+///
 /// **The pile is a [`Pile`], which is either an id or a name.** The name arm resolves through
 /// [`crate::deck_meta::category_for_name`] exactly as [`crate::deck::add_card`]'s does, inside
 /// this move's own transaction, so a pile the app has to invent is recorded `origin = 'auto'`
@@ -441,6 +487,22 @@ pub fn collection_to_deck(
     // Doubles as the deck fence: it answers `deck::GONE` for an id with no row, one statement
     // before there is an orphan to worry about. [`crate::deck::touch_deck`]'s own argument.
     crate::deck::touch_deck(&tx, deck_id)?;
+    // **The folder rule, and it is read here rather than four statements down for one reason:
+    // the [`Pile::Name`] arm below *writes*.** A pile the app has to invent must not survive a
+    // move that is refused after it — `a_refused_filing_by_name_leaves_no_pile_behind`'s rule,
+    // and `a_filing_refused_by_the_folder_rule_leaves_no_pile_behind` is the same pin one
+    // refusal over. Everything above it is a read except [`crate::deck::touch_deck`], which
+    // rolls back with the transaction and has to stay first so that a stale editor's dead deck
+    // id is still answered [`crate::deck::GONE`] rather than [`NOT_IN_DECK`] — "that deck is
+    // gone" and "that deck does not play this" are different things to be told.
+    //
+    // The price of hoisting the source read up here with it is that a caller sending a dead
+    // entry id **and** a dead category id now hears about the entry first. That is the right
+    // order anyway: the entry is what the reader pointed at, the category is where it was going.
+    let source = source_of(&tx, entry_id)?;
+    if !crate::deck::plays_card(&tx, deck_id, &source.card_id)? {
+        return Err(NOT_IN_DECK.to_owned());
+    }
     // **Inside the transaction, because the name arm *writes***: a pile nobody has made yet is
     // made here, and it must not survive a move that fails after it —
     // [`crate::deck::add_card`]'s discipline, and `a_refused_filing_by_name_leaves_no_pile_
@@ -477,7 +539,6 @@ pub fn collection_to_deck(
     };
     let group = crate::deck::deck_group(&tx, deck_id)?.ok_or_else(|| NO_DECK_GROUP.to_owned())?;
 
-    let source = source_of(&tx, entry_id)?;
     if quantity > source.quantity {
         return Err(NOT_THAT_MANY.to_owned());
     }
@@ -499,7 +560,7 @@ pub fn collection_to_deck(
     }
 
     // The conflict target is `DECK_CARD_GRAIN` verbatim — the same text the unique index was
-    // created from, [`crate::deck::add_card`]'s discipline. `tag_id` and `needs_review` are
+    // created from, [`crate::deck::add_card`]'s discipline. `label_id` and `needs_review` are
     // left alone: the row already there is the one the user labelled.
     //
     // **`RETURNING id` rather than `last_insert_rowid`**, and that is the whole of why the id is
@@ -863,12 +924,32 @@ mod tests {
         (deck, category)
     }
 
-    /// One card, one deck with its group, one category.
+    /// One card, a **reprint of it**, one deck with its group, one category.
+    ///
+    /// The second printing is here for [`plays`], which every case that files a copy has to call
+    /// since the folder rule landed — see that helper for why it is another printing rather than
+    /// the one being filed.
     fn fixture() -> (Connection, i64, i64) {
         let conn = open();
         seed_card(&conn, "bolt", "lea", "161");
+        seed_reprint(&conn, "bolt-m10", "bolt");
         let (deck, category) = deck_with_group(&conn, "Deck A");
         (conn, deck, category)
+    }
+
+    /// Make a deck **play** the card these cases file, which [`NOT_IN_DECK`] now requires of
+    /// every one of them.
+    ///
+    /// **It lists another printing of the same card rather than the printing being filed**, and
+    /// that buys two things at once. It is the oracle match the fence is built on, exercised by
+    /// every case in this file instead of by the one case named for it — a fence narrowed to the
+    /// exact printing would take this whole suite red. And it leaves every `card_id = 'bolt'`
+    /// count below reading exactly what it read before the rule existed: [`deck_copies`],
+    /// [`deck_card`], [`group_copies`] and [`root_copies`] all name that printing, so the row
+    /// this writes is invisible to them and no assertion had to be re-tuned to accommodate a
+    /// precondition.
+    fn plays(conn: &Connection, deck: i64, category: i64) {
+        add_variant_card(conn, deck, category, LIVE, "bolt-m10", 1);
     }
 
     /// A second deck, so a copy can be taken out of one and put in the other.
@@ -1008,6 +1089,7 @@ mod tests {
     #[test]
     fn a_card_taken_from_the_binder_leaves_the_binder() {
         let (conn, deck, cat) = fixture();
+        plays(&conn, deck, cat);
         let entry = seed_entry(&conn, "bolt", 4, None);
         collection_to_deck(&conn, entry, deck, Pile::Id(cat), 1).unwrap();
         assert_eq!(root_copies(&conn, "bolt"), 3);
@@ -1021,6 +1103,8 @@ mod tests {
         // reader is not looking at.
         let (conn, a, cat_a) = fixture();
         let (b, cat_b) = second_deck(&conn);
+        plays(&conn, a, cat_a);
+        plays(&conn, b, cat_b);
         let entry = seed_entry(&conn, "bolt", 1, None);
         collection_to_deck(&conn, entry, a, Pile::Id(cat_a), 1).unwrap();
         let filed = group_entry(&conn, a, "bolt");
@@ -1038,6 +1122,7 @@ mod tests {
     #[test]
     fn a_card_cut_from_a_deck_lands_in_recently_removed() {
         let (conn, deck, cat) = fixture();
+        plays(&conn, deck, cat);
         let entry = seed_entry(&conn, "bolt", 1, None);
         collection_to_deck(&conn, entry, deck, Pile::Id(cat), 1).unwrap();
         let dc = deck_card(&conn, deck, "bolt");
@@ -1070,7 +1155,6 @@ mod tests {
         // the copies stay filed under a deck that no longer lists them — invisible, and
         // unavailable to every other deck.
         let (conn, deck, cat) = fixture();
-        seed_reprint(&conn, "bolt-m10", "bolt");
         let group = crate::deck::deck_group(&conn, deck).unwrap();
         seed_entry(&conn, "bolt", 2, group);
         let dc = add_variant_card(&conn, deck, cat, "live", "bolt-m10", 2);
@@ -1096,7 +1180,6 @@ mod tests {
         // This is what keeps the common case — every cut of a card nobody ever swapped —
         // byte-for-byte what it was before the oracle arm existed.
         let (conn, deck, cat) = fixture();
-        seed_reprint(&conn, "bolt-m10", "bolt");
         let group = crate::deck::deck_group(&conn, deck).unwrap();
         seed_entry(&conn, "bolt", 1, group);
         seed_entry(&conn, "bolt-m10", 1, group);
@@ -1173,6 +1256,7 @@ mod tests {
     /// being deleted.
     fn cut_fixture() -> (Connection, i64, i64, i64) {
         let (conn, deck, cat) = fixture();
+        plays(&conn, deck, cat);
         let entry = seed_entry(&conn, "bolt", 4, None);
         collection_to_deck(&conn, entry, deck, Pile::Id(cat), 4).unwrap();
         let dc = deck_card(&conn, deck, "bolt");
@@ -1307,6 +1391,7 @@ mod tests {
         // nothing leaves the reader opening the history drawer to find the card simply *there*
         // with nothing saying how it arrived.
         let (conn, deck, cat) = fixture();
+        plays(&conn, deck, cat);
         let entry = seed_entry(&conn, "bolt", 4, None);
         collection_to_deck(&conn, entry, deck, Pile::Id(cat), 2).unwrap();
         assert_eq!(
@@ -1326,6 +1411,7 @@ mod tests {
         // wrong: the row lands on 3, and the history is a list of *changes* — the day header
         // adds `delta` up, so recording the total would count the first two copies twice.
         let (conn, deck, cat) = fixture();
+        plays(&conn, deck, cat);
         let entry = seed_entry(&conn, "bolt", 4, None);
         collection_to_deck(&conn, entry, deck, Pile::Id(cat), 2).unwrap();
         collection_to_deck(&conn, root_entry(&conn, "bolt"), deck, Pile::Id(cat), 1).unwrap();
@@ -1369,6 +1455,7 @@ mod tests {
         let (conn, a, cat_a) = fixture();
         let side = crate::schema::tests::category(&conn, a, "main", "Sideboard");
         let (b, cat_b) = second_deck(&conn);
+        plays(&conn, b, cat_b);
         let group = crate::deck::deck_group(&conn, a).unwrap();
         // Deck A lists the Bolt in two piles and its group holds the four copies behind them.
         add_variant_card(&conn, a, cat_a, LIVE, "bolt", 2);
@@ -1413,6 +1500,7 @@ mod tests {
     fn taking_a_copy_from_another_deck_files_no_step_in_that_deck() {
         let (conn, a, cat_a) = fixture();
         let (b, cat_b) = second_deck(&conn);
+        plays(&conn, b, cat_b);
         let group = crate::deck::deck_group(&conn, a).unwrap();
         add_variant_card(&conn, a, cat_a, LIVE, "bolt", 1);
         let filed = seed_entry(&conn, "bolt", 1, group);
@@ -1433,6 +1521,7 @@ mod tests {
     #[test]
     fn a_filing_answers_the_deck_card_it_wrote_through_both_arms() {
         let (conn, deck, cat) = fixture();
+        plays(&conn, deck, cat);
         let entry = seed_entry(&conn, "bolt", 4, None);
 
         let first = collection_to_deck(&conn, entry, deck, Pile::Id(cat), 2).unwrap();
@@ -1453,6 +1542,7 @@ mod tests {
     #[test]
     fn a_cut_answers_no_deck_card_because_its_caller_already_holds_one() {
         let (conn, deck, cat) = fixture();
+        plays(&conn, deck, cat);
         let entry = seed_entry(&conn, "bolt", 1, None);
         collection_to_deck(&conn, entry, deck, Pile::Id(cat), 1).unwrap();
         let dc = deck_card(&conn, deck, "bolt");
@@ -1465,6 +1555,7 @@ mod tests {
         // row with it — `a_refused_cut_records_nothing` from the other direction. `touch_deck`
         // has already written by the time this refusal is reached, so the rollback is real.
         let (conn, deck, cat) = fixture();
+        plays(&conn, deck, cat);
         let entry = seed_entry(&conn, "bolt", 1, None);
         let err = collection_to_deck(&conn, entry, deck, Pile::Id(cat), 2).unwrap_err();
         assert_eq!(err, NOT_THAT_MANY);
@@ -1524,7 +1615,8 @@ mod tests {
         // `'user'`, the reader's own answer — and a `Ramp` nobody asked for went on drawing an
         // empty heading for ever. `category_for_name` is the write that records `'auto'`, and it
         // is reachable only from inside a command that also writes the card.
-        let (conn, deck, _cat) = fixture();
+        let (conn, deck, cat) = fixture();
+        plays(&conn, deck, cat);
         let entry = seed_entry(&conn, "bolt", 1, None);
 
         collection_to_deck(&conn, entry, deck, Pile::Name("Ramp"), 1).unwrap();
@@ -1541,7 +1633,8 @@ mod tests {
     fn filing_by_name_into_a_pile_the_reader_made_leaves_it_theirs() {
         // `category_for_name` finds before it creates, which is the half that keeps a reader's
         // own "Ramp" drawing for as long as it exists even once the app files cards into it.
-        let (conn, deck, _cat) = fixture();
+        let (conn, deck, cat) = fixture();
+        plays(&conn, deck, cat);
         let mine = crate::deck_meta::create_category(&conn, deck, "Ramp").unwrap();
         let entry = seed_entry(&conn, "bolt", 1, None);
 
@@ -1595,7 +1688,8 @@ mod tests {
         // The create is inside the move's own transaction — `deck::add_card`'s discipline — so a
         // refusal that lands after it takes the invented pile with it. Without that, a reader who
         // asked for more copies than they own would be left with an empty column they never made.
-        let (conn, deck, _cat) = fixture();
+        let (conn, deck, cat) = fixture();
+        plays(&conn, deck, cat);
         let entry = seed_entry(&conn, "bolt", 1, None);
 
         let err = collection_to_deck(&conn, entry, deck, Pile::Name("Ramp"), 2).unwrap_err();
@@ -1608,9 +1702,117 @@ mod tests {
     fn a_copy_in_a_deck_group_is_not_available_to_another_deck() {
         // Exclusivity, which is the whole point: it is a fact about where the row sits, not a sum.
         let (conn, a, cat_a) = fixture();
+        plays(&conn, a, cat_a);
         let entry = seed_entry(&conn, "bolt", 1, None);
         collection_to_deck(&conn, entry, a, Pile::Id(cat_a), 1).unwrap();
         let free = unallocated_copies(&conn, "bolt");
         assert_eq!(free, 0, "the only copy is spoken for");
+    }
+
+    // ---- the folder rule ---------------------------------------------------------------
+    //
+    // [Issue #358](https://github.com/Msgaihede/mtg-grimoire/issues/358). Every case above
+    // calls [`plays`] to satisfy this rule; these are the cases that are *about* it.
+
+    #[test]
+    fn filing_a_card_the_deck_does_not_play_is_refused() {
+        // The hole this closes: the write below invented the `deck_cards` row as it went, so
+        // filing copies into a deck that had never listed the card put a card the reader never
+        // chose to play into their deck. Nothing at all may move.
+        let (conn, deck, cat) = fixture();
+        let entry = seed_entry(&conn, "bolt", 4, None);
+
+        let err = collection_to_deck(&conn, entry, deck, Pile::Id(cat), 1).unwrap_err();
+
+        assert_eq!(err, NOT_IN_DECK);
+        assert_eq!(
+            root_copies(&conn, "bolt"),
+            4,
+            "the copies never left the binder"
+        );
+        assert_eq!(group_copies(&conn, deck, "bolt"), 0);
+        assert_eq!(
+            deck_copies(&conn, deck, "bolt"),
+            0,
+            "and no list row was invented"
+        );
+        assert_eq!(history(&conn, deck), vec![]);
+    }
+
+    #[test]
+    fn filing_a_card_the_deck_already_lists_is_allowed() {
+        // The ordinary case the rule leaves standing: the deck lists the printing, the reader
+        // owns copies of it, and filing them raises the row through the `ON CONFLICT` arm.
+        let (conn, deck, cat) = fixture();
+        add_deck_card(&conn, deck, cat, "bolt", 1);
+        let entry = seed_entry(&conn, "bolt", 2, None);
+
+        collection_to_deck(&conn, entry, deck, Pile::Id(cat), 2).unwrap();
+
+        assert_eq!(deck_copies(&conn, deck, "bolt"), 3);
+        assert_eq!(group_copies(&conn, deck, "bolt"), 2);
+    }
+
+    #[test]
+    fn filing_another_printing_of_a_card_the_deck_plays_is_allowed() {
+        // **The whole reason the match is on the oracle card.** A deck listing the M10 Bolt
+        // plays the Alpha copies in the binder, and a fence on the exact printing would tell a
+        // reader their own deck has never heard of a card they are looking at. `deck_swap_
+        // printing` and the v25 conversion both produce this state without anybody asking for it.
+        let (conn, deck, cat) = fixture();
+        add_deck_card(&conn, deck, cat, "bolt-m10", 1);
+        let entry = seed_entry(&conn, "bolt", 1, None);
+
+        collection_to_deck(&conn, entry, deck, Pile::Id(cat), 1).unwrap();
+
+        assert_eq!(group_copies(&conn, deck, "bolt"), 1);
+        assert_eq!(deck_copies(&conn, deck, "bolt"), 1);
+    }
+
+    #[test]
+    fn filing_a_card_the_deck_only_plans_is_refused() {
+        // **A plan holds no cards** — [`THEORY_HOLDS_NOTHING`]'s argument, applied to the other
+        // direction. A theory row claims nothing, so copies filed against it would sit in the
+        // group with no live list behind them: exactly the state this rule exists to prevent,
+        // reached through the one variant that looks like a list and is not.
+        let (conn, deck, cat) = fixture();
+        add_theory_card(&conn, deck, cat, "bolt", 1);
+        let entry = seed_entry(&conn, "bolt", 1, None);
+
+        let err = collection_to_deck(&conn, entry, deck, Pile::Id(cat), 1).unwrap_err();
+
+        assert_eq!(err, NOT_IN_DECK);
+        assert_eq!(root_copies(&conn, "bolt"), 1);
+        assert_eq!(group_copies(&conn, deck, "bolt"), 0);
+    }
+
+    #[test]
+    fn a_filing_refused_by_the_folder_rule_leaves_no_pile_behind() {
+        // `a_refused_filing_by_name_leaves_no_pile_behind`'s pin, one refusal over — and the
+        // reason the fence sits **above** the category block rather than beside the quantity
+        // check. Read after [`Pile::Name`] had resolved, this refusal would still roll the
+        // invented pile back with the transaction; read *before* it, the pile is never made at
+        // all, and the case that would go red if the fence drifted down is this one.
+        let (conn, deck, _cat) = fixture();
+        let entry = seed_entry(&conn, "bolt", 1, None);
+
+        let err = collection_to_deck(&conn, entry, deck, Pile::Name("Ramp"), 1).unwrap_err();
+
+        assert_eq!(err, NOT_IN_DECK);
+        assert_eq!(origin_of(&conn, deck, "Ramp"), None);
+    }
+
+    #[test]
+    fn a_deck_that_is_gone_is_named_before_the_folder_rule() {
+        // The other end of the placement: [`crate::deck::touch_deck`] stays first, so a stale
+        // editor pointing at a deck somebody deleted is told the deck is gone rather than that
+        // it does not play the card — which would be true of a deck that does not exist, and
+        // useless.
+        let (conn, _deck, cat) = fixture();
+        let entry = seed_entry(&conn, "bolt", 1, None);
+
+        let err = collection_to_deck(&conn, entry, 404_040, Pile::Id(cat), 1).unwrap_err();
+
+        assert_eq!(err, crate::deck::GONE);
     }
 }

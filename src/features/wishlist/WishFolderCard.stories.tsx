@@ -4,7 +4,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import type { MenuItem } from "@/components/menu/types";
-import { DROP_MARK_ROOM, DROP_OVER, DROP_RING } from "@/lib/dropMarks";
+import { DROP_EDGE, DROP_MARK_ROOM, DROP_OVER } from "@/lib/dropMarks";
 import { folderDraggable, type FolderDrag } from "@/lib/folderDrag";
 import type { FolderNode } from "@/lib/folderTree";
 import type { WishlistFolder } from "@/lib/ipc";
@@ -15,7 +15,7 @@ import { wishDraggable, type WishDrag } from "./wishDrag";
 /**
  * How long a `waitFor` will wait for a state a drag has to travel to reach.
  *
- * The library schedules its `onDragStart` on `requestAnimationFrame` and every ring here is a
+ * The library schedules its `onDragStart` on `requestAnimationFrame` and every mark here is a
  * `useState` behind that, so one frame is necessary and never sufficient — seconds rather than
  * milliseconds because these plays run under a hundred-odd parallel jsdom files.
  * `ContextMenu.stories.tsx` measured the same thing first and carries the long form.
@@ -30,12 +30,32 @@ function folder(over: Partial<WishlistFolder> & { id: number; name: string }): W
 /** The drawer every story below draws, and the one a wish is dropped into. */
 const EXPENSIVE = folder({ id: 3, name: "Expensive" });
 
+/** Two neighbours, so {@link Renaming} has drawers to stand its field among. */
+const SOMEDAY = folder({ id: 8, name: "Someday" });
+const TRADES = folder({ id: 11, name: "Trade binder" });
+
 function node(
   f: WishlistFolder,
   over: Partial<FolderNode<WishlistFolder>> = {},
 ): FolderNode<WishlistFolder> {
   return { folder: f, depth: 0, count: 0, children: [], ...over };
 }
+
+/**
+ * The card at rest — the field closed, nothing in flight.
+ *
+ * **`rename` is the page's state rather than the card's**: one field is open at a time across the
+ * whole wall, since pressing `New folder` has to close a rename already in progress and a card
+ * holding its own flag could not know that had happened. So it arrives as a prop, and this is what
+ * every story but one passes — including each neighbour in {@link Renaming}, which is what keeps
+ * the wall to the one open field the page allows.
+ */
+const RESTING: ComponentProps<typeof WishFolderCard>["rename"] = {
+  active: false,
+  pending: false,
+  onSubmit: fn(),
+  onCancel: fn(),
+};
 
 /**
  * The card as the page draws it: inside the `<ul>` the wall is, inside the scroller that wall
@@ -46,10 +66,12 @@ function node(
  * would put a list item outside a list and document markup the page does not build.
  *
  * **`DROP_MARK_ROOM` is on the scroller for the reason it exists**, even though nothing in jsdom
- * can go red for it: `overflow` clips at the padding box and a `DROP_RING` is a box shadow painted
- * *outside* the border box, so a card flush against the content edge loses the outer 2px of its
- * ring for the whole length of a drag. The wall in the workbench has to be the wall on the page,
- * or {@link DropTarget} would draw a ring the app clips.
+ * can go red for it: `overflow` clips at the padding box, so anything a card paints *outside* its
+ * border box is lost where the card sits flush against the content edge. Since 2026-09-03 that is
+ * no longer this card's drop marks — {@link DROP_EDGE} recolours the card's own border and
+ * {@link DROP_OVER} fills it, both inside the box — but it is still `FOCUS`, which stands 4px
+ * proud, and half a focus indicator is a WCAG 2.4.7 failure rather than a cosmetic one. The wall
+ * in the workbench has to be the wall on the page either way.
  *
  * The menu is the real `useContextMenu`, off the provider `.storybook/preview.tsx` mounts for
  * every story — so the `⋯`, a right-click and Shift+F10 all open the page's three rows here, and
@@ -58,8 +80,24 @@ function node(
  */
 function Wall({
   act,
+  beside = [],
   ...card
-}: Omit<ComponentProps<typeof WishFolderCard>, "rowMenu"> & { act: (what: string) => void }) {
+}: Omit<ComponentProps<typeof WishFolderCard>, "rowMenu"> & {
+  act: (what: string) => void;
+  /**
+   * Drawers drawn after the subject, at rest.
+   *
+   * **Only {@link Renaming} passes any, and the reason is that its whole claim is a
+   * comparison.** A field with a dashed *accent* edge is only legible against the dashed *border*
+   * edges of the tiles it stands among — one on its own is a tile with a coloured outline and
+   * nothing to be coloured against. They share the subject's handlers because no story presses
+   * one; what is their own is the drawer and its figures.
+   */
+  beside?: readonly {
+    node: FolderNode<WishlistFolder>;
+    summary: ComponentProps<typeof WishFolderCard>["summary"];
+  }[];
+}) {
   const { menu, menuKey, menuClick } = useContextMenu();
   const build = (): MenuItem[] => [
     { kind: "action", id: "rename", label: "Rename…", onSelect: () => act("rename") },
@@ -67,20 +105,28 @@ function Wall({
     { kind: "separator", id: "before-delete" },
     { kind: "action", id: "delete", label: "Delete…", onSelect: () => act("delete") },
   ];
+  const rowMenu = {
+    onContextMenu: menu(build),
+    onKeyDown: menuKey(build),
+    onClick: menuClick(build),
+  };
   return (
     <div className={cn("relative max-h-44 overflow-y-auto", DROP_MARK_ROOM)}>
       <ul
         aria-label="Folders"
         className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-2"
       >
-        <WishFolderCard
-          {...card}
-          rowMenu={{
-            onContextMenu: menu(build),
-            onKeyDown: menuKey(build),
-            onClick: menuClick(build),
-          }}
-        />
+        <WishFolderCard {...card} rowMenu={rowMenu} />
+        {beside.map((other) => (
+          <WishFolderCard
+            {...card}
+            key={other.node.folder.id}
+            node={other.node}
+            summary={other.summary}
+            rename={RESTING}
+            rowMenu={rowMenu}
+          />
+        ))}
       </ul>
     </div>
   );
@@ -95,6 +141,7 @@ const meta = {
     summary: { wishes: 6, missing: 6, cost: 312, unpriced: 0 },
     currency: "usd",
     onOpen: fn(),
+    rename: RESTING,
     onDropWish: fn(),
     // The page's own answer, verbatim — spec §9: a folder takes any wish that is not already
     // filed in it. Stated once here rather than per story, because it is the rule rather than a
@@ -243,6 +290,56 @@ export const Unpriced: Story = {
     await expect(canvas.getByRole("button", { name: /^Expensive folder/ })).toHaveTextContent(
       "4 wishes · $88.00 · 2 unpriced",
     );
+  },
+};
+
+/**
+ * `Rename…`, answered **on the card** — and drawn beside two drawers at rest, because the whole
+ * claim here is a comparison.
+ *
+ * **What this replaced was a bordered strip above the wall**, with its own edge, its own
+ * background, `Create folder` and `Cancel` written out, and a line saying which level it was
+ * about. Every one of those pieces re-established a context the reader could already see: the
+ * level is the wall in front of them, and the drawer being renamed is the tile they pressed. So
+ * the tile says it by being the tile — the name is typed on the line the name already occupies, at
+ * the same track and the same footprint, and ✓ / ✕ take the corner the `⋯` was in.
+ *
+ * **The border is the part to look at, and it needs the neighbours to be legible.** The dash
+ * stays, because a folder being renamed is still a container and dashed is this app's word for
+ * that; only the *colour* moves, to `border-accent`, which is the whole of what says this tile is
+ * live. One field on its own is a tile with a coloured outline — against the two dashed grey edges
+ * either side of it, it is obviously the same kind of thing, mid-edit.
+ *
+ * **The figures line stays under the field**, which is the reason a rename is not the create tile
+ * with another word on the tick: a reader renaming *Expensive* is looking at the drawer holding
+ * six wishes worth $312, and a box that dropped the count would make them stop and check they had
+ * the right one — with the name, the only other thing to check by, the thing they are replacing.
+ *
+ * Both drop targets are deliberately left registered while the field is open: a wish let go here
+ * files perfectly well, and the reader dragging it cannot see the field. What the field does
+ * suppress is this card as a drag *source*, through one `data-no-drag` on its `<form>`.
+ */
+export const Renaming: Story = {
+  args: {
+    rename: { active: true, pending: false, onSubmit: fn(), onCancel: fn() },
+    beside: [
+      { node: node(SOMEDAY), summary: { wishes: 2, missing: 2, cost: 41, unpriced: 0 } },
+      { node: node(TRADES), summary: { wishes: 9, missing: 4, cost: 118, unpriced: 1 } },
+    ],
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const field = canvas.getByRole("textbox", { name: "Rename Expensive" });
+    // Named for the drawer rather than "Folder name": a wall of these is otherwise a row of
+    // identically-named boxes, and only one of them is open at a time for a sighted reader.
+    await expect(field).toHaveValue("Expensive");
+    await expect(field.closest("form")).toHaveTextContent("6 wishes · $312.00");
+
+    // The field is *instead of* the tile's two controls, not beside them — and only on this one
+    // card, which is what the neighbours are here to say.
+    await expect(canvas.queryByRole("button", { name: "Manage Expensive" })).toBeNull();
+    await expect(canvas.getByRole("button", { name: "Manage Someday" })).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: /^Trade binder folder/ })).toBeInTheDocument();
   },
 };
 
@@ -396,17 +493,25 @@ function Source({ wish }: { wish: WishDrag }) {
 }
 
 /**
- * The two rings, and the folder that draws neither.
+ * The two marks, and the folder that draws neither.
  *
- * **`DROP_RING` is raised on every folder that would take the wish, not only the one under the
+ * **`DROP_EDGE` is raised on every folder that would take the wish, not only the one under the
  * pointer**, from the moment it leaves the tile — that is what tells a reader where a drag can
  * end before they have aimed anywhere. `DROP_OVER` is the second, narrower fact only the target
  * the pointer is actually over can answer, and it comes with `border-accent` so the dashed edge
  * itself says which drawer is about to take it.
  *
- * **The folder a wish is already filed in refuses it and draws no ring at all** — spec §9, and
- * the same rule as a deck card dropped back into its own column: a ring that led to a write which
- * moved nothing and bumped `updated_at` would be worse than no ring. `WishDrag.folderId` is the
+ * **Both are on the `<button>`, which is the element carrying the card's own dash** (2026-09-03).
+ * The eligible mark used to be a `DROP_RING` on the `<li>` around it, and a ring is a box shadow
+ * painted *outside* the border box — so it stood 2px proud of the dashed rectangle it was meant to
+ * agree with, two concentric outlines for one landing. A card that already owns an outline does
+ * not need a second one to say a drag could land on it; it needs *that* outline to change colour,
+ * which is the whole of what `DROP_EDGE` does. Drive this story to see the two strengths of gold
+ * on one edge rather than two edges.
+ *
+ * **The folder a wish is already filed in refuses it and leaves its dash alone** — spec §9, and
+ * the same rule as a deck card dropped back into its own column: a mark that led to a write which
+ * moved nothing and bumped `updated_at` would be worse than no mark. `WishDrag.folderId` is the
  * whole of what lets a target answer that before the drop, which is why the payload carries it.
  *
  * The drag runs over the library's own code path. What it cannot reach is what `test-drag.ts`
@@ -425,7 +530,9 @@ export const DropTarget: Story = {
   play: async ({ args, canvasElement }) => {
     const canvas = within(canvasElement);
     const tile = canvas.getByRole("button", { name: /^Expensive folder/ });
-    // The ring lives on the `<li>`, which is where the page's scroller has to leave room for it.
+    // Both marks are on the `tile` — the `<button>`, which is what carries the card's dashed edge.
+    // The `<li>` around it is still the box the wish drop target is registered on, so it is what
+    // the pointer is steered to, but it wears nothing.
     const item = tile.closest("li")!;
     const marked = (element: Element, mark: string) =>
       // `classList.contains` per class, never `className.includes`: several classes around these
@@ -433,22 +540,26 @@ export const DropTarget: Story = {
       // state has changed — a vacuous assertion that reads exactly like a real one.
       mark.split(" ").every((one) => element.classList.contains(one));
 
-    await expect(marked(item, DROP_RING)).toBe(false);
+    await expect(marked(tile, DROP_EDGE)).toBe(false);
 
     const held = await pickUp(canvas.getByText("Sol Ring"));
     try {
-      await waitFor(() => expect(marked(item, DROP_RING)).toBe(true), { timeout: DRAG_WAIT });
+      await waitFor(() => expect(marked(tile, DROP_EDGE)).toBe(true), { timeout: DRAG_WAIT });
+      await expect(marked(item, DROP_EDGE)).toBe(false);
       await expect(marked(tile, DROP_OVER)).toBe(false);
 
       await held.over(item);
       await waitFor(() => expect(marked(tile, DROP_OVER)).toBe(true), { timeout: DRAG_WAIT });
+      // `border-accent` rather than `DROP_EDGE`'s `border-accent/45`: one edge going from the
+      // eligible strength to the full one, which is `tailwind-merge` resolving the two by the
+      // order the card writes them in.
       await expect(tile).toHaveClass("border-accent");
     } finally {
       await held.cancel();
     }
-    // Cancelled, not dropped — the platform ends both the same way, so the ring stands down
+    // Cancelled, not dropped — the platform ends both the same way, so the dash stands back down
     // without the hook ever hearing a keypress, and nothing was filed.
-    await waitFor(() => expect(marked(item, DROP_RING)).toBe(false), { timeout: DRAG_WAIT });
+    await waitFor(() => expect(marked(tile, DROP_EDGE)).toBe(false), { timeout: DRAG_WAIT });
     await expect(args.onDropWish).not.toHaveBeenCalled();
   },
 };

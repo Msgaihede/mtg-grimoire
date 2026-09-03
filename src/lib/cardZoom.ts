@@ -339,7 +339,7 @@ export function atLeast(base: number, zoom: number): number {
  * The marks are shared components and **most of their call sites must not scale**. `RarityGem` is
  * drawn on a wall tile, in a deck tile's foot, in the stack's data line — and in the search table,
  * the collection table, the wishlist table and the card pane twice. `OwnedBadge`, `FinishMark`,
- * `TagDot` and `QuantityStepper` are each split the same way. A prop would have to be threaded to
+ * `LabelDot` and `QuantityStepper` are each split the same way. A prop would have to be threaded to
  * every one of them and *defaulted* at the ones that stay still, which makes "does this scale?" a
  * question answered fifteen times, silently, by whoever added the newest call site.
  *

@@ -40,48 +40,49 @@ describe("availableFields", () => {
 /**
  * The deck label's two fields, which are the one place the two declarations disagree on purpose.
  *
- * Archidekt carries the colour **inside** `^Keeper,#4aab08^`, so it offers `tag` and no colour
+ * Archidekt carries the colour **inside** `^Keeper,#4aab08^`, so it offers `label` and no colour
  * box — a checkbox that changed nothing would be worse than its absence. A CSV spends one column
  * per value, so it offers both.
  */
 describe("the deck label's fields", () => {
   it("offers Archidekt the label and not a colour of its own", () => {
     const offered = availableFields("archidekt", "deck");
-    expect(offered).toContain("tag");
-    expect(offered).not.toContain("tagColor");
+    expect(offered).toContain("label");
+    expect(offered).not.toContain("labelColor");
   });
 
   it("offers CSV both, because a cell holds one value", () => {
     expect(availableFields("csv", "deck")).toEqual(
-      expect.arrayContaining(["tag", "tagColor"]),
+      expect.arrayContaining(["label", "labelColor"]),
     );
   });
 
   it("offers neither to a surface with no labels", () => {
     for (const surface of ["collection", "wishlist"] as const) {
       const offered = availableFields("csv", surface);
-      expect(offered, surface).not.toContain("tag");
-      expect(offered, surface).not.toContain("tagColor");
+      expect(offered, surface).not.toContain("label");
+      expect(offered, surface).not.toContain("labelColor");
     }
   });
 
-  /** The collection's free-text `Tags` and the deck's `Tag` are two different facts. They can
-   *  never be drawn together — no surface holds both — which is what makes the near-collision
-   *  safe rather than merely survived. */
-  it("never offers the collection's Tags beside the deck's Tag", () => {
+  /** The collection's free-text `Tags` and the deck's `Label` are two different facts. They can
+   *  never be drawn together — no surface holds both — which was already what made the old
+   *  one-letter gap between `Tag` and `Tags` safe rather than merely survived, and is still what
+   *  keeps the two apart now the words are further off. */
+  it("never offers the collection's Tags beside the deck's Label", () => {
     for (const surface of ["deck", "collection", "wishlist"] as const) {
       const offered = new Set(availableFields("csv", surface));
-      expect(offered.has("tag") && offered.has("tags"), surface).toBe(false);
+      expect(offered.has("label") && offered.has("tags"), surface).toBe(false);
     }
   });
 
   it("ticks the label on Archidekt and leaves it for the reader on CSV", () => {
     // Archidekt's defaults are everything Archidekt can say, and the caret group is something
     // Archidekt itself emits.
-    expect(defaultFields("archidekt", "deck")).toContain("tag");
+    expect(defaultFields("archidekt", "deck")).toContain("label");
     // CSV's are a deliberate core; everything else is opt-in, the colour included.
-    expect(defaultFields("csv", "deck")).not.toContain("tag");
-    expect(defaultFields("csv", "deck")).not.toContain("tagColor");
+    expect(defaultFields("csv", "deck")).not.toContain("label");
+    expect(defaultFields("csv", "deck")).not.toContain("labelColor");
   });
 });
 

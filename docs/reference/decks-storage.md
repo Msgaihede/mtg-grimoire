@@ -18,13 +18,13 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   press. `delete_deck` re-files those cards into `Recently removed` **by hand and before the
   `DELETE`**, so the SET NULL is a backstop rather than the mechanism; see
   [collection-folders.md](collection-folders.md).
-  **`deck_tags.deck_id` was on that list until schema v21 and no longer exists**: a tag belongs
+  **`deck_labels.deck_id` was on that list until schema v21 and no longer exists**: a label belongs
   to no deck, so deleting the deck where a label was first typed must not take it off the nine
   other decks wearing it. The one place that still clears the table is `reset::clear_decks`,
   by hand, because every deck at once is the case where clearing them is right.
   **SET NULL** on exactly two of the deck side's — `decks.folder_id` (a folder is a filing
   decision; the decks in it are the user's work, not the folder's to take down) and
-  `deck_cards.tag_id` (deleting a tag must never delete a card). **The schema's own total is
+  `deck_cards.label_id` (deleting a label must never delete a card). **The schema's own total is
   four since v24**, and neither of the other two is a deck's: `wishlist_entries.folder_id` (v23)
   and `collection_entries.folder_id` (v24) each repeat `decks.folder_id` exactly, one list over,
   because both of those got the same filing cabinet — and `wishlist_folders.parent_id` and
@@ -40,9 +40,9 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `DELETE FROM decks` takes `deck_cards`, `deck_categories`, `deck_audit`,
   `deck_undo` and every deck's `collection_folders` group by cascade — but `decks.folder_id` is SET NULL for the
   reason above, so a wipe that stopped there hands the reader an empty folder tree to delete by
-  hand, and **`deck_tags` needs a statement of its own since schema v21** for the reason one
+  hand, and **`deck_labels` needs a statement of its own since schema v21** for the reason one
   bullet up: nothing cascades onto it any more, and a reader who has just deleted every deck they
-  own would otherwise open the Tags dialog onto forty labels attached to nothing, with no deck
+  own would otherwise open the Labels dialog onto forty labels attached to nothing, with no deck
   left to reach them from. **There was a third step and it was not a `DELETE` at all**: the
   covers were swept **whole** rather than removed one id at a time, which `deck::delete_deck`
   must not do, because after this command there are no decks left and every `<id>.webp` in
@@ -265,14 +265,14 @@ preferred_finish`'s nullability one table over.
   vocabulary, it is a bug in the caller, and storing it hands the editor back a remembered choice
   of nothing.
 - **`deck_get(id, variant)` scopes the cards, and every number counted over them, and nothing
-  else.** All categories and all tags come back whatever the variant — the empty ones included,
+  else.** All categories and all labels come back whatever the variant — the empty ones included,
   because **which of them draw a column is TypeScript's answer and not this read's**
   (`grouping.ts`'s `drawsWhenEmpty`, which files the empty ones by `kind` and `origin`: a pile the
   reader made draws, one the app made does not). A read that pre-filtered would be a second copy of
-  that rule, and the two would part company silently. A category's _and a tag's_ `card_count` do
-  read the variant asked for; threading it into `list_categories` and not `list_tags` is exactly
+  that rule, and the two would part company silently. A category's _and a label's_ `card_count` do
+  read the variant asked for; threading it into `list_categories` and not `list_labels` is exactly
   how they came to disagree once.
-- Category and tag writes live in **`deck_meta.rs`**, and **none of them reallocates any more —
+- Category and label writes live in **`deck_meta.rs`**, and **none of them reallocates any more —
   two of them used to.** `is_active` decided whether a card was allocated *for*, so
   `set_category_active` and `delete_category` each rebuilt the deck's claims inside their own
   transaction, the way every card write in `deck.rs` did. Schema v25 dropped `deck_allocations`:
@@ -366,6 +366,22 @@ preferred_finish`'s nullability one table over.
     which is now closed by there being nothing to re-run. A `sum()` over the group is current at
     every read.
 
+  **`collection_to_deck` refuses a card the deck's live list does not already play** since
+  2026-09-03 — `collection_alloc::NOT_IN_DECK`, issue #358. Filing assigns copies to a list rather
+  than joining a card to a deck, so the one write that could create a placement is no longer
+  allowed to satisfy the invariant by writing the other half itself. **The match is
+  `deck::PLAYED_KEY`, `coalesce(c.oracle_id, dc.card_id)`** — the same oracle-first rule with the
+  same printing fallback that `release_group_copies` holds one function away, so an Alpha Bolt fills
+  a deck listing the M10 one and a `deck_cards` row whose printing has left the corpus is still
+  matched by its own id. **Live only**: a plan holds no cards, so a theory-only listing refuses.
+  Two thin reads over the same expression serve the surfaces that say it early —
+  **`deck_played_keys(deckId)`**, every key a deck's live list plays, and
+  **`deck_ids_playing(keys)`**, every deck that plays *every* key given (`GROUP BY … HAVING
+  count(DISTINCT …)`, an empty list answering nothing rather than everything). Both are routed to
+  the web target; neither takes a marketplace or a variant, because the answer is priced by nothing
+  and scoped to one list by definition. `collection-folders.md` carries the placement argument and
+  what the two greyed surfaces do with it.
+
   **The run list is not replaced by a shorter run list; it is replaced by nothing.** There is no
   derived table to keep in step, so no write "runs the allocator" and none can forget to. What
   moves a row *across* the deck boundary is the pair in `collection_alloc.rs` —
@@ -397,7 +413,7 @@ preferred_finish`'s nullability one table over.
   and wishlist arms) and the reconciler's **three-table sweep**
   (`collection_entries`, `wishlist_entries`, `deck_cards`).
 - **The audit log records facts; TypeScript writes the sentence.** `deck_audit` has no `summary`
-  column and never will — it holds `kind` (one of `add|remove|quantity|move|swap|tag|category|
+  column and never will — it holds `kind` (one of `add|remove|quantity|move|swap|label|category|
 folder|deck`, `schema::AUDIT_KINDS`), `variant`, a soft `card_id`/`card_name`, a **JSON
   `payload`** (`CHECK (json_valid(payload))`) and a signed `delta` for the day header's roll-up.
   `src/features/decks/auditText.ts` is the only thing that reads that payload, and it is the only
@@ -459,15 +475,15 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
     records `cards: 7`, a count of what the CASCADE took; a `reorder` records `{"action":
 "reorder"}` and no order either side; a clear and an import `replace` record counts; and the
     theory toggle records `{field:"theory",from:false,to:true}` while having **moved the whole
-    live list**. Two softer ones: every payload names categories and tags by **name**, and
+    live list**. Two softer ones: every payload names categories and labels by **name**, and
     `folder` records the destination with no `from`.
   - **A step restores rows; it does not run a command backwards.** Four primitives — `cards`
     (an exact set of `deck_cards` rows over an explicit scope of `(variant, categoryId, cardId)`
-    cells), `categories`, `tags`, `deck` — and `cards` alone covers add, remove, quantity, move,
+    cells), `categories`, `labels`, `deck` — and `cards` alone covers add, remove, quantity, move,
     swap **including the fold**, both clears, both import modes and the theory move. There is no
     `unswap_printing` and no un-import, and there could not be: `replace` cleared rows nothing
     recorded.
-  - **`restore` and `patch` are two lists on the category and tag ops, because they are two
+  - **`restore` and `patch` are two lists on the category and label ops, because they are two
     intents.** A patch is a rename, a switch or a reorder — the row is there and its columns go
     back. A restore is a delete being undone, and whatever holds that id now is **somebody else's
     pile**: `deck_categories.id` is a rowid alias, so deleting the highest-numbered pile and
@@ -885,45 +901,46 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   deserialising, and absent means the ordinary counted pile an import has always made. Rust records
   the flag and concludes nothing from it: which lines carry it is `parse.ts`'s reading of the
   bracket's **first** entry, carried to the item by `plan.ts`.
-- **`ImportItem.tag_name`/`tag_color` is the second pair this boundary grew, and it is
-  `category_name`'s shape over `deck_tags`** (2026-08-24). Archidekt writes one label per card as
-  `^Keeper,#4aab08^` and `deck_cards.tag_id` holds exactly one, so the two line up without a
-  decision. `tag_for_name` finds by `schema::tag_name_key` — `deck_tags.name_key`'s own grain — and
+- **`ImportItem.label_name`/`label_color` is the second pair this boundary grew, and it is
+  `category_name`'s shape over `deck_labels`** (2026-08-24). Archidekt writes one label per card as
+  `^Keeper,#4aab08^` and `deck_cards.label_id` holds exactly one, so the two line up without a
+  decision. `label_for_name` finds by `schema::label_name_key` — `deck_labels.name_key`'s own
+  grain — and
   creates only when nothing answers, memoised for the list so a hundred `Keeper` lines cost one
   lookup and count as **one** creation. Four decisions inside it:
 
   - **A label that is already there is used exactly as it stands** — not renamed to the file's
     capitals, not recoloured. `inactive`'s principle over a different table, and it bites harder
-    here: `deck_tags` has had no `deck_id` since schema v21, so a pasted decklist recolouring
-    `Keeper` would recolour it in every deck the reader owns. `deck_meta::create_tag` is
+    here: `deck_labels` has had no `deck_id` since schema v21, so a pasted decklist recolouring
+    `Keeper` would recolour it in every deck the reader owns. `deck_meta::create_label` is
     deliberately **not** the function used — it refuses a taken name (the ordinary case for an
     import), opens its own transaction, writes its own audit row and records its own step, and a
     hundred labelled lines must not be a hundred of each.
-  - **`tag_id` coalesces where `quantity` sums**, in the same `ON CONFLICT`:
-    `tag_id = coalesce(deck_cards.tag_id, excluded.tag_id)`. That asymmetry is what a `merge`
+  - **`label_id` coalesces where `quantity` sums**, in the same `ON CONFLICT`:
+    `label_id = coalesce(deck_cards.label_id, excluded.label_id)`. That asymmetry is what a `merge`
     promises — two copies of a card are three copies, but a label the reader put on a row by hand
     is a decision this import may not overturn. It is also what an *unticked* label sends: the
-    item simply carries no `tag_name`, and an item that says nothing about a label leaves the row
+    item simply carries no `label_name`, and an item that says nothing about a label leaves the row
     alone.
-  - **A name with no colour beside it is refused rather than defaulted.** `deck_tags.color` is
+  - **A name with no colour beside it is refused rather than defaulted.** `deck_labels.color` is
     NOT NULL and picking what a colour *is* belongs to the webview (the Rust/TS boundary), so
     inventing one here would be this module making a display decision. `toImportItems` sends the
-    two together or neither, and `PlannedTag` is where a group that carried no hex gets
-    `DEFAULT_TAG_COLOR` — on the *step*, so the swatch the reader sees is the colour the row
+    two together or neither, and `PlannedLabel` is where a group that carried no hex gets
+    `DEFAULT_LABEL_COLOR` — on the *step*, so the swatch the reader sees is the colour the row
     would really be made with.
-  - **`ImportOutcome::tags_created` counts the rows the import _made_**, and the `add` audit row
-    carries the same number as `tagsCreated`. A label the reader already had costs nothing and is
-    not counted. It is owed for a sharper reason than `categories_created` is: a tag is app-wide,
+  - **`ImportOutcome::labels_created` counts the rows the import _made_**, and the `add` audit row
+    carries the same number as `labelsCreated`. A label the reader already had costs nothing and is
+    not counted. It is owed for a sharper reason than `categories_created` is: a label is app-wide,
     so three new ones is a change to a list every other deck reads from — which is why the dialog
     says it on the way out and `auditText.ts` puts it in the history row's detail.
 
-  **The undo step sweeps them.** `record_variant` takes a third "before" — `deck_undo::tag_ids`,
-  the whole table, since a tag belongs to no deck — and `push_made_tags` diffs it exactly as
-  `push_made_categories` diffs the piles. On the **redo** side `Op::Tags` restores *before*
-  `Op::Variant` inserts, and that order is not a nicety: `deck_cards.tag_id` is a real foreign key
-  and `insert_cards` writes each restored row's label through `remap.tag`, so the cards have
+  **The undo step sweeps them.** `record_variant` takes a third "before" — `deck_undo::label_ids`,
+  the whole table, since a label belongs to no deck — and `push_made_labels` diffs it exactly as
+  `push_made_categories` diffs the piles. On the **redo** side `Op::Labels` restores *before*
+  `Op::Variant` inserts, and that order is not a nicety: `deck_cards.label_id` is a real foreign
+  key and `insert_cards` writes each restored row's label through `remap.label`, so the cards have
   nowhere to point until the label is back. `deck_undo::tests::undoing_an_import_sweeps_only_the_
-labels_it_made` is the proof that the reader's own tags are not swept with them.
+labels_it_made` is the proof that the reader's own labels are not swept with them.
 - **`import_resolve` is the import's read half, and it answers the one question TypeScript
   cannot**: which printing in this app's corpus a name means. Six statements, prepared once and
   reused down the list, tried narrowest first — a set **and** a collector number; the set with the
@@ -991,7 +1008,7 @@ labels_it_made` is the proof that the reader's own tags are not swept with them.
   count, and `//` in the flat list — were re-counted from the same text by the same rules on
   2026-08-16.
 
-  | Fixture               | rows | headings | card lines | copies | `()` | `^tag^` | `//` names | `{noDeck}` first |
+  | Fixture               | rows | headings | card lines | copies | `()` | `^label^` | `//` names | `{noDeck}` first |
   | --------------------- | ---- | -------- | ---------- | ------ | ---- | ------- | ---------- | ---------------- |
   | `ARCHIDEKT_SECTIONED` | 132  | 14       | 105        | 117    | 0    | 44      | 7          | 17               |
   | `ARCHIDEKT_FLAT`      | 88   | 0        | 88         | 100    | 0    | 43      | 5          | 0                |
@@ -1001,7 +1018,7 @@ labels_it_made` is the proof that the reader's own tags are not swept with them.
   purpose. **105 − 17 = 88 and 117 − 17 = 100**: the two flat lists are the sectioned one minus its
   maybeboard, so mis-handling `{noDeck}` breaks the arithmetic _between two fixtures_ rather than
   one number in one test. **The sectioned list is `REFERENCE_LIST`'s deck** with printings,
-  categories and tags added, so the two fixtures check each other — its 105 names and 117 copies
+  categories and labels added, so the two fixtures check each other — its 105 names and 117 copies
   are the list the import feature was designed against in the first place. And **14 headings
   against 14 distinct first-bracket names, identical sets** — re-counted 2026-08-16, along with the
   stronger form: in **all 105** lines the first bracket entry is the heading that line is printed
@@ -1010,7 +1027,7 @@ labels_it_made` is the proof that the reader's own tags are not swept with them.
 
 - **What the TypeScript side learnt for those exports**, each rule with the failure behind it in
   [the transfer feature's own CLAUDE.md](../../src/features/transfer/CLAUDE.md): four per-line decorations
-  (an **empty** `()` hint, an Archidekt `^Tag,#colour^`, the `[Category]` bracket, the existing
+  (an **empty** `()` hint, an Archidekt `^Label,#colour^`, the `[Category]` bracket, the existing
   `*F*`) plus one heading rule that is **the only lookahead in the parser**; a bracket's first
   entry as the pile with `{flag}`s stripped, `{noDeck}` there meaning `is_active = 0` and `{noDeck}`
   on a later entry meaning nothing at all; **a heading or a bracket naming a section word setting
@@ -1162,11 +1179,11 @@ Halfling`, the one non-legendary creature among its 56 creatures, was correctly 
 - **A write to what is _in_ a deck goes through a `useDeck` mutation, and `DeckEditor`'s
   `newestWrite([...])` takes every one of them but `rememberView`** — update (the rename, the
   cover, the format and the `Split X` chip, all of which are the same deck-row write
-  and therefore not four mutations), add-card, set-quantity, move, set-tag,
+  and therefore not four mutations), add-card, set-quantity, move, set-label,
   missing-to-wishlist, swap-printing — **and the `useDeckMeta` writes a right-click can now
-  reach**, which are the tag create and a category's rename, switch and delete. Read the array
+  reach**, which are the label create and a category's rename, switch and delete. Read the array
   rather than a count: this sentence carried one and it went stale on 2026-08-14, when the card
-  and category menus gave `setTag` and the `useDeckMeta` writes a control in this view for the
+  and category menus gave `setLabel` and the `useDeckMeta` writes a control in this view for the
   first time. `rememberView` is the one that stays out, because looking at a deck is not
   editing it.
   **There is no remove
@@ -1207,7 +1224,7 @@ Halfling`, the one non-legendary creature among its 56 creatures, was correctly 
 - **`deck_set_card_finish` is `deck_swap_printing` one axis over**, and shares its shape for the
   reason it shares its `SwapResult`: the deck plays a different physical object of the same
   card. It **folds** the same way — setting a row to a finish the pile already holds adds the
-  quantities and deletes the row that moved, with `tag_id` and `needs_review` the surviving
+  quantities and deletes the row that moved, with `label_id` and `needs_review` the surviving
   row's (`add_card`'s rule: the row that was already there is the one the reader labelled) — and
   it records the same **`swap` audit kind** rather than a tenth word, because `AUDIT_KINDS` is
   CHECK-constrained and a new word would mean rebuilding every reader's whole deck history for a
@@ -1309,9 +1326,9 @@ clientWidth` — so the tenth bar fitted the 250px content box with no overflow,
 - **The marks go left, and they used to go right** (changed 2026-08-13, off the `CardStack.dc.html`
   canvas). The old rule was right about a grey chip: a rectangle of app furniture over the first
   four characters of a printed name buys nothing. What sits there now is not a chip —
-  `QuantityTag` is the card's **tag, in the tag's colour, with the copy count printed on it**, cut
-  to a banner rather than a box, and down a fifteen-card stack that column of colour _is_ the
-  structure of the pile. `TagDot` is gone from this surface and unchanged on the other three.
+  `QuantityTag` is the card's **label, in the label's colour, with the copy count printed on it**,
+  cut to a banner rather than a box, and down a fifteen-card stack that column of colour _is_ the
+  structure of the pile. `LabelDot` is gone from this surface and unchanged on the other three.
   The cost is ~34px of printed name, paid knowingly; the app-drawn frame insets its own name band
   by exactly that width, so the one case where the app writes the name never hides a character.
 - **The data line left the picture and became the card's foot** (same change). It was an overlay

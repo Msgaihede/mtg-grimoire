@@ -59,14 +59,14 @@ pub const REMOVE: &str = crate::schema::AUDIT_KINDS[1];
 pub const QUANTITY: &str = crate::schema::AUDIT_KINDS[2];
 pub const MOVE: &str = crate::schema::AUDIT_KINDS[3];
 pub const SWAP: &str = crate::schema::AUDIT_KINDS[4];
-pub const TAG: &str = crate::schema::AUDIT_KINDS[5];
+pub const LABEL: &str = crate::schema::AUDIT_KINDS[5];
 pub const CATEGORY: &str = crate::schema::AUDIT_KINDS[6];
 pub const FOLDER: &str = crate::schema::AUDIT_KINDS[7];
 pub const DECK: &str = crate::schema::AUDIT_KINDS[8];
 
 /// The variant a change that is about no card list at all is recorded under.
 ///
-/// `deck_audit.variant` is `NOT NULL` with a CHECK over the two, so a category rename, a tag
+/// `deck_audit.variant` is `NOT NULL` with a CHECK over the two, so a category rename, a label
 /// write, a folder move and a deck rename all have to carry *something* — and none of them is
 /// a fact about one variant's cards. They carry `live`, which is the column's own DDL default
 /// and the variant the editor opens on. `deck_meta::READBACK_VARIANT` says the same thing for
@@ -113,7 +113,7 @@ pub struct DeckAuditEntry {
     /// Signed copies, for the day header's `+7 / −6` roll-up: `+n` on an add, `−n` on a
     /// remove, the difference on a quantity change, and **`+n` on the one [`DECK`] row that
     /// records a theory copy** ([`crate::deck_theory::copy_from_live`] carries the copies it
-    /// seeded). **0** on everything else: a move, a swap, a tag and every other deck- or
+    /// seeded). **0** on everything else: a move, a swap, a label and every other deck- or
     /// category-level edit change no count, and a roll-up that pretended otherwise would
     /// double a card that only ever changed pile.
     ///
@@ -152,7 +152,7 @@ pub struct DeckAuditEntry {
 /// | `quantity` | `{ "category": "Ramp", "from": 1, "to": 2 }` |
 /// | `move` | `{ "from": "Creature", "to": "Maybeboard" }` |
 /// | `swap` | `{ "category": "Ramp", "fromSet": "cmm", "toSet": "3ed", "folded": false }` |
-/// | `tag` | `{ "tag": "Cut candidate", "previous": null }` |
+/// | `label` | `{ "label": "Cut candidate", "previous": null }` |
 /// | `category` | `{ "action": "create\|rename\|delete\|activate\|deactivate\|reorder", "name": "Draw", "previousName": "Value", "cards": 7 }` |
 /// | `folder` | `{ "action": "move", "folder": "Commander › Legends" }` |
 /// | `deck` | `{ "field": "name\|format\|cover\|description\|notes\|built\|archived\|theory", "from": "…", "to": "…" }` |
@@ -171,12 +171,12 @@ pub struct DeckAuditEntry {
 /// Two of those rows carry keys the brief's table did not, and both are additions rather than
 /// changes — a renderer written against the shapes above still reads every row it knew:
 ///
-/// * **`tag` gains an `action`** (`create` | `rename` | `delete`) on the rows where `card_id`
-///   is NULL. A tag is two different events: labelling a *card* (`card_id` set, `tag` and
+/// * **`label` gains an `action`** (`create` | `rename` | `delete`) on the rows where `card_id`
+///   is NULL. A label is two different events: labelling a *card* (`card_id` set, `label` and
 ///   `previous` are the labels) and creating, renaming or deleting the label itself. They
 ///   share a kind because they share a subject, and `card_id` is what tells them apart — but a
-///   renderer that could not see the verb would report "deleted the Cut candidate tag" as
-///   "tagged as Cut candidate".
+///   renderer that could not see the verb would report "deleted the Cut candidate label" as
+///   "labelled as Cut candidate".
 /// * **`deck.field` gains `description` and `archived`.** Both are editable today
 ///   ([`crate::deck::DeckPatch`]) and both are deck writes, so the alternative was a write that
 ///   records nothing — the one thing this table exists to prevent. `description` is the v5
@@ -420,7 +420,7 @@ mod tests {
     #[test]
     fn the_kind_constants_are_the_schemas_own() {
         assert_eq!(
-            [ADD, REMOVE, QUANTITY, MOVE, SWAP, TAG, CATEGORY, FOLDER, DECK],
+            [ADD, REMOVE, QUANTITY, MOVE, SWAP, LABEL, CATEGORY, FOLDER, DECK],
             crate::schema::AUDIT_KINDS
         );
         assert_eq!(DECK_LEVEL, "live");
@@ -483,8 +483,8 @@ mod tests {
                 inactive: false,
                 finish: None,
                 // No label, which is what every format but Archidekt's says.
-                tag_name: None,
-                tag_color: None,
+                label_name: None,
+                label_color: None,
             }
         }
 
@@ -651,23 +651,23 @@ mod tests {
                 }),
             ),
             (
-                "deck_card_set_tag",
+                "deck_card_set_label",
                 1,
                 Box::new(|| {
                     crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", None, 2)
                         .unwrap();
-                    let tag = crate::deck_meta::create_tag(&conn, id, "Cut candidate", "amber")
+                    let label = crate::deck_meta::create_label(&conn, id, "Cut candidate", "amber")
                         .unwrap()
                         .id;
                     clear(&conn);
-                    crate::deck_meta::set_card_tag(
+                    crate::deck_meta::set_card_label(
                         &conn,
                         id,
                         "bolt-lea",
                         main,
                         "live",
                         None,
-                        Some(tag),
+                        Some(label),
                     )
                     .unwrap();
                 }),
@@ -720,32 +720,32 @@ mod tests {
                 }),
             ),
             (
-                "deck_tag_create",
+                "deck_label_create",
                 1,
                 Box::new(|| {
-                    crate::deck_meta::create_tag(&conn, id, "Fresh", "amber").unwrap();
+                    crate::deck_meta::create_label(&conn, id, "Fresh", "amber").unwrap();
                 }),
             ),
             (
-                "deck_tag_update",
+                "deck_label_update",
                 1,
                 Box::new(|| {
-                    let tag = crate::deck_meta::create_tag(&conn, id, "Old", "amber")
+                    let label = crate::deck_meta::create_label(&conn, id, "Old", "amber")
                         .unwrap()
                         .id;
                     clear(&conn);
-                    crate::deck_meta::update_tag(&conn, id, tag, "New", "jade").unwrap();
+                    crate::deck_meta::update_label(&conn, id, label, "New", "jade").unwrap();
                 }),
             ),
             (
-                "deck_tag_delete",
+                "deck_label_delete",
                 1,
                 Box::new(|| {
-                    let tag = crate::deck_meta::create_tag(&conn, id, "Doomed", "amber")
+                    let label = crate::deck_meta::create_label(&conn, id, "Doomed", "amber")
                         .unwrap()
                         .id;
                     clear(&conn);
-                    crate::deck_meta::delete_tag(&conn, id, tag).unwrap();
+                    crate::deck_meta::delete_label(&conn, id, label).unwrap();
                 }),
             ),
             (
@@ -812,6 +812,14 @@ mod tests {
                 "collection_to_deck",
                 1,
                 Box::new(|| {
+                    // **The deck has to already play the card**, since issue #358: filing is
+                    // assigning copies to a list, not writing one. The seeded row is added
+                    // *before* `clear`, so its own `add` row is wiped and the count below is
+                    // still only what the filing itself owes — which is one, because the
+                    // filing then folds onto this row through `add_card`'s `ON CONFLICT` arm
+                    // rather than inserting a second.
+                    crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", None, 1)
+                        .unwrap();
                     let entry = seed_entry(&conn, "bolt-lea", 2, None);
                     clear(&conn);
                     crate::collection_alloc::collection_to_deck(
@@ -836,6 +844,20 @@ mod tests {
                 Box::new(|| {
                     let donor = deck(&conn, "Donor");
                     let donor_main = category(&conn, donor, "Main deck");
+                    // Both decks have to play the card before either may hold its copies (#358)
+                    // — the donor to take them in the first place, the target to take them off
+                    // it. Both seeded before `clear`, so neither `add` is counted below.
+                    crate::deck::add_card(
+                        &conn,
+                        donor,
+                        "bolt-lea",
+                        Some(donor_main),
+                        None,
+                        "live",
+                        None,
+                        1,
+                    )
+                    .unwrap();
                     let entry = seed_entry(&conn, "bolt-lea", 2, None);
                     let parked = crate::collection_alloc::collection_to_deck(
                         &conn,
@@ -847,6 +869,8 @@ mod tests {
                     .unwrap()
                     .entry_id
                     .expect("copies that moved land in a row");
+                    crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", None, 1)
+                        .unwrap();
                     clear(&conn);
                     crate::collection_alloc::collection_to_deck(
                         &conn,
@@ -866,6 +890,23 @@ mod tests {
                 "deck_to_collection",
                 1,
                 Box::new(|| {
+                    // The list has to name the card before its copies may be filed under it
+                    // (#358), so the row this case cuts is seeded at 1 and the filing folds
+                    // onto it — leaving 2. **The cut then takes both**, which is what keeps
+                    // this case about the sentence the comment above argues: a partial cut
+                    // records a `quantity` row, and it is the `remove` that would otherwise be
+                    // missing from a deck's log.
+                    crate::deck::add_card(
+                        &conn,
+                        id,
+                        "serra-lea",
+                        Some(side),
+                        None,
+                        "live",
+                        None,
+                        1,
+                    )
+                    .unwrap();
                     let entry = seed_entry(&conn, "serra-lea", 1, None);
                     let landed = crate::collection_alloc::collection_to_deck(
                         &conn,
@@ -878,7 +919,7 @@ mod tests {
                     .deck_card_id
                     .expect("the move names the deck row it wrote");
                     clear(&conn);
-                    crate::collection_alloc::deck_to_collection(&conn, landed, 1).unwrap();
+                    crate::collection_alloc::deck_to_collection(&conn, landed, 2).unwrap();
                 }),
             ),
         ];
@@ -1057,87 +1098,90 @@ mod tests {
     }
 
     #[test]
-    fn the_tag_kind_records_the_label_and_the_one_it_replaced() {
+    fn the_label_kind_records_the_label_and_the_one_it_replaced() {
         let conn = seeded();
         let id = deck(&conn, "Burn");
         let main = category(&conn, id, "Ramp");
         crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", None, 1).unwrap();
-        let cut = crate::deck_meta::create_tag(&conn, id, "Cut candidate", "amber")
+        let cut = crate::deck_meta::create_label(&conn, id, "Cut candidate", "amber")
             .unwrap()
             .id;
-        let keep = crate::deck_meta::create_tag(&conn, id, "Keep", "jade")
+        let keep = crate::deck_meta::create_label(&conn, id, "Keep", "jade")
             .unwrap()
             .id;
 
-        crate::deck_meta::set_card_tag(&conn, id, "bolt-lea", main, "live", None, Some(cut))
+        crate::deck_meta::set_card_label(&conn, id, "bolt-lea", main, "live", None, Some(cut))
             .unwrap();
 
         let (row, payload) = newest(&conn, id);
-        assert_eq!(row.kind, TAG);
+        assert_eq!(row.kind, LABEL);
         assert_eq!(row.card_name.as_deref(), Some("Lightning Bolt"));
         assert_eq!(row.delta, 0);
-        assert_eq!(payload, json!({ "tag": "Cut candidate", "previous": null }));
+        assert_eq!(
+            payload,
+            json!({ "label": "Cut candidate", "previous": null })
+        );
 
         // Replacing one label with another, and then clearing it: `previous` is what makes
-        // either readable, and `tag: null` is how the row says the card wears nothing now.
-        crate::deck_meta::set_card_tag(&conn, id, "bolt-lea", main, "live", None, Some(keep))
+        // either readable, and `label: null` is how the row says the card wears nothing now.
+        crate::deck_meta::set_card_label(&conn, id, "bolt-lea", main, "live", None, Some(keep))
             .unwrap();
         let (_, payload) = newest(&conn, id);
         assert_eq!(
             payload,
-            json!({ "tag": "Keep", "previous": "Cut candidate" })
+            json!({ "label": "Keep", "previous": "Cut candidate" })
         );
 
-        crate::deck_meta::set_card_tag(&conn, id, "bolt-lea", main, "live", None, None).unwrap();
+        crate::deck_meta::set_card_label(&conn, id, "bolt-lea", main, "live", None, None).unwrap();
         let (_, payload) = newest(&conn, id);
-        assert_eq!(payload, json!({ "tag": null, "previous": "Keep" }));
+        assert_eq!(payload, json!({ "label": null, "previous": "Keep" }));
     }
 
-    /// The other half of the `tag` kind: the label itself, created, renamed and deleted. These
-    /// rows carry no `card_id` — that is what tells a renderer "the tag" from "a card wearing
-    /// the tag" — and an `action` verb, because without one a delete would read as a labelling.
+    /// The other half of the `label` kind: the label itself, created, renamed and deleted. These
+    /// rows carry no `card_id` — that is what tells a renderer "the label" from "a card wearing
+    /// the label" — and an `action` verb, because without one a delete would read as a labelling.
     #[test]
-    fn a_tag_of_its_own_records_the_verb_and_no_card() {
+    fn a_label_of_its_own_records_the_verb_and_no_card() {
         let conn = seeded();
         let id = deck(&conn, "Burn");
 
-        let tag = crate::deck_meta::create_tag(&conn, id, "Cut candidate", "amber")
+        let label = crate::deck_meta::create_label(&conn, id, "Cut candidate", "amber")
             .unwrap()
             .id;
         let (row, payload) = newest(&conn, id);
-        assert_eq!(row.kind, TAG);
-        assert_eq!(row.card_id, None, "a tag write is about no card");
+        assert_eq!(row.kind, LABEL);
+        assert_eq!(row.card_id, None, "a label write is about no card");
         assert_eq!(
             payload,
-            json!({ "action": "create", "tag": "Cut candidate", "previous": null })
+            json!({ "action": "create", "label": "Cut candidate", "previous": null })
         );
 
-        crate::deck_meta::update_tag(&conn, id, tag, "Cut", "jade").unwrap();
+        crate::deck_meta::update_label(&conn, id, label, "Cut", "jade").unwrap();
         let (_, payload) = newest(&conn, id);
         // `color` rides along since v21: one row means one colour, so a recolour is a change a
         // reader may come back looking for — and a rename that also recoloured says both.
         assert_eq!(
             payload,
-            json!({ "action": "rename", "tag": "Cut", "previous": "Cut candidate",
+            json!({ "action": "rename", "label": "Cut", "previous": "Cut candidate",
                     "color": "jade" })
         );
 
         // Same name, different colour: the other verb, and `previous` is null because nothing
         // was renamed.
-        crate::deck_meta::update_tag(&conn, id, tag, "Cut", "amber").unwrap();
+        crate::deck_meta::update_label(&conn, id, label, "Cut", "amber").unwrap();
         let (_, payload) = newest(&conn, id);
         assert_eq!(
             payload,
-            json!({ "action": "recolour", "tag": "Cut", "previous": null, "color": "amber" })
+            json!({ "action": "recolour", "label": "Cut", "previous": null, "color": "amber" })
         );
 
-        crate::deck_meta::delete_tag(&conn, id, tag).unwrap();
+        crate::deck_meta::delete_label(&conn, id, label).unwrap();
         let (_, payload) = newest(&conn, id);
-        // `cards` is what `auditText` renders "N cards untagged" from. It reads the key for a
+        // `cards` is what `auditText` renders "N cards unlabelled" from. It reads the key for a
         // delete and always has; nothing wrote it until the reach became app-wide.
         assert_eq!(
             payload,
-            json!({ "action": "delete", "tag": "Cut", "previous": null, "cards": 0 })
+            json!({ "action": "delete", "label": "Cut", "previous": null, "cards": 0 })
         );
     }
 

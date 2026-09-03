@@ -849,7 +849,7 @@ Spec §7.2 (what syncs), §7.3 (conflict semantics), §7.4 (what the reader sees
 `schema::SYNCED_TABLES`:
 
 `collection_entries` · `collection_folders` · `deck_audit` · `deck_cards` · `deck_categories` ·
-`deck_folders` · `deck_tags` · `decks` · `device_names` · `muted_tags` · `wishlist_entries` ·
+`deck_folders` · `deck_labels` · `decks` · `device_names` · `muted_tags` · `wishlist_entries` ·
 `wishlist_folders`
 
 **Twelve, and not for the reason the spec's own count would suggest.** The spec's list names
@@ -865,10 +865,12 @@ intent behind the first move did not.
 
 Two further corrections, both found by reading `schema.rs` rather than the spec:
 
-- **`deck_tags` has no `deck_id`.** Schema v21 rebuilt it as one app-wide list keyed on
+- **`deck_labels` has no `deck_id`.** Schema v21 rebuilt it as one app-wide list keyed on
   `name_key`. That matters here more than anywhere: two devices typing "Ramp" must converge on
-  **one** row, because `idx_deck_tags_grain` is `UNIQUE (name_key)` and a second row is a
-  constraint failure at apply time rather than a duplicate.
+  **one** row, because `idx_deck_labels_grain` is `UNIQUE (name_key)` and a second row is a
+  constraint failure at apply time rather than a duplicate. **The table was `deck_tags` until
+  user schema v33**, and that rename is the one place this list has ever carried a version
+  boundary — *A table's NAME is on the wire* below is what it costs.
 - **`needs_review` was on three tables, not two.** §7.4 names `collection_entries` and
   `deck_cards`; `wishlist_entries` has had it since schema v4. **No folder table had it at
   all** — and §7.4's second surfaced outcome is a broken folder cycle, so v29 adds it to
@@ -880,6 +882,35 @@ Two further corrections, both found by reading `schema.rs` rather than the spec:
 device wrote a row; the group's ordering is the hybrid logical clock, and syncing a timestamp
 would put two answers to "when" in the database with nothing to say which one a reader is being
 shown.
+
+### ⚠️ A table's NAME is on the wire, and v33 renamed one
+
+`Meta { table, .. }` in `apply.rs` and the literals in `capture.rs` and `baseline.rs` are the
+same string, and it is what an op is addressed by. User schema **v33** renamed `deck_tags` to
+`deck_labels`, so a device on v33 publishes label rows under a name a device still on v32 has
+never heard of, and the reverse. **This is the first rename any synced table has had**, and it is
+the reason to be sure the next one is worth what it costs.
+
+What it costs is more than the labels. `apply::write_group` answers `Deferred` for a table this
+build does not sync — deliberately, because a *newer* device's op is not an error and must not be
+dropped — and a deferred op holds that device's watermark, which is the section on it below. So
+the first label op an older peer writes **stops that peer's whole stream**, not just its label
+rows: everything it wrote after that op is left for the next pull, page after page, for as long
+as the two builds disagree.
+
+Three things make that the right shape rather than a bug:
+
+- **Nothing is lost.** The ops are never acked, so they are re-delivered; the moment the older
+  device updates, its stream drains from the block and every row lands in order. This is exactly
+  the missing-parent stall self-healing, one cause over.
+- **Only the peers that disagree stall.** The block is per-device, so a group of four where three
+  have updated keeps syncing normally between those three.
+- **A device that has never worn a label never blocks at all**, since the stall needs an op on
+  that table to exist.
+
+The remedy is the ordinary one and there is no other: **update every device in the group.** There
+is no alias table and no version negotiation on the wire, by design — a wire that accepted two
+names for one table would have to keep accepting them for good.
 
 ---
 
@@ -909,7 +940,7 @@ applier resolves by grain first, uid second, with a `min(uid)` tiebreak.**
 | `wishlist_entries` | `oracle_id, card_id, preferred_finish, folder_uid` |
 | `deck_cards` | `deck_uid, variant, category_uid, card_id, finish` (**five** — `finish` joined at v19) |
 | `deck_categories` | `deck_uid, name` |
-| `deck_tags` | `name_key` |
+| `deck_labels` | `name_key` |
 | `muted_tags` | `namespace, tag_id` |
 
 `decks`, `deck_folders`, `wishlist_folders` and `deck_audit` have no grain and are uid-only.
@@ -1854,7 +1885,7 @@ distinct uid.
 | `collection_folders` | 6 |
 | `decks` | 4 |
 | `deck_folders` · `wishlist_folders` | 1 each |
-| `deck_tags` · `muted_tags` | 0 |
+| `deck_labels` · `muted_tags` | 0 |
 
 ### The split, with the uid mint — debug
 

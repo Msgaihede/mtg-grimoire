@@ -164,13 +164,13 @@ function writeLine(
   // to the end, so the tail has to come off before the bracket, and the bracket before `*F*`.
   //
   // **No per-format test here**, exactly as there is none for the bracket or the finish: only
-  // `archidekt` lists `tag` in `FORMAT_FIELDS`, so a set reaching this function with `tag` in it
-  // is a set a caret group belongs in. The colour is read off the card rather than off a second
-  // field, because in this syntax it is part of the tag rather than a channel beside it — see
-  // `TRANSFER_FIELDS.tagColor`. A label whose colour this build cannot read writes the name
-  // alone, which the parser reads straight back as a label with no colour.
-  if (fields.has("tag") && card.tagName !== null && card.tagName !== "") {
-    line += ` ^${card.tagName}${card.tagColor === null ? "" : `,${card.tagColor}`}^`;
+  // `archidekt` lists `label` in `FORMAT_FIELDS`, so a set reaching this function with `label`
+  // in it is a set a caret group belongs in. The colour is read off the card rather than off a
+  // second field, because in this syntax it is part of the label rather than a channel beside
+  // it — see `TRANSFER_FIELDS.labelColor`. A label whose colour this build cannot read writes
+  // the name alone, which the parser reads straight back as a label with no colour.
+  if (fields.has("label") && card.labelName !== null && card.labelName !== "") {
+    line += ` ^${card.labelName}${card.labelColor === null ? "" : `,${card.labelColor}`}^`;
   }
   return line;
 }

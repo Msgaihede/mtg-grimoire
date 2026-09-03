@@ -63,27 +63,28 @@ pub struct Card {
     pub misprint: Option<bool>,
     /// The collection's free-text `collection_entries.tags` — **not a deck label.**
     ///
-    /// The two live one field apart and mean different things, which is worth saying here
-    /// rather than leaving to whoever reads the CSV header: this one is a string the reader
-    /// typed on a copy they own, and [`Card::tag_name`] is a row of `deck_tags`. No surface
-    /// has both — `SURFACE_FIELDS` gives this to the collection and the label to the deck — so
-    /// the two checkboxes can never be drawn together and the two columns can never appear in
-    /// one file.
+    /// The two mean different things, which is worth saying here rather than leaving to
+    /// whoever reads the CSV header: this one is a string the reader typed on a copy they own,
+    /// and [`Card::label_name`] is a row of `deck_labels`. No surface has both —
+    /// `SURFACE_FIELDS` gives this to the collection and the label to the deck — so the two
+    /// checkboxes can never be drawn together and the two columns can never appear in one
+    /// file. That was already true while the deck's column said `Tag` and this one said `Tags`;
+    /// the rename is what makes it legible from the header row alone.
     pub tags: Option<String>,
     pub notes: Option<String>,
     pub set_name: Option<String>,
     pub rarity: Option<String>,
     pub type_line: Option<String>,
     pub unit_price: Option<f64>,
-    /// The deck label this card wears — one row of `deck_tags`, by name. `None` on a surface
+    /// The deck label this card wears — one row of `deck_labels`, by name. `None` on a surface
     /// with no labels and on a deck card wearing none.
     ///
     /// A name, because that is what a file can carry and what an import finds a row by.
-    pub tag_name: Option<String>,
-    /// That label's colour, `#rrggbb`. A separate field from [`Card::tag_name`] because only
+    pub label_name: Option<String>,
+    /// That label's colour, `#rrggbb`. A separate field from [`Card::label_name`] because only
     /// some formats can carry it separately — Archidekt's `^Keeper,#4aab08^` holds both in one
     /// group, a CSV spends a column on each.
-    pub tag_color: Option<String>,
+    pub label_color: Option<String>,
     /// This printing's `legalities` blob, JSON, verbatim.
     ///
     /// **Not a field**: it is never written to a file and never draws a checkbox. It is what
@@ -159,7 +160,7 @@ mod tests {
     /// Hand-written rather than lifted off the corpus, because the name check below has to
     /// hold on a day the corpus is mid-edit: a row this suite owns is the only one that is
     /// certainly complete, and a check made of the thing it is checking proves nothing.
-    const EVERY_FIELD: &str = r##""name":"Bolt","quantity":1,"setCode":"2X2","collectorNumber":"117","finish":null,"lang":"en","categoryName":"Removal","categoryKind":"main","categoryActive":true,"condition":"NM","tradelistQuantity":2,"purchasePrice":1.25,"purchaseCurrency":"USD","acquiredAt":"2026-01-02","acquisitionSource":"trade","serialNumber":"7/500","grading":"PSA 10","altered":false,"signed":true,"proxy":false,"misprint":false,"tags":"burn, staple","notes":"a note","setName":"Double Masters 2022","rarity":"uncommon","typeLine":"Instant","unitPrice":2.5,"tagName":"Cut candidate","tagColor":"#4aab08","legalities":"{}""##;
+    const EVERY_FIELD: &str = r##""name":"Bolt","quantity":1,"setCode":"2X2","collectorNumber":"117","finish":null,"lang":"en","categoryName":"Removal","categoryKind":"main","categoryActive":true,"condition":"NM","tradelistQuantity":2,"purchasePrice":1.25,"purchaseCurrency":"USD","acquiredAt":"2026-01-02","acquisitionSource":"trade","serialNumber":"7/500","grading":"PSA 10","altered":false,"signed":true,"proxy":false,"misprint":false,"tags":"burn, staple","notes":"a note","setName":"Double Masters 2022","rarity":"uncommon","typeLine":"Instant","unitPrice":2.5,"labelName":"Cut candidate","labelColor":"#4aab08","legalities":"{}""##;
 
     /// Wrap one card body in the smallest corpus that holds it.
     fn corpus_with(card_body: &str) -> String {

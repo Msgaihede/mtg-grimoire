@@ -7,11 +7,13 @@
 //! category. Neither declaration knows about the other, which is what stops this becoming a
 //! per-surface list of things to remember to hide.
 //!
-//! **There is no `label` here, and that is deliberate.** A checkbox's word belongs to the export
-//! dialog, which stays TypeScript; porting the labels would create a second place for a word to
-//! drift with nothing on this side reading it. What is ported is the two declarations, the CSV
-//! header (which is data — a file's column name, and what a reader matches an incoming header
-//! against) and the read.
+//! **`FIELD_META`'s `label` property has no counterpart here, and that is deliberate.** A
+//! checkbox's caption belongs to the export dialog, which stays TypeScript; porting the captions
+//! would create a second place for a word to drift with nothing on this side reading it. What is
+//! ported is the two declarations, the CSV header (which is data — a file's column name, and what
+//! a reader matches an incoming header against) and the read. This paragraph used to open "there
+//! is no `label` here", which the rename turned into a trap: [`FieldId::Label`] is a *field*, and
+//! the captions are still the thing this file does not have.
 
 use super::{Card, Format, Surface};
 
@@ -19,9 +21,9 @@ use super::{Card, Format, Surface};
 ///
 /// `TRANSFER_FIELD_IDS`' order, variant for variant. The first six are today's deck CSV header
 /// spelled in today's order, which is what makes [`default_fields`] for `(Csv, Deck)` a
-/// byte-for-byte reproduction of what shipped — `Tag` and `TagColor` sit *after* them on purpose,
-/// because inserting into the six would change the column order of every CSV already written for
-/// a field that is switched off by default there.
+/// byte-for-byte reproduction of what shipped — `Label` and `LabelColor` sit *after* them on
+/// purpose, because inserting into the six would change the column order of every CSV already
+/// written for a field that is switched off by default there.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FieldId {
     Quantity,
@@ -30,23 +32,31 @@ pub enum FieldId {
     CollectorNumber,
     Category,
     Finish,
-    /// The deck label — one row of `deck_tags`, by name.
+    /// The deck label — one row of `deck_labels`, by name.
     ///
-    /// **`Tag` against the collection's `Tags` three rows down, and the near-collision is
-    /// deliberate rather than survived.** They are two different facts (a `deck_tags` row against
-    /// `collection_entries.tags`, free text), and no surface holds both — [`surface_fields`]
-    /// gives this one to the deck and that one to the collection — so the two columns can never
-    /// be in one file. Renaming either would cost every reader who already has a `Tags` column,
-    /// for a confusion the registry cannot actually produce.
-    Tag,
+    /// **This was `Tag` until the rename — one letter off the collection's `Tags`, further down
+    /// this list — and the near-collision is resolved now rather than survived.** The two were
+    /// always different facts — a `deck_labels` row against `collection_entries.tags`, free
+    /// text — and no surface holds both: [`surface_fields`] gives this one to the deck and that
+    /// one to the collection, so the two columns could never appear in one file. What the old
+    /// spelling cost was the reading, and only that — but it cost it every time. The deck's
+    /// column says `Label` now and the collection's still says `Tags`; only one of the two
+    /// moved, because only one of them was ever a label.
+    ///
+    /// **The price is a deck CSV an older build wrote, whose column says `Tag`.** TypeScript's
+    /// header map keeps that word as an alias so those files still read their labels back — and
+    /// the collection's `Tags` is untouched, so the alias cannot shadow it. Nothing on this side
+    /// needs one: the mirror only ever writes, so this crate has no parser and never matches an
+    /// incoming header against these words at all.
+    Label,
     /// That label's colour, and **a field only because a CSV cell holds one value.**
     ///
     /// Archidekt writes the pair as `^Keeper,#4aab08^`, so its writer reads the colour off the
-    /// card whenever `Tag` is on and offers no box of its own. A CSV has to spend a column, so it
+    /// card whenever `Label` is on and offers no box of its own. A CSV has to spend a column, so it
     /// gets one, off by default: the colour repeats down every row wearing that label, and it
     /// only decides anything on the way back in for a label the importing database has never
     /// seen.
-    TagColor,
+    LabelColor,
     Condition,
     Lang,
     TradelistQuantity,
@@ -60,7 +70,8 @@ pub enum FieldId {
     Signed,
     Proxy,
     Misprint,
-    /// The collection's free-text `collection_entries.tags` — see [`FieldId::Tag`].
+    /// The collection's free-text `collection_entries.tags`, and **not the deck's label** —
+    /// see [`FieldId::Label`], which used to be one letter away from this one.
     Tags,
     Notes,
     SetName,
@@ -78,8 +89,8 @@ pub const FIELD_IDS: [FieldId; 27] = [
     FieldId::CollectorNumber,
     FieldId::Category,
     FieldId::Finish,
-    FieldId::Tag,
-    FieldId::TagColor,
+    FieldId::Label,
+    FieldId::LabelColor,
     FieldId::Condition,
     FieldId::Lang,
     FieldId::TradelistQuantity,
@@ -106,7 +117,7 @@ pub const ALWAYS: [FieldId; 2] = [FieldId::Quantity, FieldId::Name];
 
 /// The field's wire word — the string `TRANSFER_FIELD_IDS` spells it with.
 ///
-/// **A spelling, not a label, and not the CSV header either** — [`Format::key`] one file over,
+/// **A spelling, not a caption, and not the CSV header either** — [`Format::key`] one file over,
 /// for the same reason. It is what `__golden__/fields.json` names a field by, so the registry
 /// fence can compare the two implementations' field lists id for id rather than only through
 /// the bytes a CSV header row happens to expose. A wrong entry here is a red
@@ -120,8 +131,8 @@ pub fn key(id: FieldId) -> &'static str {
         FieldId::CollectorNumber => "collectorNumber",
         FieldId::Category => "category",
         FieldId::Finish => "finish",
-        FieldId::Tag => "tag",
-        FieldId::TagColor => "tagColor",
+        FieldId::Label => "label",
+        FieldId::LabelColor => "labelColor",
         FieldId::Condition => "condition",
         FieldId::Lang => "lang",
         FieldId::TradelistQuantity => "tradelistQuantity",
@@ -146,7 +157,7 @@ pub fn key(id: FieldId) -> &'static str {
 
 /// The CSV column name — and what a CSV *reader* matches an incoming header against.
 ///
-/// **Data rather than a label**: the words here are written into files and read back out of
+/// **Data rather than a caption**: the words here are written into files and read back out of
 /// them, which is why they are ported and the checkbox captions are not.
 pub fn csv_header(id: FieldId) -> &'static str {
     match id {
@@ -156,8 +167,8 @@ pub fn csv_header(id: FieldId) -> &'static str {
         FieldId::CollectorNumber => "Collector number",
         FieldId::Category => "Category",
         FieldId::Finish => "Finish",
-        FieldId::Tag => "Tag",
-        FieldId::TagColor => "Tag colour",
+        FieldId::Label => "Label",
+        FieldId::LabelColor => "Label colour",
         FieldId::Condition => "Condition",
         FieldId::Lang => "Language",
         FieldId::TradelistQuantity => "Tradelist quantity",
@@ -241,8 +252,8 @@ pub fn read(id: FieldId, card: &Card) -> String {
         FieldId::CollectorNumber => text(&card.collector_number),
         FieldId::Category => text(&card.category_name),
         FieldId::Finish => text(&card.finish),
-        FieldId::Tag => text(&card.tag_name),
-        FieldId::TagColor => text(&card.tag_color),
+        FieldId::Label => text(&card.label_name),
+        FieldId::LabelColor => text(&card.label_color),
         FieldId::Condition => text(&card.condition),
         FieldId::Lang => text(&card.lang),
         FieldId::TradelistQuantity => num_i(card.tradelist_quantity),
@@ -278,16 +289,16 @@ struct FormatFields {
 
 const ARENA: [FieldId; 2] = PRINTING;
 const MOXFIELD: [FieldId; 3] = [FieldId::SetCode, FieldId::CollectorNumber, FieldId::Finish];
-/// **`Tag` and not `TagColor`**: the colour rides inside `^Keeper,#4aab08^`, so it is part of what
-/// `Tag` writes here rather than a channel of its own. On by default like this format's other
-/// four — Archidekt's defaults are everything Archidekt can say, and the caret group is something
-/// Archidekt itself emits.
+/// **`Label` and not `LabelColor`**: the colour rides inside `^Keeper,#4aab08^`, so it is part of
+/// what `Label` writes here rather than a channel of its own. On by default like this format's
+/// other four — Archidekt's defaults are everything Archidekt can say, and the caret group is
+/// something Archidekt itself emits.
 const ARCHIDEKT: [FieldId; 5] = [
     FieldId::SetCode,
     FieldId::CollectorNumber,
     FieldId::Finish,
     FieldId::Category,
-    FieldId::Tag,
+    FieldId::Label,
 ];
 /// CSV's defaults are a deliberate core with everything else opt-in. `Condition` is among them so
 /// a collection CSV separates a NM copy from an LP one without the reader having to know that is
@@ -346,8 +357,8 @@ pub fn surface_fields(surface: Surface) -> &'static [FieldId] {
             FieldId::CollectorNumber,
             FieldId::Category,
             FieldId::Finish,
-            FieldId::Tag,
-            FieldId::TagColor,
+            FieldId::Label,
+            FieldId::LabelColor,
             FieldId::Lang,
             FieldId::SetName,
             FieldId::Rarity,
@@ -455,8 +466,8 @@ mod tests {
             rarity: None,
             type_line: None,
             unit_price: None,
-            tag_name: None,
-            tag_color: None,
+            label_name: None,
+            label_color: None,
             legalities: None,
         }
     }
@@ -486,8 +497,8 @@ mod tests {
                 FieldId::CollectorNumber,
                 FieldId::Category,
                 FieldId::Finish,
-                FieldId::Tag,
-                FieldId::TagColor,
+                FieldId::Label,
+                FieldId::LabelColor,
                 FieldId::Lang,
                 FieldId::SetName,
                 FieldId::Rarity,
@@ -508,11 +519,11 @@ mod tests {
     fn archidekt_offers_the_label_and_not_its_colour() {
         let f = available_fields(Format::Archidekt, Surface::Deck);
         assert!(
-            f.contains(&FieldId::Tag),
+            f.contains(&FieldId::Label),
             "the caret group is Archidekt's own"
         );
         assert!(
-            !f.contains(&FieldId::TagColor),
+            !f.contains(&FieldId::LabelColor),
             "the colour rides inside the group"
         );
     }

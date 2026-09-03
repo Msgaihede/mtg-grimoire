@@ -4,12 +4,12 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import type { MenuItem } from "@/components/menu/types";
-import { DROP_MARK_ROOM, DROP_OVER, DROP_RING } from "@/lib/dropMarks";
+import { DROP_EDGE, DROP_MARK_ROOM, DROP_OVER } from "@/lib/dropMarks";
 import { folderDraggable, type FolderDrag } from "@/lib/folderDrag";
 import type { FolderNode } from "@/lib/folderTree";
 import type { CollectionFolder } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
-import { CollectionFolderCard } from "./CollectionFolderCard";
+import { CollectionFolderCard, type CollectionFolderTotals } from "./CollectionFolderCard";
 import {
   collectionDraggable,
   collectionTileDraggable,
@@ -21,7 +21,7 @@ import {
 /**
  * How long a `waitFor` will wait for a state a drag has to travel to reach.
  *
- * The library schedules its `onDragStart` on `requestAnimationFrame` and every ring here is a
+ * The library schedules its `onDragStart` on `requestAnimationFrame` and every mark here is a
  * `useState` behind that, so one frame is necessary and never sufficient — seconds rather than
  * milliseconds because these plays run under a hundred-odd parallel jsdom files.
  * **Not exported**: CSF indexes every named export of a story file as a story.
@@ -36,6 +36,16 @@ function folder(
 
 /** The drawer every story below draws, and the one a copy is dropped into. */
 const BINDER = folder({ id: 3, name: "Trade binder" });
+
+/**
+ * The rename arm at rest — every card on the wall but the one being renamed.
+ *
+ * `active` is the **page's** flag rather than the card's, because one field is open at a time
+ * across the whole cabinet: pressing `New folder` has to close a rename already in progress, and a
+ * card holding its own flag could not know that had happened. **Not exported**: CSF indexes every
+ * named export of a story file as a story.
+ */
+const RESTING = { active: false, pending: false, onSubmit: fn(), onCancel: fn() };
 
 function node(
   f: CollectionFolder,
@@ -53,10 +63,13 @@ function node(
  * canvas would put a list item outside a list and document markup the page does not build.
  *
  * **`DROP_MARK_ROOM` is on the scroller for the reason it exists**, even though nothing in jsdom
- * can go red for it: `overflow` clips at the padding box and a `DROP_RING` is a box shadow painted
- * *outside* the border box, so a card flush against the content edge loses the outer 2px of its
- * ring for the whole length of a drag. The wall in the workbench has to be the wall on the page,
- * or {@link DropTarget} would draw a ring the app clips.
+ * can go red for it: `overflow` clips at the padding box, so anything a card paints *outside* its
+ * own border box is lost on the card flush against the content edge. **The drop marks are no
+ * longer that thing** — since 2026-09-03 both are drawn on the card's `<button>`, one recolouring
+ * a border it already had and one washing the surface inside it, and neither leaves the box. What
+ * still needs the room is `FOCUS`, which stands 4px proud of that same button and is a WCAG 2.4.7
+ * matter rather than a cosmetic one. The wall in the workbench has to be the wall on the page
+ * either way, or a story would document a card in a scroller the app does not build.
  *
  * The menu is the real `useContextMenu`, off the provider `.storybook/preview.tsx` mounts for
  * every story — so the `⋯`, a right-click and Shift+F10 all open the page's three rows here, and
@@ -65,9 +78,20 @@ function node(
  */
 function Wall({
   act,
+  siblings = [],
   ...card
 }: Omit<ComponentProps<typeof CollectionFolderCard>, "rowMenu"> & {
   act: (what: string) => void;
+  /**
+   * Drawers drawn **after** the subject, at rest, for the one story whose whole subject is a card
+   * against the cards beside it.
+   *
+   * Real `CollectionFolderCard`s rather than stand-in markup, because the claim is that a renaming
+   * card and a resting one differ in exactly one property — the edge's colour — and a hand-written
+   * tile beside it would be a resemblance this file maintains rather than one the component
+   * guarantees. Empty for every other story: a wall of one is what makes a drop unambiguous.
+   */
+  siblings?: readonly { folder: CollectionFolder; summary: CollectionFolderTotals }[];
 }) {
   const { menu, menuKey, menuClick } = useContextMenu();
   const build = (): MenuItem[] => [
@@ -90,6 +114,20 @@ function Wall({
             onClick: menuClick(build),
           }}
         />
+        {siblings.map(({ folder: beside, summary }) => (
+          <CollectionFolderCard
+            key={beside.id}
+            {...card}
+            node={node(beside)}
+            summary={summary}
+            rename={RESTING}
+            rowMenu={{
+              onContextMenu: menu(build),
+              onKeyDown: menuKey(build),
+              onClick: menuClick(build),
+            }}
+          />
+        ))}
       </ul>
     </div>
   );
@@ -104,6 +142,9 @@ const meta = {
     summary: { cards: 12, value: 340.25 },
     currency: "usd",
     onOpen: fn(),
+    // `Rename…` is answered on the card since 2026-09-03, so every card on every wall carries this
+    // arm — at rest here, and open in exactly one story below.
+    rename: RESTING,
     onDropCard: fn(),
     // The page's own answer, verbatim, for both shapes a collection drop can be: a folder takes
     // any copy that is not already filed in it. A *tile* is takeable when **at least one** of the
@@ -274,6 +315,69 @@ export const Thousands: Story = {
     await expect(canvas.getByRole("button", { name: /^Trade binder folder/ })).toHaveTextContent(
       "1,204 cards · $12,000.00",
     );
+  },
+};
+
+/**
+ * **The card _being_ the field, in the wall, beside the drawers it has to leave alone.**
+ *
+ * `Rename…` is answered here rather than in a strip above the wall, and this is the frame that
+ * says why: the name is typed **on the line the folder's name occupies**, inside the same
+ * footprint and the same dashed edge, so the two drawers beside it do not move and the track does
+ * not re-flow. The ✓ and the ✕ take the corner this card gives its `⋯`, which is the one place on
+ * a card a reader has already been taught to look for its controls.
+ *
+ * **The edge is the whole visual claim, and it needs both cards in one frame to be seen.** A
+ * renaming card stays **dashed** — the thing being renamed is still a container, and this app's
+ * dash means exactly that — and moves only its *colour* to `border-accent`, which is what says
+ * *this tile is live*. Beside it, `Sealed` and `Standard staples` wear the same dash in
+ * `border-border`. A solid edge here would be `NewFolderCard`'s vocabulary: that tile is a
+ * control among containers, and this one is a container being named.
+ *
+ * **The figures line survives underneath**, which is the whole reason a rename is not the create
+ * tile with a different label: a reader renaming *Trade binder* can still see it is the drawer
+ * holding twelve cards worth $340.25, and a box that dropped the count would make them stop and
+ * check they had the right one.
+ *
+ * On the canvas the field takes the caret as it mounts with the name selected — `FolderNameField`
+ * does that, and its own page shows both shapes. Two drop targets are still registered while it is
+ * open: a copy dropped on a folder whose name is being edited files perfectly well, and the mark
+ * that stops the *card* being dragged from inside the field is one `data-no-drag` on its `<form>`.
+ * Both are driven in `CollectionFolderCard.test.tsx`, where a drag can be made to happen.
+ */
+export const Renaming: Story = {
+  args: {
+    rename: { active: true, pending: false, onSubmit: fn(), onCancel: fn() },
+    siblings: [
+      { folder: folder({ id: 8, name: "Sealed" }), summary: { cards: 0, value: null } },
+      { folder: folder({ id: 9, name: "Standard staples" }), summary: { cards: 18, value: 92.4 } },
+    ],
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const wall = canvas.getByRole("list", { name: "Folders" });
+    await expect([...wall.children]).toHaveLength(3);
+
+    // The card's two buttons are *gone*, not covered — a field drawn under a name that stayed put
+    // is exactly the reflow this arrangement promises not to do, and a `⋯` offering `Rename…` over
+    // a name being edited is a menu about a folder in a state the page cannot answer for.
+    await expect(canvas.queryByRole("button", { name: /^Trade binder folder/ })).toBeNull();
+    await expect(canvas.queryByRole("button", { name: "Manage Trade binder" })).toBeNull();
+
+    const input = canvas.getByRole("textbox", { name: "Rename Trade binder" });
+    await expect(input).toHaveValue("Trade binder");
+    const form = input.closest("form")!;
+    await expect(form).toHaveTextContent("12 cards · $340.25");
+
+    // The claim, both ways round. `classList.contains` per class, never `className.includes`: the
+    // resting face carries `hover:border-accent`, and a substring test would report the accent on
+    // a card nobody is renaming.
+    const box = form.firstElementChild!;
+    const resting = canvas.getByRole("button", { name: /^Sealed folder/ });
+    await expect(box.classList.contains("border-dashed")).toBe(true);
+    await expect(box.classList.contains("border-accent")).toBe(true);
+    await expect(resting.classList.contains("border-dashed")).toBe(true);
+    await expect(resting.classList.contains("border-accent")).toBe(false);
   },
 };
 
@@ -497,24 +601,32 @@ function TileSource({ tile }: { tile: CollectionTileDrag }) {
 }
 
 /**
- * The two rings, and the folder that draws neither.
+ * The two marks, and the folder that draws neither.
  *
- * **`DROP_RING` is raised on every folder that would take the copy, not only the one under the
+ * **`DROP_EDGE` is raised on every folder that would take the copy, not only the one under the
  * pointer**, from the moment it leaves the row — that is what tells a reader where a drag can end
  * before they have aimed anywhere. `DROP_OVER` is the second, narrower fact only the target the
- * pointer is actually over can answer, and it comes with `border-accent` so the dashed edge itself
- * says which drawer is about to take it.
+ * pointer is actually over can answer, and it takes the same edge to full strength beside a wash.
  *
- * **The folder a copy is already filed in refuses it and draws no ring at all** — the same rule as
- * a deck card dropped back into its own column: a ring that led to a write which moved nothing and
- * bumped `updated_at` would be worse than no ring. `CollectionDrag.folderId` is the whole of what
+ * **Both are drawn on the card's own `<button>` (2026-09-03), which is why this play addresses the
+ * face for both.** They were split — the eligible ring on the `<li>`, the dash and the wash on the
+ * face — and a ring is a box shadow painted *outside* the border box, so a gold rectangle stood
+ * 2px proud of a dashed one it never touched. Two concentric outlines for one landing, reported as
+ * affordances that are bulky, overlap their neighbours and do not align with the dotted outline.
+ * A folder card already owns an edge all day, so the eligible mark recolours *that* rather than
+ * adding one: there is no second outline to line up, which is the whole of the fix.
+ *
+ * **The folder a copy is already filed in refuses it and leaves its dash plain** — the same rule as
+ * a deck card dropped back into its own column: an edge that led to a write which moved nothing and
+ * bumped `updated_at` would be worse than no mark. `CollectionDrag.folderId` is the whole of what
  * lets a target answer that before the drop, which is why the payload carries it.
  *
  * The drag runs over the library's own code path. What it cannot reach is what `test-drag.ts`
  * records and what {@link Wall}'s scroller is about: the platform's drag preview, the pointer
  * hit-testing that decides which card a `dragover` lands on, and the clip that `DROP_MARK_ROOM`
- * buys room against — all three measure rectangles, and jsdom has no layout engine. Those stay the
- * live pass's to prove.
+ * buys room against — all three measure rectangles, and jsdom has no layout engine. **Whether the
+ * two marks really do land on one rectangle is now on that list too**: it is the point of the
+ * change and the one thing no class assertion can witness.
  */
 export const DropTarget: Story = {
   render: (args) => (
@@ -526,25 +638,35 @@ export const DropTarget: Story = {
   play: async ({ args, canvasElement }) => {
     const canvas = within(canvasElement);
     const tile = canvas.getByRole("button", { name: /^Trade binder folder/ });
-    // The ring lives on the `<li>`, which is where the page's scroller has to leave room for it.
+    // Both marks are the face's; the `<li>` is only where the drop is registered, so it is what a
+    // pointer is aimed at here and never what a mark is read off.
     const item = tile.closest("li")!;
 
-    await expect(marked(item, DROP_RING)).toBe(false);
+    await expect(marked(tile, DROP_EDGE)).toBe(false);
 
     const held = await pickUp(canvas.getByText("Sol Ring"));
     try {
-      await waitFor(() => expect(marked(item, DROP_RING)).toBe(true), { timeout: DRAG_WAIT });
+      await waitFor(() => expect(marked(tile, DROP_EDGE)).toBe(true), { timeout: DRAG_WAIT });
       await expect(marked(tile, DROP_OVER)).toBe(false);
+      // Nothing painted on the wrapper, asked **per class** rather than through `marked`: that
+      // helper wants all of a mark's classes, so a wrapper wearing only `border-accent/45` — the
+      // half that draws — would come back `false` and leave a second gold outline on screen with
+      // the play green. `CollectionFolderCard.test.tsx` sweeps the whole vocabulary this way.
+      await expect(item).not.toHaveClass("border-accent/45");
+      await expect(item).not.toHaveClass("ring-1");
 
       await held.over(item);
       await waitFor(() => expect(marked(tile, DROP_OVER)).toBe(true), { timeout: DRAG_WAIT });
+      // Full strength on the one card the pointer is on, and `tailwind-merge` resolving the pair
+      // by argument order is what makes the escalation a swap rather than a stack.
       await expect(tile).toHaveClass("border-accent");
+      await expect(item).not.toHaveClass("bg-accent/15");
     } finally {
       await held.cancel();
     }
-    // Cancelled, not dropped — the platform ends both the same way, so the ring stands down
+    // Cancelled, not dropped — the platform ends both the same way, so the edge stands down
     // without the hook ever hearing a keypress, and nothing was filed.
-    await waitFor(() => expect(marked(item, DROP_RING)).toBe(false), { timeout: DRAG_WAIT });
+    await waitFor(() => expect(marked(tile, DROP_EDGE)).toBe(false), { timeout: DRAG_WAIT });
     await expect(args.onDropCard).not.toHaveBeenCalled();
   },
 };
@@ -561,7 +683,7 @@ export const DropTarget: Story = {
  * **`Sol Ring` has copies in two places and `Arcane Signet` is entirely in this drawer**, which is
  * what makes the page's rule visible rather than merely stated: a folder takes a tile when **at
  * least one** copy behind it is somewhere else, and the tile whose every copy is already filed here
- * draws no ring at all — the same refusal a row already gets, one grain finer. Refusing the first
+ * keeps its plain dash — the same refusal a row already gets, one grain finer. Refusing the first
  * of those instead would leave the two loose copies unreachable by the gesture, which is the whole
  * failure the `some` prevents.
  */
@@ -582,7 +704,7 @@ export const TileDropTarget: Story = {
 
     const loose = await pickUp(canvas.getByText("Sol Ring"));
     try {
-      await waitFor(() => expect(marked(item, DROP_RING)).toBe(true), { timeout: DRAG_WAIT });
+      await waitFor(() => expect(marked(tile, DROP_EDGE)).toBe(true), { timeout: DRAG_WAIT });
       await loose.over(item);
       await waitFor(() => expect(marked(tile, DROP_OVER)).toBe(true), { timeout: DRAG_WAIT });
       await loose.drop(item);
@@ -598,11 +720,11 @@ export const TileDropTarget: Story = {
     await expect(args.onDropCard).toHaveBeenCalledWith({ kind: "tile", tile: LOOSE_TILE });
 
     // …and the printing this drawer already holds every copy of raises nothing, and is refused on
-    // the drop as well rather than merely going unadvertised. A ring leading to a write that moved
-    // no row and bumped `updated_at` would be worse than no ring.
+    // the drop as well rather than merely going unadvertised. A gold edge leading to a write that
+    // moved no row and bumped `updated_at` would be worse than a plain dash.
     const filed = await pickUp(canvas.getByText("Arcane Signet"));
     try {
-      await waitFor(() => expect(marked(item, DROP_RING)).toBe(false), { timeout: DRAG_WAIT });
+      await waitFor(() => expect(marked(tile, DROP_EDGE)).toBe(false), { timeout: DRAG_WAIT });
       await filed.over(item);
       await filed.drop(item);
     } finally {
@@ -668,6 +790,11 @@ const OTHER_FOLDER: FolderDrag = {
  * before anything is measured. The two boxes stay for the geometry and for every test and story
  * that addresses them by name. The copy's is the `<li>`; the folder's is an inner wrapper that
  * covers every pixel of the card.
+ *
+ * **Neither of them draws anything.** Since 2026-09-03 both marks are on the card's own
+ * `<button>` — the element carrying the dashed edge a reader actually sees — so "where a drop is
+ * registered" and "where a drop is drawn" are two different questions with two different answers,
+ * and a mark on a wrapper is the concentric-outline bug this replaced.
  */
 export const FolderTarget: Story = {
   render: (args) => (

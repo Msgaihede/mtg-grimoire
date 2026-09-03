@@ -136,7 +136,30 @@ pub struct CardRow {
     pub collector_number: String,
     pub lang: String,
     pub name: String,
-    pub tag_id: Option<i64>,
+    /// Which label the card wore — `tag_id` in the column, and `tagId` in this key, until
+    /// schema v33.
+    ///
+    /// **`#[serde(alias = "tagId")]` is what lets a step written before that rung still read.**
+    /// It sits on the field and not only on [`Op::Labels`] because this key is on *every
+    /// card-shaped step* — a quantity change, a move between piles, an import — and not only on
+    /// the ones about a label. The v33 rung keeps `deck_undo`'s rows on the grounds that no label
+    /// id moves, which is true of the ids and says nothing about what the keys are called.
+    ///
+    /// **This half fails silently where the variant's fails loudly, and that is why it is the
+    /// half worth writing down.** An unrecognised `op` raises; an unrecognised *field* is
+    /// discarded, and a missing `Option` deserialises to `None` with no `#[serde(default)]`
+    /// anywhere near it. So without the alias, undoing a step the reader wrote last week would
+    /// put every card back **unlabelled**, report success, and leave nothing to say it had
+    /// happened.
+    ///
+    /// **An alias and not a `default`**: an alias is a second spelling of a fact the step
+    /// carries, where a default would be this build inventing one for a step that genuinely has
+    /// none. Nothing serialises `tagId` any more, so this is a read path with no writer, and it
+    /// does not expire — `labelColors.ts`'s `LEGACY_TOKENS` reason, which is that a database is
+    /// not migrated by a build being newer than it.
+    /// `a_step_written_before_v33_still_reads_and_still_undoes` is the proof.
+    #[serde(alias = "tagId")]
+    pub label_id: Option<i64>,
     pub quantity: i64,
     pub needs_review: Option<String>,
     /// Which object the row played — `None` the regular copy, `Some("foil")`/`Some("etched")`
@@ -207,10 +230,10 @@ pub struct CategoryRow {
     pub origin: String,
 }
 
-/// One `deck_tags` row, as a step carries it.
+/// One `deck_labels` row, as a step carries it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct TagRow {
+pub struct LabelRow {
     pub id: i64,
     pub name: String,
     pub color: String,
@@ -226,7 +249,7 @@ pub struct TagRow {
 pub struct Carrier {
     /// Which deck the card is in — **not the step's**, since schema v21.
     ///
-    /// A tag belongs to no deck now, so a delete's carriers are every card wearing it *in every
+    /// A label belongs to no deck now, so a delete's carriers are every card wearing it *in every
     /// deck*, while the step recording that delete is filed under the one deck the reader was
     /// standing in. Without this field the reversal would put the label back on that deck's
     /// cards and quietly leave the other decks' bare — the failure mode being that undo looks
@@ -241,13 +264,18 @@ pub struct Carrier {
     pub variant: String,
     pub category_id: i64,
     pub card_id: String,
-    pub tag_id: Option<i64>,
+    /// Which label the card wore — `tagId` in a step written before schema v33, aliased for
+    /// [`CardRow::label_id`]'s reason and with its failure mode: an unrecognised field is
+    /// discarded in silence, so without this a reversal would clear the very label it exists to
+    /// put back.
+    #[serde(alias = "tagId")]
+    pub label_id: Option<i64>,
 }
 
 /// One reversal instruction. A step is a list of these, applied in order.
 ///
-/// **Order inside a step is load-bearing**: `deck_cards.category_id` and `.tag_id` are real
-/// foreign keys, so a [`Op::Categories`] or [`Op::Tags`] that restores a row has to run before
+/// **Order inside a step is load-bearing**: `deck_cards.category_id` and `.label_id` are real
+/// foreign keys, so a [`Op::Categories`] or [`Op::Labels`] that restores a row has to run before
 /// the [`Op::Cards`] that files cards under it. Every call site builds its list in that order,
 /// and [`apply`] threads the id remap forward so the later ops see it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -282,12 +310,18 @@ pub enum Op {
         #[serde(default)]
         default_category_id: Option<i64>,
     },
-    /// The same three lists over `deck_tags`, plus which cards wore them.
-    Tags {
+    /// The same three lists over `deck_labels`, plus which cards wore them.
+    ///
+    /// **`tags` on the wire until schema v33.** The variant-level twin of
+    /// [`CardRow::label_id`]'s alias, and the loud half of the pair: an internally-tagged enum
+    /// refuses a tag it does not know, so a step carrying the old spelling would have failed the
+    /// press outright rather than quietly.
+    #[serde(alias = "tags")]
+    Labels {
         #[serde(default)]
-        restore: Vec<TagRow>,
+        restore: Vec<LabelRow>,
         #[serde(default)]
-        patch: Vec<TagRow>,
+        patch: Vec<LabelRow>,
         #[serde(default)]
         delete: Vec<i64>,
         #[serde(default)]
@@ -314,7 +348,7 @@ impl Step {
 
 /// Ids that moved while a step was being applied.
 ///
-/// A restored category or tag keeps its own id whenever that id is free, which is the case
+/// A restored category or label keeps its own id whenever that id is free, which is the case
 /// almost every time and is what lets the [`Op::Cards`] beside it name the id it recorded. When
 /// the id has been **taken since** — `deck_categories.id` is a rowid alias, so deleting the
 /// highest-numbered pile and making a new one reuses the number — the row comes back under a
@@ -324,7 +358,7 @@ impl Step {
 #[derive(Debug, Default)]
 struct Remap {
     categories: HashMap<i64, i64>,
-    tags: HashMap<i64, i64>,
+    labels: HashMap<i64, i64>,
 }
 
 impl Remap {
@@ -332,8 +366,8 @@ impl Remap {
         self.categories.get(&id).copied().unwrap_or(id)
     }
 
-    fn tag(&self, id: Option<i64>) -> Option<i64> {
-        id.map(|t| self.tags.get(&t).copied().unwrap_or(t))
+    fn label(&self, id: Option<i64>) -> Option<i64> {
+        id.map(|t| self.labels.get(&t).copied().unwrap_or(t))
     }
 }
 
@@ -437,20 +471,20 @@ fn push_made_categories(
 }
 
 /// Add the labels a write invented to both sides of a step — [`push_made_categories`]'s job over
-/// `deck_tags`.
+/// `deck_labels`.
 ///
 /// **The order is that function's, and it is load-bearing for the same reason at one remove.** On
-/// the undo side the delete goes *after* the cards: `deck_cards.tag_id` is `ON DELETE SET NULL`,
+/// the undo side the delete goes *after* the cards: `deck_cards.label_id` is `ON DELETE SET NULL`,
 /// so deleting an invented label first would be harmless for the rows being restored (none of
 /// them wore it — it did not exist when they were read) but would leave the ordering rule
 /// different from the categories' for no reason anybody could reconstruct. On the redo side the
-/// restore goes **first**, and there it is not a nicety: `tag_id` is a real foreign key and
-/// `insert_cards` writes the redo rows' labels through `remap.tag`, so the rows have nowhere to
+/// restore goes **first**, and there it is not a nicety: `label_id` is a real foreign key and
+/// `insert_cards` writes the redo rows' labels through `remap.label`, so the rows have nowhere to
 /// point until the label is back.
 ///
-/// **No `deck_id` anywhere in here**, unlike its sibling: a tag has belonged to no deck since
-/// schema v21, so "every tag there is" is the only list there is to diff.
-fn push_made_tags(
+/// **No `deck_id` anywhere in here**, unlike its sibling: a label has belonged to no deck since
+/// schema v21, so "every label there is" is the only list there is to diff.
+fn push_made_labels(
     tx: &Connection,
     made: Option<Vec<i64>>,
     undo: &mut Vec<Op>,
@@ -459,25 +493,25 @@ fn push_made_tags(
     let Some(before_ids) = made else {
         return Ok(());
     };
-    let invented: Vec<TagRow> = read_tags(tx)?
+    let invented: Vec<LabelRow> = read_labels(tx)?
         .into_iter()
         .filter(|t| !before_ids.contains(&t.id))
         .collect();
     if invented.is_empty() {
         return Ok(());
     }
-    undo.push(Op::Tags {
+    undo.push(Op::Labels {
         restore: vec![],
         patch: vec![],
         delete: invented.iter().map(|t| t.id).collect(),
         // None: the cards wearing these labels are being replaced wholesale by the `Op::Variant`
-        // beside this one, which carries each row's own `tag_id`. A carrier list would be a
+        // beside this one, which carries each row's own `label_id`. A carrier list would be a
         // second, weaker statement about the same rows.
         carriers: vec![],
     });
     redo.insert(
         0,
-        Op::Tags {
+        Op::Labels {
             restore: invented,
             patch: vec![],
             delete: vec![],
@@ -487,14 +521,14 @@ fn push_made_tags(
     Ok(())
 }
 
-/// Every `deck_tags` row — the whole table, because a tag belongs to no deck.
-pub fn read_tags(conn: &Connection) -> Result<Vec<TagRow>, String> {
+/// Every `deck_labels` row — the whole table, because a label belongs to no deck.
+pub fn read_labels(conn: &Connection) -> Result<Vec<LabelRow>, String> {
     let mut stmt = conn
-        .prepare("SELECT id, name, color FROM deck_tags ORDER BY id")
+        .prepare("SELECT id, name, color FROM deck_labels ORDER BY id")
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |r| {
-            Ok(TagRow {
+            Ok(LabelRow {
                 id: r.get(0)?,
                 name: r.get(1)?,
                 color: r.get(2)?,
@@ -505,11 +539,11 @@ pub fn read_tags(conn: &Connection) -> Result<Vec<TagRow>, String> {
         .map_err(|e| e.to_string())
 }
 
-/// Every tag id there is — the "before" half of [`push_made_tags`]' diff, and
+/// Every label id there is — the "before" half of [`push_made_labels`]' diff, and
 /// [`category_ids`]' opposite number.
-pub fn tag_ids(conn: &Connection) -> Result<Vec<i64>, String> {
+pub fn label_ids(conn: &Connection) -> Result<Vec<i64>, String> {
     let mut stmt = conn
-        .prepare("SELECT id FROM deck_tags")
+        .prepare("SELECT id FROM deck_labels")
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |r| r.get(0))
@@ -538,10 +572,10 @@ pub fn record_variant(
     variant: &str,
     before: Vec<CardRow>,
     made: Option<Vec<i64>>,
-    // The `deck_tags` ids as they stood before the write, or `None` for a caller that cannot
+    // The `deck_labels` ids as they stood before the write, or `None` for a caller that cannot
     // invent one — the theory move, which files cards that already exist. Every id not in this
     // list afterwards is a label the write made, and undoing it takes that label away again.
-    made_tags: Option<Vec<i64>>,
+    made_labels: Option<Vec<i64>>,
 ) -> Result<(), String> {
     let after = read_variant(tx, deck_id, variant)?;
     let mut undo = vec![Op::Variant {
@@ -553,7 +587,7 @@ pub fn record_variant(
         rows: after,
     }];
     push_made_categories(tx, deck_id, made, &mut undo, &mut redo)?;
-    push_made_tags(tx, made_tags, &mut undo, &mut redo)?;
+    push_made_labels(tx, made_labels, &mut undo, &mut redo)?;
     record_step(tx, audit_id, deck_id, &Step::new(undo, redo))
 }
 
@@ -568,7 +602,7 @@ pub fn read_cells(conn: &Connection, deck_id: i64, cells: &[Cell]) -> Result<Vec
         let mut stmt = conn
             .prepare(
                 "SELECT category_id, variant, card_id, set_code, collector_number, lang, name,
-                        tag_id, quantity, needs_review, finish
+                        label_id, quantity, needs_review, finish
                    FROM deck_cards
                   WHERE deck_id = ?1 AND variant = ?2 AND category_id = ?3
                     AND (?4 IS NULL OR card_id = ?4)",
@@ -596,7 +630,7 @@ pub fn read_variant(
     let mut stmt = conn
         .prepare(
             "SELECT category_id, variant, card_id, set_code, collector_number, lang, name,
-                    tag_id, quantity, needs_review, finish
+                    label_id, quantity, needs_review, finish
                FROM deck_cards
               WHERE deck_id = ?1 AND variant = ?2",
         )
@@ -617,7 +651,7 @@ fn card_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<CardRow> {
         collector_number: r.get(4)?,
         lang: r.get(5)?,
         name: r.get(6)?,
-        tag_id: r.get(7)?,
+        label_id: r.get(7)?,
         quantity: r.get(8)?,
         needs_review: r.get(9)?,
         finish: r.get(10)?,
@@ -669,13 +703,13 @@ pub fn read_categories(conn: &Connection, deck_id: i64) -> Result<Vec<CategoryRo
         .map_err(|e| e.to_string())
 }
 
-/// One `deck_tags` row, for the "before" side of a tag step.
-pub fn read_tag(conn: &Connection, id: i64) -> Result<Option<TagRow>, String> {
+/// One `deck_labels` row, for the "before" side of a label step.
+pub fn read_label(conn: &Connection, id: i64) -> Result<Option<LabelRow>, String> {
     conn.query_row(
-        "SELECT id, name, color FROM deck_tags WHERE id = ?1",
+        "SELECT id, name, color FROM deck_labels WHERE id = ?1",
         params![id],
         |r| {
-            Ok(TagRow {
+            Ok(LabelRow {
                 id: r.get(0)?,
                 name: r.get(1)?,
                 color: r.get(2)?,
@@ -686,30 +720,30 @@ pub fn read_tag(conn: &Connection, id: i64) -> Result<Option<TagRow>, String> {
     .map_err(|e| e.to_string())
 }
 
-/// Every card wearing one tag **in every deck**, as cells — what a tag delete's `SET NULL` is
-/// about to clear.
+/// Every card wearing one label **in every deck**, as cells — what a label delete's `SET NULL`
+/// is about to clear.
 ///
-/// Deck-blind since v8 and *correct* only since v21: while a tag belonged to one deck, every
+/// Deck-blind since v8 and *correct* only since v21: while a label belonged to one deck, every
 /// carrier was in that deck by construction and the missing `WHERE deck_id` was a distinction
-/// with no difference. A tag is the app's now, so this genuinely spans decks — which is why
+/// with no difference. A label is the app's now, so this genuinely spans decks — which is why
 /// [`Carrier::deck_id`] exists.
-pub fn read_carriers(conn: &Connection, tag_id: i64) -> Result<Vec<Carrier>, String> {
-    carriers_where(conn, "tag_id = ?1", params![tag_id], tag_id)
+pub fn read_carriers(conn: &Connection, label_id: i64) -> Result<Vec<Carrier>, String> {
+    carriers_where(conn, "label_id = ?1", params![label_id], label_id)
 }
 
-/// The same, narrowed to one list of one deck — [`crate::deck_meta::remove_tag_from_deck`]'s
-/// read, which is about a deck's cards rather than about the tag.
+/// The same, narrowed to one list of one deck — [`crate::deck_meta::remove_label_from_deck`]'s
+/// read, which is about a deck's cards rather than about the label.
 pub fn read_carriers_in(
     conn: &Connection,
-    tag_id: i64,
+    label_id: i64,
     deck_id: i64,
     variant: &str,
 ) -> Result<Vec<Carrier>, String> {
     carriers_where(
         conn,
-        "tag_id = ?1 AND deck_id = ?2 AND variant = ?3",
-        params![tag_id, deck_id, variant],
-        tag_id,
+        "label_id = ?1 AND deck_id = ?2 AND variant = ?3",
+        params![label_id, deck_id, variant],
+        label_id,
     )
 }
 
@@ -719,7 +753,7 @@ fn carriers_where(
     conn: &Connection,
     where_sql: &str,
     args: impl rusqlite::Params,
-    tag_id: i64,
+    label_id: i64,
 ) -> Result<Vec<Carrier>, String> {
     let mut stmt = conn
         .prepare(&format!(
@@ -733,7 +767,7 @@ fn carriers_where(
                 variant: r.get(1)?,
                 category_id: r.get(2)?,
                 card_id: r.get(3)?,
-                tag_id: Some(tag_id),
+                label_id: Some(label_id),
             })
         })
         .map_err(|e| e.to_string())?;
@@ -857,38 +891,38 @@ pub fn apply(tx: &Connection, deck_id: i64, ops: &[Op]) -> Result<(), String> {
                     .map_err(|e| e.to_string())?;
                 }
             }
-            Op::Tags {
+            Op::Labels {
                 restore,
                 patch,
                 delete,
                 carriers,
             } => {
                 // No `AND deck_id = ?`, and none of the three statements in this arm has one
-                // since schema v21: a tag is one app-wide row, so the id *is* the whole
+                // since schema v21: a label is one app-wide row, so the id *is* the whole
                 // address. A deck-scoped clause here would silently match nothing and report a
                 // successful undo that undid nothing.
                 for id in delete {
                     tx.execute(
-                        "DELETE FROM deck_tags WHERE id = ?1",
-                        params![remap.tag(Some(*id))],
+                        "DELETE FROM deck_labels WHERE id = ?1",
+                        params![remap.label(Some(*id))],
                     )
                     .map_err(|e| e.to_string())?;
                 }
                 for row in restore {
-                    restore_tag(tx, row, &mut remap)?;
+                    restore_label(tx, row, &mut remap)?;
                 }
                 for row in patch {
-                    let id = remap.tag(Some(row.id));
+                    let id = remap.label(Some(row.id));
                     let changed = tx
                         .execute(
-                            "UPDATE deck_tags
+                            "UPDATE deck_labels
                                 SET name = ?2, name_key = ?3, color = ?4,
                                     updated_at = unixepoch()
                               WHERE id = ?1",
                             params![
                                 id,
                                 row.name,
-                                crate::schema::tag_name_key(&row.name),
+                                crate::schema::label_name_key(&row.name),
                                 row.color
                             ],
                         )
@@ -901,7 +935,7 @@ pub fn apply(tx: &Connection, deck_id: i64, ops: &[Op]) -> Result<(), String> {
                     // The carrier's own deck, falling back to the step's for a step written
                     // before v21 — see `Carrier::deck_id`.
                     tx.execute(
-                        "UPDATE deck_cards SET tag_id = ?5, updated_at = unixepoch()
+                        "UPDATE deck_cards SET label_id = ?5, updated_at = unixepoch()
                           WHERE deck_id = ?1 AND variant = ?2 AND category_id = ?3
                             AND card_id = ?4",
                         params![
@@ -909,7 +943,7 @@ pub fn apply(tx: &Connection, deck_id: i64, ops: &[Op]) -> Result<(), String> {
                             carrier.variant,
                             remap.category(carrier.category_id),
                             carrier.card_id,
-                            remap.tag(carrier.tag_id)
+                            remap.label(carrier.label_id)
                         ],
                     )
                     .map_err(|e| e.to_string())?;
@@ -969,7 +1003,7 @@ fn insert_cards(
         tx.execute(
             "INSERT INTO deck_cards
                 (deck_id, category_id, variant, card_id, set_code, collector_number, lang,
-                 name, tag_id, quantity, needs_review, finish, created_at, updated_at)
+                 name, label_id, quantity, needs_review, finish, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
                      unixepoch(), unixepoch())",
             params![
@@ -981,7 +1015,7 @@ fn insert_cards(
                 row.collector_number,
                 row.lang,
                 row.name,
-                remap.tag(row.tag_id),
+                remap.label(row.label_id),
                 row.quantity,
                 row.needs_review,
                 row.finish
@@ -1086,28 +1120,28 @@ fn patch_category(
         .ok_or_else(|| MISSING_ROW.to_owned())
 }
 
-/// Bring one tag back from a delete — [`restore_category`]'s two cases, over `deck_tags`.
+/// Bring one label back from a delete — [`restore_category`]'s two cases, over `deck_labels`.
 ///
-/// **No `deck_id`, since schema v21**, and one refusal that is new with it: the tag being
+/// **No `deck_id`, since schema v21**, and one refusal that is new with it: the label being
 /// restored may have had its *name* taken in the meantime, by another deck, because the grain
 /// is app-wide. The UNIQUE index answers that with an error the reader sees, which is the right
 /// outcome — the alternative is a silent second row spelling the same word, which is the one
 /// thing the new grain exists to prevent.
-fn restore_tag(tx: &Connection, row: &TagRow, remap: &mut Remap) -> Result<(), String> {
-    let key = crate::schema::tag_name_key(&row.name);
-    if taken(tx, "deck_tags", row.id)? {
+fn restore_label(tx: &Connection, row: &LabelRow, remap: &mut Remap) -> Result<(), String> {
+    let key = crate::schema::label_name_key(&row.name);
+    if taken(tx, "deck_labels", row.id)? {
         let fresh: i64 = tx
             .query_row(
-                "INSERT INTO deck_tags (name, name_key, color, created_at, updated_at)
+                "INSERT INTO deck_labels (name, name_key, color, created_at, updated_at)
                  VALUES (?1, ?2, ?3, unixepoch(), unixepoch()) RETURNING id",
                 params![row.name, key, row.color],
                 |r| r.get(0),
             )
             .map_err(|e| e.to_string())?;
-        remap.tags.insert(row.id, fresh);
+        remap.labels.insert(row.id, fresh);
     } else {
         tx.execute(
-            "INSERT INTO deck_tags (id, name, name_key, color, created_at, updated_at)
+            "INSERT INTO deck_labels (id, name, name_key, color, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, unixepoch(), unixepoch())",
             params![row.id, row.name, key, row.color],
         )
@@ -1415,7 +1449,7 @@ mod tests {
     /// **`deck_cards.id`, `created_at` and `updated_at` are deliberately left out**, for
     /// [`CardRow`]'s reason: a restored row is a new row, and a snapshot that compared ids
     /// would assert the one thing this design says is not promised. Everything a reader can
-    /// see is in here — including `tag_id` and `needs_review`, which are the two columns an
+    /// see is in here — including `label_id` and `needs_review`, which are the two columns an
     /// "obvious" reversal built out of the audit payload would silently drop.
     ///
     /// **`finish` is a third column of exactly that kind, and it joined this list late** (v18).
@@ -1428,7 +1462,7 @@ mod tests {
         let mut cards = conn
             .prepare(
                 "SELECT category_id, variant, card_id, set_code, collector_number, lang, name,
-                        coalesce(tag_id, -1), quantity, coalesce(needs_review, ''),
+                        coalesce(label_id, -1), quantity, coalesce(needs_review, ''),
                         coalesce(finish, '')
                    FROM deck_cards WHERE deck_id = ?1",
             )
@@ -1474,20 +1508,21 @@ mod tests {
             .unwrap()
             .map(Result::unwrap),
         );
-        // **Every tag, not this deck's**, since schema v21 — there is no such thing as this
-        // deck's. A tag write is app-wide now, so a snapshot narrowed to one deck would let a
+        // **Every label, not this deck's**, since schema v21 — there is no such thing as this
+        // deck's. A label write is app-wide now, so a snapshot narrowed to one deck would let a
         // botched reversal leave another deck's label renamed and call the deck restored.
-        let mut tags = conn.prepare("SELECT name, color FROM deck_tags").unwrap();
+        let mut labels = conn.prepare("SELECT name, color FROM deck_labels").unwrap();
         out.extend(
-            tags.query_map([], |r| {
-                Ok(format!(
-                    "tag {}|{}",
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?
-                ))
-            })
-            .unwrap()
-            .map(Result::unwrap),
+            labels
+                .query_map([], |r| {
+                    Ok(format!(
+                        "label {}|{}",
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?
+                    ))
+                })
+                .unwrap()
+                .map(Result::unwrap),
         );
         for field in DECK_FIELDS {
             let value = read_deck_fields(conn, deck_id, &[field]).unwrap();
@@ -1522,7 +1557,7 @@ mod tests {
     /// A case that needs nothing beyond [`fresh`].
     fn nothing(_: &Connection, _: i64) {}
 
-    /// A deck with two piles, a tag and some cards in it — enough state that a step which
+    /// A deck with two piles, a label and some cards in it — enough state that a step which
     /// dropped a column would show up in [`snapshot`] rather than comparing two empty decks.
     fn fresh() -> (Connection, i64) {
         let conn = seeded();
@@ -1532,10 +1567,10 @@ mod tests {
         crate::deck::add_card(&conn, id, "bolt-lea", Some(ramp), None, "live", None, 2).unwrap();
         crate::deck::add_card(&conn, id, "serra-lea", Some(draw), None, "live", None, 1).unwrap();
         crate::deck::add_card(&conn, id, "bolt-m10", Some(ramp), None, "theory", None, 3).unwrap();
-        let tag = crate::deck_meta::create_tag(&conn, id, "Cut candidate", "amber")
+        let label = crate::deck_meta::create_label(&conn, id, "Cut candidate", "amber")
             .unwrap()
             .id;
-        crate::deck_meta::set_card_tag(&conn, id, "serra-lea", draw, "live", None, Some(tag))
+        crate::deck_meta::set_card_label(&conn, id, "serra-lea", draw, "live", None, Some(label))
             .unwrap();
         (conn, id)
     }
@@ -1568,10 +1603,10 @@ mod tests {
                     .unwrap();
             }),
             (
-                // The tag and the `needs_review` sentence are what a reversal rebuilt from the
+                // The label and the `needs_review` sentence are what a reversal rebuilt from the
                 // audit payload would lose: that row records a category, a quantity and a
                 // reason, and the label the reader put on the card is in none of them.
-                "deck_set_card_quantity (zero, a tagged row)",
+                "deck_set_card_quantity (zero, a labelled row)",
                 nothing,
                 |c, id| {
                     crate::deck::set_card_quantity(
@@ -1946,11 +1981,11 @@ mod tests {
                 },
             ),
             (
-                // Archidekt's `^Keeper,#4aab08^`. `snapshot` reads **every** `deck_tags` row, so
+                // Archidekt's `^Keeper,#4aab08^`. `snapshot` reads **every** `deck_labels` row, so
                 // this case is what proves a step sweeps the labels the import invented — a
                 // reversal that left them behind would restore the deck and fail here on two
-                // extra `tag` lines.
-                "deck_import_commit (inventing tags)",
+                // extra `label` lines.
+                "deck_import_commit (inventing labels)",
                 nothing,
                 |c, id| {
                     crate::import::commit_import(
@@ -1969,7 +2004,7 @@ mod tests {
         ]
     }
 
-    /// The category and tag writes.
+    /// The category and label writes.
     fn meta_write_cases() -> Vec<Case> {
         vec![
             ("deck_category_create", nothing, |c, id| {
@@ -2052,49 +2087,57 @@ mod tests {
                     crate::deck_meta::delete_category(c, ramp(c, id), None).unwrap();
                 },
             ),
-            ("deck_tag_create", nothing, |c, id| {
-                crate::deck_meta::create_tag(c, id, "Keep", "jade").unwrap();
+            ("deck_label_create", nothing, |c, id| {
+                crate::deck_meta::create_label(c, id, "Keep", "jade").unwrap();
             }),
             (
-                "deck_tag_update (renaming and recolouring)",
+                "deck_label_update (renaming and recolouring)",
                 nothing,
                 |c, id| {
-                    let tag = tag_id(c, id);
-                    crate::deck_meta::update_tag(c, id, tag, "Cut", "jade").unwrap();
+                    let label = label_id(c, id);
+                    crate::deck_meta::update_label(c, id, label, "Cut", "jade").unwrap();
                 },
             ),
             (
                 // `SET NULL` un-labels N cards on the way out, and the history counts them.
-                "deck_tag_delete (un-labelling its cards)",
+                "deck_label_delete (un-labelling its cards)",
                 nothing,
                 |c, id| {
-                    crate::deck_meta::delete_tag(c, id, tag_id(c, id)).unwrap();
+                    crate::deck_meta::delete_label(c, id, label_id(c, id)).unwrap();
                 },
             ),
-            ("deck_card_set_tag", nothing, |c, id| {
-                let tag = tag_id(c, id);
-                crate::deck_meta::set_card_tag(
+            ("deck_card_set_label", nothing, |c, id| {
+                let label = label_id(c, id);
+                crate::deck_meta::set_card_label(
                     c,
                     id,
                     "bolt-lea",
                     ramp(c, id),
                     "live",
                     None,
-                    Some(tag),
+                    Some(label),
                 )
                 .unwrap();
             }),
-            ("deck_card_set_tag (clearing one)", nothing, |c, id| {
-                crate::deck_meta::set_card_tag(c, id, "serra-lea", draw(c, id), "live", None, None)
-                    .unwrap();
+            ("deck_card_set_label (clearing one)", nothing, |c, id| {
+                crate::deck_meta::set_card_label(
+                    c,
+                    id,
+                    "serra-lea",
+                    draw(c, id),
+                    "live",
+                    None,
+                    None,
+                )
+                .unwrap();
             }),
         ]
     }
 
-    /// The tag [`fresh`] seeds. **No deck in the lookup**, since v21 there is none on the row
-    /// — and no ambiguity either: these fixtures seed one deck and one tag.
-    fn tag_id(conn: &Connection, _deck_id: i64) -> i64 {
-        conn.query_row("SELECT id FROM deck_tags", [], |r| r.get(0))
+    /// The label [`fresh`] seeds. **No deck in the lookup**, since v21 there is none on the row
+    /// — and no ambiguity either: these fixtures seed one deck and one label.
+    fn label_id(conn: &Connection, _deck_id: i64) -> i64 {
+        conn.query_row("SELECT id FROM deck_labels", [], |r| r.get(0))
             .unwrap()
     }
 
@@ -2109,10 +2152,10 @@ mod tests {
             // about restoring rows has no opinion about that, nor about the finish.
             inactive: false,
             finish: None,
-            // No label. The tag half of an import's step has its own tests below, which name
+            // No label. The label half of an import's step has its own tests below, which name
             // their own items for the reason this helper names none.
-            tag_name: None,
-            tag_color: None,
+            label_name: None,
+            label_color: None,
         }
     }
 
@@ -2120,19 +2163,19 @@ mod tests {
     fn labelled(
         card_id: &str,
         category: &str,
-        tag: &str,
+        label: &str,
         color: &str,
     ) -> crate::import::ImportItem {
         crate::import::ImportItem {
-            tag_name: Some(tag.to_owned()),
-            tag_color: Some(color.to_owned()),
+            label_name: Some(label.to_owned()),
+            label_color: Some(color.to_owned()),
             ..imported(card_id, 1, category)
         }
     }
 
     /// **The rule this journal exists for.** Every deck write records a step, and undoing that
     /// step puts the deck back exactly — row for row over `deck_cards`, `deck_categories`,
-    /// `deck_tags` and every `decks` column a step may write.
+    /// `deck_labels` and every `decks` column a step may write.
     ///
     /// Written as a list of cases rather than as ten tests for
     /// `every_deck_write_leaves_exactly_one_audit_row`'s reason, one module over: the claim is
@@ -2155,9 +2198,9 @@ mod tests {
         drive_cases(deck_write_cases());
     }
 
-    /// And for the category and tag writes.
+    /// And for the category and label writes.
     #[test]
-    fn undoing_any_category_or_tag_write_restores_the_deck_exactly() {
+    fn undoing_any_category_or_label_write_restores_the_deck_exactly() {
         drive_cases(meta_write_cases());
     }
 
@@ -2191,16 +2234,16 @@ mod tests {
     /// The half `drive_cases` cannot show: undoing an import sweeps the labels it **invented**
     /// and leaves the reader's own alone.
     ///
-    /// The sweep above starts from `fresh`, whose one tag predates the write, so it proves the
+    /// The sweep above starts from `fresh`, whose one label predates the write, so it proves the
     /// invented ones go and says nothing about the difference. Here there is a label of the
-    /// reader's *and* two of the file's, and only the two go — which is `push_made_tags`' whole
-    /// job and matters because `deck_tags` is app-wide since schema v21.
+    /// reader's *and* two of the file's, and only the two go — which is `push_made_labels`' whole
+    /// job and matters because `deck_labels` is app-wide since schema v21.
     #[test]
     fn undoing_an_import_sweeps_only_the_labels_it_made() {
         let (conn, id) = fresh();
         let names = |c: &Connection| {
             let mut stmt = c
-                .prepare("SELECT name FROM deck_tags ORDER BY name")
+                .prepare("SELECT name FROM deck_labels ORDER BY name")
                 .unwrap();
             let rows = stmt
                 .query_map([], |r| r.get::<_, String>(0))
@@ -2210,7 +2253,7 @@ mod tests {
             rows
         };
         let mine = names(&conn);
-        assert_eq!(mine.len(), 1, "`fresh` makes exactly one tag");
+        assert_eq!(mine.len(), 1, "`fresh` makes exactly one label");
 
         crate::import::commit_import(
             &conn,
@@ -2238,7 +2281,7 @@ mod tests {
         let worn: Option<String> = conn
             .query_row(
                 "SELECT t.name FROM deck_cards dc
-                   JOIN deck_tags t ON t.id = dc.tag_id
+                   JOIN deck_labels t ON t.id = dc.label_id
                   WHERE dc.deck_id = ?1 AND dc.card_id = 'bolt-m10'",
                 params![id],
                 |r| r.get(0),
@@ -2248,7 +2291,70 @@ mod tests {
         assert_eq!(
             worn.as_deref(),
             Some("Keeper"),
-            "the card wears it again — `Op::Tags` restores before `Op::Variant` inserts, and              `insert_cards` remaps the id"
+            "the card wears it again — `Op::Labels` restores before `Op::Variant` inserts, and              `insert_cards` remaps the id"
+        );
+    }
+
+    /// **A `deck_undo` row written before schema v33 still reads, and still undoes exactly.**
+    ///
+    /// That rung renamed `deck_tags` to `deck_labels` and `deck_cards.tag_id` to `label_id`, and
+    /// it deliberately keeps every step it finds rather than clearing the stack the way v21 did.
+    /// The JSON keys moved with the Rust fields, so three `#[serde(alias)]`es are the whole of
+    /// what makes that decision true — see [`CardRow::label_id`] for which of them bites hardest.
+    ///
+    /// **Both halves are driven, because they fail differently.** `{"op":"tags"}` raises, which a
+    /// reader would at least see; `"tagId"` is discarded, which would put the cards back
+    /// unlabelled and report success. The second is the one a test has to hold.
+    ///
+    /// **Written by rewinding the stored text rather than by building a `Step`**, because the
+    /// thing under test is a spelling nothing in this build can produce any more: a `Step`
+    /// serialised here would carry the new names and the test would pass with no aliases at all.
+    #[test]
+    fn a_step_written_before_v33_still_reads_and_still_undoes() {
+        let (conn, id) = fresh();
+        let before = snapshot(&conn, id);
+
+        // Two presses, because no one step carries both shapes. The quantity change records an
+        // `Op::Cards` over a row that wears a label — that is the `tagId` half — and the delete
+        // records an `Op::Labels` with a carrier apiece, which is the `{"op":"tags"}` half.
+        crate::deck::set_card_quantity(&conn, id, "serra-lea", draw(&conn, id), "live", None, 4)
+            .unwrap();
+        let quantity_step = next_undo(&conn, id).unwrap().unwrap();
+        crate::deck_meta::delete_label(&conn, id, label_id(&conn, id)).unwrap();
+        let label_step = next_undo(&conn, id).unwrap().unwrap();
+
+        let mut wound_back = String::new();
+        for audit_id in [quantity_step, label_step] {
+            let stored: String = conn
+                .query_row(
+                    "SELECT step FROM deck_undo WHERE audit_id = ?1",
+                    params![audit_id],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let old = stored
+                .replace(r#""op":"labels""#, r#""op":"tags""#)
+                .replace(r#""labelId""#, r#""tagId""#);
+            assert_ne!(old, stored, "step {audit_id} carried no new spelling");
+            assert!(!old.contains(r#""labelId""#), "{old}");
+            conn.execute(
+                "UPDATE deck_undo SET step = ?2 WHERE audit_id = ?1",
+                params![audit_id, &old],
+            )
+            .unwrap();
+            wound_back.push_str(&old);
+        }
+        // The fixture has to carry both old spellings, or this passes against the very step it
+        // was written to avoid producing.
+        assert!(wound_back.contains(r#""op":"tags""#), "{wound_back}");
+        assert!(wound_back.contains(r#""tagId":"#), "{wound_back}");
+
+        undo(&conn, id).unwrap();
+        undo(&conn, id).unwrap();
+        assert_eq!(
+            snapshot(&conn, id),
+            before,
+            "an old step puts the deck back exactly, the label on the card included"
         );
     }
 
