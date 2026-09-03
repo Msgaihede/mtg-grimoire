@@ -24,8 +24,8 @@ import type { CardModalScope } from "./cardModalScope";
  * says nothing about *what* is owned, which `QuantityStepper`'s own doc forbids ("Quantity of
  * Lightning Bolt", not "Quantity"). The modal holds exactly one stepper and the dialog around it
  * is already named after the card, so this is belt and braces rather than the only signpost —
- * but a reader listing the modal's controls hears this one beside a printing picker and a
- * category picker, and "Owned" alone would be the odd one out that named no object.
+ * but a reader listing the modal's controls hears this one beside a category picker and forty
+ * printing rows, and "Owned" alone would be the odd one out that named no object.
  */
 const QUANTITY_LABEL: Record<
   NonNullable<CardModalScope["quantity"]>,
@@ -104,6 +104,15 @@ export interface CardModalControlsProps {
   scope: CardModalScope;
   /** How many printings this card has — drawn **inside** the button's name, see below. */
   printingCount: number;
+  /**
+   * Open the printings **wall** — `AllPrintingsDialog`.
+   *
+   * **It stays, and `CardModalPrintings` does not make it redundant** (2026-09-03). The inline
+   * list beneath this column is a column of facts a reader reads down; the wall is a filtered
+   * grid of *art*, at three or four times the width, with a set / language / treatment / finish
+   * filter row this column has no room for. They answer two different questions about one card,
+   * and the door to the second is here.
+   */
   onViewAllPrintings: () => void;
 
   // ── Everything below is wiring Task 10 supplies. ────────────────────────────────────────
@@ -113,22 +122,6 @@ export interface CardModalControlsProps {
   // control, reporting to nobody — because the alternative is a column whose *shape* depends on
   // how far a parent's queries have got, which is a layout that flickers as data lands.
 
-  /** The card's printings, in the shape `Dropdown` draws. Empty until that query answers. */
-  printings?: readonly DropdownOption[];
-  /**
-   * A printing was picked — and **what that means is the host's answer, not this file's.**
-   *
-   * With a deck row behind the modal the host swaps the row onto it (`useDeck.swapPrinting`, the
-   * same write `AllPrintingsDialog` presses); with no deck row it browses (`viewPrinting`). This
-   * column deliberately knows neither: it draws a picker over `scope`, and a component that
-   * branched on `scope.deck` to decide which *write* a press makes would be a second opinion
-   * about a question `cardModalScope.ts` is the single answer to.
-   *
-   * The trigger goes on reading the printing that is open until the answer lands — there is no
-   * optimistic patch behind either arm, for the reason `useDeck.swapPrinting` states: a swap can
-   * **fold**, and the number a reader would check afterwards is the one only the server computes.
-   */
-  onPickPrinting?: (printingId: string) => void;
   /** The count the stepper reports. Ignored entirely when `scope.quantity` is null. */
   quantity?: number;
   onQuantityChange?: (next: number) => void;
@@ -162,8 +155,21 @@ export interface CardModalControlsProps {
 }
 
 /**
- * The card modal's centre column: **Quantity**, **Printing**, and — for a card opened out of a
- * deck — **Deck category** and **Label**.
+ * The card modal's controls: **Quantity**, `View all printings`, and — for a card opened out of
+ * a deck — **Deck category** and **Label**.
+ *
+ * **The `Printing` combobox was the third field and is gone** (2026-09-03). It was a picker over
+ * every printing of the card, and it moved to `CardModalPrintings` — the list that now fills the
+ * modal's main column — because a picker announces the printing you are *on* and hides the ones
+ * you are choosing *between*, which is the comparison the control existed for. The write did not
+ * move: `onPickPrinting` is `CardModalPrintings`' `onPick` and reaches the same host callback
+ * with the same two meanings.
+ *
+ * **`View all printings (N)` did not go with it**, and that is a decision rather than a leftover.
+ * The inline list is a column of facts read downwards; the wall behind that button is a filtered
+ * grid of *art* at three or four times this column's width, with a set / language / treatment /
+ * finish filter row there is no room for here. Two questions about one card, and only one of them
+ * fits in a column.
  *
  * **Every branch in this file reads `scope` and nothing else.** The per-view table is spec §7's
  * and it is resolved once, in `cardModalScope.ts`, precisely so that the rail, the action row
@@ -185,8 +191,6 @@ export function CardModalControls({
   scope,
   printingCount,
   onViewAllPrintings,
-  printings = [],
-  onPickPrinting,
   quantity = 0,
   onQuantityChange,
   categories = [],
@@ -205,77 +209,47 @@ export function CardModalControls({
 
   return (
     <div className="flex flex-col gap-4">
-      {/* Quantity and Printing share one row at the widest rungs and stack below.
-          `auto 1fr` — the stepper is the fixed thing (three controls of a size it chose) and
-          the printing picker is the elastic one, because a set name is what has to truncate.
-          Two whole class strings rather than one built by interpolation: Tailwind scans source
-          text, and a class assembled at runtime emits no rule at all.
-
-          With no stepper the row is one cell, and it must say so: left at
-          `grid-cols-[auto_1fr]` a lone picker would sit in the `auto` track and draw at its own
-          content width, which on the search wall is most of this column left blank. */}
-      <div
-        className={cn(
-          "grid grid-cols-1 gap-3",
-          stepper === null
-            ? "@min-[900px]/card:grid-cols-1"
-            : "@min-[900px]/card:grid-cols-[auto_1fr]",
-        )}
-      >
-        {stepper !== null && (
-          <div className="flex min-w-0 flex-col gap-1">
-            {/* A plain word rather than a `<label htmlFor>`: `QuantityStepper` owns the id of
-                the field inside it and exposes none, and a `<label>` *wrapping* the control
-                would forward a press on `−` or `+` to the number box instead of stepping.
-                The control carries its own `aria-label`, so nothing is unnamed. */}
-            <span className={FIELD_LABEL}>{stepper.word}</span>
-            <div className={cn("flex items-center", CONTROL_HEIGHT)}>
-              <QuantityStepper
-                value={quantity}
-                onChange={(next) => onQuantityChange?.(next)}
-                label={stepper.name(card.name)}
-              />
-            </div>
-          </div>
-        )}
-
-        <Field id={`${uid}-printing`} label="Printing">
-          <div className="flex min-w-0 items-center gap-2">
-            <Dropdown
-              id={`${uid}-printing-control`}
-              labelledBy={`${uid}-printing`}
-              // The open card *is* the picked printing, so the trigger reads the set this copy
-              // is from. `printings` is empty until the query answers, and the placeholder is
-              // what the trigger says meanwhile — never the card's name, which would make a
-              // control whose whole job is to say *which* Lightning Bolt say "Lightning Bolt".
-              value={card.id}
-              onChange={(v) => onPickPrinting?.(v)}
-              options={printings}
-              placeholder={card.setName ?? card.setCode.toUpperCase()}
-              searchable
-              searchLabel="Search printings"
-              fill
-              className={cn("min-w-0 flex-1", CONTROL_HEIGHT)}
+      {stepper !== null && (
+        <div className="flex min-w-0 flex-col gap-1">
+          {/* A plain word rather than a `<label htmlFor>`: `QuantityStepper` owns the id of
+              the field inside it and exposes none, and a `<label>` *wrapping* the control
+              would forward a press on `−` or `+` to the number box instead of stepping.
+              The control carries its own `aria-label`, so nothing is unnamed. */}
+          <span className={FIELD_LABEL}>{stepper.word}</span>
+          <div className={cn("flex items-center", CONTROL_HEIGHT)}>
+            <QuantityStepper
+              value={quantity}
+              onChange={(next) => onQuantityChange?.(next)}
+              label={stepper.name(card.name)}
             />
-            <button
-              type="button"
-              onClick={onViewAllPrintings}
-              className={cn(
-                "shrink-0 whitespace-nowrap rounded-md border border-border px-3 text-xs text-dim",
-                "hover:text-text",
-                CONTROL_HEIGHT,
-                PRESS,
-                FOCUS,
-              )}
-            >
-              {/* **One text node, count included.** A label and its count in two sibling spans
-                  separated by a CSS `gap` compute to "View all printings4" — the gap is not a
-                  word separator, and the accessible name is what a test and a screen reader
-                  both read. This has cost this repo a round before. */}
-              {`View all printings (${printingCount})`}
-            </button>
           </div>
-        </Field>
+        </div>
+      )}
+
+      {/* **The door to the printings wall, and it is a row of its own now.**
+          It shared a line with the `Printing` combobox until 2026-09-03, inside a `Field`
+          labelled `Printing`; the combobox moved to `CardModalPrintings` and the label went with
+          it, because a `<label htmlFor>` pointing at a control that is no longer rendered is a
+          dangling association rather than a heading. The button itself is untouched — same
+          geometry, same recipe, same one-text-node name. */}
+      <div className="flex min-w-0">
+        <button
+          type="button"
+          onClick={onViewAllPrintings}
+          className={cn(
+            "shrink-0 whitespace-nowrap rounded-md border border-border px-3 text-xs text-dim",
+            "hover:text-text",
+            CONTROL_HEIGHT,
+            PRESS,
+            FOCUS,
+          )}
+        >
+          {/* **One text node, count included.** A label and its count in two sibling spans
+              separated by a CSS `gap` compute to "View all printings4" — the gap is not a
+              word separator, and the accessible name is what a test and a screen reader
+              both read. This has cost this repo a round before. */}
+          {`View all printings (${printingCount})`}
+        </button>
       </div>
 
       {/* Deck category and Label, side by side above the fold and stacked below it.

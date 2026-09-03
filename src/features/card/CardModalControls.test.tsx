@@ -130,19 +130,22 @@ describe("CardModalControls", () => {
     expect(onViewAllPrintings).toHaveBeenCalledOnce();
   });
 
-  it("names the printing picker after the printing the card is, not after the card", () => {
-    // The trigger says which printing is open, so a reader who came in on a Beta copy is not
-    // told "Lightning Bolt" by a control whose whole job is to say *which* Lightning Bolt.
-    renderControls({
-      printings: [
-        { value: "c1", label: "Limited Edition Alpha", hint: "LEA" },
-        { value: "c2", label: "Limited Edition Beta", hint: "LEB" },
-      ],
-    });
+  it("draws no printing picker, and keeps the way out to the wall", () => {
+    // **The two used to share a row and only one of them moved** (2026-09-03). The combobox is
+    // `CardModalPrintings` now — a picker that announced the printing you were on and hid the
+    // ones you were choosing between — and `View all printings` stays here, because the wall it
+    // opens is a filtered grid of art rather than the column of facts that replaced the picker.
+    //
+    // Asserted as a pair, because "no combobox" alone would pass on a build that deleted both,
+    // and "the button is here" alone would pass on the build before the change.
+    renderControls({ scope: deckScope, quantity: 1 });
 
-    expect(screen.getByRole("button", { name: "Printing" })).toHaveTextContent(
-      "Limited Edition Alpha",
-    );
+    expect(screen.queryByRole("button", { name: "Printing" })).not.toBeInTheDocument();
+    // …and nothing else in this column is a `Printing`-labelled control either: the `Field`
+    // wrapper went with the combobox, since a `<label htmlFor>` naming an unrendered control is
+    // a dangling association rather than a heading.
+    expect(screen.queryByText("Printing")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "View all printings (4)" })).toBeInTheDocument();
   });
 
   /**
