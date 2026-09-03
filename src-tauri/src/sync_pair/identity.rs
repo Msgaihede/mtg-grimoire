@@ -1604,9 +1604,10 @@ mod tests {
              VALUES ((SELECT id FROM decks WHERE name = 'Atraxa'),
                      (SELECT id FROM deck_categories WHERE name = 'Ramp'),
                      'live', 'c2', 'cmr', '2', 'en', 'Cultivate', 1, unixepoch(), unixepoch())",
-            // `deck_tags` is the app-wide palette and names no deck — `decks.tag_id` is the
-            // side that points. Read off the head schema, not off the migration-era CREATE.
-            "INSERT INTO deck_tags (name, name_key, color, created_at, updated_at)
+            // `deck_labels` is the app-wide palette and names no deck — `deck_cards.label_id`
+            // is the side that points. Read off the head schema, not off the migration-era
+            // CREATE.
+            "INSERT INTO deck_labels (name, name_key, color, created_at, updated_at)
              VALUES ('Brewing', 'brewing', 'green', unixepoch(), unixepoch())",
             "INSERT INTO muted_tags (namespace, tag_id, slug, muted_at)
              VALUES ('oracle', 't1', 'ramp', unixepoch())",
@@ -1644,7 +1645,7 @@ mod tests {
             "deck_categories",
             "deck_cards",
             "deck_audit",
-            "deck_tags",
+            "deck_labels",
             "wishlist_folders",
             "wishlist_entries",
             "muted_tags",

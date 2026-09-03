@@ -344,7 +344,7 @@ export function deckCardShort(card: DeckCard): boolean {
  *
  * **This is the whole of what a keyboard reader gets, and that is why it is one function.** An
  * `aria-label` *replaces* an element's content for naming purposes, so every `sr-only` span
- * inside one of these buttons is announced to nobody: the tag chip, the `GC` badge, the
+ * inside one of these buttons is announced to nobody: the label chip, the `GC` badge, the
  * `RULE BREAK` mark, the theory tick and the red shortage figure are all decoration once the
  * button is named, and each of them is a fact somebody needs. They are said here instead, once,
  * so no surface can be the one that forgets.
@@ -390,7 +390,7 @@ export function deckCardName(
     card.quantity > 1 ? `${card.quantity} copies` : null,
     short ? `you own ${card.ownedQuantity} of ${card.quantity}` : null,
     named?.toLowerCase() ?? (finish === null ? null : FINISH_LABEL[finish].toLowerCase()),
-    card.tagName,
+    card.labelName,
     card.gameChanger === true ? "game changer" : null,
     // Before the rule break, because it is the milder fact and this list runs from what the card
     // *is* to what is wrong with it — and lowercased like every other clause here, since the
@@ -557,7 +557,7 @@ export interface DeckCardActions {
    * exists at all: it goes three components deep — the view, the group, the card — and a bag
    * passed on whole cannot be passed on incompletely. And it is the *handlers* rather than the
    * items because only `DeckEditor` knows what a deck card's menu offers: the deck's
-   * categories, its format spec and its tags are three facts no view has, and four views
+   * categories, its format spec and its labels are three facts no view has, and four views
    * assembling them would be four copies of one rule.
    *
    * Absent is a view with no menu — a story, a read-only mount — and the reader gets the app's

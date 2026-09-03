@@ -35,13 +35,13 @@
 //! [`missing_to_wishlist`] (it changes the wishlist, not the deck).
 
 use crate::collection::{valid_quantity, EntryChange, ZERO_ADD};
-use crate::deck_meta::{DeckCategoryRow, DeckTagRow};
+use crate::deck_meta::{DeckCategoryRow, DeckLabelRow};
 #[cfg(not(target_family = "wasm"))]
 use crate::sync::{with_write, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 #[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
@@ -771,7 +771,7 @@ fn not_the_same_card(from: &str, to: &str) -> String {
 /// deleted the deck — is answered with [`GONE`] rather than with a foreign-key error, one
 /// statement before there is an orphan row to worry about.
 ///
-/// `pub(crate)`, not private: [`crate::deck_meta`]'s category, tag and folder writes open
+/// `pub(crate)`, not private: [`crate::deck_meta`]'s category, label and folder writes open
 /// with it too — a category rename is exactly as much an edit the gallery should surface as
 /// a card add is, and duplicating the UPDATE there would be a second place to keep this in
 /// step with [`GONE`].
@@ -800,7 +800,7 @@ fn card_gone(category: &str) -> String {
 /// stops `deck_cards.category_id` pointing at a category of a *different* deck — the FK only
 /// requires the row to exist — so this is where "a card of deck A cannot be filed under a
 /// category of deck B" actually lives. [`crate::deck_meta::delete_category`]'s move target and
-/// `set_card_tag`'s tag id draw the same two-sentence distinction, and for the same reason:
+/// `set_card_label`'s label id draw the same two-sentence distinction, and for the same reason:
 /// "gone" and "not yours" are different things to tell a stale editor.
 ///
 /// Returning the name rather than `()` is what lets [`card_gone`] name the category the reader
@@ -2172,11 +2172,11 @@ pub fn delete_deck(conn: &Connection, id: i64) -> Result<(), String> {
 }
 
 /// One `deck_cards` row on its way from a deck to its copy — every column that describes the
-/// card, with the two that describe *which deck's* category and tag it is (`category_id`,
-/// `tag_id`) still holding the source's ids, for [`duplicate_deck`] to remap.
+/// card, with the two that describe *which deck's* category and label it is (`category_id`,
+/// `label_id`) still holding the source's ids, for [`duplicate_deck`] to remap.
 struct CopiedCard {
     category_id: i64,
-    tag_id: Option<i64>,
+    label_id: Option<i64>,
     variant: String,
     card_id: String,
     set_code: String,
@@ -2188,7 +2188,7 @@ struct CopiedCard {
     finish: Option<String>,
 }
 
-/// Copy the deck, its categories, its tags and its cards — never the cards it **holds**, and
+/// Copy the deck, its categories, its labels and its cards — never the cards it **holds**, and
 /// never `archived`.
 ///
 /// A copy is a **draft**: it lists the same cards and physically holds none of them, and it is
@@ -2231,13 +2231,13 @@ struct CopiedCard {
 /// and the copy's categories do not exist yet at that statement. The copy is born on
 /// [`AUTO_CATEGORY`] and pointed at its own pile once the map is built.
 ///
-/// **Categories and tags are new rows with new ids**, and the cards are remapped onto them.
+/// **Categories and labels are new rows with new ids**, and the cards are remapped onto them.
 /// This is the part a "copy the cards" implementation gets wrong invisibly: `deck_cards`
 /// stores a `category_id`, so copying a card row verbatim would file the copy's card under
 /// the *original's* category — and then deleting the original would take the copy's cards
 /// with it through `ON DELETE CASCADE`. Two id maps, built as the rows are written, are what
-/// keep the copy a copy. `tag_id` maps the same way and falls back to NULL, which cannot
-/// happen (a card's tag is a tag of its own deck) but is the honest answer if it ever does.
+/// keep the copy a copy. `label_id` maps the same way and falls back to NULL, which cannot
+/// happen (a card's label is a label of its own deck) but is the honest answer if it ever does.
 ///
 /// The copy is **not** handed [`crate::deck_meta::ensure_predefined_categories`]: it inherits
 /// the source's four, because every deck has them — the v8 migration backfilled every deck
@@ -2324,7 +2324,7 @@ pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
     // `AUTO_CATEGORY` is the answer for a source that was already on Auto (it is in no map, and
     // it is what the copy was born with) and for a source pointing at a pile that has gone,
     // which the clean-up in [`crate::deck_meta::delete_category`] means cannot happen and which
-    // is the honest answer if it ever does — `tag_id`'s fallback below, for its reason.
+    // is the honest answer if it ever does — `label_id`'s fallback below, for its reason.
     let source_default: i64 = tx
         .query_row(
             "SELECT default_category_id FROM decks WHERE id = ?1",
@@ -2340,17 +2340,17 @@ pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
         .map_err(|e| e.to_string())?;
     }
 
-    // **The tags are not copied, and since schema v21 there is nothing to copy.** A duplicate
-    // used to get its own `deck_tags` rows and a map from the original's ids to them, because a
-    // tag belonged to a deck and the copy needed its own. A tag is one app-wide row now, so the
-    // copied cards keep the very `tag_id` they had: the duplicate wears the same labels as its
+    // **The labels are not copied, and since schema v21 there is nothing to copy.** A duplicate
+    // used to get its own `deck_labels` rows and a map from the original's ids to them, because a
+    // label belonged to a deck and the copy needed its own. A label is one app-wide row now, so the
+    // copied cards keep the very `label_id` they had: the duplicate wears the same labels as its
     // original, which is what a reader duplicating a deck means by "the same deck".
 
     // `needs_review` travels with the row: the sentence says this printing left the card
     // database, which is just as true of the copy.
     let cards: Vec<CopiedCard> = tx
         .prepare(
-            "SELECT category_id, tag_id, variant, card_id, set_code, collector_number, lang,
+            "SELECT category_id, label_id, variant, card_id, set_code, collector_number, lang,
                     name, quantity, needs_review, finish
                FROM deck_cards WHERE deck_id = ?1 ORDER BY id",
         )
@@ -2358,7 +2358,7 @@ pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
         .query_map(params![id], |r| {
             Ok(CopiedCard {
                 category_id: r.get(0)?,
-                tag_id: r.get(1)?,
+                label_id: r.get(1)?,
                 variant: r.get(2)?,
                 card_id: r.get(3)?,
                 set_code: r.get(4)?,
@@ -2381,7 +2381,7 @@ pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
         tx.execute(
             "INSERT INTO deck_cards
                 (deck_id, category_id, variant, card_id, set_code, collector_number, lang,
-                 name, tag_id, quantity, needs_review, finish, created_at, updated_at)
+                 name, label_id, quantity, needs_review, finish, created_at, updated_at)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12, unixepoch(), unixepoch())",
             params![
                 copy,
@@ -2393,7 +2393,7 @@ pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
                 card.lang,
                 card.name,
                 // Verbatim: the label is the app's, so the copy wears the very same row.
-                card.tag_id,
+                card.label_id,
                 card.quantity,
                 card.needs_review,
                 card.finish,
@@ -2508,7 +2508,7 @@ pub fn add_card(
     // The conflict target is `DECK_CARD_GRAIN` verbatim — the same text the unique index
     // was created from. Anything else is a runtime "ON CONFLICT clause does not match any
     // PRIMARY KEY or UNIQUE constraint" at the first quick-add, which is why it is a
-    // constant. The quantities add; `tag_id` and `needs_review` are left alone, because the
+    // constant. The quantities add; `label_id` and `needs_review` are left alone, because the
     // row that is already there is the one the user labelled.
     let sql = format!(
         "INSERT INTO deck_cards
@@ -2615,7 +2615,7 @@ pub fn set_card_quantity(
         .optional()
         .map_err(|e| e.to_string())?;
 
-    // Read whole rather than rebuilt from `current`: the step has to put the **tag** and any
+    // Read whole rather than rebuilt from `current`: the step has to put the **label** and any
     // `needs_review` sentence back too, and a delete takes all of it. `current` answers what
     // the history line needs and is deliberately not widened to answer both questions.
     let cells = vec![crate::deck_undo::Cell::card(variant, category_id, card_id)];
@@ -2931,7 +2931,7 @@ pub fn clear_variant(conn: &Connection, deck_id: i64, variant: &str) -> Result<i
 /// tidying, and a move that needed the id to resolve would refuse the one row that most
 /// needs moving.
 ///
-/// `tag_id` travels with it too, where the printing does — a label is the user's word about
+/// `label_id` travels with it too, where the printing does — a label is the user's word about
 /// *this card in this deck*, and re-filing it is not a reason to lose it.
 ///
 /// **Either `to_category_id` or `to_category_name`**, and at least one ([`NO_CATEGORY`]) —
@@ -3044,9 +3044,9 @@ pub fn move_card(
     let sql = format!(
         "INSERT INTO deck_cards
             (deck_id, category_id, variant, card_id, set_code, collector_number, lang, name,
-             tag_id, finish, quantity, needs_review, created_at, updated_at)
+             label_id, finish, quantity, needs_review, created_at, updated_at)
          SELECT deck_id, ?3, variant, card_id, set_code, collector_number, lang, name,
-                tag_id, finish, quantity, needs_review, unixepoch(), unixepoch()
+                label_id, finish, quantity, needs_review, unixepoch(), unixepoch()
            FROM deck_cards
           WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?4 AND variant = ?5
             AND coalesce(finish, '') = coalesce(?6, '')
@@ -3294,7 +3294,7 @@ pub fn swap_printing(
 ///
 /// **The fold is the half worth reading.** Setting the foil row of a pile that already holds a
 /// regular row is two rows becoming one: the quantities add and the row that moved is deleted.
-/// `tag_id` and `needs_review` are the **surviving** row's — [`add_card`]'s rule, because the
+/// `label_id` and `needs_review` are the **surviving** row's — [`add_card`]'s rule, because the
 /// row that was already there is the one the reader labelled.
 ///
 /// Three refusals, each its own sentence: [`SAME_FINISH`] for a press that changes nothing,
@@ -3381,7 +3381,7 @@ pub fn set_card_finish(
         .map_err(|e| e.to_string())?;
 
     let (quantity, folded) = match landed {
-        // Two rows become one. The target keeps its own id, its tag and its sentence.
+        // Two rows become one. The target keeps its own id, its label and its sentence.
         Some((target_id, there)) => {
             tx.execute(
                 "UPDATE deck_cards SET quantity = ?2, updated_at = unixepoch() WHERE id = ?1",
@@ -3465,13 +3465,13 @@ pub struct DeckCardRow {
     /// carries the same value (the read asks by variant), and it is here so a caller holding
     /// a row can write it back without remembering which list it came from.
     pub variant: String,
-    /// The one tag this row carries, or none. A tag is per-deck data with a name and a
+    /// The one label this row carries, or none. A label is per-deck data with a name and a
     /// palette colour, resolved here so a row can be drawn without a second lookup — and
-    /// `None` on all three fields together, because a tag deleted out from under a card sets
-    /// `deck_cards.tag_id` to NULL rather than deleting the card.
-    pub tag_id: Option<i64>,
-    pub tag_name: Option<String>,
-    pub tag_color: Option<String>,
+    /// `None` on all three fields together, because a label deleted out from under a card sets
+    /// `deck_cards.label_id` to NULL rather than deleting the card.
+    pub label_id: Option<i64>,
+    pub label_name: Option<String>,
+    pub label_color: Option<String>,
     pub quantity: i64,
     pub name: String,
     pub set_code: String,
@@ -3592,7 +3592,7 @@ pub struct DeckCardRow {
 }
 
 /// One deck and everything in it: the gallery's row, one variant's cards, and **every**
-/// category and tag the deck owns.
+/// category and label the deck owns.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeckDetail {
@@ -3607,20 +3607,20 @@ pub struct DeckDetail {
     /// Their `card_count` and both `total_price_*` are scoped to the same variant the cards
     /// are.
     pub categories: Vec<DeckCategoryRow>,
-    /// Every tag **this list is wearing**, most-used first — the fast row of the right-click
+    /// Every label **this list is wearing**, most-used first — the fast row of the right-click
     /// menu, and nothing more than that.
     ///
-    /// It was "every tag of the deck, worn or not" until schema v21, when a tag stopped being a
+    /// It was "every label of the deck, worn or not" until schema v21, when a label stopped being a
     /// deck's at all. There is no per-deck palette to send any more: what a deck has is cards,
     /// some of which wear a label, and that is what this is. Scoped to the same `variant` the
     /// cards are, because the live list and the theory list are treated as separate decks where
     /// labels are concerned — a menu opened over a theory row offers what the theory list wears.
     ///
-    /// **The other tags are one command away and deliberately not here**: `deck_tag_all` is the
-    /// whole list, which the Tags dialog and the "Add tag" dialog read and a context menu does
+    /// **The other labels are one command away and deliberately not here**: `deck_label_all` is the
+    /// whole list, which the Labels dialog and the "Add label" dialog read and a context menu does
     /// not want. `deck_get` is the editor's one read and adding an app-wide table to it would
     /// make every deck open pay for a list that changes for reasons no deck knows about.
-    pub tags: Vec<DeckTagRow>,
+    pub labels: Vec<DeckLabelRow>,
 }
 
 /// One row of `format_specs` — the rules as data (spec §6), handed to the TS engine whole.
@@ -3664,8 +3664,8 @@ pub struct FormatSpecRow {
 ///
 /// * `LEFT JOIN cards` is [`crate::collection`]'s discipline verbatim — an inner join would
 ///   delete from the view exactly the rows the denormalised columns exist for.
-/// * `LEFT JOIN deck_tags` for the same reason at one remove: `deck_cards.tag_id` is
-///   `ON DELETE SET NULL`, so an untagged row is the ordinary case, not a broken one.
+/// * `LEFT JOIN deck_labels` for the same reason at one remove: `deck_cards.label_id` is
+///   `ON DELETE SET NULL`, so an unlabelled row is the ordinary case, not a broken one.
 /// * `JOIN deck_categories` is **inner**, and is the only inner join in this file's reads.
 ///   `category_id` is `NOT NULL` with an enforced foreign key, so a card with no category is
 ///   a row the schema cannot hold — unlike `card_id`, which is soft by design.
@@ -3683,7 +3683,7 @@ fn deck_card_select(marketplace: crate::sorting::Marketplace) -> String {
     format!(
         "SELECT dc.id, dc.card_id,
             dc.category_id, cat.name, cat.kind, cat.is_active,
-            dc.variant, dc.tag_id, t.name, t.color,
+            dc.variant, dc.label_id, t.name, t.color,
             dc.quantity, dc.name,
             dc.set_code, dc.collector_number, dc.lang, dc.needs_review,
             c.oracle_id, c.mana_cost, c.cmc, c.type_line, c.oracle_text, c.colors,
@@ -3710,7 +3710,7 @@ fn deck_card_select(marketplace: crate::sorting::Marketplace) -> String {
             {image_uris}
        FROM deck_cards dc
        JOIN deck_categories cat ON cat.id = dc.category_id
-       LEFT JOIN deck_tags t ON t.id = dc.tag_id
+       LEFT JOIN deck_labels t ON t.id = dc.label_id
        LEFT JOIN cards c ON c.id = dc.card_id
       WHERE dc.deck_id = ?1 AND dc.variant = ?2
       ORDER BY cat.sort_order, cat.id, dc.name, dc.id",
@@ -3719,7 +3719,7 @@ fn deck_card_select(marketplace: crate::sorting::Marketplace) -> String {
 }
 
 /// The whole deck in one read: the gallery's row, one variant's cards, every category, every
-/// tag, every fact, every number.
+/// label, every fact, every number.
 ///
 /// One command rather than five, because the editor and the validation engine ask the same
 /// question — *what is in this deck* — and a screen that draws a curve from one query, a
@@ -3727,12 +3727,12 @@ fn deck_card_select(marketplace: crate::sorting::Marketplace) -> String {
 /// fourth is a screen whose answers can disagree.
 ///
 /// **`variant` scopes the cards, and every number counted over them.** *Which* categories and
-/// *which* tags come back does not depend on it (see [`DeckDetail::categories`]), so switching
+/// *which* labels come back does not depend on it (see [`DeckDetail::categories`]), so switching
 /// between the live deck and the theory one changes what is in the columns and never which
-/// columns there are — but a category's and a tag's `card_count` both count the variant that
+/// columns there are — but a category's and a label's `card_count` both count the variant that
 /// was asked for, because all three parts of this answer describe one list of cards. Threading
 /// it into [`crate::deck_meta::list_categories`] and not into
-/// [`crate::deck_meta::list_tags`] is exactly how they came to disagree once.
+/// [`crate::deck_meta::list_labels`] is exactly how they came to disagree once.
 ///
 /// **`marketplace` scopes every price in the answer, the categories' totals included**, for the
 /// same reason `variant` scopes every count: a column header priced on Cardmarket over rows
@@ -3751,12 +3751,12 @@ pub fn get_deck(
     fill_unknown_power_toughness(conn, &mut cards)?;
     attribute_owned(&mut cards, &owned_by_oracle(conn, id)?);
     let categories = crate::deck_meta::list_categories(conn, id, variant, marketplace)?;
-    let tags = crate::deck_meta::list_tags(conn, id, variant)?;
+    let labels = crate::deck_meta::list_labels(conn, id, variant)?;
     Ok(Some(DeckDetail {
         deck,
         cards,
         categories,
-        tags,
+        labels,
     }))
 }
 
@@ -3793,9 +3793,9 @@ fn read_deck_cards(
                 category_kind: r.get(4)?,
                 category_active: r.get(5)?,
                 variant: r.get(6)?,
-                tag_id: r.get(7)?,
-                tag_name: r.get(8)?,
-                tag_color: r.get(9)?,
+                label_id: r.get(7)?,
+                label_name: r.get(8)?,
+                label_color: r.get(9)?,
                 quantity: r.get(10)?,
                 name: r.get(11)?,
                 set_code: r.get(12)?,
@@ -4154,6 +4154,180 @@ pub fn list_format_specs(conn: &Connection) -> Result<Vec<FormatSpecRow>, String
         .map_err(|e| e.to_string())
 }
 
+/// How a deck row and a collection row are matched when the question is *does this deck play
+/// this card* — on the **oracle card**, falling back to the printing where `cards` has never
+/// heard of it.
+///
+/// It is [`release_group_copies`]' rule read as a key rather than as a join condition, and
+/// [`owned_by_oracle`]'s "a Bolt is a Bolt" read from a third end: a deck that counts an Alpha
+/// Bolt toward an M10 line plays that card, so a reader filing the Alpha copies must not be told
+/// their own deck has never heard of it.
+///
+/// **The `coalesce` is the whole of the NULL trap and is why this is not two comparisons.**
+/// `cards.oracle_id` is NULLABLE, and a deck row's `card_id` is a *soft* reference to a table
+/// that is dropped and recreated on every sync, so an orphaned row joins to nothing at all.
+/// Spelled the obvious way — `c.oracle_id = ?1 OR dc.card_id = ?2` — the first term over an
+/// orphan is `NULL = <something>`, which is NULL rather than false; and where the *asked* card
+/// is an orphan too it is NULL against NULL, which is still not true. The row silently drops out
+/// of the answer and the deck quietly stops playing a card the reader can see on its own list.
+/// One `coalesce`d key per side is never NULL: the oracle card where there is one, the printing
+/// id itself where there is not, and `=` means what it says on both.
+///
+/// **Spelled once because three functions below read it.** [`played_keys`], [`plays_card`] and
+/// [`decks_playing`] all answer questions about the same rule, and two of them disagreeing about
+/// what "the same card" means is a deck that lists a card, refuses its copies, and is right by
+/// one query and wrong by the other.
+const PLAYED_KEY: &str = "coalesce(c.oracle_id, dc.card_id)";
+
+/// The `FROM` [`PLAYED_KEY`] is written against, in the one place its two aliases are bound so
+/// that an expression and its join cannot drift apart.
+///
+/// **`LEFT JOIN`, never an inner one**, for [`release_group_copies`]' reason: `cards` is dropped
+/// and recreated on every sync and `deck_cards.card_id` is soft, so an inner join would take
+/// every orphaned row out of the answer — and a deck would stop playing exactly the cards whose
+/// rows are already flagged for the reader to look at.
+const PLAYED_FROM: &str = "deck_cards dc LEFT JOIN cards c ON c.id = dc.card_id";
+
+/// Every card this deck's **live** list plays, as [`PLAYED_KEY`]s, each once.
+///
+/// **`LIVE` only, and that is the rule rather than a narrowing of it.** A theory list is a plan
+/// and a plan holds no cards ([`crate::collection_alloc::THEORY_HOLDS_NOTHING`]), so a deck that
+/// has only *thought about* a card does not play it — filing copies against a theory row would
+/// put the reader's cardboard in a folder no list claims, which is the state this whole rule
+/// exists to make unreachable.
+///
+/// `DISTINCT`, because one card can sit in two piles of one deck and the caller is asking which
+/// cards the deck plays rather than how many rows say so. `ORDER BY` the key itself, so two runs
+/// over one deck answer in one order — a caller comparing two answers must not see a difference
+/// SQLite chose.
+///
+/// A deck with an empty live list answers `[]`, and so does a deck id with no deck behind it:
+/// this is a fact about rows, and [`read_deck`] is where "is there a deck" is asked.
+pub fn played_keys(conn: &Connection, deck_id: i64) -> Result<Vec<String>, String> {
+    let sql = format!(
+        "SELECT DISTINCT {key} FROM {from}
+          WHERE dc.deck_id = ?1 AND dc.variant = ?2
+          ORDER BY 1",
+        key = PLAYED_KEY,
+        from = PLAYED_FROM,
+    );
+    let keys: Vec<String> = conn
+        .prepare(&sql)
+        .and_then(|mut s| s.query_map(params![deck_id, LIVE], |r| r.get(0))?.collect())
+        .map_err(|e| e.to_string())?;
+    Ok(keys)
+}
+
+/// Does this deck's **live** list already play the card this printing is of?
+///
+/// The one question [`crate::collection_alloc::collection_to_deck`]'s folder rule asks, and it
+/// is asked one printing at a time because that is what a filing holds: a `collection_entries`
+/// row names a printing, and whether the deck lists *that* printing or another of the same card
+/// is exactly the distinction [`PLAYED_KEY`] exists to erase.
+///
+/// **The printing's own key is resolved first, in Rust, rather than folded into the comparison.**
+/// The alternative reads `c.oracle_id = (SELECT oracle_id FROM cards WHERE id = ?) OR
+/// dc.card_id = ?`, which is [`PLAYED_KEY`]'s NULL trap on the *other* side of the `=`: an
+/// orphaned entry — a `card_id` `cards` has never heard of, or has stopped hearing of since the
+/// last sync — makes the sub-select NULL, and NULL against an orphaned deck row's NULL is not a
+/// match. So the sub-select is run on its own through
+/// [`rusqlite::OptionalExtension::optional`], and a printing with no `cards` row falls back to
+/// **its own id**, which is the one thing an orphaned entry always still has. Two orphans of the
+/// same printing then match on that id, which is the best answer there is when nothing in the
+/// database can say what card either of them is.
+pub(crate) fn plays_card(conn: &Connection, deck_id: i64, card_id: &str) -> Result<bool, String> {
+    let wanted: String = conn
+        .query_row(
+            "SELECT coalesce(oracle_id, ?1) FROM cards WHERE id = ?1",
+            params![card_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .unwrap_or_else(|| card_id.to_owned());
+    let sql = format!(
+        "SELECT 1 FROM {from}
+          WHERE dc.deck_id = ?1 AND dc.variant = ?2 AND {key} = ?3
+          LIMIT 1",
+        from = PLAYED_FROM,
+        key = PLAYED_KEY,
+    );
+    let found: Option<i64> = conn
+        .query_row(&sql, params![deck_id, LIVE, wanted], |r| r.get(0))
+        .optional()
+        .map_err(|e| e.to_string())?;
+    Ok(found.is_some())
+}
+
+/// Every deck whose **live** list plays **every one** of these keys.
+///
+/// The rule read from the collection's end: a reader looking at a row of copies asks which of
+/// their decks it could be filed into, and a deck that plays three of the four cards on the page
+/// is not one of them. `AND` rather than `OR` is the whole contract, and the `HAVING` is where it
+/// is said.
+///
+/// **One statement, and `count(DISTINCT …)` rather than `count(…)`.** A card can sit in two piles
+/// of one deck, so a plain row count would read a deck listing one card twice as a deck playing
+/// two cards — a two-key question would answer decks that play only one of them, and a one-key
+/// question would drop the deck that plays it twice. Counting the distinct *keys* matched is the
+/// only count that means what the `HAVING` claims. The `IN` list is what makes it a group filter
+/// at all: without it the count would be over the deck's whole list rather than over the asked-for
+/// part of it.
+///
+/// **Keys are deduplicated first**, [`crate::combos::match_combos`]' rule for its reason: a caller
+/// naming one card twice has not asked about two cards, and leaving the duplicate in would make
+/// the `HAVING` unsatisfiable — every deck refused, with nothing to say why.
+///
+/// **No keys is no decks.** Nobody plays nothing, and both other answers are wrong rather than
+/// merely unhelpful: "every deck" shows the reader decks for a row nothing has identified, and
+/// "the decks with an empty list" is what a `HAVING count(…) = 0` over an `IN ()` would drift
+/// toward by accident. So the case is answered here, in Rust, where it can be said.
+///
+/// `ORDER BY dc.deck_id`, so two runs answer in one order — [`played_keys`]' reason.
+pub fn decks_playing(conn: &Connection, keys: &[String]) -> Result<Vec<i64>, String> {
+    let mut wanted: Vec<&str> = Vec::with_capacity(keys.len());
+    let mut seen: HashSet<&str> = HashSet::new();
+    for key in keys {
+        if seen.insert(key.as_str()) {
+            wanted.push(key.as_str());
+        }
+    }
+    if wanted.is_empty() {
+        return Ok(Vec::new());
+    }
+    let holes = vec!["?"; wanted.len()].join(",");
+    let sql = format!(
+        "SELECT dc.deck_id FROM {from}
+          WHERE dc.variant = ? AND {key} IN ({holes})
+          GROUP BY dc.deck_id
+         HAVING count(DISTINCT {key}) = ?
+          ORDER BY dc.deck_id",
+        from = PLAYED_FROM,
+        key = PLAYED_KEY,
+        holes = holes,
+    );
+    // One boxed list rather than `params_from_iter` over the keys alone, because the variant and
+    // the count ride in the same statement and are not keys — [`crate::filters::Sql`]'s shape,
+    // for the reason it has it.
+    let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(wanted.len() + 2);
+    args.push(Box::new(LIVE.to_owned()));
+    for key in &wanted {
+        args.push(Box::new((*key).to_owned()));
+    }
+    args.push(Box::new(wanted.len() as i64));
+    let decks: Vec<i64> = conn
+        .prepare(&sql)
+        .and_then(|mut s| {
+            s.query_map(
+                rusqlite::params_from_iter(args.iter().map(|p| p.as_ref())),
+                |r| r.get(0),
+            )?
+            .collect()
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(decks)
+}
+
 /// What a deck write says when its worker thread died under it. Never a user's problem —
 /// the write itself answers [`crate::db::BUSY`] when the database is busy.
 #[cfg(not(target_family = "wasm"))]
@@ -4213,7 +4387,7 @@ pub async fn deck_delete(state: tauri::State<'_, Arc<AppState>>, id: i64) -> Res
     .map_err(unfinished)?
 }
 
-/// Copy a deck, its categories, its tags and its cards. See [`duplicate_deck`].
+/// Copy a deck, its categories, its labels and its cards. See [`duplicate_deck`].
 ///
 /// **No `AppHandle`, for [`deck_delete`]'s reason**: it carried one only to resolve the covers
 /// directory the copy's own `<id>.webp` was written into.
@@ -4284,7 +4458,7 @@ pub async fn deck_list(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<Dec
         .map_err(|e| format!("the deck list could not be read: {e}"))?
 }
 
-/// One deck, one variant's cards, every category and tag, every fact the validator needs.
+/// One deck, one variant's cards, every category and label, every fact the validator needs.
 /// **Read-only** connection.
 #[cfg(not(target_family = "wasm"))]
 #[tauri::command]
@@ -4306,6 +4480,46 @@ pub async fn deck_get(
     })
     .await
     .map_err(|e| format!("the deck could not be read: {e}"))?
+}
+
+/// Every card a deck's **live** list plays, as the keys the folder rule is answered from.
+/// **Read-only.**
+///
+/// The keys are `coalesce(cards.oracle_id, deck_cards.card_id)` and are the deck's *facts*: what
+/// a page makes of them — greying a destination, refusing a drop, explaining why — is
+/// TypeScript's, this crate's boundary as usual. A deck with an empty live list and a deck id
+/// with no deck both answer `[]`; [`deck_get`] is where "is there a deck" is asked.
+#[cfg(not(target_family = "wasm"))]
+#[tauri::command]
+pub async fn deck_played_keys(
+    state: tauri::State<'_, Arc<AppState>>,
+    deck_id: i64,
+) -> Result<Vec<String>, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        played_keys(&crate::sync::lock_db_read(&state), deck_id)
+    })
+    .await
+    .map_err(|e| format!("the deck's cards could not be read: {e}"))?
+}
+
+/// Which decks play **all** of these cards. **Read-only.**
+///
+/// [`deck_played_keys`] read from the collection's end, and the one the copies page wants: it
+/// holds a row and asks which decks that row may be filed into. `AND` and not `OR` — see
+/// [`decks_playing`] — and an empty `keys` answers `[]`, because nobody plays nothing.
+#[cfg(not(target_family = "wasm"))]
+#[tauri::command]
+pub async fn deck_ids_playing(
+    state: tauri::State<'_, Arc<AppState>>,
+    keys: Vec<String>,
+) -> Result<Vec<i64>, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        decks_playing(&crate::sync::lock_db_read(&state), &keys)
+    })
+    .await
+    .map_err(|e| format!("the decks playing those cards could not be read: {e}"))?
 }
 
 /// The format rules as data, for the picker and the validation engine. **Read-only.**
@@ -6211,20 +6425,20 @@ mod tests {
     }
 
     /// A copy is a copy of the whole deck: its cards in **both** variants, its categories and
-    /// its tags as **new rows**, and none of its state.
+    /// its labels as **new rows**, and none of its state.
     ///
     /// The remap is the part that fails invisibly. `deck_cards.category_id` is an id, so a
     /// copy that carried the source's would file the copy's cards under the *original's*
     /// piles — and deleting the original would then take the copy's cards with it through
     /// `ON DELETE CASCADE`. Deleting the source at the end is what proves it did not.
     #[test]
-    fn duplicate_copies_categories_tags_and_both_variants_but_not_the_cards_it_holds() {
+    fn duplicate_copies_categories_labels_and_both_variants_but_not_the_cards_it_holds() {
         let conn = seeded();
         conn.pragma_update(None, "foreign_keys", "ON").unwrap();
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
         let main = main_of(&conn, deck.id);
         let scratch = kind_of(&conn, deck.id, "maybe");
-        let tag = crate::deck_meta::create_tag(&conn, deck.id, "Flex", "amber").unwrap();
+        let label = crate::deck_meta::create_label(&conn, deck.id, "Flex", "amber").unwrap();
         add(&conn, deck.id, "bolt-lea", main, 4);
         add(&conn, deck.id, "bolt-jp", scratch, 1);
         add_card(
@@ -6238,8 +6452,16 @@ mod tests {
             2,
         )
         .unwrap();
-        crate::deck_meta::set_card_tag(&conn, deck.id, "bolt-lea", main, LIVE, None, Some(tag.id))
-            .unwrap();
+        crate::deck_meta::set_card_label(
+            &conn,
+            deck.id,
+            "bolt-lea",
+            main,
+            LIVE,
+            None,
+            Some(label.id),
+        )
+        .unwrap();
         file_into_group(&conn, deck.id, "bolt-lea", 4);
 
         let copy = duplicate_deck(&conn, deck.id).unwrap();
@@ -6253,7 +6475,7 @@ mod tests {
              not the deck"
         );
 
-        // Its categories and tags are its own rows, with its own ids, and every one of them
+        // Its categories and labels are its own rows, with its own ids, and every one of them
         // came across.
         let categories: Vec<(String, String, bool)> = conn
             .prepare(
@@ -6291,7 +6513,7 @@ mod tests {
                 "SELECT dc.card_id, dc.variant, cat.name, t.name, dc.quantity
                    FROM deck_cards dc
                    JOIN deck_categories cat ON cat.id = dc.category_id
-                   LEFT JOIN deck_tags t ON t.id = dc.tag_id
+                   LEFT JOIN deck_labels t ON t.id = dc.label_id
                   WHERE dc.deck_id = ?1 ORDER BY dc.variant, dc.card_id",
             )
             .unwrap()
@@ -6326,7 +6548,7 @@ mod tests {
                     2
                 ),
             ],
-            "both variants, filed under the copy's own categories, tag remapped"
+            "both variants, filed under the copy's own categories, label remapped"
         );
 
         assert_eq!(
@@ -6341,7 +6563,7 @@ mod tests {
         );
 
         // The remap, proven the only way it can be: deleting the source fires the CASCADE on
-        // every category and tag it owns, and the copy is untouched by it.
+        // every category and label it owns, and the copy is untouched by it.
         delete_deck(&conn, deck.id).unwrap();
         assert_eq!(
             count(&conn, "deck_cards"),
@@ -7176,7 +7398,7 @@ mod tests {
     /// `Recently removed` first, which
     /// `deleting_a_deck_refiles_its_cards_into_recently_removed_one_at_a_time` is about.
     ///
-    /// **Nor the tags, since schema v21, and that is the change rather than a leak.** A tag
+    /// **Nor the labels, since schema v21, and that is the change rather than a leak.** A label
     /// used to carry `deck_id … ON DELETE CASCADE` and went with the deck that made it, which
     /// was right while it belonged to one. It belongs to the app now: deleting a deck that
     /// happened to be where "Cut candidate" was first typed must not take the label off the
@@ -7189,7 +7411,7 @@ mod tests {
         conn.pragma_update(None, "foreign_keys", "ON").unwrap();
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
         add(&conn, deck.id, "bolt-lea", main_of(&conn, deck.id), 4);
-        crate::deck_meta::create_tag(&conn, deck.id, "Flex", "amber").unwrap();
+        crate::deck_meta::create_label(&conn, deck.id, "Flex", "amber").unwrap();
         file_into_group(&conn, deck.id, "bolt-lea", 4);
 
         delete_deck(&conn, deck.id).unwrap();
@@ -7198,7 +7420,7 @@ mod tests {
         assert_eq!(count(&conn, "deck_cards"), 0);
         assert_eq!(count(&conn, "deck_categories"), 0);
         assert_eq!(
-            count(&conn, "deck_tags"),
+            count(&conn, "deck_labels"),
             1,
             "the label outlives the deck it was made in — see this test's doc"
         );
@@ -9214,18 +9436,18 @@ mod tests {
     }
 
     /// **Rules 4 and 6.** One read answers with one variant's cards and **every** category and
-    /// tag the deck owns — an empty category still draws its column, an inactive one always
-    /// draws, and a tag nobody is wearing is still in the palette. The cards come back in
+    /// label the deck owns — an empty category still draws its column, an inactive one always
+    /// draws, and a label nobody is wearing is still in the palette. The cards come back in
     /// category `sort_order`, then the row's own name, then row id.
     #[test]
-    fn the_read_scopes_cards_by_variant_and_answers_with_every_category_and_tag() {
+    fn the_read_scopes_cards_by_variant_and_answers_with_every_category_and_label() {
         let conn = seeded();
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
         let main = main_of(&conn, deck.id);
         let side = kind_of(&conn, deck.id, "side");
         let scratch = kind_of(&conn, deck.id, "maybe");
-        let tag = crate::deck_meta::create_tag(&conn, deck.id, "Flex", "amber").unwrap();
-        crate::deck_meta::create_tag(&conn, deck.id, "Unworn", "slate").unwrap();
+        let label = crate::deck_meta::create_label(&conn, deck.id, "Flex", "amber").unwrap();
+        crate::deck_meta::create_label(&conn, deck.id, "Unworn", "slate").unwrap();
         // Written so the reading order is neither the insert order nor the category order a
         // reader would guess: the Sideboard and the Maybeboard both sort *before* the main
         // pile, because they were seeded with the deck and the main pile was made by the
@@ -9246,16 +9468,24 @@ mod tests {
             7,
         )
         .unwrap();
-        crate::deck_meta::set_card_tag(&conn, deck.id, "bolt-lea", main, LIVE, None, Some(tag.id))
-            .unwrap();
-        crate::deck_meta::set_card_tag(
+        crate::deck_meta::set_card_label(
+            &conn,
+            deck.id,
+            "bolt-lea",
+            main,
+            LIVE,
+            None,
+            Some(label.id),
+        )
+        .unwrap();
+        crate::deck_meta::set_card_label(
             &conn,
             deck.id,
             "serra-8ed",
             main,
             THEORY,
             None,
-            Some(tag.id),
+            Some(label.id),
         )
         .unwrap();
 
@@ -9283,8 +9513,8 @@ mod tests {
             (
                 bolt.category_kind.as_str(),
                 bolt.category_active,
-                bolt.tag_name.as_deref(),
-                bolt.tag_color.as_deref()
+                bolt.label_name.as_deref(),
+                bolt.label_color.as_deref()
             ),
             ("main", true, Some("Flex"), Some("amber")),
             "the kind the rules read, the flag that decides whether they read it at all, and \
@@ -9294,7 +9524,7 @@ mod tests {
             !card_row(&live, "bolt-jp", scratch).category_active,
             "the Maybeboard is seeded off, which is the whole of what makes it a scratchpad"
         );
-        assert!(card_row(&live, "bolt-m10", side).tag_id.is_none());
+        assert!(card_row(&live, "bolt-m10", side).label_id.is_none());
 
         assert_eq!(
             live.categories
@@ -9312,14 +9542,14 @@ mod tests {
              card goes"
         );
         assert_eq!(
-            live.tags
+            live.labels
                 .iter()
                 .map(|t| (t.name.as_str(), t.card_count))
                 .collect::<Vec<_>>(),
             vec![("Flex", 4)],
-            "and every tag **this list wears**, `Unworn` being a tag of the app rather than \
+            "and every label **this list wears**, `Unworn` being a label of the app rather than \
              of a deck since v21 — `card_count` being copies rather than rows, which \
-             is why the tag on one four-of reads 4"
+             is why the label on one four-of reads 4"
         );
 
         let theory = get_deck(&conn, deck.id, THEORY, ANY_MARKET)
@@ -9349,14 +9579,14 @@ mod tests {
             7,
             "with the counts of the variant that was asked for"
         );
-        // **And the tags are counted over that same variant**, which they briefly were not:
-        // `get_deck` threaded its variant into the category list and not into the tag list, so
-        // a Theory read came back with Theory category counts beside Live tag counts. Live has
-        // 4 tagged copies and Theory has 7, so a leak reads 4 here — a number belonging to a
+        // **And the labels are counted over that same variant**, which they briefly were not:
+        // `get_deck` threaded its variant into the category list and not into the label list, so
+        // a Theory read came back with Theory category counts beside Live label counts. Live has
+        // 4 labelled copies and Theory has 7, so a leak reads 4 here — a number belonging to a
         // list this answer is not about.
         assert_eq!(
             theory
-                .tags
+                .labels
                 .iter()
                 .map(|t| (t.name.as_str(), t.card_count))
                 .collect::<Vec<_>>(),
@@ -9914,9 +10144,9 @@ mod tests {
             category_kind: "main".to_owned(),
             category_active: true,
             variant: "live".to_owned(),
-            tag_id: Some(5),
-            tag_name: Some("Flex".to_owned()),
-            tag_color: Some("amber".to_owned()),
+            label_id: Some(5),
+            label_name: Some("Flex".to_owned()),
+            label_color: Some("amber".to_owned()),
             quantity: 4,
             name: "Lightning Bolt".to_owned(),
             set_code: "lea".to_owned(),
@@ -9960,7 +10190,7 @@ mod tests {
             serde_json::json!({
                 "id": 7, "cardId": "bolt-lea", "categoryId": 2, "categoryName": "Main deck",
                 "categoryKind": "main", "categoryActive": true, "variant": "live",
-                "tagId": 5, "tagName": "Flex", "tagColor": "amber", "quantity": 4,
+                "labelId": 5, "labelName": "Flex", "labelColor": "amber", "quantity": 4,
                 "name": "Lightning Bolt", "setCode": "lea",
                 "setName": "Limited Edition Alpha", "collectorNumber": "161",
                 "lang": "en", "needsReview": null, "oracleId": "o1", "manaCost": "{R}",
@@ -10002,9 +10232,174 @@ mod tests {
                 .unwrap();
         assert_eq!(detail["deck"]["formatKey"], "modern");
         assert_eq!(detail["cards"], serde_json::json!([]));
-        assert_eq!(detail["tags"], serde_json::json!([]));
+        assert_eq!(detail["labels"], serde_json::json!([]));
         assert_eq!(detail["categories"].as_array().unwrap().len(), 4);
         assert_eq!(detail["categories"][0]["name"], "Commander");
         assert_eq!(detail["categories"][0]["isActive"], true);
+    }
+
+    // ---- the folder rule's three reads ------------------------------------------------
+    //
+    // [`played_keys`], [`plays_card`] and [`decks_playing`] answer one question from three
+    // ends, so the cases below are written to pin the parts they *share* — the oracle match,
+    // the `live` fence and the orphan fallback — in more than one of them at a time. A rule
+    // that is right in one read and wrong in another is a deck that lists a card and refuses
+    // its copies.
+
+    /// A pile of the deck's own beside `Main deck`, so a card can sit in two of them.
+    /// [`main_of`]'s call, one name over.
+    fn side_of(conn: &Connection, deck_id: i64) -> i64 {
+        crate::deck_meta::category_for_name(conn, deck_id, "Sideboard").unwrap()
+    }
+
+    #[test]
+    fn a_decks_played_keys_are_its_oracle_cards_each_once() {
+        // Two printings of one card in two piles is **one** key: the caller is asking which
+        // cards the deck plays, not how many rows say so.
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap().id;
+        let main = main_of(&conn, deck);
+        let side = side_of(&conn, deck);
+        add(&conn, deck, "bolt-lea", main, 4);
+        add(&conn, deck, "bolt-m10", side, 1);
+        add(&conn, deck, "serra-lea", main, 1);
+
+        assert_eq!(
+            played_keys(&conn, deck).unwrap(),
+            vec!["o1".to_owned(), "o2".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_card_a_deck_only_plans_is_not_played() {
+        // **A plan holds no cards** — `collection_alloc::THEORY_HOLDS_NOTHING`, read as the
+        // reason the `variant` clause is in all three statements. Drop it from any one of them
+        // and copies can be filed into a deck against a row that claims nothing.
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap().id;
+        let main = main_of(&conn, deck);
+        add_card(&conn, deck, "serra-lea", Some(main), None, THEORY, None, 1).unwrap();
+
+        assert_eq!(played_keys(&conn, deck).unwrap(), Vec::<String>::new());
+        assert!(!plays_card(&conn, deck, "serra-lea").unwrap());
+        assert_eq!(
+            decks_playing(&conn, &["o2".to_owned()]).unwrap(),
+            Vec::<i64>::new()
+        );
+    }
+
+    #[test]
+    fn a_printing_the_corpus_has_lost_is_played_under_its_own_id() {
+        // `cards` is dropped and recreated on every sync and `deck_cards.card_id` is a soft
+        // reference, so a deck row can name a printing nothing in the corpus knows. It is still
+        // on the reader's list, so the deck still plays it — and the only name left to play it
+        // under is the printing id itself. An inner join, or a bare `OR` over the two nullable
+        // columns, loses this row silently.
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap().id;
+        let main = main_of(&conn, deck);
+        add(&conn, deck, "bolt-jp", main, 1);
+        conn.execute("DELETE FROM cards WHERE id = 'bolt-jp'", [])
+            .unwrap();
+
+        assert_eq!(
+            played_keys(&conn, deck).unwrap(),
+            vec!["bolt-jp".to_owned()]
+        );
+        assert!(
+            plays_card(&conn, deck, "bolt-jp").unwrap(),
+            "an orphaned entry still has its printing id, and so does the row it matches"
+        );
+        assert!(
+            !plays_card(&conn, deck, "bolt-lea").unwrap(),
+            "and a row that no longer names an oracle card cannot be reached through one"
+        );
+        assert_eq!(
+            decks_playing(&conn, &["bolt-jp".to_owned()]).unwrap(),
+            vec![deck]
+        );
+    }
+
+    #[test]
+    fn a_deck_that_lists_one_printing_plays_every_other_one() {
+        // "A Bolt is a Bolt", `owned_by_oracle`'s rule and `release_group_copies`', read from
+        // the filing end: a deck listing the Alpha Bolt plays the M10 copies in the binder, and
+        // a fence matching the exact printing would refuse a reader their own cards.
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap().id;
+        let main = main_of(&conn, deck);
+        add(&conn, deck, "bolt-lea", main, 1);
+
+        assert!(
+            plays_card(&conn, deck, "bolt-lea").unwrap(),
+            "the printing it lists"
+        );
+        assert!(
+            plays_card(&conn, deck, "bolt-m10").unwrap(),
+            "and another printing of the same card"
+        );
+        assert!(
+            !plays_card(&conn, deck, "serra-lea").unwrap(),
+            "but not a card it has never listed"
+        );
+        assert!(
+            !plays_card(&conn, deck, "no-such-printing").unwrap(),
+            "and not an id `cards` has never heard of"
+        );
+    }
+
+    #[test]
+    fn only_a_deck_that_plays_every_key_is_answered() {
+        let conn = seeded();
+        let both = create_deck(&conn, &input("Both", "modern")).unwrap().id;
+        let one = create_deck(&conn, &input("One", "modern")).unwrap().id;
+        add(&conn, both, "bolt-lea", main_of(&conn, both), 1);
+        add(&conn, both, "serra-lea", main_of(&conn, both), 1);
+        add(&conn, one, "bolt-m10", main_of(&conn, one), 1);
+
+        assert_eq!(
+            decks_playing(&conn, &["o1".to_owned()]).unwrap(),
+            vec![both, one]
+        );
+        assert_eq!(
+            decks_playing(&conn, &["o1".to_owned(), "o2".to_owned()]).unwrap(),
+            vec![both],
+            "`AND`, not `OR` — a deck short of one of the cards is not an answer"
+        );
+    }
+
+    #[test]
+    fn a_card_in_two_piles_is_one_key_and_no_keys_is_no_decks() {
+        // **The `count(DISTINCT …)` pin.** A plain `count(…)` counts *rows*, so this deck would
+        // read as playing two cards: the one-key question would drop it and the two-key
+        // question would wrongly answer it. Both directions are asserted, because a mutation
+        // that only breaks one of them is a mutation half a test catches.
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap().id;
+        let main = main_of(&conn, deck);
+        let side = side_of(&conn, deck);
+        add(&conn, deck, "bolt-lea", main, 4);
+        add(&conn, deck, "bolt-m10", side, 1);
+
+        assert_eq!(
+            decks_playing(&conn, &["o1".to_owned()]).unwrap(),
+            vec![deck],
+            "two rows of one card are one card"
+        );
+        assert_eq!(
+            decks_playing(&conn, &["o1".to_owned(), "o2".to_owned()]).unwrap(),
+            Vec::<i64>::new(),
+            "and are not two cards"
+        );
+        assert_eq!(
+            decks_playing(&conn, &["o1".to_owned(), "o1".to_owned()]).unwrap(),
+            vec![deck],
+            "one card named twice is one card, so the `HAVING` stays satisfiable"
+        );
+        assert_eq!(
+            decks_playing(&conn, &[]).unwrap(),
+            Vec::<i64>::new(),
+            "and nobody plays nothing"
+        );
     }
 }

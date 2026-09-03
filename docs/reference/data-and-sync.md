@@ -503,7 +503,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   answers the question the switch was asking — the decks *are* where the cards are now.
 - **The single-file ladder is frozen at v26**, and `schema::LEGACY_SINGLE_FILE_VERSION` is the
   answer; schema 27 splits the file in two and the halves number themselves separately
-  (`USER_SCHEMA_VERSION` **32** on the reader's file, `CORPUS_SCHEMA_VERSION` 1 on the
+  (`USER_SCHEMA_VERSION` **33** on the reader's file, `CORPUS_SCHEMA_VERSION` 1 on the
   rebuildable one). This line read **v18** for two
   whole rungs, because a prose-only edit routes to neither CI job and nothing goes red when a
   ladder entry rots. **It then read 30 for two more**, through v31 and v32, and so did
@@ -583,6 +583,55 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `cover_image_path` stays on the `decks` spec is not danger.** It is that removing it buys one
   dead key out of a deck op that is sent regardless, which is not worth a second change to the
   sync surface in the week the relay work is moving.
+  **v33 is the deck label's rename, and it is the only rung on either ladder that changes nothing
+  but names.** `deck_tags` becomes `deck_labels` and `deck_cards.tag_id` becomes `label_id` — two
+  `ALTER TABLE … RENAME`s — both of that table's indexes come down and go back up under the new
+  names (SQLite has no `ALTER INDEX`), and `deck_audit`'s `kind` vocabulary and the `payload` key
+  those rows carry move from `tag` to `label` with them. No behaviour moves; what moves is that
+  "tag" in this app now means Scryfall's taxonomy and nothing else. **Five things about it are
+  worth carrying.**
+  First, **`ALTER TABLE … RENAME TO` rewrites `deck_cards`' `REFERENCES` clause whatever
+  `PRAGMA foreign_keys` says.** The documented rule reads as though the rewrite were conditional
+  on that pragma; driven on the bundled build (SQLite 3.53 — `node:sqlite` 3.53.0 against
+  `libsqlite3-sys` 0.38.1's 3.53.2, 2026-09-03) it is not, and ON and OFF leave byte-identical
+  `sqlite_master`. That is worth knowing rather than assuming, because the app always runs the
+  pragma ON (`db::open_write`) while every ladder test in `schema.rs` walks over a bare
+  `Connection::open_in_memory`, which is OFF — a rewrite that happened on only one of the two
+  would be a dangling foreign key no test could ever see.
+  Second, **the six capture triggers come off first.** `sync_engine::capture` writes persistent
+  `CREATE TRIGGER`s, and `ALTER TABLE` rewrites a trigger the way it rewrites a reference — so
+  `sync_ins_deck_tags` would survive as a second, older trigger firing on `deck_labels` beside the
+  `sync_ins_deck_labels` that `capture::install` then creates, and every insert would emit two
+  ops. Dropping them costs nothing: `prepare_database` calls `install` immediately afterwards, on
+  every target, so the gap is shut before anything can write.
+  Third, **`deck_audit` is a full rebuild**, v29's `error_log` argument exactly — `kind` sits
+  inside a CHECK and SQLite has no `ALTER … CHECK`. The rows are rewritten on the way across, and
+  the payload key moves through **`json_insert` then `json_remove` rather than a text
+  substitution**, because the value beside that key is a label *name* the reader typed and a
+  reader who called a label `tag` must not have their own history rewritten. `"tag": null` — a
+  card that had its label taken off — is a value rather than an absence, so the guard is
+  `json_type(…) IS NOT NULL` and never the value itself.
+  Fourth, **the trap is `deck_undo`, and it is `globalise_tags`' trap one table over.**
+  `deck_undo.audit_id` CASCADEs off `deck_audit`, so that rebuild's `DROP TABLE` would silently
+  empty the undo stack on every real launch while leaving it intact in every test — the worst
+  shape a bug can have. Unlike v21 there is nothing here that *invalidates* a step: audit ids come
+  across unchanged and no label id moves, so losing them would be gratuitous. They are held by
+  hand across the drop, and `deck_undo` is emptied explicitly first so that the two pragma
+  settings arrive at the same state rather than at one duplicate-key failure.
+  Fifth, **a rename cannot touch a comment**, so the stored DDL keeps the words the rungs that
+  wrote it used: `deck_cards` still says *"deleting a tag must never delete a card"* and
+  `deck_labels` still says *"see `tag_name_key`"*. `USER_SCHEMA_SQL` wears both, for the same
+  reason it wears the quotes — it is byte-compared against what the ladder builds.
+  **`UNDO_V33` is the newest rewind on the user ladder and every fixture chain below now starts
+  with it**, which v32 was exempt from and this rung is not: `ALTER TABLE deck_tags RENAME TO
+  deck_labels` against a database that already has `deck_labels` is `no such table`, so a fixture
+  that skipped the line would not quietly test nothing — it would take the whole chain down with
+  an error about a table the test is not about. The rewind rebuilds `deck_audit` narrow again for
+  `UNDO_V29`'s reason, since a fixture below v33 that kept the widened CHECK would accept a
+  `'label'` row while claiming to be a version that never had one.
+  **On the wire this rename is a version boundary**, and [sync.md](sync.md) carries what it costs:
+  the table name is what an op is addressed by, so a device on this build and one still on v32 do
+  not exchange label rows until both have updated.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every
@@ -677,22 +726,27 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   nothing derives it — so a mute stays refused-in-words until the next refresh, which is the
   state `tags::query::not_muted`'s `id <> ''` clause and `tag_mute`'s refusal already exist for.
   **v21 rebuilds one table and takes one column off it**, and both halves of that sentence are
-  the feature: `deck_tags` loses `deck_id` and gains `name_key`, so a tag belongs to no deck and
-  its grain (`DECK_TAG_GRAIN`) becomes one name, app-wide. `tag_name_key` is what "one name"
+  the feature: the label store loses `deck_id` and gains `name_key`, so a label belongs to no deck
+  and its grain (`DECK_LABEL_GRAIN`) becomes one name, app-wide. **The rung's own SQL still says
+  `deck_tags`** — that is the table it built, and v33 is the rung that renames it;
+  `globalise_tags` describes a shape no database between v21 and v33 ever had if it is edited.
+  `label_name_key` is what "one name"
   means — NFC, Unicode lowercase, NFC again — computed in Rust and **stored**, because SQLite
   cannot answer it: `COLLATE NOCASE` folds ASCII and nothing else, and the bundled build carries
   no normalisation at all. That is the one dependency the rung added, `unicode-normalization`.
   **Three things about the step are worth knowing before touching it.** The survivor of a merge
   is the row worn by the most **copies** (then `updated_at`, then the lowest id) and it **keeps
-  its own id**, so every `deck_cards.tag_id` and every audit row that already named it still
+  its own id**, so every `deck_cards.tag_id` (`label_id` since v33) and every audit row that
+  already named it still
   does — only the losers are remapped. The rebuild carries the labels across the drop **by hand**
   (`deck_tags_carry`), because under `PRAGMA foreign_keys=ON` a `DROP TABLE` on a *parent* runs
-  an implicit `DELETE FROM` that fires `deck_cards.tag_id`'s own `ON DELETE SET NULL` — which
-  would untag every card in every deck and leave a perfectly-shaped empty answer behind it — and
+  an implicit `DELETE FROM` that fires that column's own `ON DELETE SET NULL` — which
+  would strip the label off every card in every deck and leave a perfectly-shaped empty answer
+  behind it — and
   the pragma cannot be turned off to dodge that, since toggling `foreign_keys` is a documented
   no-op inside a transaction and `migrate` is always inside one. And it **deletes every
-  `deck_undo` row**: a step names tag ids (`Op::Tags` directly, every *card* step through
-  `CardRow::tag_id`), so one could restore a card's label as a foreign key resolving to nothing,
+  `deck_undo` row**: a step names label ids (`Op::Labels` directly, every *card* step through
+  `CardRow::label_id`), so one could restore a card's label as a foreign key resolving to nothing,
   or re-insert a name another deck now holds, which the new grain refuses. `deck_audit` is left
   alone — the history still reads in full, and only the arrows lose their charge, once.
   v20 adds **six tables, two columns, five indexes and a replay that moved**, and every one of
@@ -956,12 +1010,15 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `v9_database` at all.
   **The per-rung fixture counts that used to be written out here are gone on purpose.** They read
   "all six below it" and "the five below that" against a fixture set that has grown twice since,
-  and a count is a fact about a *tree*: `grep -c "{UNDO_V25}" src-tauri/src/schema.rs` is the
+  and a count is a fact about a *tree*: `grep -c "{UNDO_V33}" src-tauri/src/schema.rs` is the
   census of how many fixtures the newest rung reaches, and it answers for the tree you are
   actually in. (The constant in that command moves with the ladder — it named `UNDO_V23` until v24
-  landed, and `UNDO_V24` until v25 did — and the whole point of writing a command rather than a number is that only the command
+  landed, `UNDO_V24` until v25 did, and then stood at `UNDO_V25` across the split and four rungs
+  above it before v33 moved it, which is the drift a command was supposed to prevent and only
+  half did — and the whole point of writing a command rather than a number is that only the command
   needed changing.) **v21 is a rebuild rather than an `ADD COLUMN`, and it still needs a line in every
-  fixture**: `UNDO_V21` drops `deck_tags` and recreates the per-deck shape v8 built, because
+  fixture**: `UNDO_V21` drops `deck_tags` — the name that table had until v33 — and recreates the
+  per-deck shape v8 built, because
   `ALTER TABLE … DROP COLUMN` refuses a column an index names and the shape changed both ways.
   **v22 is the only rung with no `UNDO_V22` at all, and that is a fact about the rung rather
   than an omission**: it writes no table, no column and no index — it repairs the contents of

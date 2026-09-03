@@ -128,7 +128,7 @@ export const Default: Story = {
 
     await expect(dialog).toHaveAttribute("aria-modal", "true");
     await expect(dialog).toHaveFocus();
-    // Named by the host rather than derived from the title: "Close Categories & tags" is not a
+    // Named by the host rather than derived from the title: "Close Categories & labels" is not a
     // sentence. Waited out rather than read straight off the render `findByRole` resolved on —
     // see {@link FRAME_WAIT}, which is what every `toBeVisible` inside this shell needs.
     await waitFor(
@@ -152,14 +152,14 @@ export const Default: Story = {
  */
 export const LongBody: Story = {
   args: {
-    title: "Categories & tags",
-    closeLabel: "Close categories and tags",
+    title: "Categories & labels",
+    closeLabel: "Close categories and labels",
     width: "w-[48rem]",
     children: <Body paragraphs={24} />,
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const dialog = await canvas.findByRole("dialog", { name: "Categories & tags" });
+    const dialog = await canvas.findByRole("dialog", { name: "Categories & labels" });
 
     // The width is the host's, verbatim; `max-w-full` is the shell's, so a panel wider than the
     // window still fits inside it.

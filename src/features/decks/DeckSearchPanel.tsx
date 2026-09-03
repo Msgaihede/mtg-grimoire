@@ -389,7 +389,7 @@ export interface DeckSearchPanelProps {
    * What a tile offers on a right-click — **the handler already built**, from the editor.
    *
    * A tile here is a search result rather than a deck card, so it gets the plain card menu every
-   * other wall in the app draws: none of the deck editor's own rows (Move to, the two zones, Tag
+   * other wall in the app draws: none of the deck editor's own rows (Move to, the two zones, Label
    * card) means anything about a printing that is in no deck. It is built by `DeckEditor` all the
    * same, so that one `CardMenuDeps` serves both surfaces of that screen — two would be two
    * collection-add observers and two places to draw one refusal.

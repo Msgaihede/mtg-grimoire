@@ -4,10 +4,10 @@ import {
   ipcError,
   type DeckCard,
   type DeckCategory,
-  type DeckTag,
+  type DeckLabel,
   type DeckVariant,
-  type GlobalTag,
-  type TagColor,
+  type GlobalLabel,
+  type LabelColor,
 } from "@/lib/ipc";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { autoCategoryFor, UNCATEGORIZED } from "./autoCategory";
@@ -16,8 +16,8 @@ import { DEFAULT_CATEGORY_NAME, DEFAULT_VARIANT, opened } from "./useDeck";
 /** Stable identities for "not loaded yet", so a consumer's `useMemo` does not re-run on every
  *  render of a panel that is still waiting. */
 const NO_CATEGORIES: readonly DeckCategory[] = [];
-const NO_TAGS: readonly DeckTag[] = [];
-const NO_ALL_TAGS: readonly GlobalTag[] = [];
+const NO_LABELS: readonly DeckLabel[] = [];
+const NO_ALL_LABELS: readonly GlobalLabel[] = [];
 
 /**
  * The piles {@link useDeckMeta}'s `autoCategorise` is allowed to empty — and the only ones.
@@ -57,28 +57,29 @@ const TAG_READ_REFUSED =
   "type instead is not what you pressed.";
 
 /**
- * A deck's **categories and tags as things in themselves** — the piles and the labels, rather
+ * A deck's **categories and labels as things in themselves** — the piles and the labels, rather
  * than the cards filed under them.
  *
- * **One hook, mounted by two dialogs** (changed 2026-08-14): `CategoriesDialog` and `TagsDialog`
- * were two sections of one drawer and are two independent surfaces now, and each of them mounts
- * the whole of this. So each fires the other's read — opening Categories asks for the deck's
- * tags, opening Tags asks for its categories — and that is worth having written down rather than
- * discovered from a log. It is cheap and it is not free: **three** local-SQLite reads either way
- * — the categories, the tags the list on screen is wearing, and every tag there is — across the
- * three key shapes below, shared through one `["decks"]`-rooted cache, so the second dialog a
- * reader opens in a sitting finds its own lists already there. (It was four until schema v21:
- * the fourth was a second `deck_tag_list` at the *other* variant, folded into a map so that a
- * delete confirmation could quote a count the variant does not scope. `deck_tag_all` answers
- * that off the row now, and answers it about every deck rather than about two lists of one.)
+ * **One hook, mounted by two dialogs** (changed 2026-08-14): `CategoriesDialog` and
+ * `LabelsDialog` were two sections of one drawer and are two independent surfaces now, and each
+ * of them mounts the whole of this. So each fires the other's read — opening Categories asks for
+ * the deck's labels, opening Labels asks for its categories — and that is worth having written
+ * down rather than discovered from a log. It is cheap and it is not free: **three** local-SQLite
+ * reads either way — the categories, the labels the list on screen is wearing, and every label
+ * there is — across the three key shapes below, shared through one `["decks"]`-rooted cache, so
+ * the second dialog a reader opens in a sitting finds its own lists already there. (It was four
+ * until schema v21: the fourth was a second `deck_label_list` at the *other* variant, folded
+ * into a map so that a delete confirmation could quote a count the variant does not scope.
+ * `deck_label_all` answers that off the row now, and answers it about every deck rather than
+ * about two lists of one.)
  * Splitting the hook to match the split of the drawer would buy two of those reads back for
- * Categories and one for Tags, and would cost the two surfaces their one definition of what a
+ * Categories and one for Labels, and would cost the two surfaces their one definition of what a
  * deck's piles and labels are; that trade has not been worth making.
  *
  * `useDeck` already answers both lists as part of `deck_get`; these are the same facts read
  * through the two commands that exist so a dialog need not pull the whole card list to draw a
  * column heading. They cannot durably disagree because every write in the app invalidates the
- * one `["decks"]` root, which is a prefix of every key here — both spellings of the tag key
+ * one `["decks"]` root, which is a prefix of every key here — both spellings of the label key
  * included — and of the editor's detail key.
  *
  * **`variant` scopes the two counts on each category row and nothing else.** Which categories
@@ -86,21 +87,21 @@ const TAG_READ_REFUSED =
  * facts about the deck, not about one of its two lists — so a Live/Theory switch changes the
  * numbers in the headings and never the headings themselves.
  *
- * **For tags it scopes membership as well, and that asymmetry is deliberate.** Since schema v21
- * a tag belongs to no deck; what a deck has is cards, some of which wear one. So "this deck's
- * tags" is derived from the cards of the list on screen, and flipping Live↔Theory genuinely
- * changes which tags are there — the issue asks for the two lists to be treated as different
- * decks where labels are concerned, and this is where that is true.
+ * **For labels it scopes membership as well, and that asymmetry is deliberate.** Since schema
+ * v21 a label belongs to no deck; what a deck has is cards, some of which wear one. So "this
+ * deck's labels" is derived from the cards of the list on screen, and flipping Live↔Theory
+ * genuinely changes which labels are there — the issue asks for the two lists to be treated as
+ * different decks where labels are concerned, and this is where that is true.
  *
  * **The marketplace scopes one number and is in the categories key for it**: a category's
  * `totalPrice` is a sum at one marketplace, and the two are not conversions of each other.
- * The tag reads take no marketplace at all — a `DeckTag` carries a count and no money — which
- * is why only one of the three key shapes below grew a segment.
+ * The label reads take no marketplace at all — a `DeckLabel` carries a count and no money —
+ * which is why only one of the three key shapes below grew a segment.
  *
  * A known narrowing, and it is the backend's rather than this hook's: every **category** write
  * answers with the `live` variant's counts, because a rename carries no variant of its own. It
  * costs nothing here — the row a mutation answers with is its result and is never written into
- * the cache; the invalidation re-reads through this hook's own variant. The tag writes stopped
+ * the cache; the invalidation re-reads through this hook's own variant. The label writes stopped
  * having the problem at v21: an app-wide write answers the app-wide row, whose counts are not
  * scoped by a variant at all.
  */
@@ -114,32 +115,33 @@ export function useDeckMeta(deckId: number | null, variant: DeckVariant = DEFAUL
     enabled: deckId !== null,
   });
 
-  const tagsQuery = useQuery({
-    queryKey: ["decks", "tags", deckId, variant],
-    queryFn: () => ipc.deckTagList(opened(deckId), variant),
+  const labelsQuery = useQuery({
+    queryKey: ["decks", "labels", deckId, variant],
+    queryFn: () => ipc.deckLabelList(opened(deckId), variant),
     enabled: deckId !== null,
   });
 
   /**
-   * **Every tag there is**, most-used first — the app-wide list, and the only read here that
-   * can answer a tag no card is wearing.
+   * **Every label there is**, most-used first — the app-wide list, and the only read here that
+   * can answer a label no card is wearing.
    *
-   * No deck in the key, because there is none in the command: one tag list belongs to the app.
-   * It sits under `["decks"]` all the same, so creating, renaming or deleting a tag refreshes
-   * the list that tag is in.
+   * No deck in the key, because there is none in the command: one label list belongs to the
+   * app. It sits under `["decks"]` all the same, so creating, renaming or deleting a label
+   * refreshes the list that label is in.
    *
-   * **It also does the work `tagCardCountsAllVariants` used to** — a second `deck_tag_list` at
-   * the *other* variant, folded into a map, so that a delete confirmation could quote a number
-   * the variant does not scope. That read existed because `DECK_VARIANTS` has two members and
-   * two reads were therefore every variant; it stopped being enough the moment the reach became
-   * every *deck*, and {@link GlobalTag.cardCount} is the number itself, off one command.
+   * **It also does the work the old `tagCardCountsAllVariants` did** — a second
+   * `deck_label_list` at the *other* variant, folded into a map, so that a delete confirmation
+   * could quote a number the variant does not scope. That read existed because `DECK_VARIANTS`
+   * has two members and two reads were therefore every variant; it stopped being enough the
+   * moment the reach became every *deck*, and {@link GlobalLabel.cardCount} is the number
+   * itself, off one command.
    *
    * Gated on a deck for the reason every query in this hook is: the Decks view mounts with no
-   * deck open, and the only surface that wants this list is a tag dialog inside an editor.
+   * deck open, and the only surface that wants this list is a label dialog inside an editor.
    */
-  const allTagsQuery = useQuery({
-    queryKey: ["decks", "tagsAll"],
-    queryFn: () => ipc.deckTagAll(),
+  const allLabelsQuery = useQuery({
+    queryKey: ["decks", "labelsAll"],
+    queryFn: () => ipc.deckLabelAll(),
     enabled: deckId !== null,
   });
 
@@ -150,13 +152,13 @@ export function useDeckMeta(deckId: number | null, variant: DeckVariant = DEFAUL
    * `setCategoryActive` changes what the deck **counts**: an inactive pile counts toward nothing
    * and is handed no copies from the deck's group, so flipping the switch moves every
    * `ownedQuantity` in the deck without touching a single card. The rest (a rename, a reorder,
-   * every tag write) change what a pile is *called* and nothing about what is in it — they take
-   * the same root anyway, because the editor's columns are drawn from a category list this just
-   * rewrote. (This paragraph said the two of them **reallocate**; schema v25 deleted the
+   * every label write) change what a pile is *called* and nothing about what is in it — they
+   * take the same root anyway, because the editor's columns are drawn from a category list this
+   * just rewrote. (This paragraph said the two of them **reallocate**; schema v25 deleted the
    * allocator, and what a deck owns is now a sum over the rows filed in its group.)
    *
    * **On error as well as on success**, on the definition rather than on a call site. Every
-   * refusal here is either a busy database or a deck, category or tag that another surface has
+   * refusal here is either a busy database or a deck, category or label that another surface has
    * deleted — and the second must not leave a panel drawing a column that is gone. Two
    * definitions of that rule would be two places to keep it.
    */
@@ -397,63 +399,63 @@ export function useDeckMeta(deckId: number | null, variant: DeckVariant = DEFAUL
   });
 
   /** A new label, **app-wide**; the deck is where the reader was standing. Refused when any
-   *  tag already holds the name — see `tagNames.ts` for the comparison, and for why the
+   *  label already holds the name — see `labelNames.ts` for the comparison, and for why the
    *  dialogs try not to let a reader reach this refusal. */
-  const createTag = useMutation({
-    mutationFn: ({ name, color }: { name: string; color: TagColor }) =>
-      ipc.deckTagCreate(opened(deckId), name, color),
+  const createLabel = useMutation({
+    mutationFn: ({ name, color }: { name: string; color: LabelColor }) =>
+      ipc.deckLabelCreate(opened(deckId), name, color),
     ...writes,
   });
 
   /** Rename **and** recolour, **in every deck at once**: one command, both required, because
    *  there is no patch shape here — a caller changing one sends the other back unchanged. */
-  const updateTag = useMutation({
-    mutationFn: ({ id, name, color }: { id: number; name: string; color: TagColor }) =>
-      ipc.deckTagUpdate(opened(deckId), id, name, color),
+  const updateLabel = useMutation({
+    mutationFn: ({ id, name, color }: { id: number; name: string; color: LabelColor }) =>
+      ipc.deckLabelUpdate(opened(deckId), id, name, color),
     ...writes,
   });
 
-  /** Take a label off **this deck's cards in the list on screen**, leaving the tag itself
+  /** Take a label off **this deck's cards in the list on screen**, leaving the label itself
    *  alone. The row-level act the app-wide list needed: "I am done with this here" and "this
-   *  label should stop existing" were one press while a tag belonged to a deck, and
+   *  label should stop existing" were one press while a label belonged to a deck, and
    *  conflating them now would mean tidying one deck stripped the label off nine others. */
-  const removeTagFromDeck = useMutation({
-    mutationFn: (tagId: number) => ipc.deckTagRemoveFromDeck(opened(deckId), tagId, variant),
+  const removeLabelFromDeck = useMutation({
+    mutationFn: (labelId: number) => ipc.deckLabelRemoveFromDeck(opened(deckId), labelId, variant),
     ...writes,
   });
 
-  /** Delete a label **from the whole app**. It **untags its cards rather than deleting them**
-   *  — `deck_cards.tag_id` is `ON DELETE SET NULL` — in every deck wearing it, which is the
-   *  half of the sentence a confirm dialog owes a reader and the reason
-   *  {@link GlobalTag.deckCount} is on the row. */
-  const deleteTag = useMutation({
-    mutationFn: (id: number) => ipc.deckTagDelete(opened(deckId), id),
+  /** Delete a label **from the whole app**. It **unlabels its cards rather than deleting
+   *  them** — `deck_cards.label_id` is `ON DELETE SET NULL` — in every deck wearing it, which
+   *  is the half of the sentence a confirm dialog owes a reader and the reason
+   *  {@link GlobalLabel.deckCount} is on the row. */
+  const deleteLabel = useMutation({
+    mutationFn: (id: number) => ipc.deckLabelDelete(opened(deckId), id),
     ...writes,
   });
 
   return {
     categoriesQuery,
-    tagsQuery,
-    allTagsQuery,
+    labelsQuery,
+    allLabelsQuery,
     /** Every category of the deck in `sortOrder`, empty and inactive ones included. */
     categories: categoriesQuery.data ?? NO_CATEGORIES,
-    /** The tags this deck's list on screen is wearing, most-used first. */
-    tags: tagsQuery.data ?? NO_TAGS,
-    /** Every tag there is, most-used first — including the ones nothing wears. */
-    allTags: allTagsQuery.data ?? NO_ALL_TAGS,
+    /** The labels this deck's list on screen is wearing, most-used first. */
+    labels: labelsQuery.data ?? NO_LABELS,
+    /** Every label there is, most-used first — including the ones nothing wears. */
+    allLabels: allLabelsQuery.data ?? NO_ALL_LABELS,
     createCategory,
     renameCategory,
     setCategoryActive,
     reorderCategories,
     deleteCategory,
     autoCategorise,
-    createTag,
-    updateTag,
-    removeTagFromDeck,
-    deleteTag,
+    createLabel,
+    updateLabel,
+    removeLabelFromDeck,
+    deleteLabel,
   };
 }
 
-/** The whole of what a categories or tags panel consumes, named so the view and the hook
+/** The whole of what a categories or labels panel consumes, named so the view and the hook
  *  agree. */
 export type DeckMeta = ReturnType<typeof useDeckMeta>;

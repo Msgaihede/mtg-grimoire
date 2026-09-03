@@ -115,6 +115,16 @@ export function auditSentence(
     if (line !== null) return line;
   }
 
+  // A pull is the `move` that names no card, for the import's reason one kind over: one press
+  // moves copies of several printings at once, so the payload carries the counts instead. Read
+  // **before** the per-card branches, because the `move` arm would call it "Moved a card" — a
+  // sentence about a card the row has not got.
+  const pulled = nested(p.pull);
+  if (pulled !== null) {
+    const line = pullLine(entry.kind, pulled);
+    if (line !== null) return line;
+  }
+
   switch (entry.kind) {
     case "add": {
       const quantity = numberField(p.quantity);
@@ -215,10 +225,12 @@ export function auditSentence(
     // Two different events wear this one kind, and `action` is what tells them apart: a
     // change to the **label itself** (created, renamed, recoloured, deleted) carries one and
     // names no card, while putting a label **on a card** carries none. Reading only the
-    // second would render "deleted the Cut candidate tag" as "Tagged a card" — a sentence
+    // second would render "deleted the Cut candidate label" as "Labelled a card" — a sentence
     // about a card the row does not have.
-    case "tag":
-      return text(p.action) !== null || entry.cardId === null ? tagLine(p) : cardTagLine(p, name);
+    case "label":
+      return text(p.action) !== null || entry.cardId === null
+        ? labelLine(p)
+        : cardLabelLine(p, name);
     case "category":
       return categoryLine(p);
     case "folder":
@@ -292,19 +304,53 @@ function importLine(kind: DeckAuditKind, p: Record<string, unknown>): AuditLine 
       const cards = plural(numberField(p.cards), "card");
       const categories = plural(numberField(p.categories), "category", "categories");
       // The labels the import **made**, in the detail rather than the sentence: it is news
-      // exactly when it is not zero, and it is app-wide news — a tag belongs to no deck, so an
-      // import that invented three changed a list every other deck reads from. `numberField`
+      // exactly when it is not zero, and it is app-wide news — a label belongs to no deck, so
+      // an import that invented three changed a list every other deck reads from. `numberField`
       // reads an absent key as 0, which is every import row written before 2026-08-24 and every
       // list that carried no labels, and a zero draws no detail at all.
-      const made = numberField(p.tagsCreated);
+      const made = numberField(p.labelsCreated);
       return {
         text: `Imported ${cards} into ${categories}`,
-        detail: made > 0 ? `${plural(made, "new tag")}` : null,
+        detail: made > 0 ? `${plural(made, "new label")}` : null,
       };
     }
     default:
       return null;
   }
+}
+
+/**
+ * The one row a pull writes: copies the reader already owned, moved into this deck's group.
+ *
+ * **It wears `move` and is not a tenth audit kind**, which is `reversalLine`'s paragraph applied
+ * a second time and for exactly the same reason: `deck_audit.kind` carries a CHECK, SQLite has no
+ * `ALTER … CHECK`, and a tenth word would mean rebuilding every reader's whole deck history for a
+ * spelling. `deck_import_commit` reached that conclusion first and reused `add`/`remove`; the undo
+ * reached it second and reused `deck`. This is the third, and `move` is the honest word — nothing
+ * was added to the list and nothing taken off it, only *where the copies sit* changed.
+ *
+ * **`delta` is `0` on the row and that is honest rather than a hole.** The column counts copies
+ * the deck's *list* gained or lost, and a pull writes no `deck_cards` row at all: a 4-copy line
+ * the reader was 3 short of is still a 4-copy line afterwards. The two counts in the payload are
+ * what moved, and they are deliberately not the delta.
+ *
+ * **Copies in the sentence, cards in the detail**, because they are different units of the same
+ * press — three copies of one card and three copies of three cards are the same first number and
+ * a different act. The detail is drawn only when the row carries a card count: `numberField`
+ * reads an absent key as `0`, and "across 0 cards" beside "Pulled 3 copies" is arithmetic that
+ * cannot be true. That is `importLine`'s `tagsCreated` rule, one payload over.
+ *
+ * `null` for any kind but `move`, so a row a newer build wrote with a `pull` payload on a kind
+ * this one has no sentence for falls through to its own branch instead of being claimed here —
+ * {@link importLine}'s own defensive rule, and the reason a plain card move is untouched by this.
+ */
+function pullLine(kind: DeckAuditKind, p: Record<string, unknown>): AuditLine | null {
+  if (kind !== "move") return null;
+  const cards = numberField(p.cards);
+  return {
+    text: `Pulled ${plural(numberField(p.copies), "copy", "copies")} from your collection`,
+    detail: cards > 0 ? `across ${plural(cards, "card")}` : null,
+  };
 }
 
 /**
@@ -339,32 +385,32 @@ function clearedFrom(entry: DeckAuditEntry, p: Record<string, unknown>): string 
 }
 
 /** A label put on a card, taken off it, or swapped for another one. */
-function cardTagLine(p: Record<string, unknown>, name: string): AuditLine {
-  const tag = text(p.tag);
+function cardLabelLine(p: Record<string, unknown>, name: string): AuditLine {
+  const label = text(p.label);
   const previous = text(p.previous);
-  if (tag === null) return { text: `Untagged ${name}`, detail: previous && `was ${previous}` };
-  return { text: `Tagged ${name}`, detail: previous ? `${previous} → ${tag}` : tag };
+  if (label === null) return { text: `Unlabelled ${name}`, detail: previous && `was ${previous}` };
+  return { text: `Labelled ${name}`, detail: previous ? `${previous} → ${label}` : label };
 }
 
 /**
- * What happened to a tag itself — the label, not a card wearing it.
+ * What happened to a label itself, rather than to a card wearing it.
  *
  * The name is read from either spelling the backend might use, because this half of the
  * contract arrived after the payload table was written and a renderer that insisted on one
- * key would render half of them as "a tag".
+ * key would render half of them as "a label".
  */
-function tagLine(p: Record<string, unknown>): AuditLine {
-  const name = text(p.tag) ?? text(p.name) ?? "a tag";
+function labelLine(p: Record<string, unknown>): AuditLine {
+  const name = text(p.label) ?? text(p.name) ?? "a label";
   const previous = text(p.previous) ?? text(p.previousName);
   const cards = numberField(p.cards);
   const moved = (suffix: string) => (cards > 0 ? `${plural(cards, "card")} ${suffix}` : null);
 
   switch (text(p.action)) {
     case "create":
-      return { text: `Created tag ${name}`, detail: null };
+      return { text: `Created label ${name}`, detail: null };
     case "rename":
       return {
-        text: previous ? `Renamed tag ${previous} to ${name}` : `Renamed a tag to ${name}`,
+        text: previous ? `Renamed label ${previous} to ${name}` : `Renamed a label to ${name}`,
         detail: moved("carry it"),
       };
     case "recolour":
@@ -373,19 +419,19 @@ function tagLine(p: Record<string, unknown>): AuditLine {
       // share the `rename` verb, because a colour was one of six palette tokens and never
       // appeared in a sentence. It is the reader's own hex now, and the same hex in every deck,
       // so it is a change worth being able to find again.
-      return { text: `Recoloured tag ${name}`, detail: text(p.color) };
+      return { text: `Recoloured label ${name}`, detail: text(p.color) };
     case "remove":
       // Taking a label off one deck's list, which is **not** deleting it — the distinction the
-      // per-deck tag never had to make. The sentence names the deck rather than the tag as the
-      // thing that changed, which is what tells the two lines apart in a history.
-      return { text: `Took tag ${name} off this deck`, detail: moved("untagged") };
+      // per-deck label never had to make. The sentence names the deck rather than the label as
+      // the thing that changed, which is what tells the two lines apart in a history.
+      return { text: `Took label ${name} off this deck`, detail: moved("unlabelled") };
     case "delete":
-      // Deleting a tag untags its cards rather than deleting them — in **every** deck wearing
-      // it, since v21 — which is the half of this sentence a reader would otherwise have to go
-      // and check.
-      return { text: `Deleted tag ${name}`, detail: moved("untagged") };
+      // Deleting a label unlabels its cards rather than deleting them — in **every** deck
+      // wearing it, since v21 — which is the half of this sentence a reader would otherwise
+      // have to go and check.
+      return { text: `Deleted label ${name}`, detail: moved("unlabelled") };
     default:
-      return { text: `Changed tag ${name}`, detail: null };
+      return { text: `Changed label ${name}`, detail: null };
   }
 }
 

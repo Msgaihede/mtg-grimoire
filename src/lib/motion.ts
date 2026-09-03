@@ -170,7 +170,7 @@ export const scrim: EnterExit = {
 
 /**
  * A centred surface drawn over the view: `Dialog` (and through it the deck editor's
- * categories, tags, history and settings), `CreateDeckDialog`, `TheoryDiffDialog`,
+ * categories, labels, history and settings), `CreateDeckDialog`, `TheoryDiffDialog`,
  * `ImportDialog`, and `CardDetailPane`, which is docked but arrives by scaling from its own
  * right edge.
  *

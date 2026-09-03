@@ -62,6 +62,69 @@ vi.mock("@/lib/ipc", async (original) => ({
   },
 }));
 
+/**
+ * The deck-plays census behind the cabinet's greyed deck rows (issue #358), faked at the module
+ * boundary.
+ *
+ * **Faked rather than driven through `ipc`, because what this file owns is the *use* of that
+ * answer and not the answer.** `useDecksPlaying` belongs to `features/decks/useDeckPlays` and is
+ * tested there; here it is a spy, which is what lets a test say what the census answered and —
+ * the whole point of the `lazy` row — that *building* a menu asked it nothing.
+ *
+ * **{@link plays} keeps the hook's contract rather than a convenient shortcut.** A deck is in the
+ * answer only when it holds **every** key it was handed. A fake that ORed them would let the group
+ * case below pass against a picker that had stopped intersecting, which is the one thing that case
+ * exists to catch.
+ */
+const decksPlaying = vi.fn();
+vi.mock("@/features/decks/useDeckPlays", () => ({
+  // The documented key: the oracle card, or the printing where `cards` has never heard of it.
+  playKey: (card: { oracleId: string | null; cardId: string }) => card.oracleId ?? card.cardId,
+  useDecksPlaying: (keys: readonly string[]) => decksPlaying(keys),
+}));
+
+/** What the census answers: deck id → the play keys that deck's live list holds. */
+function plays(byDeck: Record<number, readonly string[]>) {
+  decksPlaying.mockImplementation((keys: readonly string[]) => ({
+    deckIds: new Set(
+      Object.entries(byDeck)
+        .filter(([, held]) => keys.every((key) => held.includes(key)))
+        .map(([id]) => Number(id)),
+    ),
+    // **`pending`, and not a `query` object**, because that is what the picker reads: the hook
+    // exposes `query.isPending && query.fetchStatus !== "idle"` under this name precisely so a
+    // caller cannot mistake a *disabled* query for a loading one. A fake offering `query` instead
+    // would let the picker go back to the raw flag with nothing going red.
+    pending: false,
+  }));
+}
+
+/** The census still in flight. `deckIds` is empty because a pending query has no data — the point
+ *  is that the picker must not draw rows off it, greyed or otherwise. */
+function censusPending() {
+  decksPlaying.mockReturnValue({ deckIds: new Set<number>(), pending: true });
+}
+
+/**
+ * Mount a `lazy` row's body — what a reader does by expanding it, and the only way to see the rows
+ * behind `Decks` now that a query decides them.
+ *
+ * No cascade around it, which is `DeckTargetSubmenu`'s own tests' shape: `MenuRows` outside a menu
+ * draws the rows and runs what is pressed, which is exactly the half being asserted.
+ */
+function expand(item: MenuItem) {
+  if (item.kind !== "lazy") {
+    throw new Error(`${"label" in item ? item.label : item.kind} is ${item.kind}, not lazy`);
+  }
+  render(<item.Content onDone={vi.fn()} />);
+}
+
+/** The rows the expanded body drew, in order. A greyed row's `reason` is part of its text, so a
+ *  name is matched rather than compared where one is expected — see the greying cases. */
+function drawnRows(): string[] {
+  return screen.getAllByRole("menuitem").map((el) => el.textContent ?? "");
+}
+
 const BOLT: CardMenuTarget = {
   cardId: "bolt-lea",
   name: "Lightning Bolt",
@@ -148,6 +211,11 @@ function find(items: MenuItem[], label: string) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // **Nothing plays anything until a case says otherwise.** `clearAllMocks` clears calls and not
+  // implementations, so without this the census a test set would answer the next one's — and the
+  // empty answer is the fail-closed direction, so a case that forgot to arm it greys every deck
+  // rather than quietly enabling one.
+  plays({});
 });
 
 describe("buildCardMenu", () => {
@@ -394,8 +462,10 @@ describe("buildCardMenu", () => {
    * list they had already been stripped from. Found by driving the real app against a database
    * with three deck groups in the pinned band, one panel away from an empty picker.
    */
-  it("offers the deck groups through the whole menu, not only through the builder", () => {
+  it("offers the deck groups through the whole menu, not only through the builder", async () => {
+    const user = userEvent.setup();
     const toDeck = vi.fn();
+    plays({ 7: ["o-bolt"] });
     const addTo = find(
       buildCardMenu(
         BOLT,
@@ -408,12 +478,35 @@ describe("buildCardMenu", () => {
     ) as MenuSubmenu;
     const collection = find(addTo.items, "Collection") as MenuSubmenu;
 
-    const decks = find(collection.items, "Decks") as MenuSubmenu;
-    expect(labels(decks.items)).toEqual(["Mono-Red Aggro"]);
+    // `lazy` since issue #358: the rows behind it are decided by a census of what each deck plays,
+    // and that is a backend read this menu may not make until the reader expands the row.
+    const decks = find(collection.items, "Decks");
+    expect(decks.kind).toBe("lazy");
+    expand(decks);
+    expect(drawnRows()).toEqual(["Mono-Red Aggro"]);
 
-    (find(decks.items, "Mono-Red Aggro") as MenuAction).onSelect();
+    await user.click(screen.getByRole("menuitem", { name: /Mono-Red Aggro/ }));
     // The **deck** id, never the group's folder id — the row writes through the deck's own add.
     expect(toDeck).toHaveBeenCalledWith(BOLT, 7);
+  });
+
+  /**
+   * **The rule the whole `lazy` kind exists for, asserted at the outermost level.** A right-click
+   * on a tile in a wall of forty builds this array; if the census were asked here it would be
+   * asked forty times over a wall the reader is only scanning. `Add to → Deck` one row up is
+   * pinned the same way by "puts the deck picker behind a lazy row"; this is the cabinet's copy,
+   * and it is the assertion that would go red if the `Decks` row ever went back to `submenu`
+   * with the greying computed eagerly.
+   */
+  it("asks the deck census nothing while the menu is merely built", () => {
+    buildCardMenu(
+      BOLT,
+      deps({
+        toDeck: vi.fn(),
+        collectionFolders: [binder(1, "Binder"), deckGroup(20, "Mono-Red Aggro", 7)],
+      }),
+    );
+    expect(decksPlaying).not.toHaveBeenCalled();
   });
 
   it("asks for the finish first and the folder second when the printing has two", () => {
@@ -804,6 +897,9 @@ describe("buildCollectionTargetItems", () => {
    * wired the sanctioned write, and never as a folder id.
    */
   describe("the app's own folders", () => {
+    /** The one card every case here is filing, and the key {@link plays} answers about. */
+    const ONE = [BOLT] as const;
+
     it("draws none of them where the surface offers no deck row", () => {
       // The third argument absent is every caller that existed before this row did, and the
       // picker they get is the one they have always had.
@@ -818,7 +914,7 @@ describe("buildCollectionTargetItems", () => {
       const items = buildCollectionTargetItems(
         [binder(1, "Binder"), deckGroup(2, "Mono red", 4)],
         vi.fn(),
-        { toDeck: vi.fn() },
+        { toDeck: vi.fn(), targets: ONE },
       );
       expect(items.map((i) => ("label" in i ? i.label : i.kind))).toEqual([
         "Collection",
@@ -831,26 +927,125 @@ describe("buildCollectionTargetItems", () => {
     });
 
     /**
+     * **`lazy`, not `submenu`, and nothing is asked to build it** — issue #358. The rows behind
+     * `Decks` are decided by {@link decksPlaying}, which is a backend read; a right-click on a
+     * wall of forty tiles builds forty of these arrays and must fire none of them.
+     */
+    it("puts the deck groups behind a lazy row and asks the census nothing to build it", () => {
+      const items = buildCollectionTargetItems([deckGroup(2, "Mono red", 4)], vi.fn(), {
+        toDeck: vi.fn(),
+        targets: ONE,
+      });
+      expect(find(items, "Decks").kind).toBe("lazy");
+      expect(decksPlaying).not.toHaveBeenCalled();
+    });
+
+    /**
      * **A deck row hands over the deck, never the folder.** `set_entry_folder` calls
      * `user_folder` on its destination and answers `FOLDER_NOT_YOURS` for a group; a copy reaches
      * one only through `collection_to_deck`, which writes the `deck_cards` row in the same
      * transaction. Calling `choose` here would file copies into a deck that does not list them.
      */
-    it("hands the deck id to toDeck and leaves the folder chooser alone", () => {
+    it("hands the deck id to toDeck and leaves the folder chooser alone", async () => {
+      const user = userEvent.setup();
       const choose = vi.fn();
       const toDeck = vi.fn();
+      plays({ 4: ["o-bolt"] });
       const items = buildCollectionTargetItems(
         [binder(1, "Binder"), deckGroup(2, "Mono red", 4)],
         choose,
-        { toDeck },
+        { toDeck, targets: ONE },
       );
-      const decks = find(items, "Decks") as MenuSubmenu;
-      expect(labels(decks.items)).toEqual(["Mono red"]);
+      expand(find(items, "Decks"));
+      expect(drawnRows()).toEqual(["Mono red"]);
 
-      (find(decks.items, "Mono red") as MenuAction).onSelect();
+      const row = screen.getByRole("menuitem", { name: /Mono red/ });
+      // Live, because the deck's list already plays the card — the other half of the fence below.
+      expect(row).not.toHaveAttribute("aria-disabled");
+      await user.click(row);
       expect(toDeck).toHaveBeenCalledWith(4);
       // The folder id 2 is the group's, and nothing may ever pass it to a folder write.
       expect(choose).not.toHaveBeenCalled();
+    });
+
+    /**
+     * **Issue #358's whole point.** A deck group means *this deck holds these copies*, so aiming a
+     * card at one the deck does not play would file custody for a card the list says nothing
+     * about. The row is greyed rather than dropped, `Recently removed`'s argument: the deck is on
+     * the page behind the menu and in the pinned band, so a group that vanished would read as a
+     * picker that lost a deck rather than as a fact about the card.
+     */
+    it("greys a deck whose list does not play the card, and says why", async () => {
+      const user = userEvent.setup();
+      const toDeck = vi.fn();
+      // The deck plays something, just not this card — an empty deck and a deck that plays other
+      // things must grey the same way, and only the second says the census was consulted at all.
+      plays({ 4: ["o-something-else"] });
+      const items = buildCollectionTargetItems([deckGroup(2, "Mono red", 4)], vi.fn(), {
+        toDeck,
+        targets: ONE,
+      });
+      expand(find(items, "Decks"));
+
+      const row = screen.getByRole("menuitem", { name: /Mono red/ });
+      expect(row).toHaveAttribute("aria-disabled", "true");
+      // A phrase, because a row is as wide as its widest content — `MenuAction.reason`'s rule.
+      expect(row).toHaveTextContent("not in this deck");
+
+      await user.click(row);
+      expect(toDeck).not.toHaveBeenCalled();
+    });
+
+    /**
+     * **Every target, never any.** A press writes one add per card, so a deck that plays three of
+     * four would take the three and leave the fourth — one press, one menu closing, and nothing on
+     * screen saying half of it did not happen. The picker hands the census *all* the keys and
+     * greys on its answer; {@link plays} intersects, which is the hook's own contract.
+     */
+    it("greys a deck that plays only some of a picked set", async () => {
+      const user = userEvent.setup();
+      const toDeck = vi.fn();
+      const HELIX: CardMenuTarget = { ...BOLT, cardId: "helix-arn", oracleId: "o-helix" };
+      plays({ 4: ["o-bolt"], 5: ["o-bolt", "o-helix"] });
+      const items = buildCollectionTargetItems(
+        [deckGroup(2, "Half of it", 4), deckGroup(3, "Both", 5)],
+        vi.fn(),
+        { toDeck, targets: [BOLT, HELIX] },
+      );
+      expand(find(items, "Decks"));
+
+      // Both keys reached the census — a picker that asked about the first card only would grey
+      // exactly the same way here and be wrong about every other pair.
+      expect(decksPlaying).toHaveBeenCalledWith(["o-bolt", "o-helix"]);
+      expect(screen.getByRole("menuitem", { name: /Half of it/ })).toHaveAttribute(
+        "aria-disabled",
+        "true",
+      );
+      const both = screen.getByRole("menuitem", { name: /Both/ });
+      expect(both).not.toHaveAttribute("aria-disabled");
+      await user.click(both);
+      expect(toDeck).toHaveBeenCalledWith(5);
+    });
+
+    /**
+     * **Fail closed while the census is in flight.** Drawing rows off a pending query is drawing
+     * them off no data: they would each be pressable for one frame and then grey under the
+     * pointer. `CollectionPage.tsx`'s `stepperByTile` argues the same direction for the same class
+     * of control — a tile whose rows the wall cannot vouch for gets no stepper at all, because a
+     * control drawn before its fence is known is a control that writes past it.
+     */
+    it("draws a note rather than pressable rows while the census is loading", () => {
+      censusPending();
+      const items = buildCollectionTargetItems([deckGroup(2, "Mono red", 4)], vi.fn(), {
+        toDeck: vi.fn(),
+        targets: ONE,
+      });
+      expand(find(items, "Decks"));
+
+      expect(screen.getByText("Checking your decks…")).toBeInTheDocument();
+      // Not "greyed rows": no deck row is drawn at all, so there is nothing for a press to land
+      // on and nothing that could stop being greyed a frame later.
+      expect(screen.queryByRole("menuitem", { name: /Mono red/ })).not.toBeInTheDocument();
     });
 
     it("omits the Decks submenu where there is no deck group", () => {
@@ -859,6 +1054,7 @@ describe("buildCollectionTargetItems", () => {
       // cards go whether or not the reader keeps a deck.
       const items = buildCollectionTargetItems([binder(1, "Binder")], vi.fn(), {
         toDeck: vi.fn(),
+        targets: ONE,
       });
       expect(labels(items)).not.toContain("Decks");
       expect(labels(items)).toContain("Recently removed");
@@ -872,12 +1068,35 @@ describe("buildCollectionTargetItems", () => {
      */
     it("orders deck groups by name rather than by the order the decks were made", () => {
       // Both at `sort_order` 0, which is what v25 writes, so nothing but the name can order them.
+      // Both playing the card too, so the order is read off live rows rather than off a reason.
+      plays({ 9: ["o-bolt"], 1: ["o-bolt"] });
       const items = buildCollectionTargetItems(
         [deckGroup(2, "Zoo", 9), deckGroup(3, "Affinity", 1)],
         vi.fn(),
-        { toDeck: vi.fn() },
+        { toDeck: vi.fn(), targets: ONE },
       );
-      expect(labels((find(items, "Decks") as MenuSubmenu).items)).toEqual(["Affinity", "Zoo"]);
+      expand(find(items, "Decks"));
+      expect(drawnRows()).toEqual(["Affinity", "Zoo"]);
+    });
+
+    /**
+     * **A greyed deck is still in its place in the alphabet.** The order is a fact about the
+     * groups, not about which of them this card can go to — a picker that floated the pressable
+     * decks would move a row a reader has learnt the position of every time they right-clicked a
+     * different card.
+     */
+    it("keeps a greyed deck in the alphabet rather than sinking it", () => {
+      plays({ 9: ["o-bolt"] });
+      const items = buildCollectionTargetItems(
+        [deckGroup(2, "Zoo", 9), deckGroup(3, "Affinity", 1)],
+        vi.fn(),
+        { toDeck: vi.fn(), targets: ONE },
+      );
+      expand(find(items, "Decks"));
+      expect(screen.getAllByRole("menuitem").map((el) => el.textContent)).toEqual([
+        "Affinitynot in this deck",
+        "Zoo",
+      ]);
     });
 
     /**
@@ -890,7 +1109,10 @@ describe("buildCollectionTargetItems", () => {
     it("greys Recently removed and says on the row how to reach it", () => {
       const choose = vi.fn();
       const toDeck = vi.fn();
-      const items = buildCollectionTargetItems([binder(1, "Binder")], choose, { toDeck });
+      const items = buildCollectionTargetItems([binder(1, "Binder")], choose, {
+        toDeck,
+        targets: ONE,
+      });
       const removed = find(items, "Recently removed") as MenuAction;
 
       expect(removed.disabled).toBe(true);

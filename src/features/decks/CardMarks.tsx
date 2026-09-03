@@ -39,26 +39,26 @@ import { finishTreatments } from "@/lib/treatment";
 import type { DeckCard } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { cn } from "@/lib/utils";
-import { tagColorCss, tagFgCss } from "./tagColors";
+import { labelColorCss, labelFgCss } from "./labelColors";
 
 /**
- * The one tag a card wears, as an 8px chip in its own colour with the name one hover away.
+ * The one label a card wears, as an 8px chip in its own colour with the name one hover away.
  *
- * A dot rather than a word: a tag is a mark the reader put there and already knows, and a
- * 224px column has no room for a second label beside a card's name.
+ * A dot rather than a word: a label is a mark the reader put there and already knows, and a
+ * 224px column has no room for a second word beside a card's name.
  *
  * **8px is its size on a card at 100% zoom.** The Grid view lays this on a card face the reader can
  * zoom, so it reads that card's `--mark-scale` (`lib/cardZoom.ts`); the table and text views take
  * the `, 1` fallback and are unchanged. The 1px ring around it does **not** scale — it is a hairline
  * separating the dot from whatever it sits on, which is a job one pixel does at every size.
  */
-export function TagDot({
+export function LabelDot({
   name,
   color,
   className,
 }: {
   name: string;
-  /** The stored palette token, never a CSS colour — see `tagColors.ts`. */
+  /** The stored palette token, never a CSS colour — see `labelColors.ts`. */
   color: string | null;
   className?: string;
 }) {
@@ -66,12 +66,12 @@ export function TagDot({
   return (
     <span
       aria-hidden="true"
-      // Redundant with the button's own name: the tag's word is already one of
-      // `deckCardName`'s clauses (`card.tagName`), so the hint here is for the pointer only —
+      // Redundant with the button's own name: the label's word is already one of
+      // `deckCardName`'s clauses (`card.labelName`), so the hint here is for the pointer only —
       // `describes: false` leaves `aria-describedby` unset, which an `aria-hidden` span could
       // not usefully carry anyway.
       {...tip(name, { describes: false })}
-      style={{ backgroundColor: tagColorCss(color) }}
+      style={{ backgroundColor: labelColorCss(color) }}
       className={cn(
         "size-[calc(0.5rem*var(--mark-scale,1))] shrink-0 rounded-[2px]",
         "shadow-[0_0_0_1px_var(--color-bg)]",
@@ -82,8 +82,8 @@ export function TagDot({
 }
 
 /**
- * The copy count as a **filled tag in the card's own tag colour** — the deck stack's mark, and
- * the one place the tag and the quantity are drawn as a single object.
+ * The copy count as a **filled tag in the card's own label colour** — the deck stack's mark, and
+ * the one place the label and the quantity are drawn as a single object.
  *
  * ## Why the two were merged
  *
@@ -93,18 +93,18 @@ export function TagDot({
  * So the count is *printed on* the tag: one object, one glance, and the strip keeps room for
  * the printed name underneath it.
  *
- * **An untagged card is grey** — {@link CountTag}'s own `NEUTRAL_COUNT_PAINT`, never the gold a
- * missing token falls to. A filled mark has to be some colour, and if the untagged one were gold
- * then gold would stop being something a tag says. This is the one caller that draws the
- * distinction, which is why it passes `paint` for a tag and nothing at all without one.
+ * **An unlabelled card is grey** — {@link CountTag}'s own `NEUTRAL_COUNT_PAINT`, never the gold a
+ * missing token falls to. A filled mark has to be some colour, and if the unlabelled one were
+ * gold then gold would stop being something a label says. This is the one caller that draws the
+ * distinction, which is why it passes `paint` for a label and nothing at all without one.
  *
  * **The box is {@link CountTag}'s and no longer this file's** — the slant, the height, the mono
  * face, the `aria-hidden` and the number-with-no-`×`. The search wall makes the same statement
  * about a different quantity (how many printings a collapsed tile stands for) and the two have to
- * be one object. What stays here is what makes this one a *tag*: the colour it is filled with,
+ * be one object. What stays here is what makes this one a *label*: the colour it is filled with,
  * the sentence naming both facts, and the z-index below.
  *
- * {@link TagDot} is untouched and is still what the table, the text columns and the categories
+ * {@link LabelDot} is untouched and is still what the table, the text columns and the categories
  * panel draw — a row has a column for the count and does not need the two folded together.
  */
 export function QuantityTag({
@@ -114,10 +114,11 @@ export function QuantityTag({
   className,
 }: {
   quantity: number;
-  /** The tag's name, or `null` for an untagged card. `deck_cards` answers `tagId`, `tagName`
-   *  and `tagColor` as a set — all three `null` together — so this decides both. */
+  /** The label's name, or `null` for an unlabelled card. `deck_cards` answers `labelId`,
+   *  `labelName` and `labelColor` as a set — all three `null` together — so this decides
+   *  both. */
   name: string | null;
-  /** The stored palette token, never a CSS colour — see `tagColors.ts`. */
+  /** The stored palette token, never a CSS colour — see `labelColors.ts`. */
   color: string | null;
   className?: string;
 }) {
@@ -132,8 +133,8 @@ export function QuantityTag({
       // a `useTooltip()` binding internally, since that component's file is outside this
       // sweep's list. The prop's name and shape are unchanged, so this call site needed no edit.
       title={name === null ? `${quantity} in this pile` : `${name} · ${quantity} in this pile`}
-      // Nothing for an untagged card, which is how it lands on the neutral grey — see above.
-      paint={name === null ? undefined : { css: tagColorCss(color), fg: tagFgCss(color) }}
+      // Nothing for an unlabelled card, which is how it lands on the neutral grey — see above.
+      paint={name === null ? undefined : { css: labelColorCss(color), fg: labelFgCss(color) }}
       className={cn(
         // **The z-index is load-bearing and `relative` alone was not enough.** This tag has to
         // cover the Game Changer banner tucked 10px under its slanted tail, and the obvious
@@ -273,10 +274,10 @@ export const THEORY_MATCH_ATTR = "data-theory-match";
  * grey chip at one end of the strip and a grey chip at the other read as two of the same thing.
  * Azure is none of those, and it is a colour the reader has no other meaning for on a card face.
  *
- * It **is** one of the six tag colours, and that is the one cost. A card tagged Azure draws an
- * azure {@link QuantityTag} at the other end of this strip — but that mark is a *number* at the
- * opposite end, so the pair are still told apart by content and position, which is the same
- * argument that lets two gold things (a Gold tag and the banner) already coexist.
+ * It **is** one of the six label colours, and that is the one cost. A card labelled Azure draws
+ * an azure {@link QuantityTag} at the other end of this strip — but that mark is a *number* at
+ * the opposite end, so the pair are still told apart by content and position, which is the same
+ * argument that lets two gold things (a Gold label and the banner) already coexist.
  *
  * ## `aria-hidden`, like every mark here
  *

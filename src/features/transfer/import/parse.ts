@@ -30,15 +30,42 @@ import { parseCsv } from "../csv";
 import { TRANSFER_FIELDS, TRANSFER_FIELD_IDS, type TransferFieldId } from "../fields";
 
 /**
+ * What an **older build** called two of these columns. A read path and nothing else.
+ *
+ * The deck's label column was `Tag`, and its colour `Tag colour`, until the rename — so every
+ * deck CSV written before it says those words. With the registry's own header now `Label` those
+ * columns would map to nothing at all, and the reader would get their cards back with the
+ * labels quietly stripped: a round trip that drops a fact and says nothing, which is the one
+ * failure `decklists.test.ts`' fixed point exists to make impossible.
+ *
+ * **Nothing writes `Tag` any more**, so this table can only ever grow by another rename, never
+ * by a format gaining a channel — which is what keeps it from becoming a second registry.
+ *
+ * **It cannot shadow the collection's `Tags`**, which is a different fact and keeps its name.
+ * {@link normalizeHeader} lowercases and collapses runs of whitespace and does nothing else, so
+ * `tag` and `tags` are two keys and always were — and the aliases are laid down *first* below,
+ * so a real header would win the key even if one ever spelled itself the same way.
+ */
+const LEGACY_CSV_HEADERS: readonly (readonly [string, TransferFieldId])[] = [
+  ["Tag", "label"],
+  ["Tag colour", "labelColor"],
+];
+
+/**
  * A CSV header maps to field ids by `csvHeader`, case- and space-insensitively.
  *
  * Built from the registry rather than written out, so a field added there is readable back
  * without a second edit here — which is the whole reason the registry carries a `csvHeader` at
- * all rather than the writer spelling one inline.
+ * all rather than the writer spelling one inline. {@link LEGACY_CSV_HEADERS} is laid over it for
+ * the one thing a table derived from today's names cannot say: what yesterday's called a column.
+ *
+ * **The aliases go in first on purpose.** `Map`'s constructor keeps the *last* entry for a
+ * repeated key, so a registry header always beats an alias spelled the same way.
  */
-const HEADER_TO_FIELD = new Map<string, TransferFieldId>(
-  TRANSFER_FIELD_IDS.map((id) => [normalizeHeader(TRANSFER_FIELDS[id].csvHeader), id]),
-);
+const HEADER_TO_FIELD = new Map<string, TransferFieldId>([
+  ...LEGACY_CSV_HEADERS.map(([header, id]) => [normalizeHeader(header), id] as const),
+  ...TRANSFER_FIELD_IDS.map((id) => [normalizeHeader(TRANSFER_FIELDS[id].csvHeader), id] as const),
+]);
 
 function normalizeHeader(raw: string): string {
   return raw.trim().toLowerCase().replace(/\s+/g, " ");
@@ -147,12 +174,12 @@ export interface ParsedLine {
    * The label the file put on this card — Archidekt's `^Keeper,#4aab08^`, name half. `null` for a
    * line carrying none, which is every line of every other format this reads.
    *
-   * **Verbatim, including its capitals**, because `deck_tags.name` keeps whatever capitals the
+   * **Verbatim, including its capitals**, because `deck_labels.name` keeps whatever capitals the
    * reader chose and this is a reader's word arriving from somewhere else. Whether it is the
-   * *same* label as one they already have is `tagNameKey`'s question, asked in the planner and
-   * again — authoritatively — by the UNIQUE index behind `deck_tags.name_key`.
+   * *same* label as one they already have is `labelNameKey`'s question, asked in the planner and
+   * again — authoritatively — by the UNIQUE index behind `deck_labels.name_key`.
    */
-  tagName: string | null;
+  labelName: string | null;
   /**
    * That label's colour as `#rrggbb` lowercase, or `null` when the group carried none.
    *
@@ -162,7 +189,7 @@ export interface ParsedLine {
    * enforced in `commit_import`, where the find-or-create is, and it is the same rule
    * {@link excluded} obeys one channel over.
    */
-  tagColor: string | null;
+  labelColor: string | null;
   /** Every column a CSV named that this app recognises, verbatim. `{}` for every other format —
    *  a decklist line has no channel for a condition or a purchase price. */
   extra: Partial<Record<TransferFieldId, string>>;
@@ -251,7 +278,8 @@ const LINE =
 
 /**
  * Trailing decoration that belongs to the exporter rather than to the card: the `*F*`/`*E*`
- * finish markers, an Archidekt `^Tag,#colour^`, and a trailing `#tag`.
+ * finish markers, an Archidekt `^Label,#colour^`, and a trailing `#tag` (somebody else's
+ * hashtag convention, and not this app's label — that one arrives in the caret group).
  *
  * Every one is anchored to the **end** and requires whitespace in front of it. Both halves of
  * that matter: a `#` in the middle of a line is part of a name, and a marker regex that
@@ -259,75 +287,76 @@ const LINE =
  *
  * **The `^…^` arm is not the `#` arm widened.** Archidekt writes `^Keeper,#4aab08^`, where the
  * hash follows a comma rather than whitespace, so the `#` arm never saw it and the whole tail
- * stayed inside the card's name. `[^^]*` rather than `\S*` because a tag's text has spaces and
+ * stayed inside the card's name. `[^^]*` rather than `\S*` because a label's text has spaces and
  * parentheses in it — `^Fence (flavor),#fa890d^` is one of them.
  *
  * **The bracket is no longer here**, because it is read rather than discarded: see
  * {@link stripDecorations}. The `^…^` arm is still here for {@link FINISH_MARKER}'s reason: it
- * is {@link TAG_MARKER} that reads one, and this is what takes off a shape that one cannot read.
+ * is {@link LABEL_MARKER} that reads one, and this is what takes off a shape that one cannot
+ * read.
  */
 const MARKERS = [/\s+\*[A-Z]\*$/, /\s+\^[^^]*\^$/, /\s+#\S+$/];
 
 /**
  * Archidekt's label, **read** rather than merely stripped (2026-08-24) — `^Keeper,#4aab08^`.
  *
- * It was thrown away for as long as this app had nowhere to put it. `deck_cards.tag_id` is that
- * somewhere, and `deck_tags` has been one app-wide row per name since schema v21, so a label in
- * a file is a label this app can find or make.
+ * It was thrown away for as long as this app had nowhere to put it. `deck_cards.label_id` is
+ * that somewhere, and `deck_labels` has been one app-wide row per name since schema v21, so a
+ * label in a file is a label this app can find or make.
  *
  * **The colour is the last comma-separated field, not the second**, and that is the whole of why
- * this is a split rather than a two-group regex. A tag's text may itself contain a comma —
+ * this is a split rather than a two-group regex. A label's text may itself contain a comma —
  * nothing in Archidekt forbids one, and `Fence (flavor)` shows the field is free text — so
  * `/^(.+),(#.+)$/` would be right by accident and `/^([^,]+),(#.+)$/` wrong on the first label
  * somebody names `Cut, maybe`. Splitting at the **last** comma and checking the tail is a colour
  * is right either way.
  *
- * **A group with no colour in it is still a tag.** `^Keeper^` is not a shape any export in scope
- * writes, but a hand-edited list is exactly what this parser exists to keep reading; the name is
- * the half that matters and {@link ParsedLine.tagColor} answering `null` is what the planner
- * reads as "pick a colour for me".
+ * **A group with no colour in it is still a label.** `^Keeper^` is not a shape any export in
+ * scope writes, but a hand-edited list is exactly what this parser exists to keep reading; the
+ * name is the half that matters and {@link ParsedLine.labelColor} answering `null` is what the
+ * planner reads as "pick a colour for me".
  */
-const TAG_MARKER = /\s+\^([^^]*)\^$/;
+const LABEL_MARKER = /\s+\^([^^]*)\^$/;
 
 /**
  * A colour Archidekt wrote, as `#rrggbb` lowercase, or `null` for a tail that is not one.
  *
- * **Deliberately not `normalizeTagColor` from `features/decks/tagColors.ts`**, which this could
- * import and must not: that function also reads the six retired palette *tokens*, so a label
- * literally called `gold` would have its own name read as its colour. This is the narrower
+ * **Deliberately not `normalizeLabelColor` from `features/decks/labelColors.ts`**, which this
+ * could import and must not: that function also reads the six retired palette *tokens*, so a
+ * label literally called `gold` would have its own name read as its colour. This is the narrower
  * question — did the exporter write a hex here — and the two answers must not be the same
  * function.
  */
-const TAG_COLOR = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
+const LABEL_COLOR = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
 
 /**
- * A `Tag colour` **cell**, as `#rrggbb` lowercase, or `null` for anything else.
+ * A `Label colour` **cell**, as `#rrggbb` lowercase, or `null` for anything else.
  *
- * **The `#` is optional here and required in {@link TAG_COLOR}, and that is not an
+ * **The `#` is optional here and required in {@link LABEL_COLOR}, and that is not an
  * inconsistency.** Inside `^…^` the hash is what tells the colour from the name — the split is
  * on a comma, and a label really called `Cut, abc` would otherwise have `abc` read as `#aabbcc`
  * and lose half its own name. A dedicated column has nothing to disambiguate from, and a reader
  * typing `4aab08` into a spreadsheet means the colour, so this arm takes it.
  */
-function csvTagColor(raw: string): string | null {
+function csvLabelColor(raw: string): string | null {
   const found = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(raw.trim());
   if (found === null) return null;
   const digits = found[1].toLowerCase();
   return `#${digits.length === 3 ? digits.replace(/./g, (d) => d + d) : digits}`;
 }
 
-/** One `^…^` group, read. `null` when the group was empty — a tag with no name is no tag. */
-function readTagMarker(inside: string): { name: string; color: string | null } | null {
+/** One `^…^` group, read. `null` when the group was empty — a label with no name is no label. */
+function readLabelMarker(inside: string): { name: string; color: string | null } | null {
   const comma = inside.lastIndexOf(",");
   const tail = comma === -1 ? "" : inside.slice(comma + 1).trim();
-  const found = TAG_COLOR.exec(tail);
+  const found = LABEL_COLOR.exec(tail);
   const name = (found === null ? inside : inside.slice(0, comma)).trim();
   if (name === "") return null;
   const digits = found === null ? null : found[1].toLowerCase();
   return {
     name,
-    // `#f00` and `#ff0000` are the same colour, and `deck_tags.color` holds one shape of it —
-    // `tagColors.ts` expands the shorthand exactly this way for exactly this reason.
+    // `#f00` and `#ff0000` are the same colour, and `deck_labels.color` holds one shape of it —
+    // `labelColors.ts` expands the shorthand exactly this way for exactly this reason.
     color:
       digits === null
         ? null
@@ -408,7 +437,7 @@ interface Decorations {
   /** The `*F*` / `*E*` marker as a finish, or `null` for the regular copy. */
   finish: DeckFinish;
   /** Archidekt's `^Name,#rrggbb^`, read — `null` for a line carrying none. */
-  tag: { name: string; color: string | null } | null;
+  label: { name: string; color: string | null } | null;
 }
 
 /**
@@ -416,7 +445,7 @@ interface Decorations {
  *
  * Repeatedly, to a fixed point, because each pattern is anchored to the end and a line can carry
  * three. `1x Skrelv, Defector Mite (one) 33 *F* [Protection] ^Keeper,#4aab08^` is the case: the
- * tag comes off first, which is the only thing that puts the bracket at the end, which is the
+ * label comes off first, which is the only thing that puts the bracket at the end, which is the
  * only thing that puts `*F*` there. The same loop is what `1 Sol Ring *F* #Ramp` has always
  * needed — one pass takes `#Ramp` off the tail and a single pass would import `Sol Ring *F*`.
  *
@@ -427,7 +456,7 @@ function stripDecorations(line: string): Decorations {
   let body = line;
   let bracket: string | null = null;
   let finish: DeckFinish = null;
-  let tag: { name: string; color: string | null } | null = null;
+  let label: { name: string; color: string | null } | null = null;
   for (;;) {
     const before = body;
     const found = BRACKET.exec(body);
@@ -441,14 +470,14 @@ function stripDecorations(line: string): Decorations {
     const marked = FINISH_MARKER.exec(body);
     if (marked !== null) finish ??= marked[1] === "F" ? "foil" : "etched";
     // The same discipline one channel over, and the `??=` is doing more work here than it does
-    // for the finish: a card can wear several labels in Archidekt and `deck_cards.tag_id` holds
-    // exactly one, so a line writing two `^…^` groups keeps the **rightmost**, which is the one
-    // nearest what it labels. That is a choice rather than a fact about the format, and it is
-    // stated here because nothing else in the pipeline can see that a second group existed.
-    const labelled = TAG_MARKER.exec(body);
-    if (labelled !== null) tag ??= readTagMarker(labelled[1]);
+    // for the finish: a card can wear several labels in Archidekt and `deck_cards.label_id`
+    // holds exactly one, so a line writing two `^…^` groups keeps the **rightmost**, which is
+    // the one nearest what it labels. That is a choice rather than a fact about the format, and
+    // it is stated here because nothing else in the pipeline can see that a second group existed.
+    const labelled = LABEL_MARKER.exec(body);
+    if (labelled !== null) label ??= readLabelMarker(labelled[1]);
     for (const marker of MARKERS) body = body.replace(marker, "");
-    if (body === before) return { body, bracket, finish, tag };
+    if (body === before) return { body, bracket, finish, label };
   }
 }
 
@@ -594,8 +623,8 @@ function parseCsvGrid(grid: string[][], header: readonly (TransferFieldId | null
       // holds one value. Both are read — a column this app writes and cannot read back is a
       // round trip that loses something silently, which is what `decklists.test.ts`' fixed point
       // exists to make impossible.
-      tagName: cell("tag") === "" ? null : cell("tag"),
-      tagColor: csvTagColor(cell("tagColor")),
+      labelName: cell("label") === "" ? null : cell("label"),
+      labelColor: csvLabelColor(cell("labelColor")),
       extra,
     });
   }
@@ -795,8 +824,8 @@ export function parseDecklist(text: string): ParsedList {
       categoryName,
       finish: decorated.finish,
       excluded,
-      tagName: decorated.tag?.name ?? null,
-      tagColor: decorated.tag?.color ?? null,
+      labelName: decorated.label?.name ?? null,
+      labelColor: decorated.label?.color ?? null,
       // A decklist line has no channel for a condition or a purchase price — only a CSV's
       // column reader ever fills this.
       extra: {},

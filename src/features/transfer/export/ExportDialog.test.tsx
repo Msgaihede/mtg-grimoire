@@ -238,19 +238,19 @@ describe("ExportDialog", () => {
       quantity: 2,
       setCode: "lea",
       collectorNumber: "161",
-      tagName: "Keeper",
-      tagColor: "#4aab08",
+      labelName: "Keeper",
+      labelColor: "#4aab08",
     });
-    const tagBox = () => screen.getByRole("checkbox", { name: "Tag" });
+    const labelBox = () => screen.getByRole("checkbox", { name: "Label" });
 
     it("is ticked on Archidekt and offers no colour box of its own", async () => {
       const user = userEvent.setup();
       render(<ExportDialog {...props} cards={[KEEPER]} />);
 
       await user.click(await screen.findByRole("radio", { name: "Archidekt" }));
-      expect(tagBox()).toBeChecked();
+      expect(labelBox()).toBeChecked();
       // The colour rides inside `^Keeper,#4aab08^`, so a box for it here would change nothing.
-      expect(screen.queryByRole("checkbox", { name: "Tag colour" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("checkbox", { name: "Label colour" })).not.toBeInTheDocument();
     });
 
     it("writes the label into the Archidekt preview, and stops when it is unticked", async () => {
@@ -261,7 +261,7 @@ describe("ExportDialog", () => {
 
       expect(screen.getByText(/\^Keeper,#4aab08\^/)).toBeInTheDocument();
 
-      await user.click(tagBox());
+      await user.click(labelBox());
       expect(screen.queryByText(/\^Keeper/)).not.toBeInTheDocument();
     });
 
@@ -270,15 +270,15 @@ describe("ExportDialog", () => {
       render(<ExportDialog {...props} cards={[KEEPER]} />);
       await user.click(await screen.findByRole("radio", { name: "CSV" }));
 
-      const colourBox = screen.getByRole("checkbox", { name: "Tag colour" });
+      const colourBox = screen.getByRole("checkbox", { name: "Label colour" });
       // CSV's defaults are a deliberate core; the label and its colour are both opt-in there.
-      expect(tagBox()).not.toBeChecked();
+      expect(labelBox()).not.toBeChecked();
       expect(colourBox).not.toBeChecked();
 
-      await user.click(tagBox());
+      await user.click(labelBox());
       await user.click(colourBox);
       await showList(user);
-      expect(screen.getByText(/Tag,Tag colour/)).toBeInTheDocument();
+      expect(screen.getByText(/Label,Label colour/)).toBeInTheDocument();
       expect(screen.getByText(/Keeper,#4aab08/)).toBeInTheDocument();
     });
 
@@ -287,7 +287,10 @@ describe("ExportDialog", () => {
       render(<ExportDialog {...props} cards={[KEEPER]} />);
       for (const format of ["Plain text", "MTGO", "Arena", "Moxfield", "TCGplayer"]) {
         await user.click(await screen.findByRole("radio", { name: format }));
-        expect(screen.queryByRole("checkbox", { name: "Tag" }), format).not.toBeInTheDocument();
+        expect(
+          screen.queryByRole("checkbox", { name: "Label" }),
+          format,
+        ).not.toBeInTheDocument();
       }
     });
   });

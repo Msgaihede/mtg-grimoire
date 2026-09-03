@@ -21,7 +21,7 @@ import {
   omittedCount,
   type ExportFormat,
 } from "./export/format";
-import { tagNameKey } from "@/features/decks/tagNames";
+import { labelNameKey } from "@/features/decks/labelNames";
 import { defaultFields } from "./fields";
 import { transferCard } from "./fixtures";
 import type { TransferCard } from "./TransferCard";
@@ -118,10 +118,11 @@ function exportCardsFor(text: string): TransferCard[] {
       .filter((pile) => pile.inactive)
       .map((pile) => pile.name),
   );
-  // The colour lives on the plan's label list rather than on the card, which is `PlannedTag`'s
+  // The colour lives on the plan's label list rather than on the card, which is
+  // `PlannedLabel`'s
   // whole shape: a colour is a fact about the label and one label is on forty lines. This is the
   // join `commit_import` makes with a database behind it, made here against the plan.
-  const colorFor = new Map(plan.tags.map((tag) => [tag.key, tag.color]));
+  const colorFor = new Map(plan.labels.map((label) => [label.key, label.color]));
   return plan.cards.map((card) =>
     transferCard({
       name: card.match.name,
@@ -137,8 +138,9 @@ function exportCardsFor(text: string): TransferCard[] {
       // Same reasoning as the finish, one channel over: `ARCHIDEKT_SECTIONED` carries 44
       // labelled lines, so wiring these two is what puts a real corpus of labels through the
       // fixed point rather than the hand-built pair `format.test.ts` uses.
-      tagName: card.tagName,
-      tagColor: card.tagName === null ? null : (colorFor.get(tagNameKey(card.tagName)) ?? null),
+      labelName: card.labelName,
+      labelColor:
+        card.labelName === null ? null : (colorFor.get(labelNameKey(card.labelName)) ?? null),
     }),
   );
 }
@@ -387,23 +389,23 @@ describe("a real decklist round-trips through every format this app can read", (
     const before = parseDecklist(ARCHIDEKT_SECTIONED).lines;
     const after = parseDecklist(written).lines;
 
-    const labels = (lines: readonly { tagName: string | null; tagColor: string | null }[]) =>
-      lines.map((line) => `${line.tagName ?? ""}|${line.tagColor ?? ""}`);
+    const labels = (lines: readonly { labelName: string | null; labelColor: string | null }[]) =>
+      lines.map((line) => `${line.labelName ?? ""}|${line.labelColor ?? ""}`);
 
-    expect(after.filter((line) => line.tagName !== null)).toHaveLength(44);
+    expect(after.filter((line) => line.labelName !== null)).toHaveLength(44);
     expect(labels(after)).toEqual(labels(before));
   });
 
   /** And out of a CSV, which spends a column on each half rather than one group on both. */
   it("keeps every label through a CSV carrying both of its columns", () => {
-    const fields = [...DECK_FIELDS("csv"), "tag" as const, "tagColor" as const];
+    const fields = [...DECK_FIELDS("csv"), "label" as const, "labelColor" as const];
     const written = formatExport(exportCardsFor(ARCHIDEKT_SECTIONED), "csv", fields);
     const after = parseDecklist(written).lines;
 
-    expect(after.filter((line) => line.tagName !== null)).toHaveLength(44);
-    expect(after.find((line) => line.tagName !== null)).toMatchObject({
-      tagName: "Keeper",
-      tagColor: "#4aab08",
+    expect(after.filter((line) => line.labelName !== null)).toHaveLength(44);
+    expect(after.find((line) => line.labelName !== null)).toMatchObject({
+      labelName: "Keeper",
+      labelColor: "#4aab08",
     });
   });
 

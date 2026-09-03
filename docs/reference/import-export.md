@@ -42,22 +42,22 @@ maybeboard.
 
 ## The deck label, both directions
 
-`^Keeper,#4aab08^` — a `deck_tags` row on a deck card. Read on import since 2026-08-24
-(`ParsedLine.tagName`/`tagColor` → `ImportPlan.tags` → the picker on the import step →
-`ImportItem.tag_name`/`tag_color`), and **written on export since the same day**, so a deck
+`^Keeper,#4aab08^` — a `deck_labels` row on a deck card. Read on import since 2026-08-24
+(`ParsedLine.labelName`/`labelColor` → `ImportPlan.labels` → the picker on the import step →
+`ImportItem.label_name`/`label_color`), and **written on export since the same day**, so a deck
 survives a full round trip through the one text format with a slot for it.
 
-**Two fields, not one, and the split is forced by the media.** `tag` is the name; `tagColor` is
-the colour. Archidekt writes the pair as one group, so its line has room for both and it offers
-only `tag` — a colour checkbox there would be a control that changed nothing, and `writeLine`
-reads `card.tagColor` off the card whenever `tag` is on. A CSV cell holds one value, so it spends
-a column each and offers both boxes. That is the only place in `fields.ts` where a format
+**Two fields, not one, and the split is forced by the media.** `label` is the name; `labelColor`
+is the colour. Archidekt writes the pair as one group, so its line has room for both and it offers
+only `label` — a colour checkbox there would be a control that changed nothing, and `writeLine`
+reads `card.labelColor` off the card whenever `label` is on. A CSV cell holds one value, so it
+spends a column each and offers both boxes. That is the only place in `fields.ts` where a format
 deliberately declares fewer fields than it writes.
 
 | | Carries a label? | Colour |
 | --- | --- | --- |
 | Archidekt | `^Name,#rrggbb^`, last on the line | inside the group; no box of its own |
-| CSV | `Tag` column | `Tag colour` column, its own box, **off** by default |
+| CSV | `Label` column | `Label colour` column, its own box, **off** by default |
 | plain · MTGO · Arena · Moxfield · TCGplayer | no | — |
 
 **On by default for Archidekt and off for CSV.** Archidekt's other four optional fields are on
@@ -74,18 +74,30 @@ channel this app emits and cannot read back — and `\S+` cannot hold `Cut candi
 Archidekt and CSV are the whole list.
 
 **No `DISCRIMINATOR` entry, and that is checked rather than assumed.** A label is not structural:
-with `tag` on it is an ordinary keyed field, so two differently-labelled rows are two lines; with
+with `label` on it is an ordinary keyed field, so two differently-labelled rows are two lines; with
 it off the file cannot tell them apart and folding them is the fold doing its job.
-`format.test.ts`'s "keeps two labels apart while Tag is on, and folds them when it is off" is that
-pair.
+`format.test.ts`'s "keeps two labels apart while Label is on, and folds them when it is off" is
+that pair.
 
-**`Tag` and the collection's `Tags` are two different columns for two different facts** — one row
-of `deck_tags` against `collection_entries.tags`, which is free text the reader typed on a copy
-they own. The near-collision is safe rather than survived: `SURFACE_FIELDS` gives one to the deck
-and the other to the collection, so no surface offers both and no file can hold both.
-`fields.test.ts` asserts that emptiness directly, over every format × surface pair.
+**The near-collision with the collection's `Tags` is gone, and the header that made it still
+reads.** The deck's column was `Tag` until 2026-09-03 and the collection's free-text one is
+`Tags` — one row of `deck_labels` against `collection_entries.tags`, two different facts one
+letter apart. The deck's is `Label` now and the collection's did not move, so a reader looking at
+a header row can no longer take one for the other. The structural fence is unchanged and still
+the real one: `SURFACE_FIELDS` gives one to the deck and the other to the collection, so no
+surface offers both and no file can hold both, and `fields.test.ts` asserts that emptiness
+directly over every format × surface pair.
+**A CSV an older build wrote still reads its labels back**, through `parse.ts`'s
+`LEGACY_CSV_HEADERS` — `Tag` → `label` and `Tag colour` → `labelColor`, a read path and nothing
+else, since no writer emits those words any more. It is laid **under** the registry-derived map
+rather than over it, because `Map`'s constructor keeps the last entry for a repeated key and a
+real header must always win one. It cannot shadow the collection's `Tags`: `normalizeHeader`
+lowercases and collapses whitespace and does nothing else, so `tag` and `tags` are two keys and
+always were. Without the alias the columns would map to nothing and the cards would come back
+with their labels quietly stripped — a round trip that drops a fact and says nothing, which is
+exactly what the fixed point below exists to make impossible.
 
-The round trip is measured rather than claimed. `decklists.test.ts` wires `tagName`/`tagColor`
+The round trip is measured rather than claimed. `decklists.test.ts` wires `labelName`/`labelColor`
 into `exportCardsFor`, so `ARCHIDEKT_SECTIONED`'s **44 labelled lines of 105** go out through the
 writer and back through the parser: "keeps every label, and its colour, through Archidekt"
 compares the label on every line before and after, and the CSV twin does the same over both
@@ -176,20 +188,21 @@ than carrying the old selection forward, because a set chosen for CSV means noth
 and no name is not a card. **Every other id in `TRANSFER_FIELD_IDS` can be optional somewhere.**
 
 **There is no total written here any more, and the reason is on the record.** This page said
-"25 fields total" from the day it shipped and went on saying it after `tag` and `tagColor` landed
-on 2026-08-24 — the array holds **27** ids as of 2026-08-25, counted by running the module. A
+"25 fields total" from the day it shipped and went on saying it after the deck label's two fields
+landed on 2026-08-24 — the array holds **27** ids as of 2026-08-25, counted by running the
+module. A
 count is a fact about a *tree*, `TRANSFER_FIELD_IDS.length` is the only honest way to ask, and
 `fields.test.ts` already asserts one header per id, so the number is a build's answer rather than
 a sentence's.
 
 | Surface | Fields it carries, excluding `quantity`/`name` |
 | --- | --- |
-| `deck` | setCode, collectorNumber, category, finish, **tag**, **tagColor**, lang, setName, rarity, typeLine, unitPrice |
+| `deck` | setCode, collectorNumber, category, finish, **label**, **labelColor**, lang, setName, rarity, typeLine, unitPrice |
 | `collection` | setCode, collectorNumber, finish, condition, lang, tradelistQuantity, purchasePrice, purchaseCurrency, acquiredAt, acquisitionSource, serialNumber, grading, altered, signed, proxy, misprint, tags, notes, setName, rarity, typeLine, unitPrice |
 | `wishlist` | setCode, collectorNumber, finish, lang, notes, rarity, typeLine, unitPrice |
 
 (Transcribed from `SURFACE_FIELDS` on 2026-08-25 by running it, and the deck row is the one that
-had rotted — it was missing `tag` and `tagColor` and carried a stale count beside them. Re-read it
+had rotted — it was missing the label's two fields and carried a stale count beside them. Re-read it
 in the same commit that changes that constant. The collection carries every fact a physical card
 can have except a pile, which is why its CSV is the tallest thing the export dialog draws.)
 `category` is the one field neither the collection nor
@@ -212,8 +225,8 @@ space-insensitively, so a header never drifts out of sync with a column:
 | `collectorNumber` | Collector number | `proxy` | Proxy |
 | `category` | Category | `misprint` | Misprint |
 | `finish` | Finish | `tags` | Tags |
-| `tag` | Tag | `notes` | Notes |
-| `tagColor` | Tag colour | `setName` | Set name |
+| `label` | Label | `notes` | Notes |
+| `labelColor` | Label colour | `setName` | Set name |
 | `condition` | Condition | `rarity` | Rarity |
 | `lang` | Language | `typeLine` | Type line |
 | `tradelistQuantity` | Tradelist quantity | `unitPrice` | Price |

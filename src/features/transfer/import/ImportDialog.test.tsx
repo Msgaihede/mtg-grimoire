@@ -188,9 +188,9 @@ function deckCard(over: Partial<DeckCard> & { quantity: number }): DeckCard {
     categoryActive: true,
     finish: null,
     variant: "live",
-    tagId: null,
-    tagName: null,
-    tagColor: null,
+    labelId: null,
+    labelName: null,
+    labelColor: null,
     name: "Sol Ring",
     setCode: "lea",
     setName: "Limited Edition Alpha",
@@ -225,12 +225,12 @@ const DETAIL: DeckDetail = {
   deck: DECK,
   cards: [deckCard({ quantity: 40 }), deckCard({ id: 2, cardId: "bolt", quantity: 2 })],
   categories: [],
-  tags: [],
+  labels: [],
 };
 
 const MADE: DeckRow = { ...DECK, id: 12, name: "Burn", formatKey: "modern" };
 
-const OUTCOME: ImportOutcome = { added: 6, removed: 0, categoriesCreated: 2, tagsCreated: 0 };
+const OUTCOME: ImportOutcome = { added: 6, removed: 0, categoriesCreated: 2, labelsCreated: 0 };
 
 const IDLE: SyncStatus = {
   cardCount: 116_695,

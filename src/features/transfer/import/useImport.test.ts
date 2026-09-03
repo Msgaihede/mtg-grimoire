@@ -75,7 +75,7 @@ const MADE: DeckRow = {
   updatedAt: 1_800_000_000,
 };
 
-const OUTCOME: ImportOutcome = { added: 117, removed: 0, categoriesCreated: 3, tagsCreated: 0 };
+const OUTCOME: ImportOutcome = { added: 117, removed: 0, categoriesCreated: 3, labelsCreated: 0 };
 
 const ITEMS: ImportItem[] = [{ cardId: "p1", quantity: 1, categoryName: "Main deck" }];
 

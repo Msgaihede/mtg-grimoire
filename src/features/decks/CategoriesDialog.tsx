@@ -6,8 +6,9 @@
  * columns come in, whether it counts, and whether it should exist at all.
  *
  * **The labels are next door rather than below.** This used to be the upper half of one
- * right-hand drawer called "Categories & tags", with {@link TagsDialog}'s subject scrolled under
- * it; they are two dialogs off the same toolbar now, because they are two questions and a reader
+ * right-hand drawer called "Categories & tags" — the title it carried while a label was called
+ * a tag — with {@link LabelsDialog}'s subject scrolled under it; they are two dialogs off the
+ * same toolbar now, because they are two questions and a reader
  * arrives with one of them. Nothing is shared between the two but a `useDeckMeta` and the row
  * grammar in `metaRows.tsx`.
  *
@@ -134,7 +135,7 @@ function CategoriesBody({ deckId, variant }: { deckId: number; variant: DeckVari
   // and has to say whose. Read once here and handed down, for `GroupHeader`'s reason: two rows
   // of one list must not name two marketplaces.
   const { marketplace } = useMarketplace();
-  // **One hook over a deck's piles *and* its labels, so this reads the tag lists too**, and
+  // **One hook over a deck's piles *and* its labels, so this reads the label lists too**, and
   // that is the price of the two dialogs sharing it rather than each growing a hook of its own.
   // It is cheap and it is deliberate: the editor opens at most one of them, so the pair costs
   // one set of reads however the reader arrives — and the two lists cannot durably disagree,
@@ -519,7 +520,7 @@ function CategoryRow({
  *
  * It stays in this file rather than joining {@link CONFIRM_DESTRUCTIVE} in `metaRows.tsx` for two
  * reasons, and the second is the stronger. It is one control's second state rather than a shape
- * three sites share — the clear and the tag delete have no such arm. And the state is **live**:
+ * three sites share — the clear and the label delete have no such arm. And the state is **live**:
  * the reader flips between the two by working the picker above it, so this is not a variant a
  * site picks once at build time.
  *

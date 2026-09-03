@@ -4,53 +4,55 @@
  * A label is a thing a reader made, and this is where it is made, renamed, recoloured, taken
  * off a deck and taken away. {@link CategoriesDialog} is the same idea one floor up, and the
  * two have drifted apart in exactly one way that matters: a category says *where in the deck* a
- * card lives and belongs to that deck, a tag says what the reader thinks of a card and belongs
+ * card lives and belongs to that deck, a label says what the reader thinks of a card and belongs
  * to nobody's deck at all. That is why the shape of a row here is still `metaRows.tsx`' and the
  * *sections* are not.
  *
  * ## What schema v21 moved, and why
  *
- * **A tag is one app-wide row.** `Cut candidate` in four decks was four rows, four colours and
+ * **A label is one app-wide row.** `Cut candidate` in four decks was four rows, four colours and
  * four things to rename; it is one row now, so recolouring it here recolours it in all four,
- * and no second tag can take a name one already holds. Both halves of that are the issue this
+ * and no second label can take a name one already holds. Both halves of that are the issue this
  * dialog was rebuilt for.
  *
- * **So "this deck's tags" became a fact about the cards.** There is no deck on a tag row to
+ * **So "this deck's labels" became a fact about the cards.** There is no deck on a label row to
  * filter by. What a deck has is a list of cards, some of which wear a label — so the first
- * section is the tags *this list is wearing*, derived from exactly the same read the right-click
- * menu offers, and the second is every other tag there is. A tag made here and worn by nothing
- * yet lands in the second section, which is honest: it is a label the reader owns and no deck's.
+ * section is the labels *this list is wearing*, derived from exactly the same read the
+ * right-click menu offers, and the second is every other label there is. A label made here and
+ * worn by nothing yet lands in the second section, which is honest: it is a label the reader
+ * owns and no deck's.
  *
  * **`variant` scopes membership, not just the counts.** The live list and the theory list are
  * treated as different decks where labels are concerned, so switching the editor between them
- * changes which tags are in the first section. That is the issue's own request, and it is why
+ * changes which labels are in the first section. That is the issue's own request, and it is why
  * the heading names the list rather than the deck.
  *
  * ## The two destructive acts, and why they are not one control
  *
- * They used to be. While a tag belonged to a deck, "I am done with this label here" and "this
+ * They used to be. While a label belonged to a deck, "I am done with this label here" and "this
  * label should stop existing" were the same press, and Delete meant both at once. They are
  * different acts now and conflating them would mean a reader tidying one deck stripping a
  * label off nine others without being asked.
  *
- * So: a row **in this list** offers *Remove*, which untags this deck's cards in the list on
- * screen and leaves the tag standing. A row in **every other tag** offers *Delete*, which is
- * app-wide and says how far it reaches before it goes. A tag in use here that the reader wants
- * gone everywhere is removed first and then deleted — two presses, and the second one is never
- * one click away from the deck they are editing, which is a property worth the extra step.
+ * So: a row **in this list** offers *Remove*, which takes the label off this deck's cards in the
+ * list on screen and leaves the label standing. A row in **every other label** offers *Delete*,
+ * which is app-wide and says how far it reaches before it goes. A label in use here that the
+ * reader wants gone everywhere is removed first and then deleted — two presses, and the second
+ * one is never one click away from the deck they are editing, which is a property worth the
+ * extra step.
  *
  * ## What stayed
  *
- * The add row is still first, because a reader with no tags is who this screen is hardest for.
+ * The add row is still first, because a reader with no labels is who this screen is hardest for.
  * The colour is still the swatch rather than something behind Rename, and the picker still
  * holds a draft with Done as the write — `input[type=color]` fires all the way down a drag
- * through the OS dialog, so a row writing on every change would be a `deck_tag_update` per
- * pixel of travel. `deck_tag_update` still renames **and** recolours in one command with no
+ * through the OS dialog, so a row writing on every change would be a `deck_label_update` per
+ * pixel of travel. `deck_label_update` still renames **and** recolours in one command with no
  * patch shape, so each half sends the other back unchanged.
  */
 import { useEffect, useId, useMemo, useRef, useState, type JSX } from "react";
 import { useTooltip } from "@/components/tooltip/useTooltip";
-import { type DeckTag, type DeckVariant, type GlobalTag, type TagColor } from "@/lib/ipc";
+import { type DeckLabel, type DeckVariant, type GlobalLabel, type LabelColor } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { FOCUS } from "@/lib/focus";
 import { Dialog } from "@/components/Dialog";
@@ -64,14 +66,14 @@ import {
   sectionFailure,
   useConfirmFocus,
 } from "./metaRows";
-import { TagColorButton, TagColorPanel, TagColorRow, TagSwatch } from "./TagColorPicker";
-import { DEFAULT_TAG_COLOR, tagColorCss, tagColorHex } from "./tagColors";
-import { findTagByName } from "./tagNames";
+import { LabelColorButton, LabelColorPanel, LabelColorRow, LabelSwatch } from "./LabelColorPicker";
+import { DEFAULT_LABEL_COLOR, labelColorCss, labelColorHex } from "./labelColors";
+import { findLabelByName } from "./labelNames";
 import { useDeckMeta, type DeckMeta } from "./useDeckMeta";
 
-export interface TagsDialogProps {
+export interface LabelsDialogProps {
   deckId: number;
-  /** Which list the first section is about — **membership as well as counts**, since a tag
+  /** Which list the first section is about — **membership as well as counts**, since a label
    *  belongs to no deck and the two lists are treated as separate decks where labels are
    *  concerned. */
   variant: DeckVariant;
@@ -83,17 +85,17 @@ export interface TagsDialogProps {
 }
 
 /** The heading's line, and the two facts that are true of the whole dialog rather than of one
- *  control in it. The second is the one nothing on screen can show: a tag is shared, so the
+ *  control in it. The second is the one nothing on screen can show: a label is shared, so the
  *  colour a reader picks here is the colour it has in every deck. */
-export const TAGS_SUBTITLE = "A card carries at most one. Tags are shared by all your decks.";
+export const LABELS_SUBTITLE = "A card carries at most one. Labels are shared by all your decks.";
 
 /**
  * The chrome is {@link Dialog}'s and the body below is this file's.
  *
  * **The body is a separate component and that is not tidiness**: a closed {@link Dialog}
  * mounts no children at all, so the queries belong one floor down where they only exist while
- * the dialog is up. A closed dialog therefore costs nothing — no `deck_tag_list`, no
- * `deck_tag_all` — which is what makes it safe for the editor to mount this unconditionally
+ * the dialog is up. A closed dialog therefore costs nothing — no `deck_label_list`, no
+ * `deck_label_all` — which is what makes it safe for the editor to mount this unconditionally
  * beside five others. The Escape rung is the shell's, registered on the flag for the reason its
  * own doc gives.
  *
@@ -101,24 +103,24 @@ export const TAGS_SUBTITLE = "A card carries at most one. Tags are shared by all
  * text buttons, with no `GroupHeader` and no money in it, so the extra twelve would be a column
  * of empty.
  */
-export function TagsDialog({
+export function LabelsDialog({
   deckId,
   variant,
   open,
   onDismiss,
   onClose,
-}: TagsDialogProps): JSX.Element {
+}: LabelsDialogProps): JSX.Element {
   return (
     <Dialog
       open={open}
-      title="Tags"
-      subtitle={TAGS_SUBTITLE}
-      closeLabel="Close tags"
+      title="Labels"
+      subtitle={LABELS_SUBTITLE}
+      closeLabel="Close labels"
       width="w-[36rem]"
       onDismiss={onDismiss}
       onClose={onClose}
     >
-      <TagsBody deckId={deckId} variant={variant} />
+      <LabelsBody deckId={deckId} variant={variant} />
     </Dialog>
   );
 }
@@ -133,11 +135,11 @@ const SECTION = "mb-1.5 text-[0.6875rem] uppercase tracking-[0.04em] text-dim";
 const LIST_NAME: Record<DeckVariant, string> = { live: "actual", theory: "theory" };
 
 /**
- * **This body reads no marketplace and no deck, and both absences are deliberate.** A tag
+ * **This body reads no marketplace and no deck, and both absences are deliberate.** A label
  * carries a name, a colour and a count and never a price, so there is no currency for this
  * dialog to be wrong about; and the deck's card rows are the auto-filer's argument, which is
  * `CategoriesDialog`'s control. Reaching for either would be this screen paying for a fact it
- * does not draw — `TagsDialog.test.tsx` asserts the `deck_get` half rather than trusting it.
+ * does not draw — `LabelsDialog.test.tsx` asserts the `deck_get` half rather than trusting it.
  *
  * **`useDeckMeta` is one hook over a deck's piles *and* the app's labels, so it reads the
  * category list here too** — and takes a marketplace of its own to key that read by. That is
@@ -150,9 +152,9 @@ const LIST_NAME: Record<DeckVariant, string> = { live: "actual", theory: "theory
  * so that opening one on a row below closes the one above — a dialog with three rows unfolded
  * is a dialog with no list left in it.
  */
-function TagsBody({ deckId, variant }: { deckId: number; variant: DeckVariant }) {
+function LabelsBody({ deckId, variant }: { deckId: number; variant: DeckVariant }) {
   const meta = useDeckMeta(deckId, variant);
-  const { tags, tagsQuery, allTags, allTagsQuery } = meta;
+  const { labels, labelsQuery, allLabels, allLabelsQuery } = meta;
   const [renaming, setRenaming] = useState<number | null>(null);
   const [confirming, setConfirming] = useState<number | null>(null);
   /**
@@ -160,35 +162,35 @@ function TagsBody({ deckId, variant }: { deckId: number; variant: DeckVariant })
    * two, and the pairing is what keeps a `useEffect` out of the row.
    *
    * The colour has to be a draft, because `input[type=color]` fires all the way down a drag
-   * through the OS dialog and a row writing on every change would be a `deck_tag_update` per
+   * through the OS dialog and a row writing on every change would be a `deck_label_update` per
    * pixel of travel. A draft held in the *row* would then have to be reset when the picker
    * closed — a piece of state derived from another piece of state, which is an effect and a
    * cascade. Held here, opening **is** the reset: the press seeds the draft from the row's own
    * colour, and closing throws it away.
    */
-  const [picking, setPicking] = useState<{ id: number; color: TagColor } | null>(null);
+  const [picking, setPicking] = useState<{ id: number; color: LabelColor } | null>(null);
   const [name, setName] = useState("");
-  const [color, setColor] = useState<TagColor>(DEFAULT_TAG_COLOR.hex);
+  const [color, setColor] = useState<LabelColor>(DEFAULT_LABEL_COLOR.hex);
   const [pickerOpen, setPickerOpen] = useState(false);
   const nameId = useId();
 
   /** Ids this list is wearing — what splits the app-wide list into the dialog's two sections. */
-  const worn = useMemo(() => new Set(tags.map((t) => t.id)), [tags]);
-  const others = useMemo(() => allTags.filter((t) => !worn.has(t.id)), [allTags, worn]);
-  /** The full row for a tag in the first section, for the counts the deck-scoped row has not
+  const worn = useMemo(() => new Set(labels.map((t) => t.id)), [labels]);
+  const others = useMemo(() => allLabels.filter((t) => !worn.has(t.id)), [allLabels, worn]);
+  /** The full row for a label in the first section, for the counts the deck-scoped row has not
    *  got: how far a rename or a delete reaches. `undefined` while the app-wide read is still
    *  in flight, which every consumer of it treats as "no number" rather than as zero. */
-  const globalById = useMemo(() => new Map(allTags.map((t) => [t.id, t])), [allTags]);
+  const globalById = useMemo(() => new Map(allLabels.map((t) => [t.id, t])), [allLabels]);
 
-  // A name any tag already holds cannot be made a second time — the backend refuses it, and a
+  // A name any label already holds cannot be made a second time — the backend refuses it, and a
   // reader who has to press Add and wait to find that out was told nothing the app did not
-  // already know. Compared on `tagNames.ts`' key, so `removal` is `Removal`.
-  const clash = findTagByName(allTags, name);
+  // already know. Compared on `labelNames.ts`' key, so `removal` is `Removal`.
+  const clash = findLabelByName(allLabels, name);
 
   const failure = sectionFailure(
-    [meta.createTag, meta.updateTag, meta.removeTagFromDeck, meta.deleteTag],
-    tagsQuery,
-    allTagsQuery,
+    [meta.createLabel, meta.updateLabel, meta.removeLabelFromDeck, meta.deleteLabel],
+    labelsQuery,
+    allLabelsQuery,
   );
 
   const rowProps = (id: number) => ({
@@ -205,7 +207,7 @@ function TagsBody({ deckId, variant }: { deckId: number; variant: DeckVariant })
       setPicking(null);
     },
     draft: picking?.id === id ? picking.color : null,
-    onDraft: (next: TagColor) => setPicking({ id, color: next }),
+    onDraft: (next: LabelColor) => setPicking({ id, color: next }),
     onDone: () => {
       setRenaming(null);
       setConfirming(null);
@@ -213,8 +215,8 @@ function TagsBody({ deckId, variant }: { deckId: number; variant: DeckVariant })
     },
   });
 
-  const onPickFor = (tag: { id: number; color: TagColor }) => () => {
-    setPicking((p) => (p?.id === tag.id ? null : { id: tag.id, color: tag.color }));
+  const onPickFor = (label: { id: number; color: LabelColor }) => () => {
+    setPicking((p) => (p?.id === label.id ? null : { id: label.id, color: label.color }));
     setRenaming(null);
     setConfirming(null);
   };
@@ -223,16 +225,16 @@ function TagsBody({ deckId, variant }: { deckId: number; variant: DeckVariant })
     // The body's own scroller, with its own padding: the shell owns the header and stops there,
     // because the deck's dialogs do not agree about what goes inside one.
     <div className="flex min-h-0 flex-1 flex-col gap-[1.125rem] overflow-y-auto px-5 pb-6 pt-4">
-      {/* Making one comes first, and the dialog opens on it. A reader with no tags is the reader
-          this screen is hardest for, and the field that fixes that used to be under the list and
-          under the paragraph explaining what a tag was. */}
+      {/* Making one comes first, and the dialog opens on it. A reader with no labels is the
+          reader this screen is hardest for, and the field that fixes that used to be under the
+          list and under the paragraph explaining what a label was. */}
       <section>
         <form
           onSubmit={(e) => {
             e.preventDefault();
             const trimmed = name.trim();
             if (!trimmed || clash !== undefined) return;
-            meta.createTag.mutate(
+            meta.createLabel.mutate(
               { name: trimmed, color },
               {
                 onSuccess: () => {
@@ -245,26 +247,26 @@ function TagsBody({ deckId, variant }: { deckId: number; variant: DeckVariant })
           className="flex items-center gap-2"
         >
           <label htmlFor={nameId} className="sr-only">
-            New tag name
+            New label name
           </label>
           <input
             id={nameId}
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="New tag name…"
+            placeholder="New label name…"
             className={META_FIELD}
           />
-          <TagColorButton
+          <LabelColorButton
             color={color}
             open={pickerOpen}
             onToggle={() => setPickerOpen((o) => !o)}
           />
           <button
             type="submit"
-            disabled={meta.createTag.isPending || name.trim() === "" || clash !== undefined}
+            disabled={meta.createLabel.isPending || name.trim() === "" || clash !== undefined}
             className={META_SUBMIT}
           >
-            Add tag
+            Add label
           </button>
         </form>
         {clash !== undefined && (
@@ -275,30 +277,30 @@ function TagsBody({ deckId, variant }: { deckId: number; variant: DeckVariant })
         )}
         {pickerOpen && (
           <div className="mt-2">
-            <TagColorPanel value={color} onChange={setColor} />
+            <LabelColorPanel value={color} onChange={setColor} />
           </div>
         )}
       </section>
 
       <section>
         <p className={SECTION}>On cards in this {LIST_NAME[variant]} list</p>
-        {tagsQuery.isPending ? (
-          <p className="text-xs text-dim">Reading this deck’s tags…</p>
-        ) : tags.length === 0 ? (
+        {labelsQuery.isPending ? (
+          <p className="text-xs text-dim">Reading this deck’s labels…</p>
+        ) : labels.length === 0 ? (
           <p className="text-xs text-dim">
-            Nothing in this list is tagged yet — right-click a card to put a label on it.
+            Nothing in this list is labelled yet — right-click a card to put a label on it.
           </p>
         ) : (
           <ul className="flex flex-col gap-1">
-            {tags.map((tag) => (
-              <TagRow
-                key={tag.id}
-                tag={tag}
-                global={globalById.get(tag.id)}
+            {labels.map((label) => (
+              <LabelRow
+                key={label.id}
+                label={label}
+                global={globalById.get(label.id)}
                 meta={meta}
                 variant={variant}
-                {...rowProps(tag.id)}
-                onPick={onPickFor(tag)}
+                {...rowProps(label.id)}
+                onPick={onPickFor(label)}
               />
             ))}
           </ul>
@@ -308,24 +310,24 @@ function TagsBody({ deckId, variant }: { deckId: number; variant: DeckVariant })
       {/* The rule that is not guessable from the controls, said as the name of the section it is
           about rather than as a paragraph above three others. */}
       <section>
-        <p className={SECTION}>Your other tags</p>
-        {allTagsQuery.isPending ? (
-          <p className="text-xs text-dim">Reading your tags…</p>
+        <p className={SECTION}>Your other labels</p>
+        {allLabelsQuery.isPending ? (
+          <p className="text-xs text-dim">Reading your labels…</p>
         ) : others.length === 0 ? (
           <p className="text-[0.6875rem] text-dim">
-            {allTags.length === 0
+            {allLabels.length === 0
               ? "None yet — name one above, then right-click a card to put it on."
-              : "Every tag you have is on a card in this list."}
+              : "Every label you have is on a card in this list."}
           </p>
         ) : (
           <ul className="flex flex-col gap-1">
-            {others.map((tag) => (
-              <OtherTagRow
-                key={tag.id}
-                tag={tag}
+            {others.map((label) => (
+              <OtherLabelRow
+                key={label.id}
+                label={label}
                 meta={meta}
-                {...rowProps(tag.id)}
-                onPick={onPickFor(tag)}
+                {...rowProps(label.id)}
+                onPick={onPickFor(label)}
               />
             ))}
           </ul>
@@ -349,17 +351,17 @@ interface RowState {
   confirming: boolean;
   onConfirm: () => void;
   /** The colour being tried while this row's picker is open, or `null` when it is shut. It is
-   *  the dialog's state rather than the row's — see `TagsBody`'s `picking` for why. */
-  draft: TagColor | null;
+   *  the dialog's state rather than the row's — see `LabelsBody`'s `picking` for why. */
+  draft: LabelColor | null;
   onPick: () => void;
-  onDraft: (color: TagColor) => void;
+  onDraft: (color: LabelColor) => void;
   onDone: () => void;
 }
 
 /** The swatch, the name and the picker — the half of a row that is the same in both sections,
  *  because recolouring and renaming are app-wide wherever the row is drawn. */
-function TagShell({
-  tag,
+function LabelShell({
+  label,
   meta,
   trailing,
   children,
@@ -374,7 +376,7 @@ function TagShell({
   onDone,
   deleteRef,
 }: RowState & {
-  tag: { id: number; name: string; color: TagColor };
+  label: { id: number; name: string; color: LabelColor };
   meta: DeckMeta;
   /** The count, drawn between the name and the two buttons. */
   trailing: JSX.Element;
@@ -385,7 +387,7 @@ function TagShell({
 }) {
   const tip = useTooltip();
   const picking = draft !== null;
-  const shown = draft ?? tag.color;
+  const shown = draft ?? label.color;
 
   return (
     <li className="rounded-md border border-border py-1.5 pl-2.5 pr-2">
@@ -396,8 +398,8 @@ function TagShell({
           type="button"
           onClick={onPick}
           aria-expanded={picking}
-          aria-label={`Change colour of ${tag.name}`}
-          {...tip(`#${tagColorHex(shown)}`)}
+          aria-label={`Change colour of ${label.name}`}
+          {...tip(`#${labelColorHex(shown)}`)}
           className={cn(
             "grid size-[1.125rem] shrink-0 place-items-center rounded border border-border",
             "transition-colors duration-150 hover:border-accent motion-reduce:transition-none",
@@ -405,9 +407,9 @@ function TagShell({
             FOCUS,
           )}
         >
-          <TagSwatch color={shown} />
+          <LabelSwatch color={shown} />
         </button>
-        <span className="min-w-0 flex-1 truncate text-[0.8125rem]">{tag.name}</span>
+        <span className="min-w-0 flex-1 truncate text-[0.8125rem]">{label.name}</span>
         {trailing}
         <RowAction onClick={onRename} disabled={renaming}>
           Rename
@@ -418,16 +420,20 @@ function TagShell({
       </div>
 
       {picking && (
-        <TagColorRow
-          value={tagColorCss(draft)}
+        <LabelColorRow
+          value={labelColorCss(draft)}
           onChange={onDraft}
           onDone={() => {
-            // Both fields, always: `deck_tag_update` renames **and** recolours in one command
+            // Both fields, always: `deck_label_update` renames **and** recolours in one command
             // and has no patch shape, so this half sends the name back unchanged. And nothing
             // at all when the colour did not move — Done is how the panel closes, so it is
             // pressed by readers who opened it to look.
-            if (tagColorCss(draft) !== tagColorCss(tag.color)) {
-              meta.updateTag.mutate({ id: tag.id, name: tag.name, color: tagColorCss(draft) });
+            if (labelColorCss(draft) !== labelColorCss(label.color)) {
+              meta.updateLabel.mutate({
+                id: label.id,
+                name: label.name,
+                color: labelColorCss(draft),
+              });
             }
             onDone();
           }}
@@ -436,14 +442,14 @@ function TagShell({
 
       {renaming && (
         <RenameField
-          label={`Rename ${tag.name}`}
-          initial={tag.name}
-          pending={meta.updateTag.isPending}
+          label={`Rename ${label.name}`}
+          initial={label.name}
+          pending={meta.updateLabel.isPending}
           // The colour's half of the same one-command write, sent back untouched: this field
           // renames and the swatch above recolours, and neither may quietly undo the other.
           onSave={(next) =>
-            meta.updateTag.mutate(
-              { id: tag.id, name: next, color: tag.color },
+            meta.updateLabel.mutate(
+              { id: label.id, name: next, color: label.color },
               { onSuccess: onDone },
             )
           }
@@ -470,27 +476,27 @@ function useDestructiveFocus(confirming: boolean) {
   return { deleteRef, owedFocusRef };
 }
 
-/** A tag **this list is wearing**: it says how many copies, and its destructive control takes
+/** A label **this list is wearing**: it says how many copies, and its destructive control takes
  *  the label off this deck rather than off the app. */
-function TagRow({
-  tag,
+function LabelRow({
+  label,
   global,
   meta,
   variant,
   ...state
 }: RowState & {
-  tag: DeckTag;
-  /** The same tag's app-wide row, for the reach a rename has. `undefined` while that read is
+  label: DeckLabel;
+  /** The same label's app-wide row, for the reach a rename has. `undefined` while that read is
    *  in flight. */
-  global: GlobalTag | undefined;
+  global: GlobalLabel | undefined;
   meta: DeckMeta;
   variant: DeckVariant;
 }) {
   const { deleteRef, owedFocusRef } = useDestructiveFocus(state.confirming);
 
   return (
-    <TagShell
-      tag={tag}
+    <LabelShell
+      label={label}
       meta={meta}
       confirmLabel="Remove"
       deleteRef={deleteRef}
@@ -498,13 +504,13 @@ function TagRow({
       trailing={
         // The list on screen, and right to be: this row is the list the reader is editing.
         <span className="shrink-0 font-mono text-[0.625rem] tabular-nums text-dim">
-          {tag.cardCount} {tag.cardCount === 1 ? "card" : "cards"}
+          {label.cardCount} {label.cardCount === 1 ? "card" : "cards"}
         </span>
       }
     >
       {state.confirming && (
         <RemoveFromDeck
-          tag={tag}
+          label={label}
           global={global}
           meta={meta}
           variant={variant}
@@ -515,37 +521,39 @@ function TagRow({
           onDone={state.onDone}
         />
       )}
-    </TagShell>
+    </LabelShell>
   );
 }
 
-/** A tag **no card in this list wears**: it says how far it reaches across the app, and its
+/** A label **no card in this list wears**: it says how far it reaches across the app, and its
  *  destructive control is the app-wide delete. */
-function OtherTagRow({
-  tag,
+function OtherLabelRow({
+  label,
   meta,
   ...state
-}: RowState & { tag: GlobalTag; meta: DeckMeta }) {
+}: RowState & { label: GlobalLabel; meta: DeckMeta }) {
   const { deleteRef, owedFocusRef } = useDestructiveFocus(state.confirming);
 
   return (
-    <TagShell
-      tag={tag}
+    <LabelShell
+      label={label}
       meta={meta}
       confirmLabel="Delete"
       deleteRef={deleteRef}
       {...state}
       trailing={
         <span className="shrink-0 font-mono text-[0.625rem] tabular-nums text-dim">
-          {tag.deckCount === 0
+          {label.deckCount === 0
             ? "unused"
-            : `${tag.cardCount} in ${tag.deckCount} ${tag.deckCount === 1 ? "deck" : "decks"}`}
+            : `${label.cardCount} in ${label.deckCount} ${
+                label.deckCount === 1 ? "deck" : "decks"
+              }`}
         </span>
       }
     >
       {state.confirming && (
-        <DeleteTag
-          tag={tag}
+        <DeleteLabel
+          label={label}
           meta={meta}
           onCancel={() => {
             owedFocusRef.current = true;
@@ -554,7 +562,7 @@ function OtherTagRow({
           onDeleted={state.onDone}
         />
       )}
-    </TagShell>
+    </LabelShell>
   );
 }
 
@@ -563,46 +571,46 @@ function OtherTagRow({
  *
  * **The sentence's job is to say what is *not* happening.** The button is red and sits where
  * Delete used to, so a reader who has used this dialog before will read it as the press that
- * destroys the tag. It is not: the label stays in their list and stays on every other deck
+ * destroys the label. It is not: the label stays in their list and stays on every other deck
  * wearing it, and this is the only place that can be said before the press rather than
  * discovered after it.
  *
- * `global` is the tag's app-wide row and is `undefined` while that read is in flight, which is
+ * `global` is the label's app-wide row and is `undefined` while that read is in flight, which is
  * why the reach is a clause the sentence can do without: "unknown" must never be spelled as a
  * number, and the outcome for *this* deck is exact either way.
  */
 function RemoveFromDeck({
-  tag,
+  label,
   global,
   meta,
   variant,
   onCancel,
   onDone,
 }: {
-  tag: DeckTag;
-  global: GlobalTag | undefined;
+  label: DeckLabel;
+  global: GlobalLabel | undefined;
   meta: DeckMeta;
   variant: DeckVariant;
   onCancel: () => void;
   onDone: () => void;
 }) {
   // The caret comes into the question, for `DeleteCategory`'s reason.
-  const confirm = useConfirmFocus(`Remove ${tag.name} from this deck`);
+  const confirm = useConfirmFocus(`Remove ${label.name} from this deck`);
   /** Decks that would still be wearing it afterwards, or `null` while the app-wide read is out.
-   *  `> 0` is exactly the condition for mentioning them: a tag no other deck uses has one deck
+   *  `> 0` is exactly the condition for mentioning them: a label no other deck uses has one deck
    *  to talk about, and a sentence about others would be chrome. */
   const elsewhere = global === undefined ? null : global.deckCount - 1;
 
   return (
     <div {...confirm}>
       <p className="text-xs">
-        Take “{tag.name}” off this {LIST_NAME[variant]} list?
+        Take “{label.name}” off this {LIST_NAME[variant]} list?
       </p>
       <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">
-        {tag.cardCount === 1
+        {label.cardCount === 1
           ? "Its 1 card stays in the deck and loses the label"
-          : `Its ${tag.cardCount} cards stay in the deck and lose the label`}
-        {". The tag itself stays in your list"}
+          : `Its ${label.cardCount} cards stay in the deck and lose the label`}
+        {". The label itself stays in your list"}
         {elsewhere !== null && elsewhere > 0
           ? `, and stays on the ${elsewhere === 1 ? "1 other deck" : `${elsewhere} other decks`} using it.`
           : "."}
@@ -610,8 +618,8 @@ function RemoveFromDeck({
       <div className="mt-2 flex gap-2">
         <button
           type="button"
-          disabled={meta.removeTagFromDeck.isPending}
-          onClick={() => meta.removeTagFromDeck.mutate(tag.id, { onSuccess: onDone })}
+          disabled={meta.removeLabelFromDeck.isPending}
+          onClick={() => meta.removeLabelFromDeck.mutate(label.id, { onSuccess: onDone })}
           className={CONFIRM_DESTRUCTIVE}
         >
           Remove from deck
@@ -628,55 +636,54 @@ function RemoveFromDeck({
  * Delete a label from the whole app, and say how far that goes.
  *
  * **The number is every deck, which is a widening rather than a rewording.** It used to be
- * every *variant* of the open deck — a correction made when a tag worn by 2 live rows and 5
+ * every *variant* of the open deck — a correction made when a label worn by 2 live rows and 5
  * theory ones said "Its 2 cards stay in the deck", and worse, when one worn by nothing on
- * screen said flatly "No card is wearing it." The reach has grown again since: a tag belongs to
- * no deck, so the press reaches every deck that has ever put it on a card.
+ * screen said flatly "No card is wearing it." The reach has grown again since: a label belongs
+ * to no deck, so the press reaches every deck that has ever put it on a card.
  *
- * Where that correction needed a second `deck_tag_list` at the other variant to get its number,
- * this one reads it off the row — {@link GlobalTag} carries both counts, from a command that
- * takes no deck at all. There is no in-flight case left to spell, which is the quiet win: the
- * row cannot be drawn before the read it came from has answered.
+ * Where that correction needed a second `deck_label_list` at the other variant to get its
+ * number, this one reads it off the row — {@link GlobalLabel} carries both counts, from a
+ * command that takes no deck at all. There is no in-flight case left to spell, which is the
+ * quiet win: the row cannot be drawn before the read it came from has answered.
  *
- * Nothing is destroyed but the label itself, so there is no picker and no choice — a tag delete
- * has one outcome, and the whole of the dialog is saying what it is.
+ * Nothing is destroyed but the label itself, so there is no picker and no choice — a label
+ * delete has one outcome, and the whole of the dialog is saying what it is.
  */
-function DeleteTag({
-  tag,
+function DeleteLabel({
+  label,
   meta,
   onCancel,
   onDeleted,
 }: {
-  tag: GlobalTag;
+  label: GlobalLabel;
   meta: DeckMeta;
   onCancel: () => void;
   onDeleted: () => void;
 }) {
   // The caret comes into the question, for `DeleteCategory`'s reason.
-  const confirm = useConfirmFocus(`Delete ${tag.name}`);
+  const confirm = useConfirmFocus(`Delete ${label.name}`);
 
-  const decks =
-    tag.deckCount === 1 ? "1 deck" : `${tag.deckCount} decks`;
+  const decks = label.deckCount === 1 ? "1 deck" : `${label.deckCount} decks`;
   const wearing =
-    tag.cardCount === 1
+    label.cardCount === 1
       ? `Its 1 card, in ${decks}, stays where it is and loses the label.`
-      : `Its ${tag.cardCount} cards, across ${decks}, stay where they are and lose the label.`;
+      : `Its ${label.cardCount} cards, across ${decks}, stay where they are and lose the label.`;
 
   return (
     <div {...confirm}>
-      <p className="text-xs">Delete “{tag.name}” everywhere?</p>
+      <p className="text-xs">Delete “{label.name}” everywhere?</p>
       <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">
-        {tag.deckCount === 0 ? "No deck is using it." : wearing} This takes it out of your tag
+        {label.deckCount === 0 ? "No deck is using it." : wearing} This takes it out of your label
         list for good.
       </p>
       <div className="mt-2 flex gap-2">
         <button
           type="button"
-          disabled={meta.deleteTag.isPending}
-          onClick={() => meta.deleteTag.mutate(tag.id, { onSuccess: onDeleted })}
+          disabled={meta.deleteLabel.isPending}
+          onClick={() => meta.deleteLabel.mutate(label.id, { onSuccess: onDeleted })}
           className={CONFIRM_DESTRUCTIVE}
         >
-          Delete tag
+          Delete label
         </button>
         <button type="button" onClick={onCancel} className={CONFIRM_CANCEL}>
           Keep it

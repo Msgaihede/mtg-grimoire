@@ -5,13 +5,13 @@ import { cn } from "@/lib/utils";
  * What a count tag is filled with when nothing colours it: the colourless deep, `--color-pie-c`.
  *
  * A filled mark has to be *some* colour, and grey is the one that says nothing — which is what a
- * count on an untagged deck card has to say. If the neutral fill were gold, gold would stop being
- * something a **tag** means.
+ * count on an unlabelled deck card has to say. If the neutral fill were gold, gold would stop
+ * being something a **label** means.
  *
- * This used to be `UNTAGGED_COLOR` in `features/decks/tagColors.ts`, where it answered a question
- * about tags. It answers a question about this mark, so it stays with the mark even though the
- * one caller left is `QuantityTag`: the fill is what says "no tag", and a module about tag
- * colours is the wrong place for the absence of one.
+ * This used to be `UNLABELLED_COLOR` in `features/decks/labelColors.ts`, where it answered a
+ * question about labels. It answers a question about this mark, so it stays with the mark even
+ * though the one caller left is `QuantityTag`: the fill is what says "no label", and a module
+ * about label colours is the wrong place for the absence of one.
  */
 export const NEUTRAL_COUNT_PAINT = {
   css: "var(--color-pie-c)",

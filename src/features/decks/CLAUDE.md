@@ -406,13 +406,13 @@ reader to configure the deck they had just made; it now asks all of them.
 - **A write to what is _in_ a deck goes through a `useDeck` mutation — but the refused-write family
   stopped being all of one hook's on 2026-08-14.** `DeckEditor`'s `newestWrite([...])` takes
   **every `useDeck` mutation but `rememberView`** — update (rename, cover, format, the
-  `Split X` chip), add-card, set-quantity, move, set-tag, missing-to-wishlist, swap-printing — and
-  **the `useDeckMeta` writes a right-click can now reach**, which are the tag create and a
+  `Split X` chip), add-card, set-quantity, move, set-label, missing-to-wishlist, swap-printing — and
+  **the `useDeckMeta` writes a right-click can now reach**, which are the label create and a
   category's rename, switch and delete. Read the array rather than a number here; a count stood in
   this bullet and went stale twice. The X chip is a **deck-row** write riding the same `update` as
   the other three, so it is not a mutation of its own and it touches not one `deck_cards` row.
   `rememberView` is the one exclusion, for the reason stated on its definition. **The menus are
-  what grew the family**: `setTag` sat outside it for as long as nothing in the app could reach it,
+  what grew the family**: `setLabel` sat outside it for as long as nothing in the app could reach it,
   and `useDeckMeta`'s writes had no control in this view at all — they were the Categories dialog's,
   which draws its own sentence for its own observer. A write a reader can now make from a card's
   menu or a pile's heading is a write whose refusal has to be said somewhere, and **the menu that
@@ -513,7 +513,7 @@ reader to configure the deck they had just made; it now asks all of them.
     clicked is one press from a deck the reader did not mean to edit. It goes through
     `setQuantityAt(…, 0)` like every other removal here; there is still no remove mutation.
   - **The card menu goes plural for the writes and stays singular for what cannot mean anything
-    else.** `Add N cards to`, `Move N cards to`, `Tag N cards`, `Remove N cards` act on the set;
+    else.** `Add N cards to`, `Move N cards to`, `Label N cards`, `Remove N cards` act on the set;
     `Copy card name`, `Copy card image`, `Open on`, `View all printings`, `Set as commander`,
     `Set as companion` and `Finish` stay about the one card that was right-clicked. A finish
     belongs to a *printing* — the toggle, the submenu and the greyed row are three shapes decided
@@ -672,7 +672,7 @@ reader to configure the deck they had just made; it now asks all of them.
 - **The printings modal steps along the deck, and the order reaches it through the store because
   it cannot be recomputed anywhere else.** `AllPrintingsDialog` is drawn at `App` level, outside
   this editor, and the order depends on three things that are the editor's own — `groupBy` and
-  `sortBy` are `useState` here, and the rows are `shown`, narrowed by a live text box and tag
+  `sortBy` are `useState` here, and the rows are `shown`, narrowed by a live text box and label
   chips. So `DeckEditor` **publishes** `deckWalkStops(groups, deckId)` as `store.deckWalk` and the
   modal reads it; `deckWalk.ts` derives the order through the same `splitRail`, so the desk's own
   arrow keys and the modal's chevrons are one answer rather than two that agree today. A row with
@@ -1314,7 +1314,7 @@ price | type`). An **inactive category stays its own group in all three grouping
   badge. The rest were reached by grepping for the *rendered* word rather than by following the
   report: `listNames.ts`'s `listName` (so both Clear confirmations and the history log's
   whole-list line), Deck settings' `Clear actual list…`, the theory switch's own caption, the
-  Categories dialog's "both the theory and actual lists" clause, and `TagsDialog`'s section
+  Categories dialog's "both the theory and actual lists" clause, and `LabelsDialog`'s section
   heading. **Nothing about the stored variant moved**, exactly as the tab rename did not move it:
   `live` is still the column, the IPC argument and `DeckVariant`'s member, and the two prose
   helpers above are the whole of the join. A sixth surface would be found the same way — grep the
@@ -1561,7 +1561,7 @@ price | type`). An **inactive category stays its own group in all three grouping
   it is still a row, still in `DeckEditor`'s `categories`, still listed in the Categories dialog
   with its name, its order and its switch — it draws no heading until a card is in it again.
 - **A filter decides nothing about which headings exist, and the rule that said it did has been
-  deleted.** `EmptyGroupRules.narrowed` reported whether the toolbar's text field or a tag chip was
+  deleted.** `EmptyGroupRules.narrowed` reported whether the toolbar's text field or a label chip was
   running, and while one was, `isPredefined` was the test for an empty pile — so that typing three
   letters could not answer with twenty headings over three cards. **The auto rule subsumes it: that
   wall was always auto piles** (Removal, Ramp, Draw and the type buckets), and a pile the filter
@@ -2027,20 +2027,21 @@ price | type`). An **inactive category stays its own group in all three grouping
   The frame is the same thing that says "No image", "Retrying…" or "No card".
 - **The marks go left, and they used to go right** (changed 2026-08-13). Over the art go facts
   about the _deck_ — the quantity tag, the Game Changer banner, `RULE BREAK`. Under it goes the
-  data line with facts about the _printing_. `QuantityTag` merges the tag and the copy count into
-  one mark: the count printed on the tag's own colour, grey when there is no tag, so gold stays
-  something a tag says. `TagDot` is unchanged on the other three views. It costs ~34px of printed
+  data line with facts about the _printing_. `QuantityTag` merges the label and the copy count
+  into one mark: the count printed on the label's own colour, grey when there is no label, so gold
+  stays something a label says. `LabelDot` is unchanged on the other three views. It costs ~34px of printed
   name, knowingly; the app-drawn frame insets its own name band by exactly that width so a name
   _this app_ wrote is never clipped.
   **The box that mark is drawn in is `components/CountTag.tsx` and no longer this folder's**
   (2026-08-14): the slant, the 22px height, the mono face, the `aria-hidden` and the bare number.
   The grey went with it — `NEUTRAL_COUNT_PAINT` is what `UNTAGGED_COLOR` became, and
-  `QuantityTag` now passes `paint` for a tagged card and nothing at all for an untagged one. What
-  stayed here is what makes this one a _tag_: the colour, the two-fact sentence in its `title`,
+  `QuantityTag` now passes `paint` for a labelled card and nothing at all for an unlabelled one.
+  What stayed here is what makes this one a _label_: the colour, the two-fact sentence in its
+  `title`,
   and `LAYER.overlappingMark`.
   **The move was made for a second caller that has since left, and the box stays where it is**
   (2026-08-15). The search wall counted printings with this same object for a day; it says
-  `132 printings` in its own corner chip now, because a bare number is honest here — the tag it
+  `132 printings` in its own corner chip now, because a bare number is honest here — the label it
   is printed on says what is being counted — and was not honest there. So `QuantityTag` is the
   one caller again. `components/` is still the right shelf for the geometry, and
   [`src/CLAUDE.md`](../../CLAUDE.md) carries the rule both halves came out of.
@@ -2050,9 +2051,9 @@ price | type`). An **inactive category stays its own group in all three grouping
   its square ones.
 - **Every mark carries a `title`, and that is a second contract from the accessible name.**
   `deckCardName` is the whole of what a screen reader gets; a pointer user sees a 6px gem, a
-  slanted colour tag and a crown, none of which is a word. Six sentences, pinned by
-  `CardStack.test.tsx`: the tag (`"Fast mana · 2 in this pile"` — the tag and the count are one
-  mark, so one title says both), `"Game changer"`, the rule break's own finding, the rarity
+  slanted tag in a label's colour and a crown, none of which is a word. Six sentences, pinned by
+  `CardStack.test.tsx`: the label (`"Fast mana · 2 in this pile"` — the label and the count are
+  one mark, so one title says both), `"Game changer"`, the rule break's own finding, the rarity
   (`RarityGem` grew a `title` for this; the stack draws no rarity text), the shortage, and the
   finish through `FinishMark`'s SVG `<title>`. **The seventh is missing on purpose**: the canvas
   wants the set _name_ behind the printing code, and `DeckCard` carries only `setCode` —
@@ -2328,7 +2329,7 @@ price | type`). An **inactive category stays its own group in all three grouping
 - **The two that were drawers are centred modals, and the search column deliberately is not**
   (changed 2026-08-14). **Two** surfaces were right-hand drawers and **three** dialogs came out of
   them: History was `AuditDrawer` and is `DeckHistoryDialog`; the piles and the labels were two
-  sections of one `CategoriesPanel` drawer and are `CategoriesDialog` and `TagsDialog` now, each
+  sections of one `CategoriesPanel` drawer and are `CategoriesDialog` and `LabelsDialog` now, each
   one press away instead of a press and a scroll, with `metaRows.tsx` as the shared row grammar
   the two of them draw with. Those three and `DeckSettingsDialog` are built on one shell,
   `Dialog.tsx`, and so is every full-window surface added since — the export dialog, the quick
@@ -2361,82 +2362,85 @@ price | type`). An **inactive category stays its own group in all three grouping
   filters and format away on a _resize_ — opening the card pane at 1024 was enough. Never opened
   is still nothing mounted, which is what keeps the search off a deck nobody searched from.
   The app-wide form of this rule is in [`src/CLAUDE.md`](../../CLAUDE.md).
-- **A tag is the reader's, not a deck's, and every tag surface was rebuilt around that**
-  (2026-08-20, schema v21 — issue #185). `deck_tags` has no `deck_id`: one row per name, app-wide,
-  keyed on `schema::tag_name_key`. The storage half is
+- **A label is the reader's, not a deck's, and every label surface was rebuilt around that**
+  (2026-08-20, schema v21 — issue #185). `deck_labels` has no `deck_id`: one row per name,
+  app-wide, keyed on `schema::label_name_key`. The storage half is
   [`src-tauri/CLAUDE.md`](../../../src-tauri/CLAUDE.md); what this folder owns is what a reader
   sees, and it is six decisions:
-  - **"This deck's tags" is derived from the cards, and `variant` scopes it.** There is no deck on
-    a tag row to filter by, so what a deck has is a list of cards, some of which wear a label —
-    which is also exactly what the right-click menu wants to offer. One definition of "in use",
-    serving the menu, the Tags dialog's first section and the counts. The live list and the theory
-    list are treated as **separate decks** where labels are concerned, so switching the editor
-    between them genuinely changes which tags are there.
-  - **The order is use, and `deckCardTagRows` therefore stopped calling `sortOptions`** — which
-    reverses a fix made on 2026-08-14 whose premise is gone. That fix was right: `deck_tag_list`
+  - **"This deck's labels" is derived from the cards, and `variant` scopes it.** There is no deck
+    on a label row to filter by, so what a deck has is a list of cards, some of which wear a label
+    — which is also exactly what the right-click menu wants to offer. One definition of "in use",
+    serving the menu, the Labels dialog's first section and the counts. The live list and the
+    theory list are treated as **separate decks** where labels are concerned, so switching the
+    editor between them genuinely changes which labels are there.
+  - **The order is use, and `deckCardLabelRows` therefore stopped calling `sortOptions`** — which
+    reverses a fix made on 2026-08-14 whose premise is gone. That fix was right: `deck_label_list`
     answered `ORDER BY t.name` over a `TEXT` column with no `COLLATE NOCASE`, which is byte order,
     so `Cut, Ramp, budget` and a reader looking for "budget" under B found it last. The list is
     most-used-first now, which is the first of the two exemptions this app grants — **an order
     that *is* the information** — and re-sorting it here would throw away a fact the backend went
     and counted.
-  - **The context menu offers only what this list wears; "More tags…" is where the rest went.**
-    That row was "New tag…" and opened a create form; it opens `AddTagDialog`, a pick-or-create
-    with **one field doing both jobs** — typing narrows the list *and* is the name a new tag would
-    get, because those are the same question. The chain is untouched and must stay untouched:
-    `createTagFor` is the editor's, `mutateAsync` rather than a `mutate`-scoped `onSuccess`,
-    because those callbacks belong to an *observer* and TanStack drops them when it unmounts — a
-    create started in the dialog and chained there loses its attach to an Escape landing during
-    the round trip, leaving the label made and silently never worn. The `addTag` layer carries the
-    **slot** (`cardId`, `categoryId`, `finish`) and the card's name, frozen.
-  - **The Tags dialog is two sections and two *different* destructive acts.** A row the list wears
-    offers **Remove** (untags this deck's cards in the variant on screen, tag survives); a row
-    under "Your other tags" offers **Delete** (app-wide, and the confirmation says how many cards
-    in how many decks). They were one press while a tag belonged to a deck, and conflating them
-    now would mean a reader tidying one deck stripping a label off nine others. A tag in use here
-    that they want gone everywhere is removed first, then deleted — two presses, and the
+  - **The context menu offers only what this list wears; "More labels…" is where the rest went.**
+    That row was "New label…" and opened a create form; it opens `AddLabelDialog`, a
+    pick-or-create with **one field doing both jobs** — typing narrows the list *and* is the name a
+    new label would get, because those are the same question. The chain is untouched and must stay
+    untouched: `createLabelFor` is the editor's, `mutateAsync` rather than a `mutate`-scoped
+    `onSuccess`, because those callbacks belong to an *observer* and TanStack drops them when it
+    unmounts — a create started in the dialog and chained there loses its attach to an Escape
+    landing during the round trip, leaving the label made and silently never worn. The `addLabel`
+    layer carries the **slot** (`cardId`, `categoryId`, `finish`) and the card's name, frozen.
+  - **The Labels dialog is two sections and two *different* destructive acts.** A row the list
+    wears offers **Remove** (unlabels this deck's cards in the variant on screen, label survives);
+    a row under "Your other labels" offers **Delete** (app-wide, and the confirmation says how many
+    cards in how many decks). They were one press while a label belonged to a deck, and conflating
+    them now would mean a reader tidying one deck stripping a label off nine others. A label in use
+    here that they want gone everywhere is removed first, then deleted — two presses, and the
     app-wide one is never a single click from the deck they are editing.
-  - **The duplicate guard is a courtesy, and the index is the fence.** `tagNames.ts` is a
-    deliberate second copy of `schema::tag_name_key`, walked by the same table of spellings on
+  - **The duplicate guard is a courtesy, and the index is the fence.** `labelNames.ts` is a
+    deliberate second copy of `schema::label_name_key`, walked by the same table of spellings on
     both sides, and it exists for one reason: a reader who types a name that exists has not made a
-    mistake, they have found the tag they wanted — so the dialogs disable the button and point at
-    the row rather than spending a round trip on a refusal. Uniqueness itself is a table property
-    and stays the `UNIQUE INDEX`'s: two windows racing one new name is what an index is for.
-  - **The header's second line says the tags are shared**, because that is the fact nothing on
-    screen can show. It said "Deleting a tag keeps its cards", which is still true and is now the
+    mistake, they have found the label they wanted — so the dialogs disable the button and point
+    at the row rather than spending a round trip on a refusal. Uniqueness itself is a table
+    property and stays the `UNIQUE INDEX`'s: two windows racing one new name is what an index is
+    for.
+  - **The header's second line says the labels are shared**, because that is the fact nothing on
+    screen can show. It said "Deleting a label keeps its cards", which is still true and is now the
     *less* surprising half.
-- **A tag's colour is the reader's own, stored as `#rrggbb`, and `tagColors.ts` is the only file
-  that knows it** (2026-08-20). It was one of **six token words** — `gold`, `ember`, … — and the
-  argument for that was real and is written down where it was made: a stored hex outlives the
-  theme that chose it, so a tag picked against last year's palette comes back as a colour this app
-  no longer uses. What overruled it is that a label is the one thing on a deck screen whose meaning
-  is the reader's rather than the game's, and six words cannot say what a reader means. Four
-  consequences, none of them optional. **The six are still the quick row of the picker** and are
-  still `--color-pie-*`, so the common answer is unchanged and no new colour entered the palette;
-  they are **literal hexes** in `TAG_COLORS` now rather than `var()`s, because these strings are
-  written to a column and a `var()` in a column is a colour with no value outside this build —
-  `tagColors.test.ts` compares them against `index.css` and is the only thing that would catch a
-  palette edit leaving the picker behind. **Rows written before the change still read**, through
-  `LEGACY_TOKENS`, which is a read path that does not expire: a database is not migrated by a build
-  being newer than it, and `CardStack.test.tsx` holds a legacy row on purpose. **`tagFgCss` is
-  computed rather than tabulated** — the quantity tag prints a count *on* the colour, and once the
-  reader picks it no table can hold the answer in advance; the formula is the sRGB luma the retired
-  table's own six answers were built from, and those six are pinned so a "more correct" curve
-  cannot flip one silently. And **nothing in Rust changed**: `deck_tags.color` never had a CHECK,
-  because picking what a colour *is* is the webview's job. **Since v21 that colour is the same in
-  every deck**, which is what the issue asked for and what makes the recolour worth finding: the
-  audit log gained a `recolour` verb it had rendered and never been written, because a hex that
-  moves nine decks is a change a reader may come back looking for.
-- **The Tags dialog opens on the act of making one, and the swatch is the recolour** (2026-08-20).
+- **A label's colour is the reader's own, stored as `#rrggbb`, and `labelColors.ts` is the only
+  file that knows it** (2026-08-20). It was one of **six token words** — `gold`, `ember`, … — and
+  the argument for that was real and is written down where it was made: a stored hex outlives the
+  theme that chose it, so a label picked against last year's palette comes back as a colour this
+  app no longer uses. What overruled it is that a label is the one thing on a deck screen whose
+  meaning is the reader's rather than the game's, and six words cannot say what a reader means.
+  Four consequences, none of them optional. **The six are still the quick row of the picker** and
+  are still `--color-pie-*`, so the common answer is unchanged and no new colour entered the
+  palette; they are **literal hexes** in `LABEL_COLORS` now rather than `var()`s, because these
+  strings are written to a column and a `var()` in a column is a colour with no value outside this
+  build — `labelColors.test.ts` compares them against `index.css` and is the only thing that would
+  catch a palette edit leaving the picker behind. **Rows written before the change still read**,
+  through `LEGACY_TOKENS`, which is a read path that does not expire: a database is not migrated by
+  a build being newer than it, and `CardStack.test.tsx` holds a legacy row on purpose.
+  **`labelFgCss` is computed rather than tabulated** — the quantity tag prints a count *on* the
+  colour, and once the reader picks it no table can hold the answer in advance; the formula is the
+  sRGB luma the retired table's own six answers were built from, and those six are pinned so a
+  "more correct" curve cannot flip one silently. And **nothing in Rust changed**:
+  `deck_labels.color` never had a CHECK, because picking what a colour *is* is the webview's job.
+  **Since v21 that colour is the same in every deck**, which is what the issue asked for and what
+  makes the recolour worth finding: the audit log gained a `recolour` verb it had rendered and
+  never been written, because a hex that moves nine decks is a change a reader may come back
+  looking for.
+- **The Labels dialog opens on the act of making one, and the swatch is the recolour**
+  (2026-08-20).
   Three moves, each with a reason that outlives the redesign that made it. The **add field went to
-  the top**: a reader with no tags is who this screen is hardest for, and the control that fixes
+  the top**: a reader with no labels is who this screen is hardest for, and the control that fixes
   that sat below the list *and* below a four-line paragraph. That **paragraph became a subtitle and
   two section headings**. And the **colour left the rename**, which had made a reader who wanted a
   different red open the control for changing the word. Both halves still send the other back,
-  because `deck_tag_update` renames **and** recolours in one command with no patch shape — the
-  rename sends `tag.color`, the picker sends `tag.name`, and `TagsDialog.test.tsx` has a case for
-  each. **The picker holds a draft and Done is the write**: `input[type=color]` fires all the way
-  down a drag through the OS dialog, so a row writing on every change would be a `deck_tag_update`
-  per pixel of travel.
+  because `deck_label_update` renames **and** recolours in one command with no patch shape — the
+  rename sends `label.color`, the picker sends `label.name`, and `LabelsDialog.test.tsx` has a case
+  for each. **The picker holds a draft and Done is the write**: `input[type=color]` fires all the
+  way down a drag through the OS dialog, so a row writing on every change would be a
+  `deck_label_update` per pixel of travel.
 - **The docked panel's width is the reader's, dragged from its left edge** (2026-08-14).
   `ResizeHandle` is an ARIA window splitter — `role="separator"`, `aria-orientation="vertical"`, a
   `tabIndex`, `aria-valuenow`/`min`/`max` in **px**, arrows and Home/End for the keyboard — bounded
