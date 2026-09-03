@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SyncStatus } from "@/lib/ipc";
@@ -9,6 +10,11 @@ import type { Update } from "@/lib/useUpdate";
  * Every panel on this page is stubbed, because what is under test is **which of them the page
  * renders** rather than what any of them draws. Each has its own suite already; mounting them
  * for real here would make this file fail for their reasons.
+ *
+ * **Since the rail landed (2026-09-03) "which of them" is two questions rather than one** — which
+ * group a panel belongs to, and whether the reader has selected that group or typed something
+ * that matches it. The first is `nav.ts`'s and is decided with no DOM at all in `nav.test.ts`;
+ * what this file can see is the second, so most of its assertions now begin with a press.
  */
 function stub(name: string) {
   const Panel = () => <div>{name}</div>;
@@ -57,18 +63,26 @@ const backend = vi.hoisted(() => ({ syncStatus: null as SyncStatus | null }));
  *
  * **`onSyncLive` is a third special case, beside `syncStatus`, and it has to be — not because
  * `SettingsPage` reads it, but because `SyncPanel` does now (Task 12's `useDeviceSyncLive()`
- * call), and `SyncPanel` is one of the panels this page mounts for real rather than stubbing.**
- * The generic branch answers every command with `vi.fn().mockResolvedValue(null)`, a function
- * that *resolves to* a value — correct for a `Promise<T>` command, and wrong for `onSyncLive`,
- * whose contract is `Unlisten` returned **synchronously** so a mount effect can hand it straight
- * back as its own cleanup. Proxied through the generic branch, `ipc.onSyncLive(cb)` returned a
- * `Promise`, `useDeviceSyncLive`'s effect handed that back as its cleanup function, and React
- * threw `TypeError: destroy is not a function` unmounting every test in this file that reaches
- * `SyncPanel` — which, since the panel is not one of the nine stubs above, is all nine `it`s.
- * `syncLiveState` is answered `"off"` rather than falling through to the generic `null`, for the
- * same reason `RelayStatus`'s own em-dash rule exists: a `LiveState` of `null` is a value
- * `liveNote`'s switch was never written to handle, and "off" is what the real command answers
- * when nothing is paired, which is every world this file renders.
+ * call), and `SyncPanel` is one of the two panels this page mounts for real rather than
+ * stubbing.** The generic branch answers every command with `vi.fn().mockResolvedValue(null)`, a
+ * function that *resolves to* a value — correct for a `Promise<T>` command, and wrong for
+ * `onSyncLive`, whose contract is `Unlisten` returned **synchronously** so a mount effect can
+ * hand it straight back as its own cleanup. Proxied through the generic branch, `ipc.onSyncLive(cb)`
+ * returned a `Promise`, `useDeviceSyncLive`'s effect handed that back as its cleanup function, and
+ * React threw `TypeError: destroy is not a function` unmounting every test that reaches
+ * `SyncPanel`. `syncLiveState` is answered `"off"` rather than falling through to the generic
+ * `null`, for the same reason `RelayStatus`'s own em-dash rule exists: a `LiveState` of `null` is
+ * a value `liveNote`'s switch was never written to handle, and "off" is what the real command
+ * answers when nothing is paired, which is every world this file renders.
+ *
+ * **Which tests need those two answers changed with the rail, and that is worth stating.** It
+ * used to be all nine, because the page drew every panel at once; the two sync panels now mount
+ * only while the `Sync` entry is selected or a query matches them, so it is the one test below
+ * that presses `Sync` — which is exactly why that test is there. Delete it and these two branches
+ * become dead code that nothing would notice.
+ *
+ * `syncReviewList` falls through to the generic `null` on purpose: the rail's `Sync` badge reads
+ * `?? 0` off it, and "the query has not answered" is the state every test here renders in.
  */
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
@@ -116,9 +130,17 @@ function pretendAndroid() {
   });
 }
 
-afterEach(() => {
+afterEach(async () => {
   delete (navigator as unknown as Record<string, unknown>).userAgent;
   backend.syncStatus = null;
+  /**
+   * **Put back, because two tests below set it and neither used to.** While the `false` case
+   * happened to run last that cost nothing; it made the file order-dependent, and a new test
+   * written between the two would have inherited `true` from its neighbour with no sign of it
+   * anywhere. `false` is the module factory's own default and the shape jsdom stands for.
+   */
+  const { isWebTarget } = await import("@/pwa/target");
+  vi.mocked(isWebTarget).mockReturnValue(false);
 });
 
 /**
@@ -143,9 +165,35 @@ function syncStatus(over: Partial<SyncStatus> = {}): SyncStatus {
 
 const folderPanel = () => screen.getByRole("region", { name: "Data folder" });
 
+/**
+ * Press a rail entry.
+ *
+ * **Matched as a prefix of the accessible name rather than as the whole of it**, because two of
+ * the six entries carry a badge: a count in a second span folds into one accessible name with no
+ * space between the label and the number — `Errors3` — which `src/CLAUDE.md` records as a thing
+ * jsdom cannot referee, and a test hedging with `\s*` would pass either way.
+ */
+async function pickGroup(label: string) {
+  await userEvent.click(screen.getByRole("button", { name: new RegExp(`^${label}`) }));
+}
+
+/**
+ * The rail's search box.
+ *
+ * Every filter box in this app is an `<input type="search">` — `src/CLAUDE.md`'s rule, and the
+ * reason `clearFieldOnEscape` exists — so `searchbox` is the role to ask for. The fallback is
+ * for the one shape that would otherwise make this file fail with "unable to find role" and say
+ * nothing about which role it did find; nothing else this page draws while a group is unselected
+ * is a text entry.
+ */
+function searchBox(): HTMLElement {
+  return screen.queryByRole("searchbox") ?? screen.getByRole("textbox");
+}
+
 describe("the Backup panel is on every platform", () => {
-  it("is on the page under jsdom, which is the desktop shape", () => {
+  it("is on the page under jsdom, which is the desktop shape", async () => {
     render(wrap(<SettingsPage update={NO_UPDATE} />));
+    await pickGroup("Storage and data");
 
     expect(screen.getByText("panel:backup")).toBeInTheDocument();
   });
@@ -162,16 +210,23 @@ describe("the Backup panel is on every platform", () => {
    * mounts it unconditionally. **`BackupArchivePanel.test.tsx` is where the two shapes are told
    * apart** — this file mocks the panel to a stub, so all it can see is whether it is on the
    * page at all.
+   *
+   * The "the rest of the page still rendered" witness is now taken in **two** places rather than
+   * one, because the two panels it named no longer share a group: the Updates panel is read
+   * before the press and the cache after it. That is the same assertion — this is about the
+   * Backup panel and not about a mount that failed — asked of a page that draws one group at a
+   * time.
    */
-  it("stays on Android, where it draws the archive instead of the folder", () => {
+  it("stays on Android, where it draws the archive instead of the folder", async () => {
     pretendAndroid();
 
     render(wrap(<SettingsPage update={NO_UPDATE} />));
+    expect(screen.getByText("panel:update")).toBeInTheDocument();
+
+    await pickGroup("Storage and data");
 
     expect(screen.getByText("panel:backup")).toBeInTheDocument();
-    // The rest of the page still rendered, so this is about the panel rather than a failed mount.
     expect(screen.getByText("panel:cache")).toBeInTheDocument();
-    expect(screen.getByText("panel:update")).toBeInTheDocument();
   });
 });
 
@@ -194,6 +249,10 @@ describe("the Updates panel is drawn on every target", () => {
    *
    * The panel is stubbed here, so these two assert reachability and nothing about content —
    * which is the whole of what this file can honestly say about it.
+   *
+   * `Updates` is also the group the page opens on, so neither of these two needs a press to
+   * reach the panel — the second one does, for its witness, and that press is the same
+   * two-places move the Android test above explains.
    */
   it("is on the page on the web build, as it is everywhere else", async () => {
     const { isWebTarget } = await import("@/pwa/target");
@@ -202,8 +261,12 @@ describe("the Updates panel is drawn on every target", () => {
     render(wrap(<SettingsPage update={NO_UPDATE} />));
 
     expect(screen.getByText("panel:update")).toBeInTheDocument();
-    // The page itself still rendered, so this is the panel and not a failed mount.
+    // The page itself still rendered, so this is the panel and not a failed mount — and on this
+    // build the browser panel is in the group too, which is the only place `panelsOn`'s web
+    // answer is visible from here.
+    await pickGroup("Storage and data");
     expect(screen.getByText("panel:cache")).toBeInTheDocument();
+    expect(screen.getByText("panel:webstorage")).toBeInTheDocument();
   });
 
   it("is on the page when the build is not the web one", async () => {
@@ -214,6 +277,15 @@ describe("the Updates panel is drawn on every target", () => {
 
     expect(screen.getByText("panel:update")).toBeInTheDocument();
   });
+
+  /** The other half of the gate, and the one that costs a desktop reader nothing. */
+  it("does not draw the browser panel where there is no browser to describe", async () => {
+    render(wrap(<SettingsPage update={NO_UPDATE} />));
+    await pickGroup("Storage and data");
+
+    expect(screen.getByText("panel:cache")).toBeInTheDocument();
+    expect(screen.queryByText("panel:webstorage")).not.toBeInTheDocument();
+  });
 });
 
 /**
@@ -223,12 +295,16 @@ describe("the Updates panel is drawn on every target", () => {
  * re-verified by grep on 2026-08-29, which found `imageStoreFailures` drawn in no other string
  * and `dataDir` in no other expression. This section is that second door, and the tooltip is
  * untouched — a pointer reader loses nothing.
+ *
+ * Every test here now opens `Storage and data` first: the section is the first panel of that
+ * group, which is where `nav.ts` files the page's three panels about the folder on disk.
  */
 describe("the data folder gets a home on the page", () => {
   it("names the folder the app keeps everything in", async () => {
     backend.syncStatus = syncStatus({ dataDir: "E:\\Grimoire\\data" });
 
     render(wrap(<SettingsPage update={NO_UPDATE} />));
+    await pickGroup("Storage and data");
 
     expect(await screen.findByText("E:\\Grimoire\\data")).toBeInTheDocument();
     // In this section rather than merely somewhere on the page.
@@ -245,6 +321,7 @@ describe("the data folder gets a home on the page", () => {
     backend.syncStatus = syncStatus({ imageStoreFailures: 12 });
 
     render(wrap(<SettingsPage update={NO_UPDATE} />));
+    await pickGroup("Storage and data");
 
     expect(
       await screen.findByText(
@@ -257,6 +334,7 @@ describe("the data folder gets a home on the page", () => {
     backend.syncStatus = syncStatus({ imageStoreFailures: 1 });
 
     render(wrap(<SettingsPage update={NO_UPDATE} />));
+    await pickGroup("Storage and data");
 
     expect(
       await screen.findByText(
@@ -276,20 +354,123 @@ describe("the data folder gets a home on the page", () => {
     backend.syncStatus = syncStatus({ imageStoreFailures: 0 });
 
     render(wrap(<SettingsPage update={NO_UPDATE} />));
+    await pickGroup("Storage and data");
 
     expect(
       await screen.findByText("No card images have failed to save this session."),
     ).toBeInTheDocument();
   });
 
-  /** The blurb promised the folder; the section above it delivers now. Import still does not. */
+  /**
+   * The blurb promised the folder; the section above it delivers now. Import still does not.
+   *
+   * **What this can assert changed with the rail and the intent did not.** The `Not here yet`
+   * block has left the page for the rail, so the heading is `SettingsNav`'s to draw and its own
+   * suite's to test; what is still this page's to answer is that the folder is a *panel* rather
+   * than a promise, which is what these two lines say — the path is on screen, and nothing on
+   * the page files the folder under things still to come.
+   */
   it("no longer promises the folder as something still to come", async () => {
     backend.syncStatus = syncStatus();
 
     render(wrap(<SettingsPage update={NO_UPDATE} />));
+    await pickGroup("Storage and data");
 
-    await screen.findByText("D:\\MTG Grimoire\\data");
-    expect(screen.getByRole("heading", { name: "Not here yet" })).toBeInTheDocument();
+    expect(await screen.findByText("D:\\MTG Grimoire\\data")).toBeInTheDocument();
     expect(screen.queryByText(/Data folder and import/)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The rail, from the pane's side.
+ *
+ * `nav.test.ts` owns *which* panels a group holds and which a query matches — decidable with no
+ * DOM, and tested there as a function. What is only answerable here is that the page actually
+ * asks: that it opens on a group rather than on everything, that a press moves it, that a query
+ * outranks the press, and that the two states are never both live at once.
+ */
+describe("the rail decides what the pane draws", () => {
+  it("opens on Updates, with the other groups' panels off the page", () => {
+    render(wrap(<SettingsPage update={NO_UPDATE} />));
+
+    expect(screen.getByText("panel:update")).toBeInTheDocument();
+    // One panel from three other groups, so this is about the grouping rather than about one
+    // component failing to mount.
+    expect(screen.queryByText("panel:prices")).not.toBeInTheDocument();
+    expect(screen.queryByText("panel:hidden")).not.toBeInTheDocument();
+    expect(screen.queryByText("panel:danger")).not.toBeInTheDocument();
+  });
+
+  it("draws a group's panels, and only that group's, once its entry is pressed", async () => {
+    render(wrap(<SettingsPage update={NO_UPDATE} />));
+
+    await pickGroup("Card data");
+
+    expect(screen.getByText("panel:prices")).toBeInTheDocument();
+    expect(screen.getByText("panel:combos")).toBeInTheDocument();
+    // The group it came from is gone, which is the half a `shown()` stuck at `true` would fail.
+    expect(screen.queryByText("panel:update")).not.toBeInTheDocument();
+  });
+
+  /**
+   * **The two panels this file does not stub, mounted for real, and that is the point of the
+   * test rather than a side effect.** `SyncPanel` and `ReviewPanel` are the only ones the page
+   * draws unmocked here, so the `onSyncLive`/`syncLiveState` branches of the `ipc` proxy above
+   * are reachable from this test and from no other. Before the rail every test mounted them;
+   * now exactly one does.
+   */
+  it("mounts the sync panels for real when the Sync entry is pressed", async () => {
+    render(wrap(<SettingsPage update={NO_UPDATE} />));
+
+    await pickGroup("Sync");
+
+    expect(screen.getByRole("region", { name: "Sync" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Needs review" })).toBeInTheDocument();
+  });
+
+  /**
+   * **A query outranks the group**, which is `nav.ts`'s one rule stated from this side: a reader
+   * standing on `Updates` who types "dropbox" is asking Settings a question, not asking the
+   * `Updates` group one. The word is one of `Backup`'s keywords and appears in no other panel's,
+   * so the answer is a single panel from a group nobody selected.
+   */
+  it("finds a panel in a group that is not selected", async () => {
+    render(wrap(<SettingsPage update={NO_UPDATE} />));
+
+    await userEvent.type(searchBox(), "dropbox");
+
+    expect(screen.getByText("panel:backup")).toBeInTheDocument();
+    // The selected group's own panel is gone while the query stands, because the query is
+    // answering instead of the group — not alongside it.
+    expect(screen.queryByText("panel:update")).not.toBeInTheDocument();
+  });
+
+  it("says so when nothing matches", async () => {
+    render(wrap(<SettingsPage update={NO_UPDATE} />));
+
+    await userEvent.type(searchBox(), "xyzzy");
+
+    expect(screen.getByText("Nothing in Settings matches that.")).toBeInTheDocument();
+    expect(screen.queryByText("panel:update")).not.toBeInTheDocument();
+    expect(screen.queryByText("panel:backup")).not.toBeInTheDocument();
+  });
+
+  /**
+   * **Picking a group clears the query, and the page does it rather than the rail.** Without it
+   * the two states would both apply and the query would keep winning, so pressing an entry would
+   * appear to do nothing at all — the worst shape this bug could take, because the rail would
+   * still mark the new entry as current while drawing the old answer.
+   */
+  it("clears the query when a group is picked", async () => {
+    render(wrap(<SettingsPage update={NO_UPDATE} />));
+
+    await userEvent.type(searchBox(), "dropbox");
+    expect(screen.getByText("panel:backup")).toBeInTheDocument();
+
+    await pickGroup("Card data");
+
+    expect(searchBox()).toHaveValue("");
+    expect(screen.getByText("panel:prices")).toBeInTheDocument();
+    expect(screen.queryByText("panel:backup")).not.toBeInTheDocument();
   });
 });

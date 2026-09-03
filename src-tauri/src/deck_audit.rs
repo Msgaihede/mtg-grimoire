@@ -812,6 +812,14 @@ mod tests {
                 "collection_to_deck",
                 1,
                 Box::new(|| {
+                    // **The deck has to already play the card**, since issue #358: filing is
+                    // assigning copies to a list, not writing one. The seeded row is added
+                    // *before* `clear`, so its own `add` row is wiped and the count below is
+                    // still only what the filing itself owes — which is one, because the
+                    // filing then folds onto this row through `add_card`'s `ON CONFLICT` arm
+                    // rather than inserting a second.
+                    crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", None, 1)
+                        .unwrap();
                     let entry = seed_entry(&conn, "bolt-lea", 2, None);
                     clear(&conn);
                     crate::collection_alloc::collection_to_deck(
@@ -836,6 +844,20 @@ mod tests {
                 Box::new(|| {
                     let donor = deck(&conn, "Donor");
                     let donor_main = category(&conn, donor, "Main deck");
+                    // Both decks have to play the card before either may hold its copies (#358)
+                    // — the donor to take them in the first place, the target to take them off
+                    // it. Both seeded before `clear`, so neither `add` is counted below.
+                    crate::deck::add_card(
+                        &conn,
+                        donor,
+                        "bolt-lea",
+                        Some(donor_main),
+                        None,
+                        "live",
+                        None,
+                        1,
+                    )
+                    .unwrap();
                     let entry = seed_entry(&conn, "bolt-lea", 2, None);
                     let parked = crate::collection_alloc::collection_to_deck(
                         &conn,
@@ -847,6 +869,8 @@ mod tests {
                     .unwrap()
                     .entry_id
                     .expect("copies that moved land in a row");
+                    crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", None, 1)
+                        .unwrap();
                     clear(&conn);
                     crate::collection_alloc::collection_to_deck(
                         &conn,
@@ -866,6 +890,23 @@ mod tests {
                 "deck_to_collection",
                 1,
                 Box::new(|| {
+                    // The list has to name the card before its copies may be filed under it
+                    // (#358), so the row this case cuts is seeded at 1 and the filing folds
+                    // onto it — leaving 2. **The cut then takes both**, which is what keeps
+                    // this case about the sentence the comment above argues: a partial cut
+                    // records a `quantity` row, and it is the `remove` that would otherwise be
+                    // missing from a deck's log.
+                    crate::deck::add_card(
+                        &conn,
+                        id,
+                        "serra-lea",
+                        Some(side),
+                        None,
+                        "live",
+                        None,
+                        1,
+                    )
+                    .unwrap();
                     let entry = seed_entry(&conn, "serra-lea", 1, None);
                     let landed = crate::collection_alloc::collection_to_deck(
                         &conn,
@@ -878,7 +919,7 @@ mod tests {
                     .deck_card_id
                     .expect("the move names the deck row it wrote");
                     clear(&conn);
-                    crate::collection_alloc::deck_to_collection(&conn, landed, 1).unwrap();
+                    crate::collection_alloc::deck_to_collection(&conn, landed, 2).unwrap();
                 }),
             ),
         ];

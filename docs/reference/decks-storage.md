@@ -366,6 +366,22 @@ preferred_finish`'s nullability one table over.
     which is now closed by there being nothing to re-run. A `sum()` over the group is current at
     every read.
 
+  **`collection_to_deck` refuses a card the deck's live list does not already play** since
+  2026-09-03 — `collection_alloc::NOT_IN_DECK`, issue #358. Filing assigns copies to a list rather
+  than joining a card to a deck, so the one write that could create a placement is no longer
+  allowed to satisfy the invariant by writing the other half itself. **The match is
+  `deck::PLAYED_KEY`, `coalesce(c.oracle_id, dc.card_id)`** — the same oracle-first rule with the
+  same printing fallback that `release_group_copies` holds one function away, so an Alpha Bolt fills
+  a deck listing the M10 one and a `deck_cards` row whose printing has left the corpus is still
+  matched by its own id. **Live only**: a plan holds no cards, so a theory-only listing refuses.
+  Two thin reads over the same expression serve the surfaces that say it early —
+  **`deck_played_keys(deckId)`**, every key a deck's live list plays, and
+  **`deck_ids_playing(keys)`**, every deck that plays *every* key given (`GROUP BY … HAVING
+  count(DISTINCT …)`, an empty list answering nothing rather than everything). Both are routed to
+  the web target; neither takes a marketplace or a variant, because the answer is priced by nothing
+  and scoped to one list by definition. `collection-folders.md` carries the placement argument and
+  what the two greyed surfaces do with it.
+
   **The run list is not replaced by a shorter run list; it is replaced by nothing.** There is no
   derived table to keep in step, so no write "runs the allocator" and none can forget to. What
   moves a row *across* the deck boundary is exactly the pair in `collection_alloc.rs` —

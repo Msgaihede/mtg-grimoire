@@ -476,11 +476,23 @@ shared_cell` walks both into two databases and compares them column by column.
   replace-import on a live list leaves the freshly imported rows owning nothing** until the copies
   are filed back, exactly where `Clear live list…` leaves them — the price of the copies being
   findable at all, and the same trade every other bulk live removal here makes.
-  Six rules hold it together, each with a test:
+  Seven rules hold it together, each with a test:
   - **A deck group is not a drop target**, because a card reaches one only through
     `collection_to_deck`. A bare drag would go through `collection_set_folder`, which knows
     nothing about decks, and leave a placement with **no deck card behind it**.
     `set_entry_folder` refuses a `deck` or `removed` destination for exactly that.
+  - **And `collection_to_deck` itself refuses a card the deck's live list does not already play**
+    (`NOT_IN_DECK`, issue #358, 2026-09-03) — the rule that turned the invariant above from a habit
+    into a fence. Filing is *assigning copies to a list*, not joining a card to a deck; the one
+    write that could create a placement was allowed to satisfy the invariant by writing the
+    `deck_cards` row itself, which made a filing gesture into a deck-building one. **The match is
+    `deck::PLAYED_KEY` — `coalesce(c.oracle_id, dc.card_id)`, oracle first with the printing as the
+    fallback** — `release_group_copies`' rule reused rather than re-spelled, so another printing of
+    a card the deck plays is accepted and an orphaned `deck_cards` row is matched by its own id.
+    **Live only** (a plan holds no cards). **The fence sits after `touch_deck` and before the pile
+    resolves**, because `Pile::Name` *writes*: asked later it would be a refusal that had already
+    invented a category. `deck::played_keys` and `deck::decks_playing` are the two reads behind the
+    surfaces that grey early, and both fail **closed** while unanswered.
   - **And the fence has a second end**: `set_entry_folder` refuses a row whose **source** is a
     `deck` folder (`ENTRY_IN_A_DECK`, a sibling of `FOLDER_NOT_YOURS` rather than a reuse of it —
     that one is about the destination folder, this one about the row). A copy dragged *out* of a

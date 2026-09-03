@@ -419,6 +419,55 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
+   * The two reads a **collection-folder filing rule** is answered from — one deck's played
+   * cards, and the decks that play a given set.
+   *
+   * **They are one question asked from both ends, so they are the shape a copy-paste gets
+   * wrong**: `deck_played_keys` takes a `deckId` and answers card keys, `deck_ids_playing`
+   * takes card keys and answers deck ids. Both parameters are single-word and neither is
+   * `id` — so a wrapper that reached for `id`, or that sent `cardIds` for `keys` because that
+   * is what the array holds elsewhere in this file, is a parameter Tauri cannot fill and a
+   * runtime rejection with no type error anywhere. And a swap between the two commands
+   * type-checks on neither side while both answer an array.
+   *
+   * **The crate is read for the wire names**, `deck_category_clear`'s argument above: nothing
+   * else in this build compares the two sides, and a name Rust does not register is a menu
+   * whose rows all grey for a reason nothing on screen explains.
+   *
+   * The answers are read back because the mirrors are typed rather than inert — `string[]` one
+   * way and `number[]` the other, and a mirror that had them the wrong way round would hand a
+   * consumer a `Set` of card keys to test deck ids against, which matches nothing and looks
+   * exactly like a deck that plays nothing.
+   */
+  it("asks both play reads under the names their commands declare, and the crate declares them", async () => {
+    // Not `toContain` on the source alone: a pass has to mean "the crate spells it", never
+    // "the crate was never read".
+    expect(deckRs.length).toBeGreaterThan(1_000);
+    expect(deckRs).toContain("fn deck_played_keys(");
+    expect(deckRs).toContain("fn deck_ids_playing(");
+
+    // `deckId`, not `id` — the four `deck_update`-family writes above take `id`, and this is a
+    // read in the other family. Camel-cased on the wire, because `deck.rs` renames.
+    invoke.mockResolvedValue(["o1", "o2"]);
+    expect(await ipc.deckPlayedKeys(4)).toEqual(["o1", "o2"]);
+    expect(invoke).toHaveBeenCalledWith("deck_played_keys", { deckId: 4 });
+
+    // `keys`, and the array is passed through untouched: sorting and deduping are the caller's
+    // (`useDecksPlaying` does both), so a mirror that quietly reordered here would make the
+    // hook's own guarantee unfalsifiable.
+    invoke.mockResolvedValue([7, 9]);
+    expect(await ipc.deckIdsPlaying(["o1", "o2"])).toEqual([7, 9]);
+    expect(invoke).toHaveBeenCalledWith("deck_ids_playing", { keys: ["o1", "o2"] });
+
+    // The empty set still travels as an explicit key rather than being dropped: Tauri fills
+    // parameters by name and an absent one is a refusal, not a default — and the backend's
+    // answer to no keys is `[]`, never every deck.
+    invoke.mockResolvedValue([]);
+    expect(await ipc.deckIdsPlaying([])).toEqual([]);
+    expect(invoke).toHaveBeenCalledWith("deck_ids_playing", { keys: [] });
+  });
+
+  /**
    * The four writes over a whole deck. `deck`, not `input` or `entry`: three modules now
    * name their one-object payload differently (`entry`, `wish`, `deck`) and Tauri matches
    * by name, so the one copied from another is the one that fails at runtime.

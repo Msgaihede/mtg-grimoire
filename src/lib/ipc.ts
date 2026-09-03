@@ -4708,6 +4708,59 @@ export const ipc = {
    */
   deckLastFormat: () => invoke<string | null>("deck_last_format"),
   /**
+   * Every card the deck's **live** list plays, as the keys a copy is matched against — the read
+   * behind the rule that a copy may only be filed into a deck's own collection folder when that
+   * deck already plays it.
+   *
+   * **A key is `coalesce(cards.oracle_id, deck_cards.card_id)`: the oracle card, with the
+   * printing as the fallback for a row the card database has never heard of.** The oracle id is
+   * what makes the rule mean what a reader means — a deck plays *Sol Ring*, not the Commander
+   * 2019 printing of one — so a copy from any set is answered by a deck holding any other.
+   * `cards.oracle_id` is nullable and a `deck_cards` row outlives a printing leaving the corpus,
+   * so the fallback is what keeps an orphaned row addressable at all: matched printing to
+   * printing, which is the strictest thing that can honestly be said about a card whose identity
+   * nothing knows.
+   *
+   * **Build the same key on this side with `playKey`** from `@/features/decks/useDeckPlays` —
+   * every DTO a filing surface holds carries both halves ({@link DeckCard},
+   * {@link CollectionRow}, {@link CardDetail}), and a second spelling of the coalesce is one
+   * rule two files would have to go on agreeing about.
+   *
+   * **The live list, and there is no `variant` argument on purpose.** A theory list is what a
+   * deck is being built *toward* and holds no copies at all, so filing the reader's cardboard
+   * into a group on the strength of a plan would put a physical card in a deck that does not
+   * play it yet.
+   *
+   * `DISTINCT` and sorted by the key, so two runs over one deck answer in one order — a card
+   * sitting in two piles is one entry, and the question is membership rather than a count.
+   * **`[]` is an answer twice over**: a deck with an empty live list reads it, and so does a
+   * `deckId` with no deck behind it — this is a fact about rows, and {@link ipc.deckGet} is
+   * where "is there a deck" is asked.
+   */
+  deckPlayedKeys: (deckId: number) => invoke<string[]>("deck_played_keys", { deckId }),
+  /**
+   * Which decks play **every** one of these cards — {@link ipc.deckPlayedKeys} asked from the
+   * other end, for a menu that has to grey the deck groups a selection may not be filed into.
+   *
+   * **`AND`, never `OR`, and that is the half a caller gets wrong.** A reader with four cards
+   * picked is asking *which group can take this selection*, so a deck playing three of the four
+   * must not offer a row that would refuse half the press. With one key the conjunction is
+   * invisible, which is exactly why it is written down here.
+   *
+   * `keys` are {@link ipc.deckPlayedKeys}' own keys, built by `playKey`. **Sort and dedupe
+   * before calling, and that is a caching rule rather than a correctness one** — the backend
+   * dedupes for itself and the answer does not depend on the order, so what an unsorted list
+   * costs is a second cache entry and a second round trip for one question
+   * (`combosForCardsKey` in `lib/query.ts` states the same rule for the same reason).
+   * `useDecksPlaying` does both for its callers.
+   *
+   * **An empty `keys` answers `[]` rather than every deck**, and that arm is the one worth
+   * holding on to: a conjunction over nothing is vacuously true, so "every deck plays all of no
+   * cards" is the tidy answer and precisely the wrong one for a menu — it would offer every
+   * group for a selection there is nothing to check.
+   */
+  deckIdsPlaying: (keys: readonly string[]) => invoke<number[]>("deck_ids_playing", { keys }),
+  /**
    * Make a deck — **the whole deck, in one INSERT**, with its four predefined categories and
    * its one birth row of history in the same transaction. Every field of {@link DeckInput}
    * travels in this one call rather than as a create followed by a patch and a filing, which

@@ -41,7 +41,7 @@ use crate::sync::{with_write, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 #[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
@@ -4154,6 +4154,180 @@ pub fn list_format_specs(conn: &Connection) -> Result<Vec<FormatSpecRow>, String
         .map_err(|e| e.to_string())
 }
 
+/// How a deck row and a collection row are matched when the question is *does this deck play
+/// this card* — on the **oracle card**, falling back to the printing where `cards` has never
+/// heard of it.
+///
+/// It is [`release_group_copies`]' rule read as a key rather than as a join condition, and
+/// [`owned_by_oracle`]'s "a Bolt is a Bolt" read from a third end: a deck that counts an Alpha
+/// Bolt toward an M10 line plays that card, so a reader filing the Alpha copies must not be told
+/// their own deck has never heard of it.
+///
+/// **The `coalesce` is the whole of the NULL trap and is why this is not two comparisons.**
+/// `cards.oracle_id` is NULLABLE, and a deck row's `card_id` is a *soft* reference to a table
+/// that is dropped and recreated on every sync, so an orphaned row joins to nothing at all.
+/// Spelled the obvious way — `c.oracle_id = ?1 OR dc.card_id = ?2` — the first term over an
+/// orphan is `NULL = <something>`, which is NULL rather than false; and where the *asked* card
+/// is an orphan too it is NULL against NULL, which is still not true. The row silently drops out
+/// of the answer and the deck quietly stops playing a card the reader can see on its own list.
+/// One `coalesce`d key per side is never NULL: the oracle card where there is one, the printing
+/// id itself where there is not, and `=` means what it says on both.
+///
+/// **Spelled once because three functions below read it.** [`played_keys`], [`plays_card`] and
+/// [`decks_playing`] all answer questions about the same rule, and two of them disagreeing about
+/// what "the same card" means is a deck that lists a card, refuses its copies, and is right by
+/// one query and wrong by the other.
+const PLAYED_KEY: &str = "coalesce(c.oracle_id, dc.card_id)";
+
+/// The `FROM` [`PLAYED_KEY`] is written against, in the one place its two aliases are bound so
+/// that an expression and its join cannot drift apart.
+///
+/// **`LEFT JOIN`, never an inner one**, for [`release_group_copies`]' reason: `cards` is dropped
+/// and recreated on every sync and `deck_cards.card_id` is soft, so an inner join would take
+/// every orphaned row out of the answer — and a deck would stop playing exactly the cards whose
+/// rows are already flagged for the reader to look at.
+const PLAYED_FROM: &str = "deck_cards dc LEFT JOIN cards c ON c.id = dc.card_id";
+
+/// Every card this deck's **live** list plays, as [`PLAYED_KEY`]s, each once.
+///
+/// **`LIVE` only, and that is the rule rather than a narrowing of it.** A theory list is a plan
+/// and a plan holds no cards ([`crate::collection_alloc::THEORY_HOLDS_NOTHING`]), so a deck that
+/// has only *thought about* a card does not play it — filing copies against a theory row would
+/// put the reader's cardboard in a folder no list claims, which is the state this whole rule
+/// exists to make unreachable.
+///
+/// `DISTINCT`, because one card can sit in two piles of one deck and the caller is asking which
+/// cards the deck plays rather than how many rows say so. `ORDER BY` the key itself, so two runs
+/// over one deck answer in one order — a caller comparing two answers must not see a difference
+/// SQLite chose.
+///
+/// A deck with an empty live list answers `[]`, and so does a deck id with no deck behind it:
+/// this is a fact about rows, and [`read_deck`] is where "is there a deck" is asked.
+pub fn played_keys(conn: &Connection, deck_id: i64) -> Result<Vec<String>, String> {
+    let sql = format!(
+        "SELECT DISTINCT {key} FROM {from}
+          WHERE dc.deck_id = ?1 AND dc.variant = ?2
+          ORDER BY 1",
+        key = PLAYED_KEY,
+        from = PLAYED_FROM,
+    );
+    let keys: Vec<String> = conn
+        .prepare(&sql)
+        .and_then(|mut s| s.query_map(params![deck_id, LIVE], |r| r.get(0))?.collect())
+        .map_err(|e| e.to_string())?;
+    Ok(keys)
+}
+
+/// Does this deck's **live** list already play the card this printing is of?
+///
+/// The one question [`crate::collection_alloc::collection_to_deck`]'s folder rule asks, and it
+/// is asked one printing at a time because that is what a filing holds: a `collection_entries`
+/// row names a printing, and whether the deck lists *that* printing or another of the same card
+/// is exactly the distinction [`PLAYED_KEY`] exists to erase.
+///
+/// **The printing's own key is resolved first, in Rust, rather than folded into the comparison.**
+/// The alternative reads `c.oracle_id = (SELECT oracle_id FROM cards WHERE id = ?) OR
+/// dc.card_id = ?`, which is [`PLAYED_KEY`]'s NULL trap on the *other* side of the `=`: an
+/// orphaned entry — a `card_id` `cards` has never heard of, or has stopped hearing of since the
+/// last sync — makes the sub-select NULL, and NULL against an orphaned deck row's NULL is not a
+/// match. So the sub-select is run on its own through
+/// [`rusqlite::OptionalExtension::optional`], and a printing with no `cards` row falls back to
+/// **its own id**, which is the one thing an orphaned entry always still has. Two orphans of the
+/// same printing then match on that id, which is the best answer there is when nothing in the
+/// database can say what card either of them is.
+pub(crate) fn plays_card(conn: &Connection, deck_id: i64, card_id: &str) -> Result<bool, String> {
+    let wanted: String = conn
+        .query_row(
+            "SELECT coalesce(oracle_id, ?1) FROM cards WHERE id = ?1",
+            params![card_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .unwrap_or_else(|| card_id.to_owned());
+    let sql = format!(
+        "SELECT 1 FROM {from}
+          WHERE dc.deck_id = ?1 AND dc.variant = ?2 AND {key} = ?3
+          LIMIT 1",
+        from = PLAYED_FROM,
+        key = PLAYED_KEY,
+    );
+    let found: Option<i64> = conn
+        .query_row(&sql, params![deck_id, LIVE, wanted], |r| r.get(0))
+        .optional()
+        .map_err(|e| e.to_string())?;
+    Ok(found.is_some())
+}
+
+/// Every deck whose **live** list plays **every one** of these keys.
+///
+/// The rule read from the collection's end: a reader looking at a row of copies asks which of
+/// their decks it could be filed into, and a deck that plays three of the four cards on the page
+/// is not one of them. `AND` rather than `OR` is the whole contract, and the `HAVING` is where it
+/// is said.
+///
+/// **One statement, and `count(DISTINCT …)` rather than `count(…)`.** A card can sit in two piles
+/// of one deck, so a plain row count would read a deck listing one card twice as a deck playing
+/// two cards — a two-key question would answer decks that play only one of them, and a one-key
+/// question would drop the deck that plays it twice. Counting the distinct *keys* matched is the
+/// only count that means what the `HAVING` claims. The `IN` list is what makes it a group filter
+/// at all: without it the count would be over the deck's whole list rather than over the asked-for
+/// part of it.
+///
+/// **Keys are deduplicated first**, [`crate::combos::match_combos`]' rule for its reason: a caller
+/// naming one card twice has not asked about two cards, and leaving the duplicate in would make
+/// the `HAVING` unsatisfiable — every deck refused, with nothing to say why.
+///
+/// **No keys is no decks.** Nobody plays nothing, and both other answers are wrong rather than
+/// merely unhelpful: "every deck" shows the reader decks for a row nothing has identified, and
+/// "the decks with an empty list" is what a `HAVING count(…) = 0` over an `IN ()` would drift
+/// toward by accident. So the case is answered here, in Rust, where it can be said.
+///
+/// `ORDER BY dc.deck_id`, so two runs answer in one order — [`played_keys`]' reason.
+pub fn decks_playing(conn: &Connection, keys: &[String]) -> Result<Vec<i64>, String> {
+    let mut wanted: Vec<&str> = Vec::with_capacity(keys.len());
+    let mut seen: HashSet<&str> = HashSet::new();
+    for key in keys {
+        if seen.insert(key.as_str()) {
+            wanted.push(key.as_str());
+        }
+    }
+    if wanted.is_empty() {
+        return Ok(Vec::new());
+    }
+    let holes = vec!["?"; wanted.len()].join(",");
+    let sql = format!(
+        "SELECT dc.deck_id FROM {from}
+          WHERE dc.variant = ? AND {key} IN ({holes})
+          GROUP BY dc.deck_id
+         HAVING count(DISTINCT {key}) = ?
+          ORDER BY dc.deck_id",
+        from = PLAYED_FROM,
+        key = PLAYED_KEY,
+        holes = holes,
+    );
+    // One boxed list rather than `params_from_iter` over the keys alone, because the variant and
+    // the count ride in the same statement and are not keys — [`crate::filters::Sql`]'s shape,
+    // for the reason it has it.
+    let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(wanted.len() + 2);
+    args.push(Box::new(LIVE.to_owned()));
+    for key in &wanted {
+        args.push(Box::new((*key).to_owned()));
+    }
+    args.push(Box::new(wanted.len() as i64));
+    let decks: Vec<i64> = conn
+        .prepare(&sql)
+        .and_then(|mut s| {
+            s.query_map(
+                rusqlite::params_from_iter(args.iter().map(|p| p.as_ref())),
+                |r| r.get(0),
+            )?
+            .collect()
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(decks)
+}
+
 /// What a deck write says when its worker thread died under it. Never a user's problem —
 /// the write itself answers [`crate::db::BUSY`] when the database is busy.
 #[cfg(not(target_family = "wasm"))]
@@ -4306,6 +4480,46 @@ pub async fn deck_get(
     })
     .await
     .map_err(|e| format!("the deck could not be read: {e}"))?
+}
+
+/// Every card a deck's **live** list plays, as the keys the folder rule is answered from.
+/// **Read-only.**
+///
+/// The keys are `coalesce(cards.oracle_id, deck_cards.card_id)` and are the deck's *facts*: what
+/// a page makes of them — greying a destination, refusing a drop, explaining why — is
+/// TypeScript's, this crate's boundary as usual. A deck with an empty live list and a deck id
+/// with no deck both answer `[]`; [`deck_get`] is where "is there a deck" is asked.
+#[cfg(not(target_family = "wasm"))]
+#[tauri::command]
+pub async fn deck_played_keys(
+    state: tauri::State<'_, Arc<AppState>>,
+    deck_id: i64,
+) -> Result<Vec<String>, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        played_keys(&crate::sync::lock_db_read(&state), deck_id)
+    })
+    .await
+    .map_err(|e| format!("the deck's cards could not be read: {e}"))?
+}
+
+/// Which decks play **all** of these cards. **Read-only.**
+///
+/// [`deck_played_keys`] read from the collection's end, and the one the copies page wants: it
+/// holds a row and asks which decks that row may be filed into. `AND` and not `OR` — see
+/// [`decks_playing`] — and an empty `keys` answers `[]`, because nobody plays nothing.
+#[cfg(not(target_family = "wasm"))]
+#[tauri::command]
+pub async fn deck_ids_playing(
+    state: tauri::State<'_, Arc<AppState>>,
+    keys: Vec<String>,
+) -> Result<Vec<i64>, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        decks_playing(&crate::sync::lock_db_read(&state), &keys)
+    })
+    .await
+    .map_err(|e| format!("the decks playing those cards could not be read: {e}"))?
 }
 
 /// The format rules as data, for the picker and the validation engine. **Read-only.**
@@ -10022,5 +10236,170 @@ mod tests {
         assert_eq!(detail["categories"].as_array().unwrap().len(), 4);
         assert_eq!(detail["categories"][0]["name"], "Commander");
         assert_eq!(detail["categories"][0]["isActive"], true);
+    }
+
+    // ---- the folder rule's three reads ------------------------------------------------
+    //
+    // [`played_keys`], [`plays_card`] and [`decks_playing`] answer one question from three
+    // ends, so the cases below are written to pin the parts they *share* — the oracle match,
+    // the `live` fence and the orphan fallback — in more than one of them at a time. A rule
+    // that is right in one read and wrong in another is a deck that lists a card and refuses
+    // its copies.
+
+    /// A pile of the deck's own beside `Main deck`, so a card can sit in two of them.
+    /// [`main_of`]'s call, one name over.
+    fn side_of(conn: &Connection, deck_id: i64) -> i64 {
+        crate::deck_meta::category_for_name(conn, deck_id, "Sideboard").unwrap()
+    }
+
+    #[test]
+    fn a_decks_played_keys_are_its_oracle_cards_each_once() {
+        // Two printings of one card in two piles is **one** key: the caller is asking which
+        // cards the deck plays, not how many rows say so.
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap().id;
+        let main = main_of(&conn, deck);
+        let side = side_of(&conn, deck);
+        add(&conn, deck, "bolt-lea", main, 4);
+        add(&conn, deck, "bolt-m10", side, 1);
+        add(&conn, deck, "serra-lea", main, 1);
+
+        assert_eq!(
+            played_keys(&conn, deck).unwrap(),
+            vec!["o1".to_owned(), "o2".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_card_a_deck_only_plans_is_not_played() {
+        // **A plan holds no cards** — `collection_alloc::THEORY_HOLDS_NOTHING`, read as the
+        // reason the `variant` clause is in all three statements. Drop it from any one of them
+        // and copies can be filed into a deck against a row that claims nothing.
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap().id;
+        let main = main_of(&conn, deck);
+        add_card(&conn, deck, "serra-lea", Some(main), None, THEORY, None, 1).unwrap();
+
+        assert_eq!(played_keys(&conn, deck).unwrap(), Vec::<String>::new());
+        assert!(!plays_card(&conn, deck, "serra-lea").unwrap());
+        assert_eq!(
+            decks_playing(&conn, &["o2".to_owned()]).unwrap(),
+            Vec::<i64>::new()
+        );
+    }
+
+    #[test]
+    fn a_printing_the_corpus_has_lost_is_played_under_its_own_id() {
+        // `cards` is dropped and recreated on every sync and `deck_cards.card_id` is a soft
+        // reference, so a deck row can name a printing nothing in the corpus knows. It is still
+        // on the reader's list, so the deck still plays it — and the only name left to play it
+        // under is the printing id itself. An inner join, or a bare `OR` over the two nullable
+        // columns, loses this row silently.
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap().id;
+        let main = main_of(&conn, deck);
+        add(&conn, deck, "bolt-jp", main, 1);
+        conn.execute("DELETE FROM cards WHERE id = 'bolt-jp'", [])
+            .unwrap();
+
+        assert_eq!(
+            played_keys(&conn, deck).unwrap(),
+            vec!["bolt-jp".to_owned()]
+        );
+        assert!(
+            plays_card(&conn, deck, "bolt-jp").unwrap(),
+            "an orphaned entry still has its printing id, and so does the row it matches"
+        );
+        assert!(
+            !plays_card(&conn, deck, "bolt-lea").unwrap(),
+            "and a row that no longer names an oracle card cannot be reached through one"
+        );
+        assert_eq!(
+            decks_playing(&conn, &["bolt-jp".to_owned()]).unwrap(),
+            vec![deck]
+        );
+    }
+
+    #[test]
+    fn a_deck_that_lists_one_printing_plays_every_other_one() {
+        // "A Bolt is a Bolt", `owned_by_oracle`'s rule and `release_group_copies`', read from
+        // the filing end: a deck listing the Alpha Bolt plays the M10 copies in the binder, and
+        // a fence matching the exact printing would refuse a reader their own cards.
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap().id;
+        let main = main_of(&conn, deck);
+        add(&conn, deck, "bolt-lea", main, 1);
+
+        assert!(
+            plays_card(&conn, deck, "bolt-lea").unwrap(),
+            "the printing it lists"
+        );
+        assert!(
+            plays_card(&conn, deck, "bolt-m10").unwrap(),
+            "and another printing of the same card"
+        );
+        assert!(
+            !plays_card(&conn, deck, "serra-lea").unwrap(),
+            "but not a card it has never listed"
+        );
+        assert!(
+            !plays_card(&conn, deck, "no-such-printing").unwrap(),
+            "and not an id `cards` has never heard of"
+        );
+    }
+
+    #[test]
+    fn only_a_deck_that_plays_every_key_is_answered() {
+        let conn = seeded();
+        let both = create_deck(&conn, &input("Both", "modern")).unwrap().id;
+        let one = create_deck(&conn, &input("One", "modern")).unwrap().id;
+        add(&conn, both, "bolt-lea", main_of(&conn, both), 1);
+        add(&conn, both, "serra-lea", main_of(&conn, both), 1);
+        add(&conn, one, "bolt-m10", main_of(&conn, one), 1);
+
+        assert_eq!(
+            decks_playing(&conn, &["o1".to_owned()]).unwrap(),
+            vec![both, one]
+        );
+        assert_eq!(
+            decks_playing(&conn, &["o1".to_owned(), "o2".to_owned()]).unwrap(),
+            vec![both],
+            "`AND`, not `OR` — a deck short of one of the cards is not an answer"
+        );
+    }
+
+    #[test]
+    fn a_card_in_two_piles_is_one_key_and_no_keys_is_no_decks() {
+        // **The `count(DISTINCT …)` pin.** A plain `count(…)` counts *rows*, so this deck would
+        // read as playing two cards: the one-key question would drop it and the two-key
+        // question would wrongly answer it. Both directions are asserted, because a mutation
+        // that only breaks one of them is a mutation half a test catches.
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap().id;
+        let main = main_of(&conn, deck);
+        let side = side_of(&conn, deck);
+        add(&conn, deck, "bolt-lea", main, 4);
+        add(&conn, deck, "bolt-m10", side, 1);
+
+        assert_eq!(
+            decks_playing(&conn, &["o1".to_owned()]).unwrap(),
+            vec![deck],
+            "two rows of one card are one card"
+        );
+        assert_eq!(
+            decks_playing(&conn, &["o1".to_owned(), "o2".to_owned()]).unwrap(),
+            Vec::<i64>::new(),
+            "and are not two cards"
+        );
+        assert_eq!(
+            decks_playing(&conn, &["o1".to_owned(), "o1".to_owned()]).unwrap(),
+            vec![deck],
+            "one card named twice is one card, so the `HAVING` stays satisfiable"
+        );
+        assert_eq!(
+            decks_playing(&conn, &[]).unwrap(),
+            Vec::<i64>::new(),
+            "and nobody plays nothing"
+        );
     }
 }

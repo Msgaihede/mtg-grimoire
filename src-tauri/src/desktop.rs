@@ -407,6 +407,11 @@ pub fn run() {
             deck::deck_set_view_state,
             deck::deck_list,
             deck::deck_get,
+            // The two reads a folder rule is answered from: what one deck's live list plays,
+            // and which decks play a given set of cards. Both are reads and take `db_read`,
+            // so they sit with `deck_list`/`deck_get` rather than with the card writes below.
+            deck::deck_played_keys,
+            deck::deck_ids_playing,
             deck::deck_last_format,
             deck::deck_search_open,
             deck::set_deck_search_open,
