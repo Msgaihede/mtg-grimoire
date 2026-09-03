@@ -119,8 +119,22 @@ These apply to **every** task. They are the house rules that a fresh implementer
   `quantity` / `onQuantityChange`, `categories` / `onPickCategory`, `tags` / `tagId` / `onPickTag`.
   **An unwired handler is silently inert** — the control draws, the reader presses it, and nothing
   happens, with nothing going red. Task 10's review must check all nine.
-- **The tag picker is single-select.** `DeckCard.tagId` is `number | null`, so a deck row wears at
-  most one tag: a `Dropdown` with `""` for none, never a multi-select.
+- **The deck card's coloured mark is a LABEL, not a tag** (corrected 2026-09-03 after a merge from
+  `main` renamed it mid-flight). The field is `DeckCard.labelId`, the writer is
+  `ipc.deckCardSetLabel`, the tables are `deck_labels` / `deck_cards.label_id`, and the dialogs are
+  `LabelsDialog` / `AddLabelDialog`. The root `CLAUDE.md` now reserves **tag** for Scryfall's two
+  Tagger datasets and the collection's free-text `tags` column, and says in bold: *"Never let the
+  words trade places."*
+
+  `CardModalControls` shipped in wave 3 calling it a Tag with `tagId` / `onPickTag`. That
+  **type-checked**, because the props are declared locally rather than off `DeckCard` — so a host
+  could have wired `labelId` into a prop named `tagId` with nothing going red. Renamed to
+  `labelId` / `onPickLabel` / `labels`.
+
+  **The rail's "Oracle tags" entry is correct and stays** — those really are Scryfall tags.
+
+- **The label picker is single-select.** `DeckCard.labelId` is `number | null`, so a deck row wears
+  at most one: a `Dropdown` with `""` for none, never a multi-select.
 - **Format display names do not come from `FORMAT_ORDER`** — it is 23 bare keys and nothing else.
   `format_specs` looks like the right source and was tried and backed out in wave 2: the Storybook
   fake serves 12 of its 25 rows by design, so a 23-row grid through it renders half its rows as raw

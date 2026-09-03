@@ -2,27 +2,9 @@ import { useId, type JSX, type ReactNode } from "react";
 import { skipToken, useQuery } from "@tanstack/react-query";
 import { Dialog } from "@/components/Dialog";
 import { ipc, type CardDetail, type OracleTagStatus } from "@/lib/ipc";
-import type { MarketplaceId } from "@/lib/marketplace";
 import { useAppStore } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
-
-/**
- * The one `card_detail` read, spelled the way every other card surface spells it.
- *
- * **A copy rather than an import, deliberately.** The original lives in `CardDetailPane.tsx`,
- * which is deleted once the modal's parts have moved out of it, so importing it would be an
- * import of a file with a demolition date. What matters is that the *string* agrees: the key is
- * how this dialog gets the open card for free — the card modal behind it has already fetched
- * this entry, so mounting an observer on the same key is a cache read and not a second round
- * trip. Two spellings would be two fetches of one card and a dialog that flashes empty.
- *
- * The marketplace is in the key because it is in the answer: `card_detail` prices every finish
- * with it, so two marketplaces are two different cards as far as the cache is concerned. Nothing
- * *here* draws a price, but the key is not this surface's to shorten.
- */
-function cardDetailKey(cardId: string | null, marketplace: MarketplaceId) {
-  return ["card", cardId, marketplace];
-}
+import { cardDetailKey } from "./cardDetailKey";
 
 /**
  * The tag read, keyed on the **oracle** id — which is what the plan asks for and what the data

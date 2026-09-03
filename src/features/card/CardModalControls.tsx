@@ -93,31 +93,31 @@ export interface CardModalControlsProps {
   /** The deck's categories. Drawn only when `scope.deckControls`. */
   categories?: readonly DropdownOption[];
   onPickCategory?: (categoryId: number) => void;
-  /** Every tag there is — one row wears at most one (`DeckCard.tagId`), so this is a single
+  /** Every label there is — one row wears at most one (`DeckCard.labelId`), so this is a single
    *  select rather than a `MultiDropdown`. */
-  tags?: readonly DropdownOption[];
-  /** The tag the deck row wears, or `null` for none. */
-  tagId?: number | null;
-  onPickTag?: (tagId: number | null) => void;
+  labels?: readonly DropdownOption[];
+  /** The label the deck row wears, or `null` for none. */
+  labelId?: number | null;
+  onPickLabel?: (labelId: number | null) => void;
 }
 
 /**
  * The card modal's centre column: **Quantity**, **Printing**, and — for a card opened out of a
- * deck — **Deck category** and **Tag**.
+ * deck — **Deck category** and **Label**.
  *
  * **Every branch in this file reads `scope` and nothing else.** The per-view table is spec §7's
  * and it is resolved once, in `cardModalScope.ts`, precisely so that the rail, the action row
  * and this column cannot answer it three different ways. Two fields decide everything here:
  * `scope.quantity` says which count the stepper edits (or that there is none to edit), and
- * `scope.deckControls` gates the category and tag pickers **together** — they are one fact about
- * one row, and a surface that can file a card into a pile can also tag it.
+ * `scope.deckControls` gates the category and label pickers **together** — they are one fact about
+ * one row, and a surface that can file a card into a pile can also label it.
  *
  * What is *not* drawn is absent rather than disabled. A greyed stepper on the search wall would
  * be a claim that the wall keeps a count, which it does not; `Add to collection` in the action
  * row is how a card becomes something with a count, and that is the door every other surface in
  * the app already uses.
  *
- * **This writes nothing.** Category, tag and quantity call props; Task 10 connects them to
+ * **This writes nothing.** Category, label and quantity call props; Task 10 connects them to
  * `useDeck`. Keeping the writes out is what lets this render with no deck in the tree.
  */
 export function CardModalControls({
@@ -131,9 +131,9 @@ export function CardModalControls({
   onQuantityChange,
   categories = [],
   onPickCategory,
-  tags = [],
-  tagId = null,
-  onPickTag,
+  labels = [],
+  labelId = null,
+  onPickLabel,
 }: CardModalControlsProps) {
   const uid = useId();
   const stepper = scope.quantity === null ? null : QUANTITY_LABEL[scope.quantity];
@@ -213,10 +213,10 @@ export function CardModalControls({
         </Field>
       </div>
 
-      {/* Deck category and Tag, side by side above the fold and stacked below it.
+      {/* Deck category and Label, side by side above the fold and stacked below it.
           `grid-cols-2` rather than the spec's literal `repeat(2,1fr)`: Tailwind's spelling is
           `repeat(2, minmax(0, 1fr))`, and the `minmax(0,` is what lets a long category name
-          truncate instead of pushing the tag picker out of the column. */}
+          truncate instead of pushing the label picker out of the column. */}
       {scope.deckControls && (
         <div className="grid grid-cols-1 gap-3 @min-[900px]/card:grid-cols-2">
           <Field id={`${uid}-category`} label="Deck category">
@@ -240,20 +240,20 @@ export function CardModalControls({
             />
           </Field>
 
-          <Field id={`${uid}-tag`} label="Tag">
+          <Field id={`${uid}-label`} label="Label">
             <Dropdown
-              id={`${uid}-tag-control`}
-              labelledBy={`${uid}-tag`}
-              // A row wears at most one tag and `null` is a real answer, so the empty string is
+              id={`${uid}-label-control`}
+              labelledBy={`${uid}-label`}
+              // A row wears at most one label and `null` is a real answer, so the empty string is
               // the value that means "none" — `Dropdown` speaks strings and has no null.
-              value={tagId === null ? "" : String(tagId)}
-              onChange={(v) => onPickTag?.(v === "" ? null : Number(v))}
-              options={tags}
-              placeholder="No tag"
-              // App-wide since schema v21, so the list is every tag the reader has ever made
+              value={labelId === null ? "" : String(labelId)}
+              onChange={(v) => onPickLabel?.(v === "" ? null : Number(v))}
+              options={labels}
+              placeholder="No label"
+              // App-wide since schema v21, so the list is every label the reader has ever made
               // rather than this deck's — which is exactly the list that needs a search box.
               searchable
-              searchLabel="Search tags"
+              searchLabel="Search labels"
               fill
               className={CONTROL_HEIGHT}
             />

@@ -60,7 +60,7 @@ The panel is a three-part grid over a scrim, with the card's name, type line and
 │ card image     │ Quantity                  │ OPTIONS             │
 │  + chin        │ Printing ▾  View all (4)  │  Legality           │
 │                │                           │  Oracle tags        │
-│ Set as foil    │ Deck category ▾   Tag ▾   │  Card text          │
+│ Set as foil    │ Deck category ▾  Label ▾  │  Card text          │
 │ Flip card      │                           │  Set as commander   │
 │                │                           │  Set deck image     │
 │ Nonfoil  Foil  │                           │  Open on Scryfall ↗ │
@@ -303,7 +303,7 @@ already exist: `paneDeckContext` (the deck row a card was opened out of, or `nul
 | --- | --- | --- | --- | --- | --- |
 | Quantity stepper | — | owned count | wished count | — | deck quantity |
 | Deck category ▾ | — | — | — | — | ✓ |
-| Tag ▾ | — | — | — | — | ✓ |
+| Label ▾ | — | — | — | — | ✓ |
 | Set as commander / Set deck image | — | — | — | — | ✓ |
 | Legality / Oracle tags / Card text / Open on Scryfall | ✓ | ✓ | ✓ | ✓ | ✓ |
 | In your grimoire | ✓ | ✓ | ✓ | ✓ | ✓ + `4× in Burn · mainboard` |

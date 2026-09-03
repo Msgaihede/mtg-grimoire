@@ -48,13 +48,14 @@ import {
   type Printing,
 } from "@/lib/ipc";
 import { languageHint } from "@/lib/languages";
-import type { Marketplace, MarketplaceId } from "@/lib/marketplace";
+import type { Marketplace } from "@/lib/marketplace";
 import { dialog } from "@/lib/motion";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { useAppStore, type PaneDeckContext } from "@/lib/store";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
+import { cardDetailKey } from "./cardDetailKey";
 import { buildCardMenu, type CardMenuDeps, type CardMenuTarget } from "./cardMenu";
 import { CardMenuRefusal } from "./CardMenuRefusal";
 import { useCardMenuDeps } from "./useCardMenuDeps";
@@ -241,20 +242,6 @@ interface SwapOffer {
  * end of the app — the deck editor's two right-hand drawers became centred modals — so this is
  * the only preset a docked surface here has, and the reasoning above is why that costs nothing.
  */
-/**
- * The one `card_detail` read this pane makes, named once.
- *
- * The marketplace is in the key because it is in the answer — `card_detail` prices every finish
- * with it, so two marketplaces are two different cards as far as the cache is concerned. It is a
- * function rather than a literal at each site because {@link CardDetailPane} reads this entry
- * *without* observing it: the box holds no card state (that is {@link Body}'s, keyed on the
- * card), so its right-click menu asks the cache for whatever the body has already fetched, at the
- * moment of the press. Two spellings of one key would be a menu that silently found nothing.
- */
-function cardDetailKey(cardId: string, marketplace: MarketplaceId) {
-  return ["card", cardId, marketplace];
-}
-
 /** The card the pane is open on, as a menu target. Every field is the card's own. */
 function paneTarget(card: CardDetail): CardMenuTarget {
   return {
@@ -592,7 +579,9 @@ function Body({
   // The marketplace is in the key because it is in the answer: `card_detail` prices every finish
   // with it, so two marketplaces are two different cards as far as the cache is concerned.
   const card = useQuery({
-    // One spelling of this key, shared with the pane's own menu — see {@link cardDetailKey}.
+    // **The entry every other card surface is served out of.** One spelling of this key, shared
+    // with the pane's own menu and with the three overlays the rail opens — see
+    // {@link cardDetailKey} for what that sharing buys and what a second spelling would cost.
     queryKey: cardDetailKey(cardId, marketplace.id),
     queryFn: () => ipc.cardDetail(cardId, marketplace.id),
   });

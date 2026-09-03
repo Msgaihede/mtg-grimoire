@@ -72,17 +72,23 @@ function renderControls(props: Partial<Parameters<typeof CardModalControls>[0]> 
 
 describe("CardModalControls", () => {
   it("draws the deck controls only for a card opened out of a deck", () => {
-    // Spec §7: `Deck category` and `Tag` are the deck editor's column of that table and
+    // Spec §7: `Deck category` and `Label` are the deck editor's column of that table and
     // nothing else's. `scope.deckControls` gates the pair together, so neither can arrive
     // on a surface the other did not.
+    //
+    // `Label` is the deck card's own coloured mark (`DeckCard.labelId`, `deck_labels`) and
+    // never a Scryfall tag — the root `CLAUDE.md` reserves that word for the two tagger
+    // taxonomies and the collection's free-text column.
     renderControls({
       scope: deckScope,
       categories: [{ value: "2", label: "Burn spells" }],
-      tags: [{ value: "7", label: "Cut candidate" }],
+      labels: [{ value: "7", label: "Cut candidate" }],
     });
 
     expect(screen.getByRole("button", { name: /deck category/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /tag/i })).toBeInTheDocument();
+    // Named exactly, not `/label/i`: the picker's own name is the one visible word, and a
+    // loose pattern would just as happily match a control that grew the word later.
+    expect(screen.getByRole("button", { name: "Label" })).toBeInTheDocument();
   });
 
   it("draws no stepper and no deck controls on the search page", () => {
@@ -92,6 +98,9 @@ describe("CardModalControls", () => {
     renderControls({ scope: searchScope });
 
     expect(screen.queryByRole("button", { name: /deck category/i })).not.toBeInTheDocument();
+    // The other half of the pair `scope.deckControls` gates — asserted here so the claim the
+    // test above makes about the two arriving together is checked from both ends.
+    expect(screen.queryByRole("button", { name: "Label" })).not.toBeInTheDocument();
     expect(screen.queryByRole("spinbutton")).not.toBeInTheDocument();
   });
 

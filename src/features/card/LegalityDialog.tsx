@@ -5,6 +5,7 @@ import { ipc, ipcError, type CardDetail } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
+import { cardDetailKey } from "./cardDetailKey";
 import { FORMAT_ORDER } from "./printings";
 
 /**
@@ -63,10 +64,9 @@ export function LegalityDialog(): JSX.Element {
   const open = overlay === "legality" && cardId !== null;
 
   const card = useQuery({
-    // One spelling of the card modal's key, written out rather than imported: `CardDetailPane`
-    // owns the only other copy today and that file goes with the dock, so importing it would be
-    // an import of something on its way out.
-    queryKey: ["card", cardId, marketplace.id],
+    // The card modal's own key, imported rather than spelled out — see {@link cardDetailKey}
+    // for why every surface that reads a card has to agree on it to the character.
+    queryKey: cardDetailKey(cardId, marketplace.id),
     // `skipToken` rather than `enabled`, so the closed state is *no query function at all*
     // rather than a disabled one — this component is mounted for the whole life of the app and
     // must cost nothing until a reader asks. An entry the modal has already filled is read on
