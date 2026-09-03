@@ -210,6 +210,11 @@ export const Table: Story = {
  * which is where it would file the new one. `NewFolderCard` carries the visual argument: a folder
  * card’s footprint exactly, and solid-bordered where every card beside it is dashed, because the
  * dash means “provisional container” on every screen in this app and a button is not one.
+ *
+ * **Pressing it names the folder in the tile itself** ({@link NamingAFolder}), and a folder card’s
+ * `Rename…` does the same thing on that card. Nothing opens above the wall for either — the strip
+ * that used to is down to the two questions no 62px tile can hold, `Move to folder…` and
+ * `Delete…`.
  */
 export const Folders: Story = {
   // The cabinet is the subject, and no wall is drawn at all while the list is flattened.
@@ -260,9 +265,14 @@ export const Folders: Story = {
  *
  * `seed: "empty"` is the only seeded world with no wishlist folders in it, so it is also the only
  * one that can show this. The page draws the tile alone, at a folder card's own height —
- * `NewFolderCard`'s measured `min-h`, which is what stops the band collapsing to a 20px strip when
+ * `FOLDER_CARD_HEIGHT`, the measured `min-h` that stops the band collapsing to a 20px strip when
  * there is no card beside it to stretch against — and no breadcrumb at all, because there is no
  * trail and nowhere for it to lead.
+ *
+ * **The floor lives in `FolderNameField` now rather than in `NewFolderCard`, and this story is
+ * why it had to move**: the tile *becomes* the field when it is pressed, so a field sized only by
+ * its own content would shrink the wall the moment a reader used it — and here, with nothing else
+ * in the wall to stretch against, there would be nothing to hide it.
  */
 export const EmptyCabinet: Story = {
   // {@link Folders}' reason: flattened there is no wall, so the trap door this story guards
@@ -279,8 +289,59 @@ export const EmptyCabinet: Story = {
     // And it reaches something: a tile over an empty wall that opened nothing would look right in
     // every screenshot and still be the trap door.
     await userEvent.click(within(wall).getByRole("button", { name: "New folder" }));
-    await expect(await canvas.findByLabelText("New folder name")).toBeInTheDocument();
-    await expect(canvas.getByText("in Wishlist")).toBeInTheDocument();
+
+    // The tile *is* the field — asserted by containment rather than by finding an input somewhere
+    // on the page, which is what a field back in a strip above the wall would also satisfy.
+    const field = await canvas.findByLabelText("New folder name");
+    await expect(within(wall).getAllByRole("listitem")[0]).toContainElement(field);
+    // Nothing above the wall says which level this is. The strip printed `in Wishlist` here, for a
+    // reader who could not see which level it was drawn over; the wall the field stands in is that
+    // sentence now.
+    await expect(canvas.queryByText("in Wishlist")).toBeNull();
+  },
+};
+
+/**
+ * **The field the tile becomes**, drawn where the folder it is naming will be.
+ *
+ * This is the state a screenshot of the wall could not previously show, because the field was
+ * never in the wall: pressing `+ New folder` opened a bordered strip under the breadcrumb with an
+ * input, `Create folder` and `Cancel` in words, and a line reading *in Wishlist*. Every one of
+ * those re-established a context the reader could already see — the level is the wall they are
+ * looking at, and the thing being named is going to appear in it — so the strip said, at the size
+ * of a second panel, what the wall says by being on screen.
+ *
+ * What is worth looking at here rather than reading: the name is typed **on the line the folder's
+ * name will occupy**, at the same track and the same footprint, so nothing reflows when the field
+ * opens and nothing moves when it closes; ✓ and ✕ take the corner a folder card gives its `⋯`,
+ * which is the one place on a card a reader has been taught to find its controls; and the tile
+ * keeps its **solid** border while the drawers beside it stay dashed, because it is still a
+ * control holding no folder yet. `FolderNameField` has the whole argument and its own stories
+ * carry the field's states; what only this page can show is the field *in the wall*, with the
+ * drawers it will stand beside on either side of it.
+ */
+export const NamingAFolder: Story = {
+  // {@link Folders}' reason — there is no wall to draw the field in while the list is flattened.
+  args: { flatten: false },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findByRole("button", { name: /^Ordered folder/ });
+
+    const wall = canvas.getByRole("list", { name: "Folders" });
+    await userEvent.click(within(wall).getByRole("button", { name: "New folder" }));
+
+    const field = await canvas.findByLabelText("New folder name");
+    const cards = within(wall).getAllByRole("listitem");
+    // In the tile's own `<li>` — the claim a query that only found the input would pass without,
+    // since a field back in a strip above the wall is also "on the page".
+    await expect(cards[0]).toContainElement(field);
+    // The control it replaced is out of the tree rather than sitting behind the field: two ways to
+    // start naming one folder is one of them doing nothing.
+    await expect(within(wall).queryByRole("button", { name: "New folder" })).toBeNull();
+    // And the drawers are still drawers — one field is open at a time across the whole wall.
+    await expect(
+      within(cards[1]).getByRole("button", { name: /^Ordered folder/ }),
+    ).toBeInTheDocument();
   },
 };
 
