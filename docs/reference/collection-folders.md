@@ -1169,6 +1169,13 @@ to fix a miscount. What came with it is a fence neither view had: **a stepper is
 every copy behind it is at the root or in a folder the reader made.** A deck's group and `Recently
 removed` draw the number as plain text and say why.
 
+**Where it stands moved on 2026-09-03** —
+[issue #348](https://github.com/Msgaihede/mtg-grimoire/issues/348) reported that the walls matched
+the deck builder's control in neither style nor location, so both walls took the deck stack's
+column: 36px, standing on end in the tile's right margin, through `CardGrid`'s `column` slot. The
+fence below is untouched by that and is the half worth reading; the geometry is in
+[frontend-design.md](frontend-design.md#one-quantity-control-on-a-card-face-on-all-three-surfaces-2026-09-03-issue-348).
+
 **The fence is the app's and not the crate's, and that asymmetry is deliberate.**
 `collection::set_quantity` takes an entry id and asks nothing about where the row is filed; it will
 step a row in a deck's group as readily as one at the root, and the section above is why that

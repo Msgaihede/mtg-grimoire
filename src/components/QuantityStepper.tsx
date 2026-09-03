@@ -79,11 +79,17 @@ export function QuantityStepper({
    * `xs` is the deck's row scale: a stepper inside a 150px grid tile or a 22px text row, where
    * `sm`'s 28px does not fit.
    *
-   * `card` is the **36px** column drawn over a card face in the deck stack, and it is still the
-   * one size larger than the default rather than smaller than `sm`. Everything else in this file
-   * sits in a *row* of controls and is sized by the row; this one stands alone in a 210px card's
-   * right margin, over an illustration, and is the whole of what a reader presses to change how
-   * many copies a deck holds.
+   * `card` is the **36px** column drawn over a card face, and it is still the one size larger
+   * than the default rather than smaller than `sm`. Everything else in this file sits in a *row*
+   * of controls and is sized by the row; this one stands alone in a card's right margin, over an
+   * illustration, and is the whole of what a reader presses to change how many copies they hold.
+   *
+   * **Three surfaces draw it, not one** — the deck stack's 210px card, and since issue #348 the
+   * collection's and the wishlist's 170px wall tiles, where it replaced an `xs` bar tucked into
+   * the tile's bottom corner. That report was that the walls matched the deck builder in neither
+   * style nor location, and one control on one kind of object is what closes it. The figures
+   * below are the deck card's; a wall tile's are at each caller's own site, because what the
+   * ratio is held against differs and the argument for the ratio does not.
    *
    * **It was 24px until 2026-08-15 and 48px until 2026-08-20**, and each move was a correction of
    * the one before. 24 made it the smallest control in the app in the place with the most room

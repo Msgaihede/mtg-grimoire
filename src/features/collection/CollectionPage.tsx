@@ -2796,18 +2796,25 @@ export function CollectionPage() {
               // the wall draws its own `SET · number` and this page spells that text exactly once
               // — in {@link captionFor}, which is the flattened line and nothing else.
               caption={flatten ? captionFor(folderNameOf) : undefined}
-              /* **The wall's own stepper** (issue #284), in the strip over the foot of the art —
-                 the slot the search's quick-add and the wishlist's pencil already ride in, and the
-                 same place the deck editor puts a card's stepper. It costs the wall no height:
-                 the strip is `absolute inset-x-0 bottom-0`, so `tileHeight` is unchanged by its
-                 existence. Until it landed this view could maintain quantities in its *table*
+              /* **The wall's own stepper** (issue #284), standing in the tile's right margin
+                 (issue #348). Until it landed this view could maintain quantities in its *table*
                  alone, which made the wall the layout a reader looked at and the table the one
                  they worked in.
+
+                 **It rode in the bottom strip for its first two days and does not any more.** The
+                 report was that neither the style nor the location matched the deck builder's, and
+                 neither did: the deck stack draws a 36px column up the card's right-hand side and
+                 this drew a 20px bar tucked into the bottom corner. It is the same control over
+                 the same kind of object, so it is one recipe now — {@link CardGrid}'s `column`
+                 slot is the position and `size="card"` the size, both of them the deck stack's,
+                 and the wishlist's wall took the identical change in the same commit. It still
+                 costs the wall no height: the box is absolute, so `tileHeight` is unchanged by its
+                 existence, which was the strip's property and is inherited rather than re-argued.
 
                  **Absent is a real answer, not a fallback**: {@link stepperByTile} draws nothing
                  for a tile whose copies the reader may not step, and that is the fence rather than
                  an affordance — every rule about it is at that map's own site. */
-              action={(tile) => {
+              column={(tile) => {
                 const step = stepperByTile.get(tile.key);
                 if (step === undefined) return null;
                 // The mark the art is drawing, read through the same function the chip above it
@@ -2822,22 +2829,29 @@ export function CollectionPage() {
                   // travel is a drag of the card, and the press is never delivered as a click.
                   // `cardDraggable` asks `closest()`, so one mark on the wrapper covers both
                   // buttons; `DeckCardControls` carries the identical mark for the identical
-                  // reason. The wrapper is also the direct child `CardGrid`'s strip gives
-                  // `pointer-events-auto` back to.
+                  // reason.
                   <span data-no-drag="" className="flex">
                     <QuantityStepper
-                      // The 20px box, which scales with the reader's zoom through
-                      // `--control-scale` — `xs` and `card` are the two sizes drawn on a card
-                      // face, and this is a 170px tile rather than a 210px one.
-                      size="xs"
+                      // The deck stack's column, verbatim — the 36px box, standing on end, over
+                      // art. `xs` and `card` are the two sizes drawn on a card face and both
+                      // follow the reader's zoom through `--control-scale`; this is the larger.
+                      // Against a 170px tile whose art box is 238px (5:7) the column rests at
+                      // 30.6 × ~98.6px — 18% of the width and 41% of the height, starting 24px
+                      // down — where on the deck's own 210 × 293 card it is 15% and 34%. Both are
+                      // constants across the zoom ladder rather than readings at 1×, because the
+                      // tile, the art and the column are each linear in the same zoom.
+                      size="card"
+                      orientation="vertical"
                       // Drawn over an illustration, and inside a box that clips its own corners —
                       // the deck stepper's two reasons, unchanged one surface over.
                       tone="art"
                       focus="inset"
                       // **The tile's sum, never the addressed row's own number.** `OwnedBadge`
-                      // draws that same figure in the corner six pixels away, and two numbers
-                      // that close together disagreeing about one piece of art is not a state
-                      // this wall may show.
+                      // draws that same figure in the tile's other corner, and two numbers on one
+                      // piece of art disagreeing about how many copies it stands for is not a
+                      // state this wall may show. (They were six pixels apart while this rode in
+                      // the bottom strip; the column has moved and the rule has not, because what
+                      // makes it one is the tile rather than the distance.)
                       value={tile.copies}
                       // The copies this control cannot reach — see {@link stepperByTile}, where
                       // the arithmetic and the two behaviours that fall out of it are worked
