@@ -4560,6 +4560,97 @@ function ownedByOracle(db: FakeDb, deckId: number): Map<string, number> {
 }
 
 /**
+ * `coalesce(cards.oracle_id, deck_cards.card_id)` — what names a card in a folder rule.
+ *
+ * {@link collapseKey} one table over, and the difference is which id the coalesce falls back to.
+ * That one is handed a `cards` row and takes its own id; this one is handed a **`card_id` a deck
+ * row or a collection row remembers**, and `cards` may never have heard of it — an import writes
+ * a printing this corpus has not got, and a sync can drop one. So the fallback is the id the
+ * caller already had, which is exactly what the `LEFT JOIN` and the `coalesce` do together: a
+ * printing with no `cards` row is still a card, and it is only ever the same card as itself.
+ */
+function playedKey(db: FakeDb, cardId: string): string {
+  return cardById(db, cardId)?.oracleId ?? cardId;
+}
+
+/**
+ * `deck::played_keys` — every card a deck's **live** list plays, keyed by {@link playedKey}.
+ *
+ * The live list and nothing else: a theory row is a *plan*, it holds no cards, and a group
+ * filled from a plan is the phantom {@link NOT_IN_DECK} exists to stop. It is the same sentence
+ * {@link THEORY_HOLDS_NOTHING} says from the other end of the same pair.
+ *
+ * **No category test and no quantity test.** An inactive pile is still the reader's list — the
+ * Maybeboard is switched off for the *counting*, not for the filing — and a row stepped to zero
+ * is still a row. The crate's `SELECT DISTINCT` says neither, so a fake that said either would
+ * refuse presses the app allows.
+ *
+ * `DISTINCT`, because two piles of one deck may name one card and a rule asking "does this deck
+ * play it" must not care how many rows say yes. **Sorted by the key** — the crate's `ORDER BY 1`
+ * — so the answer is a stable list rather than whatever order the rows happen to be in, which is
+ * what lets a caller compare two decks' keys without sorting them first.
+ */
+function playedKeys(db: FakeDb, deckId: number): string[] {
+  const keys = new Set<string>();
+  for (const dc of db.deckCards) {
+    if (dc.deckId !== deckId || dc.variant !== LIVE) continue;
+    keys.add(playedKey(db, dc.cardId));
+  }
+  return [...keys].sort(cmp);
+}
+
+/**
+ * Whether a deck's live list plays a card — {@link NOT_IN_DECK}'s question.
+ *
+ * **Written over {@link playedKeys} rather than beside it**, which is the whole point: the fence
+ * and the read a rule is evaluated from have to answer the same question, and two walks over
+ * `deck_cards` are two places for a variant test or an oracle fallback to drift. A folder rule
+ * that let a card through the fence and then said the deck did not play it would be the same
+ * phantom by a longer road.
+ */
+function deckPlays(db: FakeDb, deckId: number, cardId: string): boolean {
+  return playedKeys(db, deckId).includes(playedKey(db, cardId));
+}
+
+/**
+ * `deck::decks_playing` — every deck whose live list plays **every** one of the given keys.
+ *
+ * **Every, never any**, and that is the rule rather than a detail: a folder rule naming three
+ * cards asks which decks could hold all three, and an `any` would answer with decks that play
+ * one of them — the union where the caller asked for the intersection.
+ *
+ * **No keys is no decks.** The vacuous reading — every deck plays all zero of them — is the one
+ * a `HAVING count(*) = 0` would give and is the wrong answer to the only question that produces
+ * it: a caller with an empty list has nothing to file, and answering the whole gallery would
+ * offer every deck at once. The early return is **belt and braces rather than the mechanism**:
+ * the walk below already answers `[]`, because no key can be in an empty set. It is written out
+ * so a later rewrite into a counting shape cannot pick the vacuous reading up by accident, which
+ * is exactly how that bug arrives in SQL.
+ *
+ * The keys are deduped before they are counted, so a caller that sent one card twice is asking
+ * about one card — the crate walks them into a `HashSet` for the same reason, because the count
+ * its `HAVING` compares against is the number of *distinct* keys the statement bound. Sorted by
+ * deck id, the crate's `ORDER BY dc.deck_id`.
+ */
+function decksPlaying(db: FakeDb, keys: readonly string[]): number[] {
+  const wanted = new Set(keys);
+  if (wanted.size === 0) return [];
+  const have = new Map<number, Set<string>>();
+  for (const dc of db.deckCards) {
+    if (dc.variant !== LIVE) continue;
+    const key = playedKey(db, dc.cardId);
+    if (!wanted.has(key)) continue;
+    const hit = have.get(dc.deckId);
+    if (hit) hit.add(key);
+    else have.set(dc.deckId, new Set([key]));
+  }
+  return [...have]
+    .filter(([, played]) => played.size === wanted.size)
+    .map(([deckId]) => deckId)
+    .sort((a, b) => a - b);
+}
+
+/**
  * `DECK_CARD_SELECT`'s `ORDER BY cat.sort_order, cat.id, dc.name, dc.id` — the order the
  * editor reads a deck in.
  *
@@ -6000,6 +6091,37 @@ export function readHandlers(db: FakeDb) {
     },
 
     /**
+     * `deck::played_keys` — every card this deck's **live** list plays, as the keys a folder
+     * rule names cards by. See {@link playedKeys} for the variant, the key, the `DISTINCT` and
+     * the order.
+     *
+     * **A read where {@link writeHandlers.collection_to_deck}'s fence is a refusal**, and the
+     * pair is the point: the write is where the invariant is *kept* ({@link NOT_IN_DECK}), and
+     * this is how a screen can say so before the reader presses anything. Both go through
+     * {@link playedKeys}, so a control that offers a filing and a write that accepts one cannot
+     * disagree about which cards a deck plays.
+     *
+     * **No `deckMeta` fault and no refusal of any kind.** It is not one of `deck_meta`'s five
+     * satellites — it is `deck.rs`' own, on the same `lock_db_read` as `deck_get` — so a deck
+     * whose folders cannot be read still answers here. A deck that is not there answers `[]`,
+     * which is the honest reading of "the cards its list plays" and what the SQL gives with no
+     * fence at all.
+     */
+    deck_played_keys: (args: { deckId: number }): string[] => playedKeys(db, args.deckId),
+
+    /**
+     * `deck::decks_playing` — every deck whose live list plays **every** one of these keys.
+     *
+     * The question the other way round: {@link deck_played_keys} asks what one deck plays, this
+     * asks which decks play a given hand. See {@link decksPlaying} for the every-not-any rule
+     * and for why an empty `keys` answers an empty list rather than the whole gallery.
+     *
+     * Ids and not rows, deliberately — the caller already has `deck_list`, and a second command
+     * answering deck rows would be a second place for a name or an `updatedAt` to be stale.
+     */
+    deck_ids_playing: (args: { keys: string[] }): number[] => decksPlaying(db, args.keys),
+
+    /**
      * `deck_meta::list_categories` — a deck's categories on their own, for a panel that wants
      * them without the cards.
      *
@@ -6894,6 +7016,29 @@ const NO_REMOVED_FOLDER = "There is no Recently removed folder to file these int
  *  from deck A's folder onto deck A would otherwise write a second `deck_cards` row against
  *  copies the group already holds, and the list would say two where the folder says one. */
 const ALREADY_HERE = "Those copies are already in this deck.";
+/**
+ * `collection_alloc::NOT_IN_DECK` — issue #358's fence, and the newest of this module's
+ * refusals.
+ *
+ * **A copy may only be filed into a deck's group if that deck's *live* list already plays the
+ * card.** A group is where the app keeps the cards a deck is physically holding, so a copy
+ * filed into one that no `deck_cards` row backs is a phantom: the collection says the card is
+ * spoken for, every other deck is refused it, and nothing on the deck screen accounts for it.
+ *
+ * It says what to do rather than only what went wrong, {@link ENTRY_IN_A_DECK}'s manners: the
+ * card goes on the list first — `deck_add_card`, which writes no collection row at all — and the
+ * copies follow.
+ *
+ * **It does not preempt {@link DECK_GONE}**, and that is deliberate on both sides: "that deck is
+ * gone" and "that deck does not play this" are different things to tell a stale editor, so the
+ * deck fence stays the first statement in the write.
+ *
+ * **Matched on the oracle card, not the printing** ({@link playedKeys}): a different printing of
+ * a card the deck plays is the same card, which is `deck::release_group_copies`' rule and
+ * {@link ownedByOracle}'s.
+ */
+const NOT_IN_DECK =
+  "That deck does not play this card. Add it to the deck first, then file your copies.";
 /** `collection_alloc::BOTH_PILES`. The id and the name are alternatives there rather than a
  *  preference — `deck_add_card` lets the id win because a drag carries both, and nothing sends
  *  both to this write, so both arriving means a caller has lost track of which it meant. In Rust
@@ -9000,6 +9145,17 @@ export function writeHandlers(db: FakeDb) {
      * {@link ALREADY_HERE} is refused rather than treated as a no-op: the press that produces it
      * would otherwise write a second `deck_cards` row against copies the group already holds.
      *
+     * **The deck must already play the card** ({@link NOT_IN_DECK}, issue #358), and that fence
+     * is asked **before the pile is resolved** — the crate's position, and the one that makes
+     * the name arm safe by construction rather than by the rollback below. A copy filed into a
+     * group no `deck_cards` row backs is a phantom, so this is the same invariant
+     * {@link ENTRY_IN_A_DECK} keeps from the collection's end: a copy in a deck's group is
+     * backed by a deck card in that deck.
+     *
+     * **It changes what this command is for.** Filing copies is no longer how a card *joins* a
+     * deck — `deck_add_card` is, and it writes no collection row — this is how the card the deck
+     * already plays gets the reader's physical copies behind it.
+     *
      * **`categoryId` and `categoryName` are alternatives and exactly one must arrive**
      * (`collection_alloc::Pile`), which is where this parts company with {@link deck_add_card}
      * one cabinet over: that one lets the id win when both are sent, because a drag genuinely
@@ -9024,6 +9180,22 @@ export function writeHandlers(db: FakeDb) {
       // The deck fence first, so a stale editor's id answers `DECK_GONE` before there is an
       // orphan to worry about.
       const deck = requireDeck(db, args.deckId);
+      // **The row the copies are coming out of, hoisted above the pile with the fence that needs
+      // it** — `collection_alloc`'s own order since issue #358. The deck fence stays *first*, so
+      // a stale editor's dead deck id is still told the deck is gone rather than that it does
+      // not play this: two different things to be told.
+      //
+      // What the hoist costs is that a caller sending a dead entry id **and** a dead category id
+      // now hears about the entry first, which the crate argues is the right order anyway — the
+      // entry is what the reader pointed at, the category is only where it was going.
+      const source = db.collectionEntries.find((e) => e.id === args.entryId);
+      if (!source) throw refuse(ENTRY_GONE);
+      // **Issue #358's fence** (`deck::plays_card`), and it sits ahead of the pile for the reason
+      // the rollback below exists: the name arm *writes* — a pile nobody has made yet is made
+      // here — and a refusal that lands after that create leaves an empty column standing after
+      // a press that failed. The crate gets that from the transaction the create sits in; this
+      // one gets it by being asked first, which is where `collection_alloc` puts it too.
+      if (!deckPlays(db, args.deckId, source.cardId)) throw refuse(NOT_IN_DECK);
       // Its **name** as well as its id, because the history row below quotes the word rather
       // than a number no reader can resolve — `deck::add_card`'s two arms record the same way.
       // The name arm finds before it creates, so a pile the reader made stays theirs.
@@ -9052,8 +9224,6 @@ export function writeHandlers(db: FakeDb) {
         const group = deckGroup(db, args.deckId);
         if (!group) throw refuse(NO_DECK_GROUP);
 
-        const source = db.collectionEntries.find((e) => e.id === args.entryId);
-        if (!source) throw refuse(ENTRY_GONE);
         if (args.quantity > source.quantity) throw refuse(NOT_THAT_MANY);
         if (source.folderId === group.id) throw refuse(ALREADY_HERE);
         // Read before anything moves: the card is what a deck row remembers, and the name is the

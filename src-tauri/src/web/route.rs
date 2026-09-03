@@ -20,7 +20,7 @@ use serde_json::Value;
 /// sentence that stood here said **154** while the census said 156, having rotted twice with
 /// nothing going red — a prose-only edit routes to neither CI job. The first four here are
 /// the browse, which is the read path spec 8 requires measured in wasm rather than guessed;
-/// the thirteen after them are the Decks destination's reads and the thirty-four after those
+/// the fifteen after them are the Decks destination's reads and the thirty-four after those
 /// are its writes - **the whole deck cluster**, with no exception left to name: it read
 /// "except `deck_set_cover_image`" until custom deck covers went on 2026-08-31. The rest arrive
 /// with their modules - see `lib.rs`'s module map for which are still desktop-only.
@@ -52,6 +52,10 @@ pub const COMMANDS: &[&str] = &[
     "deck_theory_slots",
     "deck_theory_diff",
     "deck_undo_state",
+    // The two reads a folder rule is answered from — one deck's played cards, and the decks
+    // that play a given set. Reads, so they belong in this half and not in the one below.
+    "deck_played_keys",
+    "deck_ids_playing",
     // Decks, write path. **Complete since 2026-08-31.** One name was permanently missing from
     // it — `deck_set_cover_image`, the eleventh on §6.3's desktop-only list, which wrote a file
     // into a covers directory and did not compile for wasm at all — and it is missing now
@@ -420,6 +424,27 @@ pub fn call(
                 command,
                 crate::deck_undo::undo_state(&conn, deck_id, redo_id)
                     .map_err(RouteError::Failed)?,
+            )
+        }
+
+        // The two reads a folder rule is answered from. Both go through `lock_db_read` like
+        // every other read here; the keys are `coalesce(cards.oracle_id, deck_cards.card_id)`
+        // and are the deck's facts, so nothing in this arm decides what a rule makes of them.
+        "deck_played_keys" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::deck::played_keys(&conn, deck_id).map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_ids_playing" => {
+            let keys: Vec<String> = field(command, args, "keys")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::deck::decks_playing(&conn, &keys).map_err(RouteError::Failed)?,
             )
         }
 
@@ -2405,7 +2430,7 @@ mod tests {
         }
         assert_eq!(
             COMMANDS.len(),
-            121,
+            123,
             "update this number when a command is added"
         );
     }

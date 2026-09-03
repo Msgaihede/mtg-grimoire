@@ -21,7 +21,7 @@ import { cn } from "@/lib/utils";
 import { AUTO_CATEGORY, autoCategoryFor } from "./autoCategory";
 import { foldCopies, type CopyTile } from "./collectionTiles";
 import { CONFIRM_CANCEL, CONFIRM_DESTRUCTIVE, useConfirmFocus } from "./metaRows";
-import { useCollectionSearch } from "./useCollectionSearch";
+import { useCollectionSearch, type PlayState } from "./useCollectionSearch";
 
 /**
  * How wide a tile is at 100 %, in px.
@@ -216,6 +216,21 @@ export function landingCategory(
  * `FilterBar`'s prop is a structural `FilterSurface` now, which both hooks satisfy, so the two tabs
  * are one control over two backends. {@link COLLECTION_TRAY} is where this tab says which of its
  * cells it offers.
+ *
+ * ## It is assign-only (2026-09-03, [#358](https://github.com/Msgaihede/mtg-grimoire/issues/358))
+ *
+ * Pressing Add here files copies into the deck's **collection group** and writes the `deck_cards`
+ * row in one transaction, which for a card the deck does not play meant putting cardboard into a
+ * deck folder for a card that deck has never played — a folder that is meant to be the physical
+ * ledger of where the reader's cards *are* recording a card the list does not name.
+ *
+ * So this tab answers one question: **which copies I own back this deck's list**. Adding a card the
+ * deck does not play is the **Card search** tab beside it, one press away, and the refusal names
+ * that route. A tile for such a card is drawn **greyed rather than left out**, because the reader
+ * can see the card in their binder and a tile that vanished under a search that found it reads as
+ * the search losing rows. {@link PlayState} carries the shape of the fence and why it is a second
+ * axis rather than a fourth `CopySource`; `collection_alloc::NOT_IN_DECK` is the fence itself, and
+ * the greying is that refusal said early.
  */
 export function CollectionSearchTab({
   categories,
@@ -246,7 +261,7 @@ export function CollectionSearchTab({
 }) {
   const tip = useTooltip();
   const search = useCollectionSearch({ deckId, defaultFormat });
-  const { query, rows, move, sourceOf, marketplace } = search;
+  const { query, rows, move, sourceOf, playStateOf, marketplace } = search;
 
   /**
    * Read here rather than handed down: the root's own `selectedCardId` is for the caret effect,
@@ -466,6 +481,11 @@ export function CollectionSearchTab({
           action={(tile) => (
             <AddButton
               tile={tile}
+              // The second axis, per tile and never per copy — see `PlayState`. It is computed
+              // here rather than inside the button so that the *one* place a tile's press is
+              // decided stays the hook's model: this file branches on the answer and never on the
+              // census.
+              play={playStateOf(tile)}
               lands={landingCategory(categories, targetCategoryId, tile)}
               tip={tip}
               onAsk={setAsking}
@@ -527,15 +547,24 @@ export function CollectionSearchTab({
  *
  * Its own component so the two names it carries are built in one place, and so the three
  * {@link CopySource} answers are branched on exactly once.
+ *
+ * **Two axes since issue #358, and they are branched on in one ladder.** `play` says whether the
+ * deck's list has the card at all and `tile.from` says what taking this particular copy costs; both
+ * are decided by the hook and this component only words them. Adding a third refusal means one more
+ * arm of `refusal` below and nothing else — which is the property the split was chosen for.
  */
 function AddButton({
   tile,
+  play,
   lands,
   tip,
   onAsk,
   onCommit,
 }: {
   tile: CopyTile;
+  /** Whether this deck's live list plays this card at all — the assign-only fence (issue #358).
+   *  See `PlayState`, which is where the four answers and the two axes are argued. */
+  play: PlayState;
   lands: DeckCategory | null;
   tip: ReturnType<typeof useTooltip>;
   onAsk: (tile: CopyTile) => void;
@@ -546,16 +575,39 @@ function AddButton({
   /**
    * Why this tile cannot be pressed, or `null`.
    *
-   * Two of them, and both are said in the button's **name** rather than only in a tooltip: a
-   * greyed control whose name has not changed reads as a control that broke, and a hover sentence
-   * is not something a keyboard reader can produce (`src/CLAUDE.md`'s greyed-row rule).
+   * **Four of them, and every one is said in the button's own accessible *name*** rather than only
+   * in a tooltip: a greyed control whose name has not changed reads as a control that broke, and a
+   * hover sentence is not something a keyboard reader can produce (`src/CLAUDE.md`'s greyed-row
+   * rule).
+   *
+   * **The census answers first, and that ordering is the fail-closed half.** The two `PlayState`
+   * arms below `plays` are states in which nothing is *known* about this card, so a sentence
+   * underneath them would be a claim made out of an unanswered query: *"already in this deck"* is
+   * knowable from the rows in hand, but so is nothing else worth saying about a press that cannot
+   * be allowed. `CollectionPage.tsx`'s `stepperByTile` takes the same direction for the same
+   * reason — a control that is live for the length of one query and then greys is worse than one
+   * that was never live, because the reader has already reached for it.
+   *
+   * **Then the fence, then the copy.** *"is not in this deck — add it from the Card search tab
+   * first"* is the whole of issue #358 in one sentence: it says what is wrong (the deck's list, not
+   * the copy) and where to go (the tab one press away), which is the grammar `blockedReason` uses
+   * on the collection page. It outranks *"already in this deck"* only in principle — a card whose
+   * every copy sits in **this** deck's group is a card the deck plays — so the two are ordered
+   * rather than exclusive, and the order is the one that stays true if the group and the list ever
+   * disagree.
    */
   const refusal =
-    tile.add === null
-      ? `${tile.name} is already in this deck`
-      : lands === null
-        ? `${tile.name} — this deck has no pile to file it in`
-        : null;
+    play === "unread"
+      ? `${tile.name} — reading what this deck plays`
+      : play === "unreadable"
+        ? `${tile.name} — could not read what this deck plays`
+        : play === "notPlayed"
+          ? `${tile.name} is not in this deck — add it from the Card search tab first`
+          : tile.add === null
+            ? `${tile.name} is already in this deck`
+            : lands === null
+              ? `${tile.name} — this deck has no pile to file it in`
+              : null;
 
   /**
    * **Where the copy is coming from** — the fact the list this replaced drew on every row, and the
