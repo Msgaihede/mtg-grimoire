@@ -88,6 +88,24 @@ function deps(over: Partial<DeckCardMenuDeps> = {}): DeckCardMenuDeps {
   };
 }
 
+/**
+ * The same deck card with the three `Collection ▸` callbacks wired — what `DeckEditor` hands the
+ * builder once issue #350's writes exist.
+ *
+ * **Deliberately not folded into {@link deps}**, because every other test in this file is then a
+ * test of a menu whose surface wired no such writes — which is exactly what the submenu's absence
+ * rule has to be checked against, and it is checked for free by the ordering assertions that were
+ * already here.
+ */
+function collectionDeps(over: Partial<DeckCardMenuDeps> = {}): DeckCardMenuDeps {
+  return deps({
+    quickAdd: vi.fn(),
+    quickAddAndUnwish: vi.fn(),
+    pullCard: vi.fn(),
+    ...over,
+  });
+}
+
 const labels = (items: MenuItem[]) =>
   items.filter((i) => i.kind !== "separator").map((i) => i.label);
 
@@ -430,6 +448,218 @@ describe("buildDeckCardMenu", () => {
     expect(wired.addLabel).toHaveBeenCalledWith(target);
     expect(wired.setLabel).not.toHaveBeenCalled();
   });
+
+  /**
+   * **`Collection ▸`** — issue #350's three presses, and the only rows in this menu that write to
+   * the reader's binder rather than to their list.
+   */
+  describe("the Collection submenu", () => {
+    /** Short by three: the deck plays four and the reader owns one, which is the `1/4` the
+     *  card's chin draws. */
+    const short = () => bolt({ quantity: 4, ownedQuantity: 1 });
+
+    const collection = (items: MenuItem[]) => find(items, "Collection") as MenuSubmenu;
+
+    /**
+     * **The absence is the surface saying it wired no writes** — `cardMenu.tsx`'s `moveItem`
+     * rule, which drops its whole item rather than drawing a picker that cannot file. This is
+     * also the state every other test in this file is written against.
+     */
+    it("builds nothing at all where the surface wired no collection writes", () => {
+      expect(has(buildDeckCardMenu(short(), deps()), "Collection")).toBe(false);
+    });
+
+    /** The three answer one question and travel together, so two of them is a half-wired
+     *  surface rather than a menu with a row missing. */
+    it("builds nothing where only some of the three writes are wired", () => {
+      const partial = deps({ quickAdd: vi.fn(), pullCard: vi.fn() });
+      expect(has(buildDeckCardMenu(short(), partial), "Collection")).toBe(false);
+    });
+
+    /**
+     * **After `Move to` and in front of the zone rows.** It is *filing*, like `Move to`;
+     * everything from `Set as commander` down is a claim about what the card **is** in this deck.
+     */
+    it("sits after Move to and before the zone rows", () => {
+      const items = buildDeckCardMenu(short(), collectionDeps({ spec: spec("commander") }));
+      expect(labels(items).slice(5)).toEqual([
+        "Move to",
+        "Collection",
+        "Set as commander",
+        "Set as companion",
+        "Set as foil",
+        "Label card",
+        "Remove card",
+      ]);
+    });
+
+    /** The rows, in the plan's own order, with the shortfall named in each. */
+    it("names the row's own shortfall in all three labels", () => {
+      const rows = collection(buildDeckCardMenu(short(), collectionDeps())).items;
+      expect(labels(rows)).toEqual([
+        "Quick add 3 copies",
+        "Quick add 3 and remove from wishlist",
+        "Pull 3 from your collection",
+      ]);
+    });
+
+    /** The app must never print "1 copies", and one copy is the count a reader meets most —
+     *  `plural` from `@/lib/counts`, which is where this feature already spells one. */
+    it("goes singular for a single copy", () => {
+      const rows = collection(
+        buildDeckCardMenu(bolt({ quantity: 1, ownedQuantity: 0 }), collectionDeps()),
+      ).items;
+      expect(labels(rows)).toEqual([
+        "Quick add 1 copy",
+        "Quick add 1 and remove from wishlist",
+        "Pull 1 from your collection",
+      ]);
+    });
+
+    /**
+     * The rule between *recording* cardboard and *moving* it: the two rows above say the copies
+     * exist, and the one below takes copies the reader already owns loose.
+     *
+     * `labels` strips separators, so nothing else in this file can see one being dropped.
+     */
+    it("rules off the pull from the two rows that record copies", () => {
+      const rows = collection(buildDeckCardMenu(short(), collectionDeps())).items;
+      expect(rows.map((i) => (i.kind === "separator" ? `—${i.id}` : i.id))).toEqual([
+        "quick-add",
+        "quick-add-unwish",
+        "—sep-pull",
+        "pull-from-collection",
+      ]);
+    });
+
+    /** The count the label quoted is the count the write is pressed with — one spelling of the
+     *  shortfall, so the row can never file a number the card is not wearing. */
+    it("presses each write with the card and the count its own label quoted", () => {
+      const quickAdd = vi.fn();
+      const quickAddAndUnwish = vi.fn();
+      const pullCard = vi.fn();
+      const row = short();
+      const rows = collection(
+        buildDeckCardMenu(row, collectionDeps({ quickAdd, quickAddAndUnwish, pullCard })),
+      ).items;
+
+      (find(rows, "Quick add 3 copies") as MenuAction).onSelect();
+      expect(quickAdd).toHaveBeenCalledWith(row, 3);
+
+      (find(rows, "Quick add 3 and remove from wishlist") as MenuAction).onSelect();
+      expect(quickAddAndUnwish).toHaveBeenCalledWith(row, 3);
+
+      // No count: the pull moves cardboard that exists, so what it can take is decided by what
+      // the binder holds rather than by the shortfall.
+      (find(rows, "Pull 3 from your collection") as MenuAction).onSelect();
+      expect(pullCard).toHaveBeenCalledWith(row);
+      expect(pullCard.mock.calls[0]).toHaveLength(1);
+    });
+
+    /**
+     * **Greyed _with_ a reason**, where this menu's zone and finish rows grey silently — the split
+     * is `cardMenu.tsx`'s test rather than a drift. A plan holding no cards is a rule about the
+     * list the reader is standing in, and nothing on the card in front of them says it.
+     */
+    it("greys all three rows on a theory row, and says why", () => {
+      const plan = bolt({ quantity: 4, ownedQuantity: 0, variant: "theory" });
+      const rows = collection(buildDeckCardMenu(plan, collectionDeps())).items;
+      const actions = rows.filter((i): i is MenuAction => i.kind === "action");
+
+      expect(actions).toHaveLength(3);
+      for (const row of actions) {
+        expect(row.disabled).toBe(true);
+        expect(row.reason).toBe("a plan holds no cards");
+      }
+    });
+
+    /**
+     * **The Maybeboard row, and the defect that reached the shipped window before this test
+     * existed.** A switched-off pile is handed nothing out of the deck's group, so every row in
+     * one reads `0` owned whatever the folder holds — which read as a shortfall, offered
+     * `Quick add 1 copy`, recorded the copies, and **left the row at `0/1`**. The press looked
+     * like a no-op and could be repeated; two of them put two copies in one folder. The reason is
+     * about the *pile* because nothing on the card says the column it sits in is off.
+     */
+    it("greys all three rows in a switched-off pile, and blames the pile", () => {
+      const maybe = bolt({ quantity: 1, ownedQuantity: 0, categoryActive: false });
+      const rows = collection(buildDeckCardMenu(maybe, collectionDeps())).items;
+      const actions = rows.filter((i): i is MenuAction => i.kind === "action");
+
+      expect(actions).toHaveLength(3);
+      for (const row of actions) {
+        expect(row.disabled).toBe(true);
+        expect(row.reason).toBe("this pile is switched off");
+      }
+    });
+
+    /** A switched-off pile whose row the reader really is short of writes nothing when pressed —
+     *  the half `disabled` alone does not promise, asserted here because this is the arm that
+     *  used to be live and whose press accumulated copies. */
+    it("writes nothing when a switched-off pile's row is pressed anyway", () => {
+      const quickAdd = vi.fn();
+      const quickAddAndUnwish = vi.fn();
+      const pullCard = vi.fn();
+      const maybe = bolt({ quantity: 1, ownedQuantity: 0, categoryActive: false });
+      const rows = collection(
+        buildDeckCardMenu(maybe, collectionDeps({ quickAdd, quickAddAndUnwish, pullCard })),
+      ).items;
+
+      for (const row of rows.filter((i): i is MenuAction => i.kind === "action")) row.onSelect();
+
+      expect(quickAdd).not.toHaveBeenCalled();
+      expect(quickAddAndUnwish).not.toHaveBeenCalled();
+      expect(pullCard).not.toHaveBeenCalled();
+    });
+
+    /** Nothing to file: the deck plays four and the reader owns four. The label still quotes the
+     *  shortfall — `Quick add 0 copies` beside `nothing missing` is the fact and its reason side
+     *  by side, rather than a label that changes shape with the state. */
+    it("greys all three rows on a card the reader is not short of, and says why", () => {
+      const stocked = bolt({ quantity: 4, ownedQuantity: 4 });
+      const rows = collection(buildDeckCardMenu(stocked, collectionDeps())).items;
+      const actions = rows.filter((i): i is MenuAction => i.kind === "action");
+
+      expect(actions).toHaveLength(3);
+      for (const row of actions) {
+        expect(row.disabled).toBe(true);
+        expect(row.reason).toBe("nothing missing");
+      }
+      expect(labels(rows)[0]).toBe("Quick add 0 copies");
+    });
+
+    /** A greyed row writes nothing, which is the half `disabled` alone does not promise: it is
+     *  `aria-disabled` on the panel, so the row stays in the caret's reach. */
+    it("writes nothing when a greyed row is pressed anyway", () => {
+      const quickAdd = vi.fn();
+      const pullCard = vi.fn();
+      const stocked = bolt({ quantity: 4, ownedQuantity: 4 });
+      const rows = collection(
+        buildDeckCardMenu(stocked, collectionDeps({ quickAdd, pullCard })),
+      ).items;
+
+      for (const row of rows) if (row.kind === "action") row.onSelect();
+
+      expect(quickAdd).not.toHaveBeenCalled();
+      expect(pullCard).not.toHaveBeenCalled();
+    });
+
+    /**
+     * **The parent stays live, and that is what lets the reason be read at all** — a greyed
+     * submenu cannot be opened, so its rows' sentences would be written where nobody can reach
+     * them. Greyed rather than hidden for `View all printings`' reason: every card of this
+     * surface can be short, so a row that vanished on the ones that are not reads as a bug.
+     */
+    it("keeps the parent live and in place while its rows are greyed", () => {
+      const stocked = buildDeckCardMenu(bolt({ quantity: 4, ownedQuantity: 4 }), collectionDeps());
+      const parent = collection(stocked);
+
+      expect(parent.kind).toBe("submenu");
+      expect(labels(stocked).indexOf("Collection")).toBe(
+        labels(buildDeckCardMenu(bolt({ quantity: 4 }), collectionDeps())).indexOf("Collection"),
+      );
+    });
+  });
 });
 
 describe("deckCardLabelRows", () => {
@@ -600,6 +830,32 @@ describe("buildDeckCardMenu with a picked set", () => {
     expect((find(rowsOf(find(items, "Move 2 cards to")), "Sideboard") as MenuAction).disabled).toBe(
       true,
     );
+  });
+
+  /**
+   * **`Collection ▸` stays about the one card that was right-clicked**, and the count in every
+   * one of its labels is why: three rows short by three different amounts have no one number to
+   * name, so a plural row could only quote a total no card on screen is wearing — or file
+   * whichever member the label happened to be about.
+   */
+  it("keeps the Collection rows about the right-clicked card under a set", () => {
+    const quickAdd = vi.fn();
+    const pressed = card({ name: "Lightning Bolt", quantity: 4, ownedQuantity: 1 });
+    const other = card({ name: "Bear", quantity: 3, ownedQuantity: 0 });
+    const items = buildDeckCardMenu(
+      pressed,
+      collectionDeps({ picked: [pressed, other], quickAdd }),
+    );
+    const rows = (find(items, "Collection") as MenuSubmenu).items;
+
+    // The right-clicked row's own shortfall, and never the set's total of six.
+    expect(labels(rows)).toEqual([
+      "Quick add 3 copies",
+      "Quick add 3 and remove from wishlist",
+      "Pull 3 from your collection",
+    ]);
+    (find(rows, "Quick add 3 copies") as MenuAction).onSelect();
+    expect(quickAdd.mock.calls).toEqual([[pressed, 3]]);
   });
 
   it("labels every picked card on one press", () => {

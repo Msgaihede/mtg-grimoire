@@ -21,6 +21,8 @@ const deckMoveCard = vi.hoisted(() => vi.fn());
 const deckMissingToWishlist = vi.hoisted(() => vi.fn());
 const deckPullPlan = vi.hoisted(() => vi.fn());
 const deckPullFromCollection = vi.hoisted(() => vi.fn());
+const deckQuickAddWishes = vi.hoisted(() => vi.fn());
+const deckQuickAddToCollection = vi.hoisted(() => vi.fn());
 const deckSwapPrinting = vi.hoisted(() => vi.fn());
 const deckCardSetLabel = vi.hoisted(() => vi.fn());
 const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
@@ -44,6 +46,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckMissingToWishlist,
     deckPullPlan,
     deckPullFromCollection,
+    deckQuickAddWishes,
+    deckQuickAddToCollection,
     deckSwapPrinting,
     deckCardSetLabel,
     oracleTagsForPrintings,
@@ -52,7 +56,13 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   },
 }));
 
-import { useDeck, usePullPlan, useSwapFromPane } from "./useDeck";
+import {
+  pullPlanQuery,
+  quickAddWishesQuery,
+  useDeck,
+  usePullPlan,
+  useSwapFromPane,
+} from "./useDeck";
 
 const DECK: DeckRow = {
   gameKey: "any",
@@ -211,6 +221,13 @@ beforeEach(() => {
   // What a pull moved, which is the shape the command answers and never the picks that
   // went in: it is all-or-nothing, so a resolved promise means every pick landed.
   deckPullFromCollection.mockReset().mockResolvedValue({ copies: 3, cards: 1 });
+  // The read half of the quick add's second arm. Empty is the ordinary answer — most cards a
+  // reader records are on no shopping list — and this hook never calls it: the editor fetches it
+  // at the press through `quickAddWishesQuery`.
+  deckQuickAddWishes.mockReset().mockResolvedValue([]);
+  // What a quick add wrote, which is what a sentence quotes and never the argument sent: the
+  // copies recorded, the row they folded into, and what came off the wish.
+  deckQuickAddToCollection.mockReset().mockResolvedValue({ copies: 2, entryId: 44, wishCopies: 1 });
   deckSwapPrinting.mockReset().mockResolvedValue({ folded: false, quantity: 4 });
   deckCardSetLabel.mockReset().mockResolvedValue(undefined);
   // A database that has never fetched the taxonomy — every card answers "no tags", which is
@@ -1259,6 +1276,102 @@ describe("useDeck", () => {
     expect(deckToCollection).not.toHaveBeenCalled();
     expect(deckAddCard).not.toHaveBeenCalled();
   });
+
+  /**
+   * **The quick add sends the row's own address and the app's one condition.** `finish` is the
+   * deck row's — `null` is the regular copy — and the condition is `MENU_CONDITION`, which is the
+   * `"NM"` every other menu add in this app records at. Both are read off the card rather than
+   * assembled by the caller, so a foil row cannot be recorded as a regular copy.
+   *
+   * The answer is read back, because it is what a sentence quotes: the backend answers what it
+   * *wrote*, and a mirror typed `void` would throw away both counts.
+   */
+  it("records a shortfall against the row's own printing, finish and condition", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    const outcome = await result.current.quickAddToCollection.mutateAsync({
+      card: BOLT,
+      quantity: 2,
+      wishId: null,
+    });
+
+    expect(deckQuickAddToCollection).toHaveBeenCalledWith(4, "p1", null, "NM", 2, null);
+    expect(outcome).toEqual({ copies: 2, entryId: 44, wishCopies: 1 });
+  });
+
+  /** A foil row is a different piece of cardboard and a different `deck_cards` row, so the
+   *  finish travels rather than defaulting. */
+  it("carries a foil row's finish onto the copy it records", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.quickAddToCollection.mutateAsync({
+      card: { ...BOLT, finish: "foil" },
+      quantity: 1,
+      wishId: 7,
+    });
+
+    expect(deckQuickAddToCollection).toHaveBeenCalledWith(4, "p1", "foil", "NM", 1, 7);
+  });
+
+  /**
+   * **The one write in this hook that can _create_ a collection row, so it takes all four owned
+   * roots** — and the absence that makes the pull's own test a claim is exactly what is present
+   * here. `["wishlist"]` is not decoration: the second arm can **delete** a wish outright, so the
+   * shopping list's own rows move and not just their progress. `["cards", "search"]` because
+   * `CardSummary.ownedQuantity` goes from 0 to N on the very tile the press was made on, and
+   * `["collection"]` because a row appeared in a folder.
+   *
+   * The exact array is the whole assertion — `staleRoots` covers all four — so a set narrowed to
+   * the three the movers share would fail here rather than half a minute later on screen.
+   */
+  it("refreshes all four owned roots after a quick add, the wishlist included", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    seedOwned(client);
+    expect(staleRoots(client)).toEqual([]);
+
+    await result.current.quickAddToCollection.mutateAsync({
+      card: BOLT,
+      quantity: 2,
+      wishId: null,
+    });
+
+    await waitFor(() =>
+      expect(staleRoots(client)).toEqual(["cards", "collection", "decks", "wishlist"]),
+    );
+  });
+
+  /**
+   * **It writes no `deck_cards` row**, which is what keeps a 4-copy line the reader is 2 short of
+   * from becoming a 6-copy line. There is no field on the answer to check for it, so the claim is
+   * made where it can be: the three commands in this hook that touch the deck's list are the add,
+   * the absolute quantity write and the cut, and a quick add calls none of them.
+   */
+  it("records copies without touching the deck's own list", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.quickAddToCollection.mutateAsync({
+      card: BOLT,
+      quantity: 2,
+      wishId: null,
+    });
+
+    expect(deckAddCard).not.toHaveBeenCalled();
+    expect(deckSetCardQuantity).not.toHaveBeenCalled();
+    expect(deckToCollection).not.toHaveBeenCalled();
+  });
+
+  /** **The read is the press's, never the mount's.** A right-click has to be free, so nothing
+   *  here asks the wishlist about a card until something fetches `quickAddWishesQuery`. */
+  it("asks the wishlist nothing merely for having a deck open", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    expect(deckQuickAddWishes).not.toHaveBeenCalled();
+  });
 });
 
 /**
@@ -1314,6 +1427,79 @@ describe("usePullPlan", () => {
     await client.invalidateQueries({ queryKey: ["decks"] });
 
     await waitFor(() => expect(deckPullPlan).toHaveBeenCalledTimes(2));
+  });
+});
+
+/**
+ * The two options factories, which exist so that a key is spelled once.
+ *
+ * **A press that fetches imperatively and a hook that mounts the same query must land on one
+ * cache entry**, and nothing in the type system holds that: a second spelling still *works* — it
+ * simply always misses, so every press is a fresh command behind a dialog that already had the
+ * answer, and nothing goes red. These pin the keys as literals rather than reading them back off
+ * the factory, which would be the assertion checking itself.
+ */
+describe("the query keys the press and the dialog share", () => {
+  /**
+   * `usePullPlan` is built **from** this factory, so the proof is that the hook's own fetch is
+   * served out of the cache the factory's key names — not that two arrays look alike.
+   */
+  it("serves usePullPlan out of the entry pullPlanQuery names", () => {
+    const rows = [{ cardId: "p1", name: "Lightning Bolt", short: 3 }];
+    client.setQueryData(["decks", "pullPlan", 4], rows);
+
+    const { result } = renderHook(() => usePullPlan(4, true), { wrapper });
+
+    // Read on the **first** render, with no `waitFor`: a cached entry is served synchronously,
+    // where a key that disagreed would mount pending and answer a round trip later. (This
+    // client sets no `staleTime`, so a refetch follows — which is the app's ordinary behaviour
+    // and says nothing about the key.)
+    expect(result.current.data).toBe(rows);
+    expect(pullPlanQuery(4).queryKey).toEqual(["decks", "pullPlan", 4]);
+  });
+
+  /**
+   * **Under the `["wishlist"]` root**, which is what `quickAddToCollection`'s invalidation
+   * reaches — that write can delete the very wish this answered, and a cached list offering a
+   * row that is gone is a picker whose confirm is refused.
+   *
+   * **The finish is part of the key because it is part of the question**: the predicate matches
+   * the row's own finish, so one printing's foil line and regular line are two answers. `""` is
+   * the regular copy, which no finish spells, so it cannot collide with `"foil"`.
+   */
+  it("keys the wish read on the printing and the finish, under the wishlist root", () => {
+    expect(quickAddWishesQuery("p1", null).queryKey).toEqual(["wishlist", "forPrinting", "p1", ""]);
+    expect(quickAddWishesQuery("p1", "foil").queryKey).toEqual([
+      "wishlist",
+      "forPrinting",
+      "p1",
+      "foil",
+    ]);
+    expect(quickAddWishesQuery("p2", null).queryKey).toEqual(["wishlist", "forPrinting", "p2", ""]);
+  });
+
+  /** The fetcher sends the two arguments the command declares, and answers its rows through —
+   *  a factory that dropped the finish would ask a different question under the right key. */
+  it("fetches the wishes for that printing and finish", async () => {
+    const wishes = [{ id: 7, quantity: 3, folderId: null, folderName: null }];
+    deckQuickAddWishes.mockResolvedValue(wishes);
+
+    await expect(
+      client.fetchQuery(quickAddWishesQuery("p1", "etched")),
+    ).resolves.toBe(wishes);
+    expect(deckQuickAddWishes).toHaveBeenCalledWith("p1", "etched");
+    // And it landed where the key says, so a second press pays nothing.
+    expect(client.getQueryData(["wishlist", "forPrinting", "p1", "etched"])).toBe(wishes);
+  });
+
+  /** The wishlist root reaches it, which is what makes the quick add's own invalidation enough
+   *  — a stale list here is a picker offering a wish the same press has just deleted. */
+  it("is invalidated by the wishlist root the quick add fires", async () => {
+    await client.fetchQuery(quickAddWishesQuery("p1", null));
+
+    await client.invalidateQueries({ queryKey: ["wishlist"] });
+
+    expect(client.getQueryState(["wishlist", "forPrinting", "p1", ""])?.isInvalidated).toBe(true);
   });
 });
 

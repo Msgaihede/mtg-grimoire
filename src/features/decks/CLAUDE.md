@@ -439,6 +439,76 @@ reader to configure the deck they had just made; it now asks all of them.
   never owned, and `useDeck` fires `["collection"]` only when copies actually moved. `query.ts`
   caches 30 s, so a missing invalidation there is a ghost row on the collection page rather than a
   stale one.
+- **`Collection ▸` is the card menu's one write to the reader's _binder_ rather than to their
+  list, and it is three rows** (issue #350, 2026-09-03). `Quick add N copies`, `Quick add N and
+  remove from wishlist`, then — under a separator — `Pull N from your collection`. The first two
+  **record** cardboard the reader has just bought and file it straight into the deck's group; the
+  third **moves** copies they already own loose, which is `deck_pull`'s per-card entrance and the
+  whole of what the separator marks. `deckCardMenu.tsx`'s `collectionItems` builds it, placed
+  after `Move to` and before the zone rows because filing is what `Move to` does and a zone row is
+  a claim. The storage side is in
+  [decks-storage.md](../../../docs/reference/decks-storage.md#the-quick-add-recording-cardboard-nobody-had-written-down).
+  - **All three deps or none.** `quickAdd`, `quickAddAndUnwish` and `pullCard` are optional
+    callbacks and one missing drops the whole submenu — `cardMenu.tsx`'s `moveItem` absence rule,
+    because these are three answers to one question (how do the copies this row is short of get
+    here) and offering two of them reads as the third being *impossible* rather than unwired.
+  - **A submenu rather than three flat rows.** This menu is already long, and three more on every
+    card of the surface a reader spends the longest in is a menu that has to be read instead of
+    scanned.
+  - **All three stay singular under a picked set**, which is `finishItem`'s argument reached from
+    the other side. Every label names a **count**, and the count is one row's shortfall —
+    `quickAddShort`, `max(0, quantity − ownedQuantity)`, imported from `quickCollection.ts` rather
+    than respelled because it is exactly the `3/4` `CardStack` draws in the card's chin. A set of
+    four rows short by four different amounts has no one number to name, so a plural row could
+    only quote a total no card on screen is wearing.
+  - **Greyed _with_ a reason, where this menu's other two refusals are silent** — `a plan holds no
+    cards` for a theory row, `this pile is switched off` for a row in an inactive category,
+    `nothing missing` for a live one that is not short, all three in `QUICK_ADD_REASON` and keyed
+    by `quickAddBlock`'s union so a new arm is a red build rather than a row greyed with
+    `undefined`. The split from `zoneItem` and `finishItem` is a test rather than a drift: those
+    two grey on facts the reader can check against the card in front of them, and *a plan holds no
+    cards* is a rule about the list they are standing in that nothing on the card says. **The
+    three rows grey and the parent stays live**, which is the whole of how a reason gets read — a
+    greyed submenu cannot be opened, so its sentences would be written where nobody can reach them.
+  - **The inactive arm is the one a live pass added, and it is the reason this feature owes one**
+    (2026-09-03, debug build, real database). `attribute_owned` hands a switched-off pile nothing
+    out of the deck's group — `category_active` is tested before the oracle total is spent — so
+    **every** row in one reads `0` owned whatever the folder holds. Without the arm that `0` read
+    as a shortfall: the submenu offered *Quick add 1 copy* on a Maybeboard line, the press was
+    legal (the deck plays the card, so `NOT_IN_DECK` passes), the copies were recorded, **and the
+    row still read `0/1`** — a control whose own number never moves is one a reader presses again,
+    and two presses put two copies into one folder. Every suite fixture used an active category,
+    so nothing here could go red for it; `deckCardShort` guards on `categoryActive` for the same
+    reason and is the precedent rather than a coincidence. It greys rather than being made to
+    work, because a shortfall computed against a number the backend refuses to count would put
+    two answers on one screen.
+  - **The pure half is `quickCollection.ts` and the name is load-bearing on Windows.** It was
+    planned as `quickAdd.ts`, and `QuickAdd.tsx` already sits in this folder: a case-insensitive
+    file system resolves `./quickAdd` and `./QuickAdd` to whichever the resolver reaches first, so
+    the import took the toolbar component for one run and answered *"quickAddShort is not a
+    function"* — `folderTree.ts` beside `FolderTree.tsx` a second time. tsc refuses the program
+    outright (TS1149), which is the only reason it is not a silent wrong answer.
+  - **The prompt is only for the ambiguous half**, `quickCollection.ts`'s `chooseWish` and
+    `choosePull`. One matching wish is taken with no dialog and several open
+    `QuickUnwishDialog`; one pull candidate is pulled and several — **or none** — open
+    `PullFromCollectionDialog`, which already words the empty case. Ambiguity is `candidates.length >= 2` and nothing else: a lone candidate
+    holding fewer copies than the shortfall is still unambiguous, so it is taken. Both reads are
+    `queryClient.fetchQuery` at the press rather than hooks, so a right-click fires nothing — and
+    both query-options factories live in `useDeck.ts`, because a second spelling of either key is
+    a fetch that never shares the dialog's cache.
+  - **The quick add is this hook's one write that can _create_ a collection row**, so it fires
+    `query.ts`'s `OWNED_WRITE_KEYS` and not the `["collection"]` root the four movers share — that
+    is exactly the case the comment left where the deleted `own` add's invalidation stood said
+    would come back. The set already carries `["wishlist"]`, which this write needs on its own
+    account and not only for owned progress: the second row can delete a wish outright.
+  - **`QuickUnwishDialog`'s Cancel does nothing at all, the add included.** The reader asked for
+    both halves and gets neither, which is the only answer a cancel can honestly give — the same
+    rule the backend applies when the wish has moved on and rolls the copies back with the
+    refusal.
+  - **Not the same thing as `## The quick add` further down**, which is `QuickAdd.tsx`, the
+    toolbar field that adds a card to the deck's **list**. One writes a list and the other writes
+    a binder; the word does two jobs in this feature, and the two file names are the whole of what
+    keeps them apart.
 - **A deck card names a finish, and the grain says so** (schema v19, 2026-08-17). This reverses
   "a deck names a printing and never a finish", which was true for as long as Scryfall's model
   went unread: foil is a **finish of a printing** rather than a printing, so 53 224 of 107 337
@@ -515,9 +585,10 @@ reader to configure the deck they had just made; it now asks all of them.
   - **The card menu goes plural for the writes and stays singular for what cannot mean anything
     else.** `Add N cards to`, `Move N cards to`, `Label N cards`, `Remove N cards` act on the set;
     `Copy card name`, `Copy card image`, `Open on`, `View all printings`, `Set as commander`,
-    `Set as companion` and `Finish` stay about the one card that was right-clicked. A finish
-    belongs to a *printing* — the toggle, the submenu and the greyed row are three shapes decided
-    by what that printing is sold in — and a deck has one commander. **The set travels into
+    `Set as companion`, `Finish` and `Collection ▸`'s three stay about the one card that was
+    right-clicked. A finish belongs to a *printing* — the toggle, the submenu and the greyed row
+    are three shapes decided by what that printing is sold in — a deck has one commander, and
+    every `Collection ▸` label names a count that is one row's shortfall. **The set travels into
     `buildCardMenu` too**: it did not for one build, and the menu read `Move 2 cards to` under a
     singular `Add to`, which is one menu answering the same question two ways.
   - **The cost this accepts rather than solves: undo is per-audit-entry.** A four-card move writes

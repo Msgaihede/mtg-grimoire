@@ -665,6 +665,117 @@ export const NoMoveControl: Story = {
 };
 
 /**
+ * **`Collection ▸` — the three presses that answer one card's shortfall** (issue #350).
+ *
+ * A deck reads *you own 2 of 4* on a card and the two copies that would settle it are either on
+ * the reader's desk or about to be bought; until this landed, neither fact could be acted on from
+ * the card that was stating it. The submenu is the shortest path from the number to the act:
+ *
+ * - **Quick add N copies** — record them, filed straight into this deck's own group. It is the
+ *   only write in the app that *creates* cardboard rather than moving it.
+ * - **Quick add N and remove from wishlist** — the same, and take them off a matching shopping
+ *   line. A prompt only where several lines match; one match and no match both write straight
+ *   through, which is `quickCollection.ts`'s `chooseWish`.
+ * - **Pull N from your collection** — copies the reader already owns loose, moved in. One
+ *   candidate pulls outright; several, or none, open `PullFromCollectionDialog` over this one
+ *   card.
+ *
+ * **The count is the card's own.** It is `quickAddShort` — `max(0, quantity − ownedQuantity)`,
+ * exactly the red `2/4` the card wears in its chin — so the menu can never press for a number the
+ * card is not showing. Counterspell is the deck's short row and reads `you own 2 of 4`, which is
+ * why every label below says two.
+ *
+ * **A submenu rather than three flat rows**: this menu already carries thirteen, and three more on
+ * every card of the surface a reader spends longest in is a menu that has to be read instead of
+ * scanned. It sits under `Move to` because filing copies and moving a card are the same kind of
+ * act, and above the zone rows, which are claims about the deck.
+ */
+export const CollectionSubmenu: Story = {
+  args: { deckId: 1 },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // The card that states the shortfall these three rows act on — and the assertion that makes
+    // the numbers below facts rather than fixtures.
+    const card = await canvas.findByRole("button", { name: /^Counterspell.*you own 2 of 4/ });
+
+    await userEvent.pointer({ keys: "[MouseRight]", target: card });
+    const menu = await canvas.findByRole("menu");
+    await waitFor(async () => await expect(menu).toBeVisible());
+
+    // A submenu row says so in ARIA rather than only with a chevron — the chevron is
+    // `aria-hidden`, so this is the whole of what a screen reader is told.
+    const parent = canvas.getByRole("menuitem", { name: "Collection" });
+    await expect(parent).toHaveAttribute("aria-haspopup", "menu");
+    await expect(parent).toHaveAttribute("aria-expanded", "false");
+
+    await userEvent.click(parent);
+    const panels = canvas.getAllByRole("menu");
+    // The innermost panel, which is the one just opened. `.at(-1)` is not in this build's
+    // `lib` target — see the TS 6.0.x pin.
+    const panel = panels[panels.length - 1];
+    await expect(
+      within(panel).getByRole("menuitem", { name: "Quick add 2 copies" }),
+    ).toBeVisible();
+    await expect(
+      within(panel).getByRole("menuitem", { name: "Quick add 2 and remove from wishlist" }),
+    ).toBeVisible();
+    await expect(
+      within(panel).getByRole("menuitem", { name: "Pull 2 from your collection" }),
+    ).toBeVisible();
+  },
+};
+
+/**
+ * The press, and the number it moves — `Quick add 2 copies` on a card reading *you own 2 of 4*,
+ * and the same card reading *4 of 4* afterwards.
+ *
+ * **This is the one frame that shows what the row is _for_.** The submenu above can be read from
+ * a screenshot; that the copies land in this deck's own group, are counted against this row, and
+ * settle the shortfall the reader was looking at cannot be — it is three tables agreeing, and the
+ * card's own name is where they agree.
+ *
+ * **The list itself does not change**, which is the whole difference from every other add in this
+ * editor: `deck_quick_add_to_collection` writes a `collection_entries` row and never a
+ * `deck_cards` one, so the deck still plays four Counterspells and now holds four. A row that
+ * folded the quantity into the list would make a 4-copy line the reader was 2 short of into a
+ * 6-copy line.
+ *
+ * The wishlist is untouched here and deliberately: this row sends `wishId: null` and does not so
+ * much as read the shopping list. A reader who wanted both halves pressed the row below it.
+ */
+export const QuickAddSettlesTheShortfall: Story = {
+  args: { deckId: 1 },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const card = await canvas.findByRole("button", { name: /^Counterspell.*you own 2 of 4/ });
+
+    await userEvent.pointer({ keys: "[MouseRight]", target: card });
+    await canvas.findByRole("menu");
+    // **Scoped to the open submenu's panel**, because two rows on this menu are called
+    // `Collection` — this one and `Add to ▸ Collection` — and the repeat is deliberate: it is the
+    // reader's binder in both places. What tells them apart is the panel each is in.
+    await userEvent.click(canvas.getByRole("menuitem", { name: "Collection" }));
+    const panels = canvas.getAllByRole("menu");
+    // The innermost panel, which is the one just opened. `.at(-1)` is not in this build's
+    // `lib` target — see the TS 6.0.x pin.
+    const panel = panels[panels.length - 1];
+    await userEvent.click(
+      within(panel).getByRole("menuitem", { name: "Quick add 2 copies" }),
+    );
+
+    // The deck re-reads and the card says so itself. **The shortage clause is _gone_ rather than
+    // reading `you own 4 of 4`** — `deckCardShort` is one predicate behind both the red figure in
+    // the card's chin and this half of its name, and a deck that holds what it plays is not
+    // short of anything. The line is still four copies, which is the other half of the sentence
+    // above: the list did not change.
+    await waitFor(async () => {
+      await expect(canvas.queryByRole("button", { name: /^Counterspell.*you own/ })).toBeNull();
+      await expect(canvas.getByRole("button", { name: /^Counterspell, 4 copies/ })).toBeVisible();
+    });
+  },
+};
+
+/**
  * The deck's own filter, and the stats band it deliberately does not reach.
  *
  * The filter narrows the cards **before** they are grouped, so every heading's count is a count

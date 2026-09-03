@@ -6,7 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronLeft,
   Columns3Cog,
@@ -45,6 +45,8 @@ import {
   type DeckCard,
   type DeckCategory,
   type DeckFinish,
+  type DeckPullRow,
+  type DeckQuickAddWish,
   type DeckVariant,
 } from "@/lib/ipc";
 import { PRESS, statusLine } from "@/lib/motion";
@@ -97,14 +99,22 @@ import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import { RenameField } from "./metaRows";
 import { AddLabelDialog } from "./AddLabelDialog";
 import { PriceStrip } from "./PriceStrip";
+import { pullKey } from "./pullPlan";
 import { PullFromCollectionDialog } from "./PullFromCollectionDialog";
+// **`quickCollection` and not `quickAdd`**, which is a Windows filename hazard rather than a
+// naming preference: `QuickAdd.tsx` — the toolbar's quick-add field — already sits in this
+// directory, and a case-insensitive filesystem resolves `./quickAdd` to whichever of the two the
+// resolver reaches first. `tsc` refuses the whole program with TS1149 and a suite that got past
+// it went red with `quickAddShort is not a function`, having imported the component.
+import { chooseWish, choosePull } from "./quickCollection";
 import { QuickAdd } from "./QuickAdd";
+import { QuickUnwishDialog } from "./QuickUnwishDialog";
 import { QuickCategoryDialog, QuickZones } from "./QuickZones";
 import { asSortBy, DEFAULT_SORT_BY, SORT_OPTIONS, type SortBy } from "./sorting";
 import { LabelsDialog } from "./LabelsDialog";
 import { TheoryDiffDialog } from "./TheoryDiffDialog";
 import { theoryMatchPlan } from "./theoryMatch";
-import { useDeck, usePullPlan } from "./useDeck";
+import { pullPlanQuery, quickAddWishesQuery, useDeck, usePullPlan } from "./useDeck";
 import { useDeckMeta } from "./useDeckMeta";
 import { useFormatSpecs } from "./useFormatSpecs";
 import { useRecentAdds } from "./useRecentAdds";
@@ -320,6 +330,12 @@ const DECK_HEIGHT_FLOOR = "min-h-96";
 /** Stable identity for "no label filter", so the memo below does not re-run on every
  *  render. */
 const NO_LABELS: readonly number[] = [];
+
+/** Stable identity for the wishes a *closed* {@link QuickUnwishDialog} is handed. The shell
+ *  mounts no body while it is shut, so nothing reads this — a fresh `[]` on every render would
+ *  still be a new prop on every render of the deck, which is the kind of churn `NO_ROWS` in
+ *  `PullFromCollectionDialog` exists to avoid. */
+const NO_WISHES: readonly DeckQuickAddWish[] = [];
 
 /**
  * Which deck the editor has restored the remembered controls for, and under which readings of
@@ -635,13 +651,38 @@ type Layer =
    * the deck for the whole session; the desk row measures 602px at the app's own 1280×800 with
    * the card pane docked, and the deck's own floor is what runs out first.
    *
-   * **No payload, and that is a fact about the command rather than a simplification.**
-   * `deck_pull_plan` takes the deck and no variant — it reads the live list, because a plan holds
-   * no cards to be short of — so there is nothing for an arm to carry that the editor does not
-   * already know. It is also why the opener is `null` on the theory tab rather than disabled:
-   * there is no question to ask there, not a question with an empty answer.
+   * **The card, or absent for the whole deck — and the payload arrived on 2026-09-03.** It used
+   * to carry nothing, on the argument that `deck_pull_plan` takes the deck and no variant (it
+   * reads the live list, because a plan holds no cards to be short of), so there was nothing for
+   * an arm to hold that the editor did not already know. That is still true of the *read*: a
+   * deck card's `Collection ▸ Pull …` (issue #350) fetches the same plan under the same key and
+   * this arm narrows only what the dialog is handed — the rows whose {@link pullKey} matches
+   * this card, and that card's name for the subtitle.
+   *
+   * **So the payload is what the dialog draws, never what is read**, which is why the query's
+   * gate below asks `layer?.kind === "pull"` and not {@link layerMatches}: both shapes want the
+   * same plan, and a gate that distinguished them would spend a second `deck_pull_plan` on the
+   * card entrance for an answer already in the cache.
+   *
+   * `null` for the opener on the theory tab is unchanged and is still not a disabled button:
+   * there is no question to ask there, rather than a question with an empty answer.
    */
-  | { kind: "pull" }
+  | { kind: "pull"; card?: DeckCard }
+  /**
+   * **Which wish these copies come off** — a deck card's `Collection ▸ Quick add N and remove
+   * from wishlist`, on the one press where the answer is ambiguous (issue #350).
+   *
+   * **Every field is frozen on purpose, which is `quickCategory`'s exception rather than
+   * `export`'s rule.** The arms that carry an id name a row the editor re-reads the deck into;
+   * this one names a **press that is over**: the reader right-clicked one row, the menu quoted
+   * one number off it, and `deck_quick_add_wishes` has already answered for that printing and
+   * finish. Looking any of it back up would be looking up the answer the reader was shown.
+   *
+   * `wishes` is `many` and only `many` — {@link chooseWish} writes outright for none and for
+   * one, so this layer is opened for two or more and the dialog never asks a question with one
+   * answer in it.
+   */
+  | { kind: "quickUnwish"; card: DeckCard; copies: number; wishes: readonly DeckQuickAddWish[] }
   | { kind: "history" }
   | { kind: "theoryDiff" }
   | { kind: "settings" }
@@ -720,11 +761,12 @@ interface AddLabelSlot {
 /**
  * Is the open layer the one this control opens?
  *
- * `export` is the only kind **two** controls reach — the header's `Export deck` and a category
- * heading's `Export cards…` — so it is the only one where the kind alone is not the answer, and a
- * header button that read `aria-expanded` off the kind would claim to be open while a pile's
- * dialog was up. Every other arm has one opener, which is why this is a widening of
- * `layer?.kind === kind` rather than a second rule beside it.
+ * **Two kinds are reached by two controls each**, and for both the kind alone is not the answer:
+ * `export` (the header's `Export deck` and a category heading's `Export cards…`) and, since
+ * 2026-09-03, `pull` (the stats band's `Pull from collection` and a deck card's
+ * `Collection ▸ Pull …`). A control that read `aria-expanded` off the kind would claim to be
+ * open while the *other* one's dialog was up. Every other arm has one opener, which is why this
+ * is a widening of `layer?.kind === kind` rather than a second rule beside it.
  *
  * Pure and exported for its test, like the two functions above it: the case it exists for is
  * unreachable by a press — an open export paints a scrim over both of its openers — so the only
@@ -734,6 +776,19 @@ export function layerMatches(open: Layer, target: NonNullable<Layer>): boolean {
   if (open === null || open.kind !== target.kind) return false;
   if (open.kind === "export" && target.kind === "export") {
     return open.categoryId === target.categoryId;
+  }
+  if (open.kind === "pull" && target.kind === "pull") {
+    // **Absent and present are different controls**, which is the whole of what this arm asks:
+    // the stats band opens `{ kind: "pull" }` over the deck and a card's menu opens one carrying
+    // that card, so a bare kind test would have the band's button claim to be open while a
+    // per-card dialog was up. Two *cards* can never be open at once — there is one slot — so the
+    // comparison below is a courtesy rather than a case anything reaches, and it is by
+    // {@link pullKey} rather than by object identity because a `DeckCard` is a fresh object on
+    // every `deck_get`.
+    if (open.card === undefined || target.card === undefined) {
+      return open.card === undefined && target.card === undefined;
+    }
+    return pullKey(open.card) === pullKey(target.card);
   }
   return true;
 }
@@ -992,6 +1047,22 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const [filter, setFilter] = useState("");
   const [labelIds, setLabelIds] = useState<readonly number[]>(NO_LABELS);
   const [layer, setLayer] = useState<Layer>(null);
+  /**
+   * A **read** the reader pressed for and that refused, as a sentence — the wishes behind
+   * `Quick add and remove from wishlist`, or the plan behind a card's `Pull …`.
+   *
+   * **In the write banner rather than in a second sentence of its own**, which is the one thing
+   * about this state worth arguing. Both reads are made *inside* a press: the reader chose a
+   * menu row, the row promised an act, and the act cannot happen — so what has failed is the
+   * press, not a background query, and the press's family is the banner. It is also the only
+   * place either could be said at all: the menu closes before its handler runs, and neither
+   * read has a surface of its own until it has answered.
+   *
+   * Cleared on the next press of either row rather than on a timer, so a sentence stays up for
+   * as long as it is the last thing that happened — {@link bannerFailure}'s own rule, since a
+   * refused write's sentence stays until another write replaces it.
+   */
+  const [pressReadFailure, setPressReadFailure] = useState<string | null>(null);
   /**
    * The pile whose heading is showing its rename field, or `null`.
    *
@@ -1306,13 +1377,26 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     // nothing else on screen says why it moved.
     meta.reorderCategories,
     meta.deleteCategory,
+    // **The quick add, and it is in this family on purpose even though it writes no
+    // `deck_cards` row** (2026-09-03, issue #350). Every argument the family is built on holds:
+    // it goes through `touch_deck`, so it answers the same `deck::GONE` and must not leave a
+    // dead deck painted; it is pressed from a card's right-click, which has closed by the time
+    // an answer arrives, so its refusal has nowhere else to be said; and its two other refusals
+    // (`NOT_IN_DECK`, and a wish that moved under the reader) are exactly the kind this banner
+    // exists for. What it records is the copies a deck row is short of, so "a write to what is
+    // in the deck" is true of it in every sense but the table it touches.
+    deck.quickAddToCollection,
   ] as const;
   // **The undo hook's own refusal joins this banner rather than drawing a second one.** Its
   // two mutations are writes to what is in the deck like any other, and its commonest refusal
   // — "the deck has been edited since" — is exactly the kind this line exists to say. It is not
   // in `writes` because it is not a `useMutation` the array's type accepts: `useDeckUndo`
   // reports through a string of its own so that it can also drop a redo that can never work.
-  const bannerFailure = writeFailure(writes) ?? undo.error;
+  // **And a read the reader pressed for**, which is {@link pressReadFailure}'s own argument:
+  // the two menu rows that fetch before they write have no surface to report into, and their
+  // failure is the failure of a press rather than of a background query. It is last in the
+  // chain because a refused *write* is the more specific answer whenever both are standing.
+  const bannerFailure = writeFailure(writes) ?? undo.error ?? pressReadFailure;
 
   /**
    * What to say when a re-file moved nothing — and **nothing at all when it moved something**,
@@ -2026,16 +2110,73 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * deck anybody merely opened — the `Layer` union's own doc states the rule, and this is the
    * first member with a query to spend.
    *
-   * **`layerMatches` rather than `layer?.kind === "pull"`**, which for an arm with no payload is
-   * the same question asked the way this file asks it everywhere else. It costs nothing and it
-   * cannot be the thing that is wrong on the day this arm grows a field.
+   * **The kind and not {@link layerMatches}, and this line reversed on 2026-09-03.** It used to
+   * read `layerMatches(layer, { kind: "pull" })` with a note saying that for an arm with no
+   * payload it was the same question, and that it could not be the thing that was wrong on the
+   * day the arm grew a field. The arm grew a field, and the note was half right: it is the thing
+   * that would have been wrong, and the fix is the *opposite* of what the note implied. Both
+   * shapes of the arm want this exact plan under this exact key — the per-card one narrows what
+   * the dialog is *handed*, not what is read — so a `layerMatches` here would have left the card
+   * entrance's dialog reading an idle query while the answer sat in the cache beside it.
    *
    * The answer survives the dialog closing — the key is the deck's, and TanStack keeps a
    * disabled query's cache — so reopening it in the same minute redraws immediately and
    * refetches behind the rows. Anything invalidating `["decks"]` in between, the pull included,
-   * refills it: see {@link usePullPlan} for why the key is shaped to sit under that root.
+   * refills it: see {@link usePullPlan} for why the key is shaped to sit under that root. It is
+   * also what {@link pullCard}'s `fetchQuery` fills, through the shared options factory, so the
+   * press that *decides* whether to open this dialog and the dialog itself are one read.
    */
-  const pullPlan = usePullPlan(deckId, layerMatches(layer, { kind: "pull" }));
+  const pullPlan = usePullPlan(deckId, layer?.kind === "pull");
+
+  /** The one card an open pull is about, or `null` for the deck-wide press. */
+  const pulledCard = layer?.kind === "pull" ? (layer.card ?? null) : null;
+
+  /**
+   * What the pull dialog draws: the whole plan, or the rows for one card.
+   *
+   * **The narrowing is here rather than in the dialog**, which is that component's own fence —
+   * it holds no notion of a {@link pullKey} and therefore cannot come to disagree with this
+   * about which rows belong to which card. And it is derived from the **live** query rather
+   * than frozen into the layer, so a pull made from the dialog re-reads the plan and the rows
+   * under the reader's eyes are the rows a second press would write.
+   *
+   * `pullKey` is `(cardId, finish)`, which is the grain the plan is folded to — the same card
+   * short in two piles is one row of it — so a deck card's key matches at most one row and the
+   * filter is a lookup rather than a subset.
+   */
+  const pulledRows = useMemo(() => {
+    const rows = pullPlan.data;
+    if (rows === undefined) return null;
+    if (pulledCard === null) return rows;
+    const wanted = pullKey(pulledCard);
+    return rows.filter((planRow) => pullKey(planRow) === wanted);
+  }, [pullPlan.data, pulledCard]);
+
+  /** The press {@link QuickUnwishDialog} is asking about — the card, the count and the wishes,
+   *  all frozen at the press. See the arm's own doc for why none of the three is looked up. */
+  const unwish = layer?.kind === "quickUnwish" ? layer : null;
+
+  /**
+   * The refusal that dialog draws **inside its own panel** — and it is narrowed to the write the
+   * dialog itself made.
+   *
+   * One mutation serves all three `Collection ▸` rows, so `isError` alone is the *last* quick add
+   * of any kind: a refused `Quick add 4 copies` would still be standing when the reader opened
+   * this question on some other card a minute later, and the panel would greet them with a red
+   * sentence about a press they had already been told about in the banner. The mutation's own
+   * `variables` are what tell the two apart — this dialog is the only presser that sends both a
+   * `wishId` and *this* card — and reading them is a derivation rather than a `reset()`, which
+   * would take the banner's memory of that earlier refusal away with it.
+   */
+  const unwishVariables = deck.quickAddToCollection.variables;
+  const unwishFailure =
+    unwish !== null &&
+    deck.quickAddToCollection.isError &&
+    unwishVariables !== undefined &&
+    unwishVariables.wishId !== null &&
+    unwishVariables.card.cardId === unwish.card.cardId
+      ? ipcError(deck.quickAddToCollection.error)
+      : null;
 
   /**
    * **Label card ▸ New label…** — the one layer opened from a *card's* menu rather than a
@@ -2069,6 +2210,138 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       );
     },
     [openLayer],
+  );
+
+  /**
+   * The client the two menu reads below go through.
+   *
+   * **`fetchQuery` rather than a hook, because a right-click must fire nothing.** A `useQuery`
+   * for the wishes would run for every card the deck draws, and one for the pull plan is the
+   * widest read this editor makes — the `Layer` union's own rule applied a rung lower: nothing
+   * is asked for until the reader presses the row that needs it. It also means the answer lands
+   * in the same cache the dialogs read, so a press that *decides* and a dialog that *draws* are
+   * one round trip rather than two.
+   */
+  const queryClient = useQueryClient();
+
+  /**
+   * The write behind all three `Collection ▸` rows, and the pull's own — `mutate` rather than
+   * the mutation, for the reason the three category writes below give: TanStack hands back a
+   * fresh result object every render, so a callback closing over the whole thing has a new
+   * identity every render and every menu built from it is rebuilt.
+   */
+  const writeQuickAdd = deck.quickAddToCollection.mutate;
+  const writePull = deck.pullFromCollection.mutate;
+
+  /**
+   * **Quick add N copies** — record what this row is short of into the deck's own group, and ask
+   * nothing.
+   *
+   * No read and no dialog, which is what makes it the simplest of the three: the count arrives
+   * from the menu (it is `quickAddShort` over the row that was right-clicked, so it is exactly
+   * the `3/4` the card is wearing) and `wishId: null` says this press is not about the wishlist
+   * at all. A reader who wanted the wishlist half pressed the row below it.
+   */
+  const quickAdd = useCallback(
+    (card: DeckCard, copies: number) => {
+      setPressReadFailure(null);
+      writeQuickAdd({ card, quantity: copies, wishId: null });
+    },
+    [writeQuickAdd],
+  );
+
+  /**
+   * **Quick add N and remove from wishlist** — the same record, then take the copies off a wish
+   * that was asking for this exact printing.
+   *
+   * **A prompt only when the answer is ambiguous**, which is `chooseWish`'s whole job and
+   * deliberately not this callback's: no matching wish and one matching wish both write straight
+   * through, because a dialog with nothing to decide is a dialog that made the reader press
+   * twice. Two or more open {@link QuickUnwishDialog}, because which of two lists a purchase
+   * satisfies is a thing only the reader knows.
+   *
+   * **A failed read reaches the banner and never nothing.** This is a read the reader pressed
+   * for, inside an act they were promised, and the menu that made the press has closed — so a
+   * silent catch would be a menu row that sometimes does nothing at all. The write's own
+   * refusals are the banner's already, through `writes`; this puts the read beside them.
+   *
+   * The hand-back is read off `document.activeElement` **before** the await, which is
+   * {@link openAddLabel}'s answer and a rung more careful for the same reason: `ContextMenu`'s
+   * `run` focuses the opener before it calls a row, so the caret is right *now* — where by the
+   * time the round trip lands the reader may have moved on, and the element read here is still
+   * the honest destination.
+   */
+  const quickAddAndUnwish = useCallback(
+    (card: DeckCard, copies: number) => {
+      const opener = document.activeElement;
+      const handBack = () => {
+        if (opener instanceof HTMLElement) opener.focus();
+      };
+      setPressReadFailure(null);
+      void (async () => {
+        let wishes: DeckQuickAddWish[];
+        try {
+          wishes = await queryClient.fetchQuery(quickAddWishesQuery(card.cardId, card.finish));
+        } catch (error) {
+          setPressReadFailure(ipcError(error));
+          return;
+        }
+        const choice = chooseWish(wishes);
+        if (choice.kind === "many") {
+          openLayer({ kind: "quickUnwish", card, copies, wishes: choice.wishes }, handBack);
+          return;
+        }
+        writeQuickAdd({
+          card,
+          quantity: copies,
+          wishId: choice.kind === "one" ? choice.wish.id : null,
+        });
+      })();
+    },
+    [openLayer, queryClient, writeQuickAdd],
+  );
+
+  /**
+   * **Pull N from your collection** — the per-card entrance to the dialog the stats band already
+   * opens over the whole deck.
+   *
+   * The same test as the row above it and the same argument: `choosePull` answers `take` where
+   * the plan holds exactly one candidate for this printing — a lone source is unambiguous even
+   * when it cannot cover the line, so what there is is taken — and `ask` for two or more, **and
+   * for none**. None goes to the dialog rather than to a sentence here, because the dialog
+   * already words that case (`NOTHING_TO_PULL`) and words it better than a banner could: a
+   * reader whose deck says *3 missing* needs to be told *why* the pull found nothing, not merely
+   * that it did.
+   *
+   * The read is {@link pullPlan}'s own, through the shared options factory, so this press fills
+   * the cache the dialog then draws from and the two can never disagree about the key. The
+   * filtering is done at the render site off the **live** query rather than frozen into the
+   * layer: the arm carries the card, and the plan is re-read after every write.
+   */
+  const pullCard = useCallback(
+    (card: DeckCard) => {
+      const opener = document.activeElement;
+      const handBack = () => {
+        if (opener instanceof HTMLElement) opener.focus();
+      };
+      setPressReadFailure(null);
+      void (async () => {
+        let rows: DeckPullRow[];
+        try {
+          rows = await queryClient.fetchQuery(pullPlanQuery(deckId));
+        } catch (error) {
+          setPressReadFailure(ipcError(error));
+          return;
+        }
+        const choice = choosePull(rows, card);
+        if (choice.kind === "take") {
+          writePull(choice.picks);
+          return;
+        }
+        openLayer({ kind: "pull", card }, handBack);
+      })();
+    },
+    [deckId, openLayer, queryClient, writePull],
   );
 
   // The three category writes, each addressed by the slot rather than by a `DeckCard` — because
@@ -2545,6 +2818,22 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           labels: deck.labels,
           addLabel: openAddLabel,
           remove: removeCard,
+          // **The `Collection ▸` submenu's three rows** (2026-09-03, issue #350). All three are
+          // callbacks and none of them is a mutation, which is this builder's contract — and
+          // here it is load-bearing rather than ceremonial: two of the three *read* before they
+          // write, and one of those two ends in a dialog rather than in a write at all, so
+          // "which write does this row make" is a question with no single answer.
+          //
+          // **Passed on both lists, and the theory one is greyed rather than absent.** That is
+          // `quickAddBlock`'s call and not this file's: a plan holds no cards, so a theory row
+          // can neither record copies nor pull any — but every card of this surface can be
+          // short, so a submenu that simply vanished on one tab would read as a bug rather than
+          // as a refusal. The row says `a plan holds no cards` instead. The stats band's
+          // deck-wide `onPull` is `null` there for a different reason and stays so: that button
+          // has a *question* to lose, where these rows have an answer to give.
+          quickAdd,
+          quickAddAndUnwish,
+          pullCard,
           // **Only when this card is in the set** — `dragsWholeSelection`'s rule for a press
           // instead of a drag. A right-click on a card the reader has not picked is about that
           // card, so `[]` goes over and the menu is the singular one it has always been.
@@ -2573,6 +2862,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       setFinishAt,
       openAddLabel,
       removeCard,
+      quickAdd,
+      quickAddAndUnwish,
+      pullCard,
       pickedCards,
     ],
   );
@@ -4549,11 +4841,47 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       <PullFromCollectionDialog
         open={layer?.kind === "pull"}
         deckName={row?.name ?? ""}
-        rows={pullPlan.data ?? null}
+        cardName={pulledCard?.name ?? null}
+        rows={pulledRows}
         loading={pullPlan.isLoading}
         readError={pullPlan.isError ? ipcError(pullPlan.error) : null}
         pull={deck.pullFromCollection}
         onClose={dismiss}
+      />
+
+      {/* **Which wish those copies came off**, and the third of the editor's overlays with no
+          button in this view — a card's right-click is the affordance, like the delete and clear
+          confirmations above.
+
+          **The card and the count come off the layer, and the wishes do too** — which is the one
+          place this file freezes a payload rather than re-reading it. `deck_quick_add_wishes`
+          answered for one printing at one finish and the reader was shown that answer; a second
+          read here would be re-asking a question they have already been given, and would let the
+          list change under an open radio group. `quickCategory`'s exception, for its reason.
+
+          **Its refusal is drawn inside the panel** rather than in the editor's banner, which is
+          behind this scrim — the delete confirmation's rule. The banner still gets it, because
+          the write is in `writes`; what this passes is the same sentence said where the reader
+          is looking. */}
+      <QuickUnwishDialog
+        open={layer?.kind === "quickUnwish"}
+        cardName={unwish?.card.name ?? null}
+        copies={unwish?.copies ?? 0}
+        wishes={unwish?.wishes ?? NO_WISHES}
+        pending={deck.quickAddToCollection.isPending}
+        failure={unwishFailure}
+        onConfirm={(wishId) => {
+          if (unwish === null) return;
+          writeQuickAdd(
+            { card: unwish.card, quantity: unwish.copies, wishId },
+            // Closed on the answer rather than on the press, so a refusal leaves the question
+            // open with its sentence under it — `ClearCategory`'s arrangement, and the reason
+            // the panel takes a `failure` at all.
+            { onSuccess: dismiss },
+          );
+        }}
+        onDismiss={dismiss}
+        onClose={close}
       />
 
       {/* The quick zones' New category, which is the third overlay in this view with no control

@@ -17,10 +17,10 @@
 use crate::sync::AppState;
 use crate::{
     camera, card, collection, collection_alloc, collection_folders, combos, db, deck, deck_audit,
-    deck_meta, deck_pull, deck_theory, deck_undo, errors, export, flatten, images, import, index,
-    listview, marketplace, marketplace_feed, mirror, nav, paths, reset, schema, scryfall, search,
-    sync, sync_engine, sync_pair, tags, update, wishlist, wishlist_folders, wishlist_optimize,
-    zoom,
+    deck_meta, deck_pull, deck_quick_add, deck_theory, deck_undo, errors, export, flatten, images,
+    import, index, listview, marketplace, marketplace_feed, mirror, nav, paths, reset, schema,
+    scryfall, search, sync, sync_engine, sync_pair, tags, update, wishlist, wishlist_folders,
+    wishlist_optimize, zoom,
 };
 // **Not in the list above, because this file compiles for Android too.** Its name says
 // `desktop`, but its gate is `cfg(not(target_family = "wasm"))` — desktop *and* mobile — while
@@ -393,6 +393,12 @@ pub fn run() {
             // path segment, so these are `deck_pull_plan` and `deck_pull_from_collection`.
             deck_pull::commands::deck_pull_plan,
             deck_pull::commands::deck_pull_from_collection,
+            // The fourth crossing, and the only one that *creates* copies rather than moving
+            // them — see `deck_quick_add`. Same registration shape as the pair above:
+            // `generate_handler!` names a command after the last path segment, so these are
+            // `deck_quick_add_wishes` and `deck_quick_add_to_collection`.
+            deck_quick_add::commands::deck_quick_add_wishes,
+            deck_quick_add::commands::deck_quick_add_to_collection,
             wishlist::wishlist_add,
             wishlist::wishlist_set_quantity,
             wishlist::wishlist_remove,

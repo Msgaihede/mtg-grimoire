@@ -125,6 +125,16 @@ export function auditSentence(
     if (line !== null) return line;
   }
 
+  // A quick add is the second `move` that names no card, and it is read here for the pull's
+  // reason exactly: the `move` arm would render it as "Moved a card", a sentence about a card
+  // the row has not got. Beside the pull rather than inside it because they are opposite acts —
+  // that one moves cardboard that exists, this one records cardboard that did not.
+  const recorded = nested(p.quickAdd);
+  if (recorded !== null) {
+    const line = quickAddLine(entry.kind, recorded);
+    if (line !== null) return line;
+  }
+
   switch (entry.kind) {
     case "add": {
       const quantity = numberField(p.quantity);
@@ -350,6 +360,56 @@ function pullLine(kind: DeckAuditKind, p: Record<string, unknown>): AuditLine | 
   return {
     text: `Pulled ${plural(numberField(p.copies), "copy", "copies")} from your collection`,
     detail: cards > 0 ? `across ${plural(cards, "card")}` : null,
+  };
+}
+
+/**
+ * The one row a quick add writes: copies the reader has just told the app they own, filed
+ * straight into this deck's group.
+ *
+ * **It wears `move` and is the fourth reuse of an existing kind** — `deck_import_commit` took
+ * `add`/`remove`, the undo took `deck`, the pull took `move`, and this is the pull's neighbour.
+ * `AUDIT_KINDS` stays at nine for the reason it stayed at nine three times before: the column
+ * carries a CHECK, SQLite has no `ALTER … CHECK`, and a tenth word would rebuild every reader's
+ * whole deck history for a spelling.
+ *
+ * **`move` is the least wrong word rather than the honest one, and that is worth saying plainly.**
+ * A pull really did move copies; this one *creates* them — it is the first of the four deck
+ * boundary crossings that records cardboard that was not written down before. What the two share
+ * is the half the column can express: neither writes a `deck_cards` row, so `delta` is `0` on
+ * both and the deck's *list* gained nothing either time.
+ *
+ * **Copies in the sentence, wishlist copies in the detail**, {@link pullLine}'s split for its
+ * reason: they are two facts about one press, and a press that cleared a shopping line did
+ * something a press that did not never mentions. The detail is drawn only above zero —
+ * `numberField` reads an absent key as `0`, so an older row, a truncated payload and a press that
+ * named no wish all arrive the same way and all correctly say nothing. That is `importLine`'s
+ * `labelsCreated` rule a third time.
+ *
+ * **`wishes` counts _copies_ taken off the wishlist, never wishlist lines, and the detail has to
+ * say so.** `deck_quick_add_to_collection` takes `wish_id: Option<i64>` — **at most one wish per
+ * press** — and records `min(copies, wish.quantity)`, so a press against a wish for four copies
+ * writes `{"copies": 4, "wishes": 4}` while clearing exactly one line. This read `4 wishes
+ * cleared`, which is a sentence about four shopping lines the reader can go and fail to find; the
+ * ambiguity was flagged from both sides of the boundary on the day it landed, and the payload's
+ * own doc on `QuickAddOutcome::wish_copies` is what settles it. Saying `copies` twice in one row
+ * is the price, and it is worth paying: the two numbers can differ (a 4-copy press against a wish
+ * for one is `4` and `1`), which is exactly when a reader needs to know which is which.
+ *
+ * **"for this deck" rather than "into this deck"**, because the copies went into the reader's
+ * *collection* — filed in the deck's group, which is custody rather than the list. A history line
+ * saying they were added to the deck would be the one thing this write did not do.
+ *
+ * `null` for any kind but `move`, so a `quickAdd` payload a newer build put on a kind this one
+ * has no sentence for falls through to that kind's own branch — {@link importLine}'s defensive
+ * rule, and what keeps an ordinary card move untouched by this.
+ */
+function quickAddLine(kind: DeckAuditKind, p: Record<string, unknown>): AuditLine | null {
+  if (kind !== "move") return null;
+  const wishes = numberField(p.wishes);
+  return {
+    text: `Recorded ${plural(numberField(p.copies), "copy", "copies")} for this deck`,
+    detail: wishes > 0 ? `${plural(wishes, "copy", "copies")} off your wishlist` : null,
   };
 }
 

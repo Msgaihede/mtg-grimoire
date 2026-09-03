@@ -2179,6 +2179,56 @@ export interface DeckPullOutcome {
 }
 
 /**
+ * One wishlist line a quick add could take copies off — `deck_quick_add::QuickAddWish`, the whole
+ * of what {@link ipc.deckQuickAddWishes} answers.
+ *
+ * **The match is on the printing and the finish, never on the oracle card.** The predicate is
+ * `wishlist::OWNED_SQL`'s own first arm with the any-printing arm dropped — `w.card_id = :cardId
+ * AND (w.preferred_finish IS NULL OR w.preferred_finish = :finish)` — rather than a second
+ * opinion about what fills a wish. So a wish for *any* printing of the card is left standing,
+ * exactly as the pull leaves an Alpha Bolt out of an M10 line and for the same trade: nothing is
+ * ever taken off a shopping list that is not the piece of cardboard the reader just recorded. A
+ * `preferred_finish` of `null` still matches, because the list itself says a wish naming no
+ * finish takes any of them, and excluding it would refuse the commonest wish there is.
+ *
+ * **The order is the pre-pick**, {@link DeckPullCandidate}'s rule one table over: the root first,
+ * then the reader's own folders in their `sortOrder`, oldest row first inside a tie. A dialog
+ * that has to ask opens on the head of the list.
+ */
+export interface DeckQuickAddWish {
+  /** `wishlist_entries.id` — what {@link ipc.deckQuickAddToCollection}'s `wishId` points at. */
+  id: number;
+  /** Copies the wish asks for, whole. A press takes at most this many and deletes the row when
+   *  it takes them all. */
+  quantity: number;
+  /** Where it sits, or `null` at the root. */
+  folderId: number | null;
+  /** What to call that place, or `null` at the root — which the UI words, not the backend. */
+  folderName: string | null;
+}
+
+/**
+ * What a quick add recorded — `deck_quick_add::QuickAddOutcome`.
+ *
+ * **What was written, never the argument that was sent**, which is {@link MoveOutcome}'s rule: a
+ * sentence quotes this. The two numbers are separate halves of one press and either can be zero
+ * without the other being wrong.
+ */
+export interface DeckQuickAddOutcome {
+  /** Copies recorded into the deck's own group. */
+  copies: number;
+  /**
+   * The `collection_entries` row they landed in, **after the grain fold** — so a second press on
+   * one line raises the row already in the group rather than making a second one, and both
+   * presses answer the same id.
+   */
+  entryId: number;
+  /** Copies taken off the wish, and `0` when the press named none. Never more than the wish
+   *  held. */
+  wishCopies: number;
+}
+
+/**
  * One card the plan asks for — {@link ipc.deckTheorySlots}' row, and the whole input to the deck
  * editor's theory tick.
  *
@@ -5667,6 +5717,72 @@ export const ipc = {
    */
   deckPullFromCollection: (deckId: number, picks: DeckPullPick[]) =>
     invoke<DeckPullOutcome>("deck_pull_from_collection", { deckId, picks }),
+  /**
+   * Which wishlist lines a quick add of this printing could take copies off — the read half of
+   * {@link ipc.deckQuickAddToCollection}'s second arm.
+   *
+   * **It names no deck**, and that is the shape rather than an omission: a wish is a fact about
+   * the reader's shopping list and about a printing, never about which deck the press came from.
+   * The deck is what the *write* files the copies into.
+   *
+   * **Fetched imperatively at the press, not by a mounted hook.** A right-click that fired a
+   * wishlist read per menu open would ask this question once per card the reader hovered past;
+   * `useDeck`'s `quickAddWishesQuery` is the options factory both the press and any test build
+   * the key from, so the two cannot disagree about it.
+   *
+   * **An empty array is the ordinary answer** — most cards a reader records are on no shopping
+   * list — and one row is the answer that needs no dialog at all. See {@link DeckQuickAddWish}
+   * for the predicate, which is deliberately narrower than what fills a wish.
+   */
+  deckQuickAddWishes: (cardId: string, finish: DeckFinish) =>
+    invoke<DeckQuickAddWish[]>("deck_quick_add_wishes", { cardId, finish }),
+  /**
+   * Record the copies a deck row is short of, filed straight into that deck's own group — and,
+   * where `wishId` names one, take them off that wish in the same transaction.
+   *
+   * **The first of the four deck-boundary crossings that _creates_ cardboard rather than moving
+   * it.** `collection_to_deck`, `deck_to_collection` and {@link ipc.deckPullFromCollection} all
+   * move a row that already exists; this one writes a `collection_entries` row that was never
+   * there. That is the whole reason its caller takes `query.ts`'s `OWNED_WRITE_KEYS` rather than
+   * the narrower collection root the three movers share: `CardSummary.ownedQuantity` moves from
+   * 0 to N on the very tile the press was made on.
+   *
+   * **`collection_add` refuses a `deck` folder outright and must go on refusing.** Filing into a
+   * group asserts *this deck holds these copies*, which only a write that can answer for the
+   * `deck_cards` row behind them may say — so this command is fenced on the deck playing the
+   * card (`NOT_IN_DECK`) and passes `collection::DECK_WRITE_FOLDERS` to the private door the
+   * deck importer already uses.
+   *
+   * **The live list only.** A plan holds no cards, so a theory row is refused with no fence of
+   * its own to explain it — the menu greys the row instead, which is where a reader can read the
+   * reason.
+   *
+   * **`finish` is the deck row's** — `null` is the regular copy, {@link DeckFinish}'s
+   * translation — and the collection word it is recorded under is `nonfoil`. `condition` is the
+   * one decision this press makes for the reader, and it is `MENU_CONDITION` (NM) rather than a
+   * second spelling of it.
+   *
+   * **One transaction, so a wish that has moved on rolls the copies back too.** The backend
+   * re-reads the named wish against the same predicate {@link ipc.deckQuickAddWishes} used —
+   * the dialog's answer is a round trip old — and refuses in words (`WISH_GONE`,
+   * `WISH_WRONG_CARD`) rather than recording copies against a wish it could not find.
+   */
+  deckQuickAddToCollection: (
+    deckId: number,
+    cardId: string,
+    finish: DeckFinish,
+    condition: string,
+    quantity: number,
+    wishId: number | null,
+  ) =>
+    invoke<DeckQuickAddOutcome>("deck_quick_add_to_collection", {
+      deckId,
+      cardId,
+      finish,
+      condition,
+      quantity,
+      wishId,
+    }),
   /**
    * Every name in a decklist, resolved to a printing this app has. **Read-only**, and one call
    * for the whole list rather than one per line — ~100 names is six prepared statements and a

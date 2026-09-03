@@ -91,6 +91,9 @@ function writer(over: Partial<PullWrite> = {}): PullWrite {
 
 interface Options {
   rows?: readonly DeckPullRow[] | null;
+  /** The per-card scope. Absent is the deck-wide press, which is what every other case here
+   *  drives — see the two subtitle cases at the foot of the file. */
+  cardName?: string | null;
   loading?: boolean;
   readError?: string | null;
   pull?: Partial<PullWrite>;
@@ -112,6 +115,7 @@ function open(options: Options = {}) {
     <PullFromCollectionDialog
       open
       deckName="Burn"
+      cardName={options.cardName}
       rows={options.rows === undefined ? [row()] : options.rows}
       loading={options.loading ?? false}
       readError={options.readError ?? null}
@@ -567,5 +571,44 @@ describe("PullFromCollectionDialog", () => {
         "Cards this deck is short of that you already own — into Burn",
       ),
     ).toBeInTheDocument();
+  });
+
+  /**
+   * **The per-card scope, which is one sentence and nothing else** (2026-09-03, issue #350).
+   *
+   * A deck card's `Collection ▸ Pull …` opens this same dialog over one row of the plan, and the
+   * subtitle is the only thing on screen that says so — the heading is what the press *does* and
+   * is deliberately the same at both scopes. Without it, a panel headed `Pull from collection`
+   * over a single row, saying *cards this deck is short of*, reads as a plan that has lost the
+   * rest of itself.
+   *
+   * The deck-wide sentence is asserted **absent** in the same case, because a subtitle that drew
+   * both would pass a `findByText` on either one alone.
+   */
+  it("names the card instead when the press was about one", async () => {
+    open({ cardName: "Lightning Bolt", rows: [row()] });
+
+    expect(
+      await screen.findByText("Copies of Lightning Bolt you already own — into Burn"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Cards this deck is short of that you already own — into Burn"),
+    ).not.toBeInTheDocument();
+  });
+
+  /**
+   * **It filters nothing**, which is the fence that keeps this component free of any notion of a
+   * `PullKey`: the caller narrows the plan, and a `cardName` is a caption over whatever it was
+   * handed.
+   *
+   * Stated as a case rather than as prose because the tempting "fix" — filter here too, so the
+   * two agree — is exactly what would make them able to disagree.
+   */
+  it("draws the rows it was given and never narrows them itself", async () => {
+    open({ cardName: "Lightning Bolt", rows: [row(), SOL_RING] });
+
+    expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
+    expect(screen.getByText("Sol Ring")).toBeInTheDocument();
+    expect(screen.getByText("5 copies across 2 cards")).toBeInTheDocument();
   });
 });

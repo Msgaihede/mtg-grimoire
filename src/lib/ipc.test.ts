@@ -13,6 +13,7 @@ import collectionRs from "../../src-tauri/src/collection.rs?raw";
 import collectionFoldersRs from "../../src-tauri/src/collection_folders.rs?raw";
 import deckRs from "../../src-tauri/src/deck.rs?raw";
 import deckPullRs from "../../src-tauri/src/deck_pull.rs?raw";
+import deckQuickAddRs from "../../src-tauri/src/deck_quick_add.rs?raw";
 import deckTheoryRs from "../../src-tauri/src/deck_theory.rs?raw";
 import resetRs from "../../src-tauri/src/reset.rs?raw";
 import searchRs from "../../src-tauri/src/search.rs?raw";
@@ -669,6 +670,74 @@ describe("ipc argument names match the Rust command signatures", () => {
     // How many wishes were *touched*, not how many copies were added — clicking twice raises
     // one line rather than making two, which is `add_wish`'s fold.
     expect(wishes).toBe(2);
+  });
+
+  /**
+   * The quick add's two commands, and the crate is read for both names.
+   *
+   * **`invoke` matches by name and nothing in this build type-checks either half**, which is the
+   * ordinary reason; what makes this pair worth its own case is that the two are one press split
+   * across a read and a write, and the write's argument list is the longest in this file. Six
+   * parameters, two of which are nullable and one of which is a bare `string` — so a payload
+   * that spelled `wishId` `wish_id`, or sent `deckId` where the read wants none, is a
+   * deserialization failure with no type error anywhere and a menu row that simply never works.
+   *
+   * **`condition` is `MENU_CONDITION`'s `"NM"` and travels as an explicit argument**, never as a
+   * default the backend fills in: a collection row's identity includes its condition, so
+   * something has to choose, and the menu says so where the choice is made.
+   *
+   * **`finish` is the deck row's** — `null` is the regular copy, which the crate translates to
+   * `nonfoil` on its own side — and it is sent on **both** commands, because the wish predicate
+   * matches on it too. `null` is a value the wire carries rather than an omission: an absent
+   * parameter is a refusal, not a default.
+   *
+   * **`wishId: null` is the whole of "record these copies and clear nothing"**, and it is the
+   * commonest press of the three menu rows, so it is asserted beside the named-wish form.
+   */
+  it("sends both quick-add commands under the names the crate declares", async () => {
+    // Not `toContain` on the source alone: a pass has to mean "the crate spells it", never
+    // "the crate was never read".
+    expect(deckQuickAddRs.length).toBeGreaterThan(1_000);
+    expect(deckQuickAddRs).toContain("fn deck_quick_add_wishes(");
+    expect(deckQuickAddRs).toContain("fn deck_quick_add_to_collection(");
+
+    // The read names **no deck**: a wish is a fact about a shopping list and a printing, and
+    // which deck the press came from decides only where the copies are filed.
+    invoke.mockResolvedValue([{ id: 7, quantity: 3, folderId: null, folderName: null }]);
+    const wishes = await ipc.deckQuickAddWishes("p1", null);
+    expect(invoke).toHaveBeenCalledWith("deck_quick_add_wishes", { cardId: "p1", finish: null });
+    expect(wishes).toEqual([{ id: 7, quantity: 3, folderId: null, folderName: null }]);
+
+    await ipc.deckQuickAddWishes("p1", "foil");
+    expect(invoke).toHaveBeenLastCalledWith("deck_quick_add_wishes", {
+      cardId: "p1",
+      finish: "foil",
+    });
+
+    // The write, and the answer is read back because it is what a sentence quotes — the copies
+    // recorded, the row they folded into, and what came off the wish.
+    invoke.mockResolvedValue({ copies: 4, entryId: 44, wishCopies: 3 });
+    const outcome = await ipc.deckQuickAddToCollection(4, "p1", null, "NM", 4, 7);
+    expect(invoke).toHaveBeenLastCalledWith("deck_quick_add_to_collection", {
+      deckId: 4,
+      cardId: "p1",
+      finish: null,
+      condition: "NM",
+      quantity: 4,
+      wishId: 7,
+    });
+    expect(outcome).toEqual({ copies: 4, entryId: 44, wishCopies: 3 });
+
+    // No wish named — the plain `Quick add N copies` row — and `null` still travels.
+    await ipc.deckQuickAddToCollection(4, "p1", "etched", "NM", 1, null);
+    expect(invoke).toHaveBeenLastCalledWith("deck_quick_add_to_collection", {
+      deckId: 4,
+      cardId: "p1",
+      finish: "etched",
+      condition: "NM",
+      quantity: 1,
+      wishId: null,
+    });
   });
 
   /**
@@ -2374,6 +2443,14 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     ["DeckPullCandidate", deckPullRs, "PullCandidate"],
     ["DeckPullPick", deckPullRs, "Pick"],
     ["DeckPullOutcome", deckPullRs, "PullOutcome"],
+    // **The quick add's two, added with the feature** (2026-09-03, issue #350). Both are
+    // read-only shapes with no picture, and both are exactly the kind of small unpictured row
+    // `CollectionFolder` above is on this list for: `QuickAddOutcome`'s three numbers are all
+    // counts a sentence quotes, so a renamed one arrives as `undefined`, prints as `0` through
+    // the audit's own defensive readers, and reads as a press that recorded nothing — with
+    // nothing red anywhere, because a press that *did* record nothing is a legitimate answer.
+    ["DeckQuickAddWish", deckQuickAddRs, "QuickAddWish"],
+    ["DeckQuickAddOutcome", deckQuickAddRs, "QuickAddOutcome"],
     // **The cheapest-printing sweep's six, added with the feature** (2026-09-03, issue #352).
     // They are here rather than on `mirrors` above for `DecksCleared`'s reason and not for a new
     // one: none is a card wall's row, none carries a picture, and the smallest of them is two

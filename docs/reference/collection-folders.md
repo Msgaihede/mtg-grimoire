@@ -660,6 +660,9 @@ nothing writes any more would have sat in that table forever.
 ```text
          collection_to_deck                 deck_to_collection
 binder / another deck ─────────▶ deck group ─────────────────▶ Recently removed
+                                     ▲   ▲
+        deck_pull_from_collection ───┘   └─── deck_quick_add_to_collection
+        (moves cardboard that exists)         (records cardboard that did not)
 ```
 
 **A third write joined them on 2026-09-03 and is deliberately not a member of the pair** —
@@ -670,14 +673,40 @@ makes it a third thing rather than a bulk `collection_to_deck`: it only ever fil
 `deck_cards` row **already declares**, so the number of copies the group holds rises to meet a
 list that was already asking for them.
 
-**A card reaches a deck's group only through those three, and every one of them answers for the
+**A fourth joined them the same day and is the only one that does not move a row at all** —
+`deck_quick_add.rs`'s `deck_quick_add_to_collection`,
+[issue #350](https://github.com/Msgaihede/mtg-grimoire/issues/350), recorded in
+[decks-storage.md](decks-storage.md#the-quick-add-recording-cardboard-nobody-had-written-down).
+The other three take copies that are already somewhere and put them somewhere else; this one
+**creates** the `collection_entries` row, filed in the group on the way in, for a reader who has
+just bought the cardboard their deck was short of. That is why its arrow starts nowhere: there is
+no source folder, and the total the reader owns actually changes — the one difference on this page
+that reaches the search wall's Owned badge rather than only the census.
+
+**A card reaches a deck's group only through those four, and every one of them answers for the
 deck card behind the copies.** `collection_to_deck` writes that row; `deck_pull_from_collection`
-refuses any pick the list is not already short of. That is why `set_entry_folder` refuses a
+refuses any pick the list is not already short of; `deck_quick_add_to_collection` refuses outright
+unless the live list already plays the card. That is why `set_entry_folder` refuses a
 `deck` destination and the page offers no ring on a deck group: a bare drag would file copies into
 the group and leave the deck's list saying nothing about them — a placement with no deck card
 behind it, which reads to the reader as cards that vanished into a deck that does not play them.
 The refusal is the command's, not `refile_entry`'s; the write underneath carries no kind fence at
 all, which is exactly what lets these file into the two folders a reader may not point at.
+
+**The fourth write reaches the group through a different door, and that door now has two callers.**
+The three above *move* a row, so they go through `refile_entry`/`take_copies`, which carry no kind
+fence. A write that **creates** a row has to go through `collection::add_entry`, and that one
+refuses a `deck` folder outright (`FOLDER_NOT_YOURS`) exactly as `set_entry_folder` does.
+`collection::add_entry_filed` is the private door that takes the fence as a parameter and
+`collection::DECK_WRITE_FOLDERS` — `user` and `deck`, and deliberately never `removed` — is the
+widened set. **`import::commit_import` was its first caller and `deck_quick_add` is its second**,
+and what each answers for is the same shape read two ways: the importer writes the deck's list in
+the same press, so the list and the copies behind it arrive together or not at all; the quick add
+checks that the list **already** says so, through the `deck::plays_card` fence issue #358 put on
+`collection_to_deck`. Neither is a reader naming a folder they may not name, which is the thing
+the public door exists to refuse. The constant carried the name `IMPORT_FOLDERS` until 2026-09-03
+and was renamed with the second caller: a constant called `IMPORT_` that a non-import write passes
+is a name that would have to be read past every time.
 
 ### And since 2026-09-03 the deck has to already play the card — issue #358
 
@@ -1441,8 +1470,11 @@ end:
   command was one careless caller away from being the last one.
   **`removed` is deliberately not fenced as a source**: taking a cut card out of the holding area
   and filing it in a binder is what that folder is for.
-- **`refile_entry` carries no such fence**, and the absence is deliberate: it is what lets
-  `collection_alloc.rs`'s two writes, and `deck::delete_deck`, file into exactly those two folders.
+- **`refile_entry` carries no such fence**, and the absence is deliberate: it is what lets the
+  three writes that *move* a row across the deck boundary — `collection_alloc.rs`'s pair and
+  `deck_pull_from_collection`, all three through `take_copies` — and `deck::delete_deck` file into
+  exactly those two folders. (The fourth, `deck_quick_add_to_collection`, creates its row instead
+  and reaches the group through `add_entry_filed`'s parameterised fence, one section up.)
   The fence belongs to the *command*, not to the write — and the distinction is **who is asking**,
   not which table is touched: `set_entry_folder` is the reader's own filing gesture, and a silent
   drag must not be a second, unrecorded route out of a deck. Neither `refile_entry` nor
@@ -1836,7 +1868,8 @@ folder is a plain action while a folder with children is a submenu whose first i
 so a parent folder is always pickable. Empty folders are **kept**, the opposite of `deckLevel`,
 which drops a folder with no deck under it: an empty drawer is where the next card goes. Deck
 groups and `Recently removed` are filtered out (`kind === "user"`), because copies reach those only
-through `collection_alloc.rs`'s two writes and never through a folder press. `Move to → folder` for a collection row calls
+through the four writes that cross the deck boundary — `collection_alloc.rs`'s pair,
+`deck_pull_from_collection` and `deck_quick_add_to_collection` — and never through a folder press. `Move to → folder` for a collection row calls
 `collection_set_folder`, the same command the drag writes through, so a drag and a menu press merge
 on a taken grain identically — and the menu exists because a drag-only affordance is half a
 feature, and it is the half a keyboard cannot use. **One command and, since the review of this
@@ -2021,7 +2054,8 @@ build, not a description of this one.
 | `src-tauri/src/collection_folders.rs` | The folder commands, `set_entry_folder` and its two fences, `refile_entry`, `take_copies` (the split), `merge_entry`, `folder_summary`, `set_folder_locked`, `LOCKED_FOLDER_IDS` and `effectively_locked` (the lock's inheritance, spelled once), `FOLDER_NOT_YOURS`, `ENTRY_IN_A_DECK`, `FOLDER_IS_LOCKED` |
 | `src-tauri/src/collection_alloc.rs` | `collection_to_deck` and `deck_to_collection` — the pair that moves a row across the deck boundary and back — `take_from_deck_list`, `MoveOutcome`, the cut's history row and the argument for its missing undo step, and the seven refusal sentences |
 | `src-tauri/src/deck_pull.rs` | The third crossing (2026-09-03, issue #351): `deck_pull_plan` and `deck_pull_from_collection` — filling a hole the list already declares, writing no `deck_cards` row. Candidate eligibility, the pre-pick order, the all-or-nothing batch, and the `move` history row. Recorded in [decks-storage.md](decks-storage.md#the-pull-filling-a-hole-the-list-already-has) |
-| `src-tauri/src/collection.rs` | The grain's other ten terms, `set_quantity`'s zero-delete, `update_entry`'s merge, `fold_entry`, `EntryChange`, `ENTRY_FINISH`, `Allocation`, and `CollectionQuery::exclude_locked` with `scope`'s term for it |
+| `src-tauri/src/deck_quick_add.rs` | The fourth crossing (2026-09-03, issue #350): `deck_quick_add_wishes` and `deck_quick_add_to_collection` — the only one that *creates* a row rather than moving one. The seven-step order, `WISH_GONE` and `WISH_WRONG_CARD`, the wishlist predicate and why it is `OWNED_SQL`'s first arm, and the fourth `move` history row. Recorded in [decks-storage.md](decks-storage.md#the-quick-add-recording-cardboard-nobody-had-written-down) |
+| `src-tauri/src/collection.rs` | The grain's other ten terms, `set_quantity`'s zero-delete, `update_entry`'s merge, `fold_entry`, `EntryChange`, `ENTRY_FINISH`, `Allocation`, `CollectionQuery::exclude_locked` with `scope`'s term for it, and `add_entry_filed` with `DECK_WRITE_FOLDERS` — the private door that takes the folder fence as a parameter, and its two callers |
 | `src-tauri/src/deck_theory.rs` | `OWNED_SPARE_SQL` — "what can I build with", and the first ownership-shaped statement the lock changed, unconditionally |
 | `src-tauri/src/collection_source.rs` | The three fragments and `Availability` — the second thing the lock reaches, as a **scope a caller passes** rather than a statement: `ForDeck` is the deck builder's card search alone (issue #349) and drops another deck's group and every locked drawer, keeping the asking deck's own group |
 | `src-tauri/src/deck.rs` | `owned_by_oracle` and `attribute_owned` — owned/missing as a sum over the group — `delete_deck`, which re-files into `Recently removed`, and `release_group_copies`, the crate's one walk over a group's rows — oracle-matched, exact printing first — which `deck_to_collection` calls for its one row and `release_live_copies` loops for the four bulk sites (`clear_category`, `clear_variant`, `deck_meta::delete_category`'s cascade arm, `import::commit_import`'s `replace` arm), carrying the `live` fence for all of them |

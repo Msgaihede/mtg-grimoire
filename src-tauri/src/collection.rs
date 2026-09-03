@@ -346,20 +346,32 @@ fn folder_named(conn: &Connection, folder_id: Option<i64>, kinds: &[&str]) -> Re
 const READER_FOLDERS: &[&str] = &[USER_KIND];
 
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
-/// …and what a **deck import** may file into, which is the reader's drawers plus the group of
-/// the deck the same press just wrote a list into.
+/// …and what a **deck-driven write** may file into, which is the reader's drawers plus the group
+/// of the deck that same press answers for.
 ///
 /// **The one widening of the fence in the crate, and it is a widening of that fence rather than
 /// a second check.** The argument the paragraph above makes is that a request naming a `deck`
-/// folder asserts something only the app's own writes may make true — and this *is* one of those
-/// writes: `useImport`'s deck arm calls `deck_import_commit` and this command in one press, so
-/// the `deck_cards` rows and the copies backing them are written together or not at all. Filed
-/// at the root instead, the deck would read *missing* on every line the reader had just told the
-/// app they own, and every other deck could still claim the copies.
+/// folder asserts something only the app's own writes may make true — *this deck holds these
+/// copies* — so a caller passing this set has to be able to answer for the `deck_cards` row
+/// behind them. **Two callers do, and each answers in its own way:**
+///
+/// * [`commit_import`], from `useImport`'s deck arm, which calls `deck_import_commit` and this
+///   command in one press: it **wrote the list itself**, so the `deck_cards` rows and the copies
+///   backing them are written together or not at all. Filed at the root instead, the deck would
+///   read *missing* on every line the reader had just told the app they own, and every other
+///   deck could still claim the copies.
+/// * [`crate::deck_quick_add::quick_add`], the per-card menu row, which **checks that the list
+///   already says so** — [`crate::deck::plays_card`] and
+///   [`crate::collection_alloc::NOT_IN_DECK`], issue #358's invariant read from the creating
+///   side.
+///
+/// **It was called `IMPORT_FOLDERS` until 2026-09-03 and the rename came with the second
+/// caller.** A constant named after one press that a different press passes is exactly the rot
+/// this repo greps for: the next reader would have gone looking for an import.
 ///
 /// `removed` stays out. `Recently removed` is where copies go when they *leave* a deck, and a
-/// file naming it would be an import that arrives already discarded.
-const IMPORT_FOLDERS: &[&str] = &[USER_KIND, DECK_KIND];
+/// write naming it would be cardboard that arrives already discarded.
+pub(crate) const DECK_WRITE_FOLDERS: &[&str] = &[USER_KIND, DECK_KIND];
 
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
 /// `COLLECTION_FOLDER_KINDS[1]` — the one folder that stands for a deck.
@@ -392,16 +404,21 @@ pub fn add_entry(conn: &Connection, input: &EntryInput) -> Result<EntryChange, S
     add_entry_filed(conn, input, READER_FOLDERS)
 }
 
-/// [`add_entry`] with the folder fence handed in, for the one caller that files into a folder no
+/// [`add_entry`] with the folder fence handed in, for the two callers that file into a folder no
 /// reader may name themselves.
 ///
-/// **A parameter rather than a second write**, and a private one rather than a widening of the
-/// public door: [`commit_import`] passes [`IMPORT_FOLDERS`] so a deck import can file into that
-/// deck's group, and everything else in the crate — 70-odd call sites, every one of them the
-/// reader's own add — reaches this through [`add_entry`] and keeps [`READER_FOLDERS`]. The
-/// alternative was an add that landed at the root and was then *moved*, which for a printing the
-/// reader already owns is a fold into their root row followed by a move of the whole thing.
-fn add_entry_filed(
+/// **A parameter rather than a second write**, and a `pub(crate)` door rather than a widening of
+/// the public one: [`commit_import`] and [`crate::deck_quick_add::quick_add`] pass
+/// [`DECK_WRITE_FOLDERS`] so a deck-driven write can file into that deck's group, and everything
+/// else in the crate — 70-odd call sites, every one of them the reader's own add — reaches this
+/// through [`add_entry`] and keeps [`READER_FOLDERS`]. The alternative was an add that landed at
+/// the root and was then *moved*, which for a printing the reader already owns is a fold into
+/// their root row followed by a move of the whole thing.
+///
+/// **`pub(crate)` and not `pub`.** `collection_add` refuses a `deck` folder outright and must go
+/// on refusing; this door is reachable from inside the crate, where a caller can be held to
+/// answering for the `deck_cards` row behind the copies, and from nowhere else.
+pub(crate) fn add_entry_filed(
     conn: &Connection,
     input: &EntryInput,
     folders: &[&str],
@@ -700,7 +717,7 @@ pub(crate) fn commit_import(
     // each ask again per item — that is their own door and it stays theirs — but a stale folder
     // id asked about *here* is a sentence rather than a rollback, which is what the mode check
     // above is buying too.
-    folder_named(conn, folder_id, IMPORT_FOLDERS)?;
+    folder_named(conn, folder_id, DECK_WRITE_FOLDERS)?;
     let before: i64 = conn
         .query_row("SELECT count(*) FROM collection_entries", [], |r| r.get(0))
         .map_err(|e| e.to_string())?;
@@ -742,9 +759,9 @@ pub(crate) fn commit_import(
             folder_id,
         };
         if mode == "add" {
-            add_entry_filed(&tx, &input, IMPORT_FOLDERS)?;
+            add_entry_filed(&tx, &input, DECK_WRITE_FOLDERS)?;
         } else {
-            let change = set_entry(&tx, &input, IMPORT_FOLDERS)?;
+            let change = set_entry(&tx, &input, DECK_WRITE_FOLDERS)?;
             if change.quantity == 0 {
                 remove_entry(&tx, change.id)?;
                 removed += 1;
@@ -1209,7 +1226,7 @@ pub async fn collection_remove(
 /// **`folder_id` is absent for every import but one.** A file describes cards, not filing, so the
 /// collection's own import step sends nothing and its rows land at the root. The deck arm of the
 /// import dialog sends the group of the deck it just wrote a list into, so the list and the
-/// copies backing it agree the moment the dialog closes — see [`IMPORT_FOLDERS`], which is the
+/// copies backing it agree the moment the dialog closes — see [`DECK_WRITE_FOLDERS`], which is the
 /// only place in the crate that fence is wider than the reader's own drawers.
 #[cfg(not(target_family = "wasm"))]
 #[tauri::command]
@@ -5152,7 +5169,7 @@ mod tests {
     /// **The widened fence is widened by exactly one kind**, and the two it still refuses are
     /// refused before the transaction opens.
     ///
-    /// `IMPORT_FOLDERS` is the only place in the crate where a `deck` folder may be *named* by a
+    /// `DECK_WRITE_FOLDERS` is the only place in the crate where a `deck` folder may be *named* by a
     /// caller, so the pair of refusals is what says it is a widening rather than a hole: an id
     /// nothing answers to is still `FOLDER_GONE`, and `Recently removed` is still
     /// `FOLDER_NOT_YOURS` — a file naming it would be an import that arrives already discarded.
