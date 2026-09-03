@@ -259,14 +259,36 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   claim `soleFinish` above already refuses to make; a trait outlives the finish, which is what
   lets **1 718 printings that draw nothing today** carry a mark at all. `oilslick` + `raisedfoil`
   collapses to the one name a player says.
-  **The glyph is `Aperture` and it replaces the finish's**, so the corner chip still holds at
-  most a crown and one finish mark — the rule in `src/CLAUDE.md` that a third mark wanting that
-  corner means the corner is full. Iris blades because they have to be told from `Sparkles` and
-  `Gem` at 12px, where `Sparkle` is `Sparkles` minus two points and `Diamond` is `Gem` without
-  its facets. The **words** follow the same rule the chip already had: joined with ` · ` where
+  **A treatment renames the mark and never redraws it** (2026-09-03, issue #353 — the
+  correction to how this shipped). The glyph is the **finish**, always: `Sparkles` for foil,
+  `Gem` for etched, and a Surge Foil is the same `Sparkles` as an ordinary one. It was
+  `Aperture` for every named copy for a fortnight, and that was the bug — the glyph swap only
+  reached the surfaces that pass `treatments`, so one Surge Foil was an `Aperture` on the
+  printings wall and a `Sparkles` in the card pane's foil toggle, the deck card menu and the
+  theory diff, which draw a finish and have never seen a promo type. One fact, two pictures,
+  and no way for a reader to know they meant the same thing. Standardising on the finish is
+  what makes the icon standardisable at all: there are three finishes and a treatment table
+  that grows whenever Scryfall names a promo type, so only the finish can have a picture each,
+  and what #160 actually asked for — tell a Halo Foil from a plain one — is the word's job on
+  every surface anyway.
+  **`Aperture` survives in exactly one slot**: a **nonfoil** copy with a trait, where there is
+  no finish glyph to keep and the alternative is the 1 718 unusual-but-not-shiny printings
+  drawing nothing at all. Iris blades because it has to be told from `Sparkles` and `Gem` at
+  12px, where `Sparkle` is `Sparkles` minus two points and `Diamond` is `Gem` without its
+  facets. At most one glyph either way, so the corner chip still holds at most a crown and one
+  finish mark — the rule in `src/CLAUDE.md` that a third mark wanting that corner means the
+  corner is full.
+  Two call sites moved with it. The **collection table's** mark was gated on the copy having a
+  treatment name, which was right while a treatment had its own glyph and became the same
+  one-fact-two-pictures defect inside one table once it did not — it is ungated now, and
+  `FinishMark`'s own `null` for a plain copy is what keeps the unmarked case unmarked. The
+  **deck card menu's** finish row drew `Sparkles` even when it read `Set as etched`; it takes
+  the same two glyphs the marks do, with `Sparkles` standing for the control itself on the
+  regular row and the submenu head, since nonfoil has no glyph anywhere in the app.
+  The **words** follow the same rule the chip already had: joined with ` · ` where
   there is room for a sentence (a tooltip, an accessible name — "Double Rainbow Foil ·
   Serialized"), and the first one alone where there is room for a column (the pane's per-finish
-  price rows, which read `Halo Foil  $95.79`). The collection table keeps the glyph in its
+  price rows, which read `Halo Foil  $95.79`). The collection table keeps the mark in its
   **Name** cell rather than lengthening `Finish · condition`, which is 5.5rem and truncates
   "Nonfoil · NM" as it stands.
 - **`mix-blend-mode: overlay` is invisible over card art, and only a screenshot says so.**

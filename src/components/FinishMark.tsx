@@ -5,23 +5,53 @@ import { FINISH_LABEL, type Finish } from "@/lib/finish";
 import { type Treatment, treatmentTitle } from "@/lib/treatment";
 import { cn } from "@/lib/utils";
 
-/** Which glyph stands for which finish. Nonfoil is absent because it draws nothing. */
+/**
+ * Which glyph stands for which finish, and **the glyph is the finish and nothing else**.
+ *
+ * Nonfoil is absent because a plain card with nothing else to say draws nothing at all.
+ *
+ * **One foil icon, for every kind of foil** — issue #353. A Surge Foil, a Halo Foil, a Double
+ * Rainbow and an ordinary foil are all `Sparkles`, because they are all *foil*, and a reader
+ * meeting two different pictures of that one fact on two screens has been told the app cannot
+ * make its mind up. What tells them apart is the **word**, which this mark already carries as
+ * its accessible name and its tooltip and which the card pane's finish list and the collection
+ * table print in full. That split — glyph says the finish, word says the treatment — is the
+ * whole of the rule, and it is what makes the icon standardisable at all: a finish is one of
+ * three, and `CARD_TREATMENTS` is a table that grows every time Scryfall names a new promo
+ * type — only the finish can have a picture each.
+ */
 const GLYPH = { foil: Sparkles, etched: Gem } as const;
 
 /**
- * The third glyph: **a named treatment**, whatever finish it sits on.
+ * The third glyph: **a plain card that is unusual cardboard anyway** — Serialized, Poster,
+ * Glossy, Plastic.
+ *
+ * It is reached only where {@link GLYPH} has no answer, which is `nonfoil`, and that fence is
+ * what keeps the app to one foil icon: a Surge Foil is drawn as foil, and this stands in the
+ * empty slot a plain copy leaves rather than displacing a finish that is already saying
+ * something. Traits are the half of `CARD_TREATMENTS` that outlives the finish — a serialized
+ * card is serialized in whatever finish you hold it — so a nonfoil copy of one is the only
+ * card in the app with a name and no finish to hang it on. Without this glyph those printings
+ * go back to drawing nothing.
+ *
+ * **It used to replace the finish's glyph for every named copy, and that was issue #353.**
+ * The same Surge Foil was an `Aperture` on the printings wall and a `Sparkles` in the card
+ * pane's foil toggle, the deck card menu and the theory diff — one fact, two pictures, and the
+ * reader had no way to know they meant the same thing. What #160 actually asked for was to
+ * tell a Halo Foil from an ordinary one, and the *word* does that on every surface; the glyph
+ * swap was the part that cost more than it bought.
  *
  * `Aperture` because it has to be told from the other two at 12px, which rules out most of
  * what "special" suggests — `Sparkle` is `Sparkles` minus two points, and `Diamond` is `Gem`
  * without its facets. Iris blades are a circle and four straight chords: no fine detail to
  * lose at this size, and prismatic rather than glittery, which is the difference between
- * "shiny" and "shiny in a particular way" that this whole mark exists to draw.
+ * "shiny" and "shiny in a particular way".
  *
- * It **replaces** the finish's glyph rather than joining it, which is what keeps
- * `src/CLAUDE.md`'s corner-chip rule intact: the chip still holds at most a crown and one
- * finish mark, and a third mark wanting that corner would mean the corner is full.
+ * At most one glyph either way, which is what keeps `src/CLAUDE.md`'s corner-chip rule intact:
+ * the chip still holds at most a crown and one finish mark, and a second mark wanting that
+ * corner would mean the corner is full.
  */
-const TREATMENT_GLYPH = Aperture;
+const TRAIT_GLYPH = Aperture;
 
 /**
  * A finish, where there is no room for the word.
@@ -31,13 +61,18 @@ const TREATMENT_GLYPH = Aperture;
  * flattening it into `foil: true` is the single most common way an importer loses data, and
  * an interface that draws them the same teaches exactly that mistake.
  *
- * **A third glyph joined them on 2026-08-21, and it is the same argument one level down.** A
- * Surge Foil, a Halo Foil and an ordinary foil were one `Sparkles` with one word behind it —
- * issue #160, reported off the All Printings wall where three such rows sit side by side. So
- * {@link treatments} names what a copy *is*, and where it names something the glyph and the
- * word both become the treatment's. It is not a fourth finish and must never be modelled as
- * one: `cards.finishes` holds three words across all 116 712 rows, and a treatment is an
- * annotation on one of them.
+ * **A treatment renames the mark and never redraws it** — issue #353, which is the correction
+ * to how issue #160 was first answered. {@link treatments} names what a copy *is*, and where
+ * it names something the **word** becomes the treatment's while the glyph stays the finish's:
+ * a Surge Foil is a `Sparkles` labelled "Surge Foil", on the printings wall and in the deck
+ * table and beside the card pane's foil toggle alike. It is not a fourth finish and must never
+ * be modelled as one: `cards.finishes` holds three words across all 116 712 rows, and a
+ * treatment is an annotation on one of them — so it gets an annotation's say over the mark,
+ * which is the name, and not the finish's, which is the picture.
+ *
+ * The one exception is the one that proves it: a **nonfoil** copy with a name has no finish
+ * glyph to keep, so {@link TRAIT_GLYPH} fills the slot rather than leaving 1 718 unusual
+ * printings unmarked.
  *
  * **A solid accent tint, not a gradient.** These render at 12px, where a gradient is not
  * perceivable and costs an SVG `<defs>` whose id has to be unique per instance. The gradient
@@ -71,8 +106,9 @@ export function FinishMark({
    * What this copy is *called*, from `finishTreatments` in `@/lib/treatment` — `[]`, the
    * default, for the 95 % of printings that have no name beyond their finish.
    *
-   * Non-empty replaces both halves of the mark: the glyph becomes {@link TREATMENT_GLYPH} and
-   * the word becomes the treatment's, so a Surge Foil reads "Surge Foil" rather than "Foil".
+   * Non-empty replaces **the word and not the glyph**: a Surge Foil reads "Surge Foil" rather
+   * than "Foil", drawn as the same `Sparkles` every other foil in the app is (issue #353). On
+   * a `nonfoil` copy there is no finish glyph to keep, so {@link TRAIT_GLYPH} is drawn instead.
    * **The whole list, joined**, because this is the mark's accessible name and its tooltip and
    * both have the room — MUL 133z is "Double Rainbow Foil · Serialized", and either half alone
    * would be a smaller answer than the reader's own card. A finish list with one column for
@@ -91,7 +127,10 @@ export function FinishMark({
   // draws — `nonfoil` returning early is the rule for a card with *nothing* to say, and that
   // is what the caller's empty list means.
   if (finish === "nonfoil" && named === null) return null;
-  const Glyph = named !== null ? TREATMENT_GLYPH : GLYPH[finish as "foil" | "etched"];
+  // **The glyph is the finish; the label is the name.** `nonfoil` only reaches here with a
+  // name — the early return above is the plain card — so the trait glyph is exactly the case
+  // where there is no finish to draw, and every foil is the one foil icon.
+  const Glyph = finish === "nonfoil" ? TRAIT_GLYPH : GLYPH[finish];
   const label = named ?? FINISH_LABEL[finish];
   return (
     <Glyph
