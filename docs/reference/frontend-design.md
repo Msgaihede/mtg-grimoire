@@ -757,7 +757,12 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   drawn with no chrome whatever. Two things did **not** have to change and each is a rule worth
   keeping: `DROP_RING`/`DROP_OVER` are `ring-2 ring-accent` and `bg-accent/10`, and a ring is a box
   shadow **outside** the border box, so the drag highlight never read the border it appears to sit
-  on; and the border is transparent rather than absent, for the arithmetic above. `opacity-60` also
+  on; and the border is transparent rather than absent, for the arithmetic above.
+  **Both of those values changed on 2026-09-03, and the second half of that first clause is now
+  the opposite of what it says**: the ring is `ring-1 ring-inset ring-accent/45` and the wash
+  `bg-accent/15`, and an inset ring is painted *within* the border box. What stands above is what
+  was measured on the day and is left as measured — the marks section below carries the change and
+  the reader report behind it. `opacity-60` also
   makes that `<ul>` a stacking context, and the `<ul>` is what takes `LAYER.raised` when a card
   opens — the first thing to check if the lift ever regresses in inactive piles alone.
   **All of it is now measured in the shipped window — 2026-08-14, `npm run tauri dev`, a debug
@@ -2176,6 +2181,14 @@ everything drawn outside its own border box painted in the clipped region:
 | `FOCUS` (`outline-2 outline-offset-2`) | 2px of outline standing 2px off the edge | the whole side, gone |
 | `DROP_OVER` (`bg-accent/10`)           | inside                                   | untouched            |
 
+**The first row stopped being true on 2026-09-03**, and the table is left as it was because it is
+the record of the defect rather than a description of today. `DROP_RING` is `ring-1 ring-inset
+ring-accent/45` now, and an inset ring is painted *within* the border box — so it joins
+`DROP_OVER` in the "untouched" column and cannot be clipped by a scroller at all. **`DROP_MARK_ROOM`
+did not change and must not**: the middle row is the one that always asked for the larger number,
+a clipped focus indicator is a WCAG 2.4.7 failure rather than a cosmetic one, and 6px is still
+`FOCUS`'s 4 plus two to spare.
+
 Three surfaces, one defect, and the shape of it differs by view: Stacks loses the left edge of the
 first pile in every line and the right edge of the rail, Text the same plus the top of its first
 line, and **Grid loses the ring down both sides of every group at once** — a group there is as wide
@@ -2207,6 +2220,86 @@ rect is zero, and a rendering assertion passes just as happily against a view th
 padding again. `views.test.tsx` sweeps the class pair instead — `overflow-x-auto` **and**
 `DROP_MARK_ROOM` on each of the three roots — because the padding is only load-bearing on account
 of the `overflow`.
+
+## The drop marks, made quiet and made to agree (2026-09-03)
+
+**The report.** Three sentences from the reader, and they turned out to be one defect and two
+consequences of it: the highlights are "huge bulky outlines", they "often overlap with other
+content", and they "don't align with the dotted outline and faint highlight appearing when
+actually hovering over a dropzone in most cases". A fourth, separate: a dragged card "occludes a
+lot of content".
+
+**The cause of the first three.** `DROP_RING` was `ring-2 ring-accent`, and a Tailwind ring is a
+box shadow painted **outside** the border box. It went up on *every* eligible target for the whole
+length of a drag, so a wall of drawers became a dozen hard 2px rectangles each intruding 2px into
+its neighbour's gap — bulk and overlap from one property. The misalignment was the same fact seen
+from the third side: on all four folder cards the ring was on the wrapping `<li>` and the card's
+dashed border and `DROP_OVER` wash were on the `<button>` inside, so the gold stood 2px proud of a
+dash it never touched. `features/decks/FolderCard.tsx` was the worst case — a ring on the `<li>`
+for the deck drag, a second on an inner `<div>` for the folder drag, and the button's dash inside
+both: **three concentric outlines for one landing**.
+
+**The fix, in three parts.**
+
+| | before | after |
+| --- | --- | --- |
+| `DROP_RING` — borderless targets | `ring-2 ring-accent` | `ring-1 ring-inset ring-accent/45` |
+| `DROP_EDGE` — targets with an edge | *(did not exist)* | `border-accent/45 transition-none` |
+| `DROP_OVER` | `bg-accent/10` | `bg-accent/15 ring-accent transition-none` |
+
+`ring-inset` is the load-bearing word: an inset ring is painted *within* the border box, so the
+overlap is impossible by construction rather than tuned away. `DROP_EDGE` is the alignment fix and
+it works by removing the second line rather than by lining two up — a card that already owns a
+dashed outline turns *that* outline gold, so there is no pair of edges left to disagree. And the
+over state escalates by **colour, never by width**: both tokens land in one `cn()`, so a `ring-2`
+here would sit in the same `tailwind-merge` width group as the other's `ring-1` and the mark's
+thickness would depend on argument order. Width lives in one token; this one raises
+`ring-accent/45` to `ring-accent` in the ring-*colour* group, where overriding is the point.
+
+**The `transition-none` on two of them is not tidiness.** Those buttons already tween their
+colours over 150ms for hover, and moving the mark onto the button would have put a drop affordance
+behind that tween — the rule `DROP_RING` gets for free by being a box shadow. It costs nothing,
+since the class is only applied during a drag and `:hover` does not update while the pointer is
+holding something. It also keeps the two marks arriving *together*, which matters now that they
+share an element: a border that snapped while its wash faded would be a second misalignment, in
+time rather than in space, introduced by the fix for the first.
+
+**The occlusion is a separate, one-line change.** There was no `opacity` anywhere on
+`[data-dnd-dragging]` — the preview is a clone of the source drawn at full size and full opacity,
+and on a deck that is ~293px of card art laid over the heading the reader is aiming at.
+`src/index.css` now carries `[data-dnd-dragging] { opacity: 0.75 }` as an **app-owned rule kept
+separate from the copied library block**, which is a verbatim copy the fence in
+`lib/dndManager.test.ts` checks the library against; that fence runs one way (library ⊆ ours), so
+an extra rule of the app's own is legal and does not read as drift in a copy the app does not own.
+
+**Verified against the built stylesheet, not the source** — `dist/assets/index-BDP3Px9q.css`,
+2026-09-03, because a mistyped Tailwind utility emits **nothing** and source still reads correctly.
+All five present: `.border-accent\/45`, `.bg-accent\/15`, `.ring-accent\/45`,
+`.ring-inset{--tw-ring-inset:inset}` and `[data-dnd-dragging]{opacity:.75}`. Then photographed
+lock-free — a `file://` page against that sheet, headless Edge at `--force-device-scale-factor=2`,
+with the **old** `ring-2 ring-accent` drawn in the same frame for comparison. The old ring reads
+visibly wider than the element it is on; the new hairline hugs the inside of the rounded rect; the
+folder card's three states are one dash going grey → warm → solid-gold-with-wash; and a
+`data-dnd-dragging` tile is plainly faded beside an identically-classed one. The app lock was held
+by another worktree, which is what the dist-CSS route is for.
+
+**What did not change, and must not.** `DROP_MARK_ROOM` stays `p-1.5`. The ring no longer needs it
+— it cannot be clipped — but `FOCUS` still stands 4px proud, and half a focus indicator is a WCAG
+2.4.7 failure rather than a cosmetic one. The 6px was always sized for `FOCUS` rather than for the
+ring, so the number is unchanged and only its justification narrowed. `TableView` had reached the
+inset answer on its own long before, for rows absolutely positioned inside a virtualiser; its
+local `ring-inset` is now a duplicate of what the token says and was removed.
+
+**Three test holes the change opened, all of which would have gone green.** Worth recording
+because each is the same shape: an assertion written against a literal that no longer exists
+anywhere passes for *every* state. `CollectionPage`/`WishlistPage` had eight
+`classList.contains("ring-2")` refusal checks — the ones proving a target that lights up never
+then refuses the drop — replaced by a `wearsDropMark` subtree helper. `DecksPage`'s `ringed`/
+`washed` helpers hardcoded `ring-2`/`bg-accent/10` against **`FolderTree`** rows, and now ask for
+the ring's *width*, since the two tokens deliberately share the colour group and an all-classes
+test would call a correctly marked row unringed at exactly the moment it is most marked. And
+`AppShell` had four `not.toHaveClass("ring-accent")` absence checks: `toHaveClass` matches whole
+tokens, so an entry wrongly armed with `ring-accent/45` would have sailed through.
 
 ## The format check that changed width with the deck
 

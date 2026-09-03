@@ -1146,9 +1146,21 @@ Two consequences that are easy to miss and are each pinned by a test:
 The collection page is the wishlist's page ported, and the pieces it reuses are named in
 [wishlist-folders.md](wishlist-folders.md) rather than re-argued: folder cards in the grid, a
 breadcrumb whose **segments are also drop targets** (without them a drag could only ever push cards
-deeper, never back out), `DROP_RING` on every eligible folder the moment a row leaves its tile and
-`DROP_OVER` on the one under the pointer, and `DROP_MARK_ROOM` on the wall's scroller so a card
-flush against the content edge does not lose the outer 2 px of its ring for the whole drag.
+deeper, never back out), a mark on every eligible folder the moment a row leaves its tile and
+`DROP_OVER` on the one under the pointer, and `DROP_MARK_ROOM` on the wall's scroller.
+
+**That mark is `DROP_EDGE` rather than `DROP_RING`, and both marks sit on the card's own
+`<button>` face** — changed 2026-09-03, after a reader reported the affordances as bulky, as
+overlapping neighbouring content, and as not lining up with the dashed outline they appeared to
+sit on. All three were the same cause: the ring was drawn on the wrapping `<li>` and a ring is a
+box shadow painted *outside* the border box, so it stood 2 px proud of a dashed rectangle it never
+touched. A folder card already owns an outline, so it does not need a second one — its own dash
+turns faintly gold instead, and there is no longer a pair of edges that could fail to agree. The
+drop *registrations* did not move and could not: dnd-kit keeps one target per element, and the
+`<li>` and the slot inside it are the two boxes the card drag and the folder drag are registered
+on and measured against. **`DROP_MARK_ROOM` stays on the scroller for `FOCUS`'s sake**, not the
+ring's — an inset ring cannot be clipped, a half-drawn focus indicator is a WCAG 2.4.7 failure.
+`src/lib/dropMarks.ts` carries the whole reasoning.
 
 ## The wall's grain is the printing **and** the finish
 

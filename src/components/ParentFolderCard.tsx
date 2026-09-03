@@ -32,6 +32,20 @@
  * siblings and the menu makes sense. The name takes the full width instead, which is the width a
  * long folder name needs most on the one tile that cannot be scrolled past.
  *
+ * **Both drag marks are drawn on the `<button>`, because that is the element carrying this tile's
+ * own edge** (2026-09-03). They were not: the eligible ring went on the outer `<li>` while the
+ * dash and the wash went on the face inside it — and a ring is a box shadow painted *outside* the
+ * border box, so what shipped was a gold rectangle standing 2px proud of a dashed rectangle it
+ * never touched. Two concentric outlines for one landing, which is the reader's report that the
+ * affordances are bulky and "don't align with the dotted outline". Nothing about the drop
+ * *registration* moved to fix it and nothing could — dnd-kit keeps one target per element and the
+ * `<li>` is the box both droppables are registered on — so only the `className` did.
+ *
+ * And because the face already owns a dash all day, the eligible mark here is {@link DROP_EDGE}
+ * rather than the ring every borderless target wears: the tile's own outline goes faintly gold,
+ * {@link DROP_OVER} takes it to full strength beside the wash, and there is never a second edge
+ * to fail to line up with the first. `lib/dropMarks.ts` argues the whole vocabulary.
+ *
  * **One element carries both drop targets, where a folder card carries two.** Those cards keep a
  * separate `slot` box because `useFolderDropTarget` divides a target's border box into three
  * landings and the geometry has to be exactly the card's. This tile has **one** landing —
@@ -50,7 +64,7 @@
 import type { ReactElement, RefObject } from "react";
 import { FolderUp } from "lucide-react";
 import { useTooltip } from "@/components/tooltip/useTooltip";
-import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
+import { DROP_EDGE, DROP_OVER } from "@/lib/dropMarks";
 import { FOCUS } from "@/lib/focus";
 import { cn } from "@/lib/utils";
 
@@ -84,7 +98,9 @@ export function ParentFolderCard({
   onOpen,
 }: {
   /**
-   * The `<li>`, which is where both drop targets are registered and where the ring is drawn.
+   * The `<li>`, which is where both drop targets are registered — and that is now all it is for.
+   * Neither mark is drawn on it: they go on the `<button>` inside, for the reason this file's own
+   * doc gives.
    *
    * Owned by the wrapper rather than by this component, because the wrapper is what calls the
    * hooks — a ref created here would have to be handed back out, and there is no point in the
@@ -94,8 +110,8 @@ export function ParentFolderCard({
   /** What the level above is called: the parent folder's name, or the page's own word for the
    *  root — `Wishlist`, `Collection`, `All decks`, the same word its breadcrumb or tree uses. */
   label: string;
-  /** Something this tile would take is in the air. Raises the ring on **every** eligible target
-   *  at once, which is what tells a reader mid-drag where they may let go. */
+  /** Something this tile would take is in the air. Turns the dash faintly gold on **every**
+   *  eligible target at once, which is what tells a reader mid-drag where they may let go. */
   armed: boolean;
   /** …and the pointer is on this one. */
   over: boolean;
@@ -103,7 +119,7 @@ export function ParentFolderCard({
 }): ReactElement {
   const tip = useTooltip();
   return (
-    <li ref={cardRef} className={cn("relative rounded-xl", armed && DROP_RING)}>
+    <li ref={cardRef} className="relative rounded-xl">
       <button
         type="button"
         aria-label={upCardName(label)}
@@ -124,9 +140,14 @@ export function ParentFolderCard({
           "flex h-full w-full flex-col justify-center rounded-xl text-left",
           "border border-dashed border-border p-2.5",
           "transition-colors duration-150 hover:border-accent motion-reduce:transition-none",
+          // The tile's own dash, gone faintly gold — the eligible mark for a surface that already
+          // has an edge, so nothing is added around this one to disagree with it.
+          armed && DROP_EDGE,
           // One wash for both drags, because only one thing is ever in the air, and because this
           // tile has one landing: a card over it and a folder over it are the same claim — what
-          // you are holding goes *up there*.
+          // you are holding goes *up there*. It comes **after** the line above on purpose:
+          // `tailwind-merge` resolves a border colour by argument order, so this is what takes
+          // `border-accent/45` up to full strength on the one tile the pointer is on.
           over && cn("border-accent", DROP_OVER),
           FOCUS,
         )}

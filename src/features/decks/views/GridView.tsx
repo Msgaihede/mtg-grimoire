@@ -136,10 +136,12 @@ export function GridView({
     // its own.
     //
     // {@link DROP_MARK_ROOM} for `StackView`'s reason and it is the same defect, not a matching
-    // spacing choice: a group's ring is painted outside its border box, this box clips at its
-    // padding box, and with no padding every group in the wall lost the ring down both of its
-    // sides — the full height of the group rather than a corner, since a group here is as wide as
-    // the desk.
+    // spacing choice: this box clips at its padding box, and with no padding every group in the
+    // wall lost its mark down both sides — the full height of the group rather than a corner,
+    // since a group here is as wide as the desk. The mark that was clipped was the drop ring,
+    // which has been `ring-inset` since 2026-09-03 and is now drawn within the border box where
+    // nothing can reach it; `FOCUS` is what still needs the room, and is what the 6px was sized
+    // for all along. See `StackView`'s note.
     <div
       ref={scrollRef}
       className={cn(

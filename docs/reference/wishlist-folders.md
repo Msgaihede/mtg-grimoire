@@ -240,9 +240,20 @@ means nothing there.
 **`WishDrag.folderId` is on the payload so a target can refuse before the drop.** The folder a wish
 is already filed in draws no ring at all, rather than a ring that would lead to a write that moved
 nothing and bumped `updated_at` — the same rule as a deck card dropped back into its own column.
-`DROP_RING` goes up on *every* eligible folder the moment the wish leaves the tile, and `DROP_OVER`
-on the one under the pointer; the wall's scroller carries `DROP_MARK_ROOM`, or a folder card flush
-against the content edge loses the outer 2px of its ring for the whole length of the drag.
+The eligible mark goes up on *every* eligible folder the moment the wish leaves the tile, and
+`DROP_OVER` on the one under the pointer; the wall's scroller carries `DROP_MARK_ROOM`.
+
+**That mark is `DROP_EDGE` rather than `DROP_RING` since 2026-09-03, and both marks sit on the
+card's own `<button>` face rather than on the `<li>` around it.** A reader reported the
+affordances as bulky, as overlapping neighbouring content, and as not lining up with the dashed
+outline they appeared to sit on — one cause for all three, since a ring is a box shadow painted
+*outside* the border box and on the wrapper it stood 2px proud of a dash it never touched. A card
+that already owns an outline does not need a second one, so its dash turns faintly gold instead
+and there is no pair of edges left to disagree. The drop *registrations* did not move and could
+not — dnd-kit keeps one target per element, and the `<li>` and its slot are the two boxes the wish
+drag and the folder drag are registered on and measured against. **`DROP_MARK_ROOM` stays for
+`FOCUS`'s sake rather than the ring's**: an inset ring cannot be clipped, and half a focus
+indicator is a WCAG 2.4.7 failure. `src/lib/dropMarks.ts` carries the reasoning in full.
 
 The two destinations are the folder cards and **the breadcrumb's segments**, which is how a wish
 gets back *out*: without them a drag could only ever push wishes deeper. Both write through
