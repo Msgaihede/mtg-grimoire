@@ -4323,7 +4323,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         closeLabel="Close delete category"
         // Narrow, because the body is one question, one picker and two buttons — the width class
         // is written out whole, since Tailwind emits no rule for a class built at runtime.
-        width="w-[28rem]"
+        size="w-[28rem]"
         onDismiss={dismiss}
         onClose={close}
       >
@@ -4370,7 +4370,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         open={layer?.kind === "clearCategory"}
         title={clearedCategory === null ? "Clear stack" : `Clear “${clearedCategory.name}”`}
         closeLabel="Close clear stack"
-        width="w-[28rem]"
+        size="w-[28rem]"
         onDismiss={dismiss}
         onClose={close}
       >

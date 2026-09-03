@@ -89,7 +89,7 @@ export function ConfirmDialog({
       open={open}
       title={title}
       closeLabel={`Close ${title.toLowerCase()}`}
-      width="w-[26rem]"
+      size="w-[26rem]"
       onDismiss={onDismiss}
       onClose={onClose}
     >

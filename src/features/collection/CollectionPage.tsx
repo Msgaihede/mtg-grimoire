@@ -2658,7 +2658,7 @@ export function CollectionPage() {
         open={picking !== null}
         title="Which copies?"
         closeLabel="Close the copy picker"
-        width="w-[30rem]"
+        size="w-[30rem]"
         onDismiss={() => setPicking(null)}
         onClose={() => setPicking(null)}
       >

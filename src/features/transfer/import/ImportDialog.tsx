@@ -132,7 +132,7 @@ export function ImportDialog({
       // `max-w-2xl` written as the width it is (42rem), because the shell already carries
       // `max-w-full` and two `max-width` utilities on one element is whichever Tailwind emitted
       // last winning silently. `w-[42rem] max-w-full` computes to what `w-full max-w-2xl` did.
-      width="w-[42rem]"
+      size="w-[42rem]"
       onDismiss={onDismiss}
       onClose={onClose}
     >

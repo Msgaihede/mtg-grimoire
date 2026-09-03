@@ -25,6 +25,26 @@ These apply to **every** task. They are the house rules that a fresh implementer
 - Every new component gets a `.test.tsx`. Cover logic that can break — no ceremony tests.
 - **jsdom has no layout engine.** Container queries resolve to nothing and every box is 0. Never assert a computed size; assert the *class* is present.
 
+### Corrections found during wave 1 — read these before writing a fixture
+
+- **`PaneDeckContext` has six required fields, not four.** An earlier draft of this plan gave a
+  four-field fixture with `variant: "main"`, and both are wrong: `DeckVariant` is
+  `"live" | "theory"` (`ipc.ts:1494`), and `finish: DeckFinish` is required too. The correct
+  fixture, which Tasks 8, 9 and 10 all need:
+  ```ts
+  const deckRow: PaneDeckContext = {
+    deckId: 1, categoryId: 2, categoryName: "Burn spells",
+    cardId: "c1", variant: "live", finish: null,
+  };
+  ```
+- **`cn` is `twMerge`, so same-variant classes collapse to the last one.** This matters for the
+  card modal's `size` string in Task 10: `w-full` and `@[640px]/card:w-[47.75rem]` survive
+  together because their variants differ, but two widths at the *same* variant would silently
+  leave only the second. Check any multi-rung class string you build for this.
+- **`grep "<Dialog"` does not find every host.** `Dialog.stories.tsx` passes props through an
+  `args` object and was missed by exactly that search in wave 1. Grep the prop name too.
+- **`Dialog` gained a `layer` prop in wave 1** — see Task 3, which is the first host to pass it.
+
 ---
 
 ## File Structure
@@ -376,13 +396,29 @@ If the moved component does **not** already return null on a null stop, stop and
 that is the contract Task 10 depends on for hiding the chevrons, and it must not be invented here
 without saying so.
 
-- [ ] **Step 4: Run both files**
+- [ ] **Step 4: Move `AllPrintingsDialog` onto the stacked rung**
+
+Found in wave 1, and it is the reason this task touches the file at all beyond the extraction.
+
+This dialog is opened **two ways**: from a card menu over a bare view, and from the card detail
+modal's `View all printings`. At `LAYER.overlay` the second case ties with the card modal it was
+opened from, and equal z-indexes resolve by document order — which is the bug `layers.ts`'s opening
+paragraph is a report of.
+
+Wave 1 added a `layer` prop to `Dialog` for this. Pass the stacked value here — read `Dialog`'s
+prop doc for the exact spelling, since wave 1 chose the union's member names. Add the reason as a
+comment at the call site: a rung is a claim about the highest thing a surface can be asked to
+cover, not about where it usually sits.
+
+Do **not** change any other dialog's rung.
+
+- [ ] **Step 5: Run both files**
 
 Run: `npx vitest run src/features/card/StepChevron.test.tsx src/features/card/AllPrintingsDialog.test.tsx`
 Expected: PASS. `AllPrintingsDialog.test.tsx` is the real check — it exercises the chevrons through
 the dialog and must be green with no edits.
 
-- [ ] **Step 5: Report.** Do not commit.
+- [ ] **Step 6: Report.** Do not commit.
 
 ---
 

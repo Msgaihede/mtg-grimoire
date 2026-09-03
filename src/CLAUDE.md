@@ -162,8 +162,8 @@ Every one of these has its measurement and its story in
   never crop off a printed credit.
 - **Z-indexes come from `LAYER` in `src/lib/layers.ts`** and nowhere else; `src/lib/layers.test.ts`
   sweeps `src/` to keep it that way. The ladder is
-  `raised 10 < header 20 < popup 30 < dragTray 40 < overlay 45 < tooltip 46 < gate 50 <
-  caption 60`. Equal z-indexes are resolved by document order, and a popup inside a virtualised
+  `raised 10 < header 20 < popup 30 < dragTray 40 < overlay 45 < overlayStacked 46 <
+  tooltip 47 < gate 50 < caption 60`. Equal z-indexes are resolved by document order, and a popup inside a virtualised
   row is capped by that row's layer whatever it asks for.
   **`caption` is the top rung and the only one that is not about the app** (2026-08-22): with
   `decorations: false` the title bar *is* the window frame, so a surface that covers it takes

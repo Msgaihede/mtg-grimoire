@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useIsPresent } from "motion/react";
 import { describe, expect, it, vi } from "vitest";
+import { LAYER } from "@/lib/layers";
 import { Dialog } from "./Dialog";
 
 /**
@@ -24,7 +25,7 @@ function open(props: Partial<React.ComponentProps<typeof Dialog>> = {}) {
       open
       title="Deck settings"
       closeLabel="Close deck settings"
-      width="w-[55rem]"
+      size="w-[55rem]"
       onDismiss={onDismiss}
       onClose={onClose}
       {...props}
@@ -68,7 +69,7 @@ describe("Dialog", () => {
         open={false}
         title="Deck settings"
         closeLabel="Close deck settings"
-        width="w-[55rem]"
+        size="w-[55rem]"
         onDismiss={vi.fn()}
         onClose={vi.fn()}
       >
@@ -103,7 +104,7 @@ describe("Dialog", () => {
         open={false}
         title="Deck settings"
         closeLabel="Close deck settings"
-        width="w-[55rem]"
+        size="w-[55rem]"
         onDismiss={onDismiss}
         onClose={vi.fn()}
       >
@@ -189,16 +190,28 @@ describe("Dialog", () => {
   });
 
   /**
-   * The width is the host's, written out whole — a class built by interpolation matches nothing
+   * The size is the host's, written out whole — a class built by interpolation matches nothing
    * Tailwind's source scan knows and emits no rule. `max-w-full` is the shell's, so a panel
    * wider than the window still fits inside it.
+   *
+   * The prop was `width` until 2026-09-03 and carries a host's `h-…` as readily as its `w-…`
+   * now; what it does with the string is unchanged, which is what this pins.
    */
-  it("wears the width class it was handed, verbatim", async () => {
-    open({ width: "w-[48rem]" });
+  it("wears the size classes it was handed, verbatim", async () => {
+    const { unmount } = open({ size: "w-[48rem]" });
     const dialog = await panel();
 
     expect(dialog).toHaveClass("w-[48rem]");
     expect(dialog).toHaveClass("max-w-full");
+    unmount();
+
+    // A height too, which is what the rename was for — and `max-h-full` still stands beside it,
+    // because a fixed height taller than the window is exactly what that clamp exists for.
+    open({ size: "w-[48rem] h-[50rem]" });
+    const tall = await panel();
+
+    expect(tall).toHaveClass("h-[50rem]");
+    expect(tall).toHaveClass("max-h-full");
   });
 
   /**
@@ -228,6 +241,92 @@ describe("Dialog", () => {
     // which is the same bug spelled a second way. The `minmax(0,` half is load-bearing.
     expect(scrim).toHaveClass("grid");
     expect(scrim).toHaveClass("grid-rows-[minmax(0,1fr)]");
+  });
+
+  /**
+   * **Below the phone fold the panel is the window, and this moves every dialog in the app**
+   * (2026-09-03) — deliberately, unlike `flanks` and `container` beside it. A 16px inset and a
+   * rounded border on a 358px-wide panel is chrome nobody chose, and Deck settings, Categories
+   * and History are as wrong at that width as the card modal that noticed.
+   *
+   * Both halves are asserted because either alone is half a fold: the scrim keeping its padding
+   * would leave the glass showing round a panel with no frame, and the panel keeping its frame
+   * would draw a hairline and a radius hard against the four sides of a phone.
+   *
+   * **`classList.contains`, never `className.includes`** — a substring test passes on
+   * `sm:rounded-xl` when asked about `rounded-xl`, which would make the two absence assertions
+   * pass no matter what this file did. And as with everything else about this panel's geometry,
+   * **jsdom has no layout engine and applies no stylesheet**, so the class is all there is to
+   * read; the fold itself is the live pass's.
+   */
+  it("goes full-bleed below the phone fold and framed above it", async () => {
+    open({ size: "w-[30rem]" });
+    const dialogPanel = await panel();
+    const scrim = dialogPanel.parentElement as HTMLElement;
+
+    // The scrim's inset is zero below `sm` and 24px at and above it. `p-4` is gone: `sm` is
+    // 640px, which is this fold exactly, so an intermediate rung would emit a rule for a
+    // zero-width range.
+    expect(scrim.classList.contains("p-0")).toBe(true);
+    expect(scrim.classList.contains("sm:p-6")).toBe(true);
+    expect(scrim.classList.contains("p-4")).toBe(false);
+
+    // The frame is the same fold: no rounding and no border on a panel that fills the glass.
+    expect(dialogPanel.classList.contains("sm:rounded-xl")).toBe(true);
+    expect(dialogPanel.classList.contains("sm:border")).toBe(true);
+    expect(dialogPanel.classList.contains("rounded-xl")).toBe(false);
+  });
+
+  /**
+   * **`@container/card` is opt-in, and the absent case is the assertion that matters.**
+   *
+   * `container-type` implies layout containment, which makes the panel the containing block for
+   * every `fixed` descendant under it — so a body that renders an overlay of its own would have
+   * that overlay's `fixed inset-0` scrim resolve against *this panel* and cover the dialog
+   * instead of the window. On by default, that trap would be armed under every dialog in the
+   * app at once, which is why the first assertion here is the one worth keeping: it is what goes
+   * red if a later edit decides the flag is not worth the branch.
+   *
+   * **jsdom applies no container query and computes no containment**, so neither the fold this
+   * buys nor the hazard it guards is visible to this suite. The class is the behaviour here.
+   */
+  it("names a container on the panel only when the host asks", async () => {
+    const { unmount } = open({ size: "w-[30rem]" });
+    expect((await panel()).classList.contains("@container/card")).toBe(false);
+    unmount();
+
+    open({ size: "w-[30rem]", container: true });
+    expect((await panel()).classList.contains("@container/card")).toBe(true);
+  });
+
+  /**
+   * **The scrim's rung, and the default is the assertion that protects every other host.**
+   *
+   * `"stacked"` exists for a dialog that can be opened *over another dialog* —
+   * `AllPrintingsDialog`, reachable both from a card menu over a bare wall and from the card
+   * detail modal. At `LAYER.overlay` that second case is a tie between two `fixed inset-0`
+   * scrims in the root stacking context, and equal z-indexes are resolved by document order,
+   * which is the bug `layers.ts` opens with.
+   *
+   * The rungs are read **from `LAYER`** rather than written out as `"z-45"` and `"z-46"` here:
+   * an assertion that quotes the number it is checking passes when the number moves and the
+   * mapping breaks, which is this repo's own rule about a test reading its own constant. The
+   * numbers themselves are `layers.test.ts`'s.
+   *
+   * jsdom paints nothing, so the class is the whole of what is observable — the ordering it buys
+   * is the live pass's.
+   */
+  it("takes the overlay rung by default and the stacked one only on request", async () => {
+    const { unmount } = open();
+    const scrim = (await panel()).parentElement as HTMLElement;
+    expect(scrim.classList.contains(LAYER.overlay)).toBe(true);
+    expect(scrim.classList.contains(LAYER.overlayStacked)).toBe(false);
+    unmount();
+
+    open({ layer: "stacked" });
+    const stacked = (await panel()).parentElement as HTMLElement;
+    expect(stacked.classList.contains(LAYER.overlayStacked)).toBe(true);
+    expect(stacked.classList.contains(LAYER.overlay)).toBe(false);
   });
 
   /**
@@ -265,7 +364,7 @@ describe("Dialog", () => {
     const props = {
       title: "Deck settings",
       closeLabel: "Close deck settings",
-      width: "w-[55rem]",
+      size: "w-[55rem]",
       onDismiss: vi.fn(),
       onClose: vi.fn(),
     };

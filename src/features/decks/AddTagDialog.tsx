@@ -92,7 +92,7 @@ export function AddTagDialog({
       title="Add tag"
       subtitle={cardName === null ? undefined : `Put a label on “${cardName}”.`}
       closeLabel="Close add tag"
-      width="w-[26rem]"
+      size="w-[26rem]"
       onDismiss={onDismiss}
       onClose={onClose}
     >

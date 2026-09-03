@@ -531,7 +531,7 @@ export function AllPrintingsDialog() {
       // number used to do badly:
       //
       // * `100%` is `w-full`'s meaning kept as a **ceiling**, so nothing below is a length this
-      //   file has to keep in step with the shell. The grid area is `p-4 sm:p-6` off the scrim
+      //   file has to keep in step with the shell. The grid area is `p-0 sm:p-6` off the scrim
       //   and — this is the part a `calc(100vw - 10rem)` could not track — `Dialog`'s
       //   `FLANK_COLUMNS`, 3.5rem either side, whenever `flanks` are asked for. **The chevrons
       //   therefore keep their room by construction rather than by arithmetic here agreeing with
@@ -553,7 +553,7 @@ export function AllPrintingsDialog() {
       // Tiles across at 100% zoom with no walk to flank the panel: 10 at 2560 maximised (13
       // before), 7 at 1920 (9), 5 at the 1280 default (6), and 5 at the 1024 floor, where nothing
       // moves at all — 4 there once a walk buys its flank columns, as it drew before.
-      width="w-[min(100%,max(64rem,75vw))]"
+      size="w-[min(100%,max(64rem,75vw))]"
       flanks={flanks}
       onPanelKeyDown={onPanelKeyDown}
       onDismiss={close}

@@ -1077,8 +1077,12 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   _below_ the header — a row has to scroll under one. Variant spellings
   (`has-[[aria-expanded=true]]:z-10`) are their own entries, written out: Tailwind scans
   source text for whole class names, so a class built by interpolation emits no rule at all.
-- **The ladder is `raised 10 < header 20 < popup 30 < dragTray 40 < overlay 45 < tooltip 46 <
-  gate 50 < caption 60`**, and `layers.test.ts` asserts every link of it.
+- **The ladder is `raised 10 < header 20 < popup 30 < dragTray 40 < overlay 45 <
+  overlayStacked 46 < tooltip 47 < gate 50 < caption 60`**, and `layers.test.ts` asserts every
+  link of it. **`overlayStacked` was added on 2026-09-03 and pushed `tooltip` up one**, when the
+  card detail modal grew nested overlays that open over it: two `fixed inset-0` scrims at one
+  number, neither inside the other, is the document-order bug `layers.ts` opens with, and a
+  tooltip has to clear the highest rung a *dialog* is drawn at rather than a particular number.
   **`caption` was added on 2026-08-22 to fix a bug that had shipped, and the bug is the reason
   to keep it.** `TitleBar` draws the window's frame because `tauri.conf.json` sets
   `decorations: false`, and it is a **flex item at `z-auto`** — while both of the app's
@@ -2615,7 +2619,8 @@ this rule has to be stated rather than left to a linter: neither would go red.
 `position: absolute` and transformed, which caps every `z-index` inside it *and* makes that row
 the containing block for a `position: fixed` descendant.** A panel anchored inside a row inherits
 both traps at once; a panel whose DOM node lives outside the whole tree, at `LAYER.tooltip`
-(`z-46`, above `overlay`'s 45 because a hint can be shown over the deck editor's dialogs, below
+(`z-47` since 2026-09-03, above every dialog rung because a hint can be shown over the deck
+editor's dialogs — and over a nested overlay, which is what moved it off 46 — below
 `gate`'s 50 because `SyncProgress` covers the window and a hint floating over it would describe
 something the reader cannot see), needs neither raised further nor clipped by an
 `overflow-hidden` scroller. `PrintingPreview` is what paying the alternative costs today: it

@@ -94,7 +94,7 @@ export function DeckSettingsDialog({
       open={open}
       title="Deck settings"
       closeLabel="Close deck settings"
-      width="w-[55rem]"
+      size="w-[55rem]"
       onDismiss={onDismiss}
       onClose={onClose}
     >

@@ -68,14 +68,74 @@ export interface DialogProps {
    */
   closeLabel: string;
   /**
-   * The panel's Tailwind width class, written out whole — e.g. `"w-[48rem]"`.
+   * The panel's Tailwind **size** classes, written out whole — e.g. `"w-[48rem]"`, or
+   * `"w-[77.5rem] h-[50rem]"` where the host sets a height too.
+   *
+   * **Renamed from `width` on 2026-09-03**, when the card detail modal arrived wanting a height
+   * per rung: a prop called `width` carrying an `h-…` class is a name that lies, and the next
+   * host to read it would either believe the name and grow a second prop or believe the value
+   * and leave the name wrong for everybody. Nothing about the mechanism changed — this is still
+   * a class string the host spells and this file never touches.
    *
    * Written out because **Tailwind scans source text for whole class names**: a class built by
    * interpolation matches nothing the scanner knows and emits no rule at all, which fails
-   * silently and only in a build. So the host spells its own width and this file never touches
-   * the string. `max-w-full` below is the shell's, so a width wider than the window still fits.
+   * silently and only in a build. So the host spells its own size and this file never touches
+   * the string. `max-w-full` below is the shell's, so a width wider than the window still fits,
+   * and `max-h-full` is the same promise for a height — which is the normal case rather than an
+   * edge one for a host that names a fixed height, since every one of the card modal's is taller
+   * than the app's 700px minimum window.
    */
-  width: string;
+  size: string;
+  /**
+   * Make the panel a named container-query context, `@container/card`.
+   *
+   * **Opt-in, and never on by default.** `container-type: inline-size` implies **layout
+   * containment**, and a layout-contained box is the containing block for its `fixed`
+   * descendants just as a `transform` is — so a body that renders a `fixed` overlay of its own
+   * would have that overlay resolve against *this panel* instead of against the window, covering
+   * the dialog and nothing else. Switching this on for every dialog in the app would arm that
+   * trap under every body at once. Checked rather than assumed when it landed: `TooltipProvider`
+   * and `ContextMenuProvider` both render their panels as siblings of `{children}` at provider
+   * level, above `AppShell` and therefore above every dialog, so nothing today would break. But
+   * "nothing today" is what the flag is protecting, and it is this file's own rule for `flanks`
+   * and `onPanelKeyDown` restated: a prop added for one surface may not move the rest of them.
+   *
+   * It has to be on the **panel** rather than inside `children`, which is what makes it the
+   * shell's business at all: the header is this file's and the body is the host's, both fold on
+   * the same measurement, and a container declared inside `children` cannot be queried by a
+   * `title` node rendered above it.
+   *
+   * The name is the literal `card` rather than anything derived from a prop, because a class
+   * built from a value matches nothing Tailwind's source scan knows and emits no rule at all.
+   * A second named container here would be a second literal, not a parameter.
+   */
+  container?: boolean;
+  /**
+   * Which rung the scrim takes. `"overlay"` — the default, and what every host had before this
+   * prop existed — is a dialog that opens over a **view**. `"stacked"` is for one that can also
+   * be opened over **another dialog**.
+   *
+   * **It is a claim about the highest thing the surface can be asked to cover, not about where
+   * it usually sits**, which is {@link LAYER.overlayStacked}'s own rule and the reason a host
+   * cannot answer it by looking at the common case. `AllPrintingsDialog` is the surface this
+   * exists for: it is opened from a card menu over a bare wall *and* from the card detail
+   * modal's `View all printings`. At `overlay` the second of those is a **tie** — two
+   * `fixed inset-0` scrims, neither inside the other, in the root stacking context — and equal
+   * z-indexes are resolved by document order, which is the bug `layers.ts` opens with. A rung
+   * that is right in the first case is therefore not right at all.
+   *
+   * **A union rather than a class string**, for the reason {@link DialogProps.size} is spelled
+   * by the host and this is not: a rung is not a number a call site should be able to invent, and
+   * `LAYER`'s literals have to stay where Tailwind's whole-name scan already sees them. The
+   * values echo the entries they map to — `"stacked"` is {@link LAYER.overlayStacked} — so a
+   * grep for one end of the mapping finds the other.
+   *
+   * Nothing about Escape follows from this. Which layer paints over which and which layer eats a
+   * key press are two questions, and `useDismissOnEscape` orders its own by mount depth —
+   * `layers.ts` says why borrowing one as evidence for the other is how a z-index comes to be
+   * justified by a keyboard protocol.
+   */
+  layer?: "overlay" | "stacked";
   /**
    * Two controls hung off the panel's sides, or absent — which is what every host but one is.
    *
@@ -85,7 +145,7 @@ export interface DialogProps {
    *
    * ## Why the shell reserves the room rather than the host hanging a button off the panel
    *
-   * The panel is `max-w-full` inside a scrim whose padding is the whole inset (`p-4 sm:p-6`), so
+   * The panel is `max-w-full` inside a scrim whose padding is the whole inset (`p-0 sm:p-6`), so
    * a wide panel already *is* the window — `AllPrintingsDialog`'s width bottoms out at `100%` of
    * this column, and at the app's **1024px floor** even the fixed widths above it (`w-[55rem]` is
    * 880) have nothing left over. A button positioned off that panel's edge is therefore off the
@@ -181,12 +241,18 @@ export interface DialogProps {
  *   A body is expected to be, or to contain, `min-h-0 flex-1 overflow-y-auto` with its own
  *   padding; the panel is the `flex flex-col` that makes that work.
  * * **A host that asks for nothing gets exactly the dialog it got before the last prop landed.**
- *   {@link DialogProps.flanks} and {@link DialogProps.onPanelKeyDown} are both absent for
- *   every host but one, and both are written so that absent leaves the scrim's and the panel's
- *   class strings character for character what they were. That is the price of one shell under
- *   every dialog in the builder: a prop added for one surface may not move the rest of them (how
- *   many that is, is a number the imports answer), and `Dialog.test.tsx` pins the untouched
- *   shape rather than trusting the reading.
+ *   {@link DialogProps.flanks}, {@link DialogProps.onPanelKeyDown} and
+ *   {@link DialogProps.container} are each absent for every host but one, and each is written so
+ *   that absent leaves the scrim's and the panel's class strings character for character what
+ *   they were. That is the price of one shell under every dialog in the builder: a prop added for
+ *   one surface may not move the rest of them (how many that is, is a number the imports answer),
+ *   and `Dialog.test.tsx` pins the untouched shape rather than trusting the reading.
+ *
+ *   **The full bleed below `sm` is the deliberate exception**, and it is deliberate in the other
+ *   direction: it moves *every* dialog, because a 16px inset and a rounded border on a
+ *   358px-wide panel is wrong for all of them and not only for the surface that noticed. It is
+ *   opt-out-free for the same reason the ✕'s speed is — one answer, settled here, with the
+ *   argument at the scrim's and the panel's own sites.
  * * **The presence subtree reaches the body.** `children` render inside the same
  *   `AnimatePresence` child the panel does, so a `useIsPresent()` in a host's body is false from
  *   the render that starts the exit — which is what `useDeckField`'s commit-on-close is driven
@@ -201,7 +267,9 @@ export function Dialog({
   ariaLabel,
   subtitle,
   closeLabel,
-  width,
+  size,
+  container,
+  layer,
   flanks,
   onPanelKeyDown,
   onDismiss,
@@ -235,7 +303,9 @@ export function Dialog({
           ariaLabel={ariaLabel}
           subtitle={subtitle}
           closeLabel={closeLabel}
-          width={width}
+          size={size}
+          container={container}
+          layer={layer}
           flanks={flanks}
           onPanelKeyDown={onPanelKeyDown}
           onDismiss={onDismiss}
@@ -271,7 +341,9 @@ function Panel({
   ariaLabel,
   subtitle,
   closeLabel,
-  width,
+  size,
+  container,
+  layer,
   flanks,
   onPanelKeyDown,
   onDismiss,
@@ -329,8 +401,23 @@ function Panel({
       // **jsdom cannot see any of it**: it has no layout engine, so every box is 0 and this whole
       // class of defect is invisible to the suite. The shell's test pins the class; the numbers
       // above came from a browser.
+      //
+      // **`p-0` below `sm` is the phone's full bleed, and it is every dialog's** (2026-09-03).
+      // A 16px inset and, with the panel's fold below, a rounded border on a 358px-wide panel is
+      // chrome nobody chose: Deck settings, Categories and History are as wrong at that width as
+      // the card modal that asked for this. So it lands here rather than behind an opt-in prop —
+      // one rule under every dialog is the whole reason this file exists, and four hand-rolled
+      // copies had drifted into two scrim darknesses and three `max-h` values before it was
+      // written. Desktop is untouched at every rung.
+      //
+      // **A viewport query, and this is the one place that is right rather than a container
+      // one** — `src/lib/viewports.ts` asks for the reason at the site. The scrim is
+      // `fixed inset-0`, so it *is* the window, and how much glass to leave around a panel is a
+      // question about the window and nothing else. `sm` is 640px, which is this fold exactly:
+      // an intermediate `min-[640px]:p-4` would be the same breakpoint spelled twice and would
+      // emit `p-4` for a zero-width range.
       className={cn(
-        "fixed inset-0 grid grid-rows-[minmax(0,1fr)] place-items-center bg-bg/75 p-4 sm:p-6",
+        "fixed inset-0 grid grid-rows-[minmax(0,1fr)] place-items-center bg-bg/75 p-0 sm:p-6",
         // **Only when a host asked for flanks**, and the `undefined` test is doing real work: with
         // no flanks this string has to be what it was before the prop existed, because every other
         // dialog in the builder is drawn by this line and a third column would narrow all of them
@@ -341,7 +428,13 @@ function Panel({
         // Above every anchored popup and above the editor's drag tray: a dialog opened over the
         // editor must not be painted under a menu the reader left open behind it. Below `gate`,
         // which is `SyncProgress` taking the whole window.
-        LAYER.overlay,
+        //
+        // **The host chooses between two rungs and cannot name a third**, which is
+        // {@link DialogProps.layer}: `"stacked"` is for a dialog that can be opened over another
+        // dialog, where `overlay` would tie and be resolved by document order. Absent is
+        // `LAYER.overlay` — the same string this line was before the prop existed, so every host
+        // that says nothing is unmoved.
+        layer === "stacked" ? LAYER.overlayStacked : LAYER.overlay,
       )}
       // On the way out it is a picture: nothing to press, and nothing in the accessibility tree
       // — a second `role="dialog"` beside whichever overlay the reader opened next would be a
@@ -389,7 +482,7 @@ function Panel({
         // into this shell arrived carrying `max-h-[85%]` and `max-h-[80%]` against this
         // `max-h-full`, which is three answers to one question — and the percentages are the
         // weaker two, because the scrim above already states the inset as padding
-        // (`p-4 sm:p-6`). A percentage of the *padded* box is a second, smaller inset stacked on
+        // (`p-0 sm:p-6`). A percentage of the *padded* box is a second, smaller inset stacked on
         // the first, so the gap a reader sees is the padding plus a fraction of the window and
         // grows with the window: at 800px it is 16 + ~115, at 1400px it is 24 + ~206. One rule —
         // the scrim's padding is the inset, and the panel takes what is left — is a constant gap
@@ -418,9 +511,22 @@ function Panel({
         // scale tween happens to establish a containing block too, and relying on that would tie
         // a layout to whether an animation is at rest.
         className={cn(
-          "flex max-h-full max-w-full flex-col rounded-xl border border-border bg-bg shadow-2xl",
+          "flex max-h-full max-w-full flex-col bg-bg shadow-2xl",
+          // **The frame is the scrim's fold seen from the other side** (2026-09-03): below `sm`
+          // the panel fills the glass, so there is no window left for a corner to be rounded
+          // against and no edge for a border to separate it from. A radius and a hairline drawn
+          // hard against the four sides of a phone is chrome that says the panel is a card
+          // floating over something, at the one width where it is not. The same 640px fold as
+          // the scrim's `p-0 sm:p-6`, and for the same reason spelled at that site.
+          "sm:rounded-xl sm:border sm:border-border",
+          // Opt-in, for {@link DialogProps.container}'s reason: this makes the panel the
+          // containing block for every `fixed` descendant under it, so it is switched on by the
+          // one host that folds on its own width and by nobody else. The `card` in the name is a
+          // literal — Tailwind's scan reads source text, and a name assembled from this prop
+          // would emit no rule at all.
+          container === true && "@container/card",
           flanks !== undefined && "relative col-start-2",
-          width,
+          size,
           FOCUS,
         )}
       >

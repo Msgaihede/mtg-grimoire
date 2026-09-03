@@ -114,7 +114,7 @@ export function TagsDialog({
       title="Tags"
       subtitle={TAGS_SUBTITLE}
       closeLabel="Close tags"
-      width="w-[36rem]"
+      size="w-[36rem]"
       onDismiss={onDismiss}
       onClose={onClose}
     >
