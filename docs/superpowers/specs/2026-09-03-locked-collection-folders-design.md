@@ -202,18 +202,26 @@ The issue is explicit that this must always be possible. **No Rust fence.** `set
 gains nothing: it already refuses a `deck` source and a non-`user` destination, and a locked
 folder is a `user` folder on both counts.
 
-The warning is the UI's, and it is a confirmation rather than a refusal, on the two presses that
-cross the boundary:
+The warning is the UI's, and it is a confirmation rather than a refusal. The issue says
+"possibly with a warning", so **which** presses get one is this spec's decision, and it is made on
+one line: a confirmation is worth its interruption where the destination can be hit by **accident**,
+and worth nothing where the reader has just named it.
 
-- filing a card **into** a locked folder, and
-- filing a card **out of** one.
+- **A drag** onto a locked folder card, or out of one, **confirms** and names the folder. A drop
+  target is a rectangle a pointer can land on by mistake; this is the whole gesture the mark on
+  the tile exists to slow down.
+- **An explicit menu pick does not.** The card menu's "Add to → &lt;folder&gt;" and the row's
+  "Move to folder…" both put the folder's name in the press the reader made. A confirmation there
+  asks them to agree with a sentence they just typed the answer to, which is the pattern
+  `PinnedFolders.tsx` already rejects one step further along.
 
-Both name the folder. This app's confirmations carry no `dialog` or `alertdialog` role, so a test
-or a CDP pass finds this one by its text — the same note the Collection Search tab's cross-deck
-confirmation carries.
+This app's confirmations carry no `dialog` or `alertdialog` role, so a test or a CDP pass finds
+this one by its text — the same note the Collection Search tab's cross-deck confirmation carries.
 
 **A move *within* one locked folder's sub-tree is not confirmed**, because nothing has crossed the
-boundary the reader drew.
+boundary the reader drew. That is computed from the effective lock of both ends, not from the two
+folders' own flags — dragging between two subfolders of one locked parent is a move inside the
+drawer.
 
 ## 6. The surface
 
