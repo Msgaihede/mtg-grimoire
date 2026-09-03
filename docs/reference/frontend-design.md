@@ -1085,6 +1085,21 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
 - A layer that Escape dismissed hands focus back to whatever opened it, _before_ React
   flushes the close (the element is still mounted). An outside-click deliberately does not
   — the reader is already somewhere else.
+  **One kind of layer breaks that parenthetical without breaking the rule, and it arrived on
+  2026-09-03 with the folder wall's naming tiles.** Where a layer *replaces* its own opener —
+  `New folder`'s tile becoming the field it used to raise, a folder card becoming the field its
+  `⋯` used to raise — the opener is **not** still mounted, so focusing the remembered element is
+  a call on a detached node: a silent no-op, with nothing on screen and nothing in the console to
+  say the caret went to `<body>`. The element that should take it is the one React has just
+  rendered in the opener's place, and only the host knows which that is; `useFolderFieldReturn`
+  in `components/FolderNameField.tsx` refs it and restores on the close. **What keeps that from
+  becoming an exception to the second sentence as well is a test on
+  `document.activeElement`** — it restores only where the caret is `null` or `document.body`,
+  which is exactly the state Escape, the ✕ and a committed write all leave behind, so an outside
+  click that landed on something else keeps its own. **That last clause is reasoned and not
+  observed**: the last section on this page measured the tiles' geometry over the built CSS, but
+  where the caret actually lands after each of the four exits is one of the three things it still
+  owes, and only the shipped window can answer it.
 - **Z-indexes come from `LAYER` in `src/lib/layers.ts`, and `src/lib/layers.test.ts` sweeps
   `src/` to keep it the only place they are written.** The bug it closed is worth the
   paragraph: the search view's set picker (`absolute z-20`) was painted over by the results
@@ -4680,3 +4695,147 @@ tab through `http://localhost:9333/json/close/<id>` before reloading, and take t
 **And `vite preview` needs `--host`.** Without it the PC gets 200 and the phone gets `000` through
 `adb reverse` — the server binds too narrowly for the tunnel to reach, and the failure looks like
 a broken tunnel rather than a bound socket.
+
+## The folder wall names its own folders (2026-09-03) — measured over the built CSS, not in the window
+
+The Collection and Wishlist walls were rearranged from a Claude Design mock, and **the geometry it
+promised was measured the same day**: 2026-09-03, in **headless Edge** (`msedge --headless=new`)
+over the **built stylesheet** — `dist/assets/*.css` from an `npx vite build` — on a `file://` page
+reproducing the wall's real markup. That is this repo's lock-free method, and it is what was
+available: the app lock was held by another worktree for the whole session.
+
+**So say the honest half first. This is not the shipped WebView2 window.** Nobody has driven the
+change in the real app. What headless Edge over the real CSS *can* settle is what the boxes do,
+and it settled it; what it cannot touch is anything with a reader's hand in it. A live pass still
+owes this section three things, and only three:
+
+- **Where the caret actually is** after each of the four ways out of the field — Escape, the ✕, a
+  committed write, and an outside click that lands on something else. `useFolderFieldReturn`'s
+  `document.body` test is reasoned, not observed.
+- **The blur discard against a real pointer**, rather than against a synthesised `relatedTarget`.
+- **A name long enough to need the truncation**, and how the field behaves under one.
+
+### The wall does not reflow, and that is the central claim
+
+The scroller was set at a **1032px content column** with `p-1.5` and the wall's own
+`grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-2` — five columns of ~197.6px — with one row
+holding all four states side by side: the resting `New folder` tile, that tile naming, a resting
+folder card, and a folder card renaming.
+
+| Read back | Figure |
+| --- | --- |
+| Height, all four tiles | **62px** |
+| `top`, all four | **30** |
+| Width, all four | **197.59** (the resting folder card reads 197.61 — sub-pixel rounding of its own content) |
+| The single-row scroller | **74px** — 62 plus `p-1.5` either side |
+
+A tile becoming a field, and a card becoming a field, each keep the track and the row height
+**exactly**. The 74px agrees with the rule `WishlistPage.tsx` already states about the band around
+the wall — `max-h-44` is a **ceiling and not a height**, which is what lets a wall holding one row
+be one row tall.
+
+### The corner pair lands where the `⋯` lands
+
+The folder card's `⋯` and both `✓ / ✕` pairs sit at **y = 34** — 4px down from the tile's own top,
+which is `right-1 top-1` resolving against the `<li>` and not against the form. The pair is
+**58px** wide (28 + a 2px gap + 28) against the `⋯`'s 28.
+
+**And a name stops short of the tick rather than running under it**, on both shapes and by the
+same margin: on the naming tile the input's right edge reads **366.19** against the tick's left
+edge at **371.19**, and on the renaming card **777.39** against **782.39** — **5px** clear each
+time. That is what `pr-[4.125rem]` buys: 66px = `right-1`'s 4 + 28 + 2 + 28 + 4. It is the figure
+that would go wrong first if anyone rewrote that literal as arithmetic, which Tailwind would
+answer by emitting no rule at all.
+
+### The vocabulary rule holds in computed style, not only in source
+
+`border-style` computes **`solid`** on the resting `New folder` tile *and* on the naming tile, and
+**`dashed`** on the resting folder card *and* on the renaming card. The dashed-means-provisional
+rule is therefore a fact about the built CSS rather than about the classes somebody wrote.
+
+Two utilities were confirmed to **emit**, by grepping the built CSS: `caret-accent` resolves to
+the gold `oklch(0.75 0.12 85)`, and `pr-[4.125rem]` emits `padding-right:4.125rem`. Worth
+recording only because a Tailwind utility that emits nothing fails completely silently — which is
+this page's standing reason for checking `dist/` rather than source.
+
+### What it replaced, and why the old arrangement was wrong
+
+Both pages used to answer `New folder` and `⋯ → Rename…` in a **bordered strip under the
+breadcrumb**: a box with its own edge and its own background, an input, `Create folder` and
+`Cancel` spelled out in words, and — on a create — a line reading *in Collection* (or
+*in Wishlist*) to say which level the strip was about.
+
+Every one of those pieces re-established a context the reader could already see. The level is the
+wall they are looking at; the thing being named is going to appear in it; the thing being renamed
+is a tile with its name printed on it. So the strip spent a second panel's worth of screen saying
+what the wall says by being on screen — and it said it **somewhere else**, one navigation band
+away from the tile the press came from. It could also outlive its own subject: a create panel
+opened at one level survived a walk into another, and both pages already carried a
+`flatten ? null : panel` clause precisely because the same staleness had been found once before.
+
+### The tile says it by being the tile
+
+`components/FolderNameField.tsx` is the one field, drawn **as** the tile. The name is typed on the
+line the folder's name will occupy; `⋯`'s corner takes ✓ and ✕, which is the one place on a card a
+reader has been taught to find its controls; nothing above the wall opens and nothing in the wall
+moves. Neither shape draws a heading, a hint or a word on its buttons — an input on a folder tile
+with a tick beside it is not a sentence that needs writing out — and the *in …* line is gone
+because the wall the field is drawn in **is** that sentence.
+
+**Two shapes, and the border is the whole of what tells them apart.** The app's
+dashed-means-provisional rule decides which: `create` stays **solid**, because the tile is still a
+control and holds no folder yet; `rename` stays **dashed**, because the thing being renamed is
+already a container. Both wear `border-accent` while open, and that colour is the whole of what
+says *this tile is live*. A rename also keeps its **figures line** under the field, which is why a
+rename is not simply the create tile with a different label: a reader renaming *Trade binder* is
+looking at the drawer holding 240 cards, and a box that dropped the count would make them check
+they had the right one.
+
+### The footprint is inherited, and the row above is what re-proved it
+
+`FOLDER_CARD_HEIGHT` — `min-h-[calc(3.75rem+2px)]` — **moved out of `NewFolderCard.tsx` into
+`FolderNameField.tsx`**, because the naming tile needs it too: a tile that shrank the moment it
+became a field would reflow the wall on every press, which is the one thing the whole arrangement
+promises not to do. Its derivation is the older measurement and is unchanged — a folder card's
+button computes **62px** in headless Chromium over Tailwind's compiled utilities at the wall's
+real track, and `calc(3.75rem + 2px)` rather than a flat `3.875rem` because the two 1px borders
+are the one term in that sum that does not scale. The four-state row above is that number read
+back a second time, in a second browser, with the field open — which is the reading the move
+needed. The constant travels **to** the field rather than from it because the tile renders the
+field, so the other direction would be a cycle.
+
+Two geometry decisions ride on it and the same pass settled both. The ✓ / ✕ pair is absolute
+against the **`<li>`** rather than against the form, since a `<form>` with no positioning
+establishes no containing block — and the pair lands at the same `y = 34` on a naming tile as on a
+renaming card, whose boxes are different heights, which is the thing that would have failed had it
+resolved against the form. And `h-full` is on the **create** shape alone: the `<li>` is the grid
+item and stretches to the tallest card in its row, so a naming tile sized only by its own floor
+would shrink beside a card with a long wrapped name, while a rename must *not* stretch, because
+the folder card it replaces is content-height. The row's four equal heights are that arrangement
+holding at one row's worth of content; a **wrapped** name in the row is one of the things the
+pass did not put in front of it.
+
+### What it costs
+
+**A layer whose opener does not survive it**, which is the focus-return entry earlier on this page
+and the one genuinely new mechanism here.
+
+**A level clause on both pages' `openPanel`.** `flatten ? null : panel` became
+`flatten || (panel?.kind === "newFolder" && panel.parentId !== folderId) ? null : panel`. Without
+it, walking into another folder with the field open leaves a layer with no field on screen at all
+— invisible, and still swallowing the Escape that should have walked the reader back out. Where
+the strip was merely *confusing* about which level it meant, nothing is worse.
+
+**A drag source that has to stop being one while it is a field.** The renaming card's `<li>` is a
+folder drag source, so the field's `<form>` carries `data-no-drag` on its root — `NOT_A_DRAG` is
+matched with `closest()`, so one mark covers the input, the tick and the cross. Without it,
+pressing into the name and moving five pixels files the folder somewhere instead of placing the
+caret, and the press that was meant is never delivered. The card's **drop** targets are left
+registered on purpose: a copy dropped onto a folder whose name is being edited files perfectly
+well, and tearing the targets down would make the wall answer a drag differently depending on a
+state the dragger cannot see.
+
+**And the strip does not go away.** It survives for `Move to folder…` and `Delete…`, which is the
+right residue rather than a leftover: the answer to "into which folder" is a list of the *other*
+folders, and the answer to "delete this?" is a sentence about what happens to the cards inside.
+Neither is a name typed on a line, neither has a tile of its own, and neither fits on a 62px card.

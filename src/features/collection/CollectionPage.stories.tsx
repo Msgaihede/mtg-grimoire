@@ -467,6 +467,13 @@ export const Empty: Story = {
  * The tile is solid-bordered where every folder card is dashed — a dash means *container, not a
  * thing you own*, and this is a button. `NewFolderCard` carries that argument in full.
  *
+ * **Pressed, it becomes the field rather than raising one**, which is the whole of what changed on
+ * 2026-09-03: the name is typed on the line the folder's name will occupy, inside the same `<li>`,
+ * and the strip that used to open under the breadcrumb — an input, `Create folder` and `Cancel` in
+ * words, and a line reading *in Collection* — is gone. On a cabinet holding nothing that is also
+ * the only tile there is, so this is the one story where the field is the entire wall.
+ * {@link NamingAFolder} is the same press with drawers either side of it.
+ *
  * **`flatten: false` is load-bearing rather than scenery.** The page opens flattened now, and no
  * wall is drawn at all while it is — so this story would show {@link Empty}'s screen under a
  * heading promising a cabinet, and the trap door this exists to guard would be invisible again.
@@ -484,12 +491,80 @@ export const EmptyCabinet: Story = {
 
     await userEvent.click(within(wall).getByRole("button", { name: "New folder" }));
 
-    // The naming field, and the sentence that says where the folder will land — which is the
-    // whole of what a reader who cannot see which level the strip is drawn over is owed.
+    // The field, **in the tile** — and the tile's button out of the tree rather than beside it.
+    // A field back in a strip above the wall would satisfy the first line and neither of the
+    // other two.
+    const field = await canvas.findByRole("textbox", { name: "New folder name" });
+    const tiles = within(wall).getAllByRole("listitem");
+    await expect(tiles).toHaveLength(1);
+    await expect(field.closest("li")).toBe(tiles[0]);
+    await expect(within(wall).queryByRole("button", { name: "New folder" })).toBeNull();
+  },
+};
+
+/**
+ * **The same press with drawers either side of it — the picture the whole arrangement is about.**
+ *
+ * `Binder` and `Someday` stay folder cards while the first tile is a field, because one field is
+ * open at a time across the cabinet and the page owns which. What the eye is meant to check here
+ * is that **nothing moved**: the naming tile holds the wall's track and the row's height, and its
+ * ✓ / ✕ land in the corner the folder cards beside it give their `⋯`.
+ *
+ * **Measured 2026-09-03, and not in the shipped window.** Headless Edge (`msedge
+ * --headless=new`) over the *built* stylesheet (`dist/assets/*.css` after `npx vite build`), on a
+ * `file://` page reproducing this wall's markup at the 1032px content column this file's own
+ * decorator uses — the lock-free method this repo falls back on when the app lock is held, which
+ * it was for the whole of that session. **Nobody has driven this change in the real WebView2
+ * window yet.** With all four states side by side in one row of the
+ * `grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-2` track (five columns of ~197.6px):
+ *
+ * - The resting `New folder` tile, the naming tile, a resting folder card and a renaming card all
+ *   measure **62px** tall, share the same `top` (30) and the same width (197.59; the resting
+ *   folder card reads 197.61, sub-pixel rounding of its own content). A tile becoming a field and
+ *   a card becoming a field each keep the track and the row height exactly.
+ * - The single-row scroller is **74px** — 62 plus `p-1.5` either side, which is what `max-h-44`
+ *   being a ceiling rather than a height means here.
+ * - The folder card's `⋯` and both ✓ / ✕ pairs sit at **y = 34**, 4px down from the tile's own
+ *   top: `right-1 top-1` resolving against the `<li>`. The pair is **58px** wide (28 + a 2px gap
+ *   + 28) against the `⋯`'s 28.
+ * - The name stops short of the tick rather than running under it — input right edge **366.19**
+ *   against the tick's left edge **371.19** on the naming tile, **777.39** against **782.39** on
+ *   the renaming card. The same 5px both times, which is what `pr-[4.125rem]` buys.
+ * - The vocabulary rule holds in *computed* style and not only in source: `border-style` is
+ *   `solid` on the resting tile and on the naming tile, `dashed` on the resting folder card and
+ *   on the renaming card. The create shape stays a control; the rename shape stays a container.
+ * - `caret-accent` emits and resolves to the gold `oklch(0.75 0.12 85)`, and `pr-[4.125rem]`
+ *   emits `padding-right:4.125rem` — worth confirming only because a mistyped Tailwind arbitrary
+ *   value emits no rule at all and nothing goes red for it.
+ *
+ * **None of that is what the play below asserts**, and it cannot be: `src/stories.test.tsx` runs
+ * these plays under jsdom, which lays nothing out. What is checkable there is the *structure* the
+ * geometry rests on — the field in the wall, in the tile's own `<li>`, with the drawers beside it
+ * left alone — so that is what it checks.
+ */
+export const NamingAFolder: Story = {
+  args: { view: "table", flatten: false },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const wall = await canvas.findByRole("list", { name: "Folders" });
+    // The starter seed's two top-level drawers, plus the tile that makes the next one.
+    await expect(within(wall).getAllByRole("listitem")).toHaveLength(3);
+
+    await userEvent.click(within(wall).getByRole("button", { name: "New folder" }));
+
+    const field = await canvas.findByRole("textbox", { name: "New folder name" });
+    const tiles = within(wall).getAllByRole("listitem");
+    // No thirteenth tile and no reflow: the wall is the same length and the field is the first
+    // tile rather than something added to the row.
+    await expect(tiles).toHaveLength(3);
+    await expect(field.closest("li")).toBe(tiles[0]);
+    // And the drawers are still drawers — one field at a time across the cabinet.
     await expect(
-      await canvas.findByRole("textbox", { name: "New folder name" }),
+      within(tiles[1]).getByRole("button", { name: /^Binder folder/ }),
     ).toBeInTheDocument();
-    await expect(canvas.getByText("in Collection")).toBeInTheDocument();
+    await expect(
+      within(tiles[2]).getByRole("button", { name: /^Someday folder/ }),
+    ).toBeInTheDocument();
   },
 };
 
