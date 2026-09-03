@@ -467,3 +467,34 @@ it("re-reads the figures after a write it has no callback to hang off", async ()
 
   await waitFor(() => expect(figures("Wished")).toEqual(["1", "1"]));
 });
+
+/**
+ * **The panel's size rungs are all one variant family, and a named breakpoint among them breaks
+ * every rung above it — silently, and only in a browser.**
+ *
+ * Measured in the shipped window on 2026-09-03: with `sm:` spelling the 640 rung, the panel drew
+ * **764px at a 2560px viewport**, and the 900 and 1200 rungs never applied at any width. Tailwind
+ * v4 emits arbitrary `min-[…]` variants as one group, sorted ascending, and named breakpoints as
+ * a **later** group — so at a wide viewport every rung matched and the last one in source order
+ * won, which was `sm:`. Positions in the emitted sheet: `(width >= 900px)` at 84141,
+ * `(width >= 1200px)` at 84306, and `width: 47.75rem` at **84628**, after both.
+ *
+ * **No rendering assertion here can catch it**, which is why this one is about the *source*:
+ * jsdom has no layout engine and no cascade, so a test asserting these classes are present passes
+ * either way — all four were present and one of them always won. `twMerge` is not the culprit
+ * either; it kept all four, and CSS then picked the wrong one.
+ *
+ * So the invariant is the only testable half: one family, every rung. It is stated as "no named
+ * breakpoint sizes this panel" rather than "use `min-[…]`", because the defect is the *mixture* —
+ * an all-`sm:`/`lg:` string would be wrong for other reasons but would not be this bug.
+ */
+it("sizes the panel with one variant family, never a named breakpoint", async () => {
+  renderModal("c1");
+  const panel = await screen.findByRole("dialog");
+
+  const sized = [...panel.classList].filter((c) => /(^|:)(w|h)-/.test(c));
+  // Sanity, so the filter below is looking at something: the four rungs are on this element.
+  expect(sized.length).toBeGreaterThanOrEqual(4);
+
+  expect(sized.filter((c) => /^(sm|md|lg|xl|2xl):/.test(c))).toEqual([]);
+});

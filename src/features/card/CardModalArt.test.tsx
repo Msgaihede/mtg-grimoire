@@ -139,6 +139,75 @@ describe("CardModalArt", () => {
     expect(screen.getByRole("button", { name: "Set as foil" })).toBeInTheDocument();
   });
 
+  it("says `No foil` on a printing with none, rather than dropping the control", () => {
+    // **Issue #167.** A row that simply loses a button cannot be told from an app that forgot to
+    // draw one — the reader's question is "is there a foil of this?" and a missing control is
+    // silence rather than an answer. Asserted three ways, because a control that merely *looks*
+    // dead is worse than one that is honestly out of reach:
+    //
+    // - the accessible name is the visible wording, so the fact reaches a reader hearing the
+    //   modal as well as one looking at it;
+    // - it is really `disabled`, so it takes neither a press nor a tab stop;
+    // - and it carries no `aria-pressed`, because a greyed *toggle* would be a control claiming
+    //   a state on a printing that has none to be in.
+    render(
+      <CardModalArt
+        card={card({
+          finishes: '["nonfoil"]',
+          finishPrices: { nonfoil: 620, foil: null, etched: null },
+        })}
+        {...rest}
+      />,
+    );
+
+    const stated = screen.getByRole("button", { name: "No foil" });
+    expect(stated).toBeDisabled();
+    expect(stated).not.toHaveAttribute("aria-pressed");
+    expect(screen.queryByRole("button", { name: /^view as/i })).not.toBeInTheDocument();
+  });
+
+  it("says nothing about foil where the printing *is* the foil, or where nothing is known", () => {
+    // **The `soleFinish` trap, and the reason `noFoil` is not `foilable === null` read
+    // backwards.** `foilViewFinish` answers `null` for a foil-only printing too — 12 366 of them
+    // exist — because there is nothing to switch *to*, and `soleFinish` is already drawing "this
+    // cardboard is foil" over the art. `No foil` under that sheen would be the two halves of the
+    // component contradicting each other about one piece of cardboard.
+    const { unmount } = render(
+      <CardModalArt
+        card={card({
+          finishes: '["foil"]',
+          finishPrices: { nonfoil: null, foil: 9, etched: null },
+        })}
+        {...rest}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "No foil" })).not.toBeInTheDocument();
+    unmount();
+
+    // Neither is an unparseable or absent `finishes` column: knowing nothing about a printing's
+    // finishes is a different claim from knowing it has no foil, and the price grid draws no
+    // cells for it either.
+    render(<CardModalArt card={card({ finishes: null })} {...rest} />);
+    expect(screen.queryByRole("button", { name: "No foil" })).not.toBeInTheDocument();
+  });
+
+  it("drops the statement while a meld view is up, like the toggle beside it", () => {
+    // The meld gate and the finish gate are two conditions about two different things and must
+    // stay two: this one is about **this printing's cardboard**, and while the frame holds a
+    // counterpart's photograph nothing in this row may read as a caption for it. A nonfoil-only
+    // meld half would otherwise state "No foil" over a picture of another card entirely.
+    const brisela = relation({});
+    render(
+      <CardModalArt
+        card={card({ layout: "meld", name: "Bruna, the Fading Light", finishes: '["nonfoil"]' })}
+        {...rest}
+        meld={{ relations: [brisela], melded: brisela, onMeld: vi.fn(), onOpen: vi.fn() }}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "No foil" })).not.toBeInTheDocument();
+  });
+
   it("offers a flip only for a card with two physical sides", () => {
     // `faceCount` and not `faces.length`: `split`, `adventure` and `flip` all carry two faces
     // printed on one side of one piece of cardboard, so offering to turn one over shows a card

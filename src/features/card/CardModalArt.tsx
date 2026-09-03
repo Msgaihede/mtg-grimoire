@@ -197,6 +197,24 @@ export function CardModalArt({
   const finishes = parseFinishes(card.finishes);
   const foilable = foilViewFinish(card.finishes);
 
+  /**
+   * This printing is sold **only** as a regular card — what the greyed control states, and
+   * deliberately narrower than `foilable === null`.
+   *
+   * `foilViewFinish` answers `null` for four different printings and only one of them has no
+   * foil, which is why this is its own question rather than the toggle's gate read backwards:
+   *
+   * - `["nonfoil"]` — no shiny copy exists. This one, and the whole of issue #167.
+   * - `["foil"]` / `["etched"]` — 12 366 and 892 printings, which answer `null` because there is
+   *   nothing to switch *to*. `soleFinish` is already drawing "this cardboard is foil" over the
+   *   art for them, so a `No foil` control under that sheen would be the two halves of this file
+   *   contradicting each other about one piece of cardboard.
+   * - `["foil","etched"]` — no plain copy to return to, and two foils.
+   * - `[]` — nothing is known about this printing's finishes, which is not the same claim as
+   *   knowing there is no foil. The price grid below draws no cells for it either.
+   */
+  const noFoil = finishes.length > 0 && finishes.every((f) => f === "nonfoil");
+
   // The src that failed, so a flip or a new card clears it without an effect. The host keys this
   // column on the card, so browsing away throws the whole subtree out.
   const [broken, setBroken] = useState<string | null>(null);
@@ -467,6 +485,7 @@ export function CardModalArt({
           `min-w-0` and a truncating label throughout, because these name *cards* and half a
           column is not enough for "Hanweir, the Writhing Township". */}
       {(foilable !== null ||
+        noFoil ||
         sides === 2 ||
         turn !== null ||
         meldResult !== null ||
@@ -567,6 +586,51 @@ export function CardModalArt({
                   be called "Foil View as foil". */}
               <FoilGlyph className="size-3.5 shrink-0" aria-hidden="true" />
               <span className="min-w-0 truncate">{foilLabel}</span>
+            </button>
+          )}
+          {/* **A printing with no shiny copy says so, rather than losing its control** (issue
+              #167). A row that simply drops a button cannot be told from an app that forgot to
+              draw one: the reader's question is "is there a foil of this?", and silence answers
+              it the same way a bug would. The greyed control is the answer, in the slot the
+              toggle would have occupied.
+
+              Not while a meld view is up, and **the two conditions stay two** — the toggle above
+              is hidden there because the sheen it explains would be marking another card's
+              photograph, which is a statement about the *picture*. This one is a statement about
+              *this printing's cardboard*, and it is withheld for the same reason the price cells
+              would be if they were about the frame: while the frame holds a counterpart, nothing
+              in this row may look like a caption for it. */}
+          {noFoil && meld.melded === null && (
+            <button
+              type="button"
+              // **`disabled` and not this app's usual `aria-disabled`**, which is `StepChevron`'s
+              // exception rather than a new one. That rule is for a control that greys as the
+              // reader types, where leaving the caret on something that just went dead under
+              // their hands is what makes it wrong. Nothing a reader can do here gives this
+              // printing a foil — another printing is another card, and the modal is keyed on the
+              // card — so a tab stop would buy the caret a place to stop and nothing to do in it.
+              // It is also the state `Dialog`'s `trapTab` already reads: `disabled` is filtered
+              // out of the cycle, so this costs Tab one stop rather than swallowing a wrap.
+              disabled
+              className={cn(
+                ART_CONTROL,
+                // The whole of what greyed means, on `StepChevron`'s and `QuantityStepper`'s
+                // terms: dimmed, and the hover response dropped — a control that still lights up
+                // under the pointer is one a reader goes on trying to press. No `FOCUS`: a
+                // `disabled` button never takes the caret, so the outline would be a rule nothing
+                // can ever draw.
+                "disabled:opacity-40 disabled:hover:text-dim",
+              )}
+            >
+              {/* The glyph the toggle would have drawn, greyed with the rest of the control. It
+                  names what this control is *about* and does not claim the copy is foil —
+                  `FoilOverlay`'s chip is what makes that claim, and on this printing it is
+                  drawing nothing. */}
+              <Sparkles className="size-3.5 shrink-0" aria-hidden="true" />
+              {/* The visible words **are** the accessible name — the glyph is `aria-hidden` and
+                  there is nothing else in the box — so a reader hearing this modal is told "No
+                  foil, dimmed button" and gets the fact rather than an unnamed dead control. */}
+              <span className="min-w-0 truncate">No foil</span>
             </button>
           )}
         </div>

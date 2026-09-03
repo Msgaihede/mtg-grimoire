@@ -96,10 +96,11 @@ import { useCardMenuDeps } from "./useCardMenuDeps";
  *
  * `src/lib/viewports.ts` demands a reason at the site of any viewport branch, and spec §2.3
  * already licensed one for the scrim: the scrim is `fixed inset-0`, so it **is** the window, and
- * how big a panel to ask for out of that glass is a question about the glass. `sm` is Tailwind's
- * 640, which is the same fold `Dialog`'s own `p-0 sm:p-6` uses; 900 and 1200 are spelled out
- * whole because Tailwind scans source text for whole class names and an interpolated one emits no
- * rule at all.
+ * how big a panel to ask for out of that glass is a question about the glass. All three folds are
+ * spelled out whole — Tailwind scans source text for whole class names and an interpolated one
+ * emits no rule at all — and all three are `min-[…]`, which is not a style choice; see
+ * {@link PANEL_SIZE}. 640 is the same fold `Dialog`'s own `p-0 sm:p-6` uses, spelled the other
+ * way because that file has no arbitrary variant on padding to be out-ordered by.
  *
  * ## The two clamps are what keep the inside honest
  *
@@ -112,12 +113,29 @@ import { useCardMenuDeps } from "./useCardMenuDeps";
  * ## `cn` is `twMerge`, so this string was checked
  *
  * Six classes, three widths and three heights, every one at a **different** variant (`w-full`,
- * `sm:`, `min-[900px]:`, `min-[1200px]:`). Two widths at one variant would silently collapse to
- * the last; these do not.
+ * `min-[640px]:`, `min-[900px]:`, `min-[1200px]:`). Two widths at one variant would silently
+ * collapse to the last; these do not. Note that `twMerge` was never the failure here — it kept
+ * all four widths, and the CSS cascade then picked the wrong one. See {@link PANEL_SIZE}.
+ */
+/**
+ * **Every rung is an arbitrary `min-[…]` variant, and mixing in a named one silently breaks all
+ * of them.** Measured in the shipped window on 2026-09-03: with `sm:` spelling the 640 rung, the
+ * panel drew **764px at a 2560px viewport** — the 900 and 1200 rungs never applied at any width.
+ *
+ * Tailwind v4 emits arbitrary `min-[…]` variants as one group, correctly sorted ascending, and
+ * named breakpoints (`sm:`, `lg:`) as a **later** group. So at 2560px all three media queries
+ * matched and the last one in source order won, which was `sm:`. The positions in the emitted
+ * sheet: the `(width >= 900px)` block at 84141, `(width >= 1200px)` at 84306, and
+ * `width: 47.75rem` at **84628** — after both.
+ *
+ * **No suite here can see it.** jsdom has no layout engine, so a test asserting these classes are
+ * present passes either way; all four were, and one of them always won. The rule is therefore not
+ * "prefer arbitrary variants" but **"never mix the two families on one property"** — a named
+ * variant added to this string later re-breaks it exactly as invisibly.
  */
 const PANEL_SIZE =
   "w-full h-full " +
-  "sm:w-[47.75rem] sm:h-[52.5rem] " +
+  "min-[640px]:w-[47.75rem] min-[640px]:h-[52.5rem] " +
   "min-[900px]:w-[66.25rem] min-[900px]:h-[47.5rem] " +
   "min-[1200px]:w-[77.5rem] min-[1200px]:h-[50rem]";
 
