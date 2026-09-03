@@ -5128,3 +5128,91 @@ right residue rather than a leftover: the answer to "into which folder" is a lis
 folders, and the answer to "delete this?" is a sentence about what happens to the cards inside.
 Neither is a name typed on a line, neither has a tile of its own, and neither fits on a 62px card.
 
+## One quantity control on a card face, on all three surfaces (2026-09-03, issue #348)
+
+The report was that the wishlist's stepper "does not match the style or location of the
+corresponding control in the deck builder", and that the collection had none at all. **The second
+half had been fixed the day before the issue was filed** — the walls grew steppers on 2026-09-01
+(issue #284) and shipped in **v0.19.0**, so the reporter was on v0.18.0 or earlier. The first half
+was still true on `main`, and this is what it was.
+
+### What actually differed
+
+Driven in Storybook (2026-09-03, 1400×900, dark) across `decks-editor--four-views`,
+`wishlist-page--copies-from-a-tile` and `collection-page--stepping-from-the-wall`. All four
+surfaces already drew the same `QuantityStepper`; what differed was the arrangement.
+
+| Surface | Size | Orientation | Where |
+| --- | --- | --- | --- |
+| Deck — Stacks (the default view) | `card`, 36px | vertical, `+ / n / −` | the card's right margin, `top-9` |
+| Deck — Grid | `xs`, 20px | horizontal | a centred bar directly above the chin |
+| Wishlist wall | `xs`, 20px | horizontal | right-aligned in the bottom strip, beside the pencil |
+| Collection wall | `xs`, 20px | horizontal | right-aligned in the bottom strip |
+| Wishlist / collection **tables** | `sm`, 28px | horizontal | the Copies cell |
+| Deck table | `xs`, 20px | horizontal | the Qty cell |
+
+**One thing this survey corrected in a claim made mid-task**: the walls were described as drawing
+their stepper *always*, against the deck grid's hover reveal. They do not — `CardGrid`'s action
+strip has carried `REVEAL_ON_HOVER` since it was built, so every wall stepper was already revealed
+on hover and on `:focus-within`. Measured on an unhovered tile: `opacity` **0**, and **1** on the
+focused one. The reveal was never a difference and nothing about it changed.
+
+### What was done
+
+The two walls took the deck stack's arrangement: `size="card"`, `orientation="vertical"`, over art,
+standing in the tile's right margin. `CardGrid` grew a **`column`** slot for it — its own slot
+rather than a second thing hung in `action`, because the strip is a `justify-end` *row* at the foot
+(the wishlist still has its pencil in it) and a column up the right-hand side is different geometry
+with a different collision list. Both tables moved `sm` → `xs`, which is the app's size for a
+stepper in a dense row and what the deck's own table and text views draw; both tables are 44px rows
+(`TABLE_ROW_HEIGHT`) and the stepper is 80px in a 112px cell, against the deck table's 80 in 104.
+
+### The geometry, measured
+
+Read off the live boxes rather than computed:
+
+- **The column rests at 30.6 × 98.6px** on a 170px tile whose art box is 238px (5:7) — three 36px
+  boxes and two 4px gutters, times `CONTROL_SHRINK`'s 0.85. That is **18 % of the tile's width and
+  41.4 % of its height**, starting **24px** down with a **4px** right gutter and **115.4px** of
+  clearance above the chin. On the deck's own 210×293 card the same column is 15 % and 34 %.
+- **Both percentages are constants across the whole ladder, not readings at 1×.** At 0.5× / 1× / 2×
+  the art box is 85×119 / 170×238 / 340×476 and the column 15.3×49.3 / 30.6×98.6 / 61.2×197.2 —
+  18 % and 41.4 % at every stop, because the tile, the art and the column are each linear in the
+  same zoom. At `PHONE_TILE_WIDTH`'s 141 it is 22 % of the width, which is the first figure to check
+  if the column is ever made bigger.
+- **It clears the finish chip at every stop, and that is why the offset is on `--mark-scale` rather
+  than flat.** The chip is 8 / 16 / 32px tall at those three stops and the column starts at
+  12 / 24 / 48, so the gap is **1 / 3 / 7px** — narrowest at the bottom of the ladder and incapable
+  of inverting. The deck stack's own offset is a flat `top-9`, which is right *there* because that
+  card's title bar does not scale either.
+- **It never reaches the pencil.** 45.5 / 91 / 182px of clear air between the column's foot and the
+  wishlist's `EditWishButton` at the three stops.
+
+### `pointer-events` follow the reveal, and here that is load-bearing
+
+The action strip's arrangement is `pointer-events-none` on the box with `[&>*]:pointer-events-auto`
+on what it holds — so the *control* stays pressable while invisible, which that file's own comment
+records as a known cost and an open question on a touch screen. That trade is affordable across a
+20px strip and is **not** across this column: at ~99px tall on a 238px face it would put an
+invisible stepper under the right-hand third of every card, and a finger has no hover to reveal it
+with. So the column gates the whole box instead —
+`pointer-events-none group-hover:pointer-events-auto group-focus-within:pointer-events-auto`. A
+mouse loses nothing, because the pointer that reaches the column has already revealed it by being on
+the tile; a touch screen gets back the press that opens the card, which is the only gesture it had
+there. `pointer-events` is inherited, so gating the box gates the column inside it and no `[&>*]`
+arm is needed — its **absence** is asserted in `CardGrid.test.tsx`, so a later tidy-up cannot
+restore the strip's recipe by resemblance.
+
+**jsdom does no hit testing and applies no `:hover`**, so nothing in the suite can go red for any of
+this; the classes are pinned and the numbers come from a browser.
+
+### What was left alone, and why
+
+- **The deck's Grid view still draws `tone="panel"` over art**, so its two buttons are a 1px outline
+  with the illustration showing through — the exact failure `BUTTON_OVER_ART` exists for. It is a
+  real defect and it is in the deck builder, which is the *reference* this issue asked the walls to
+  be measured against, so fixing it belongs to its own change rather than to one about the walls.
+- **Issue #348's other three asks** — add/remove cards on the collection, changing a printing, and
+  locking a folder that a deck's live list is linked to — are separate features. Stepping to zero
+  already deletes a collection entry, so "remove" exists there without a named route on the wall.
+
