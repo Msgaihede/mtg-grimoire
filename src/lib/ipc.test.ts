@@ -10,7 +10,9 @@ vi.mock("@tauri-apps/api/event", () => ({ listen }));
 // reads `tauri.conf.json` the same way, for the same reason — Rust owns the fact and
 // TypeScript only quotes it, so the quote is what can rot.
 import collectionRs from "../../src-tauri/src/collection.rs?raw";
+import collectionFoldersRs from "../../src-tauri/src/collection_folders.rs?raw";
 import deckRs from "../../src-tauri/src/deck.rs?raw";
+import deckPullRs from "../../src-tauri/src/deck_pull.rs?raw";
 import deckTheoryRs from "../../src-tauri/src/deck_theory.rs?raw";
 import resetRs from "../../src-tauri/src/reset.rs?raw";
 import searchRs from "../../src-tauri/src/search.rs?raw";
@@ -419,6 +421,55 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
+   * The two reads a **collection-folder filing rule** is answered from — one deck's played
+   * cards, and the decks that play a given set.
+   *
+   * **They are one question asked from both ends, so they are the shape a copy-paste gets
+   * wrong**: `deck_played_keys` takes a `deckId` and answers card keys, `deck_ids_playing`
+   * takes card keys and answers deck ids. Both parameters are single-word and neither is
+   * `id` — so a wrapper that reached for `id`, or that sent `cardIds` for `keys` because that
+   * is what the array holds elsewhere in this file, is a parameter Tauri cannot fill and a
+   * runtime rejection with no type error anywhere. And a swap between the two commands
+   * type-checks on neither side while both answer an array.
+   *
+   * **The crate is read for the wire names**, `deck_category_clear`'s argument above: nothing
+   * else in this build compares the two sides, and a name Rust does not register is a menu
+   * whose rows all grey for a reason nothing on screen explains.
+   *
+   * The answers are read back because the mirrors are typed rather than inert — `string[]` one
+   * way and `number[]` the other, and a mirror that had them the wrong way round would hand a
+   * consumer a `Set` of card keys to test deck ids against, which matches nothing and looks
+   * exactly like a deck that plays nothing.
+   */
+  it("asks both play reads under the names their commands declare, and the crate declares them", async () => {
+    // Not `toContain` on the source alone: a pass has to mean "the crate spells it", never
+    // "the crate was never read".
+    expect(deckRs.length).toBeGreaterThan(1_000);
+    expect(deckRs).toContain("fn deck_played_keys(");
+    expect(deckRs).toContain("fn deck_ids_playing(");
+
+    // `deckId`, not `id` — the four `deck_update`-family writes above take `id`, and this is a
+    // read in the other family. Camel-cased on the wire, because `deck.rs` renames.
+    invoke.mockResolvedValue(["o1", "o2"]);
+    expect(await ipc.deckPlayedKeys(4)).toEqual(["o1", "o2"]);
+    expect(invoke).toHaveBeenCalledWith("deck_played_keys", { deckId: 4 });
+
+    // `keys`, and the array is passed through untouched: sorting and deduping are the caller's
+    // (`useDecksPlaying` does both), so a mirror that quietly reordered here would make the
+    // hook's own guarantee unfalsifiable.
+    invoke.mockResolvedValue([7, 9]);
+    expect(await ipc.deckIdsPlaying(["o1", "o2"])).toEqual([7, 9]);
+    expect(invoke).toHaveBeenCalledWith("deck_ids_playing", { keys: ["o1", "o2"] });
+
+    // The empty set still travels as an explicit key rather than being dropped: Tauri fills
+    // parameters by name and an absent one is a refusal, not a default — and the backend's
+    // answer to no keys is `[]`, never every deck.
+    invoke.mockResolvedValue([]);
+    expect(await ipc.deckIdsPlaying([])).toEqual([]);
+    expect(invoke).toHaveBeenCalledWith("deck_ids_playing", { keys: [] });
+  });
+
+  /**
    * The four writes over a whole deck. `deck`, not `input` or `entry`: three modules now
    * name their one-object payload differently (`entry`, `wish`, `deck`) and Tauri matches
    * by name, so the one copied from another is the one that fails at runtime.
@@ -773,22 +824,22 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
-   * The six tag commands, and the two that break the module's own pattern.
+   * The seven label commands, and the two that break the module's own pattern.
    *
-   * `deck_tag_suggestions` takes **no deck id at all** — the palette is a property of the
-   * app's whole history rather than of one deck — so an argument object here is a
-   * deserialization error, `prewarm_collection`'s trap again. And `deck_card_set_tag` is a
-   * *card* write wearing a tag command's name: it addresses the slot by the full grain, like
-   * every other card write, and not by the tag.
+   * `deck_label_all` takes **no deck id at all** — the palette is a property of the app's whole
+   * history rather than of one deck — so an argument object here is a deserialization error,
+   * `prewarm_collection`'s trap again. And `deck_card_set_label` is a *card* write wearing a
+   * label command's name: it addresses the slot by the full grain, like every other card write,
+   * and not by the label.
    */
-  it("sends every tag command under the name its command declares", async () => {
+  it("sends every label command under the name its command declares", async () => {
     invoke.mockResolvedValue([]);
-    await ipc.deckTagList(4, "live");
-    expect(invoke).toHaveBeenCalledWith("deck_tag_list", { deckId: 4, variant: "live" });
+    await ipc.deckLabelList(4, "live");
+    expect(invoke).toHaveBeenCalledWith("deck_label_list", { deckId: 4, variant: "live" });
 
     invoke.mockResolvedValue({ id: 3 });
-    await ipc.deckTagCreate(4, "Cut candidate", "ember");
-    expect(invoke).toHaveBeenCalledWith("deck_tag_create", {
+    await ipc.deckLabelCreate(4, "Cut candidate", "ember");
+    expect(invoke).toHaveBeenCalledWith("deck_label_create", {
       deckId: 4,
       name: "Cut candidate",
       color: "ember",
@@ -797,8 +848,8 @@ describe("ipc argument names match the Rust command signatures", () => {
     // One command for the rename **and** the recolour, and both are required: there is no
     // patch shape here, so a caller changing one sends the other back unchanged. `deckId` is
     // where the reader was standing — the write itself is app-wide.
-    await ipc.deckTagUpdate(4, 3, "Cut", "moss");
-    expect(invoke).toHaveBeenCalledWith("deck_tag_update", {
+    await ipc.deckLabelUpdate(4, 3, "Cut", "moss");
+    expect(invoke).toHaveBeenCalledWith("deck_label_update", {
       deckId: 4,
       id: 3,
       name: "Cut",
@@ -806,46 +857,46 @@ describe("ipc argument names match the Rust command signatures", () => {
     });
 
     invoke.mockResolvedValue(undefined);
-    await ipc.deckTagDelete(4, 3);
-    expect(invoke).toHaveBeenCalledWith("deck_tag_delete", { deckId: 4, id: 3 });
+    await ipc.deckLabelDelete(4, 3);
+    expect(invoke).toHaveBeenCalledWith("deck_label_delete", { deckId: 4, id: 3 });
 
     // The other destructive one, and the distinction the app-wide list needed: this takes the
-    // label off one deck's one list and leaves the tag standing.
+    // label off one deck's one list and leaves the label standing.
     invoke.mockResolvedValue(2);
-    expect(await ipc.deckTagRemoveFromDeck(4, 3, "theory")).toBe(2);
-    expect(invoke).toHaveBeenCalledWith("deck_tag_remove_from_deck", {
+    expect(await ipc.deckLabelRemoveFromDeck(4, 3, "theory")).toBe(2);
+    expect(invoke).toHaveBeenCalledWith("deck_label_remove_from_deck", {
       deckId: 4,
-      tagId: 3,
+      labelId: 3,
       variant: "theory",
     });
 
     const every = [{ id: 3, name: "Cut candidate", color: "ember", cardCount: 9, deckCount: 2 }];
     invoke.mockResolvedValue(every);
-    const palette = await ipc.deckTagAll();
-    expect(invoke).toHaveBeenCalledWith("deck_tag_all");
+    const palette = await ipc.deckLabelAll();
+    expect(invoke).toHaveBeenCalledWith("deck_label_all");
     expect(palette).toEqual(every);
 
     invoke.mockResolvedValue(undefined);
-    await ipc.deckCardSetTag(4, "p1", 7, "live", null, 3);
-    expect(invoke).toHaveBeenCalledWith("deck_card_set_tag", {
+    await ipc.deckCardSetLabel(4, "p1", 7, "live", null, 3);
+    expect(invoke).toHaveBeenCalledWith("deck_card_set_label", {
       deckId: 4,
       cardId: "p1",
       categoryId: 7,
       variant: "live",
       finish: null,
-      tagId: 3,
+      labelId: 3,
     });
 
-    // Untagging is the same command with `null`, not a second one — `deck_cards.tag_id` is a
-    // nullable column and clearing it is a write to it.
-    await ipc.deckCardSetTag(4, "p1", 7, "live", null, null);
-    expect(invoke).toHaveBeenCalledWith("deck_card_set_tag", {
+    // Unlabelling is the same command with `null`, not a second one — `deck_cards.label_id` is
+    // a nullable column and clearing it is a write to it.
+    await ipc.deckCardSetLabel(4, "p1", 7, "live", null, null);
+    expect(invoke).toHaveBeenCalledWith("deck_card_set_label", {
       deckId: 4,
       cardId: "p1",
       categoryId: 7,
       variant: "live",
       finish: null,
-      tagId: null,
+      labelId: null,
     });
   });
 
@@ -1664,15 +1715,16 @@ describe("the Settings clears name the commands `reset.rs` registers", () => {
 });
 
 /**
- * The collection's seven folder commands.
+ * The collection's eight folder commands.
  *
  * **Every one of them is a name and a set of argument spellings that nothing type-checks.**
  * `invoke` matches by name against the Rust parameter list, and `collection_folders.rs` renames
  * to camelCase — so a wrapper reaching for a plausible `collection_folder_set` or spelling
  * `parent_id` is a runtime rejection, or worse a bound `None` that files at the root, with no
- * type error anywhere. The seven names below are the seven entries in `lib.rs`'s
- * `generate_handler!`, and the `null`s are load-bearing: `null` is how a folder is made at the
- * top level, moved back out of one, and how a card is filed back at the root of the collection.
+ * type error anywhere. The eight names below are eight of the `collection_folders::` entries in
+ * `desktop.rs`'s `generate_handler!`, and the `null`s are load-bearing: `null` is how a folder is
+ * made at the top level, moved back out of one, and how a card is filed back at the root of the
+ * collection.
  */
 describe("the collection folder wrappers name the commands `collection_folders.rs` registers", () => {
   it("asks for the folder list with no arguments at all", async () => {
@@ -1712,6 +1764,37 @@ describe("the collection folder wrappers name the commands `collection_folders.r
     invoke.mockResolvedValue(undefined);
     await ipc.collectionFolderDelete(3);
     expect(invoke).toHaveBeenCalledWith("collection_folder_delete", { id: 3 });
+  });
+
+  /**
+   * The eighth, and the newest — setting a drawer aside.
+   *
+   * **`collection_folder_set_locked`, not the `collection_folder_set` this family's own doc names
+   * as the plausible wrong guess**, and `locked` is sent on both presses rather than one: it is a
+   * flag the caller states, never a toggle the backend works out, so the write is idempotent and
+   * two surfaces pressing at once cannot leave the folder in whichever state the second press
+   * flipped it to.
+   */
+  it("spells the lock write and sends the flag both ways round", async () => {
+    invoke.mockResolvedValue({
+      id: 2,
+      parentId: null,
+      name: "Binder",
+      kind: "user",
+      deckId: null,
+      sortOrder: 0,
+      locked: true,
+    });
+
+    await ipc.collectionFolderSetLocked(2, true);
+    expect(invoke).toHaveBeenCalledWith("collection_folder_set_locked", { id: 2, locked: true });
+
+    // `false` is a value the wire carries, not an omission — an unlock has to reach the column.
+    await ipc.collectionFolderSetLocked(2, false);
+    expect(invoke).toHaveBeenLastCalledWith("collection_folder_set_locked", {
+      id: 2,
+      locked: false,
+    });
   });
 
   /**
@@ -2173,6 +2256,22 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
   });
 
   /**
+   * The request's side of the same rot, for the one field on it that changes what a *number*
+   * means rather than which rows come back.
+   *
+   * A misspelling here is silent in the worst way this file guards: `#[serde(default)]` means
+   * an unrecognised key is simply dropped, so the deck builder would go on rendering every
+   * copy the reader owns — the exact behaviour issue #349 reports — with a green build, a
+   * passing wall and no error anywhere. Pinned by name rather than field for field, because
+   * `SearchRequest`'s two sides part company on purpose elsewhere (`CardFilters` is flattened
+   * into the Rust struct and spelled out in the TypeScript one).
+   */
+  it("names the deck-relative owned scope on both sides of the search request", () => {
+    expect(rustFields(searchRs, "SearchRequest")).toContain("available_for_deck");
+    expect(tsFields(ipcSource, "SearchRequest")).toContain("availableForDeck");
+  });
+
+  /**
    * **The other three card walls, pinned the same way and for a failure that has already
    * shipped.** `CardSummary` was the only DTO carrying `image_uris` until 2026-08-31, on the
    * belief that `search_cards` was the one card-bearing command a browser could call. It is
@@ -2254,6 +2353,26 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     ["CollectionCleared", resetRs, "CollectionCleared"],
     ["DecksCleared", resetRs, "DecksCleared"],
     ["CacheCleared", resetRs, "CacheCleared"],
+    // **Added with `locked` (2026-09-03), which is the field that showed why it was missing.**
+    // A folder row is small, unpictured and had been on neither list since folders shipped — so
+    // a boolean added to the Rust struct and forgotten here would be `undefined` on every
+    // folder, and `if (folder.locked)` takes the other branch for ever: no badge, no greyed
+    // Delete, and nothing red anywhere. That is `DecksCleared::covers`' failure exactly, in a
+    // field the reader presses a menu row to set.
+    ["CollectionFolder", collectionFoldersRs, "CollectionFolder"],
+    // **The pull's four, added with the feature** (2026-09-03, issue #351). Three of them are
+    // read-only shapes and the fourth is the only DTO in this file the app *sends*, which is
+    // the one where a drift is loudest: `deck_pull_from_collection` is all-or-nothing, so a
+    // renamed `Pick` field deserialises to a serde default and the batch is refused whole
+    // rather than half-applied — a press that always fails, with nothing red anywhere.
+    //
+    // `PullRow` is on this list rather than on `mirrors` above even though it carries a
+    // picture, because that table's floor of ten fields is a property of a card *wall*'s row
+    // and this one has nine. The picture is asserted on its own instead, below.
+    ["DeckPullRow", deckPullRs, "PullRow"],
+    ["DeckPullCandidate", deckPullRs, "PullCandidate"],
+    ["DeckPullPick", deckPullRs, "Pick"],
+    ["DeckPullOutcome", deckPullRs, "PullOutcome"],
   ];
 
   it.each(plainMirrors)(
@@ -2269,4 +2388,28 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
       expect([...ts].sort()).toEqual([...rust].sort());
     },
   );
+
+  /**
+   * `PullRow`'s picture, named on its own — the assertion `mirrors` makes for the four card
+   * walls, owed here for their reason and made separately because that table's other two rules
+   * are properties of a wall's row rather than of a mirror.
+   *
+   * The pull dialog draws an art crop per row, and the failure a missing `image_uris` produces
+   * is the silent one this whole block exists for: `undefined` at the call site, a bare frame on
+   * screen, and no type error anywhere — because the field is optional on the TypeScript side,
+   * as every `imageUris` in this file is. jsdom has no network and cannot notice a picture that
+   * never arrives, so the field name agreeing on both sides is the whole of the fence.
+   *
+   * It costs the crate nothing to carry: `deck_pull` clones the value off the `DeckCardRow`s the
+   * plan is already built from, rather than running a second `front_face_selects` query.
+   */
+  it("names the front face's image URLs on both sides of the pull row", () => {
+    expect(rustFields(deckPullRs, "PullRow"), "`PullRow` (Rust) has no `image_uris`").toContain(
+      "image_uris",
+    );
+    expect(
+      tsFields(ipcSource, "DeckPullRow"),
+      "`DeckPullRow` (ipc.ts) has no `imageUris`",
+    ).toContain("imageUris");
+  });
 });

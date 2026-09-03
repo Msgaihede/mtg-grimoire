@@ -84,7 +84,11 @@ const TILE_DROP: CollectionDrop = { kind: "tile", tile: TILE };
 function folder(
   over: Partial<CollectionFolder> & { id: number; name: string },
 ): CollectionFolder {
-  return { parentId: null, kind: "user", deckId: null, sortOrder: over.id, ...over };
+  // `locked: false` is the row every existing database has: schema v33's column is
+  // `NOT NULL DEFAULT 0`, so the upgrade is invisible. The cases that lock a drawer say so
+  // through the card's `locked` **prop**, which is the *effective* answer the page computes over
+  // the whole cabinet — this flag is the folder's own and the card never reads it.
+  return { parentId: null, kind: "user", deckId: null, sortOrder: over.id, locked: false, ...over };
 }
 
 const BINDER = folder({ id: 3, name: "Trade binder" });
@@ -269,6 +273,14 @@ describe("CollectionFolderCard", () => {
     on?: FolderNode<CollectionFolder>;
     summary?: CollectionFolderTotals | null;
     currency?: "usd" | "eur";
+    /**
+     * The **effective** lock the page hands down — the folder's own flag *or* any ancestor's.
+     *
+     * Deliberately separate from `on`, so a case can put the two out of step: a card told `true`
+     * over a folder whose own flag is `false` is the inherited lock, and a card told nothing over
+     * a folder whose own flag is `true` is the mutation this file exists to catch.
+     */
+    locked?: boolean;
     /** Whether the card is currently *being* the field, and whether the write is in flight. */
     rename?: typeof RESTING;
     canDrop?: (drop: CollectionDrop) => boolean;
@@ -286,6 +298,7 @@ describe("CollectionFolderCard", () => {
     on = node(BINDER),
     summary = { cards: 12, value: 340.25 } as CollectionFolderTotals | null,
     currency = "usd" as const,
+    locked = false,
     rename = RESTING,
     canDrop = () => true,
     canDropFolder = () => true,
@@ -306,6 +319,7 @@ describe("CollectionFolderCard", () => {
             node={on}
             summary={summary}
             currency={currency}
+            locked={locked}
             onOpen={onOpen}
             rowMenu={{ onContextMenu, onKeyDown, onClick: onClickMenu }}
             rename={rename}
@@ -461,6 +475,88 @@ describe("CollectionFolderCard", () => {
    * a price expression behind it, so `0 cards` across that window is a wrong number that then
    * jumps rather than a spinner.
    */
+  /**
+   * **The drawer set aside, in the two slots this card has** — issue #365.
+   *
+   * The `⋯` owns the top-right corner, so the leading glyph is the only mark a folder card has
+   * left; it becomes a `Lock`, which is the device `PinnedFolder` already uses to say what kind of
+   * folder it is. **And a glyph is not an accessible name**, so the word joins `folderFace`'s pair
+   * rather than being drawn beside it — one function building `shown` and `spoken` together is
+   * what stops the screen text and the `aria-label` drifting, and it follows the pair's existing
+   * convention exactly: the app's `·` on screen, a comma in the sentence.
+   *
+   * The glyph is asserted by its lucide class rather than by a role, because it is `aria-hidden`
+   * — which is right, since everything it says is already in the name.
+   */
+  describe("a drawer the reader has set aside", () => {
+    const glyph = (which: "lock" | "folder") =>
+      screen.getByRole("button", { name: /^Trade binder folder/ }).querySelector(`.lucide-${which}`);
+
+    it("draws a Lock where the Folder was, and says the word in both spellings", () => {
+      mount({ locked: true });
+      expect(glyph("lock")).toBeInTheDocument();
+      expect(glyph("folder")).toBeNull();
+      expect(screen.getByText("Locked · 12 cards · $340.25")).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Trade binder folder, locked, 12 cards, $340.25" }),
+      ).toBeInTheDocument();
+    });
+
+    /** The badge keeps the glyph's size and colour: a mark that also changed weight would read as
+     *  a different card rather than as the same card set aside. */
+    it("keeps the glyph's size and colour", () => {
+      mount({ locked: true });
+      expect(glyph("lock")).toHaveClass("size-3.5", "flex-none", "text-dim");
+    });
+
+    /**
+     * **A folder locked by an ancestor draws the badge too**, which is the whole reason `locked` is
+     * a prop rather than a read of `node.folder.locked`: the lock inherits down the tree, so a
+     * badge that appeared only on the drawer the reader pressed Lock on would make the inheritance
+     * invisible exactly where it matters — standing inside that drawer, looking at what it took
+     * with it.
+     *
+     * The folder's own flag is `false` here and the card says *locked* anyway.
+     */
+    it("draws the badge for a folder locked by its parent, whose own flag is off", () => {
+      mount({ on: node(folder({ id: 9, name: "Trade binder", parentId: 3 })), locked: true });
+      expect(glyph("lock")).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Trade binder folder, locked, 12 cards, $340.25" }),
+      ).toBeInTheDocument();
+    });
+
+    /**
+     * **And the other way round, which is the assertion that catches the obvious shortcut.** A
+     * card handed a folder whose own flag is `true` and told nothing draws no badge: the effective
+     * answer is a walk over the whole cabinet and this component holds one node, so `locked` is
+     * the page's word and the row's column is never read here. Wire the badge to
+     * `node.folder.locked` and this is the case that goes red.
+     */
+    it("reads the prop and never the folder's own column", () => {
+      mount({ on: node(folder({ id: 3, name: "Trade binder", locked: true })) });
+      expect(glyph("lock")).toBeNull();
+      expect(glyph("folder")).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Trade binder folder, 12 cards, $340.25" }),
+      ).toBeInTheDocument();
+    });
+
+    /**
+     * **The word survives the window the figures have not arrived in.** The lock is known from the
+     * folder *list*, which is what the wall is gated on; the figures come from a `GROUP BY` that
+     * answers later. A badge that waited for the summary would flicker on for no reason a reader
+     * could see.
+     */
+    it("says the drawer is locked before the figures land", () => {
+      mount({ summary: null, locked: true });
+      expect(screen.getByText("Locked · —")).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Trade binder folder, locked, still counting" }),
+      ).toBeInTheDocument();
+    });
+  });
+
   it("says nothing is counted yet rather than `0 cards`, while the summary is still reading", () => {
     mount({ summary: null });
     expect(screen.getByText("—")).toBeInTheDocument();

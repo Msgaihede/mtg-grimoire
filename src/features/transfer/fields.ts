@@ -25,8 +25,8 @@ export const TRANSFER_FIELD_IDS = [
   // After the first six on purpose: those are today's deck CSV header, spelled in today's order,
   // and inserting into them would change every existing CSV's column order for a field that is
   // switched off by default there.
-  "tag",
-  "tagColor",
+  "label",
+  "labelColor",
   "condition",
   "lang",
   "tradelistQuantity",
@@ -72,28 +72,38 @@ export const TRANSFER_FIELDS: Record<TransferFieldId, TransferField> = {
   },
   category: { label: "Category", csvHeader: "Category", read: (c) => c.categoryName ?? "" },
   /**
-   * The deck label — `deck_tags` by name.
+   * The deck label — `deck_labels` by name.
    *
-   * **`Tag` against the collection's `Tags` one row down, and the near-collision is deliberate
-   * rather than survived.** They are two different facts (a `deck_tags` row against
-   * `collection_entries.tags`, free text), and no surface holds both — `SURFACE_FIELDS` gives
-   * this one to the deck and that one to the collection — so the two boxes can never be drawn
-   * together and the two headers can never be in one file. Renaming either to something further
-   * apart would cost every reader who already has a `Tags` column, for a confusion the field row
-   * cannot actually produce.
+   * **It said `Tag` until the rename, one letter off the collection's `Tags` further down, and
+   * the collision is resolved now rather than merely survived.** The two were always different
+   * facts — a `deck_labels` row against `collection_entries.tags`, free text — and no surface
+   * holds both: `SURFACE_FIELDS` gives this one to the deck and that one to the collection, so
+   * the two boxes could never be drawn together and the two headers could never be in one file.
+   * The near-collision could therefore not produce a wrong import; it only ever cost the
+   * reading, and it cost that every time. Only this one moved, because only this one was ever a
+   * label.
+   *
+   * **What it costs is a deck CSV an older build wrote, whose column says `Tag`.** That word
+   * survives as a read-only alias in `import/parse.ts` so those files still bring their labels
+   * back, and the collection's `Tags` is untouched — `normalizeHeader` keeps the two words
+   * apart, so the alias cannot shadow it. Nothing writes `Tag` any more.
    */
-  tag: { label: "Tag", csvHeader: "Tag", read: (c) => c.tagName ?? "" },
+  label: { label: "Label", csvHeader: "Label", read: (c) => c.labelName ?? "" },
   /**
    * That label's colour, and **a field only because a CSV cell holds one value.**
    *
-   * Archidekt writes the pair as `^Keeper,#4aab08^`, so its writer reads `tagColor` off the card
-   * whenever `tag` is on and offers no box of its own — a checkbox there would be a control that
-   * changes nothing. A CSV has to spend a column, so it gets one, off by default: the colour
-   * repeats down every row wearing that label, and it only decides anything on the way back in
-   * for a label the importing database has never seen. Ticking it is what makes a CSV round trip
-   * lossless into a fresh install.
+   * Archidekt writes the pair as `^Keeper,#4aab08^`, so its writer reads `labelColor` off the
+   * card whenever `label` is on and offers no box of its own — a checkbox there would be a
+   * control that changes nothing. A CSV has to spend a column, so it gets one, off by default:
+   * the colour repeats down every row wearing that label, and it only decides anything on the
+   * way back in for a label the importing database has never seen. Ticking it is what makes a
+   * CSV round trip lossless into a fresh install.
    */
-  tagColor: { label: "Tag colour", csvHeader: "Tag colour", read: (c) => c.tagColor ?? "" },
+  labelColor: {
+    label: "Label colour",
+    csvHeader: "Label colour",
+    read: (c) => c.labelColor ?? "",
+  },
   // The word rather than the letter: a column somebody opens in a spreadsheet should say `foil`.
   finish: { label: "Finish", csvHeader: "Finish", read: (c) => c.finish ?? "" },
   condition: { label: "Condition", csvHeader: "Condition", read: (c) => c.condition ?? "" },
@@ -129,6 +139,8 @@ export const TRANSFER_FIELDS: Record<TransferFieldId, TransferField> = {
   signed: { label: "Signed", csvHeader: "Signed", read: (c) => flag(c.signed) },
   proxy: { label: "Proxy", csvHeader: "Proxy", read: (c) => flag(c.proxy) },
   misprint: { label: "Misprint", csvHeader: "Misprint", read: (c) => flag(c.misprint) },
+  // The collection's own free text, and **not the deck's label** — see `label` above, which
+  // used to be one letter away from this one and is `Label` now.
   tags: { label: "Tags", csvHeader: "Tags", read: (c) => c.tags ?? "" },
   notes: { label: "Notes", csvHeader: "Notes", read: (c) => c.notes ?? "" },
   setName: { label: "Set name", csvHeader: "Set name", read: (c) => c.setName ?? "" },
@@ -155,13 +167,13 @@ export const FORMAT_FIELDS: Record<ExportFormat, FormatFields> = {
   mtgo: { optional: [], defaultOn: [] },
   arena: { optional: PRINTING, defaultOn: PRINTING },
   moxfield: { optional: [...PRINTING, "finish"], defaultOn: [...PRINTING, "finish"] },
-  // **`tag` and not `tagColor`**: the colour rides inside `^Keeper,#4aab08^`, so it is part of
-  // what `tag` writes here rather than a channel of its own. On by default like this format's
-  // other four — Archidekt's defaults are everything Archidekt can say, and the caret group is
-  // something Archidekt itself emits.
+  // **`label` and not `labelColor`**: the colour rides inside `^Keeper,#4aab08^`, so it is part
+  // of what `label` writes here rather than a channel of its own. On by default like this
+  // format's other four — Archidekt's defaults are everything Archidekt can say, and the caret
+  // group is something Archidekt itself emits.
   archidekt: {
-    optional: [...PRINTING, "finish", "category", "tag"],
-    defaultOn: [...PRINTING, "finish", "category", "tag"],
+    optional: [...PRINTING, "finish", "category", "label"],
+    defaultOn: [...PRINTING, "finish", "category", "label"],
   },
   tcgplayer: { optional: PRINTING, defaultOn: PRINTING },
   // Everything, and the surface is what narrows it. `condition` is in the defaults so a
@@ -177,7 +189,7 @@ export type TransferSurface = "deck" | "collection" | "wishlist";
 
 export const SURFACE_FIELDS: Record<TransferSurface, readonly TransferFieldId[]> = {
   deck: [
-    "quantity", "name", "setCode", "collectorNumber", "category", "finish", "tag", "tagColor",
+    "quantity", "name", "setCode", "collectorNumber", "category", "finish", "label", "labelColor",
     "lang", "setName", "rarity", "typeLine", "unitPrice",
   ],
   collection: [

@@ -363,7 +363,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 - **The printing count is the deck editor's quantity tag now, and it dropped its `×`**
   (2026-08-14). It was `×N` in the wall's own `bg-bg/85` chip; it is `components/CountTag` — the
   filled banner cut off at a slant that the deck stack has drawn copies-in-a-pile with since
-  2026-08-13 — in the neutral grey, because a printing count has no tag to take a colour from.
+  2026-08-13 — in the neutral grey, because a printing count has no label to take a colour from.
   One object for both statements: a mark the eye finds before it reads the card only works if the
   two are the same shape, and a number laid on a card had been drawn two ways in one app. The
   `×` went with the chip — a banner in a corner already says "this many", and the sign was a
@@ -372,8 +372,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   tells a count from a set number. `CardGrid`'s `topLeft` is consequently the one corner with no
   backing under it — a chip behind a banner frames a frame — while `badge` (bottom-left) keeps
   the wall's felt, so the wall still owns the _corner_ and owns nothing about the paint.
-  **`UNTAGGED_COLOR` moved with the shape**, from `features/decks/tagColors.ts` to `CountTag`'s
-  own `NEUTRAL_COUNT_PAINT`: the search wall draws this over cards that have no tags at all, so
+  **`UNTAGGED_COLOR` moved with the shape**, from `features/decks/labelColors.ts` to `CountTag`'s
+  own `NEUTRAL_COUNT_PAINT`: the search wall draws this over cards that have no labels at all, so
   the neutral fill is a fact about the mark rather than about that palette.
   **Driven in the shipped window 2026-08-14** (`npm run tauri dev`, a **debug** build at
   1280×800, against the real 116 703-card corpus): a tile's corner computed `background-color:
@@ -381,19 +381,19 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   `clip-path: polygon(0px 0px, 100% 0px, calc(100% - 10px) 100%, 0px 100%)`,
   `aria-hidden="true"`, and text `2` / `4` with **no `×`**. It measures **25 × 22** inset **4px**
   top and left of a **170 × 238** tile, overflowing neither edge, and its wrapper computed
-  `background-color: rgba(0, 0, 0, 0)` with `pointer-events: auto`. The deck editor's own tags on
-  the same build measured **25 × 22**, the same fill and the same clip, `position: relative` and
+  `background-color: rgba(0, 0, 0, 0)` with `pointer-events: auto`. The deck editor's own labels
+  on the same build measured **25 × 22**, the same fill and the same clip, `position: relative` and
   `z-index: 1` — the two surfaces are one box, which is the claim the whole change rests on and
   the only one a screenshot could not settle. **The name coverage did not move**: 25px plus the
   4px inset against the old chip's ~28px for `×2`, so the tile's printed name loses what it
-  always lost. **One arm was not driven** — the _coloured_ tag, since the deck to hand carried no
-  tagged cards; `CardStack.test.tsx` and `CountTag`'s `Painted` story are what hold that path.
+  always lost. **One arm was not driven** — the _coloured_ label, since the deck to hand carried
+  no labelled cards; `CardStack.test.tsx` and `CountTag`'s `Painted` story are what hold that path.
 - **And the printing count stopped being that tag the next day — it says the word now**
   (2026-08-15). `132 printings`, in the wall's own `bg-bg/85` chip, at `text-[10px]`. The bullet
   above is the record of the shape it replaced and every figure in it was true of that shape; what
   it got wrong is the half it argued hardest for. "One object for both statements" is right about
   the _drawing_ and wrong about the _statement_: the deck stack's bare number is printed **on a
-  tag**, so the thing beside it says which quantity is being counted, and the search wall's bare
+  label**, so the thing beside it says which quantity is being counted, and the search wall's bare
   number had nothing beside it at all. Both earlier shapes put the meaning somewhere the eye is
   not — `×132` in a tooltip, `132` in a silhouette shared with "copies in this pile" and told
   apart only by which surface you were looking at. A search tile has room for the word, so it
@@ -455,7 +455,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
     is remembered across restarts by the machinery that was already there.
 - **What is drawn _on_ a card scales with it, through two inherited custom properties**
   (2026-08-17). Until then the zoom sized the tile and nothing else: the finish chip, the crown, the
-  owned badge, the printings count, the rarity gem, the caption, the deck's copy count and tag dot,
+  owned badge, the printings count, the rarity gem, the caption, the deck's copy count and label dot,
   the quantity tag, the Game Changer banner, the rule break, the printed no-picture frame and the
   quick-add and stepper controls were all fixed Tailwind literals, so a doubled card carried
   hundred-percent chrome. `SearchPage`'s own comment had already recorded the consequence — its
@@ -466,7 +466,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
     table's stepper has. Both live in `src/lib/cardZoom.ts` and are published by `cardScaleVars()`.
   - **Three elements set them and nothing else has to be touched**: `CardGrid`'s tile, `GridView`'s
     tile and `CardStack`'s card. **A variable rather than a prop because the marks are shared.**
-    `RarityGem`, `OwnedBadge`, `FinishMark`, `TagDot`, `CountTag` and `QuantityStepper` are each
+    `RarityGem`, `OwnedBadge`, `FinishMark`, `LabelDot`, `CountTag` and `QuantityStepper` are each
     drawn on a card face _and_ in one of the three tables or the card pane, so a prop would have to
     be threaded to every one and defaulted at the ones that must hold still — "does this scale?"
     answered fifteen times by whoever adds the newest call site. Every mark reads
@@ -1139,7 +1139,7 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   buttons are the app's only anchors on the window's top edge, and `placeTooltip` already flips
   those downward, so their panels are drawn below the row and never inside it. **`overlay` is one rung for every full-window
   surface, deliberately, where two looks more careful**: the deck editor's **six** — Import,
-  Categories, Tags, History, Theory diff, Deck settings — are held in **one** piece of
+  Categories, Labels, History, Theory diff, Deck settings — are held in **one** piece of
   state (`DeckEditor`'s `Layer` union) because `useDismissOnEscape` orders exactly two rungs, and
   two `"inner"` peers open at once are not ordered at all. At most one of the six is ever
   mounted,
@@ -1153,7 +1153,7 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
 - **A surface opened from a view is a centred modal, not a docked column, unless the reader works
   out of it while editing beside it** (2026-08-14). The deck editor's two right-hand drawers
   became dialogs: `AuditDrawer` → `DeckHistoryDialog`, and `CategoriesPanel` split into
-  `CategoriesDialog` and `TagsDialog` — two sections of one drawer that each cost a press and a
+  `CategoriesDialog` and `LabelsDialog` — two sections of one drawer that each cost a press and a
   scroll are two dialogs one press apart, each sized for what it draws. All of them and
   `DeckSettingsDialog` are now built on **one shell, `src/components/Dialog.tsx`**, so
   "the style of Deck settings" is a component rather than a resemblance: `LAYER.overlay`, the
@@ -1810,7 +1810,7 @@ figure in it that came from a run of text is exposed and should be re-read befor
   gold marks in one 27px strip meaning two unrelated things. `--color-ok`, the green the format
   check draws its clean-deck `CircleCheck` in, is legible and says the one sentence a tick must
   not ("nothing is wrong here"). The neutral count paint was no distinction at all — a grey chip
-  at each end of the strip. Azure is none of those. It **is** one of the six tag colours, which is
+  at each end of the strip. Azure is none of those. It **is** one of the six label colours, which is
   the accepted cost: the quantity tag at the other end draws a *number*, so the two are still told
   apart by content and position.
 - **The slant is mirrored** — `COUNT_TAG_SLANT_MIRRORED`. `CountTag`'s cut takes its bite out of
@@ -5127,4 +5127,92 @@ state the dragger cannot see.
 right residue rather than a leftover: the answer to "into which folder" is a list of the *other*
 folders, and the answer to "delete this?" is a sentence about what happens to the cards inside.
 Neither is a name typed on a line, neither has a tile of its own, and neither fits on a 62px card.
+
+## One quantity control on a card face, on all three surfaces (2026-09-03, issue #348)
+
+The report was that the wishlist's stepper "does not match the style or location of the
+corresponding control in the deck builder", and that the collection had none at all. **The second
+half had been fixed the day before the issue was filed** — the walls grew steppers on 2026-09-01
+(issue #284) and shipped in **v0.19.0**, so the reporter was on v0.18.0 or earlier. The first half
+was still true on `main`, and this is what it was.
+
+### What actually differed
+
+Driven in Storybook (2026-09-03, 1400×900, dark) across `decks-editor--four-views`,
+`wishlist-page--copies-from-a-tile` and `collection-page--stepping-from-the-wall`. All four
+surfaces already drew the same `QuantityStepper`; what differed was the arrangement.
+
+| Surface | Size | Orientation | Where |
+| --- | --- | --- | --- |
+| Deck — Stacks (the default view) | `card`, 36px | vertical, `+ / n / −` | the card's right margin, `top-9` |
+| Deck — Grid | `xs`, 20px | horizontal | a centred bar directly above the chin |
+| Wishlist wall | `xs`, 20px | horizontal | right-aligned in the bottom strip, beside the pencil |
+| Collection wall | `xs`, 20px | horizontal | right-aligned in the bottom strip |
+| Wishlist / collection **tables** | `sm`, 28px | horizontal | the Copies cell |
+| Deck table | `xs`, 20px | horizontal | the Qty cell |
+
+**One thing this survey corrected in a claim made mid-task**: the walls were described as drawing
+their stepper *always*, against the deck grid's hover reveal. They do not — `CardGrid`'s action
+strip has carried `REVEAL_ON_HOVER` since it was built, so every wall stepper was already revealed
+on hover and on `:focus-within`. Measured on an unhovered tile: `opacity` **0**, and **1** on the
+focused one. The reveal was never a difference and nothing about it changed.
+
+### What was done
+
+The two walls took the deck stack's arrangement: `size="card"`, `orientation="vertical"`, over art,
+standing in the tile's right margin. `CardGrid` grew a **`column`** slot for it — its own slot
+rather than a second thing hung in `action`, because the strip is a `justify-end` *row* at the foot
+(the wishlist still has its pencil in it) and a column up the right-hand side is different geometry
+with a different collision list. Both tables moved `sm` → `xs`, which is the app's size for a
+stepper in a dense row and what the deck's own table and text views draw; both tables are 44px rows
+(`TABLE_ROW_HEIGHT`) and the stepper is 80px in a 112px cell, against the deck table's 80 in 104.
+
+### The geometry, measured
+
+Read off the live boxes rather than computed:
+
+- **The column rests at 30.6 × 98.6px** on a 170px tile whose art box is 238px (5:7) — three 36px
+  boxes and two 4px gutters, times `CONTROL_SHRINK`'s 0.85. That is **18 % of the tile's width and
+  41.4 % of its height**, starting **24px** down with a **4px** right gutter and **115.4px** of
+  clearance above the chin. On the deck's own 210×293 card the same column is 15 % and 34 %.
+- **Both percentages are constants across the whole ladder, not readings at 1×.** At 0.5× / 1× / 2×
+  the art box is 85×119 / 170×238 / 340×476 and the column 15.3×49.3 / 30.6×98.6 / 61.2×197.2 —
+  18 % and 41.4 % at every stop, because the tile, the art and the column are each linear in the
+  same zoom. At `PHONE_TILE_WIDTH`'s 141 it is 22 % of the width, which is the first figure to check
+  if the column is ever made bigger.
+- **It clears the finish chip at every stop, and that is why the offset is on `--mark-scale` rather
+  than flat.** The chip is 8 / 16 / 32px tall at those three stops and the column starts at
+  12 / 24 / 48, so the gap is **1 / 3 / 7px** — narrowest at the bottom of the ladder and incapable
+  of inverting. The deck stack's own offset is a flat `top-9`, which is right *there* because that
+  card's title bar does not scale either.
+- **It never reaches the pencil.** 45.5 / 91 / 182px of clear air between the column's foot and the
+  wishlist's `EditWishButton` at the three stops.
+
+### `pointer-events` follow the reveal, and here that is load-bearing
+
+The action strip's arrangement is `pointer-events-none` on the box with `[&>*]:pointer-events-auto`
+on what it holds — so the *control* stays pressable while invisible, which that file's own comment
+records as a known cost and an open question on a touch screen. That trade is affordable across a
+20px strip and is **not** across this column: at ~99px tall on a 238px face it would put an
+invisible stepper under the right-hand third of every card, and a finger has no hover to reveal it
+with. So the column gates the whole box instead —
+`pointer-events-none group-hover:pointer-events-auto group-focus-within:pointer-events-auto`. A
+mouse loses nothing, because the pointer that reaches the column has already revealed it by being on
+the tile; a touch screen gets back the press that opens the card, which is the only gesture it had
+there. `pointer-events` is inherited, so gating the box gates the column inside it and no `[&>*]`
+arm is needed — its **absence** is asserted in `CardGrid.test.tsx`, so a later tidy-up cannot
+restore the strip's recipe by resemblance.
+
+**jsdom does no hit testing and applies no `:hover`**, so nothing in the suite can go red for any of
+this; the classes are pinned and the numbers come from a browser.
+
+### What was left alone, and why
+
+- **The deck's Grid view still draws `tone="panel"` over art**, so its two buttons are a 1px outline
+  with the illustration showing through — the exact failure `BUTTON_OVER_ART` exists for. It is a
+  real defect and it is in the deck builder, which is the *reference* this issue asked the walls to
+  be measured against, so fixing it belongs to its own change rather than to one about the walls.
+- **Issue #348's other three asks** — add/remove cards on the collection, changing a printing, and
+  locking a folder that a deck's live list is linked to — are separate features. Stepping to zero
+  already deletes a collection entry, so "remove" exists there without a named route on the wall.
 

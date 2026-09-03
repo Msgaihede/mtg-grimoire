@@ -491,7 +491,7 @@ function TheorySwitch({
         </p>
         <p className="mt-0.5 text-[0.6875rem] leading-snug text-dim">
           A second list you are building towards. Turning it on makes the deck you have the plan
-          and starts the live list empty; turning it off hides the Theory/Live switch and the
+          and starts the actual list empty; turning it off hides the Theory/Actual switch and the
           difference list and keeps every row.
         </p>
       </div>

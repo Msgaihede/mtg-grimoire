@@ -2,7 +2,17 @@
  * The folders the **app** owns, drawn beside the cabinet the reader owns — one entry per deck,
  * and the single `Recently removed`. Design spec §7.1, and PR 3's Bucket F.
  *
- * **Pinned, flat and locked, and every one of those three words is a decision.**
+ * **Pinned, flat and fixed, and every one of those three words is a decision.**
+ *
+ * **The third word was *locked* until 2026-09-03, and it is not what a reader's Lock press means.**
+ * Issue #365 gave `collection_folders` a `locked` column and the folder card's `⋯` a *Lock folder*
+ * row, so the word now belongs to the reader: a folder locked under #365 is still their own
+ * drawer — still dashed, still a drop target in both directions, still renameable and still
+ * movable — and all it changes is that the app stops *offering* what is in it. That is very nearly
+ * the opposite of the paragraph below, which is about folders the reader can do nothing to at all.
+ * The column, the field and the menu keep the word because that is what the reader will say; this
+ * comment moved instead, because two meanings of one word inside one feature is how a later reader
+ * concludes the pinned band is what #365 shipped.
  *
  * *Pinned*: it is drawn at every level rather than only at the root, because it is how a reader
  * reaches `Recently removed` from three drawers down without walking back out — and because a
@@ -15,7 +25,7 @@
  * tree has nothing to add up here, and asking it to would be an answer computed from a tree these
  * rows are deliberately not in.
  *
- * *Locked*: no rename, no delete, no move, and no `⋯` at all. `collection_folders`' every write
+ * *Fixed*: no rename, no delete, no move, and no `⋯` at all. `collection_folders`' every write
  * refuses a folder that is not `kind = 'user'`, in words (`FOLDER_NOT_YOURS`), so a menu here
  * would be three rows that each end in a refusal — and a control whose only outcome is a sentence
  * explaining that it does not work teaches the reader nothing they could not have been shown by
@@ -172,7 +182,12 @@ export function PinnedFolders({
  * everywhere else in this app: *provisional*. A binder the reader made is a container they can put
  * a card into and take one out of; a deck group and the holding area are records of where copies
  * already **are**, maintained by the app, and nothing the reader does on this page moves a card
- * into one. A solid border is the visible half of "locked", and the missing `⋯` is the other half.
+ * into one. A solid border is the visible half of "fixed", and the missing `⋯` is the other half.
+ *
+ * **Which is also why nothing here ever draws issue #365's `Lock` glyph.** That badge says a
+ * drawer the reader owns has been set aside; these two are not the reader's to set aside, and
+ * {@link folderFace}'s `locked` argument is left at its default for exactly that reason — the
+ * write behind the badge refuses anything that is not `kind = 'user'` in words.
  */
 function PinnedFolder({
   folder,

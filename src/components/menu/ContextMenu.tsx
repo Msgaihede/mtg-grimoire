@@ -87,9 +87,9 @@ interface RowsContext {
    * finishes *without* a row being chosen.
    *
    * **It hands the caret back, and until 2026-08-14 it did not.** The reader who pressed `Add` in
-   * the deck editor's "Tag card → New tag…" field had acted as deliberately as the reader who
-   * picks an existing tag two rows above it, and that row goes through {@link run} — so a panel
-   * whose halves disagreed about the caret dropped it on `<body>` for one of them. This is
+   * the deck editor's "Label card → New label…" field had acted as deliberately as the reader
+   * who picks an existing label two rows above it, and that row goes through {@link run} — so a
+   * panel whose halves disagreed about the caret dropped it on `<body>` for one of them. This is
    * {@link run} minus the action, and that is the whole of the difference between them. **That
    * field is gone since 2026-08-20** — the row opens a dialog now, so no shipped panel has one —
    * and the contract is unchanged: a `lazy` body that finishes without a row is still a thing
@@ -617,8 +617,8 @@ export function ContextMenu({
     // **A text field inside a panel is a mode, and while the caret is in one every key below
     // belongs to it.** A panel that owns the arrows, Home and End is right for a list of rows and
     // wrong for a caret in a field: typing works and *editing* does not, which is how this arrived
-    // — the deck editor's "Tag card ▸ New tag…" drew the first input any panel has ever held, and
-    // on 2026-08-20 it became a row that opens a dialog, so it drew the last one too. The rule
+    // — the deck editor's "Label card ▸ New label…" drew the first input any panel has ever held,
+    // and on 2026-08-20 it became a row that opens a dialog, so it drew the last one too. The rule
     // stays because the *kind* does: `lazy` exists for a body a `MenuItem[]` cannot express, and
     // a field is the reason such a body would be written. Driven by a fixture in the suite now
     // rather than by a shipped menu, which is worth knowing before trusting a green run here.
@@ -627,8 +627,8 @@ export function ContextMenu({
     // single-line input and could defensibly have stayed the menu's. They do not, and the reason
     // is sharper than "the caret moves somewhere unhelpful": **there is no type-ahead here, so a
     // caret knocked onto a row does not swallow the next characters — it fires them.** Space and
-    // Enter on a focused `ActionRow` are its `onClick`. A reader typing "new tag" into a field the
-    // caret has silently left runs whatever row it landed on, which for this menu is a write to
+    // Enter on a focused `ActionRow` are its `onClick`. A reader typing "new label" into a field
+    // the caret has silently left runs whatever row it landed on, which for this menu is a write to
     // their deck. Yielding costs one Escape to get back to the rows; that is not a comparison.
     //
     // Escape is untouched by this and must stay so — it is `useDismissOnEscape` on `window`, not
@@ -731,7 +731,7 @@ export function ContextMenu({
     // **A field is a mode for the pointer too, and this half costs the reader their words.**
     // Hover-to-open is the panel assuming its contents are rows: a sweep onto a row that opens
     // nothing collapses whatever was open, which — once a panel holds a field — is a half-typed
-    // tag name deleted by a nudge of the mouse while the reader is looking at the keyboard. So
+    // label name deleted by a nudge of the mouse while the reader is looking at the keyboard. So
     // while the caret is in a field anywhere in this cascade, the pointer rearranges nothing.
     // The caret leaving the field is what turns hover back on, and that is a deliberate act.
     //

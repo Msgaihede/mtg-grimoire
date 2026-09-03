@@ -161,7 +161,7 @@ struct Meta {
     /// (`at`, `muted_at`) as an ordinary field and have neither column.
     timestamps: bool,
     /// Whether the table can hold a sentence for the reader at all. Six of the twelve cannot:
-    /// `decks`, `deck_categories`, `deck_tags`, `deck_audit`, `muted_tags` and `device_names`.
+    /// `decks`, `deck_categories`, `deck_labels`, `deck_audit`, `muted_tags` and `device_names`.
     needs_review: bool,
     /// The self-referencing column a cycle can form on, for the three folder tables.
     tree: Option<&'static str>,
@@ -208,7 +208,7 @@ const META: [Meta; 12] = [
         tree: None,
     },
     Meta {
-        table: "deck_tags",
+        table: "deck_labels",
         order: 3,
         grains: &[Grain {
             predicate: "name_key = ?",

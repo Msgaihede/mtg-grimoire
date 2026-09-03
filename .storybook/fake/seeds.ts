@@ -71,7 +71,7 @@ import type {
   FakeDeckCard,
   FakeDeckCategory,
   FakeDeckFolder,
-  FakeDeckTag,
+  FakeDeckLabel,
   FakeEntry,
   FakeWish,
   FakeWishlistFolder,
@@ -340,7 +340,7 @@ function deckCard(
     // reserves no copy, so seeding one would make every count in this file need a caveat.
     variant: "live",
     cardId: card.id,
-    tagId: null,
+    labelId: null,
     quantity,
     name: card.name,
     setCode: card.setCode,
@@ -502,6 +502,28 @@ function starterEntries(): FakeEntry[] {
  * that built its tree from the summary rather than from `collection_folder_list` would draw two
  * folders here and never notice, and the empty-folder sentence would be unreachable.
  *
+ * # And one of the three is locked
+ *
+ * **`Someday` is the folder this seed sets aside** (user schema v33) — the drawer with nothing in
+ * it, which is the second job that row now has and the reason it is the right one to carry the
+ * lock. **It is `Trade binder` that reads as issue #365's own example** (cards held for a trade:
+ * owned, not available, today indistinguishable from a binder), and locking *it* was tried and
+ * backed out: it holds the only Black Lotus anywhere in this seed, which `deck_theory_diff`
+ * leans on for "wanted 1, and one spare in the box" — and a locked copy is not spare (spec
+ * §4.2). A seed lock that quietly rewrote another fixture's meaning would be paying for one
+ * story with another.
+ *
+ * **So the lock costs this seed nothing at all**, and that is the property being bought:
+ * `Someday` holds no copies, so no list loses a row, no tile loses a number and no plan loses a
+ * spare, whatever a caller asks. What a story gets is the badge — **at the root, beside an
+ * unlocked sibling**, which is one screen showing both states rather than a level a reader has
+ * to navigate into. A story that wants the *exclusion* presses Lock on `Binder`, and that press
+ * is also what draws the inheritance, since `Trade binder` sits underneath it.
+ *
+ * **Nothing else here is locked**, and nothing that never asks loses anything either way: an
+ * absent `excludeLocked` is every folder there is, so a caller that says nothing sees exactly
+ * the collection it always saw.
+ *
  * `sortOrder` is what `collection_folder_create` writes — `max + 1` **among siblings** — so the
  * two at the root are 0 and 1 while the child starts at 0 again rather than continuing their run.
  *
@@ -525,9 +547,13 @@ function starterEntries(): FakeEntry[] {
  */
 function starterCollectionFolders(decks: FakeDeck[]): FakeCollectionFolder[] {
   return [
-    { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0 },
-    { id: 2, parentId: 1, name: "Trade binder", kind: "user", deckId: null, sortOrder: 0 },
-    { id: 3, parentId: null, name: "Someday", kind: "user", deckId: null, sortOrder: 1 },
+    { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0,
+      locked: false },
+    { id: 2, parentId: 1, name: "Trade binder", kind: "user", deckId: null, sortOrder: 0,
+      locked: false },
+    // The one folder in this seed the reader has set aside — see the note above.
+    { id: 3, parentId: null, name: "Someday", kind: "user", deckId: null, sortOrder: 1,
+      locked: true },
     // Ids 4 through 7, in deck order, which is what {@link DECK_1_GROUP} names.
     ...decks.map((d, i) => ({
       id: 4 + i,
@@ -536,6 +562,8 @@ function starterCollectionFolders(decks: FakeDeck[]): FakeCollectionFolder[] {
       kind: "deck",
       deckId: d.id,
       sortOrder: 0,
+      // The app's own, so the toggle refuses it: a deck's group is already fixed.
+      locked: false,
     })),
     {
       id: 4 + decks.length,
@@ -544,6 +572,8 @@ function starterCollectionFolders(decks: FakeDeck[]): FakeCollectionFolder[] {
       kind: "removed",
       deckId: null,
       sortOrder: 0,
+      // The app's own too, and a holding area is the last thing a lock would mean anything on.
+      locked: false,
     },
   ];
 }
@@ -939,7 +969,7 @@ function starterDeckCards(categories: FakeDeckCategory[]): FakeDeckCard[] {
 
 /**
  * Deck 4's two lists — **the only rows in any seed with a `theory` variant**, and the only ones
- * carrying a tag.
+ * carrying a label.
  *
  * Everything schema v8 added is reachable from this one deck, and each piece is here to be seen
  * rather than to be counted:
@@ -960,18 +990,18 @@ function starterDeckCards(categories: FakeDeckCategory[]): FakeDeckCard[] {
  *   and filed under the inactive "Cut list" it produces no issue at all — the same silence the
  *   Maybeboard gives, from a category with no special kind. Switch it on and the deck reports a
  *   banned card.
- * * **A tagged card.** One label on one row — and since schema v21 that is the *whole* of what
- *   `DeckDetail.tags` describes: a tag belongs to no deck, so what this deck has is a card
- *   wearing one. The labels no card here wears are `deck_tag_all`'s, one section down in the
- *   Tags dialog.
+ * * **A labelled card.** One label on one row — and since schema v21 that is the *whole* of what
+ *   `DeckDetail.labels` describes: a label belongs to no deck, so what this deck has is a card
+ *   wearing one. The labels no card here wears are `deck_label_all`'s, one section down in the
+ *   Labels dialog.
  */
 function testbedDeckCards(
   categories: FakeDeckCategory[],
-  tags: FakeDeckTag[],
+  labels: FakeDeckLabel[],
   startId: number,
 ): FakeDeckCard[] {
   let id = startId;
-  const cut = tags.find((t) => t.name === "Cut candidate")!;
+  const cut = labels.find((l) => l.name === "Cut candidate")!;
   const filed = (
     card: FakeCard,
     name: string,
@@ -984,7 +1014,7 @@ function testbedDeckCards(
     // --- live: what is sleeved up -------------------------------------------------------
     filed(printing("eld", "303"), "Commander", 1, "live"),
     // Two copies in a singleton format, wearing the label that says the reader knows.
-    filed(printing("c21", "263"), "Ramp", 2, "live", { tagId: cut.id }),
+    filed(printing("c21", "263"), "Ramp", 2, "live", { labelId: cut.id }),
     filed(printing("pcy", "45"), "Card advantage", 1, "live"),
     filed(printing("mp2", "8"), "Card advantage", 1, "live"),
     // Banned in Commander, and silent because the pile it is in is switched off.
@@ -1036,23 +1066,24 @@ function testbedDeckCards(
 /**
  * **Three labels, belonging to no deck** — one app-wide list, since schema v21.
  *
- * There were four, two of them a second `Cut candidate` made by a second deck, because a tag was
- * per-deck data and a name used twice was two rows. That is exactly what the app-wide grain
- * refuses now, so the duplicate is gone and what is left is the shape both tag surfaces are
+ * There were four, two of them a second `Cut candidate` made by a second deck, because a label
+ * was per-deck data and a name used twice was two rows. That is exactly what the app-wide grain
+ * refuses now, so the duplicate is gone and what is left is the shape both label surfaces are
  * about: one label a deck's list is **wearing** (`Cut candidate`, on `Rhystic Testbed`'s two
  * Ramp copies), one worn only elsewhere (`Budget swap`), and one worn by nothing at all
  * (`Combo piece`).
  *
- * That third row is the one no `deck_tag_list` can answer and is why `deck_tag_all` exists: a
+ * That third row is the one no `deck_label_list` can answer and is why `deck_label_all` exists: a
  * label the reader made before any card wore it is still a label they own. Between them the
- * three seed every state the Tags dialog's two sections and the "More tags…" dialog draw.
+ * three seed every state the Labels dialog's two sections and the "More labels…" dialog draw.
  */
-function starterTags(): FakeDeckTag[] {
+function starterLabels(): FakeDeckLabel[] {
   return [
     { id: 1, name: "Cut candidate", color: "ember" },
     { id: 2, name: "Budget swap", color: "moss" },
-    // Worn by no row, which is the state the Tags dialog's second section and the "More tags…"
-    // dialog both exist to draw: a label the reader made that no card in the open list wears.
+    // Worn by no row, which is the state the Labels dialog's second section and the
+    // "More labels…" dialog both exist to draw: a label the reader made that no card in the open
+    // list wears.
     // There is no second `Cut candidate` any more — one name is one row, app-wide.
     { id: 3, name: "Combo piece", color: "gold" },
   ];
@@ -1148,7 +1179,15 @@ function starterAudit(): FakeDeckAudit[] {
     card(4, "quantity", daysAgo(1, 22, 24), "lea", "288", '{"category":"Ramp","from":3,"to":7}', 4),
     card(4, "remove", daysAgo(1, 22, 31), "isd", "51", '{"category":"Ramp","quantity":1}', -1),
 
-    card(4, "tag", daysAgo(0, 11, 4), "c21", "263", '{"tag":"Cut candidate","previous":null}', 0),
+    card(
+      4,
+      "label",
+      daysAgo(0, 11, 4),
+      "c21",
+      "263",
+      '{"label":"Cut candidate","previous":null}',
+      0,
+    ),
     row(
       4,
       "category",
@@ -1278,7 +1317,7 @@ function starterCombos(cards: readonly FakeCard[]) {
 function starterSeed(): FakeDb {
   const decks = starterDecks();
   const deckCategories = starterCategories();
-  const deckTags = starterTags();
+  const deckLabels = starterLabels();
   const migrated = starterDeckCards(deckCategories);
   return makeDb({
     ...starterFeeds(CARDS),
@@ -1291,10 +1330,13 @@ function starterSeed(): FakeDb {
     decks,
     deckFolders: starterFolders(),
     deckCategories,
-    deckTags,
+    deckLabels,
     // One id sequence over both halves, `INTEGER PRIMARY KEY`'s own behaviour: deck 4's rows
     // continue where decks 1–3's stopped rather than starting again and colliding.
-    deckCards: [...migrated, ...testbedDeckCards(deckCategories, deckTags, migrated.length + 1)],
+    deckCards: [
+      ...migrated,
+      ...testbedDeckCards(deckCategories, deckLabels, migrated.length + 1),
+    ],
     deckAudit: starterAudit(),
   });
 }
@@ -1723,6 +1765,7 @@ function bracketMismatchSeed(): FakeDb {
     kind: "deck",
     deckId: BRACKET_DECK,
     sortOrder: 0,
+    locked: false,
   });
   const main = categoryNamed(db.deckCategories, BRACKET_DECK, "Main deck");
   const commander = categoryOf(db.deckCategories, BRACKET_DECK, "commander");

@@ -303,7 +303,7 @@ const detail = (cards: DeckCard[]): DeckDetail => ({
   deck: BURN,
   cards,
   categories: [MAIN],
-  tags: [],
+  labels: [],
 });
 
 /**

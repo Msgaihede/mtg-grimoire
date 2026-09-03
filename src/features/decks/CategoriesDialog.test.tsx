@@ -7,8 +7,8 @@ import type {
   DeckCategory,
   DeckDetail,
   DeckRow,
-  DeckTag,
-  GlobalTag,
+  DeckLabel,
+  GlobalLabel,
 } from "@/lib/ipc";
 import { dndManager } from "@/lib/dndManager";
 import { boxed, startPointerDrag } from "@/test-drag";
@@ -25,18 +25,18 @@ const deckMoveCard = vi.hoisted(() => vi.fn());
 /** What the auto-filer files by: the one read behind "File cards by what they do". */
 const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
 /**
- * The tag reads, which this dialog draws nothing from.
+ * The label reads, which this dialog draws nothing from.
  *
  * `useDeckMeta` is one hook over a deck's piles *and* its labels, so mounting it here fires the
- * tag queries too — the cost of the two dialogs sharing one hook, and cheap, because only one of
+ * label queries too — the cost of the two dialogs sharing one hook, and cheap, because only one of
  * them is ever open. They are mocked so nothing rejects unhandled, and asserted nowhere in this
- * file: what they answer is `TagsDialog.test.tsx`'s subject.
+ * file: what they answer is `LabelsDialog.test.tsx`'s subject.
  */
-const deckTagList = vi.hoisted(() => vi.fn());
-const deckTagAll = vi.hoisted(() => vi.fn());
-const deckTagCreate = vi.hoisted(() => vi.fn());
-const deckTagUpdate = vi.hoisted(() => vi.fn());
-const deckTagDelete = vi.hoisted(() => vi.fn());
+const deckLabelList = vi.hoisted(() => vi.fn());
+const deckLabelAll = vi.hoisted(() => vi.fn());
+const deckLabelCreate = vi.hoisted(() => vi.fn());
+const deckLabelUpdate = vi.hoisted(() => vi.fn());
+const deckLabelDelete = vi.hoisted(() => vi.fn());
 
 // The fake sits under `ipc.ts` everywhere else in this repository; here it replaces the object,
 // because these commands are what the dialog *is* — every assertion below is about the argument
@@ -51,11 +51,11 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckCategorySetActive,
     deckCategoryReorder,
     deckCategoryDelete,
-    deckTagList,
-    deckTagCreate,
-    deckTagUpdate,
-    deckTagDelete,
-    deckTagAll,
+    deckLabelList,
+    deckLabelCreate,
+    deckLabelUpdate,
+    deckLabelDelete,
+    deckLabelAll,
     deckGet,
     deckMoveCard,
     oracleTagsForPrintings,
@@ -63,7 +63,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import { CategoriesDialog } from "./CategoriesDialog";
-import { TagsDialog } from "./TagsDialog";
+import { LabelsDialog } from "./LabelsDialog";
 
 /* --------------------------------------------------------------------- fixtures ------- */
 
@@ -102,11 +102,11 @@ const CATEGORIES: DeckCategory[] = [
   category({ id: 5, name: "Maybeboard", kind: "maybe", isActive: false, sortOrder: 4 }),
 ];
 
-/** Whatever the shared hook's tag reads answer — see the mock's doc. */
-const TAGS: DeckTag[] = [
+/** Whatever the shared hook's label reads answer — see the mock's doc. */
+const LABELS: DeckLabel[] = [
   { id: 10, name: "Cut candidate", color: "ember", cardCount: 3 },
 ];
-const SUGGESTIONS: GlobalTag[] = [
+const SUGGESTIONS: GlobalLabel[] = [
   { id: 11, name: "Budget swap", color: "moss", cardCount: 4, deckCount: 2 },
 ];
 
@@ -136,7 +136,7 @@ const DECK_ROW: DeckRow = {
   bracket: 0,
 };
 
-const DECK: DeckDetail = { deck: DECK_ROW, cards: [], categories: CATEGORIES, tags: TAGS };
+const DECK: DeckDetail = { deck: DECK_ROW, cards: [], categories: CATEGORIES, labels: LABELS };
 
 /**
  * A row in the deck's loose pile — the only shape the auto-filer acts on, and the only reason
@@ -156,9 +156,9 @@ function deckCard(over: Partial<DeckCard> & { cardId: string }): DeckCard {
     categoryActive: true,
     finish: null,
     variant: "live",
-    tagId: null,
-    tagName: null,
-    tagColor: null,
+    labelId: null,
+    labelName: null,
+    labelColor: null,
     quantity: 1,
     name: "Swords to Plowshares",
     setCode: "lea",
@@ -230,17 +230,17 @@ function boxRows(): void {
 beforeEach(() => {
   vi.clearAllMocks();
   deckCategoryList.mockResolvedValue(CATEGORIES);
-  deckTagList.mockResolvedValue(TAGS);
-  deckTagAll.mockResolvedValue(SUGGESTIONS);
+  deckLabelList.mockResolvedValue(LABELS);
+  deckLabelAll.mockResolvedValue(SUGGESTIONS);
   deckGet.mockResolvedValue(DECK);
   deckCategoryCreate.mockResolvedValue(category({ id: 6, name: "Draw" }));
   deckCategoryRename.mockResolvedValue(category({ id: 2, name: "Acceleration" }));
   deckCategorySetActive.mockResolvedValue(category({ id: 5, name: "Maybeboard" }));
   deckCategoryReorder.mockResolvedValue(CATEGORIES);
   deckCategoryDelete.mockResolvedValue(undefined);
-  deckTagCreate.mockResolvedValue(TAGS[0]);
-  deckTagUpdate.mockResolvedValue(TAGS[0]);
-  deckTagDelete.mockResolvedValue(undefined);
+  deckLabelCreate.mockResolvedValue(LABELS[0]);
+  deckLabelUpdate.mockResolvedValue(LABELS[0]);
+  deckLabelDelete.mockResolvedValue(undefined);
   // Nothing tagged: the shape of a database that has never ingested the taxonomy, which is a
   // supported way to run this app and not a failure. The tests about tags say otherwise.
   oracleTagsForPrintings.mockResolvedValue([]);
@@ -326,27 +326,27 @@ describe("CategoriesDialog", () => {
  * **It takes two switches to catch, and that is the hook's stack's doing.** `useDismissOnEscape`
  * orders capture-phase registrations by mount depth now — only the token on top acts — so one
  * switch does not discriminate: with the rung on the panel's **mount**, the fading Categories
- * panel would still hold the token pushed at its original mount, the opening Tags panel would
- * push *above* it, and Tags would answer exactly as it does here. Correct code and the defect
+ * panel would still hold the token pushed at its original mount, the opening Labels panel would
+ * push *above* it, and Labels would answer exactly as it does here. Correct code and the defect
  * agree on that press.
  *
  * They part on the way **back**. Registered on the flag, the fade takes the layer off the stack,
- * so reopening Categories over a fading Tags pushes Categories on top and the press is
+ * so reopening Categories over a fading Labels pushes Categories on top and the press is
  * Categories'. Registered on the mount, neither panel ever left: the stack is still
- * `[categories, tags]` in original mount order, Tags is still on top, and the press goes to the
+ * `[categories, labels]` in original mount order, Labels is still on top, and the press goes to the
  * dialog the reader has just **left** while the one they have just reopened is starved — a
  * capture rung `preventDefault()`s, so nothing behind it hears the press either. That is the
  * regression in its own words, and the second half of this test is what turns it red. Verified
  * by mutation, 2026-08-15: with `useDismissOnEscape` moved out of `Dialog` and into its
  * `Panel`, the first press stayed green and the second failed on `categoriesDismiss` — called 0
- * times, with `tagsDismiss` called twice.
+ * times, with `labelsDismiss` called twice.
  *
  * The reader changing their mind one press later is also the realest version of this: Categories
- * and Tags are one press apart in the same toolbar.
+ * and Labels are one press apart in the same toolbar.
  *
  * **The rung it proves is `Dialog`'s**, and this is deliberately not a second copy of that
  * file's own tests: the case needs *two peers*, and these two are the realest pair the editor
- * has — Categories and Tags are one press apart in the same toolbar, and they split out of one
+ * has — Categories and Labels are one press apart in the same toolbar, and they split out of one
  * drawer where the reader used to scroll between them. It drives exactly that: one commit that
  * closes A and opens B, then a press while A is still painted. It asserts the exit window is
  * real first, because without that this test is green over a dialog that had already vanished
@@ -355,11 +355,11 @@ describe("CategoriesDialog", () => {
 describe("Escape during a dialog's exit", () => {
   it("gives the press to the open layer, never to the one still fading", async () => {
     const categoriesDismiss = vi.fn();
-    const tagsDismiss = vi.fn();
+    const labelsDismiss = vi.fn();
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
     /** The editor's own arrangement: both dialogs mounted always, one union deciding which. */
-    const overlays = (layer: "categories" | "tags") => (
+    const overlays = (layer: "categories" | "labels") => (
       <QueryClientProvider client={client}>
         <CategoriesDialog
           deckId={1}
@@ -368,11 +368,11 @@ describe("Escape during a dialog's exit", () => {
           onDismiss={categoriesDismiss}
           onClose={vi.fn()}
         />
-        <TagsDialog
+        <LabelsDialog
           deckId={1}
           variant="live"
-          open={layer === "tags"}
-          onDismiss={tagsDismiss}
+          open={layer === "labels"}
+          onDismiss={labelsDismiss}
           onClose={vi.fn()}
         />
       </QueryClientProvider>
@@ -392,18 +392,18 @@ describe("Escape during a dialog's exit", () => {
     const { rerender } = render(overlays("categories"));
     await screen.findByText("Ramp");
 
-    // The switch, in one commit, as pressing Tags with Categories open makes it.
-    act(() => rerender(overlays("tags")));
+    // The switch, in one commit, as pressing Labels with Categories open makes it.
+    act(() => rerender(overlays("labels")));
 
     // The window this test exists for. `getByText` and not `getByRole`, deliberately: the
     // exiting layer is `aria-hidden`, so a role query cannot see it — which is itself the other
     // half of the contract, asserted two lines down.
     expect(screen.getByText("Categories")).toBeInTheDocument();
     expect(screen.getAllByRole("dialog")).toHaveLength(1);
-    expect(screen.getByRole("dialog", { name: "Tags" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Labels" })).toBeInTheDocument();
 
     const first = escape();
-    expect(tagsDismiss).toHaveBeenCalledTimes(1);
+    expect(labelsDismiss).toHaveBeenCalledTimes(1);
     expect(categoriesDismiss).not.toHaveBeenCalled();
     expect(first.defaultPrevented).toBe(true);
 
@@ -412,7 +412,7 @@ describe("Escape during a dialog's exit", () => {
     // and anything that yielded would let it finish and take the case with it.
     act(() => rerender(overlays("categories")));
 
-    expect(screen.getByText("Tags")).toBeInTheDocument();
+    expect(screen.getByText("Labels")).toBeInTheDocument();
     expect(screen.getAllByRole("dialog")).toHaveLength(1);
     expect(screen.getByRole("dialog", { name: "Categories" })).toBeInTheDocument();
 
@@ -420,7 +420,7 @@ describe("Escape during a dialog's exit", () => {
     // The reopened dialog answers, and the one fading out of view has stopped listening — it
     // took no second press and did not consume this one on the way past.
     expect(categoriesDismiss).toHaveBeenCalledTimes(1);
-    expect(tagsDismiss).toHaveBeenCalledTimes(1);
+    expect(labelsDismiss).toHaveBeenCalledTimes(1);
     expect(second.defaultPrevented).toBe(true);
   });
 });
@@ -534,8 +534,8 @@ describe("categories", () => {
    * by hand repairs the very thing it was meant to check. `user.keyboard` types wherever the
    * caret already is, which is the only honest way to ask this question.
    *
-   * `RenameField` is `metaRows.tsx`'s now and `TagsDialog.test.tsx` asks it the same question on
-   * a tag row, which is not a duplicate: shared today is not a guarantee about tomorrow, and a
+   * `RenameField` is `metaRows.tsx`'s now and `LabelsDialog.test.tsx` asks it the same question on
+   * a label row, which is not a duplicate: shared today is not a guarantee about tomorrow, and a
    * caret is a thing every host of that field owes its reader.
    */
   it("puts the caret in the rename field, so the first keystroke lands in it", async () => {
@@ -704,7 +704,7 @@ describe("categories", () => {
     expect(within(dialog).getByText(/move to “Commander”\. Nothing is lost/)).toBeInTheDocument();
     // One list in this deck, so no sentence about a second one: the words appear only where
     // there are copies the reader cannot see.
-    expect(within(dialog).queryByText(/both the live and theory lists/)).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(/both the theory and actual lists/)).not.toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Move 12 cards and delete" }));
 
     expect(deckCategoryDelete).toHaveBeenCalledWith(2, 1);
@@ -749,12 +749,12 @@ describe("categories", () => {
     // Anchored on the sentence's own opening: `move to “Commander”` alone also matches the
     // picker's own row saying the same thing, which is a different control.
     expect(within(dialog).getByText(/^The 7 cards in it move to “Commander”/)).toHaveTextContent(
-      "both the live and theory lists",
+      "both the theory and actual lists",
     );
 
     await pickOption(user, "Its 7 cards", "go with it");
     expect(within(dialog).getByText(/^The 7 cards in it go with it/)).toHaveTextContent(
-      "both the live and theory lists, not just the one on screen",
+      "both the theory and actual lists, not just the one on screen",
     );
     await user.click(within(dialog).getByRole("button", { name: "Delete “Ramp”" }));
 

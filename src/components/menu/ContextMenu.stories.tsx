@@ -20,8 +20,8 @@ import type {
   DeckCard,
   DeckCategory,
   DeckFolder,
+  DeckLabel,
   DeckRow,
-  DeckTag,
   WishlistFolder,
 } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
@@ -246,12 +246,12 @@ const CATEGORIES: DeckCategory[] = [
   RAMP_PILE,
 ];
 
-const TAGS: DeckTag[] = [
+const LABELS: DeckLabel[] = [
   { id: 1, name: "Wincon", color: "gold", cardCount: 3 },
   { id: 2, name: "Cut candidate", color: "ember", cardCount: 1 },
 ];
 
-/** A Bolt filed in the deck's main pile, wearing no label — so the tag radios open on **None**
+/** A Bolt filed in the deck's main pile, wearing no label — so the label radios open on **None**
  *  checked, which is the state every card starts in. */
 const DECK_CARD: DeckCard = deckCard(BOLT, { categoryKind: "main" });
 
@@ -283,10 +283,10 @@ function deckCardDeps(act: Act): DeckCardMenuDeps {
     cards: [DECK_CARD],
     spec: SPECS.commander,
     moveTo: (card, categoryId) => act(`move:${card.cardId}:${categoryId}`),
-    setTag: (card, tagId) => act(`tag:${card.cardId}:${tagId ?? "none"}`),
+    setLabel: (card, labelId) => act(`label:${card.cardId}:${labelId ?? "none"}`),
     setFinish: (card, to) => act(`finish:${card.cardId}:${to ?? "regular"}`),
-    tags: TAGS,
-    addTag: (card) => act(`add-tag:${card.cardId}`),
+    labels: LABELS,
+    addLabel: (card) => act(`add-label:${card.cardId}`),
     // The stepper's zero by another road — there is no `remove` mutation in this app, because
     // zero is what removes a deck row. No confirmation, unlike a **pile's** `Clear stack…`: one
     // card is one add to put back.
@@ -758,33 +758,33 @@ export const MoveToPile: Story = {
 };
 
 /**
- * **Tag card**, expanded — the deck's labels as a radio group, and the row that makes a new one.
+ * **Label card**, expanded — the deck's labels as a radio group, and the row that makes a new one.
  *
- * **Radios, and None first, because a deck card wears at most one tag**: `setTag` takes
- * `tagId: number | null` and `deck_cards.tag_id` is a single column, so a checkbox list would be a
- * control promising something the model cannot store. The rows are `menuitemradio`, which is what
- * makes the exclusivity announced rather than merely drawn.
+ * **Radios, and None first, because a deck card wears at most one label**: `setLabel` takes
+ * `labelId: number | null` and `deck_cards.label_id` is a single column, so a checkbox list would
+ * be a control promising something the model cannot store. The rows are `menuitemradio`, which is
+ * what makes the exclusivity announced rather than merely drawn.
  *
- * It is a plain `submenu`: the rows are free — the editor already holds `deck.tags` from
+ * It is a plain `submenu`: the rows are free — the editor already holds `deck.labels` from
  * `deck_get` — and since 2026-08-20 there is nothing in the panel that is not a row. It was
- * `lazy` for a **field**, "New tag…" having been a text box a `MenuItem[]` cannot carry; that row
- * opens a dialog now, so the menu mounts nothing and the last row is a row.
+ * `lazy` for a **field**, "New label…" having been a text box a `MenuItem[]` cannot carry; that
+ * row opens a dialog now, so the menu mounts nothing and the last row is a row.
  *
- * **It says "More tags…" since schema v21, because there are more.** A tag is one app-wide row,
- * so the radios above the line are the tags *this deck's list is wearing* — the fast path, most
- * used first — and every other label the reader owns is behind that row, along with making a new
- * one.
+ * **It says "More labels…" since schema v21, because there are more.** A label is one app-wide
+ * row, so the radios above the line are the labels *this deck's list is wearing* — the fast path,
+ * most used first — and every other label the reader owns is behind that row, along with making a
+ * new one.
  */
-export const TagRadios: Story = {
+export const LabelRadios: Story = {
   args: { build: (act) => buildDeckCardMenu(DECK_CARD, deckCardDeps(act)) },
   play: async ({ args, canvasElement }) => {
     const canvas = within(canvasElement);
-    const row = await canvas.findByRole("menuitem", { name: "Tag card" });
+    const row = await canvas.findByRole("menuitem", { name: "Label card" });
     await waitFor(async () => await expect(row).toBeVisible(), { timeout: FRAME_WAIT });
 
     await userEvent.click(row);
     const none = await canvas.findByRole("menuitemradio", { name: "None" });
-    // Untagged is a checked state rather than the absence of one, which is what "at most one"
+    // Unlabelled is a checked state rather than the absence of one, which is what "at most one"
     // means when the answer is allowed to be nothing.
     await expect(none).toHaveAttribute("aria-checked", "true");
 
@@ -793,10 +793,10 @@ export const TagRadios: Story = {
     await expect(canvas.getByRole("menuitemradio", { name: "Cut candidate" })).toBeInTheDocument();
 
     // The row that replaced the field: a press closes the menu and the editor opens a dialog.
-    await expect(canvas.getByRole("menuitem", { name: "More tags…" })).toBeInTheDocument();
+    await expect(canvas.getByRole("menuitem", { name: "More labels…" })).toBeInTheDocument();
 
     await userEvent.click(wincon);
-    await expect(args.act).toHaveBeenCalledWith(`tag:${DECK_CARD.cardId}:1`);
+    await expect(args.act).toHaveBeenCalledWith(`label:${DECK_CARD.cardId}:1`);
   },
 };
 

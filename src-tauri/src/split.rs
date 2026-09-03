@@ -20,6 +20,82 @@ pub const PART: &str = "user.db.part";
 /// The scratch schema name the extraction attaches under.
 const SCRATCH: &str = "part";
 
+/// What head calls the reader's deck labels against what the legacy file calls them.
+///
+/// **This exists because the destination is head and the source is frozen.**
+/// [`extract_user_file`] builds its destination with [`schema::create_user_schema`] — head's
+/// DDL — and stamps [`schema::USER_SCHEMA_VERSION`] on the way out, so **no rung ever runs on a
+/// converted file**. A name the source and destination disagree about therefore has to be
+/// reconciled *here* or not at all; there is no later pass to catch it.
+///
+/// Schema v33 renamed the deckbuilder's label store, and every one of the three disagreements
+/// it left behind fails in a different and worse way than the last if it is not answered:
+///
+/// * **`deck_tags` → `deck_labels`** — [`shared_columns`] asks `PRAGMA main.table_info` for a
+///   table the legacy file has never had, gets an empty result, and reads that as "a user rung
+///   above the frozen ladder", which is a real and *silent* state. The reader's whole label
+///   list would be skipped with no error.
+/// * **`deck_cards.tag_id` → `label_id`** — the column is simply not shared, so it drops out of
+///   the copy list while every other column comes across. Silent too, and worse: the cards
+///   arrive, wearing nothing.
+/// * **`deck_audit.kind = 'tag'` → `'label'`** — the only loud one. Head's CHECK constraint does
+///   not list `'tag'`, so the first history row refuses the INSERT, `convert` fails, and
+///   `init_state` moves the reader's database aside. A hard launch failure.
+///
+/// **The list is frozen at these three and cannot grow**, which is the one comfort here:
+/// [`schema::LEGACY_SINGLE_FILE_VERSION`] is frozen at 26, so the source shape is a fact about
+/// the past rather than a moving target. A rename in some future rung adds nothing to this
+/// list — a database that reaches that rung by *migrating* never comes through here at all.
+const LEGACY_TABLE_NAMES: &[(&str, &str)] = &[("deck_labels", "deck_tags")];
+
+/// The same disagreement one level down: `(table, head column, legacy column)`.
+/// See [`LEGACY_TABLE_NAMES`] for why this is answered here or nowhere.
+const LEGACY_COLUMN_NAMES: &[(&str, &str, &str)] = &[("deck_cards", "label_id", "tag_id")];
+
+/// What the legacy file calls `table`, which is `table` itself for all but one of them.
+fn legacy_table(table: &str) -> &str {
+    LEGACY_TABLE_NAMES
+        .iter()
+        .find(|(head, _)| *head == table)
+        .map_or(table, |(_, legacy)| *legacy)
+}
+
+/// What the legacy file calls `column` of `table`.
+fn legacy_column<'a>(table: &str, column: &'a str) -> &'a str {
+    LEGACY_COLUMN_NAMES
+        .iter()
+        .find(|(t, head, _)| *t == table && *head == column)
+        .map_or(column, |(_, _, legacy)| *legacy)
+}
+
+/// How one column is *read* out of the legacy file — the column name, unless its **values**
+/// changed too.
+///
+/// Only `deck_audit` has that problem, and it has it twice, because v33 moved a vocabulary
+/// rather than a name: the `kind` word a row is filed under, and the key its `payload` object
+/// carries the label's name in. Both rewrites are the v33 rung's, expressed as a SELECT
+/// instead of an UPDATE — deliberately, so that the two paths into a v33 database say the same
+/// thing. A converted file whose payload still said `"tag"` would read back as a history entry
+/// that had forgotten which label it was about.
+///
+/// The `json_type(...) IS NOT NULL` guard rather than a value test is load-bearing: a
+/// `{"tag": null}` payload is a real row (a label being taken *off* a card records exactly
+/// that), and testing the value would leave that row's key unmoved.
+fn read_expr(table: &str, column: &str, source: &str) -> String {
+    match (table, column) {
+        ("deck_audit", "kind") => {
+            format!("CASE \"{source}\" WHEN 'tag' THEN 'label' ELSE \"{source}\" END")
+        }
+        ("deck_audit", "payload") => format!(
+            "CASE WHEN json_type(\"{source}\", '$.tag') IS NOT NULL \
+             THEN json_remove(json_insert(\"{source}\", '$.label', \
+             json_extract(\"{source}\", '$.tag')), '$.tag') \
+             ELSE \"{source}\" END"
+        ),
+        _ => format!("\"{source}\""),
+    }
+}
+
 /// What the data folder holds, and which of them must not read as "done".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
@@ -114,8 +190,19 @@ fn finish(data_dir: &Path) -> Result<(), String> {
             .filter(|(_, s)| *s == Side::User)
             .rev()
         {
+            // **Both spellings, and the legacy one is the one that is actually here.** This
+            // walks head's list over a file that predates head, so for `deck_labels` the drop
+            // that matters is `deck_tags`' — dropping only head's name is a silent no-op that
+            // leaves the reader's old label list sitting in `corpus.db` forever, on every
+            // install rather than only on an upgrade, since a fresh one is built at
+            // [`schema::LEGACY_SINGLE_FILE_VERSION`] and split like any other.
+            let legacy = legacy_table(table);
             tx.execute_batch(&format!("DROP TABLE IF EXISTS main.{table}"))
                 .map_err(|e| e.to_string())?;
+            if legacy != *table {
+                tx.execute_batch(&format!("DROP TABLE IF EXISTS main.{legacy}"))
+                    .map_err(|e| e.to_string())?;
+            }
         }
         tx.execute_batch(&format!(
             "PRAGMA user_version = {};",
@@ -170,11 +257,14 @@ pub fn extract_user_file(conn: &Connection, data_dir: &Path) -> rusqlite::Result
         // table that exists in the destination and in no source this function will ever see —
         // pairing's three first. The empty table the destination already has is the right
         // answer: a database being converted has never been paired.
-        let Some(columns) = shared_columns(&tx, table)? else {
+        // The source's name for it, which is its own for all but `deck_labels` — see
+        // [`LEGACY_TABLE_NAMES`] for why the reconciliation has to happen on this line.
+        let source_table = legacy_table(table);
+        let Some((into, read)) = shared_columns(&tx, table, source_table)? else {
             continue;
         };
         tx.execute_batch(&format!(
-            "INSERT INTO {SCRATCH}.{table} ({columns}) SELECT {columns} FROM main.{table}"
+            "INSERT INTO {SCRATCH}.{table} ({into}) SELECT {read} FROM main.{source_table}"
         ))?;
     }
     // **Every copied row lands with a NULL `sync_uid`, and nothing else here would ever fill
@@ -198,8 +288,13 @@ pub fn extract_user_file(conn: &Connection, data_dir: &Path) -> rusqlite::Result
     conn.execute_batch(&format!("DETACH DATABASE {SCRATCH}"))
 }
 
-/// The columns both copies of `table` have, in the destination's order, or `None` when the
+/// The columns both copies of the table have, in the destination's order, or `None` when the
 /// source has no such table at all.
+///
+/// Returns **two** lists that line up positionally: what to write, in head's spelling, and how
+/// to read it, in the legacy file's. They are the same list for every column of every table but
+/// the three [`LEGACY_TABLE_NAMES`] describes, and keeping them separate is what lets a column
+/// that was *renamed* still be a shared column rather than a dropped one.
 ///
 /// A `SELECT *` would be one line and would break the first time a user rung adds a column:
 /// the destination is at head and the source is at [`schema::LEGACY_SINGLE_FILE_VERSION`],
@@ -211,29 +306,39 @@ pub fn extract_user_file(conn: &Connection, data_dir: &Path) -> rusqlite::Result
 /// the frozen ladder looks like from down here; a source that *has* the table and shares no
 /// column with the destination is still a refusal, because that is a schema nobody meant and
 /// `INSERT INTO t () SELECT` is not a sentence.
-fn shared_columns(conn: &Connection, table: &str) -> rusqlite::Result<Option<String>> {
-    let read = |schema: &str| -> rusqlite::Result<Vec<String>> {
-        let mut stmt = conn.prepare(&format!("PRAGMA {schema}.table_info({table})"))?;
+fn shared_columns(
+    conn: &Connection,
+    table: &str,
+    source_table: &str,
+) -> rusqlite::Result<Option<(String, String)>> {
+    let columns = |schema: &str, name: &str| -> rusqlite::Result<Vec<String>> {
+        let mut stmt = conn.prepare(&format!("PRAGMA {schema}.table_info({name})"))?;
         let names = stmt.query_map([], |r| r.get::<_, String>(1))?.collect();
         names
     };
-    let source = read("main")?;
+    let source = columns("main", source_table)?;
     if source.is_empty() {
         return Ok(None);
     }
-    let dest = read(SCRATCH)?;
-    let shared: Vec<String> = dest
+    let dest = columns(SCRATCH, table)?;
+    let (into, read): (Vec<String>, Vec<String>) = dest
         .into_iter()
-        .filter(|c| source.iter().any(|s| s == c))
-        .map(|c| format!("\"{c}\""))
-        .collect();
-    if shared.is_empty() {
+        // Paired on what the *source* calls it, so a renamed column is shared rather than lost.
+        .filter_map(|c| {
+            let legacy = legacy_column(table, &c);
+            source
+                .iter()
+                .any(|s| s == legacy)
+                .then(|| (format!("\"{c}\""), read_expr(table, &c, legacy)))
+        })
+        .unzip();
+    if into.is_empty() {
         return Err(rusqlite::Error::SqliteFailure(
             rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_ERROR),
             Some(format!("cannot split: `{table}` has no columns in common")),
         ));
     }
-    Ok(Some(shared.join(", ")))
+    Ok(Some((into.join(", "), read.join(", "))))
 }
 
 /// Hand the freed pages back, a chunk at a time. Best-effort: a corpus that is larger than
@@ -304,6 +409,43 @@ mod tests {
             [],
         )
         .unwrap();
+        // **A label, the card wearing it, and one history row about it — under the names a
+        // pre-27 file uses for all three.** Seeded here rather than in one test because the
+        // three ways v33's rename can go wrong across this boundary each look like something
+        // else: a skipped table reads as "a rung above the frozen ladder", a dropped column
+        // reads as a card that was never labelled, and only the audit row fails loudly. See
+        // `LEGACY_TABLE_NAMES`. Without these rows every assertion about the conversion is
+        // vacuous on exactly the tables the rename moved.
+        conn.execute(
+            "INSERT INTO deck_tags (id, name, name_key, color, created_at, updated_at)
+             VALUES (1,'Cut candidate','cut candidate','#d3202a',100,100)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO deck_categories
+               (id, deck_id, name, kind, sort_order, created_at, updated_at)
+             VALUES (1,1,'Creatures','main',0,100,100)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO deck_cards
+               (deck_id, category_id, variant, card_id, set_code, collector_number, name,
+                tag_id, quantity, created_at, updated_at)
+             VALUES (1,1,'live','abc','m21','139','Goblin Matron',1,2,100,100)",
+            [],
+        )
+        .unwrap();
+        // `kind='tag'` is the loud half; the payload key is the quiet one. Both move at v33,
+        // and a conversion is the one path into a v33 database that no rung ever touches.
+        conn.execute(
+            "INSERT INTO deck_audit (deck_id, at, variant, kind, card_name, payload, delta)
+             VALUES (1,100,'live','tag','Goblin Matron',
+                     '{\"tag\":\"Cut candidate\",\"previous\":null}',0)",
+            [],
+        )
+        .unwrap();
         crate::db::checkpoint_truncate(&conn).unwrap();
     }
 
@@ -317,32 +459,105 @@ mod tests {
     /// a conversion that *invented* rows in such a table, because the count afterwards would
     /// not be zero; that the table exists at all is asserted directly by the caller's
     /// `sqlite_master` loop.
+    /// **A table head renamed is counted under whichever name is actually there.** Without
+    /// this, `deck_labels` would count zero on the legacy side for the reason a *missing*
+    /// table does — and "zero before, zero after" is exactly the reading that would let a
+    /// silently skipped label list pass as a preserved one. Counting it under `deck_tags`
+    /// makes the before/after comparison a real fence over the rows v33 moved.
     fn user_counts(conn: &Connection, schema: &str) -> Vec<(String, i64)> {
         crate::schema::TABLES
             .iter()
             .filter(|(_, s)| *s == Side::User)
             .map(|(t, _)| {
-                let here: i64 = conn
-                    .query_row(
+                let present = |name: &str| -> bool {
+                    conn.query_row(
                         &format!(
                             "SELECT count(*) FROM {schema}.sqlite_master
                               WHERE type='table' AND name=?1"
                         ),
-                        [t],
-                        |r| r.get(0),
+                        [name],
+                        |r| r.get::<_, i64>(0),
                     )
-                    .unwrap();
-                let n: i64 = if here == 0 {
-                    0
-                } else {
-                    conn.query_row(&format!("SELECT count(*) FROM {schema}.{t}"), [], |r| {
-                        r.get(0)
-                    })
                     .unwrap()
+                        == 1
+                };
+                let here = if present(t) {
+                    Some(*t)
+                } else {
+                    let legacy = super::legacy_table(t);
+                    (legacy != *t && present(legacy)).then_some(legacy)
+                };
+                let n: i64 = match here {
+                    None => 0,
+                    Some(name) => conn
+                        .query_row(&format!("SELECT count(*) FROM {schema}.{name}"), [], |r| {
+                            r.get(0)
+                        })
+                        .unwrap(),
                 };
                 ((*t).to_owned(), n)
             })
             .collect()
+    }
+
+    /// **The conversion is the one path into a v33 database that no migration rung ever
+    /// touches**, so the three names v33 moved have to be reconciled by [`extract_user_file`]
+    /// or not at all — see [`LEGACY_TABLE_NAMES`].
+    ///
+    /// Each of the three fails differently, and two of them fail *silently*, which is why this
+    /// asserts the rows rather than trusting the conversion to have raised: a skipped
+    /// `deck_tags` leaves the label list empty, a dropped `tag_id` leaves the cards wearing
+    /// nothing, and only the `kind='tag'` audit row would have refused the INSERT.
+    #[test]
+    fn converting_a_legacy_file_carries_every_label_across_v33s_rename() {
+        let dir = scratch("legacy-labels");
+        legacy(&dir);
+
+        assert!(convert(&dir).unwrap());
+        let conn = crate::db::open_write(&dir).unwrap();
+
+        let (label_id, name, color): (i64, String, String) = conn
+            .query_row("SELECT id, name, color FROM deck_labels", [], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .unwrap();
+        // The card still wears it, and wears *that* one — the id is what a dropped column
+        // turns into a NULL, so reading it back is the whole assertion.
+        let worn: Option<i64> = conn
+            .query_row("SELECT label_id FROM deck_cards", [], |r| r.get(0))
+            .unwrap();
+        let (kind, payload): (String, String) = conn
+            .query_row("SELECT kind, payload FROM deck_audit", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        // Nothing of the old spelling survives anywhere in either file.
+        let stale: i64 = conn
+            .query_row(
+                "SELECT (SELECT count(*) FROM main.sqlite_master WHERE name='deck_tags')
+                      + (SELECT count(*) FROM corpus.sqlite_master WHERE name='deck_tags')",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(name, "Cut candidate", "the label list came across");
+        assert_eq!(color, "#d3202a");
+        assert_eq!(worn, Some(label_id), "the card still wears its label");
+        assert_eq!(
+            kind, "label",
+            "the audit row was refiled under the new kind"
+        );
+        // The *key* moves and the reader's own word does not: someone who named a label "tag"
+        // must not have their history rewritten.
+        assert_eq!(
+            payload, "{\"previous\":null,\"label\":\"Cut candidate\"}",
+            "the payload key moved and the value did not"
+        );
+        assert_eq!(stale, 0, "`deck_tags` must survive in neither file");
     }
 
     /// The four states the file system can be in, and the one that must not read as "done".

@@ -6,9 +6,9 @@ import type {
   MenuSubmenu,
 } from "@/components/menu/types";
 import type { CardMenuDeps } from "@/features/card/cardMenu";
-import type { DeckCard, DeckCategory, DeckTag } from "@/lib/ipc";
+import type { DeckCard, DeckCategory, DeckLabel } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
-import { buildDeckCardMenu, deckCardTagRows, type DeckCardMenuDeps } from "./deckCardMenu";
+import { buildDeckCardMenu, deckCardLabelRows, type DeckCardMenuDeps } from "./deckCardMenu";
 import { card, spec } from "./validation/fixtures";
 
 /** The shared builder's own dependencies, stubbed — this file is about the deck's extras,
@@ -63,7 +63,7 @@ const CATEGORIES: DeckCategory[] = [
 
 const CATEGORY_ORDER = ["Commander", "Main deck", "Recursion", "Sideboard", "Companion"];
 
-const TAGS: DeckTag[] = [
+const LABELS: DeckLabel[] = [
   { id: 8, name: "Budget swap", color: "moss", cardCount: 2 },
   { id: 9, name: "Cut candidate", color: "ember", cardCount: 1 },
 ];
@@ -80,9 +80,9 @@ function deps(over: Partial<DeckCardMenuDeps> = {}): DeckCardMenuDeps {
     spec: spec("modern"),
     setFinish: vi.fn(),
     moveTo: vi.fn(),
-    setTag: vi.fn(),
-    tags: TAGS,
-    addTag: vi.fn(),
+    setLabel: vi.fn(),
+    labels: LABELS,
+    addLabel: vi.fn(),
     remove: vi.fn(),
     ...over,
   };
@@ -126,7 +126,7 @@ describe("buildDeckCardMenu", () => {
       // The finish row sits with the zone rows rather than with `Move to`: those say what this
       // card *is* in the deck, and so does this. `Move to` is filing.
       "Set as foil",
-      "Tag card",
+      "Label card",
       "Remove card",
     ]);
   });
@@ -400,43 +400,43 @@ describe("buildDeckCardMenu", () => {
   /**
    * **`submenu`, not `lazy` — and that is a fact about the rows rather than a preference.**
    *
-   * The kind was `lazy` for one reason: a `MenuItem[]` cannot carry a text input, and "New tag…"
+   * The kind was `lazy` for one reason: a `MenuItem[]` cannot carry a text input, and "New label…"
    * was one until 2026-08-20. It is a row now, so nothing in this submenu mounts, queries or
-   * holds state — the labels come from `deps.tags`, which the editor already holds from
+   * holds state — the labels come from `deps.labels`, which the editor already holds from
    * `deck_get`. A `lazy` here would be a component mounted to draw four radios.
    */
-  it("builds the tag rows as a plain submenu, with nothing to mount", () => {
-    const row = find(buildDeckCardMenu(bolt(), deps()), "Tag card") as MenuSubmenu;
+  it("builds the label rows as a plain submenu, with nothing to mount", () => {
+    const row = find(buildDeckCardMenu(bolt(), deps()), "Label card") as MenuSubmenu;
     expect(row.kind).toBe("submenu");
-    expect(labels(row.items)).toEqual(["None", "Budget swap", "Cut candidate", "More tags…"]);
+    expect(labels(row.items)).toEqual(["None", "Budget swap", "Cut candidate", "More labels…"]);
   });
 
   /**
-   * The row that opens `AddTagDialog`, and the whole of what it does: hand the card up.
+   * The row that opens `AddLabelDialog`, and the whole of what it does: hand the card up.
    *
    * **It must not write.** The field this replaced created the label and attached it, and the
    * attach belonged to an observer the panel took with it when it closed — so a create still in
    * flight at a dismissal lost its second half silently. The surface owns both halves now, and
    * a row that reached for either would be that bug coming back.
    */
-  it("hands the card to the surface when More tags… is pressed", () => {
+  it("hands the card to the surface when More labels… is pressed", () => {
     const target = bolt();
     const wired = deps();
-    const row = find(buildDeckCardMenu(target, wired), "Tag card") as MenuSubmenu;
-    const item = find(row.items, "More tags…") as MenuAction;
+    const row = find(buildDeckCardMenu(target, wired), "Label card") as MenuSubmenu;
+    const item = find(row.items, "More labels…") as MenuAction;
 
     item.onSelect();
 
-    expect(wired.addTag).toHaveBeenCalledWith(target);
-    expect(wired.setTag).not.toHaveBeenCalled();
+    expect(wired.addLabel).toHaveBeenCalledWith(target);
+    expect(wired.setLabel).not.toHaveBeenCalled();
   });
 });
 
-describe("deckCardTagRows", () => {
-  /** A deck card wears **at most one** tag — `setTag` takes `tagId: number | null` — so these
+describe("deckCardLabelRows", () => {
+  /** A deck card wears **at most one** label — `setLabel` takes `labelId: number | null` — so these
    *  are radios and "None" is the row that takes the label off. */
-  it("offers None first and ticks the tag the card is wearing", () => {
-    const rows = deckCardTagRows(bolt({ tagId: 8, tagName: "Budget swap" }), TAGS, vi.fn());
+  it("offers None first and ticks the label the card is wearing", () => {
+    const rows = deckCardLabelRows(bolt({ labelId: 8, labelName: "Budget swap" }), LABELS, vi.fn());
     expect(labels(rows)).toEqual(["None", "Budget swap", "Cut candidate"]);
     expect(rows.every((r) => r.kind === "radio")).toBe(true);
     expect((find(rows, "None") as MenuRadio).checked).toBe(false);
@@ -444,8 +444,8 @@ describe("deckCardTagRows", () => {
     expect((find(rows, "Cut candidate") as MenuRadio).checked).toBe(false);
   });
 
-  it("ticks None for a card wearing no tag", () => {
-    const rows = deckCardTagRows(bolt(), TAGS, vi.fn());
+  it("ticks None for a card wearing no label", () => {
+    const rows = deckCardLabelRows(bolt(), LABELS, vi.fn());
     expect((find(rows, "None") as MenuRadio).checked).toBe(true);
   });
 
@@ -458,7 +458,7 @@ describe("deckCardTagRows", () => {
    * under B finding it at the bottom. An alphabet the reader cannot predict is worth replacing
    * with one they can.
    *
-   * The premise is gone. `deck_tag_list` answers **most-used first** since schema v21, which is
+   * The premise is gone. `deck_label_list` answers **most-used first** since schema v21, which is
    * the first of the two exemptions this app grants — an order that *is* the information.
    * Re-sorting here would throw away a fact the backend went and counted, and would bury the
    * label this deck reaches for most under whatever its first letter is.
@@ -466,13 +466,13 @@ describe("deckCardTagRows", () => {
    * "None" stays pinned in front: it is the row that takes a label *off*, not one of the labels.
    */
   it("keeps the backend's most-used-first order rather than re-sorting the labels", () => {
-    const arrived: DeckTag[] = [
+    const arrived: DeckLabel[] = [
       { id: 1, name: "Cut", color: "ember", cardCount: 9 },
       { id: 2, name: "budget", color: "moss", cardCount: 4 },
       { id: 3, name: "Ramp", color: "gold", cardCount: 1 },
     ];
 
-    expect(labels(deckCardTagRows(bolt(), arrived, vi.fn()))).toEqual([
+    expect(labels(deckCardLabelRows(bolt(), arrived, vi.fn()))).toEqual([
       "None",
       "Cut",
       "budget",
@@ -481,13 +481,13 @@ describe("deckCardTagRows", () => {
   });
 
   it("takes the label off with null and puts one on by id", () => {
-    const setTag = vi.fn();
-    const row = bolt({ tagId: 8 });
-    const rows = deckCardTagRows(row, TAGS, setTag);
+    const setLabel = vi.fn();
+    const row = bolt({ labelId: 8 });
+    const rows = deckCardLabelRows(row, LABELS, setLabel);
     (find(rows, "None") as MenuRadio).onSelect();
-    expect(setTag).toHaveBeenCalledWith(row, null);
+    expect(setLabel).toHaveBeenCalledWith(row, null);
     (find(rows, "Cut candidate") as MenuRadio).onSelect();
-    expect(setTag).toHaveBeenLastCalledWith(row, 9);
+    expect(setLabel).toHaveBeenLastCalledWith(row, 9);
   });
 });
 
@@ -510,7 +510,7 @@ describe("buildDeckCardMenu with a picked set", () => {
   it("counts the set in the labels of the three rows that act on it", () => {
     const items = buildDeckCardMenu(BOLT, deps({ picked: PICKED }));
     expect(has(items, "Move 3 cards to")).toBe(true);
-    expect(has(items, "Tag 3 cards")).toBe(true);
+    expect(has(items, "Label 3 cards")).toBe(true);
     expect(has(items, "Remove 3 cards")).toBe(true);
   });
 
@@ -550,7 +550,7 @@ describe("buildDeckCardMenu with a picked set", () => {
       "Move to",
       "Set as companion",
       "Set as foil",
-      "Tag card",
+      "Label card",
       "Remove card",
     ]);
   });
@@ -602,12 +602,12 @@ describe("buildDeckCardMenu with a picked set", () => {
     );
   });
 
-  it("tags every picked card on one press", () => {
-    const setTag = vi.fn();
-    const items = buildDeckCardMenu(BOLT, deps({ picked: PICKED, setTag }));
-    (find(rowsOf(find(items, "Tag 3 cards")), "Budget swap") as MenuRadio).onSelect();
+  it("labels every picked card on one press", () => {
+    const setLabel = vi.fn();
+    const items = buildDeckCardMenu(BOLT, deps({ picked: PICKED, setLabel }));
+    (find(rowsOf(find(items, "Label 3 cards")), "Budget swap") as MenuRadio).onSelect();
 
-    expect(setTag.mock.calls.map((call) => [(call[0] as DeckCard).name, call[1] as number])).toEqual([
+    expect(setLabel.mock.calls.map((call) => [(call[0] as DeckCard).name, call[1] as number])).toEqual([
       ["Lightning Bolt", 8],
       ["Bear", 8],
       ["Ponder", 8],

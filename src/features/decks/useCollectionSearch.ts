@@ -27,6 +27,7 @@ import {
 } from "@/lib/ipc";
 import type { SortSpec } from "@/lib/sort";
 import { useMarketplace } from "@/lib/useMarketplace";
+import { playKey, useDeckPlays } from "./useDeckPlays";
 
 /**
  * Rows per request in this column.
@@ -58,6 +59,23 @@ export type Allocation = NonNullable<CollectionQuery["allocation"]>;
  * makes this list answer "what can I build with today" rather than "what do I own".
  */
 export const DEFAULT_ALLOCATION: Allocation = "unallocated";
+
+/**
+ * Whether the drawers the reader has **set aside** are left out — always, on this tab
+ * ([#365](https://github.com/Msgaihede/mtg-grimoire/issues/365)).
+ *
+ * **A named constant rather than a `true` inside the query object, because it is half of a
+ * coupling and the other half is in another function.** `copySource` has no arm for a locked
+ * copy: one would fall through to `desk` and move with nothing asked, which is the wrong answer
+ * by that module's own rule and is safe only because a locked row cannot get that far. This is
+ * what stops it. A literal buried in an object literal is a thing somebody deletes while tidying
+ * a payload; a named export with this paragraph on it is one they have to read first.
+ *
+ * It is `DEFAULT_ALLOCATION`'s neighbour in every sense except that there is **no press that
+ * turns it off** — the allocation toggle widens to the copies a *deck* is holding, which says
+ * nothing about a drawer the reader took off the table themselves.
+ */
+export const DEFAULT_EXCLUDE_LOCKED = true;
 
 /**
  * Where one copy is filed, said in the terms the Add button needs.
@@ -94,6 +112,24 @@ const HERE: CopySource = { kind: "here", deckName: null };
  * dismisses. The row's own `folderName` is the best name available in that state and is what the
  * question quotes — for a deck's group it *is* the deck's name, since `create_deck_group` names
  * the folder after the deck.
+ *
+ * **A locked folder has no arm here, and the absence is load-bearing rather than an oversight**
+ * ([#365](https://github.com/Msgaihede/mtg-grimoire/issues/365)). A locked drawer is
+ * `kind: "user"`, so it falls through the line below and a copy in one would be called `desk` —
+ * *freely movable, no question asked*. **That is not a considered answer; it is the absence of
+ * one**, and the only reason it is safe is one line in {@link useCollectionSearch}: the tab sends
+ * `excludeLocked: true`, unconditionally and with no control to turn it off, so such a row never
+ * reaches this function. `a locked copy cannot reach copySource, which is why it has no arm for
+ * one` is what holds the two together.
+ *
+ * **So this is the function to change first if a locked row is ever put back on this tab** — a
+ * filter, an "include what I set aside" toggle, a second caller with its own query. Read the
+ * paragraph above before choosing: this module's rule is that an unclassifiable copy is treated
+ * as *spoken for* rather than as free, because guessing "desk" lets an add slip past exactly the
+ * copies a confirmation exists for, and a drawer the reader deliberately set aside is that copy.
+ * A fourth arm is a fourth **press** (#358's rule, argued under {@link deckPlaysCard} below), so
+ * it is not a one-line addition here: `pickCopy` ranks `CopySource` and
+ * `CollectionSearchTab` branches on it exactly once, and both would owe the new answer.
  */
 export function copySource(
   row: Pick<CollectionRow, "folderId" | "folderName">,
@@ -105,6 +141,93 @@ export function copySource(
   if (!folder) return { kind: "otherDeck", deckName: row.folderName };
   if (folder.kind !== "deck") return DESK;
   return folder.deckId === deckId ? HERE : { kind: "otherDeck", deckName: folder.name };
+}
+
+/**
+ * Whether the open deck's **live** list plays this card at all — the second half of what pressing
+ * Add on a tile does, and **a separate axis rather than a fourth {@link CopySource} arm**
+ * ([#358](https://github.com/Msgaihede/mtg-grimoire/issues/358)).
+ *
+ * ## Why not a fourth arm
+ *
+ * {@link CopySource} answers *where this copy is filed* — a fact about one `collection_entries`
+ * row — and every one of its three answers is a different **press**: move it silently, refuse it,
+ * or ask about the deck that loses a card. This asks *whether the deck's list has this card at
+ * all*, which is a fact about the **oracle card and the deck**, and is true or false identically
+ * of every copy the reader owns. Three things follow, and each of them breaks if the two are one
+ * enum:
+ *
+ * - **`pickCopy` ranks `CopySource`.** A `notPlayed` arm would have to be filtered out of the pool
+ *   the way `here` is — and a tile whose every candidate was filtered reads as `add === null`,
+ *   which this tab already says in words as *"already in this deck"*. That sentence would then be
+ *   printed over a card the deck has never held: the one refusal a reader cannot act on, because
+ *   it tells them the opposite of what is wrong.
+ * - **The two are simultaneously true and say different things.** A copy in Mono-Red Aggro that
+ *   this deck does not play is both `otherDeck` and `notPlayed`, and only one sentence fits on a
+ *   button. They are not two shades of one refusal: *"taking it from Mono-Red Aggro"* tells the
+ *   reader what the press **costs**, and *"add it from the Card search tab first"* tells them
+ *   **where to go instead**. An enum forces a rank between two facts that are about different
+ *   things; two axes let the fence answer first and the cost answer after.
+ * - **It is a fact per *card*, and `CopySource` is a fact per *row*.** Folding four copies of one
+ *   printing gives one `CopySource` by a rule ({@link pickCopy}); folding them gives one
+ *   `PlayState` by identity. Putting a per-card fact through a per-row rule is where a rule that
+ *   is true of a card and false of its own copy comes from.
+ *
+ * ## The four answers
+ *
+ * `plays` is the only pressable one. **`unread` and `unreadable` are the fail-closed pair**, and
+ * they are the reason this is four words rather than a boolean: an unanswered census is not
+ * *"plays nothing"*, and a tile that is pressable for one frame and then greys is the failure —
+ * `CollectionPage.tsx`'s `stepperByTile` argues this direction in full ("A filed tile is fenced
+ * until the census has answered … the permissive reading would draw a control over a deck's copies
+ * for exactly that window"). The two are kept apart because the *sentence* differs: a wall that is
+ * waiting says so, and a wall that cannot find out says that instead — one is about to fix itself
+ * and the other is not.
+ *
+ * **Nothing here is the fence.** `collection_alloc::NOT_IN_DECK` refuses the write in the same
+ * words at the backend, and this is that refusal said *early*: it saves a round trip and puts the
+ * route on the button, and it is deliberately not the only thing holding the rule.
+ */
+export type PlayState = "plays" | "notPlayed" | "unread" | "unreadable";
+
+/**
+ * As much of a tile as a play key is built from.
+ *
+ * **`id` is the printing** — `CopyTile.id` is `CollectionRow.cardId` under the wall's own name, and
+ * `CopyTile.key` (the printing *and* its finish) is a different string that must never reach
+ * {@link playKey}. Writing the shape down is what says which of a tile's three id-shaped fields
+ * this rule is allowed to read; a mix-up here is silent, because every one of them is a `string`.
+ */
+export interface PlayableTile {
+  id: string;
+  oracleId: string | null;
+}
+
+/**
+ * What {@link PlayState} a tile is in — pure over the census, so it is checkable as a truth table.
+ *
+ * **The match is on the oracle card and never on the printing**, through {@link playKey}, which
+ * mirrors Rust's `coalesce(oracle_id, card_id)`: a reader whose deck plays the 2XM Lightning Bolt
+ * and whose binder holds the Alpha one is holding a copy of a card their deck plays, and a
+ * printing-exact test would grey exactly the tile this tab exists to press. The `card_id` fallback
+ * is for an **orphan** — a copy whose printing has left `cards`, which therefore has no oracle id
+ * on either side of the comparison — and it is the same fallback the deck row gets, so the two
+ * still meet.
+ *
+ * **A census that has answered wins, and everything else is closed.** `isSuccess` is the only way
+ * through: a query in flight, a query that failed, and a query that failed *after* answering are
+ * three states with no trustworthy `plays` behind them, and the one thing they must not do is let
+ * a press through.
+ */
+export function playStateFor(
+  tile: PlayableTile,
+  plays: ReadonlySet<string>,
+  census: { isSuccess: boolean; isError: boolean },
+): PlayState {
+  if (census.isSuccess) {
+    return plays.has(playKey({ oracleId: tile.oracleId, cardId: tile.id })) ? "plays" : "notPlayed";
+  }
+  return census.isError ? "unreadable" : "unread";
 }
 
 /** What a move is addressed by — the row it comes out of, the pile it lands in, and how many. */
@@ -152,6 +275,25 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
   // is, not merely how it is written.
   const { marketplace } = useMarketplace();
   const { folders } = useCollectionFolderList();
+  /**
+   * Every card the open deck's **live** list plays — the census {@link playStateFor} answers from,
+   * and the whole of this tab's assign-only fence (issue #358).
+   *
+   * **Read here rather than threaded down from the editor, and that is a correctness decision
+   * rather than a convenience.** `collection_to_deck` hardcodes `LIVE`, while the editor may be
+   * drawing **Theory** — so `DeckEditor`'s own `deck.cards` is the wrong list half the time, and a
+   * prop taken from it would grey the cards a reader can file and offer the ones they cannot. The
+   * hook's key sits under `["decks"]`, which every deck write in the app already invalidates
+   * (including {@link move} below), so adding the card on the **Card search** tab beside this one
+   * un-greys its tile here with no reload — which is the whole of what makes the refusal's own
+   * sentence actionable.
+   */
+  const deckPlays = useDeckPlays(deckId);
+  const { plays } = deckPlays;
+  // The two booleans rather than the query object: TanStack hands back a fresh result object every
+  // render, so a `useCallback` closing over it would have a new identity on each one.
+  const censusAnswered = deckPlays.query.isSuccess;
+  const censusFailed = deckPlays.query.isError;
 
   const defaultFormatValue = defaultFormat?.value ?? "";
   const [text, setText] = useState("");
@@ -250,6 +392,21 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
     // one of them — `useCollection`'s "a value the backend would infer anyway is not put on the
     // wire" is the rule for a filter that is *off*, and neither of these two is off.
     allocation,
+    // **Sent on every request and never a control**, which is where this parts company with the
+    // field above it: `allocation` is a chip the reader can press, and this is a fact about what
+    // the tab is for. `DEFAULT_ALLOCATION` already hides the copies a deck is holding because
+    // this list answers *what can I build with today* rather than *what do I own* — and a drawer
+    // the reader has set aside for a trade or a display case is not something this deck can be
+    // built out of either, so it belongs on the same side of the same question. **`false` by
+    // omission is what makes that safe to ask for**: the mirror and the export sweep page through
+    // this same query for a whole-collection backup and must go on seeing every row, so the
+    // narrowing is the caller's to request rather than the backend's to assume.
+    //
+    // Spec §4.2 gives `deck_theory::OWNED_SPARE_SQL` the same arm for the same reason — the
+    // shopping list's *spare* count already drops a copy filed in a deck's group, and a locked
+    // one is no more a copy a plan can count on. **Keep the two in step**: this panel offering a
+    // copy the diff beside it has already written off is one question answered two ways.
+    excludeLocked: DEFAULT_EXCLUDE_LOCKED,
     marketplace: marketplace.id,
     // `undefined` rather than `[]`: an empty array is a sort the backend would have to test for,
     // and the absent field is what already means "your name order".
@@ -265,6 +422,11 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
    * Under `["collection", …]` like every other read of this table, so the one
    * `invalidateQueries({ queryKey: ["collection"] })` every collection write in the app already
    * fires reaches this column too.
+   *
+   * **`excludeLocked` is deliberately not a segment**, and that is not the same omission: it is
+   * a constant this tab sends on every request, so it narrows the one answer rather than telling
+   * two of them apart. A key term for it would be the same string in every entry. What *can*
+   * change under it is a folder being locked, and that is a write — `["collection"]` above.
    */
   const listKey = [
     "collection",
@@ -307,6 +469,22 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
   );
 
   /**
+   * Whether this deck's live list plays this tile's card — {@link sourceOf}'s peer on the other
+   * axis, and held still for the same reason.
+   *
+   * **Deliberately not folded into `sourceOf`, and therefore not into `foldCopies`.** The fold's
+   * job is to pick *which copy* a press moves ({@link pickCopy}), and this answer is identical for
+   * every copy behind a tile — see {@link PlayState} for the three ways merging the two goes
+   * wrong. The wall's tiles are memoised off `sourceOf`, so keeping this out of it also means the
+   * census landing re-renders the buttons rather than refolding every row.
+   */
+  const playStateOf = useCallback(
+    (tile: PlayableTile) =>
+      playStateFor(tile, plays, { isSuccess: censusAnswered, isError: censusFailed }),
+    [plays, censusAnswered, censusFailed],
+  );
+
+  /**
    * Put copies of one collection row into this deck.
    *
    * **Deliberately not optimistic, and that is a decision rather than an omission.** A move is one
@@ -326,8 +504,17 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
    * this one, because a copy taken out of another deck's group is one card off **that** deck's
    * live list.
    *
-   * A refusal takes the same pair for `useCollectionFolders`' reason: the usual refusal is a row
+   * A refusal takes the same trio for `useCollectionFolders`' reason: the usual refusal is a row
    * something else has already moved or deleted, so the list on screen is the thing that is wrong.
+   *
+   * **`["cards", "search"]` is the third, and it joined on 2026-09-03 with issue #349.** A move
+   * used to change no figure on the card search beside this tab: that wall counted every copy the
+   * reader owned, wherever it was filed, so a copy crossing a folder boundary was invisible to
+   * it. It is not any more — the tab one press away counts *what this deck can use*
+   * (`SearchRequest.availableForDeck`), and the move whose whole point is a confirmation naming
+   * another deck is exactly the one that changes the answer: a copy that was spoken for is now
+   * this deck's. Without this the reader presses Add, switches tab and reads the badge from
+   * before the press, for the 30 s `lib/query.ts` caches.
    */
   const move = useMutation<MoveOutcome, unknown, MoveRequest>({
     mutationFn: ({ row, categoryId, quantity }) => {
@@ -339,6 +526,7 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: ["collection"] });
       void queryClient.invalidateQueries({ queryKey: ["decks"] });
+      void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
     },
   });
 
@@ -470,6 +658,10 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
      *  **Held still**, because the wall's fold is a `useMemo` over it: a fresh arrow every render
      *  would refold every tile on every keystroke. */
     sourceOf,
+    /** Whether the deck plays this tile's card at all, in the four terms the Add button branches
+     *  on — this tab is **assign-only** and {@link PlayState} is where that is argued. Held still
+     *  for {@link sourceOf}'s reason. */
+    playStateOf,
     query,
     rows,
     /** Rows matching the filters, counted in full. `0` until the first page answers.
