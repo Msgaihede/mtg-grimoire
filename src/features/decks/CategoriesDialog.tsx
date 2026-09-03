@@ -615,7 +615,7 @@ export function DeleteCategory({
    *  talk about, and a sentence about two would be chrome. */
   const elsewhere = cards - category.cardCount;
   const bothLists =
-    elsewhere > 0 ? " — that is both the live and theory lists, not just the one on screen" : "";
+    elsewhere > 0 ? " — that is both the theory and actual lists, not just the one on screen" : "";
   /** The question is only asked when there is something to lose *and* somewhere to put it. */
   const choosing = cards > 0 && others.length > 0;
   const target = choosing ? (others.find((c) => String(c.id) === choice) ?? null) : null;

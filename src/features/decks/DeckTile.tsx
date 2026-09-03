@@ -63,19 +63,30 @@ const ICON = "size-[calc(0.875rem*var(--control-scale,1))]";
  * card count cannot.
  *
  * Derived rather than stored, from the two fields `deck_list` already answers.
- * {@link DeckRow.cardCount} counts the **live** list only, so a deck with theory switched on
- * and nothing live in it is a plan and not yet a deck: `THEORY ONLY`. One derivation, because
- * a badge and the editor's Live/Theory switch must never disagree about which lists a deck has.
+ * {@link DeckRow.cardCount} counts the **actual** list only, so a deck with theory switched on
+ * and nothing in that list is a plan and not yet a deck: `THEORY ONLY`. One derivation, because
+ * a badge and the editor's Theory/Actual switch must never disagree about which lists a deck
+ * has.
+ *
+ * **A deck that keeps no plan wears no badge at all**, and that is the caption's `Any` argument
+ * read across: one list is what every deck is born with, so a word for it would sit on nearly
+ * every tile in the gallery and say nothing about the deck under it. The badge is here to mark
+ * the deck that keeps *two*, and `null` is the answer for the rest.
  *
  * `THEORY ONLY` is the state **switching the theory list on now produces**, rather than an
- * unusual one: the write moves the live list into the plan and leaves live empty, so the badge
+ * unusual one: the write moves the actual list into the plan and leaves it empty, so the badge
  * reads the deck the way the editor does from that moment.
+ *
+ * **`Actual` is the word and `live` is still the stored variant** — the split the editor's
+ * switch argues, which this file only follows. Issue #357 was this badge still reading
+ * `LIVE + THEORY` a week after the tabs stopped: the vocabulary a reader meets inside a deck and
+ * the one on its tile are one vocabulary.
  */
-export type DeckBadge = "LIVE" | "LIVE + THEORY" | "THEORY ONLY";
+export type DeckBadge = "THEORY + ACTUAL" | "THEORY ONLY";
 
-export function deckBadge(deck: DeckRow): DeckBadge {
-  if (!deck.theoryEnabled) return "LIVE";
-  return deck.cardCount === 0 ? "THEORY ONLY" : "LIVE + THEORY";
+export function deckBadge(deck: DeckRow): DeckBadge | null {
+  if (!deck.theoryEnabled) return null;
+  return deck.cardCount === 0 ? "THEORY ONLY" : "THEORY + ACTUAL";
 }
 
 /**
@@ -306,8 +317,9 @@ export function DeckTile({
             no platform. **The `Any` row is deliberately not drawn**: it is what every deck is
             born as, so printing it would put a word that says nothing on nearly every tile in
             the gallery — and this caption already truncates in a narrow column. A deck that
-            *has* been pinned is the one worth marking, which is the same argument the LIVE /
-            THEORY badge above makes about the lists a deck keeps. */}
+            *has* been pinned is the one worth marking, which is the same argument the theory
+            badge above makes about the lists a deck keeps — a deck with only the one list wears
+            none. */}
         <span
           className={cn(
             "mt-[calc(0.125rem*var(--mark-scale,1))] block truncate text-dim",
@@ -320,26 +332,31 @@ export function DeckTile({
         </span>
       </button>
 
-      {/* Which lists this deck has, over its own art. Outside the button rather than in it:
+      {/* That this deck keeps a plan, over its own art. Outside the button rather than in it:
           `aria-label` would otherwise read the badge before the name, and the tile is named
-          for its deck. `pointer-events-none` so a corner of the picture is not a dead spot. */}
-      <span
-        className={cn(
-          // The badge sits *on* the art, so its inset scales with the picture it is tucked into:
-          // 6px in from a 200px crop is a corner, and 6px in from a 400px one is a smudge against
-          // the edge. Its own type and padding follow for the same reason.
-          "pointer-events-none absolute rounded-sm border bg-bg/70",
-          "left-[calc(0.375rem*var(--mark-scale,1))] top-[calc(0.375rem*var(--mark-scale,1))]",
-          "px-[calc(0.375rem*var(--mark-scale,1))]",
-          "font-mono tracking-wide",
-          "text-[calc(0.6rem*var(--mark-scale,1))] leading-[calc(1rem*var(--mark-scale,1))]",
-          badge === "LIVE" ? "border-border text-dim" : "border-accent text-accent",
-          // Dashed means provisional, here as on a folder card: a theory list is a plan.
-          badge === "THEORY ONLY" && "border-dashed",
-        )}
-      >
-        {badge}
-      </span>
+          for its deck. `pointer-events-none` so a corner of the picture is not a dead spot.
+          Absent on a deck with one list — {@link deckBadge} argues why. */}
+      {badge !== null && (
+        <span
+          className={cn(
+            // The badge sits *on* the art, so its inset scales with the picture it is tucked
+            // into: 6px in from a 200px crop is a corner, and 6px in from a 400px one is a
+            // smudge against the edge. Its own type and padding follow for the same reason.
+            "pointer-events-none absolute rounded-sm border bg-bg/70",
+            "left-[calc(0.375rem*var(--mark-scale,1))] top-[calc(0.375rem*var(--mark-scale,1))]",
+            "px-[calc(0.375rem*var(--mark-scale,1))]",
+            "font-mono tracking-wide",
+            "text-[calc(0.6rem*var(--mark-scale,1))] leading-[calc(1rem*var(--mark-scale,1))]",
+            // Accent on both, where the dim arm used to be the one-list deck's: every badge left
+            // is a deck that keeps two lists, and that is the thing worth pointing at.
+            "border-accent text-accent",
+            // Dashed means provisional, here as on a folder card: a theory list is a plan.
+            badge === "THEORY ONLY" && "border-dashed",
+          )}
+        >
+          {badge}
+        </span>
+      )}
 
       {/* Scryfall's image policy, per tile — and the plan's ruling: a cover whose artist is
           unknown draws no line at all, never the word "null" and never a placeholder. An

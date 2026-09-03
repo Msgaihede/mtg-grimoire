@@ -235,7 +235,7 @@ export const AmbiguousCommander: Story = {
  *
  * **And the sentence under the radios says where that cardboard then goes** (issue #336). A
  * `replace` on the live list releases the copies behind the rows it deletes into
- * `Recently removed`, exactly as **Clear live list…** does, so it makes the same promise in the
+ * `Recently removed`, exactly as **Clear actual list…** does, so it makes the same promise in the
  * same words — the fourth site for a sentence `ClearDeck`, `ClearCategory` and
  * `CategoriesDialog` already share. It is drawn on the press rather than on the option: Merge
  * removes nothing, so the frame this story opens on carries no such line at all.

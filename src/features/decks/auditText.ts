@@ -328,7 +328,7 @@ function importLine(kind: DeckAuditKind, p: Record<string, unknown>): AuditLine 
  * build wrote, and `entry.variant` is typed {@link DeckVariant} without anything having
  * *checked* that it is one. A variant this build has never heard of names no list and falls back
  * to the deck, which stays true of a whole-list clear whichever list it was — where a bare
- * `listName(entry.variant)` would confidently call it the live list.
+ * `listName(entry.variant)` would confidently call it the actual list.
  */
 function clearedFrom(entry: DeckAuditEntry, p: Record<string, unknown>): string {
   if (text(p.scope) !== "deck") return text(p.category) ?? "a category";

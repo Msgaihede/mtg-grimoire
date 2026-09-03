@@ -242,7 +242,7 @@ export const Docked: Story = {
  *
  * **`aria-pressed` over a `.map`, not `role="tab"`.** The role is a contract rather than a name:
  * roving focus on the arrow keys, `aria-controls`, a `tabpanel` that takes the caret. Nothing else
- * in this app implements it — `DeckEditor`'s Theory/Live switch, `FilterChips`' layout pair and
+ * in this app implements it — `DeckEditor`'s Theory/Actual switch, `FilterChips`' layout pair and
  * the card pane's toggles are all pressed buttons — so a `tab` role here would announce a contract
  * this control does not honour. Two buttons, one pressed, which is why every query in every play
  * on this page reaches for `role="button"`.

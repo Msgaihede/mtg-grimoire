@@ -102,7 +102,7 @@ describe("auditSentence", () => {
         ),
       );
 
-    expect(cleared("live")).toEqual({ text: "Cleared 42 cards from the live list", detail: null });
+    expect(cleared("live")).toEqual({ text: "Cleared 42 cards from the actual list", detail: null });
     expect(cleared("theory")).toEqual({
       text: "Cleared 42 cards from the theory list",
       detail: null,
@@ -159,12 +159,12 @@ describe("auditSentence", () => {
   it("degrades a clear whose payload it cannot read", () => {
     expect(
       auditSentence(entry("remove", { action: "clear", scope: "deck" }, { cardId: null })).text,
-    ).toBe("Cleared 0 cards from the live list");
+    ).toBe("Cleared 0 cards from the actual list");
     expect(
       auditSentence(
         entry("remove", { action: "clear", scope: "deck", cards: "lots" }, { cardId: null }),
       ).text,
-    ).toBe("Cleared 0 cards from the live list");
+    ).toBe("Cleared 0 cards from the actual list");
     // A scope that is not the word is every row written before `deck_clear` existed: a pile's.
     expect(
       auditSentence(

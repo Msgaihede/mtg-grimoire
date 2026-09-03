@@ -253,7 +253,7 @@ Pathway` is one card and there are seven such names in the reference list alone,
   `replace` on a `live` list, and it is a Rust-side fact rather than a second write from here**
   (2026-09-01, issue #336): that mode deletes the variant's `deck_cards` rows, and
   `deck::release_live_copies` inside the same commit files the copies behind them into
-  `Recently removed` — the same act `Clear live list…` performs. One press, still one
+  `Recently removed` — the same act `Clear actual list…` performs. One press, still one
   transaction, still one command; what changed is that the press is a **collection** write too,
   which is why the dialog says so. `useImport`'s fourth mutation, `importIntoNewDeck`, is
   `deck_create` then that commit with a **hand-rolled rollback** — two commands are two

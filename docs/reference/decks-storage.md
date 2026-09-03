@@ -818,7 +818,7 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
     all call it — this clear, the stack clear, `deck_meta::delete_category`'s cascade arm and the
     import's `replace` arm. **The failure it prevents is worth keeping written down now that the
     code cannot make it**: the same delete over the same rows left the reader's copies in two
-    different places depending on which press made it — **Clear live list…** put them back on
+    different places depending on which press made it — **Clear actual list…** put them back on
     their desk, while importing over the deck in replace mode left them filed under a deck that no
     longer listed them, invisible on the Collection page and unavailable to every other deck. A
     fence spelled out at three call sites is a fence the fourth forgets, which is why the `live`
@@ -856,7 +856,7 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   the same helper, that `deck_clear` and `deck_category_clear` perform. **What that costs the
   reader is worth stating plainly, because it is a real consequence rather than a detail**: the
   freshly imported rows own nothing until the copies are filed back by hand, exactly where
-  **Clear live list…** leaves them. The alternative is not "the copies stay attached" — a
+  **Clear actual list…** leaves them. The alternative is not "the copies stay attached" — a
   `collection_entries` row is filed against a *printing* in a deck's group and the list that
   replaced it may name none of them, so the choice was between copies sitting in a holding area
   the reader can see and copies filed under a deck that has no row for them, which since v25 means

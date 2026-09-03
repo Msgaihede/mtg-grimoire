@@ -704,7 +704,7 @@ describe("categories", () => {
     expect(within(dialog).getByText(/move to “Commander”\. Nothing is lost/)).toBeInTheDocument();
     // One list in this deck, so no sentence about a second one: the words appear only where
     // there are copies the reader cannot see.
-    expect(within(dialog).queryByText(/both the live and theory lists/)).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(/both the theory and actual lists/)).not.toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Move 12 cards and delete" }));
 
     expect(deckCategoryDelete).toHaveBeenCalledWith(2, 1);
@@ -749,12 +749,12 @@ describe("categories", () => {
     // Anchored on the sentence's own opening: `move to “Commander”` alone also matches the
     // picker's own row saying the same thing, which is a different control.
     expect(within(dialog).getByText(/^The 7 cards in it move to “Commander”/)).toHaveTextContent(
-      "both the live and theory lists",
+      "both the theory and actual lists",
     );
 
     await pickOption(user, "Its 7 cards", "go with it");
     expect(within(dialog).getByText(/^The 7 cards in it go with it/)).toHaveTextContent(
-      "both the live and theory lists, not just the one on screen",
+      "both the theory and actual lists, not just the one on screen",
     );
     await user.click(within(dialog).getByRole("button", { name: "Delete “Ramp”" }));
 

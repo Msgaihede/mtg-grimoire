@@ -1262,7 +1262,7 @@ describe("DeckSearchPanel", () => {
 /**
  * The two searches this column offers, and the strip that picks between them.
  *
- * The strip is `aria-pressed` over a `.map` — the shape `DeckEditor`'s Theory/Live switch
+ * The strip is `aria-pressed` over a `.map` — the shape `DeckEditor`'s Theory/Actual switch
  * already uses — and deliberately **not** `role="tab"`: that role brings a keyboard contract
  * (arrow-key roving focus, `aria-controls`, a `tabpanel`) that nothing else in this app
  * implements, so adopting it here would either be half-built or would make this one control

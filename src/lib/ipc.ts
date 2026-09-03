@@ -2124,7 +2124,7 @@ export interface DeckAuditEntry {
   /**
    * Signed **copies**, for the day header's `+7 / −6` roll-up: `+n` on an add, `−n` on a
    * remove, the difference on a quantity change, and **`+n` on the one `deck` row that records
-   * a theory copy** — `deck_theory::copy_from_live` seeds the plan from the live list and
+   * a theory copy** — `deck_theory::copy_from_live` seeds the plan from the actual list and
    * carries the copies it wrote. `0` on everything else.
    *
    * That fourth case is the one worth naming, because it is the exception to the shape of this
@@ -5088,7 +5088,7 @@ export const ipc = {
   deckCategoryClear: (deckId: number, categoryId: number, variant: DeckVariant) =>
     invoke<number>("deck_category_clear", { deckId, categoryId, variant }),
   /**
-   * Empty **one whole list of one deck** — Deck settings' **Clear live list…** and
+   * Empty **one whole list of one deck** — Deck settings' **Clear actual list…** and
    * **Clear theory list…** — and answer the
    * **copies** it removed: `sum(quantity)`, never a count of `deck_cards` rows.
    *

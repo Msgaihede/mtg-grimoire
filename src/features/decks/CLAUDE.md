@@ -279,7 +279,7 @@ reader to configure the deck they had just made; it now asks all of them.
   it sits are arguments rather than placements** (2026-09-01, issue #281). It is the dialog's own
   section — `ClearDeck.tsx` hosted by `DeckSettingsDialog`, never by `DeckSettingsForm`. **Not the
   form**, because the bullet above is what the form is: `CreateDeckDialog` draws it over a deck
-  that does not exist yet, where "empty the live list" is a question about nothing, and a
+  that does not exist yet, where "empty the actual list" is a question about nothing, and a
   destructive control is the one thing that cannot follow a component whose whole guarantee is
   that it reaches no backend. **Not the editor's toolbar**, because that row is full — `ACTIONS`
   already gives up its longest word at `SETTINGS_ICON_PX` and the rest of them at
@@ -1296,7 +1296,7 @@ price | type`). An **inactive category stays its own group in all three grouping
   **`listNames.ts`'s `listName` is a second answer to a second question and the two must not be
   merged** (2026-09-01). `variantName` names the **tabs a reader picks between** and answers
   `Actual` / `Theory`; `listName` names the **list a sentence talks about** and answers
-  `live list` / `theory list`, lowercased into prose and without an article so each caller writes
+  `actual list` / `theory list`, lowercased into prose and without an article so each caller writes
   its own `the`. They take the same argument and would collapse into one three-line function that
   read wrongly on one of the two surfaces. It became a module when it reached three callers —
   `ClearCategory` and `ClearDeck` each held a private copy, cheap to keep in step one press apart,
@@ -1309,6 +1309,24 @@ price | type`). An **inactive category stays its own group in all three grouping
   submenu's *order* — it still ranks Theory first as a guess at which list a card is for, which
   happens to agree with the tabs again and is not derived from them — and `deck_theory_diff`, which
   still counts plan → reality, that being what the shopping list *means*.
+  **Five more surfaces were still saying `live` a week later, which is what issue #357 reported
+  and what 2026-09-03 swept** — and the reporter had only seen one of them, the deck tile's
+  badge. The rest were reached by grepping for the *rendered* word rather than by following the
+  report: `listNames.ts`'s `listName` (so both Clear confirmations and the history log's
+  whole-list line), Deck settings' `Clear actual list…`, the theory switch's own caption, the
+  Categories dialog's "both the theory and actual lists" clause, and `TagsDialog`'s section
+  heading. **Nothing about the stored variant moved**, exactly as the tab rename did not move it:
+  `live` is still the column, the IPC argument and `DeckVariant`'s member, and the two prose
+  helpers above are the whole of the join. A sixth surface would be found the same way — grep the
+  word a reader sees, not the value the database holds.
+  **The tile's badge is the one that lost a state rather than a word.** It read
+  `LIVE | LIVE + THEORY | THEORY ONLY` and reads `THEORY + ACTUAL | THEORY ONLY` over `null`,
+  because the one-list deck's badge was the caption's `Any` row in different type: one list is
+  what every deck is born with, so a word for it sat on nearly every tile in the gallery and told
+  the reader nothing about any of them. `deckBadge` answers `DeckBadge | null` for it, which is
+  what took the dim-bordered arm out of the badge's own classes — every badge left is a deck that
+  keeps two lists, so accent is unconditional and the dash still means the plan has nothing
+  standing in for it yet.
   **No hairline between the two tabs**, unlike {@link TRANSFER}'s joined pair: one of them is
   always pressed, so the filled half's own edge is the divider. The pair needed one while `Compare`
   sat between them and carried it.
