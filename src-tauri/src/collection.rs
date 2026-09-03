@@ -1323,6 +1323,30 @@ pub struct CollectionQuery {
     /// widens the root to everything, this one narrows everything to the root — because the two
     /// surfaces mean opposite things by an absent folder. Same page control, opposite polarity.
     pub root_only: bool,
+    /// `true` leaves out the copies filed in a **locked** folder — a drawer the reader has set
+    /// aside — and in every folder inside one, because a lock inherits down the tree. Ignored
+    /// entirely when [`Self::folder_id`] names a folder, which is [`Self::root_only`]'s own rule
+    /// applied to a second field: standing in a locked folder, or in a subfolder of one, *names*
+    /// it, and a named folder is served whole.
+    ///
+    /// **Default `false`, and the default is the whole of its safety.** This is
+    /// [`Self::root_only`]'s argument verbatim, one field along: an unasked question keeps
+    /// today's answer, so a caller nobody updated cannot silently lose rows. And the callers
+    /// that must go on reading everything are not hypothetical — **the plain-text mirror and
+    /// the export sweep both page through [`list_entries`]**, and `mirror/read.rs` already says
+    /// in words that a whole-collection backup is "the one read that must never ask" the
+    /// narrowing question. An unconditional term in [`scope`] would make every backup and every
+    /// CSV export silently omit the reader's locked cards while raising nothing: no error, no
+    /// empty page, just a file on disk missing exactly the cards its reader was most careful
+    /// about. That is the worst failure available in this feature, and the default is what
+    /// forecloses it.
+    ///
+    /// Who asks: the collection page, and the deck builder's Collection Search tab — the
+    /// surface whose question is "what can I build with today", which is the one thing a set
+    /// aside drawer is not part of. Who does not: the mirror, the export sweep and the web
+    /// route's passthrough, and `a_query_that_never_asks_still_sees_a_locked_folders_copies` is
+    /// the fence around that silence.
+    pub exclude_locked: bool,
     /// Whether to leave out the copies a deck holds. Absent is [`Allocation::All`], which is
     /// what every caller written before folders existed asked for without saying so.
     pub allocation: Option<Allocation>,
@@ -1599,6 +1623,31 @@ fn scope(q: &CollectionQuery) -> crate::filters::Predicates {
               OR (SELECT f.kind FROM collection_folders f WHERE f.id = e.folder_id) <> 'deck')"
                 .to_owned(),
         );
+    }
+    // The copies the reader has set aside. Three things about this term are each load-bearing.
+    //
+    // **`q.folder_id.is_none()` is what makes "except inside the folder" true.** Standing in a
+    // locked folder — or in a subfolder of one — *names* it, and a named folder is served whole.
+    // That is [`CollectionQuery::root_only`]'s own rule ("ignored entirely when `folder_id`
+    // names a folder") applied to a second field, so the three-state convention above gains no
+    // fourth state and the reader can always reach what they filed.
+    //
+    // **`e.folder_id IS NULL` comes first**, for the arm above's reason: the root is where most
+    // copies are and is not a folder to look up, and a `NOT IN` over a NULL is NULL rather than
+    // true — so the root would drop out of the very list that is mostly root.
+    //
+    // **A correlated lookup and never a join**, for [`from_sql`]'s reason: the page, the count
+    // and the summary all read that one `FROM`, and widening it for a filter two of them do not
+    // use is how a header comes to describe different rows than the list below it. The statement
+    // inside is [`crate::collection_folders::LOCKED_FOLDER_IDS`], spelled once there because
+    // `deck_theory` reads it too — a second copy here would be a second place for the
+    // inheritance rule to drift — and it binds nothing.
+    if q.exclude_locked && q.folder_id.is_none() {
+        p.wheres.push(format!(
+            "(e.folder_id IS NULL
+              OR e.folder_id NOT IN ({locked}))",
+            locked = crate::collection_folders::LOCKED_FOLDER_IDS
+        ));
     }
     // **Built here rather than in `filters.rs` because the expression is the marketplace's**, and
     // [`crate::sorting::price_expr`] is the one place that mapping is written — the same
@@ -2654,6 +2703,206 @@ mod tests {
             serde_json::from_str(r#"{"folderId":4,"rootOnly":true}"#).unwrap();
         assert_eq!(filed.folder_id, Some(4));
         assert!(filed.root_only);
+    }
+
+    /// Set a folder aside, straight into the column. `collection_folders::set_folder_locked` is
+    /// the reader's press and that module's to test; these tests want a folder that **is**
+    /// locked rather than the press that locks it — [`filed_in`]'s reason, one table over.
+    ///
+    /// The affected count is asserted rather than discarded, because an `UPDATE` naming an id
+    /// that is not there succeeds and changes nothing, which would make every assertion below
+    /// it a statement about an unlocked folder.
+    fn lock(conn: &Connection, id: i64) {
+        assert_eq!(
+            conn.execute(
+                "UPDATE collection_folders SET locked = 1 WHERE id = ?1",
+                params![id],
+            )
+            .unwrap(),
+            1,
+            "the folder the test means to set aside is there"
+        );
+    }
+
+    /// One folder **inside** another, which [`folder`] cannot make — it builds root siblings, and
+    /// the whole of the inheritance rule needs a child to inherit.
+    fn nested(conn: &Connection, parent: i64, name: &str) -> i64 {
+        conn.query_row(
+            "INSERT INTO collection_folders
+                (parent_id, name, kind, deck_id, sort_order, created_at, updated_at)
+             VALUES (?1, ?2, 'user', NULL, 0, unixepoch(), unixepoch())
+             RETURNING id",
+            params![parent, name],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// **A locked folder's copies leave the flattened list, and the folder inside it goes with
+    /// them.** The flag is stored on the folder the reader pressed Lock on and the *answer* is
+    /// computed over ancestry, so a subfolder is locked while carrying no flag of its own —
+    /// which is the whole reason the term is a recursive CTE rather than an
+    /// `IN (SELECT id FROM collection_folders WHERE locked <> 0)`.
+    ///
+    /// **The summary is asserted beside the page**, which is [`scope`]'s reason for existing:
+    /// the term is pushed there so the page, the count beside it and the header narrow together,
+    /// and a predicate written into [`list_entries`] instead would pass here on the items alone
+    /// while leaving a header counting rows the wall does not draw.
+    ///
+    /// Every row is the same printing at the same finish, condition and language, so they are
+    /// four rows only because `coalesce(folder_id, 0)` is `COLLECTION_GRAIN`'s eleventh term.
+    #[test]
+    fn a_locked_folders_copies_drop_out_of_a_flattened_list() {
+        let conn = seeded();
+        let binder = folder(&conn, "user", "Binder");
+        let case = folder(&conn, "user", "Display case");
+        let shelf = nested(&conn, case, "Top shelf");
+        lock(&conn, case);
+        let at_root = filed_in(&conn, "bolt-lea", None, 2);
+        let in_binder = filed_in(&conn, "bolt-lea", Some(binder), 3);
+        filed_in(&conn, "bolt-lea", Some(case), 4);
+        filed_in(&conn, "bolt-lea", Some(shelf), 5);
+
+        let page = list_entries(
+            &conn,
+            &CollectionQuery {
+                exclude_locked: true,
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            page.items.iter().map(|r| r.id).collect::<Vec<_>>(),
+            vec![at_root, in_binder],
+            "the root and the unlocked binder — and neither the drawer nor the shelf in it"
+        );
+        assert_eq!(
+            page.total, 2,
+            "the caption narrows with the list, not just the items"
+        );
+
+        let header = summarise(
+            &conn,
+            &CollectionQuery {
+                exclude_locked: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            (header.entries, header.total_cards),
+            (2, 5),
+            "and the summary describes the same rows the page draws"
+        );
+    }
+
+    /// **Standing in a locked folder still lists its copies**, which is the half of this feature
+    /// that keeps a lock from being a hiding place: the app stops *offering* what the reader set
+    /// aside without ever stopping them *reaching* it.
+    ///
+    /// The mechanism is `q.folder_id.is_none()` on the term — `root_only`'s own "ignored
+    /// entirely when `folder_id` names a folder" applied to a second field — so an
+    /// `excludeLocked` still set from the render before cannot turn a folder's page into the
+    /// empty intersection: a wall that draws nothing, with no error anywhere.
+    ///
+    /// **The subfolder is the second case and the sharper one.** That folder carries no flag of
+    /// its own and is locked only by ancestry, so a guard that asked "is the *named* folder
+    /// locked?" instead of not asking at all would serve the drawer and refuse the shelf inside
+    /// it — the one place the two readings of the rule come apart.
+    #[test]
+    fn standing_in_a_locked_folder_still_lists_its_copies() {
+        let conn = seeded();
+        let case = folder(&conn, "user", "Display case");
+        let shelf = nested(&conn, case, "Top shelf");
+        lock(&conn, case);
+        filed_in(&conn, "bolt-lea", None, 2);
+        let in_case = filed_in(&conn, "bolt-lea", Some(case), 3);
+        let on_shelf = filed_in(&conn, "bolt-lea", Some(shelf), 4);
+
+        let standing_in = |id: i64| -> CollectionPage {
+            list_entries(
+                &conn,
+                &CollectionQuery {
+                    folder_id: Some(id),
+                    exclude_locked: true,
+                    limit: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+
+        let drawer = standing_in(case);
+        assert_eq!(
+            drawer.items.iter().map(|r| r.id).collect::<Vec<_>>(),
+            vec![in_case],
+            "the folder the reader named is served whole, lock and all"
+        );
+        assert_eq!(drawer.total, 1);
+
+        let inside = standing_in(shelf);
+        assert_eq!(
+            inside.items.iter().map(|r| r.id).collect::<Vec<_>>(),
+            vec![on_shelf],
+            "and so is a subfolder, which is locked by its parent and by nothing of its own"
+        );
+        assert_eq!(inside.total, 1);
+    }
+
+    /// **The most important assertion in this feature, and it is about a question nobody asks.**
+    ///
+    /// The plain-text mirror's `Source::WholeCollection` and the export's paged sweep both fill
+    /// this struct with `..Default::default()` and will never mention the new field, and
+    /// `mirror/read.rs` already says in words that a whole-collection backup is "the one read
+    /// that must never ask" the narrowing question. A default of `true`, or a term in [`scope`]
+    /// that had been "tidied" into an unconditional one, would put a backup on disk holding
+    /// everything except the cards the reader was most careful about — no error, no empty page,
+    /// nothing on any screen to notice.
+    ///
+    /// So the assertion is today's behaviour verbatim, from three directions: the struct's own
+    /// default, the wire's, and the rows an unasked query still answers.
+    #[test]
+    fn a_query_that_never_asks_still_sees_a_locked_folders_copies() {
+        let conn = seeded();
+        let case = folder(&conn, "user", "Display case");
+        let shelf = nested(&conn, case, "Top shelf");
+        lock(&conn, case);
+        let at_root = filed_in(&conn, "bolt-lea", None, 2);
+        let in_case = filed_in(&conn, "bolt-lea", Some(case), 3);
+        let on_shelf = filed_in(&conn, "bolt-lea", Some(shelf), 4);
+
+        let q = CollectionQuery {
+            limit: 50,
+            ..Default::default()
+        };
+        assert!(!q.exclude_locked, "the struct's own default is off");
+        let page = list_entries(&conn, &q).unwrap();
+        assert_eq!(
+            page.items.iter().map(|r| r.id).collect::<Vec<_>>(),
+            vec![at_root, in_case, on_shelf],
+            "an unasked question keeps every copy the reader owns, set aside or not"
+        );
+        assert_eq!(page.total, 3, "and the count is over the same scope");
+
+        let header = summarise(&conn, &CollectionQuery::default()).unwrap();
+        assert_eq!(
+            (header.entries, header.total_cards),
+            (3, 9),
+            "the backup's own header counts them too"
+        );
+
+        // The wire's spelling and its default, which is where this is really decided: the web
+        // route's passthrough hands `scope` whatever JSON arrived, so an omitted field has to
+        // parse to `false` rather than to a narrowing or an error.
+        let bare: CollectionQuery = serde_json::from_str("{}").unwrap();
+        assert!(
+            !bare.exclude_locked,
+            "an omitted `excludeLocked` reads the whole collection — which is what the mirror \
+             and the export sweep send, and what they must go on getting"
+        );
+        let asked: CollectionQuery = serde_json::from_str(r#"{"excludeLocked":true}"#).unwrap();
+        assert!(asked.exclude_locked, "camelCase on the way in, too");
     }
 
     /// The default query, priced somewhere other than the default.

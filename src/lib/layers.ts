@@ -84,7 +84,7 @@ export const LAYER = {
   dragTray: "z-40",
   /**
    * A full-window layer a view opens over everything it owns: the deck editor's import,
-   * categories, tags, history, theory-difference, settings and export dialogs, and the card
+   * categories, labels, history, theory-difference, settings and export dialogs, and the card
    * detail modal.
    *
    * **One rung for all of them, deliberately, where a rung apiece looks more careful.** Not one

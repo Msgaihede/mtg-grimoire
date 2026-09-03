@@ -8,7 +8,7 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { useMutation, useQueryClient, type InfiniteData } from "@tanstack/react-query";
-import { FolderInput, Pencil, Trash2 } from "lucide-react";
+import { FolderInput, Lock, LockOpen, Pencil, Trash2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { Dialog } from "@/components/Dialog";
 import type { MenuItem } from "@/components/menu/types";
@@ -21,6 +21,7 @@ import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { listWalkStops, usePublishCardWalk } from "@/features/card/cardWalk";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { dragData } from "@/features/decks/dnd";
+import { CONFIRM_CANCEL, CONFIRM_DESTRUCTIVE, useConfirmFocus } from "@/features/decks/metaRows";
 import { MoveToFolder } from "@/features/decks/MoveToFolder";
 import { CardGrid, PHONE_TILE_WIDTH, type GridCard } from "@/features/search/CardGrid";
 import { FilterBar, type FilterLabels, type TrayCell } from "@/features/search/FilterBar";
@@ -40,6 +41,7 @@ import {
   buildFolderTree,
   folderDescendants,
   folderLevel,
+  lockedFolderIds,
   type FolderNode,
 } from "@/lib/folderTree";
 import {
@@ -117,6 +119,32 @@ type Panel =
   | { kind: "moveFolder"; folderId: number }
   | { kind: "deleteFolder"; folderId: number }
   | null;
+
+/**
+ * A drag that would carry a copy across the edge of a drawer the reader has set aside — issue
+ * #365, design §5 — held for as long as the question about it is on screen.
+ *
+ * **The drop and its destination, verbatim**, because the answer *replays the gesture*: `Move it`
+ * hands both straight back to {@link CollectionPage.fileCard}, which is where a tile standing for
+ * several rows still turns into the copy picker. Nothing here is a partial write waiting to be
+ * finished; the gesture simply has not happened yet.
+ *
+ * **`out` and `into` are the locked *drawers*, by name, and either can be `null`** — a copy going
+ * into a locked binder is leaving nothing, and one coming out of it is arriving nowhere set aside.
+ * Both are the **outermost** locked ancestor rather than the folder the pointer is over, which is
+ * what makes the sentence true for a sub-folder: dropped into `Trade binder / Foils`, the drawer
+ * that is set aside is `Trade binder`, and naming `Foils` would leave the reader looking for a
+ * lock on a card whose badge they were told is inherited.
+ */
+interface LockedMove {
+  drop: CollectionDrop;
+  to: number | null;
+  card: string;
+  /** The set-aside drawer the copy is leaving, or `null` when it is not leaving one. */
+  out: string | null;
+  /** The set-aside drawer it would land in, or `null` when it is not landing in one. */
+  into: string | null;
+}
 
 /**
  * A folder the summary has no row for.
@@ -974,6 +1002,22 @@ export function CollectionPage() {
   } | null>(null);
 
   /**
+   * The question a **drag** asks when it crosses the edge of a drawer the reader has set aside,
+   * or `null` while nothing is being asked — issue #365, design §5.
+   *
+   * The whole drop travels with it rather than a card id, because the answer replays the gesture:
+   * a tile standing for several rows still has to reach {@link fileCard}'s own picker afterwards,
+   * and the folder card that took the drop is long gone from the conversation by then.
+   *
+   * **Only a drag raises one.** A drop target is a rectangle a pointer can land on by mistake and
+   * this is the whole gesture the badge on the tile exists to slow down; the card menu's
+   * `Add to → <folder>` and the row's `Move to folder…` both put the folder's name in the press
+   * the reader made, so a confirmation there would ask them to agree with a sentence they had just
+   * typed the answer to — which is `PinnedFolders`' rule one step further along.
+   */
+  const [crossing, setCrossing] = useState<LockedMove | null>(null);
+
+  /**
    * The collection as a **walk**, so the printings modal's chevrons and arrow keys step along it.
    *
    * **Built from {@link tiles} rather than from `rows`, and that is the honest source of the
@@ -1188,6 +1232,64 @@ export function CollectionPage() {
   );
 
   /**
+   * The drawers the reader has set aside — **every folder inside a locked one included**, because
+   * the lock inherits down the tree (issue #365, design §3).
+   *
+   * `lockedFolderIds` is the single place that inheritance is computed on this side and no call
+   * site here re-derives it: the badge on a folder card, the greyed Lock/Unlock row, the greyed
+   * Delete and the drag confirmation are all four about the *effective* answer, and reading
+   * `CollectionFolder.locked` at any of them would draw an unmarked drawer inside a locked one.
+   *
+   * **The whole census rather than {@link userFolders}**, which is not tidiness: a deck group and
+   * `Recently removed` carry `locked = false` — the write refuses anything that is not
+   * `kind = 'user'` in words — so including them costs nothing, and leaving them out would break
+   * {@link lockRootOf}'s walk the day anything is nested under one.
+   */
+  const lockedIds = useMemo(() => lockedFolderIds(folders.folders), [folders.folders]);
+
+  /** Every folder's parent, for {@link lockRootOf}'s walk. A `Map` for {@link folderNames}' reason:
+   *  the walk runs once per end of every drag frame, and the whole list is already in memory. */
+  const parentById = useMemo(
+    () => new Map(folders.folders.map((folder) => [folder.id, folder.parentId])),
+    [folders.folders],
+  );
+
+  /**
+   * **Which drawer a folder is set aside *inside*** — the outermost locked ancestor-or-self, or
+   * `null` for a folder that is not locked at all. The root is never locked, so `null` in is
+   * `null` out.
+   *
+   * **This is what makes "a move inside the drawer is not a move across the boundary" computable**
+   * (design §5), and a boolean cannot answer it: dragging a copy between two sub-folders of one
+   * locked binder has both ends effectively locked and has crossed nothing, while dragging between
+   * two *different* locked binders has both ends effectively locked and has crossed twice. Naming
+   * the drawer rather than counting the locks tells those two apart in one comparison —
+   * {@link crossesLockedBoundary} is that comparison, and it is the whole of the rule.
+   *
+   * **Outermost rather than nearest**, which is the half a "walk up to the first locked ancestor"
+   * reading gets wrong: a locked binder holding a separately-locked sub-folder is still one
+   * drawer, and stopping at the sub-folder would ask a reader to confirm a move within it.
+   *
+   * The `seen` set is `lockedFolderIds`' own guard for the same reason it has one: `move_folder`
+   * refuses to write a cycle, only a hand-edited database could hold one, and a walk that hung the
+   * window over it would be worse than the corruption.
+   */
+  const lockRootOf = useCallback(
+    (id: number | null): number | null => {
+      let at = id;
+      let root: number | null = null;
+      const seen = new Set<number>();
+      while (at !== null && !seen.has(at)) {
+        seen.add(at);
+        if (lockedIds.has(at)) root = at;
+        at = parentById.get(at) ?? null;
+      }
+      return root;
+    },
+    [lockedIds, parentById],
+  );
+
+  /**
    * Flatten closes whatever folder layer is open, and it does it by *deriving* rather than by
    * writing state from an effect.
    *
@@ -1339,6 +1441,17 @@ export function CollectionPage() {
    */
   const folderRowMenu = useCallback(
     (folder: CollectionFolder) => {
+      // Whether the drawer is set aside, and whether that is the reader's press on *this* card or
+      // a decision they made further up the tree. The two are different rows' answers: Lock/Unlock
+      // is about this folder's own flag and is greyed by the ancestor, where Delete is about the
+      // effective lock and is greyed by either.
+      const inherited = !folder.locked && lockedIds.has(folder.id);
+      const effectivelyLocked = folder.locked || inherited;
+      /** The phrase a greyed row carries, which is a *phrase* rather than `FOLDER_IS_LOCKED`'s
+       *  whole sentence: a menu row is as wide as its widest content, so one long reason sets the
+       *  width of the entire panel. The two arms point at the two different things a reader would
+       *  go and do next, which is the grammar {@link blockedReason}'s greyed rows already use. */
+      const ancestorReason = "a folder above it is locked";
       const build = (): MenuItem[] => [
         {
           kind: "action",
@@ -1360,12 +1473,61 @@ export function CollectionPage() {
             open({ kind: "moveFolder", folderId: folder.id }, openerRef.current);
           },
         },
+        /**
+         * **Set the drawer aside, or bring it back** — issue #365, and the one row here that is
+         * neither a layer nor a field: it writes on the press, and what the reader watches change
+         * is the badge on the card behind the menu.
+         *
+         * **It toggles the folder's *own* flag**, where every other consumer of the lock on this
+         * page reads the effective one. That asymmetry is the feature rather than an
+         * inconsistency: the reader locks a drawer and gets the drawer, including whatever they
+         * have nested inside it — so there is one row per folder to press and no second copy of
+         * the fact to disagree with the first.
+         *
+         * **Greyed, with its reason in the row's accessible name, when an ancestor is locked.**
+         * Unlocking a child of a locked parent changes nothing a reader can see — the badge stays
+         * and the copies stay out of the flattened list — and a row that reported success over an
+         * unmoved badge is worse than a greyed one. `Rename…` and `Move to folder…` above stay
+         * live in every state, deliberately: neither disturbs a card, so neither is what the lock
+         * is about (design §4.4).
+         *
+         * Above the separator, with the other two live rows: the rule below it is *destructive*,
+         * and locking is reversible in one press.
+         */
+        {
+          kind: "action",
+          id: "lock",
+          label: folder.locked ? "Unlock folder" : "Lock folder",
+          Icon: folder.locked ? LockOpen : Lock,
+          disabled: inherited ? true : undefined,
+          reason: inherited ? ancestorReason : undefined,
+          onSelect: () => {
+            folders.setLocked.reset();
+            folders.setLocked.mutate({ id: folder.id, locked: !folder.locked });
+          },
+        },
         { kind: "separator", id: "before-delete" },
+        /**
+         * **Greyed on the *effective* lock**, which is `delete_folder`'s own fence said early:
+         * deleting re-files every card in the sub-tree to the root, silently undoing exactly the
+         * filing the lock was protecting, so the backend refuses it in words (`FOLDER_IS_LOCKED`)
+         * for a folder inside a locked parent as surely as for the one the reader pressed Lock on.
+         * **And the UI must not let the press happen**: `PinnedFolders`' own rule is that a control
+         * whose only outcome is a sentence explaining that it does not work teaches the reader
+         * nothing its absence would not have. That band answers it by omitting the menu; a locked
+         * drawer keeps its menu, so this greys with its reason in the row's accessible name.
+         */
         {
           kind: "action",
           id: "delete",
           label: "Delete…",
           Icon: Trash2,
+          disabled: effectivelyLocked ? true : undefined,
+          reason: effectivelyLocked
+            ? inherited
+              ? ancestorReason
+              : "unlock it first"
+            : undefined,
           onSelect: () => {
             folders.remove.reset();
             open({ kind: "deleteFolder", folderId: folder.id }, openerRef.current);
@@ -1390,7 +1552,17 @@ export function CollectionPage() {
         },
       };
     },
-    [menu, menuKey, menuClick, open, folders.rename, folders.move, folders.remove],
+    [
+      menu,
+      menuKey,
+      menuClick,
+      open,
+      lockedIds,
+      folders.rename,
+      folders.move,
+      folders.remove,
+      folders.setLocked,
+    ],
   );
 
   /** The reader's own drawers and the app's deck groups, as sets, for the two fences in
@@ -1639,7 +1811,8 @@ export function CollectionPage() {
     [canMoveCopy],
   );
   /**
-   * The write, or the question that has to come before it.
+   * The write, or the question about **which copy** that has to come before it — everything a drop
+   * did before the lock existed, and what {@link fileCard} hands a confirmed one back to.
    *
    * A table row is one entry and files straight away — the gesture has already said everything
    * there is to say. A wall tile files straight away too **when it stands for a single row**,
@@ -1649,8 +1822,13 @@ export function CollectionPage() {
    * and choosing for them is the one answer that is always wrong for somebody. (They can no
    * longer differ in **finish** — that is what makes them two pieces of art since 2026-08-26 —
    * which narrows this question without answering it.)
+   *
+   * **Split out rather than guarded inside, so the confirmed gesture is the same code as the
+   * unconfirmed one.** A lock question that re-implemented the single-row shortcut would be a
+   * second definition of "which entry does this drop write", and the two would disagree the first
+   * time either moved — which is `useSetCollectionFolder`'s own history, one write down.
    */
-  const fileCard = useCallback(
+  const commitFile = useCallback(
     (drop: CollectionDrop, to: number | null) => {
       if (drop.kind === "entry") {
         setFolder.mutate({ entryId: drop.entry.entryId, folderId: to });
@@ -1664,6 +1842,74 @@ export function CollectionPage() {
       setPicking({ cardName: name, entryIds: copies.map((copy) => copy.entryId), folderId: to });
     },
     [setFolder],
+  );
+
+  /**
+   * **Has this drop crossed the edge of a drawer the reader set aside** — the one comparison
+   * design §5 rests on, and the reason {@link lockRootOf} names a folder rather than answering a
+   * boolean.
+   *
+   * Two ends both *effectively* locked is not the question: two sub-folders of one locked binder
+   * are both locked and the copy has not left the drawer, where two different locked binders are
+   * both locked and it has left one and entered another. Comparing the drawers answers both, and
+   * answers the ordinary cases for free — neither end locked is `null === null`, and exactly one
+   * end locked is a difference by construction.
+   */
+  const crossesLock = useCallback(
+    (from: number | null, to: number | null) => lockRootOf(from) !== lockRootOf(to),
+    [lockRootOf],
+  );
+
+  /**
+   * The write, or one of the two questions that can come before it.
+   *
+   * A table row is one entry and files straight away — the gesture has already said everything
+   * there is to say. A wall tile files straight away too **when it stands for a single row**,
+   * which is the common case and the one where a dialog would be a press for a choice with one
+   * answer. More than one row behind the art is the case the app cannot decide: the copies differ
+   * in condition, language and folder, the reader can see none of that on a piece of card art,
+   * and choosing for them is the one answer that is always wrong for somebody. (They can no
+   * longer differ in **finish** — that is what makes them two pieces of art since 2026-08-26 —
+   * which narrows this question without answering it.) That half is {@link commitFile}.
+   *
+   * **The lock is the other question and it is asked first**, because it is about the gesture
+   * rather than about which row the gesture is for: a reader who says *leave it there* never sees
+   * the picker at all, and one who says *move it* is handed back to exactly the code path the drop
+   * would have taken. Only the copies that could actually move are asked about — a tile whose one
+   * movable copy is already in the destination is refused by {@link canFile} before this runs, and
+   * a copy the destination would refuse is not part of what the reader is being warned about.
+   *
+   * **A drag only.** `Add to → <folder>` and `Move to folder…` reach {@link setFolder} through
+   * their own handlers and are deliberately not routed through here.
+   */
+  const fileCard = useCallback(
+    (drop: CollectionDrop, to: number | null) => {
+      const sources =
+        drop.kind === "entry"
+          ? [drop.entry.folderId]
+          : drop.tile.copies
+              .filter((copy) => canMoveCopy(copy.folderId, to))
+              .map((copy) => copy.folderId);
+      const crossed = sources.filter((from) => crossesLock(from, to));
+      if (crossed.length === 0) {
+        commitFile(drop, to);
+        return;
+      }
+      // The first crossing source's drawer, where a tile could in principle be carrying copies out
+      // of two different locked binders at once. The sentence stays true of the one it names, and
+      // naming both would be a clause for an arrangement nobody has: a printing filed in two
+      // separately locked drawers *and* dragged somewhere neither of them is.
+      const leaving = crossed.map((from) => lockRootOf(from)).find((id) => id !== null) ?? null;
+      const arriving = lockRootOf(to);
+      setCrossing({
+        drop,
+        to,
+        card: drop.kind === "entry" ? drop.entry.name : drop.tile.name,
+        out: leaving === null ? null : (folderNameOf(leaving) ?? "a folder you have set aside"),
+        into: arriving === null ? null : (folderNameOf(arriving) ?? "a folder you have set aside"),
+      });
+    },
+    [canMoveCopy, crossesLock, lockRootOf, folderNameOf, commitFile],
   );
 
   /**
@@ -1730,6 +1976,7 @@ export function CollectionPage() {
     folders.move,
     folders.reorder,
     folders.remove,
+    folders.setLocked,
   ]);
   const empty = rows.length === 0;
   // The cabinet is drawn only where there is one. In a collection nobody has filed, a lone inert
@@ -2219,6 +2466,40 @@ export function CollectionPage() {
           </div>
         )}
 
+        {/**
+         * **The one gesture a lock slows down**, issue #365 and design §5 — a copy dragged into a
+         * drawer the reader set aside, or out of one, asked about before it moves.
+         *
+         * **Above the wall rather than under the tile it was asked from**, which is the
+         * `CollectionSearchTab` question's own placement and for its reason one surface over: the
+         * grid virtualises, so a tile scrolled out from under an open question would unmount it
+         * mid-answer — and a box drawn *into* the wall would reflow the row of drawers around the
+         * card the reader is aiming at. It survives the position by naming the card and the drawer
+         * in words, so the question never depended on remembering which tile the drag started on.
+         *
+         * **Not gated on {@link cabinet}.** The wall is off while the list is flattened and the
+         * breadcrumb still takes copy drops, so a question that rode the cabinet would be a
+         * confirmation the reader could raise and never see.
+         *
+         * `statusLine` and `overflow-hidden`, the failure banner's own grow-in: this column is a
+         * stack of rows, so anything appearing in it pushes everything below it down together, and
+         * a box with its own padding can never animate shorter than that padding.
+         */}
+        <AnimatePresence initial={false}>
+          {crossing && (
+            <motion.div {...statusLine} className="shrink-0 overflow-hidden">
+              <LockedMoveConfirm
+                move={crossing}
+                onConfirm={() => {
+                  commitFile(crossing.drop, crossing.to);
+                  setCrossing(null);
+                }}
+                onCancel={() => setCrossing(null)}
+              />
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {/* The sentence the substitution above needs, and only where it is doing something: a wall
             of the reader's own binders drawn over a pile of copies that just left a deck is not
             self-explaining, and the gesture it is inviting is one a reader has no reason to guess
@@ -2339,6 +2620,12 @@ export function CollectionPage() {
                       : (subtotals.get(node.folder.id) ?? NO_CARDS)
                   }
                   currency={marketplace.currency}
+                  // **The effective lock, never `node.folder.locked`.** A drawer inside a locked
+                  // one is locked, so it wears the badge too — a mark that appeared only on the
+                  // folder the reader pressed Lock on would make the inheritance invisible
+                  // exactly where it matters, which is standing inside that drawer looking at
+                  // what it took with it. {@link lockedIds} is the one place the tree is walked.
+                  locked={lockedIds.has(node.folder.id)}
                   onOpen={() => collection.openFolder(node.folder.id)}
                   rowMenu={folderRowMenu(node.folder)}
                   // `Rename…` is answered on the card itself. One `openPanel` naming exactly one
@@ -2369,7 +2656,9 @@ export function CollectionPage() {
             this page for; this is the app's own record of where the rest of their copies are, and
             it belongs beside that rather than above it. Drawn at every level because *pinned* is
             the word the spec uses and it is what makes `Recently removed` reachable from three
-            drawers down — see the component for the whole of what pinned, flat and locked cost.
+            drawers down — see the component for the whole of what pinned, flat and fixed cost, and
+            for why its third word is no longer *locked*: that one belongs to the reader's own Lock
+            press since issue #365, and means very nearly the opposite.
 
             **Flatten is the exception, and it is the one thing that could take this section away.**
             Flatten's promise is that the filing is off screen and every copy is in the list; a
@@ -2507,18 +2796,25 @@ export function CollectionPage() {
               // the wall draws its own `SET · number` and this page spells that text exactly once
               // — in {@link captionFor}, which is the flattened line and nothing else.
               caption={flatten ? captionFor(folderNameOf) : undefined}
-              /* **The wall's own stepper** (issue #284), in the strip over the foot of the art —
-                 the slot the search's quick-add and the wishlist's pencil already ride in, and the
-                 same place the deck editor puts a card's stepper. It costs the wall no height:
-                 the strip is `absolute inset-x-0 bottom-0`, so `tileHeight` is unchanged by its
-                 existence. Until it landed this view could maintain quantities in its *table*
+              /* **The wall's own stepper** (issue #284), standing in the tile's right margin
+                 (issue #348). Until it landed this view could maintain quantities in its *table*
                  alone, which made the wall the layout a reader looked at and the table the one
                  they worked in.
+
+                 **It rode in the bottom strip for its first two days and does not any more.** The
+                 report was that neither the style nor the location matched the deck builder's, and
+                 neither did: the deck stack draws a 36px column up the card's right-hand side and
+                 this drew a 20px bar tucked into the bottom corner. It is the same control over
+                 the same kind of object, so it is one recipe now — {@link CardGrid}'s `column`
+                 slot is the position and `size="card"` the size, both of them the deck stack's,
+                 and the wishlist's wall took the identical change in the same commit. It still
+                 costs the wall no height: the box is absolute, so `tileHeight` is unchanged by its
+                 existence, which was the strip's property and is inherited rather than re-argued.
 
                  **Absent is a real answer, not a fallback**: {@link stepperByTile} draws nothing
                  for a tile whose copies the reader may not step, and that is the fence rather than
                  an affordance — every rule about it is at that map's own site. */
-              action={(tile) => {
+              column={(tile) => {
                 const step = stepperByTile.get(tile.key);
                 if (step === undefined) return null;
                 // The mark the art is drawing, read through the same function the chip above it
@@ -2533,22 +2829,29 @@ export function CollectionPage() {
                   // travel is a drag of the card, and the press is never delivered as a click.
                   // `cardDraggable` asks `closest()`, so one mark on the wrapper covers both
                   // buttons; `DeckCardControls` carries the identical mark for the identical
-                  // reason. The wrapper is also the direct child `CardGrid`'s strip gives
-                  // `pointer-events-auto` back to.
+                  // reason.
                   <span data-no-drag="" className="flex">
                     <QuantityStepper
-                      // The 20px box, which scales with the reader's zoom through
-                      // `--control-scale` — `xs` and `card` are the two sizes drawn on a card
-                      // face, and this is a 170px tile rather than a 210px one.
-                      size="xs"
+                      // The deck stack's column, verbatim — the 36px box, standing on end, over
+                      // art. `xs` and `card` are the two sizes drawn on a card face and both
+                      // follow the reader's zoom through `--control-scale`; this is the larger.
+                      // Against a 170px tile whose art box is 238px (5:7) the column rests at
+                      // 30.6 × ~98.6px — 18% of the width and 41% of the height, starting 24px
+                      // down — where on the deck's own 210 × 293 card it is 15% and 34%. Both are
+                      // constants across the zoom ladder rather than readings at 1×, because the
+                      // tile, the art and the column are each linear in the same zoom.
+                      size="card"
+                      orientation="vertical"
                       // Drawn over an illustration, and inside a box that clips its own corners —
                       // the deck stepper's two reasons, unchanged one surface over.
                       tone="art"
                       focus="inset"
                       // **The tile's sum, never the addressed row's own number.** `OwnedBadge`
-                      // draws that same figure in the corner six pixels away, and two numbers
-                      // that close together disagreeing about one piece of art is not a state
-                      // this wall may show.
+                      // draws that same figure in the tile's other corner, and two numbers on one
+                      // piece of art disagreeing about how many copies it stands for is not a
+                      // state this wall may show. (They were six pixels apart while this rode in
+                      // the bottom strip; the column has moved and the rule has not, because what
+                      // makes it one is the tile rather than the distance.)
                       value={tile.copies}
                       // The copies this control cannot reach — see {@link stepperByTile}, where
                       // the arithmetic and the two behaviours that fall out of it are worked
@@ -2726,6 +3029,83 @@ export function CollectionPage() {
         onDone={() => setImporting(false)}
       />
     </section>
+  );
+}
+
+/**
+ * **The drawer boundary, asked about before a drag crosses it** — issue #365, design §5.
+ *
+ * The issue asked for "possibly with a warning" and *which* presses get one is the design's
+ * decision, made on one line: a confirmation is worth its interruption where the destination can
+ * be hit by **accident**, and worth nothing where the reader has just named it. A drop target is a
+ * rectangle a pointer can land on by mistake, so a drag confirms; the card menu's
+ * `Add to → <folder>` and the row's `Move to folder…` both carry the folder's name in the press
+ * the reader made, so neither does.
+ *
+ * **It is not a refusal and must never read as one.** The issue is explicit that moving cards in
+ * and out of a locked drawer is always allowed, and there is no Rust fence behind this at all —
+ * `set_entry_folder` refuses a `deck` source and a non-`user` destination, and a locked folder is
+ * a `user` folder on both counts. So the affirmative is the plain one and the way out is the quiet
+ * one, which is the opposite weighting from a delete.
+ *
+ * **Three sentences rather than one with a slot in it**, because the three gestures are genuinely
+ * different: out of a set-aside drawer puts a copy back among the ones the app offers, into one
+ * takes it off that list, and between two of them does both. A shared sentence with the verb
+ * swapped would be the shape that gets one of the three subtly wrong.
+ *
+ * **This app's confirmations carry no `dialog` or `alertdialog` role at all**, so a test or a CDP
+ * pass finds this one by its text — the note `CollectionSearchTab`'s cross-deck question carries,
+ * and this is built on that question's own recipe. The caret goes into the **question** rather
+ * than onto a button in it: the reader has not decided yet and a stray Enter must not decide for
+ * them. `useConfirmFocus` is what pairs the effect with the `tabIndex` that makes it possible —
+ * `focus()` on a node with no `tabIndex` is a silent no-op — and its `className` is replaced here
+ * rather than extended, exactly as that tab replaces it, because `CONFIRM_BOX` rules a question
+ * off *under a row* and this one stands on its own. `FOCUS` is put back by hand, which is the one
+ * thing that replacement would otherwise drop.
+ */
+function LockedMoveConfirm({
+  move,
+  onConfirm,
+  onCancel,
+}: {
+  move: LockedMove;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const { card, out, into } = move;
+  const confirm = useConfirmFocus(
+    out !== null && into !== null
+      ? `Move ${card} from ${out} into ${into}`
+      : out !== null
+        ? `Move ${card} out of ${out}`
+        : `Move ${card} into ${into ?? ROOT_LABEL}`,
+  );
+
+  return (
+    <div
+      {...confirm}
+      className={cn(
+        "rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1.5",
+        FOCUS,
+      )}
+    >
+      <p className="text-xs leading-relaxed text-destructive">
+        {out !== null && into !== null
+          ? `“${out}” and “${into}” are both locked. Moving “${card}” takes it out of one drawer you have set aside and into another.`
+          : out !== null
+            ? `“${out}” is locked. Moving “${card}” out puts that copy back among the ones this app offers you.`
+            : `“${into}” is locked. Filing “${card}” there sets that copy aside.`}
+      </p>
+
+      <div className="mt-2 flex flex-wrap gap-2">
+        <button type="button" onClick={onConfirm} className={CONFIRM_DESTRUCTIVE}>
+          Move it
+        </button>
+        <button type="button" onClick={onCancel} className={CONFIRM_CANCEL}>
+          Leave it there
+        </button>
+      </div>
+    </div>
   );
 }
 

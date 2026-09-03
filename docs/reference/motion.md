@@ -8,7 +8,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   number. The 150 ms budget it replaces existed only as a prose comment and ~100 hand-copied
   `duration-150` literals. `src/index.css` carries the same scale so CSS-only sites agree.
 - **`drawerRight` was deleted on 2026-08-14**, when the deck editor's two right-hand drawers
-  (Categories & tags, History) became centred modals and it lost its last consumer. It slid a
+  (Categories & labels, History) became centred modals and it lost its last consumer. It slid a
   right-docked panel in from `x: "100%"` on `slow`, out on `base`. `CardDetailPane` had already
   refused it in writing — the pane is right-docked, but it lives inside `AppShell`'s
   `overflow-auto` main region, so 384px of travel is 384px of scrollable overflow and a

@@ -356,6 +356,7 @@ export function CardGrid<T extends GridCard>({
   treatment,
   gameChanger,
   action,
+  column,
   caption,
   money,
   cardMenu,
@@ -520,6 +521,26 @@ export function CardGrid<T extends GridCard>({
    * existence) and it is where the deck editor already puts a card's stepper.
    */
   action?: (card: T) => ReactNode;
+  /**
+   * A control standing **on end in the tile's right margin**, over the art — the deck stack's
+   * position for a card's stepper, brought to the walls by issue #348.
+   *
+   * Its own slot rather than a second thing hung in {@link action}, for the reason every corner
+   * of a tile has exactly one owner: the strip is a *row* at the foot (`justify-end`, and the
+   * wishlist already has a pencil in it), and a column standing up the right-hand side is a
+   * different piece of geometry with a different collision list. Hanging both off one slot would
+   * make the caller responsible for un-picking the strip's own layout, which is how two walls
+   * drift into two arrangements.
+   *
+   * The box is `absolute`, so it costs the wall no height and `tileHeight` is unchanged by its
+   * existence — the strip's property, for the strip's reason.
+   *
+   * **Where it starts is not the strip's 4px**: the top-right of a tile is already the finish
+   * chip and the game-changer crown (`CardArt`), so the column begins below them. 24px on
+   * `--mark-scale` is that chip's own box — a 4px inset over ~14px of chip — so the two clear
+   * each other at every stop of the zoom rather than at 1× only.
+   */
+  column?: (card: T) => ReactNode;
   /**
    * What the chin says about the printing, replacing the `SET · number` it says by default.
    *
@@ -1309,6 +1330,7 @@ export function CardGrid<T extends GridCard>({
                 treatment={treatment}
                 gameChanger={gameChanger}
                 action={action}
+                column={column}
                 caption={caption}
                 money={money}
                 cardMenu={tileMenu}
@@ -1347,6 +1369,7 @@ function Tile<T extends GridCard>({
   treatment,
   gameChanger,
   action,
+  column,
   caption,
   money,
   cardMenu,
@@ -1392,6 +1415,7 @@ function Tile<T extends GridCard>({
   treatment?: (card: T) => readonly Treatment[];
   gameChanger?: (card: T) => boolean;
   action?: (card: T) => ReactNode;
+  column?: (card: T) => ReactNode;
   caption?: (card: T) => ReactNode;
   money?: (card: T) => ReactNode;
   cardMenu?: (card: T) => ((e: ReactMouseEvent) => void) | undefined;
@@ -1742,6 +1766,50 @@ function Tile<T extends GridCard>({
             )}
           >
             {action(card)}
+          </span>
+        )}
+        {column && (
+          // **Up the right-hand side, over the art** — the deck stack's position for a card's
+          // stepper, and the whole of what issue #348 asked for: one control in one place across
+          // the deck editor and the two walls.
+          //
+          // The box hugs its content rather than spanning the tile, which is the one thing that
+          // makes it *unlike* the strip above: there is no popup anchored off it, so it needs no
+          // width of its own, and a narrow box is a narrow collision list.
+          //
+          // **`pointer-events` follow the reveal, and here that is load-bearing rather than
+          // tidy.** An `opacity-0` element is still a hit target — the strip's comment above says
+          // so and pays for it with `pointer-events-none` plus `auto` on its children, which
+          // leaves the *control* pressable while invisible. That trade is affordable across a
+          // 20px strip and is not across this column: it stands ~99px tall against a 238px face,
+          // so a reader tapping the right-hand third of a card to open it would step the quantity
+          // of a card they cannot see the controls for. Gating the whole box instead costs a
+          // mouse nothing — the pointer that would press it has already revealed it by being on
+          // the tile — and gives a touch screen back the press that opens the card, which is the
+          // only gesture it had here.
+          //
+          // `pointer-events` is inherited, so gating the wrapper gates the column inside it and
+          // no `[&>*]` arm is needed.
+          <span
+            className={cn(
+              "pointer-events-none absolute flex",
+              "group-hover:pointer-events-auto group-focus-within:pointer-events-auto",
+              // The top-right corner is the finish chip and the game-changer crown (`CardArt`),
+              // laid out entirely on `--mark-scale` — inset 4px and 16px tall at 1×. 24px on that
+              // **same** variable is what clears them at every stop of the ladder rather than at
+              // 1× alone. A flat 24px would clear at rest and be **swallowed at 2×**, where the
+              // chip's own foot has reached 40px — the direction `SearchPage`'s printings chip
+              // failed in when it was held at 4px, one card over. Measured in Storybook
+              // (2026-09-03, `collection-page--stepping-from-the-wall`, a foil tile): the chip is
+              // 8/16/32px tall at 0.5×/1×/2× and this box starts at 12/24/48, so the gap is
+              // 1/3/7px — narrowest at the bottom of the ladder and, because both boxes are
+              // linear in the same zoom, incapable of inverting. The right inset is the two
+              // corner marks' own 4px, so the column stands in the same gutter they do.
+              "top-[calc(1.5rem*var(--mark-scale,1))] right-[calc(0.25rem*var(--mark-scale,1))]",
+              REVEAL_ON_HOVER,
+            )}
+          >
+            {column(card)}
           </span>
         )}
       </div>

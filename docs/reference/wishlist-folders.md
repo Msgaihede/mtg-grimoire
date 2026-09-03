@@ -497,9 +497,15 @@ marketplace's and never travel across a switch.
 rule this app argued for in three separate places.** The wishlist's **wall** had no copies control
 at all: the table edited a wish in place, and on a tile the number could only be reached by opening
 the pencil's panel. A wall that is the view opening by default and cannot do what its own list view
-does is the gap the issue named, so the wall now carries a `QuantityStepper` beside the pencil, in
-`CardGrid`'s action strip over the art — the strip is absolutely positioned, so the wall's
-`tileHeight` is unchanged by it.
+does is the gap the issue named, so the wall now carries a `QuantityStepper` over the art —
+absolutely positioned, so the wall's `tileHeight` is unchanged by it.
+
+**It stood beside the pencil in `CardGrid`'s action strip for two days and stands in the tile's
+right margin now** — [issue #348](https://github.com/Msgaihede/mtg-grimoire/issues/348),
+2026-09-03, which reported that the wall's control matched the deck builder's in neither style nor
+location. It is the deck stack's column at the deck stack's size on both walls now, through
+`CardGrid`'s own `column` slot; the pencil kept the strip to itself. Every measurement is in
+[frontend-design.md](frontend-design.md#one-quantity-control-on-a-card-face-on-all-three-surfaces-2026-09-03-issue-348).
 
 **And every one of the three floors moved from `1` to `0`.** The rule they held said, in as many
 words, that "a wish for none of something is not a wish" and that "a stepper that deleted the row

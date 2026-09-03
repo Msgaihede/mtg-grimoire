@@ -642,6 +642,11 @@ mod tests {
             kind: "user".to_owned(),
             deck_id: None,
             sort_order: 0,
+            // **Every fixture here is unlocked, and that is the assertion rather than a
+            // shortcut.** A locked folder is still mirrored and still backed up in full
+            // (spec §4.1), so no plan in this module may depend on the flag — a fixture that
+            // set it would be claiming a difference that must not exist.
+            locked: false,
         }
     }
 

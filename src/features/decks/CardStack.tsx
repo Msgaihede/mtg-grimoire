@@ -358,8 +358,8 @@ export function stackLiftRoom(zoom: number = DEFAULT_ZOOM): number {
  * characters of a card's name buys nothing and costs the one thing the strip is for.
  *
  * What changed is what is in the corner. {@link QuantityTag} is not a chip — it is the card's
- * tag, in the tag's colour, with the copy count printed on it, cut to a banner rather than a
- * box. Down a fifteen-card stack that column of colour *is* the structure of the pile, and a
+ * label, in the label's colour, with the copy count printed on it, cut to a banner rather than
+ * a box. Down a fifteen-card stack that column of colour *is* the structure of the pile, and a
  * reader scans it before they read a single name. Putting it where the eye starts is what makes
  * the scan work; putting it on the right made it a footnote to fifteen names.
  *
@@ -748,8 +748,8 @@ export function CardStack({
  * ## What the app says, and where it says it
  *
  * Two places, and the split is the whole shape of this component. **Over** the picture go the
- * facts about the *deck* — how many copies, which tag, whether a rule is broken — because they
- * are answers to "what is this card doing in this pile" and belong on the pile's own reveal
+ * facts about the *deck* — how many copies, which label, whether a rule is broken — because
+ * they are answers to "what is this card doing in this pile" and belong on the pile's own reveal
  * strip ({@link CARD_MARKS_STRIP}). **Under** it goes the data line, which is facts about the
  * *printing* — the rarity, the set, the finish, the price, the shortage — because those are
  * answers about the object, and covering the card's printed text box to state them was a bad
@@ -1056,7 +1056,7 @@ function StackedCard({
               has the whole of why. The scrim is what keeps a mark legible over art of any
               brightness. */}
           <span className={cn(CARD_MARKS_STRIP, "bg-gradient-to-b from-bg/70 to-transparent")}>
-            <QuantityTag quantity={card.quantity} name={card.tagName} color={card.tagColor} />
+            <QuantityTag quantity={card.quantity} name={card.labelName} color={card.labelColor} />
             {/* Gold, spelled out, tucked under the tag's tail. The `RULE BREAK` mark is red,
                 boxed and in the card's opposite corner — see `CardMarks.tsx` for why the pair is
                 drawn once and what keeps the two from being confusable. */}

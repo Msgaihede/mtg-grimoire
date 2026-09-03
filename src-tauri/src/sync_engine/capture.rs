@@ -144,7 +144,11 @@ pub const TABLES: [Spec; 12] = [
     Spec {
         table: "collection_folders",
         keys: &["id"],
-        fields: &["name", "kind", "sort_order", "needs_review"],
+        // **`locked` is a plain field and deliberately nothing more** (user schema v33). It is
+        // not a counter, not a parent and not part of any unique index, so `apply::META` needs
+        // no entry and the merge is last-writer-wins per field — which is the right rule: "is
+        // this drawer set aside" is a decision, and the last device to make it wins.
+        fields: &["name", "kind", "sort_order", "locked", "needs_review"],
         counters: &[],
         parents: &[
             Parent {
@@ -216,9 +220,9 @@ pub const TABLES: [Spec; 12] = [
                 soft: false,
             },
             Parent {
-                key: "tag",
-                col: "tag_id",
-                table: "deck_tags",
+                key: "label",
+                col: "label_id",
+                table: "deck_labels",
                 absent: Absent::Null,
                 soft: false,
             },
@@ -254,7 +258,7 @@ pub const TABLES: [Spec; 12] = [
         append_only: false,
     },
     Spec {
-        table: "deck_tags",
+        table: "deck_labels",
         keys: &["id"],
         fields: &["name", "name_key", "color"],
         counters: &[],

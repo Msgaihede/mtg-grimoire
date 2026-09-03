@@ -69,8 +69,8 @@ export interface MenuSubmenu {
  *
  * **This is the kind that keeps a right-click free.** `submenu` holds items already in hand;
  * `lazy` is for anything that would reach the backend — the folder/deck tree behind
- * "Add to → Deck", the deck's tag list behind "Tag card". Its `Content` runs its own hooks,
- * so `useDecks()` and `deck_tag_list` fire when the reader expands the row and never when the
+ * "Add to → Deck", the deck's label list behind "Label card". Its `Content` runs its own hooks,
+ * so `useDecks()` and `deck_label_list` fire when the reader expands the row and never when the
  * menu merely opens.
  */
 export interface MenuLazy {

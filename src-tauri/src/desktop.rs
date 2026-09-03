@@ -17,9 +17,9 @@
 use crate::sync::AppState;
 use crate::{
     camera, card, collection, collection_alloc, collection_folders, combos, db, deck, deck_audit,
-    deck_meta, deck_theory, deck_undo, errors, export, flatten, images, import, index, listview,
-    marketplace, marketplace_feed, mirror, nav, paths, reset, schema, scryfall, search, sync,
-    sync_engine, sync_pair, tags, update, wishlist, wishlist_folders, zoom,
+    deck_meta, deck_pull, deck_theory, deck_undo, errors, export, flatten, images, import, index,
+    listview, marketplace, marketplace_feed, mirror, nav, paths, reset, schema, scryfall, search,
+    sync, sync_engine, sync_pair, tags, update, wishlist, wishlist_folders, zoom,
 };
 // **Not in the list above, because this file compiles for Android too.** Its name says
 // `desktop`, but its gate is `cfg(not(target_family = "wasm"))` — desktop *and* mobile — while
@@ -375,6 +375,7 @@ pub fn run() {
             collection_folders::collection_folder_list,
             collection_folders::collection_folder_create,
             collection_folders::collection_folder_rename,
+            collection_folders::collection_folder_set_locked,
             collection_folders::collection_folder_move,
             collection_folders::collection_folder_reorder,
             collection_folders::collection_folder_delete,
@@ -385,6 +386,12 @@ pub fn run() {
             // module. `generate_handler!` names a command after the last path segment.
             collection_alloc::commands::collection_to_deck,
             collection_alloc::commands::deck_to_collection,
+            // The third crossing, and the one that moves custody without writing a
+            // `deck_cards` row — see `deck_pull`. Registered from its `commands` module for
+            // the pair above's reason: `generate_handler!` names a command after the last
+            // path segment, so these are `deck_pull_plan` and `deck_pull_from_collection`.
+            deck_pull::commands::deck_pull_plan,
+            deck_pull::commands::deck_pull_from_collection,
             wishlist::wishlist_add,
             wishlist::wishlist_set_quantity,
             wishlist::wishlist_remove,
@@ -407,6 +414,11 @@ pub fn run() {
             deck::deck_set_view_state,
             deck::deck_list,
             deck::deck_get,
+            // The two reads a folder rule is answered from: what one deck's live list plays,
+            // and which decks play a given set of cards. Both are reads and take `db_read`,
+            // so they sit with `deck_list`/`deck_get` rather than with the card writes below.
+            deck::deck_played_keys,
+            deck::deck_ids_playing,
             deck::deck_last_format,
             deck::deck_search_open,
             deck::set_deck_search_open,
@@ -428,13 +440,13 @@ pub fn run() {
             deck_meta::deck_category_set_active,
             deck_meta::deck_category_reorder,
             deck_meta::deck_category_delete,
-            deck_meta::deck_tag_list,
-            deck_meta::deck_tag_create,
-            deck_meta::deck_tag_update,
-            deck_meta::deck_tag_delete,
-            deck_meta::deck_tag_remove_from_deck,
-            deck_meta::deck_tag_all,
-            deck_meta::deck_card_set_tag,
+            deck_meta::deck_label_list,
+            deck_meta::deck_label_create,
+            deck_meta::deck_label_update,
+            deck_meta::deck_label_delete,
+            deck_meta::deck_label_remove_from_deck,
+            deck_meta::deck_label_all,
+            deck_meta::deck_card_set_label,
             deck_meta::deck_folder_list,
             deck_meta::deck_folder_create,
             deck_meta::deck_folder_rename,

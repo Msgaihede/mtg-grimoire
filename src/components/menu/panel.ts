@@ -87,13 +87,13 @@ export function isTextEntry(node: EventTarget | null): boolean {
  * field a lazy body draws is not a `menuitem`, and `Tab` — which used to reach it, since rows are
  * `tabIndex={-1}` and a field was a panel's only tab stop — closes the menu now. Without this a
  * reader who opened the menu with `menuKey`, the reader that entry point exists for, could see
- * "New tag…" and never put a caret in it.
+ * "New label…" and never put a caret in it.
  *
  * It is a stop *in document order* rather than a preferred one, which is what keeps the rows
- * reachable too. The deck editor's tag panel draws its existing tags first and the new-tag field
- * last, so ArrowRight lands on the tags and ArrowDown walks down into the field — both reachable,
- * in the order they are read. Focusing the field on entry instead would have made the rows above
- * it unreachable, since every caret key yields once the caret is inside one.
+ * reachable too. The deck editor's label panel draws its existing labels first and the new-label
+ * field last, so ArrowRight lands on the labels and ArrowDown walks into the field — both
+ * reachable, in the order they are read. Focusing the field on entry instead would have made the
+ * rows above it unreachable, since every caret key yields once the caret is inside one.
  */
 const CARET_SELECTOR = `[role="menuitem"],[role="menuitemradio"],${TEXT_ENTRY_SELECTOR}`;
 

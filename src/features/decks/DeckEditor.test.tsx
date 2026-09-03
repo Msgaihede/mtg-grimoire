@@ -13,7 +13,7 @@ import type {
   DeckCategory,
   DeckDetail,
   DeckRow,
-  DeckTag,
+  DeckLabel,
   FormatSpec,
   ImportMatch,
   SyncStatus,
@@ -53,6 +53,8 @@ const deckToCollection = vi.hoisted(() => vi.fn());
 const deckMoveCard = vi.hoisted(() => vi.fn());
 const deckAddCard = vi.hoisted(() => vi.fn());
 const deckMissingToWishlist = vi.hoisted(() => vi.fn());
+const deckPullPlan = vi.hoisted(() => vi.fn());
+const deckPullFromCollection = vi.hoisted(() => vi.fn());
 const deckSwapPrinting = vi.hoisted(() => vi.fn());
 // The other write that changes a row's *address* rather than its quantity — the card menu's
 // `Set as foil` / `Set as regular`.
@@ -71,18 +73,18 @@ const listSets = vi.hoisted(() => vi.fn());
 // as it is on a fresh install — which is what `openSearchPanel` below is idempotent about.
 const deckSearchOpen = vi.hoisted(() => vi.fn());
 const setDeckSearchOpen = vi.hoisted(() => vi.fn());
-// The five consulted overlays' own reads — categories, tags, history, the theory difference and
+// The five consulted overlays' own reads — categories, labels, history, the theory difference and
 // deck settings. Each is unmounted while closed, so these answer only for the tests that open
 // one — but the whole `ipc` object is replaced here, so a command left out is a `TypeError`
 // rather than a missing answer.
 const deckCategoryList = vi.hoisted(() => vi.fn());
-const deckTagList = vi.hoisted(() => vi.fn());
-const deckTagAll = vi.hoisted(() => vi.fn());
+const deckLabelList = vi.hoisted(() => vi.fn());
+const deckLabelAll = vi.hoisted(() => vi.fn());
 // The two writes a card's own right-click reaches — the deck's label put on a row, and the
-// label made by the menu's own "New tag…" field. `setTag` had no control anywhere in the app
+// label made by the menu's own "New label…" field. `setLabel` had no control anywhere in the app
 // until that menu; this is its first caller.
-const deckCardSetTag = vi.hoisted(() => vi.fn());
-const deckTagCreate = vi.hoisted(() => vi.fn());
+const deckCardSetLabel = vi.hoisted(() => vi.fn());
+const deckLabelCreate = vi.hoisted(() => vi.fn());
 // The one write a card's menu makes that is not a deck write at all — "Add to → Collection".
 // Its refusal is the editor's second banner, because the menu has closed by the time one lands.
 const collectionAdd = vi.hoisted(() => vi.fn());
@@ -143,6 +145,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckMoveCard,
     deckAddCard,
     deckMissingToWishlist,
+    deckPullPlan,
+    deckPullFromCollection,
     deckSwapPrinting,
     deckSetCardFinish,
     deckSetViewState,
@@ -164,10 +168,10 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     }),
     listSets,
     deckCategoryList,
-    deckTagList,
-    deckTagAll,
-    deckCardSetTag,
-    deckTagCreate,
+    deckLabelList,
+    deckLabelAll,
+    deckCardSetLabel,
+    deckLabelCreate,
     collectionAdd,
     deckCategoryCreate,
     oracleTagsForPrintings,
@@ -309,9 +313,9 @@ function detail(
   deck: Partial<DeckRow>,
   cards: DeckCard[],
   categories: DeckCategory[] = CATEGORIES,
-  tags: DeckTag[] = [],
+  labels: DeckLabel[] = [],
 ): DeckDetail {
-  return { deck: { ...DECK, ...deck }, cards, categories, tags };
+  return { deck: { ...DECK, ...deck }, cards, categories, labels };
 }
 
 function bolt(overrides: Partial<DeckCard> = {}): DeckCard {
@@ -707,6 +711,12 @@ beforeEach(() => {
   deckMoveCard.mockReset().mockResolvedValue(undefined);
   deckAddCard.mockReset().mockResolvedValue({ id: 9, quantity: 1, removed: false });
   deckMissingToWishlist.mockReset().mockResolvedValue(3);
+  // **A plan of no rows, which is the ordinary answer rather than a failure** — a deck whose
+  // shortfall is all cards the reader has never owned. Every test here is about the layer
+  // rather than about the list inside it (`PullFromCollectionDialog.test.tsx` owns that), and
+  // the empty state still draws the ✕, Cancel and Pull that the Tab sweep walks.
+  deckPullPlan.mockReset().mockResolvedValue([]);
+  deckPullFromCollection.mockReset().mockResolvedValue({ copies: 0, cards: 0 });
   deckSwapPrinting.mockReset().mockResolvedValue({ folded: false, quantity: 4 });
   deckSetCardFinish.mockReset().mockResolvedValue({ folded: false, quantity: 4 });
   deckSetViewState.mockReset().mockResolvedValue(undefined);
@@ -718,10 +728,10 @@ beforeEach(() => {
   deckSearchOpen.mockReset().mockResolvedValue(true);
   setDeckSearchOpen.mockReset().mockResolvedValue(undefined);
   deckCategoryList.mockReset().mockResolvedValue(CATEGORIES);
-  deckTagList.mockReset().mockResolvedValue([]);
-  deckTagAll.mockReset().mockResolvedValue([]);
-  deckCardSetTag.mockReset().mockResolvedValue(undefined);
-  deckTagCreate
+  deckLabelList.mockReset().mockResolvedValue([]);
+  deckLabelAll.mockReset().mockResolvedValue([]);
+  deckCardSetLabel.mockReset().mockResolvedValue(undefined);
+  deckLabelCreate
     .mockReset()
     .mockResolvedValue({ id: 12, name: "Cut candidate", color: "gold", cardCount: 0 });
   collectionAdd.mockReset().mockResolvedValue({ id: 77, quantity: 1, removed: false });
@@ -1568,19 +1578,19 @@ describe("DeckEditor", () => {
     expect(within(main).getByText("4 cards")).toBeInTheDocument();
   });
 
-  /** The deck's own labels, as filters. Nothing at all for a deck with no tags — an empty group
+  /** The deck's own labels, as filters. Nothing at all for a deck with no labels — an empty group
    *  with a name is a control that says there is something to press. */
-  it("offers no tag filter to a deck with no tags", async () => {
+  it("offers no label filter to a deck with no labels", async () => {
     await open();
 
-    expect(screen.queryByRole("group", { name: "Filter by tag" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Filter by label" })).not.toBeInTheDocument();
   });
 
-  it("filters by tag", async () => {
+  it("filters by label", async () => {
     deckGet.mockResolvedValue(
       detail(
         {},
-        [bolt({ tagId: 7, tagName: "Wincon", tagColor: "gold" }), card({ name: "Bear" })],
+        [bolt({ labelId: 7, labelName: "Wincon", labelColor: "gold" }), card({ name: "Bear" })],
         CATEGORIES,
         [{ id: 7, name: "Wincon", color: "gold", cardCount: 4 }],
       ),
@@ -2856,7 +2866,7 @@ describe("DeckEditor", () => {
    * and hands the caret back to the control that opened it — the editor stays a *view*, so the
    * deck is still on screen afterwards.
    *
-   * **The list is the row, and it has grown twice.** Categories & tags was one right-hand drawer
+   * **The list is the row, and it has grown twice.** Categories & labels was one right-hand drawer
    * and became two dialogs; `Export deck` arrived beside `Import cards` when the export layer
    * grew a deck scope. A sweep that went on listing the old set while the editor drew one more
    * is the failure this file's lists exist to prevent — so it is written out rather than counted
@@ -2866,7 +2876,7 @@ describe("DeckEditor", () => {
     ["Import cards", "Import a decklist"],
     ["Export deck", 'Export "Burn"'],
     ["Categories", "Categories"],
-    ["Tags", "Tags"],
+    ["Labels", "Labels"],
     ["History", "History"],
     ["Deck settings", "Deck settings"],
   ])("opens %s and closes it on Escape, caret back on the trigger", async (button, dialog) => {
@@ -2895,7 +2905,7 @@ describe("DeckEditor", () => {
    */
   it.each([
     ["Categories", "Categories", "Close categories"],
-    ["Tags", "Tags", "Close tags"],
+    ["Labels", "Labels", "Close labels"],
     ["History", "History", "Close history"],
   ])("closes %s on its own ✕, caret back on the trigger", async (button, dialog, close) => {
     await open();
@@ -2908,6 +2918,93 @@ describe("DeckEditor", () => {
 
     expect(screen.queryByRole("dialog", { name: dialog })).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
+  });
+
+  /**
+   * **The pull, which is the one layer opened from outside the header** — its control is in the
+   * stats band at the foot of the page, beside the shortfall number it acts on.
+   *
+   * The hand-back is the interesting half and it is why this is not folded into the sweeps
+   * above. Those triggers are named elements this file holds a ref to; `DeckStats` owns this
+   * one and hands no ref up, so `openPull` reads `document.activeElement` at the press —
+   * `openAddTag`'s answer, made for `openAddTag`'s reason. A browser focuses what it presses, so
+   * the caret is on the button by the time the callback runs; if that ever stopped being true
+   * the layer would still open and only this assertion would notice.
+   */
+  it("opens the pull from the stats band and hands the caret back on Escape", async () => {
+    await open();
+    const trigger = await screen.findByRole("button", { name: "Pull from collection" });
+
+    await userEvent.click(trigger);
+    expect(
+      await screen.findByRole("dialog", { name: "Pull from collection" }),
+    ).toBeInTheDocument();
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(
+      screen.queryByRole("dialog", { name: "Pull from collection" }),
+    ).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+    // One press, one layer: the deck is still open behind it, which is the floor Escape falls
+    // to once every dismissible rung above it has passed.
+    expect(useAppStore.getState().openDeckId).toBe(4);
+  });
+
+  /**
+   * **The plan is not read until the dialog that draws it is open**, which is the `Layer` doc's
+   * rule made checkable: a `deck_pull_plan` is every hole in the list joined to every
+   * unallocated copy that could fill one, and nothing on the screen behind the dialog draws a
+   * word of it.
+   *
+   * The two halves are one test on purpose. "It was not called" passes just as well against a
+   * gate that never opens, so the press has to follow it in the same case.
+   */
+  it("reads no pull plan until the dialog is opened", async () => {
+    await open();
+    // Past the first paint and every query the editor makes for itself.
+    await screen.findByRole("button", { name: "Pull from collection" });
+    expect(deckPullPlan).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Pull from collection" }));
+
+    await waitFor(() => expect(deckPullPlan).toHaveBeenCalledWith(4));
+  });
+
+  /**
+   * **No pull on the plan, and it is the list rather than the feature.** Since schema v25 a deck
+   * holds a card because a collection row sits in its group, so a theory row holds no cards at
+   * all and there is nothing on that tab to pull copies into — which is also why
+   * `deck_pull_plan` takes no variant.
+   *
+   * The Live half is asserted in the same case, because a button absent on both tabs would pass
+   * a bare absence check while being broken everywhere.
+   */
+  it("offers the pull on the deck and not on the plan", async () => {
+    const over = { theoryEnabled: true };
+    const live = detail(over, [bolt({ quantity: 4 })]);
+    const theory = detail(over, [bolt({ quantity: 4, variant: "theory" })]);
+    deckGet.mockImplementation((_id: number, variant: string) =>
+      Promise.resolve(variant === "theory" ? theory : live),
+    );
+    await open();
+
+    expect(await screen.findByRole("button", { name: "Pull from collection" })).toBeInTheDocument();
+
+    await userEvent.click(
+      within(screen.getByRole("group", { name: "Deck list" })).getByRole("button", {
+        name: "Theory",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Pull from collection" })).not.toBeInTheDocument(),
+    );
+    // The other half of the line is still there, so the absence above is this one prop: a plan
+    // is exactly the list a reader wants a shopping list for.
+    expect(
+      screen.getByRole("button", { name: "Send missing to wishlist" }),
+    ).toBeInTheDocument();
   });
 
   /**
@@ -2946,9 +3043,14 @@ describe("DeckEditor", () => {
     ["Import cards", "Import a decklist", null],
     ["Export deck", 'Export "Burn"', null],
     ["Categories", "Categories", null],
-    ["Tags", "Tags", null],
+    ["Labels", "Labels", null],
     ["History", "History", null],
     ["Deck settings", "Deck settings", null],
+    // The one row here whose control is not in the header: `Pull from collection` is drawn in
+    // the stats band at the foot of the page, beside the shortfall it acts on. It belongs in
+    // this sweep by the sweep's own rule — a full-window overlay with a control in the view —
+    // and the fixture deck is short of three copies, which is what draws that control at all.
+    ["Pull from collection", "Pull from collection", null],
     [
       "Compare",
       "Theory to Actual difference",
@@ -3016,14 +3118,14 @@ describe("DeckEditor", () => {
   /**
    * **The split, from the toolbar: two buttons, two dialogs, and neither draws the other.**
    *
-   * The piles and the labels were two sections of one drawer called "Categories & tags", so the
+   * The piles and the labels were two sections of one drawer called "Categories & labels", so the
    * only way to be wrong about which one a press opened was to scroll. Two dialogs make the
    * press the whole of the choice, and a wiring that opened the same body from both buttons
    * would look identical to a test that only ever pressed one of them.
    */
   it.each([
-    ["Categories", "Tags"],
-    ["Tags", "Categories"],
+    ["Categories", "Labels"],
+    ["Labels", "Categories"],
   ])("opens %s from its own button and not %s", async (pressed, other) => {
     await open();
 
@@ -3049,15 +3151,15 @@ describe("DeckEditor", () => {
    * one — the thing on top — was starved. The reason for one slot is two scrims, two
    * `aria-modal` panels and two focus traps over one screen, which never depended on Escape.
    */
-  it("replaces the categories dialog with the tags one rather than stacking them", async () => {
+  it("replaces the categories dialog with the labels one rather than stacking them", async () => {
     await open();
 
     await userEvent.click(screen.getByRole("button", { name: "Categories" }));
     await screen.findByRole("dialog", { name: "Categories" });
 
-    await userEvent.click(screen.getByRole("button", { name: "Tags" }));
+    await userEvent.click(screen.getByRole("button", { name: "Labels" }));
 
-    expect(await screen.findByRole("dialog", { name: "Tags" })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "Labels" })).toBeInTheDocument();
     expect(screen.getAllByRole("dialog")).toHaveLength(1);
     expect(screen.getByRole("button", { name: "Categories" })).toHaveAttribute(
       "aria-expanded",
@@ -3086,7 +3188,7 @@ describe("DeckEditor", () => {
       "Import cards",
       "Export deck",
       "Categories",
-      "Tags",
+      "Labels",
       "History",
       "Deck settings",
     ];
@@ -4447,9 +4549,9 @@ describe("layerMatches", () => {
   });
 
   it("answers on the kind for every layer that has one opener, and never for a closed one", () => {
-    expect(layerMatches({ kind: "tags" }, { kind: "tags" })).toBe(true);
-    expect(layerMatches({ kind: "tags" }, { kind: "history" })).toBe(false);
-    expect(layerMatches(null, { kind: "tags" })).toBe(false);
+    expect(layerMatches({ kind: "labels" }, { kind: "labels" })).toBe(true);
+    expect(layerMatches({ kind: "labels" }, { kind: "history" })).toBe(false);
+    expect(layerMatches(null, { kind: "labels" })).toBe(false);
     expect(layerMatches(null, { kind: "export", categoryId: null })).toBe(false);
   });
 });
@@ -4473,7 +4575,7 @@ describe("DeckEditor — a card's menu", () => {
    */
   const RECURSION = category(7, "Recursion", "main", { origin: "auto", sortOrder: 5 });
 
-  const BUDGET: DeckTag = { id: 8, name: "Budget swap", color: "moss", cardCount: 1 };
+  const BUDGET: DeckLabel = { id: 8, name: "Budget swap", color: "moss", cardCount: 1 };
 
   /** Right-click the card the editor drew, found by the slot every view stamps on it. */
   async function rightClickCard(name: string) {
@@ -4500,7 +4602,7 @@ describe("DeckEditor — a card's menu", () => {
     expect(screen.getByRole("menuitem", { name: "Copy card name" })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /Add to/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /Move to/ })).toBeInTheDocument();
-    expect(screen.getByRole("menuitem", { name: /Tag card/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /Label card/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "Remove card" })).toBeInTheDocument();
   });
 
@@ -4691,16 +4793,16 @@ describe("DeckEditor — a card's menu", () => {
       "live", null);
   });
 
-  /** A deck card wears at most one tag, so the rows are radios and the card's own is ticked. */
-  it("draws the tags as a radio group with the card's own ticked", async () => {
+  /** A deck card wears at most one label, so the rows are radios and the card's own is ticked. */
+  it("draws the labels as a radio group with the card's own ticked", async () => {
     deckGet.mockResolvedValue(
-      detail({}, [bolt({ tagId: 8, tagName: "Budget swap", tagColor: "moss" })], CATEGORIES, [
+      detail({}, [bolt({ labelId: 8, labelName: "Budget swap", labelColor: "moss" })], CATEGORIES, [
         BUDGET,
       ]),
     );
     await open();
     await rightClickCard("Lightning Bolt");
-    await expand(/Tag card/);
+    await expand(/Label card/);
 
     expect(await screen.findByRole("menuitemradio", { name: "None" })).toHaveAttribute(
       "aria-checked",
@@ -4716,14 +4818,14 @@ describe("DeckEditor — a card's menu", () => {
     deckGet.mockResolvedValue(detail({}, [bolt()], CATEGORIES, [BUDGET]));
     await open();
     await rightClickCard("Lightning Bolt");
-    await expand(/Tag card/);
+    await expand(/Label card/);
     await userEvent.click(await screen.findByRole("menuitemradio", { name: "Budget swap" }));
 
-    expect(deckCardSetTag).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", null, 8);
+    expect(deckCardSetLabel).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", null, 8);
   });
 
   /**
-   * **"New tag…" is two writes, and the second one is the editor's rather than the menu's.**
+   * **"New label…" is two writes, and the second one is the editor's rather than the menu's.**
    *
    * A `useMutation`'s callbacks belong to its observer, so a chain started inside the panel would
    * lose its second half to any dismissal landing during the round trip — the label created and
@@ -4733,38 +4835,38 @@ describe("DeckEditor — a card's menu", () => {
    * before either command has answered.
    *
    * **The field this drove became a dialog on 2026-08-20**, and the colour is why: it was a text
-   * box inside the panel that created in `DEFAULT_TAG_COLOR` because a menu has no room for a
+   * box inside the panel that created in `DEFAULT_LABEL_COLOR` because a menu has no room for a
    * picker, so every label made this way was gold. Two presses instead of one, and the label
    * arrives in the colour the reader chose — everything about the *chain* is unchanged, which is
    * what the three cases here are actually about.
    *
    * **That dialog became a picker with a create in it at schema v21**, and the chain is still
-   * untouched: the row is "More tags…", the field is "Find or name a tag", and the button says
+   * untouched: the row is "More labels…", the field is "Find or name a label", and the button says
    * the name back. What is new is the *other* press — see the case below this one, where an
-   * existing tag goes on the card with no create at all.
+   * existing label goes on the card with no create at all.
    */
-  it("makes a label from the menu's More tags… dialog and puts it on the card", async () => {
+  it("makes a label from the menu's More labels… dialog and puts it on the card", async () => {
     deckGet.mockResolvedValue(detail({}, [bolt()]));
     await open();
     await rightClickCard("Lightning Bolt");
-    await expand(/Tag card/);
+    await expand(/Label card/);
 
-    await userEvent.click(await screen.findByRole("menuitem", { name: "More tags…" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: "More labels…" }));
     // The menu is gone the moment the row is pressed; the dialog is what is left.
     await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
-    await screen.findByRole("dialog", { name: "Add tag" });
+    await screen.findByRole("dialog", { name: "Add label" });
 
-    await userEvent.type(screen.getByLabelText("Find or name a tag"), "Cut candidate");
+    await userEvent.type(screen.getByLabelText("Find or name a label"), "Cut candidate");
     await userEvent.click(screen.getByRole("button", { name: "Slate" }));
     await userEvent.click(screen.getByRole("button", { name: "Create “Cut candidate”" }));
 
     // The colour the reader picked, where the field this replaced sent gold and never asked.
     await waitFor(() =>
-      expect(deckTagCreate).toHaveBeenCalledWith(4, "Cut candidate", "#c8c4bf"),
+      expect(deckLabelCreate).toHaveBeenCalledWith(4, "Cut candidate", "#c8c4bf"),
     );
     // …and the chain's second half runs with the dialog long gone.
     await waitFor(() =>
-      expect(deckCardSetTag).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", null, 12),
+      expect(deckCardSetLabel).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", null, 12),
     );
   });
 
@@ -4778,31 +4880,31 @@ describe("DeckEditor — a card's menu", () => {
    * is a second surface with the same lifetime problem and the same answer.
    */
   it("attaches a label whose create was still in flight when the dialog was dismissed", async () => {
-    let landed: (tag: DeckTag) => void = () => {};
-    deckTagCreate.mockImplementation(
+    let landed: (label: DeckLabel) => void = () => {};
+    deckLabelCreate.mockImplementation(
       () =>
-        new Promise<DeckTag>((resolve) => {
+        new Promise<DeckLabel>((resolve) => {
           landed = resolve;
         }),
     );
     deckGet.mockResolvedValue(detail({}, [bolt()]));
     await open();
     await rightClickCard("Lightning Bolt");
-    await expand(/Tag card/);
+    await expand(/Label card/);
 
-    await userEvent.click(await screen.findByRole("menuitem", { name: "More tags…" }));
-    await userEvent.type(await screen.findByLabelText("Find or name a tag"), "Cut candidate");
+    await userEvent.click(await screen.findByRole("menuitem", { name: "More labels…" }));
+    await userEvent.type(await screen.findByLabelText("Find or name a label"), "Cut candidate");
     await userEvent.click(screen.getByRole("button", { name: "Create “Cut candidate”" }));
     await userEvent.keyboard("{Escape}");
     await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Add tag" })).not.toBeInTheDocument(),
+      expect(screen.queryByRole("dialog", { name: "Add label" })).not.toBeInTheDocument(),
     );
-    expect(deckCardSetTag).not.toHaveBeenCalled();
+    expect(deckCardSetLabel).not.toHaveBeenCalled();
 
     landed({ id: 12, name: "Cut candidate", color: "#d9b95c", cardCount: 0 });
 
     await waitFor(() =>
-      expect(deckCardSetTag).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", null, 12),
+      expect(deckCardSetLabel).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", null, 12),
     );
   });
 
@@ -4810,19 +4912,19 @@ describe("DeckEditor — a card's menu", () => {
    * …and a refused *create* is spoken for by the deck's own banner, which is why the mutation is
    * in the editor's refused-write family rather than merely mounted in it.
    *
-   * A label the reader typed and pressed Add tag on, that never appears and never says why, is
+   * A label the reader typed and pressed Add label on, that never appears and never says why, is
    * the silent failure this family exists to prevent — and the dialog it was typed in closes on
    * the press, so there is nowhere else it could be said.
    */
-  it("says so when the menu's tag create is refused", async () => {
-    deckTagCreate.mockRejectedValue("The database is busy");
+  it("says so when the menu's label create is refused", async () => {
+    deckLabelCreate.mockRejectedValue("The database is busy");
     deckGet.mockResolvedValue(detail({}, [bolt()]));
     await open();
     await rightClickCard("Lightning Bolt");
-    await expand(/Tag card/);
+    await expand(/Label card/);
 
-    await userEvent.click(await screen.findByRole("menuitem", { name: "More tags…" }));
-    await userEvent.type(await screen.findByLabelText("Find or name a tag"), "Cut candidate");
+    await userEvent.click(await screen.findByRole("menuitem", { name: "More labels…" }));
+    await userEvent.type(await screen.findByLabelText("Find or name a label"), "Cut candidate");
     await userEvent.click(screen.getByRole("button", { name: "Create “Cut candidate”" }));
 
     expect(
@@ -4831,7 +4933,7 @@ describe("DeckEditor — a card's menu", () => {
   });
 
   /**
-   * **The other press the dialog grew, and the one the issue is chiefly about**: a tag the reader
+   * **The other press the dialog grew, and the one the issue is chiefly about**: a label the reader
    * already owns, that this deck's list is not wearing, goes on the card with **no create at
    * all**.
    *
@@ -4840,8 +4942,8 @@ describe("DeckEditor — a card's menu", () => {
    * list minus what the context menu already offered, subtracted in the editor because that is
    * the only place holding both halves.
    */
-  it("puts a tag the reader owns but this list does not wear on the card", async () => {
-    deckTagAll.mockResolvedValue([
+  it("puts a label the reader owns but this list does not wear on the card", async () => {
+    deckLabelAll.mockResolvedValue([
       { id: 8, name: "Budget swap", color: "moss", cardCount: 3, deckCount: 2 },
       // Already on a card in this list, so the menu offers it and the dialog must not.
       { id: 9, name: "Wincon", color: "gold", cardCount: 1, deckCount: 1 },
@@ -4853,19 +4955,19 @@ describe("DeckEditor — a card's menu", () => {
     );
     await open();
     await rightClickCard("Lightning Bolt");
-    await expand(/Tag card/);
+    await expand(/Label card/);
 
-    await userEvent.click(await screen.findByRole("menuitem", { name: "More tags…" }));
-    const dialog = await screen.findByRole("dialog", { name: "Add tag" });
-    // The tag this list already wears is a radio in the *menu*, never a row here. Scoped to the
-    // dialog because the editor's toolbar draws a tag filter chip by the same name.
+    await userEvent.click(await screen.findByRole("menuitem", { name: "More labels…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Add label" });
+    // The label this list already wears is a radio in the *menu*, never a row here. Scoped to the
+    // dialog because the editor's toolbar draws a label filter chip by the same name.
     expect(within(dialog).queryByRole("button", { name: /Wincon/ })).not.toBeInTheDocument();
 
     await userEvent.click(await within(dialog).findByRole("button", { name: /Budget swap/ }));
 
-    expect(deckTagCreate).not.toHaveBeenCalled();
+    expect(deckLabelCreate).not.toHaveBeenCalled();
     await waitFor(() =>
-      expect(deckCardSetTag).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", null, 8),
+      expect(deckCardSetLabel).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", null, 8),
     );
   });
 
@@ -5219,7 +5321,7 @@ describe("DeckEditor — a category's menu", () => {
 
     const dialog = await screen.findByRole("dialog", { name: /Clear “Main deck”/ });
     await waitFor(() =>
-      expect(within(dialog).getByText(/4 cards in it leave the live list/)).toBeVisible(),
+      expect(within(dialog).getByText(/4 cards in it leave the actual list/)).toBeVisible(),
     );
     // **Through the verb, not up to it.** `/1 card filed here in the other list/` passed against
     // "…other list are untouched" as readily as against the "is" that agrees with one card, so
@@ -5668,7 +5770,7 @@ describe("DeckEditor reordering the deck's piles", () => {
  * `AllPrintingsDialog` renders at `App` level, a sibling of the shell, so no context reaches it
  * from in here — and it could not recompute the order even if one did: `groupBy` and `sortBy` are
  * this component's `useState` and the rows are `shown`, the deck narrowed by the toolbar's filter
- * box and tag chips. So the editor writes `deckWalk` and the modal reads it, which is what the
+ * box and label chips. So the editor writes `deckWalk` and the modal reads it, which is what the
  * two assertions about the filter and the unmount below are really about.
  */
 describe("DeckEditor — the walk it publishes", () => {
@@ -5974,7 +6076,7 @@ describe("DeckEditor multi-select", () => {
 
     expect(screen.getByRole("menuitem", { name: /^Remove 2 cards/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /^Move 2 cards to/ })).toBeInTheDocument();
-    expect(screen.getByRole("menuitem", { name: /^Tag 2 cards/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /^Label 2 cards/ })).toBeInTheDocument();
   });
 
   /** A right-click on a card **outside** the set is about that card — the press rule that

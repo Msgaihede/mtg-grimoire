@@ -311,6 +311,27 @@ fn diff_select(marketplace: crate::sorting::Marketplace) -> String {
 /// literal, and a literal here is not the migration ladder's kind of literal: a rung is history
 /// and must not move when a constant does, while this is a **live read** that has to mean
 /// whatever the DDL's `CHECK` means today. The `format!` is spent once per process.
+///
+/// **A locked folder's copies are not spare either, and the second arm is the first one's device
+/// for the first one's reason.** This statement already means *the copies this plan can count
+/// on*; a card in a display case, or one held for a trade, is not one of them — the reader set
+/// that drawer aside, and a shopping list that quietly spends its contents is offering them
+/// cardboard they have already promised somewhere else. It reads the **effective** lock, so a
+/// subfolder of a locked folder counts as locked, through
+/// [`crate::collection_folders::LOCKED_FOLDER_IDS`] rather than a second copy of that rule here
+/// — the same statement [`crate::collection::scope`] pushes, so the page's list and this figure
+/// cannot come to disagree about which drawers are set aside.
+///
+/// **Its own `IS NULL` arm, because the two conditions are ANDed** and each has to let the root
+/// through on its own: the root is where most copies are, and a `NOT IN` over a NULL is NULL
+/// rather than true.
+///
+/// **Unconditional, unlike [`crate::collection::CollectionQuery::exclude_locked`] one module
+/// over**, and the asymmetry is deliberate rather than an oversight: no backup and no export
+/// reads this figure. `owned_spare` is a **display** field — [`TheoryDiffRow::owned_spare`] is
+/// "for a reader, beside a price" and is forbidden from being a term in any arithmetic — so
+/// widening it cannot move a number anywhere else, where widening a *list* read is exactly how a
+/// whole-collection backup silently loses rows.
 static OWNED_SPARE_SQL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     format!(
         "SELECT coalesce(sum(e.quantity), 0)
@@ -318,8 +339,11 @@ static OWNED_SPARE_SQL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|
       WHERE e.card_id = ?1 AND e.finish = coalesce(?2, 'nonfoil')
         AND (e.folder_id IS NULL
              OR (SELECT f.kind FROM collection_folders f
-                  WHERE f.id = e.folder_id) <> '{}')",
-        crate::schema::COLLECTION_FOLDER_KINDS[1]
+                  WHERE f.id = e.folder_id) <> '{deck}')
+        AND (e.folder_id IS NULL
+             OR e.folder_id NOT IN ({locked}))",
+        deck = crate::schema::COLLECTION_FOLDER_KINDS[1],
+        locked = crate::collection_folders::LOCKED_FOLDER_IDS
     )
 });
 
@@ -532,7 +556,7 @@ fn grouped_diff(
 /// hold. So this is a seed that can also top up — idempotent, never destructive, and returning
 /// how many rows it actually wrote.
 ///
-/// `tag_id` and `needs_review` travel with the copy. A label is the user's word about this card
+/// `label_id` and `needs_review` travel with the copy. A label is the user's word about this card
 /// in this deck and a plan inherits it; the flag says the printing left the card database, which
 /// is as true of the copy as of the original.
 ///
@@ -551,9 +575,9 @@ pub(crate) fn seed_from_live(tx: &Connection, deck_id: i64) -> Result<usize, Str
         // it was copied from.
         "INSERT INTO deck_cards
             (deck_id, category_id, variant, card_id, set_code, collector_number, lang, name,
-             tag_id, quantity, needs_review, finish, created_at, updated_at)
+             label_id, quantity, needs_review, finish, created_at, updated_at)
          SELECT deck_id, category_id, ?2, card_id, set_code, collector_number, lang, name,
-                tag_id, quantity, needs_review, finish, unixepoch(), unixepoch()
+                label_id, quantity, needs_review, finish, unixepoch(), unixepoch()
            FROM deck_cards
           WHERE deck_id = ?1 AND variant = ?3
          ON CONFLICT({grain}) DO NOTHING",
@@ -1624,6 +1648,94 @@ mod tests {
             theory_diff(&conn, id, ANY_MARKET).unwrap()[0].owned_spare,
             2,
             "and a card put aside is a card on the desk"
+        );
+    }
+
+    /// Set a folder aside, straight into the column — `collection_folders::set_folder_locked` is
+    /// the reader's press and that module's to test, where this one wants a folder that **is**
+    /// locked. The affected count is asserted because an `UPDATE` naming an id that is not there
+    /// succeeds and changes nothing, which would make every figure below it a statement about an
+    /// unlocked folder.
+    fn set_locked(conn: &Connection, id: i64, locked: bool) {
+        assert_eq!(
+            conn.execute(
+                "UPDATE collection_folders SET locked = ?2 WHERE id = ?1",
+                params![id, i64::from(locked)],
+            )
+            .unwrap(),
+            1,
+            "the folder the test means to set aside is there"
+        );
+    }
+
+    /// **A locked folder's copies are not spare.** [`a_copy_in_a_deck_group_is_not_spare`] one
+    /// folder over, and the same sentence: `owned_spare` means the copies this plan can count
+    /// on, and a card in a display case or held for a trade is not one of them — a shopping list
+    /// that quietly spends a set-aside drawer is offering the reader cardboard they have already
+    /// promised somewhere else.
+    ///
+    /// **The unlock at the end is what makes this about the lock rather than about the folder.**
+    /// A binder is already spare — that is the test directly above — so the *same* folder
+    /// answering 2, then 0, and then every copy again across two writes to one column is the
+    /// whole of the evidence, and no part of it can be read as the copies having moved.
+    ///
+    /// **The subfolder is the half a `locked <> 0` lookup would get wrong** while passing every
+    /// other assertion here: the shelf carries no flag of its own and is set aside only because
+    /// its parent is, which is what the recursive CTE exists for.
+    ///
+    /// **And the copy bought afterwards is the half the missing `IS NULL` arm would get wrong**,
+    /// which is the one case the tests above cannot reach: `a_copy_in_a_deck_group_is_not_spare`
+    /// counts a root copy while nothing is locked at all, and `x NOT IN (<empty>)` is *true* even
+    /// for a NULL `x` — so the arm only starts carrying weight once a locked folder exists, and
+    /// only a root row alongside one can show it. Without it the root drops out of the very
+    /// figure that is mostly root, and every other assertion here still passes.
+    #[test]
+    fn a_locked_folders_copies_are_not_spare() {
+        let conn = seeded();
+        let id = deck(&conn, "Burn");
+        let main = category(&conn, id, "Main deck");
+        let entry = own(&conn, "bolt-lea", 2);
+        add(&conn, id, "bolt-lea", main, THEORY, 4);
+
+        let case = binder(&conn, "Display case");
+        let shelf = crate::collection_folders::create_folder(&conn, Some(case), "Top shelf")
+            .unwrap()
+            .id;
+        file_into(&conn, entry, Some(case));
+        assert_eq!(
+            theory_diff(&conn, id, ANY_MARKET).unwrap()[0].owned_spare,
+            2,
+            "an unlocked folder is a binder, and a binder's copies are spare"
+        );
+
+        set_locked(&conn, case, true);
+        assert_eq!(
+            theory_diff(&conn, id, ANY_MARKET).unwrap()[0].owned_spare,
+            0,
+            "a drawer the reader set aside holds no copies this plan can count on"
+        );
+
+        // A copy bought afterwards lands at the root, which is not a folder to look up: the
+        // `IS NULL` arm is what keeps it counted now that a locked folder exists at all.
+        own(&conn, "bolt-lea", 1);
+        assert_eq!(
+            theory_diff(&conn, id, ANY_MARKET).unwrap()[0].owned_spare,
+            1,
+            "the new copy is at the root and spare; only the set-aside ones are not"
+        );
+
+        file_into(&conn, entry, Some(shelf));
+        assert_eq!(
+            theory_diff(&conn, id, ANY_MARKET).unwrap()[0].owned_spare,
+            1,
+            "and the lock inherits, so the shelf inside the drawer is set aside too"
+        );
+
+        set_locked(&conn, case, false);
+        assert_eq!(
+            theory_diff(&conn, id, ANY_MARKET).unwrap()[0].owned_spare,
+            3,
+            "one column write on the parent hands the shelf's two back — nothing moved"
         );
     }
 

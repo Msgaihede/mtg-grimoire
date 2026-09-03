@@ -62,7 +62,7 @@ export interface DialogProps {
   /**
    * The close button's accessible name, e.g. "Close deck settings".
    *
-   * Explicit rather than derived from {@link title}, because "Close Categories & tags" is not a
+   * Explicit rather than derived from {@link title}, because "Close Categories & labels" is not a
    * sentence — and a name assembled from a title is a name nobody wrote and nobody can fix
    * without changing the heading a reader sees.
    */

@@ -60,8 +60,8 @@ export function auditBand(entry: DeckAuditEntry): AuditBand {
       return "moves";
     case "swap":
       return "swaps";
-    // The deck's shape rather than its contents: a category, a tag, a folder, a deck field.
-    case "tag":
+    // The deck's shape rather than its contents: a category, a label, a folder, a deck field.
+    case "label":
     case "category":
     case "folder":
     case "deck":

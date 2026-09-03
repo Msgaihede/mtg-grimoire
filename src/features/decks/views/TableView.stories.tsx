@@ -40,7 +40,7 @@ type Story = StoryObj<typeof meta>;
  * The deck as the app's one `VirtualTable`, with a band per group.
  *
  * Nine columns, and the comparative questions are the ones it is for: what is dearest, what
- * is not owned, what is tagged. Its headers deliberately do **not** sort — the deck's order is
+ * is not owned, what is labelled. Its headers deliberately do **not** sort — the deck's order is
  * the toolbar's one Group by and one Sort, and a header that re-sorted would give one list two
  * orders with no way to see which was in force.
  */

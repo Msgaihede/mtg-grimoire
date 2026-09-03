@@ -350,7 +350,7 @@ export const DEFAULT_EMPTY_GROUP_RULES: EmptyGroupRules = {
  * quietly.
  *
  * **A filter used to decide this and now decides nothing about it.** {@link EmptyGroupRules}
- * carried a `narrowed` flag, and while the toolbar's text field or a tag chip was running, only
+ * carried a `narrowed` flag, and while the toolbar's text field or a label chip was running, only
  * the predefined zones drew empty — because typing three letters otherwise answered with twenty
  * headings over three cards. The auto rule subsumes it: that wall was always auto piles, and a
  * pile the filter emptied is an empty pile, so they are out either way. What a filter leaves is

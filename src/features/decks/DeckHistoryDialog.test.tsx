@@ -77,7 +77,7 @@ describe("auditBand", () => {
 
   /** The deck's shape rather than its contents — four kinds, one chip. */
   it("puts the four deck-shape kinds under one band", () => {
-    for (const kind of ["tag", "category", "folder", "deck"] as const) {
+    for (const kind of ["label", "category", "folder", "deck"] as const) {
       expect(auditBand(entry({ kind }))).toBe("structure");
     }
   });

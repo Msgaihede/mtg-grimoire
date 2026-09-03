@@ -563,8 +563,15 @@ describe("the wall's own quantity stepper", () => {
    *
    * One mark for both buttons rather than one each, which is what `closest` buys and what
    * `DeckCardControls` already does around the same control.
+   *
+   * **The pencil is guarded separately, and since issue #348 it is guarded somewhere else.** The
+   * stepper stood beside it in `CardGrid`'s bottom strip until then and the two shared one
+   * wrapper; the stepper has gone to the tile's right margin, so the wrapper covers the stepper
+   * alone and the pencil is left holding `AnchoredPopup`'s own mark. Both halves are asserted
+   * here rather than only the stepper's — a pencil that quietly lost its mark is a press on the
+   * panel becoming a drag of the wish, and no other test in this file would notice.
    */
-  it("marks the whole pair as not a drag", () => {
+  it("marks the stepper and the pencil as not a drag, separately", () => {
     wall([BOLT]);
 
     const decrease = screen.getByRole("button", { name: `Decrease ${LABEL}` });
@@ -573,29 +580,26 @@ describe("the wall's own quantity stepper", () => {
 
     expect(guard).not.toBeNull();
     expect(increase.closest(NOT_A_DRAG)).toBe(guard);
-    // And it is the pair's wrapper rather than something around the stepper alone: the pencil
-    // marks itself (`AnchoredPopup`), so a wrapper that covered only the stepper would still
-    // leave this true — what it would not leave true is the pencil being inside it.
-    expect(
-      guard!.contains(
-        screen.getByRole("button", { name: /^Edit Lightning Bolt/ }),
-      ),
-    ).toBe(true);
+
+    // The pencil is outside that wrapper now, and carries a mark of its own — `AnchoredPopup`
+    // marks itself, which is `dnd.ts`'s rule read the other way round.
+    const pencil = screen.getByRole("button", { name: /^Edit Lightning Bolt/ });
+    expect(guard!.contains(pencil)).toBe(false);
+    expect(pencil.closest(NOT_A_DRAG)).not.toBeNull();
   });
 
   /**
-   * **The wrapper is `position: static`, and the pencil is too — so `CardGrid`'s strip is still
-   * what the 256px panel hangs off.**
+   * **The pencil is `position: static` — so `CardGrid`'s strip is what the 256px panel hangs
+   * off.**
    *
    * `AnchoredPopup` is `relative` by default and `WishlistGrid` passes it `static` precisely so
    * that it is not the containing block: a panel anchored to a 20px control at the right end of
    * a 170px tile opens off the left of the scroller, and left overflow — unlike right — cannot
-   * be scrolled back into view. Putting a second box in that chain is the silent way to undo it,
-   * because a `relative` wrapper looks like nothing at all in the markup.
+   * be scrolled back into view. Anything positioned put between the two is the silent way to
+   * undo it, because a `relative` box looks like nothing at all in the markup — which is why
+   * this asserts the *identity* of the anchor rather than the pencil's own class.
    *
    * **Read off the class list, since jsdom loads no stylesheet** — see {@link nearestPositioned}.
-   * This is one assertion over two mutations: a positioned wrapper stops the walk at the
-   * wrapper, and a pencil that lost its `static` stops it at the popup's own root.
    */
   it("leaves the strip as the box the pencil's panel is anchored to", () => {
     wall([BOLT]);
