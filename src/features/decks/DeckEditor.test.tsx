@@ -55,6 +55,11 @@ const deckAddCard = vi.hoisted(() => vi.fn());
 const deckMissingToWishlist = vi.hoisted(() => vi.fn());
 const deckPullPlan = vi.hoisted(() => vi.fn());
 const deckPullFromCollection = vi.hoisted(() => vi.fn());
+// The `Collection ▸` submenu's read and its write (issue #350). The read is the one command in
+// this file fired **imperatively at a press** rather than by a mounted query — a right-click has
+// to cost nothing — so a test that never presses that row asserts it was never called.
+const deckQuickAddWishes = vi.hoisted(() => vi.fn());
+const deckQuickAddToCollection = vi.hoisted(() => vi.fn());
 const deckSwapPrinting = vi.hoisted(() => vi.fn());
 // The other write that changes a row's *address* rather than its quantity — the card menu's
 // `Set as foil` / `Set as regular`.
@@ -147,6 +152,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckMissingToWishlist,
     deckPullPlan,
     deckPullFromCollection,
+    deckQuickAddWishes,
+    deckQuickAddToCollection,
     deckSwapPrinting,
     deckSetCardFinish,
     deckSetViewState,
@@ -717,6 +724,14 @@ beforeEach(() => {
   // the empty state still draws the ✕, Cancel and Pull that the Tab sweep walks.
   deckPullPlan.mockReset().mockResolvedValue([]);
   deckPullFromCollection.mockReset().mockResolvedValue({ copies: 0, cards: 0 });
+  // **No wish matches, which is the commonest answer and the one that draws nothing at all.**
+  // `chooseWish` writes straight through on an empty list, so the default here is the state in
+  // which `Quick add N and remove from wishlist` is exactly `Quick add N` — and every test about
+  // the dialog states its own two rows.
+  deckQuickAddWishes.mockReset().mockResolvedValue([]);
+  deckQuickAddToCollection
+    .mockReset()
+    .mockResolvedValue({ copies: 1, entryId: 91, wishCopies: 0 });
   deckSwapPrinting.mockReset().mockResolvedValue({ folded: false, quantity: 4 });
   deckSetCardFinish.mockReset().mockResolvedValue({ folded: false, quantity: 4 });
   deckSetViewState.mockReset().mockResolvedValue(undefined);
@@ -4554,6 +4569,29 @@ describe("layerMatches", () => {
     expect(layerMatches(null, { kind: "labels" })).toBe(false);
     expect(layerMatches(null, { kind: "export", categoryId: null })).toBe(false);
   });
+
+  /**
+   * **The pull is the second kind two controls reach** (2026-09-03): the stats band opens it over
+   * the whole deck and a card's `Collection ▸ Pull …` opens it over one row. Neither is reachable
+   * while the other is up — one slot, and both are modal — so this is asserted directly, which is
+   * the same reason the export case above is a unit test rather than a press.
+   *
+   * The card comparison is by `pullKey` rather than by object identity, because a `DeckCard` is a
+   * fresh object on every `deck_get`: the two `bolt()` calls below are two objects naming one row,
+   * which is exactly what a refetch under an open dialog produces.
+   */
+  it("tells the deck-wide pull from a card's", () => {
+    const deckWide = { kind: "pull" } as const;
+    const perCard = { kind: "pull", card: bolt() } as const;
+
+    expect(layerMatches(deckWide, deckWide)).toBe(true);
+    expect(layerMatches(perCard, deckWide)).toBe(false);
+    expect(layerMatches(deckWide, perCard)).toBe(false);
+    expect(layerMatches(perCard, { kind: "pull", card: bolt() })).toBe(true);
+    expect(
+      layerMatches(perCard, { kind: "pull", card: bolt({ finish: "foil" }) }),
+    ).toBe(false);
+  });
 });
 
 /**
@@ -4984,8 +5022,19 @@ describe("DeckEditor — a card's menu", () => {
     await open();
     await rightClickCard("Lightning Bolt");
     await expand(/Add to/);
-    // One finish on this printing, so `Collection` is a plain row rather than a submenu.
-    await userEvent.click(await screen.findByRole("menuitem", { name: "Collection" }));
+    // One finish on this printing, so `Collection` is a plain row rather than a submenu — but
+    // **two rows on this menu are called `Collection` since 2026-09-03**: this destination and
+    // the new `Collection ▸` submenu of quick actions. `deckCardMenu.tsx` says the repeat is
+    // deliberate — it is the reader's binder in both places, and a second name for it would read
+    // as a second thing — and what tells them apart is the panel each is in, which is what a
+    // reader sees and what a screen reader announces. So the press is scoped to the open
+    // submenu's panel, which is the last `role="menu"` in the tree.
+    const panels = screen.getAllByRole("menu");
+    const addTo = panels[panels.length - 1];
+    expect(addTo).toBeDefined();
+    await userEvent.click(
+      await within(addTo as HTMLElement).findByRole("menuitem", { name: "Collection" }),
+    );
 
     expect(await screen.findByText(/Could not add to your collection/)).toBeInTheDocument();
   });
@@ -5217,6 +5266,460 @@ describe("DeckEditor — a card's menu", () => {
       DECK_CARD_ATTR,
       deckCardSlot(MAIN, "c-Lightning Bolt", "foil"),
     );
+  });
+});
+
+/**
+ * **`Collection ▸` — the three presses that answer a card's shortfall** (issue #350).
+ *
+ * These are the editor's only menu rows that *read before they write*, and the read is what every
+ * case here is really about: whether a press asks the backend anything at all, whether the answer
+ * is turned into a write or into a dialog, and what happens when it refuses. The rows' own labels
+ * and their greying are `deckCardMenu.test.tsx`'s — this file owns the wiring behind them.
+ *
+ * **A shortfall of four on every fixture**, because the count travels from the row into the label
+ * *and* into the write: `bolt()` is a playset the reader owns three of, and a `1` in an assertion
+ * would be indistinguishable from a hard-coded one. `ownedQuantity: 0` is what makes it four.
+ */
+describe("DeckEditor — the Collection submenu", () => {
+  /** A live row of four the reader owns none of, so every label and every write says `4`. */
+  const SHORT = () => bolt({ quantity: 4, ownedQuantity: 0 });
+
+  /** Two wishes for one printing — the ambiguous case, and the only one that draws a dialog.
+   *  One at the root and one in a folder, which is what the rows are told apart by. */
+  const WISHES = [
+    { id: 31, quantity: 2, folderId: null, folderName: null },
+    { id: 32, quantity: 4, folderId: 8, folderName: "Modern staples" },
+  ];
+
+  /** One `deck_pull_plan` row for this card, with as many candidates as a case wants. `short` is
+   *  the deck's own shortfall, so the plan and the menu label quote one number. */
+  function planRow(entryIds: number[], over: Record<string, unknown> = {}) {
+    return {
+      cardId: "c-Lightning Bolt",
+      name: "Lightning Bolt",
+      setCode: "m10",
+      collectorNumber: "146",
+      finish: null,
+      short: 4,
+      categories: ["Main deck"],
+      imageUris: null,
+      candidates: entryIds.map((entryId) => ({
+        entryId,
+        quantity: 4,
+        folderId: null,
+        folderName: null,
+        folderKind: null,
+        condition: "NM",
+        lang: "en",
+        altered: false,
+        signed: false,
+        proxy: false,
+        misprint: false,
+        grading: null,
+        serialNumber: null,
+      })),
+      ...over,
+    };
+  }
+
+  /** Right-click the card, open `Collection ▸`, and hand back the panel. */
+  async function collectionMenu(name = "Lightning Bolt") {
+    const el = document.querySelector<HTMLElement>(
+      `[${DECK_CARD_ATTR}="${deckCardSlot(MAIN, `c-${name}`, null)}"]`,
+    );
+    expect(el).not.toBeNull();
+    fireEvent.contextMenu(el as HTMLElement);
+    await screen.findByRole("menu");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Collection" }));
+  }
+
+  /**
+   * **A right-click costs nothing**, which is the whole reason the two reads are `fetchQuery` at
+   * the press rather than hooks — a mounted query per drawn card would ask the wishlist and the
+   * collection about every card in the deck.
+   *
+   * The opening of the submenu is in the same case as the absence, because "it was not called"
+   * passes just as well against a menu that never drew the rows.
+   */
+  it("asks the backend nothing until one of the three rows is pressed", async () => {
+    deckGet.mockResolvedValue(detail({}, [SHORT()]));
+    await open();
+    await collectionMenu();
+
+    expect(
+      await screen.findByRole("menuitem", { name: "Quick add 4 copies" }),
+    ).toBeInTheDocument();
+    expect(deckQuickAddWishes).not.toHaveBeenCalled();
+    expect(deckPullPlan).not.toHaveBeenCalled();
+  });
+
+  /** The plain add: the copies, into this deck's group, and the wishlist untouched — which is
+   *  `wishId: null` and, just as load-bearing, **no wish read at all**. */
+  it("records the shortfall and never looks at the wishlist", async () => {
+    deckGet.mockResolvedValue(detail({}, [SHORT()]));
+    await open();
+    await collectionMenu();
+
+    await userEvent.click(screen.getByRole("menuitem", { name: "Quick add 4 copies" }));
+
+    await waitFor(() =>
+      expect(deckQuickAddToCollection).toHaveBeenCalledWith(
+        4,
+        "c-Lightning Bolt",
+        null,
+        "NM",
+        4,
+        null,
+      ),
+    );
+    expect(deckQuickAddWishes).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **One matching wish is not a question**, which is `chooseWish`'s rule and the half of this
+   * feature most easily broken by "just always ask": the write goes with that wish's id and no
+   * dialog is drawn at all.
+   *
+   * The absence is asserted **after** the write has landed rather than immediately, or it would
+   * pass against a dialog that had simply not opened yet.
+   */
+  it("clears a single matching wish without asking", async () => {
+    deckGet.mockResolvedValue(detail({}, [SHORT()]));
+    deckQuickAddWishes.mockResolvedValue([WISHES[0]]);
+    await open();
+    await collectionMenu();
+
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: "Quick add 4 and remove from wishlist" }),
+    );
+
+    await waitFor(() => expect(deckQuickAddWishes).toHaveBeenCalledWith("c-Lightning Bolt", null));
+    await waitFor(() =>
+      expect(deckQuickAddToCollection).toHaveBeenCalledWith(
+        4,
+        "c-Lightning Bolt",
+        null,
+        "NM",
+        4,
+        31,
+      ),
+    );
+    expect(screen.queryByRole("dialog", { name: "Which wish?" })).not.toBeInTheDocument();
+  });
+
+  /** No matching wish is not a question either, and the press is exactly the plain add — the
+   *  row still records the copies rather than refusing because there was nothing to clear. */
+  it("records the copies when no wish matches at all", async () => {
+    deckGet.mockResolvedValue(detail({}, [SHORT()]));
+    await open();
+    await collectionMenu();
+
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: "Quick add 4 and remove from wishlist" }),
+    );
+
+    await waitFor(() =>
+      expect(deckQuickAddToCollection).toHaveBeenCalledWith(
+        4,
+        "c-Lightning Bolt",
+        null,
+        "NM",
+        4,
+        null,
+      ),
+    );
+    expect(screen.queryByRole("dialog", { name: "Which wish?" })).not.toBeInTheDocument();
+  });
+
+  /**
+   * Two wishes for one printing is the one case with an answer only the reader has, so the press
+   * stops at the dialog — **nothing is written before it is answered**, which is the assertion
+   * that makes "Cancel does nothing" possible at all.
+   */
+  it("asks which wish when two match, and writes nothing until it is answered", async () => {
+    deckGet.mockResolvedValue(detail({}, [SHORT()]));
+    deckQuickAddWishes.mockResolvedValue(WISHES);
+    await open();
+    await collectionMenu();
+
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: "Quick add 4 and remove from wishlist" }),
+    );
+
+    const dialog = await screen.findByRole("dialog", { name: "Which wish?" });
+    expect(within(dialog).getByRole("radio", { name: /Wishlist/ })).toBeChecked();
+    expect(within(dialog).getByRole("radio", { name: /Modern staples/ })).not.toBeChecked();
+    expect(deckQuickAddToCollection).not.toHaveBeenCalled();
+
+    await userEvent.click(within(dialog).getByRole("radio", { name: /Modern staples/ }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Record 4 copies" }));
+
+    await waitFor(() =>
+      expect(deckQuickAddToCollection).toHaveBeenCalledWith(
+        4,
+        "c-Lightning Bolt",
+        null,
+        "NM",
+        4,
+        32,
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Which wish?" })).not.toBeInTheDocument(),
+    );
+  });
+
+  /**
+   * **Cancel does nothing at all, including the add** — the decision this dialog exists to
+   * enforce, and the one a later "surely we should still record the copies" would break silently.
+   *
+   * The reader asked for both halves of one act and got neither; a collection row recorded
+   * against a wish still standing is the exact state the row exists to prevent.
+   */
+  it("writes nothing at all when the wish question is cancelled", async () => {
+    deckGet.mockResolvedValue(detail({}, [SHORT()]));
+    deckQuickAddWishes.mockResolvedValue(WISHES);
+    await open();
+    await collectionMenu();
+
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: "Quick add 4 and remove from wishlist" }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Which wish?" });
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Which wish?" })).not.toBeInTheDocument(),
+    );
+    expect(deckQuickAddToCollection).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **A lone candidate is unambiguous, so the pull happens with no dialog** — and that is true
+   * even when it cannot cover the line: what there is, is taken. `choosePull`'s rule.
+   */
+  it("pulls outright when one source can supply the card", async () => {
+    deckGet.mockResolvedValue(detail({}, [SHORT()]));
+    deckPullPlan.mockResolvedValue([planRow([55])]);
+    await open();
+    await collectionMenu();
+
+    await userEvent.click(screen.getByRole("menuitem", { name: "Pull 4 from your collection" }));
+
+    await waitFor(() =>
+      expect(deckPullFromCollection).toHaveBeenCalledWith(4, [{ entryId: 55, quantity: 4 }]),
+    );
+    expect(screen.queryByRole("dialog", { name: "Pull from collection" })).not.toBeInTheDocument();
+  });
+
+  /**
+   * **Two candidates is the issue's own question**, so the dialog opens — and it opens holding
+   * **only this card's row**.
+   *
+   * The second fixture row is the whole case: a dialog handed the unfiltered plan would draw the
+   * other card too, which is a per-card press that quietly became the deck-wide one. The subtitle
+   * is asserted beside it because it is the only thing on screen that says which of the two
+   * scopes a reader is looking at.
+   */
+  it("opens the pull on this card alone when two sources could supply it", async () => {
+    deckGet.mockResolvedValue(detail({}, [SHORT(), card({ name: "Bear", quantity: 2 })]));
+    deckPullPlan.mockResolvedValue([
+      planRow([55, 56]),
+      planRow([57], { cardId: "c-Bear", name: "Bear", short: 2 }),
+    ]);
+    await open();
+    await collectionMenu();
+
+    await userEvent.click(screen.getByRole("menuitem", { name: "Pull 4 from your collection" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Pull from collection" });
+    expect(
+      within(dialog).getByText("Copies of Lightning Bolt you already own — into Burn"),
+    ).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("checkbox", { name: "Pull Lightning Bolt, 4 copies" }),
+    ).toBeInTheDocument();
+    expect(within(dialog).queryByRole("checkbox", { name: /^Pull Bear/ })).not.toBeInTheDocument();
+    expect(deckPullFromCollection).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **No candidate at all still opens the dialog**, deliberately: `NOTHING_TO_PULL` explains why
+   * a card the deck says it is short of has nothing to pull — the exact printing, the exact
+   * finish, and never a copy another deck is holding — and a banner could only have said that it
+   * found none.
+   */
+  it("opens the pull on a card with no candidate, so the dialog can say why", async () => {
+    deckGet.mockResolvedValue(detail({}, [SHORT()]));
+    await open();
+    await collectionMenu();
+
+    await userEvent.click(screen.getByRole("menuitem", { name: "Pull 4 from your collection" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Pull from collection" });
+    expect(within(dialog).getByText("Nothing to pull.")).toBeInTheDocument();
+    expect(deckPullFromCollection).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The stats band's press is still the whole deck**, which is the other half of the layer's
+   * new payload: an arm that carried the card unconditionally would have narrowed the deck-wide
+   * dialog to whatever card was last right-clicked.
+   */
+  it("keeps the stats band's press over the whole deck", async () => {
+    deckGet.mockResolvedValue(detail({}, [SHORT(), card({ name: "Bear", quantity: 2 })]));
+    deckPullPlan.mockResolvedValue([
+      planRow([55]),
+      planRow([57], { cardId: "c-Bear", name: "Bear", short: 2 }),
+    ]);
+    await open();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Pull from collection" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Pull from collection" });
+    expect(
+      await within(dialog).findByText(
+        "Cards this deck is short of that you already own — into Burn",
+      ),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByRole("checkbox", { name: /^Pull Bear/ })).toBeInTheDocument();
+  });
+
+  /**
+   * **A read the reader pressed for cannot fail silently.** The menu closes before its handler
+   * runs, so a refused `deck_quick_add_wishes` has nowhere of its own to be said — and a menu row
+   * that sometimes does nothing at all is the worst answer available. It lands in the same banner
+   * every refused write in this editor lands in.
+   */
+  it("says so in the banner when the wish read is refused", async () => {
+    deckGet.mockResolvedValue(detail({}, [SHORT()]));
+    deckQuickAddWishes.mockRejectedValue(new Error("database is locked"));
+    await open();
+    await collectionMenu();
+
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: "Quick add 4 and remove from wishlist" }),
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could not change this deck — database is locked",
+    );
+    expect(deckQuickAddToCollection).not.toHaveBeenCalled();
+  });
+
+  /** The same for the pull's plan, which is the other read a press makes — one banner, two
+   *  reads, because both are the same kind of failure: an act the reader asked for that cannot
+   *  begin. */
+  it("says so in the banner when the pull plan is refused", async () => {
+    deckGet.mockResolvedValue(detail({}, [SHORT()]));
+    deckPullPlan.mockRejectedValue(new Error("database is locked"));
+    await open();
+    await collectionMenu();
+
+    await userEvent.click(screen.getByRole("menuitem", { name: "Pull 4 from your collection" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could not change this deck — database is locked",
+    );
+    expect(deckPullFromCollection).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **A refused write is drawn inside the wish dialog, not only in the banner behind it** —
+   * `DeleteCategory`'s and `ClearCategory`'s rule, and the reason the dialog takes a `failure` at
+   * all: the editor's banner is behind this dialog's `LAYER.overlay` scrim, so without this the
+   * reader sees a press that did nothing and a question still open.
+   */
+  it("keeps the wish question open on a refusal and says why inside it", async () => {
+    deckGet.mockResolvedValue(detail({}, [SHORT()]));
+    deckQuickAddWishes.mockResolvedValue(WISHES);
+    deckQuickAddToCollection.mockRejectedValue(new Error("that wishlist line is not there"));
+    await open();
+    await collectionMenu();
+
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: "Quick add 4 and remove from wishlist" }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Which wish?" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Record 4 copies" }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "Could not record those copies — that wishlist line is not there",
+    );
+    expect(screen.getByRole("dialog", { name: "Which wish?" })).toBeInTheDocument();
+  });
+
+  /**
+   * **A refusal from an *earlier* press is not this dialog's**, and one mutation serving all
+   * three rows is what makes that possible: a refused `Quick add 4 copies` leaves
+   * `quickAddToCollection.isError` standing, so a panel that read the flag alone would open with a
+   * red sentence about a press the banner had already reported.
+   *
+   * The banner still carries it, which is the pairing this case asserts — the sentence is not
+   * lost, it is drawn where it belongs.
+   */
+  it("does not greet the wish question with an earlier press's refusal", async () => {
+    deckGet.mockResolvedValue(detail({}, [SHORT()]));
+    deckQuickAddWishes.mockResolvedValue(WISHES);
+    deckQuickAddToCollection.mockRejectedValue(new Error("database is locked"));
+    await open();
+    await collectionMenu();
+
+    // The plain add, refused.
+    await userEvent.click(screen.getByRole("menuitem", { name: "Quick add 4 copies" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could not change this deck — database is locked",
+    );
+
+    // Now the row that asks. The question opens clean.
+    await collectionMenu();
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: "Quick add 4 and remove from wishlist" }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Which wish?" });
+
+    expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
+    // And the earlier refusal is where it was said in the first place.
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Could not change this deck — database is locked",
+    );
+  });
+
+  /**
+   * The caret goes back to the card the reader right-clicked, which is `ContextMenu`'s half of
+   * the contract met by this editor's: `run` focuses the opener *before* it calls a row, so
+   * `document.activeElement` read at the press is exact — and it is read **before** the await,
+   * so a round trip cannot move it.
+   */
+  it("hands the caret back to the card when the wish question is dismissed", async () => {
+    deckGet.mockResolvedValue(detail({}, [SHORT()]));
+    deckQuickAddWishes.mockResolvedValue(WISHES);
+    await open();
+    await collectionMenu();
+
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: "Quick add 4 and remove from wishlist" }),
+    );
+    await screen.findByRole("dialog", { name: "Which wish?" });
+    // **The `<li>`, not the button inside it.** `ContextMenu` hands the caret back to the element
+    // its handler is attached to, which in `StackView` is the card's row rather than the button
+    // carrying `DECK_CARD_ATTR` — this folder's `CLAUDE.md` states the same asymmetry for
+    // `caretCardSlot`. Asserting the button would fail on working behaviour.
+    const opener = document
+      .querySelector<HTMLElement>(
+        `[${DECK_CARD_ATTR}="${deckCardSlot(MAIN, "c-Lightning Bolt", null)}"]`,
+      )
+      ?.closest("li");
+
+    await userEvent.keyboard("{Escape}");
+
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Which wish?" })).not.toBeInTheDocument(),
+    );
+    expect(opener).toHaveFocus();
+    expect(deckQuickAddToCollection).not.toHaveBeenCalled();
   });
 });
 

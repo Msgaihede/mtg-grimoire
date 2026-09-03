@@ -14,6 +14,11 @@ import {
 } from "@/lib/ipc";
 import { useAppStore, type PaneDeckContext } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
+// The condition every menu add in this app records a copy at, imported rather than respelled: the
+// card menu's collection add and this hook's quick add have to agree, and two spellings of a
+// default drift the first time either changes.
+import { MENU_CONDITION } from "@/lib/conditions";
+import { OWNED_WRITE_KEYS } from "@/lib/query";
 import { autoCategoryFor } from "./autoCategory";
 
 /**
@@ -979,6 +984,66 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
   });
 
   /**
+   * Record the copies this row is short of, straight into the deck's own group — and, where the
+   * press named a wish, take them off it in the same transaction.
+   *
+   * **The one write in this hook that can _create_ a collection row**, which is the whole of why
+   * it takes `query.ts`'s {@link OWNED_WRITE_KEYS} rather than the {@link invalidateCollection}
+   * the three movers share. That function's own doc says the narrower set is right *because* all
+   * four of its callers only move a row between folders, so the total the reader owns cannot have
+   * changed — and it names the write that went with the deleted `own` add as the one that could
+   * do otherwise. **This is that case coming back.** `CardSummary.ownedQuantity` moves from 0 to
+   * N on the very tile the press was made on, and a 30 s `staleTime` over a missing root is a
+   * number that goes on saying what it said before the press for half a minute.
+   *
+   * **`["wishlist"]` is in that set already, and here it is load-bearing rather than incidental.**
+   * The other member of the constant takes it because a recorded copy changes what a wish counts
+   * as owned; this write can go further and **delete the wish outright**, so the shopping list's
+   * own rows move and not just their progress.
+   *
+   * **`["decks"]` is the fourth member**, so {@link invalidate} is not called beside this: it
+   * would be a second spelling of a root the set already carries. Nothing about the deck's *list*
+   * changes — no `deck_cards` row is written — and the root is owed for `ownedQuantity` alone,
+   * exactly as it is on the pull.
+   *
+   * **`MENU_CONDITION` rather than a second spelling of `"NM"`.** A quick add records a copy at
+   * the condition every other menu add in this app records one at, and two constants holding that
+   * default drift the first time either moves.
+   *
+   * **The card is passed whole rather than a `(cardId, finish)` pair**, because the row is the
+   * thing the reader right-clicked and its finish is part of its address — a caller assembling
+   * the pair by hand is a caller that can send the regular copy's word for a foil line. The
+   * `quantity` is the caller's for the same reason it is not derived here: `quickAddShort` reads
+   * the row, and a mutation that re-derived it would answer for a `DeckCard` a beat older than
+   * the menu label the reader pressed.
+   *
+   * **No optimistic patch, for {@link pullFromCollection}'s reason**: every number this moves is
+   * a sum the backend computes over rows in another table.
+   */
+  const quickAddToCollection = useMutation({
+    mutationFn: ({
+      card,
+      quantity,
+      wishId,
+    }: {
+      card: DeckCard;
+      quantity: number;
+      wishId: number | null;
+    }) =>
+      ipc.deckQuickAddToCollection(
+        opened(id),
+        card.cardId,
+        card.finish,
+        MENU_CONDITION,
+        quantity,
+        wishId,
+      ),
+    onSuccess: () => {
+      for (const queryKey of OWNED_WRITE_KEYS) void queryClient.invalidateQueries({ queryKey });
+    },
+  });
+
+  /**
    * Put the deck's one label on a card, or take it off with `labelId: null`.
    *
    * A **card** write, addressed by the same slot as the stepper and the move — which is why it
@@ -1035,6 +1100,10 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
      *  into its group. See the mutation's own doc for the three roots it invalidates, and for
      *  why the third of them is not optional. */
     pullFromCollection,
+    /** Record the copies one row is short of into this deck's group, and optionally clear a
+     *  wish with them. **The one write here that creates a collection row**, so it takes all
+     *  four of `OWNED_WRITE_KEYS` — see the mutation's own doc. */
+    quickAddToCollection,
   };
 }
 
@@ -1075,11 +1144,62 @@ export type Deck = ReturnType<typeof useDeck>;
  * query rather than branching around one, and a `null` id can never satisfy the gate.
  */
 export function usePullPlan(deckId: number | null, enabled: boolean) {
-  return useQuery({
+  return useQuery({ ...pullPlanQuery(deckId), enabled: enabled && deckId !== null });
+}
+
+/**
+ * The pull plan's key and fetcher, as options both readers build from.
+ *
+ * **Two things ask for this plan and they must not spell the key twice.** {@link usePullPlan}
+ * mounts it for the dialog; the deck card menu's per-card pull *fetches* it imperatively at the
+ * press (`queryClient.fetchQuery`) so that a right-click costs nothing and only a chosen row
+ * pays. A second spelling here would be a fetch that never shares the dialog's cache — the two
+ * would each hold their own answer to one question, and the silent half is that both would still
+ * work: the menu's press would simply always miss, and every press would be a fresh
+ * `deck_pull_plan` behind a dialog that already had one.
+ *
+ * The key is unchanged from what the hook spelled: `["decks", "pullPlan", deckId]`, under the
+ * root {@link useDeck}'s own `invalidate` reaches, which is what keeps a plan from outliving the
+ * write that filled its holes. See {@link usePullPlan} for why it carries neither a variant nor a
+ * marketplace.
+ *
+ * `deckId` is nullable so the hook can pass what it was given; the fetcher throws through
+ * {@link opened} rather than answering for a deck that is not open, and the hook's `enabled` is
+ * what keeps that unreachable.
+ */
+export function pullPlanQuery(deckId: number | null) {
+  return {
     queryKey: ["decks", "pullPlan", deckId],
     queryFn: () => ipc.deckPullPlan(opened(deckId)),
-    enabled: enabled && deckId !== null,
-  });
+  };
+}
+
+/**
+ * The wishes a quick-add-and-unwish press would clear, as query options rather than as a hook.
+ *
+ * **Deliberately not a hook, and that is the whole design of it.** A deck card's right-click has
+ * to be free: a mounted query per drawn card, or even per opened menu, would ask the wishlist
+ * about every card a reader hovered past. So the editor fetches this at the **press**, through
+ * `queryClient.fetchQuery(quickAddWishesQuery(...))`, and the answer lands in the same cache
+ * anything else reading it would find — which is what the factory is for. A key written out at
+ * the call site is the one this file cannot keep in step.
+ *
+ * **`["wishlist", "forPrinting", cardId, finish ?? ""]`.** Under the `["wishlist"]` root, so
+ * `quickAddToCollection`'s own invalidation reaches it — that write can delete the very wish this
+ * answered, and a cached list offering a row that is gone is a picker whose confirm is refused.
+ * The finish is part of the key because it is part of the *question*: the predicate matches the
+ * row's own finish, so the foil line and the regular line of one printing have two answers.
+ * `""` for the regular copy, `pullKey`'s translation and safe for its reason — no finish is the
+ * empty string, so `null` cannot collide with `"foil"` or `"etched"`.
+ *
+ * It names no deck, because a wish does not: which deck the press came from decides where the
+ * *copies* are filed and says nothing about which shopping lines could be cleared.
+ */
+export function quickAddWishesQuery(cardId: string, finish: DeckFinish) {
+  return {
+    queryKey: ["wishlist", "forPrinting", cardId, finish ?? ""],
+    queryFn: () => ipc.deckQuickAddWishes(cardId, finish),
+  };
 }
 
 /**

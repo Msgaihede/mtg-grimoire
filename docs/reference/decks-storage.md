@@ -385,9 +385,12 @@ preferred_finish`'s nullability one table over.
   **The run list is not replaced by a shorter run list; it is replaced by nothing.** There is no
   derived table to keep in step, so no write "runs the allocator" and none can forget to. What
   moves a row *across* the deck boundary is the pair in `collection_alloc.rs` —
-  `collection_to_deck` and `deck_to_collection` — **and, since 2026-09-03, `deck_pull.rs`'s
-  `deck_pull_from_collection`, which is the third and is not a member of that pair** (see
-  [the pull](#the-pull-filling-a-hole-the-list-already-has)) — plus the six bulk presses that empty a group
+  `collection_to_deck` and `deck_to_collection` — **and, since 2026-09-03, two more that are not
+  members of that pair**: `deck_pull.rs`'s `deck_pull_from_collection`, the third (see
+  [the pull](#the-pull-filling-a-hole-the-list-already-has)), and `deck_quick_add.rs`'s
+  `deck_quick_add_to_collection`, the fourth and the only one that puts a row in a group without
+  taking it out of anywhere (see
+  [the quick add](#the-quick-add-recording-cardboard-nobody-had-written-down)) — plus the six bulk presses that empty a group
   the reader is throwing away, every one of them into `Recently removed`: `delete_deck`,
   `deck_meta::delete_category`'s cascade arm, `deck::clear_category`, `deck::clear_variant`,
   `import::commit_import`'s `replace` arm, and Settings' `reset::clear_decks`. The five that
@@ -484,10 +487,12 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   it for two PRs while the list stayed at 25: a sweep that exists to catch "a new deck write
   records nothing" cannot skip the writes that move cards. It fell back to 27 on 2026-08-31, when
   custom deck covers took `deck_set_cover_image`'s case out with them and this sentence was the
-  half of that deletion nobody re-counted. **Neither clear is in the list** —
-  `deck_category_clear` never was, and `deck_clear` was not added beside it — so the test's name
-  is wider than what it drives, and each clear's history row is pinned by a test of its own in
-  `deck.rs` instead. "Exactly one" is per _change_, not per call, and
+  half of that deletion nobody re-counted. **Four writes that do record history are not in the
+  list** (re-counted 2026-09-03, still 27): `deck_category_clear` never was and `deck_clear` was
+  not added beside it, and neither of the two deck-boundary crossings that landed on 2026-09-03 —
+  `deck_pull_from_collection` and `deck_quick_add_to_collection` — went in either. So the test's
+  name is wider than what it drives, and each of the four pins its history row in a test of its
+  own: the two clears in `deck.rs`, the two crossings in their own modules. "Exactly one" is per _change_, not per call, and
   **three** commands make more than one change in a call:
   **`deck_update` records one row per changed field**
   (`record_deck_edit`, pinned by `a_patch_that_changes_two_fields_records_both`), and it
@@ -1566,3 +1571,186 @@ third time and the third reuse.
 
 **`delta` is 0 and that is honest.** `delta` is what the drawer's day header adds up, and the
 deck's *list* gained nothing — only its custody did.
+
+## The quick add: recording cardboard nobody had written down
+
+`deck_quick_add.rs`, [issue #350](https://github.com/Msgaihede/mtg-grimoire/issues/350), landed
+2026-09-03. **The fourth crossing of the deck boundary, and the first that _creates_ copies rather
+than moving them.** The deck lists four Bolts, its group holds none, and the reader has come home
+from the shop with four. The pull above cannot help — there is nothing in any folder to move — and
+the long way round is an add on the collection page followed by a file into the deck's group,
+which is two surfaces and a folder picker for a number the deck card is already wearing.
+
+```text
+         collection_to_deck                 deck_to_collection
+binder / another deck ─────────▶ deck group ─────────────────▶ Recently removed
+                                     ▲   ▲
+        deck_pull_from_collection ───┘   └─── deck_quick_add_to_collection
+        (moves cardboard that exists)         (records cardboard that did not)
+```
+
+### Creating rather than moving is the whole of what is new, and three things follow
+
+**The invalidation is the wide one.** The other three arrows only move a row between folders, so
+the total the reader owns cannot have changed, and `useDeck`'s `invalidateCollection` — the
+`["collection"]` root alone — is as precise as their answers allow. This one moves a
+`CardSummary.ownedQuantity` from 0 to 4 on the very tile the press was made on, so it fires
+`query.ts`'s `OWNED_WRITE_KEYS` instead: the collection, the wishlist's owned progress,
+`["cards", "search"]` and `["decks"]`. `useDeck.ts` had exactly one write of this class before —
+the `own` add deleted on 2026-08-25 — and the comment left standing where its invalidation used to
+be says why the narrow root is not enough. This is that case coming back, and the constant was
+kept shared with the import's owned half for exactly this.
+
+**It takes `collection_source::with_write_owned`, not `sync::lock_db_read`,** for the reason one
+level down: a `collection_entries` row is created, and the facet index's `owned` dimension counts
+rows.
+
+**And `NOT_IN_DECK` is doing real work here rather than being copied across.** Issue #358's
+invariant is *every copy in a deck's group is backed by a row in that deck's list*, and a write
+that can conjure a placement out of nothing is precisely the write that could break it. The fence
+is the one `collection_to_deck` grew — `deck::plays_card`, `PLAYED_KEY`'s
+`coalesce(c.oracle_id, dc.card_id)`, the **live** list only — reused rather than respelled.
+
+### Two commands, and the read is the smaller half this time
+
+`deck_quick_add_wishes` answers which wishlist lines this printing would satisfy;
+`deck_quick_add_to_collection` records the copies and, when the reader named one, takes them off
+that line. The split is the pull's and for the pull's reason — a prompt needs its options named
+before anything is written — but it is a narrower read: there is no plan to compute, because how
+many copies to record is a fact the row the reader right-clicked is already showing.
+
+The read is one statement over `wishlist_entries LEFT JOIN wishlist_folders`, ordered root first,
+then the reader's own folders in their `sort_order`, oldest row first inside a tie. That is
+`deck_pull::PullCandidate`'s order borrowed rather than re-decided, and it is borrowed with its
+argument: rank by how little of the reader's own filing the write disturbs. It is a pre-pick and
+nothing more — every match still reaches the picker when there is more than one.
+
+**Nothing is fetched on a right-click.** The wishes are read imperatively at the press, so the
+menu costs no round trip on a surface a reader opens constantly, and the key —
+`["wishlist", "forPrinting", cardId, finish ?? ""]` — is spelled once in `useDeck.ts` so that
+fetch and any observer of it cannot disagree about what they are sharing. **It names no deck**,
+because a wish does not: which deck the press came from decides where the *copies* are filed and
+says nothing about which shopping lines could be cleared.
+
+### The wishlist predicate is `OWNED_SQL`'s own first arm, with the second dropped
+
+```sql
+w.card_id = ?1 AND (w.preferred_finish IS NULL OR w.preferred_finish = ?2)
+```
+
+`wishlist::OWNED_SQL` — the sum that draws a wish's owned progress — is two arms `OR`ed together:
+a printing-exact one, and an any-printing one that matches `w.card_id IS NULL` through
+`cards.oracle_id`. This takes the first and drops the second, rather than forming a second opinion
+about what fills a wish. Two consequences, both decisions taken on 2026-09-03 and neither an
+oversight:
+
+- **The narrowing is on the printing, and it is the pull's narrowing exactly.** A wish for *any*
+  printing of the card is left standing after a quick add, the same way the pull leaves an Alpha
+  Bolt out of an M10 line — and for the same trade: nothing is ever struck off a shopping list
+  that is not the piece of cardboard the reader has just written down. Owned progress on such a
+  wish still moves, because `OWNED_SQL`'s second arm counts the new copies; it is the row's
+  *deletion* that is fenced, never the arithmetic.
+- **A NULL `preferred_finish` matches, and excluding it was never available.** The list itself
+  says a wish that names no finish takes any of them, and that is the commonest wish there is.
+
+The finish that goes in is the **deck row's**, through `deck::normalise_finish`, so `NULL` and
+`"nonfoil"` are one regular copy on both sides of the boundary: `deck_cards` stores `NULL` for
+regular and `collection_entries` stores the word, which is why the collection half is
+`normalise_finish(..)?.unwrap_or("nonfoil")` and not the deck value passed through.
+
+### The order of the write is the rule
+
+`collection_to_deck`'s discipline, one transaction, and every step is *placed* rather than merely
+present:
+
+1. **Zero copies are refused** — `collection::ZERO_ADD`, widened rather than respelled. Adding
+   zero is a no-op dressed as a write, and would conjure a row on a card nobody said they had.
+2. **`touch_deck` first**, so a stale editor holding a deleted deck's id hears `deck::GONE`.
+   *That deck is gone* and *that deck does not play this card* are different things to tell a
+   reader, and the order is the only thing that decides which one arrives.
+3. **`plays_card`, else `collection_alloc::NOT_IN_DECK`.** It reads the live list only, so a card
+   the deck merely *plans* is refused here with no theory fence of its own. The sentence is
+   `NOT_IN_DECK` rather than `THEORY_HOLDS_NOTHING`, which is narrower than the whole truth and
+   still the true answer to what was asked: this deck's live list does not play this card.
+4. **`deck_group`, else `collection_alloc::NO_DECK_GROUP`.**
+5. **`collection::add_entry_filed(&tx, &input, collection::DECK_WRITE_FOLDERS)`.** The grain fold
+   is that function's, so a second quick add on the same line raises the row already in the group
+   instead of making a second one — schema v24's folder term is what makes that a fold rather than
+   a move. **Every `EntryInput` field but the five this press knows is at its empty value**
+   (`..Default::default()`, so a column added later needs no line here): a menu row records
+   *copies*, and a purchase price or an acquisition source it invented would be provenance nobody
+   entered. The condition is `MENU_CONDITION` — TypeScript's, `"NM"`, the same constant every
+   other menu add records at, imported rather than respelled so the two cannot drift.
+6. **The wish, re-read inside the transaction against the predicate above.** The dialog's answer
+   is a round trip old, which is the pull's discipline: gone → `WISH_GONE`, no longer a match →
+   `WISH_WRONG_CARD`. Then `take = min(copies, wish.quantity)`, deleting the row at zero and
+   decrementing it otherwise.
+
+**A refusal at step 6 rolls the copies back with it**, and that is the answer the press deserves
+rather than a partial success: the reader asked for both halves, so they get both or neither. It
+is the same shape as `Cancel` on the picker, which likewise does not quietly perform the add on
+its own.
+
+Two new sentences, each a sentence and never a constraint failure — `deck::set_folder`'s rule:
+
+| Constant | Sentence |
+| --- | --- |
+| `WISH_GONE` | That wishlist line is not there any more. |
+| `WISH_WRONG_CARD` | That wishlist line is not for this card. |
+
+### The history row is the fourth reuse of `move`, and `AUDIT_KINDS` still stays at nine
+
+One row per press: `kind = 'move'`, no `card_id`, `delta = 0`, payload
+`{"quickAdd": {"copies": N, "wishes": M}}`, read by `auditText.ts` **before** the per-card
+branches and beside the pull's — because the `move` arm would otherwise render it as "Moved a
+card", a sentence about a card the row has not got. **`M` is copies off the wish and not a count
+of wish rows**, of which there is at most one: `quick_add` takes a single `wish_id`, because a
+press that cleared three shopping-list lines at once is a write nobody could review before making
+it.
+
+**Which is why the drawer reads `Recorded 4 copies for this deck` over `4 copies off your
+wishlist`, and says `copies` twice on purpose.** `auditText.ts` rendered that detail as
+`4 wishes cleared` for the length of one fan-out — a sentence sending the reader to look for three
+shopping lines that were never there, because a wish for four copies is one line. The two numbers
+are genuinely different facts and can differ (a four-copy press against a wish for one records
+`{"copies": 4, "wishes": 1}`), so the repetition is what tells them apart rather than clumsiness.
+`counts wishlist copies rather than wishlist lines` is the pin, and it asserts the **absence** of
+the word `wishes` — the count alone reads correctly under either spelling, and only the noun was
+ever wrong.
+
+**A tenth `AUDIT_KINDS` word was no more available here than it was to the pull**, and for
+`schema.rs`'s reason: SQLite has no `ALTER … CHECK`, so widening `deck_audit.kind` means
+rebuilding every reader's whole deck history for a spelling. `commit_import` met it first,
+`deck_undo` second, `deck_pull` third; this is the fourth time and the fourth reuse.
+
+**`delta` is 0 and honest.** The deck asked for four copies before the press and asks for four
+after it; the list gained nothing and what backs it did.
+
+### And there is no undo step, for a sharper reason than the pull's
+
+The pull files none because `take_copies` moves copies *through the merge* and a source row may
+no longer exist to restore. This one files none because there is nothing an undo step could
+express: `deck_undo` restores rows of `deck_cards` and touches no collection table at all, and
+this write changes **no** `deck_cards` row. A step carrying nothing is not a step. The way back is
+the collection editor, where the copies are a row the reader can see in a folder named after the
+deck.
+
+### The count is the row's, and one card in two piles costs two presses
+
+The number the menu names is `max(0, quantity − ownedQuantity)` for the row that was
+right-clicked — exactly the `3/4` `CardStack.tsx` is drawing on that card, so the menu never
+quotes a number the card is not already wearing. **That is deliberately not the fold the pull
+uses.** `deck_pull_plan` folds a shortfall to `(card_id, finish)` and never to the pile, because
+what a reader is short of is cardboard and custody is a fact about the deck rather than about a
+column. A menu row cannot do that: it is a label on the card a reader is pointing at, and a number
+gathered from a second pile they cannot see would offer to record copies for a row that is not on
+screen.
+
+So a deck listing two Bolts in `Removal` and two more in `Burn`, owning none, offers `Quick add 2
+copies` on each — two presses, where the second folds into the row the first created because
+`add_entry_filed` folds on the grain. Whether that is worth a folded variant of the row is a
+question for a live pass and not for this page.
+
+**Nothing in this section has been measured in the shipped window.** The pull's own live pass is
+the model for the one this owes: the two-press case above, a wish picker with several folders, and
+what the editor's banner says when the wish read fails.

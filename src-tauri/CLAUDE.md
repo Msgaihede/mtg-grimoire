@@ -428,8 +428,24 @@ shared_cell` walks both into two databases and compares them column by column.
   *is* and can say nothing about who may edit it. `refile_entry` carries no such fence
   deliberately — that is what lets `collection_alloc`'s two writes and `delete_deck` file into
   exactly those folders, and the fence belongs to the *command*.
-- **`collection_alloc.rs` holds the only pair that moves a row across the deck boundary**, and
-  nothing else in the crate may grow a third. `collection_to_deck` takes copies out of a binder or
+- **`collection_alloc.rs` holds the pair that moves a row across the deck boundary, and two more
+  crossings joined it on 2026-09-03 that are deliberately not members of that pair** —
+  `deck_pull.rs`'s `deck_pull_from_collection` ([issue
+  #351](https://github.com/Msgaihede/mtg-grimoire/issues/351)) and `deck_quick_add.rs`'s
+  `deck_quick_add_to_collection` ([issue
+  #350](https://github.com/Msgaihede/mtg-grimoire/issues/350)). **Four writes reach a deck's group,
+  the crate may not grow a fifth, and every one of them answers for the `deck_cards` row behind the
+  copies**: `collection_to_deck` writes that row, the pull refuses any pick the list is not already
+  short of, and the quick add refuses unless `deck::plays_card` already says yes. Neither of the
+  two new ones writes a `deck_cards` row at all. **The quick add is the only one that _creates_ a
+  `collection_entries` row rather than moving one**, which is why it goes through the private
+  `collection::add_entry_filed` with `collection::DECK_WRITE_FOLDERS` — the public
+  `collection::add_entry` refuses a `deck` folder outright and must go on refusing, and that
+  constant was `IMPORT_FOLDERS` until this became its second caller. It is also why it takes
+  `collection_source::with_write_owned` and fires TypeScript's `OWNED_WRITE_KEYS` rather than the
+  `["collection"]` root the three movers share: the facet index's `owned` dimension counts rows,
+  and this is the one write here that makes one.
+  `collection_to_deck` takes copies out of a binder or
   **another deck's group** and writes the `deck_cards` row in the same transaction — **naming its
   pile by id or by name and never both** (`collection_alloc::Pile`, with `Pile::from_args` the one
   place the wire's two nullable fields become it and `BOTH_PILES` where both arrive). The name arm

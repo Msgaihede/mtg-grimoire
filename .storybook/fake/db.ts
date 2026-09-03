@@ -137,6 +137,8 @@ import type {
   DeckPullOutcome,
   DeckPullPick,
   DeckPullRow,
+  DeckQuickAddOutcome,
+  DeckQuickAddWish,
   DeckRow,
   DecksCleared,
   DeckLabel,
@@ -898,6 +900,16 @@ export interface FakeUpdate {
  * something that has gone wrong with a world, it is where a reader arrives after two presses. It
  * is the `paired` **seed** in `seeds.ts`.
  *
+ * **`wishGone`** is the quick add's stale wish, and it is a fault rather than a seed for a
+ * reason no other entry on this list has: the row has to be **there when the read runs and gone
+ * when the write re-reads it**. `deck_quick_add_wishes` answers the dialog and
+ * {@link writeHandlers.deck_quick_add_to_collection} checks the same wish again a round trip
+ * later, so no arrangement of rows can produce {@link QUICK_ADD_WISH_GONE} — a seed either has the wish or
+ * it has not, and both of those are ordinary worlds. What the fault stands in for is the second
+ * window: a reader who ticked the line off their shopping list while this dialog was open. It is
+ * `pairingReadError`'s split — the one refusal in the flow nobody can type — reached from the
+ * other direction, and it lands on the **write** only, so the picker still draws its rows.
+ *
  * **`syncing`** is a card update in flight, and it exists for exactly one command:
  * `cache_clear` refuses outright while one is running, because `data/tmp/` is where the corpus
  * download puts 77 MB that the ingest then reads back. It is **not** `busy` — that fault is the
@@ -928,7 +940,8 @@ export type Fault =
   | "pairingReadError"
   | "patreonDeclined"
   | "patreonLapsed"
-  | "patreonGroupEntitled";
+  | "patreonGroupEntitled"
+  | "wishGone";
 
 /**
  * What the picture cache costs, as the Settings page's one button sees it.
@@ -6568,6 +6581,67 @@ export function readHandlers(db: FakeDb) {
     },
 
     /**
+     * `deck_quick_add::wishes` — every wishlist line a quick add of this printing could take
+     * copies off, best first.
+     *
+     * **The predicate is `wishlist::OWNED_SQL`'s own first arm with the any-printing arm
+     * dropped** — `w.card_id = ?1 AND (w.preferred_finish IS NULL OR w.preferred_finish = ?2)` —
+     * rather than a second opinion about what fills a wish. So the narrowing is on the
+     * **printing**, exactly as {@link pullCandidates} leaves an Alpha Bolt out of an M10 line and
+     * for the same trade: nothing is ever taken off a shopping list that is not the piece of
+     * cardboard the reader has just recorded. A wish for *any* printing is left standing, which
+     * is why the `card_id` test is a plain equality — `null` is not a card id, and the arm that
+     * would have to be written to include one is as absent here as it is in the SQL.
+     *
+     * **A NULL `preferred_finish` still matches**, because the list itself says a wish that names
+     * no finish takes any of them; excluding it would refuse the commonest wish there is. The
+     * comparison is against the **collection** word, so a deck row's `null` finish and a
+     * `nonfoil` wish are a match rather than a third state — {@link normaliseFinish} is the one
+     * place those two spellings meet, here as everywhere else in this file.
+     *
+     * **The root first, then the reader's folders in their own `sort_order`, oldest row first
+     * inside a tie** — {@link pullOrder}'s order and its argument, borrowed rather than
+     * re-decided: rank by how little of the reader's filing the write disturbs. It is the
+     * picker's pre-selection, which is why it is the backend's decision and not the component's.
+     * Note the one shape it does *not* borrow: there is no `removed` rank, because a wishlist
+     * folder has no kinds — every one of them is the reader's own.
+     *
+     * **An empty answer is the ordinary case and never a refusal.** Most cards a deck is short of
+     * are on no shopping list at all, and the editor reads `[]` as "record the copies and take
+     * nothing off" rather than as something to report.
+     */
+    deck_quick_add_wishes: (args: { cardId: string; finish?: DeckFinish }): DeckQuickAddWish[] => {
+      const wanted = normaliseFinish(args.finish) ?? "nonfoil";
+      const order = (w: FakeWish): [number, number] =>
+        w.folderId === null
+          ? [0, 0]
+          : [1, db.wishlistFolders.find((f) => f.id === w.folderId)?.sortOrder ?? 0];
+      return db.wishlistEntries
+        .filter(
+          (w) =>
+            w.cardId === args.cardId &&
+            (w.preferredFinish === null || w.preferredFinish === wanted),
+        )
+        .sort((a, b) => {
+          const [aRank, aOrder] = order(a);
+          const [bRank, bOrder] = order(b);
+          return aRank - bRank || aOrder - bOrder || a.id - b.id;
+        })
+        .map((w) => ({
+          id: w.id,
+          quantity: w.quantity,
+          folderId: w.folderId,
+          // `null` at the root, which the UI words — the wishlist page's own `Wishlist`. The
+          // backend has no row to read a name off and must not invent one, exactly as
+          // {@link pullCandidates} does not.
+          folderName:
+            w.folderId === null
+              ? null
+              : (db.wishlistFolders.find((f) => f.id === w.folderId)?.name ?? null),
+        }));
+    },
+
+    /**
      * `import::resolve_lines` — every name in a parsed decklist, resolved to a printing
      * this app has. **Read-only**, and one call for the whole list.
      *
@@ -7398,6 +7472,30 @@ const MORE_THAN_MISSING = "That is more copies than this deck is short of.";
  */
 const NOT_IN_DECK =
   "That deck does not play this card. Add it to the deck first, then file your copies.";
+/**
+ * `deck_quick_add`'s two, verbatim, and both are about the **wishlist** half of one press.
+ *
+ * **Prefixed here where the crate spells them bare**, and it is not cosmetic: `deck_quick_add`'s
+ * `WISH_GONE` and `wishlist`'s are two *different sentences* for the same news — "that wishlist
+ * line is not there any more" against {@link WISH_GONE}'s "that wishlist entry is not" — and Rust
+ * keeps them apart by module where this file has one scope. Folding them into one constant would
+ * be the fake picking which of two shipped sentences a story renders, which is exactly what
+ * simplification 9 forbids.
+ *
+ * They exist because the dialog's answer is a round trip old: `deck_quick_add_wishes` reads the
+ * matching wishes, the reader picks one, and the write re-checks that id against the *same*
+ * predicate before it decrements anything — {@link deck_pull_from_collection}'s discipline one
+ * table over, where the plan is re-read rather than trusted.
+ *
+ * **Two sentences rather than one**, for the reason {@link NOT_SHORT_OF_THAT} and
+ * {@link MORE_THAN_MISSING} are two: they are different things to tell a reader holding a stale
+ * picker. The first is a line somebody has already ticked off, where there is nothing to press;
+ * the second is a line that is still there and has been re-pinned to another printing or another
+ * finish since, where the copies are still worth recording and the wish is not this one. A single
+ * "that wish will not do" would leave them unable to tell which.
+ */
+const QUICK_ADD_WISH_GONE = "That wishlist line is not there any more.";
+const QUICK_ADD_WISH_WRONG_CARD = "That wishlist line is not for this card.";
 /** `collection_alloc::BOTH_PILES`. The id and the name are alternatives there rather than a
  *  preference — `deck_add_card` lets the id win because a drag carries both, and nothing sends
  *  both to this write, so both arriving means a caller has lost track of which it meant. In Rust
@@ -8277,9 +8375,10 @@ function collectionFolderLocked(db: FakeDb, id: number | null): boolean {
  * and is not a folder at all, where every caller of that one is naming a row.
  *
  * **`kinds` is the crate's parameter of the same name**, and the widening it exists for is
- * `collection::IMPORT_FOLDERS`: a **deck** import files its copies into that deck's own group,
- * because the one press wrote the decklist too. Everything else keeps
- * {@link COLLECTION_READER_FOLDERS} — the reader's own drawers and nothing else.
+ * {@link COLLECTION_DECK_WRITE_FOLDERS}: a **deck** import files its copies into that deck's own
+ * group, because the one press wrote the decklist too, and the quick add does the same for the
+ * one press that recorded them. Everything else keeps {@link COLLECTION_READER_FOLDERS} — the
+ * reader's own drawers and nothing else.
  */
 function collectionFolderNamed(
   db: FakeDb,
@@ -8299,13 +8398,23 @@ function collectionFolderNamed(
 const COLLECTION_READER_FOLDERS: readonly string[] = [COLLECTION_USER_KIND];
 
 /**
- * …and what a deck import may — `collection::IMPORT_FOLDERS`, the one place in the crate that
- * fence is wider than the reader's own drawers.
+ * …and what a **deck-driven** write may — `collection::DECK_WRITE_FOLDERS`, the one place in the
+ * crate that fence is wider than the reader's own drawers.
+ *
+ * **Two callers, and each answers for the `deck_cards` row behind the copies it files.** The deck
+ * import writes the decklist in the same press; {@link writeHandlers.deck_quick_add_to_collection}
+ * checks {@link NOT_IN_DECK} before it reaches here. That is what the widening buys and the whole
+ * of what it may be spent on — a copy in a group that no `deck_cards` row backs is issue #358's
+ * phantom.
+ *
+ * **It was `COLLECTION_DECK_WRITE_FOLDERS` until the quick add arrived**, mirroring the crate's own
+ * rename: a constant called `IMPORT_` that a non-import write passes is exactly the rot this repo
+ * greps for.
  *
  * `removed` stays out of it on both sides: `Recently removed` is where copies go when they
- * *leave* a deck, and a file naming it would be an import that arrives already discarded.
+ * *leave* a deck, and neither a file nor a purchase arrives already discarded.
  */
-const COLLECTION_IMPORT_FOLDERS: readonly string[] = [
+const COLLECTION_DECK_WRITE_FOLDERS: readonly string[] = [
   COLLECTION_USER_KIND,
   COLLECTION_DECK_KIND,
 ];
@@ -9961,6 +10070,154 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
+     * `deck_quick_add::quick_add` — record copies the reader has just acquired straight into this
+     * deck's group, and take them off a matching wish in the same press.
+     *
+     * **The fourth write that crosses the deck boundary and the first that *creates* copies
+     * rather than moving them.** {@link collection_to_deck}, {@link deck_to_collection} and
+     * {@link deck_pull_from_collection} all re-file cardboard that already exists somewhere; this
+     * one answers "I have just bought these", so there is no source row and nothing is refused on
+     * behalf of one. What it borrows from all three is the boundary's discipline: `collection_add`
+     * refuses a `deck` folder outright and must go on refusing, because filing into a group
+     * asserts *this deck holds these copies* — a claim only a write that answers for the
+     * `deck_cards` row behind it may make. {@link addEntry}'s widened `kinds` parameter is that
+     * private door, and {@link COLLECTION_DECK_WRITE_FOLDERS} is what this write hands it.
+     *
+     * **The order is the rule rather than a tidy arrangement**, and every step is a different
+     * thing to tell a stale editor:
+     *
+     * 1. `quantity <= 0` — {@link ZERO_ADD}, before the deck is even looked up. A press that
+     *    records nothing is not a press.
+     * 2. The finish, through {@link normaliseFinish} — a junk one is refused here and not after
+     *    the deck fence, so a caller that sent nonsense hears about the nonsense.
+     * 3. The deck — {@link DECK_GONE} rather than {@link NOT_IN_DECK}, because "that deck is
+     *    gone" and "that deck does not play this" are not the same news.
+     * 4. {@link deckPlays} — {@link NOT_IN_DECK}, issue #358's fence, and it reads the **live**
+     *    list only. A card the deck merely *plans* is refused here with no theory fence of its
+     *    own, and that is a statement rather than an omission: a plan holds no cards, so there is
+     *    nothing for a group to hold on its behalf — {@link THEORY_HOLDS_NOTHING}'s reasoning
+     *    reached from the other end.
+     * 5. The group — {@link NO_DECK_GROUP}, because there is nowhere to put them.
+     *
+     * **The fold is {@link addEntry}'s and not a second one**, so a second quick add on the same
+     * line raises the row already sitting in the group rather than standing a twin beside it:
+     * `folderId` is the eleventh term of {@link collectionGrain}, and two rows of one grain in one
+     * folder is a state no other write in this file can produce.
+     *
+     * **The wish is re-read *inside* the write and re-checked against the same predicate the read
+     * used** — {@link readHandlers.deck_pull_plan}'s "the plan is the fence" one table over,
+     * because the picker's answer is a round trip old. Gone is {@link QUICK_ADD_WISH_GONE}; still there and
+     * no longer a match is {@link QUICK_ADD_WISH_WRONG_CARD}. `take` is `min(quantity, wish.quantity)`, so a
+     * reader recording four copies against a wish for one clears the wish and records all four —
+     * the shortfall and the shopping list are two different numbers and neither clamps the other.
+     *
+     * **A refused wish rolls the copies back with it**, which is the crate's one transaction
+     * reached from a store that has none: the entries are snapshotted before the add and restored
+     * if anything below throws. {@link collection_to_deck} does the same by hand and for the same
+     * reason — a fake that left the copies standing after a refusal would show a state the
+     * backend cannot produce, which is the class of defect this feature has already shipped once.
+     *
+     * **One history row, `delta: 0`, no card id.** A `move` kind because the audit's nine words
+     * are a closed CHECK and a tenth would rebuild every reader's history for a spelling;
+     * `deck_import_commit`, `deck_undo` and `deck_pull` each reached that conclusion first and
+     * this is the fourth reuse. The delta is 0 and honest — the deck's **list** gained nothing,
+     * and `auditText.ts`'s day header adds that column up, so a quick add contributing to it would
+     * make a day of filing look like a day of deckbuilding. No `cardId` either, `pull`'s rule: the
+     * payload is what the sentence is drawn from.
+     */
+    deck_quick_add_to_collection: (args: {
+      deckId: number;
+      cardId: string;
+      finish?: DeckFinish;
+      // A bare `string` because that is what `ipc.ts` sends — `useCardMenuDeps`'s
+      // `MENU_CONDITION`, spelled by the caller — and {@link validCondition} is where it becomes
+      // one of the five.
+      condition?: string;
+      quantity: number;
+      wishId?: number | null;
+    }): DeckQuickAddOutcome => {
+      refuseIfBusy(db);
+      // Before the deck lookup, exactly as the crate refuses it before `touch_deck`: a press that
+      // records nothing has nothing to say about a deck.
+      if (args.quantity <= 0) throw refuse(ZERO_ADD);
+      // The deck's spelling into the collection's, **before the transaction opens** and read by
+      // both halves below: the `collection_entries.finish` this writes and the
+      // `wishlist_entries.preferred_finish` the wish is re-checked against are the same
+      // vocabulary, and a second translation would be a second thing to drift. Its position is
+      // load-bearing rather than tidy — an unknown finish is refused ahead of the deck fence, so
+      // a caller sending junk hears about the junk and not about the deck.
+      const finish = normaliseFinish(args.finish) ?? "nonfoil";
+      const deck = requireDeck(db, args.deckId);
+      if (!deckPlays(db, args.deckId, args.cardId)) throw refuse(NOT_IN_DECK);
+      const group = deckGroup(db, args.deckId);
+      if (!group) throw refuse(NO_DECK_GROUP);
+
+      // This fake's stand-in for the transaction the crate's whole press sits in. Copied row by
+      // row rather than by reference, because {@link addEntry}'s fold mutates the row it lands on.
+      const snapshot = db.collectionEntries.map((e) => ({ ...e }));
+      let wishCopies = 0;
+      try {
+        const landed = addEntry(
+          db,
+          {
+            cardId: args.cardId,
+            finish,
+            condition: validCondition(args.condition),
+            quantity: args.quantity,
+            folderId: group.id,
+            // Every other `EntryInput` field is left at its empty value on purpose: a quick add is
+            // the reader saying "I have these now", and a price, an acquisition source or a
+            // grading invented here would be provenance nobody typed.
+          },
+          COLLECTION_DECK_WRITE_FOLDERS,
+        );
+        if (typeof args.wishId === "number") {
+          const wish = db.wishlistEntries.find((w) => w.id === args.wishId);
+          // The fault is read beside the lookup rather than instead of it, so a story standing in
+          // that world still refuses a wish id that was never there for the ordinary reason.
+          if (!wish || db.fault === "wishGone") throw refuse(QUICK_ADD_WISH_GONE);
+          if (
+            wish.cardId !== args.cardId ||
+            !(wish.preferredFinish === null || wish.preferredFinish === finish)
+          ) {
+            throw refuse(QUICK_ADD_WISH_WRONG_CARD);
+          }
+          wishCopies = Math.min(args.quantity, wish.quantity);
+          if (wishCopies === wish.quantity) {
+            // A want that is met is over, and `wishlist_entries` has a CHECK against a zero row —
+            // so this is a delete rather than a decrement to nothing.
+            db.wishlistEntries = db.wishlistEntries.filter((w) => w !== wish);
+          } else {
+            wish.quantity -= wishCopies;
+            wish.updatedAt = stamp(db);
+          }
+        }
+        const outcome: DeckQuickAddOutcome = {
+          copies: args.quantity,
+          entryId: landed.id,
+          wishCopies,
+        };
+        // `live` rather than {@link DECK_LEVEL}'s filler, `pull`'s reason: the fence walked the
+        // live list and this row is a statement about it, even though the list itself is the thing
+        // that did not change.
+        record(
+          db,
+          args.deckId,
+          LIVE,
+          "move",
+          null,
+          { quickAdd: { copies: outcome.copies, wishes: wishCopies } },
+          0,
+        );
+        deck.updatedAt = stamp(db);
+        return outcome;
+      } catch (e) {
+        db.collectionEntries = snapshot;
+        throw e;
+      }
+    },
+
+    /**
      * `collection::commit_import` — one transaction for a whole imported file, mirrored here as
      * one loop over the same `addEntry`/`setEntry` operations `collection_add` performs one
      * line at a time. A refused item must roll the whole file back, and there is no real
@@ -9987,7 +10244,7 @@ export function writeHandlers(db: FakeDb) {
       const folderId = collectionFolderNamed(
         db,
         args.folderId ?? null,
-        COLLECTION_IMPORT_FOLDERS,
+        COLLECTION_DECK_WRITE_FOLDERS,
       );
       const before = db.collectionEntries.length;
       const snapshot = db.collectionEntries.map((e) => ({ ...e }));
@@ -10030,7 +10287,7 @@ export function writeHandlers(db: FakeDb) {
             folderId,
           };
           if (args.mode === "add") {
-            addEntry(db, entry, COLLECTION_IMPORT_FOLDERS);
+            addEntry(db, entry, COLLECTION_DECK_WRITE_FOLDERS);
             continue;
           }
           // **A `set` of 0 deletes the row**, `collection_set_quantity`'s reversal reached from
@@ -10039,7 +10296,7 @@ export function writeHandlers(db: FakeDb) {
           // the crate's upsert does, so a `set 0` for a printing the reader does not own counts
           // oddly and honestly: one added and one removed rather than nothing, because both
           // statements really ran.
-          const change = setEntry(db, entry, COLLECTION_IMPORT_FOLDERS);
+          const change = setEntry(db, entry, COLLECTION_DECK_WRITE_FOLDERS);
           if (change.quantity === 0) {
             db.collectionEntries = db.collectionEntries.filter((e) => e.id !== change.id);
             removed += 1;
@@ -13775,15 +14032,16 @@ export function allHandlers(db: FakeDb) {
  * `deck_set_view_state` is not here because it writes no history row either: looking at a deck
  * is not editing it, so the wrapper below files nothing for it without being told.
  *
- * **The three writes that move copies across the deck boundary are here by argument rather than
+ * **The four writes that reach across the deck boundary are here by argument rather than
  * by accident.** A step could put the `deck_cards` half back and would leave the copies where
  * they went — a deck claiming cards its own group no longer holds, told to a reader who pressed
  * Ctrl+Z and watched the row reappear. `deck_undo`'s four primitives touch no collection table,
  * so the half-step is the only step available and it is worse than none. `deck_to_collection`
  * would also slip through the wrapper on its own — it carries a `deckCardId` rather than a
  * `deckId`, so {@link deckOf} answers `undefined` for it — and naming it here is what stops that
- * being the reason. **It said "the two" until `deck_pull_from_collection` joined them on
- * 2026-09-03**, which is the drift this file keeps naming: the count is in the list below.
+ * being the reason. **It said "the two" until `deck_pull_from_collection` joined them and "the
+ * three" until `deck_quick_add_to_collection` did, both on 2026-09-03**, which is the drift this
+ * file keeps naming: the count is in the list below and nowhere else.
  */
 const NO_UNDO_STEP: ReadonlySet<string> = new Set([
   "deck_create",
@@ -13804,6 +14062,11 @@ const NO_UNDO_STEP: ReadonlySet<string> = new Set([
   // unchanged, and spend the reader's one Ctrl+Z on a press that appeared to do nothing while
   // the copies stayed exactly where the pull put them.
   "deck_pull_from_collection",
+  // The fourth, and it inherits that argument whole: the quick add changes no `deck_cards` cell
+  // either, and the half a step *could* put back is the half nobody wants back — the copies are
+  // the reader's, bought and recorded, and a Ctrl+Z that quietly unfiled them would be worse than
+  // one that does nothing. The crate calls no `record_step` here for the same reason.
+  "deck_quick_add_to_collection",
 ]);
 
 /**
