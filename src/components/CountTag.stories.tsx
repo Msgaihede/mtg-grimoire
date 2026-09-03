@@ -35,9 +35,9 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 /**
- * The default fill, and the one an **untagged** deck card draws: it has no tag to take a colour
- * from. Grey is the point — a filled mark has to be *some* colour, and if the neutral one were
- * gold then gold would stop meaning "there is a tag here".
+ * The default fill, and the one an **unlabelled** deck card draws: it has no label to take a
+ * colour from. Grey is the point — a filled mark has to be *some* colour, and if the neutral one
+ * were gold then gold would stop meaning "there is a label here".
  */
 export const Neutral: Story = {
   args: { count: 132, title: "132 in this pile" },
@@ -59,7 +59,7 @@ export const Neutral: Story = {
 };
 
 /**
- * The deck stack's shape, where the fill is the card's tag colour and the count is printed on
+ * The deck stack's shape, where the fill is the card's label colour and the count is printed on
  * it — one object saying "three of these, and they are my ramp" in the 34px strip a collapsed
  * card reveals. `QuantityTag` in `features/decks/CardMarks.tsx` is what passes this.
  */

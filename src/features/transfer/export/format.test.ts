@@ -335,11 +335,12 @@ describe("field selection", () => {
    * The deck label, out — Archidekt's `^Keeper,#4aab08^`.
    *
    * The test above still passes over `card()`, which wears none, so it says nothing about this
-   * even though `tag` is now among Archidekt's defaults. That is the vacuous half, and these are
+   * even though `label` is now among Archidekt's defaults. That is the vacuous half, and these
+   * are
    * what close it.
    */
   it("writes an Archidekt label at that format's defaults, colour and all", () => {
-    const keeper = card({ tagName: "Keeper", tagColor: "#4aab08" });
+    const keeper = card({ labelName: "Keeper", labelColor: "#4aab08" });
     expect(formatExport([keeper], "archidekt", defaultFields("archidekt", DECK))).toBe(
       "Main deck\n1x Sol Ring (ltc) 285 [Main deck] ^Keeper,#4aab08^\n",
     );
@@ -351,8 +352,8 @@ describe("field selection", () => {
     );
   });
 
-  it("drops the label when the reader unticks Tag", () => {
-    const keeper = card({ tagName: "Keeper", tagColor: "#4aab08" });
+  it("drops the label when the reader unticks Label", () => {
+    const keeper = card({ labelName: "Keeper", labelColor: "#4aab08" });
     expect(formatExport([keeper], "archidekt", ["quantity", "name", "category"])).toBe(
       "Main deck\n1x Sol Ring [Main deck]\n",
     );
@@ -361,8 +362,8 @@ describe("field selection", () => {
   /** A colour this build cannot read is not a reason to lose the name — and the parser reads the
    *  group straight back as a label with no colour. */
   it("writes the name alone when the label has no colour", () => {
-    const keeper = card({ tagName: "Keeper", tagColor: null });
-    expect(formatExport([keeper], "archidekt", ["quantity", "name", "tag"])).toBe(
+    const keeper = card({ labelName: "Keeper", labelColor: null });
+    expect(formatExport([keeper], "archidekt", ["quantity", "name", "label"])).toBe(
       "Main deck\n1x Sol Ring ^Keeper^\n",
     );
   });
@@ -370,7 +371,7 @@ describe("field selection", () => {
   /** **The label goes last on the line**, after the bracket and after `*F*`, which is where
    *  Archidekt puts it and the order `stripDecorations` peels from the end. */
   it("puts the label after every other decoration", () => {
-    const keeper = card({ finish: "foil", tagName: "Keeper", tagColor: "#4aab08" });
+    const keeper = card({ finish: "foil", labelName: "Keeper", labelColor: "#4aab08" });
     expect(formatExport([keeper], "archidekt", defaultFields("archidekt", DECK))).toBe(
       "Main deck\n1x Sol Ring (ltc) 285 [Main deck] *F* ^Keeper,#4aab08^\n",
     );
@@ -379,13 +380,13 @@ describe("field selection", () => {
   /** A CSV spends a column per value, so the colour is its own field there — and its own
    *  checkbox, off by default. */
   it("gives CSV a column each for the label and its colour", () => {
-    const keeper = card({ tagName: "Keeper", tagColor: "#4aab08" });
-    expect(formatExport([keeper], "csv", ["quantity", "name", "tag", "tagColor"])).toBe(
-      "Quantity,Name,Tag,Tag colour\n1,Sol Ring,Keeper,#4aab08\n",
+    const keeper = card({ labelName: "Keeper", labelColor: "#4aab08" });
+    expect(formatExport([keeper], "csv", ["quantity", "name", "label", "labelColor"])).toBe(
+      "Quantity,Name,Label,Label colour\n1,Sol Ring,Keeper,#4aab08\n",
     );
     // Ticking one and not the other is the reader's business; neither implies the other.
-    expect(formatExport([keeper], "csv", ["quantity", "name", "tag"])).toBe(
-      "Quantity,Name,Tag\n1,Sol Ring,Keeper\n",
+    expect(formatExport([keeper], "csv", ["quantity", "name", "label"])).toBe(
+      "Quantity,Name,Label\n1,Sol Ring,Keeper\n",
     );
   });
 
@@ -405,18 +406,19 @@ describe("field selection", () => {
 
   /**
    * The label is an ordinary keyed field in the fold, and it needs no `DISCRIMINATOR` entry
-   * because it is not structural: with Tag on, two differently-labelled rows are two lines; with
-   * it off, the file cannot tell them apart and folding them is the fold doing its job.
+   * because it is not structural: with Label on, two differently-labelled rows are two lines;
+   * with it off, the file cannot tell them apart and folding them is the fold doing its job.
    *
-   * The pair really is one grain in a deck — one printing, one pile, one finish, two tags — which
+   * The pair really is one grain in a deck — one printing, one pile, one finish, two labels —
+   * which
    * `deck_cards` cannot hold, but a *collection* can and a caller can hand this function
    * anything. Asserted rather than assumed, because "it cannot happen" is how a fold key goes
    * missing.
    */
-  it("keeps two labels apart while Tag is on, and folds them when it is off", () => {
-    const keeper = card({ name: "Bolt", quantity: 2, tagName: "Keeper", tagColor: "#4aab08" });
-    const cut = card({ name: "Bolt", quantity: 1, tagName: "Cut", tagColor: "#d3202a" });
-    expect(formatExport([keeper, cut], "archidekt", ["quantity", "name", "tag"])).toBe(
+  it("keeps two labels apart while Label is on, and folds them when it is off", () => {
+    const keeper = card({ name: "Bolt", quantity: 2, labelName: "Keeper", labelColor: "#4aab08" });
+    const cut = card({ name: "Bolt", quantity: 1, labelName: "Cut", labelColor: "#d3202a" });
+    expect(formatExport([keeper, cut], "archidekt", ["quantity", "name", "label"])).toBe(
       "Main deck\n2x Bolt ^Keeper,#4aab08^\n1x Bolt ^Cut,#d3202a^\n",
     );
     expect(formatExport([keeper, cut], "archidekt", ["quantity", "name"])).toBe(

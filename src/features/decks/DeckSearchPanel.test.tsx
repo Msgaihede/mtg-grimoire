@@ -41,6 +41,18 @@ const setDeckSearchOpen = vi.hoisted(() => vi.fn());
 const collectionList = vi.hoisted(() => vi.fn());
 const collectionToDeck = vi.hoisted(() => vi.fn());
 const collectionFolderList = vi.hoisted(() => vi.fn());
+/**
+ * What the open deck plays, for the Collection tab's #358 fence — and a read this mock **must**
+ * answer, rather than one it may leave out.
+ *
+ * `useDeckPlays` fails *closed*: until the census has come back, every tile on that wall is
+ * greyed, because "the answer has not arrived" and "the deck plays nothing" are the same empty
+ * set and only one of them may make a card pressable. So an `ipc` object without this key does
+ * not fail as a missing mock — it fails as a **wall of greyed tiles**, and the two cases below
+ * that press Add would go red for a reason that has nothing to do with what they assert. That is
+ * the whole cost of the fail-closed direction, paid here once.
+ */
+const deckPlayedKeys = vi.hoisted(() => vi.fn());
 // `useMarketplace` is the real hook on both tabs — the marketplace is in every price-bearing
 // key — so its two reads need answers as well.
 const getMarketplace = vi.hoisted(() => vi.fn());
@@ -70,6 +82,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     collectionList,
     collectionToDeck,
     collectionFolderList,
+    deckPlayedKeys,
     getMarketplace,
     marketplaceFeedStatus,
   },
@@ -220,6 +233,12 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue({ entryId: 9, fromDeck: null, deckCardId: 41, quantity: 1 });
   collectionFolderList.mockReset().mockResolvedValue([]);
+  // The deck plays Bolt, keyed the way the crate keys it — `coalesce(oracle_id, card_id)`, so
+  // the **oracle** id and not `OWNED_BOLT.cardId`. Answering with the printing would grey the
+  // one tile this file's collection cases press, and it would grey it for the exact reason
+  // #358's match is oracle-wide: the copy on the wall is a different piece of cardboard from
+  // whatever printing the deck happens to list.
+  deckPlayedKeys.mockReset().mockResolvedValue([OWNED_BOLT.oracleId]);
   getMarketplace.mockReset().mockResolvedValue("tcgplayer");
   marketplaceFeedStatus.mockReset().mockResolvedValue([]);
 });
@@ -1262,7 +1281,7 @@ describe("DeckSearchPanel", () => {
 /**
  * The two searches this column offers, and the strip that picks between them.
  *
- * The strip is `aria-pressed` over a `.map` — the shape `DeckEditor`'s Theory/Live switch
+ * The strip is `aria-pressed` over a `.map` — the shape `DeckEditor`'s Theory/Actual switch
  * already uses — and deliberately **not** `role="tab"`: that role brings a keyboard contract
  * (arrow-key roving focus, `aria-controls`, a `tabpanel`) that nothing else in this app
  * implements, so adopting it here would either be half-built or would make this one control

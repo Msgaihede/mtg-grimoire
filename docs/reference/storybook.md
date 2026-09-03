@@ -24,10 +24,10 @@ another's total — that has been wrong here more than once, and no side of a me
 predicted the merge.
 
 **`autodocs` is declared per file in the meta**, and
-`CategoriesDialog`/`TagsDialog`/`TheoryDiffDialog` do not carry it, so those three have stories
+`CategoriesDialog`/`LabelsDialog`/`TheoryDiffDialog` do not carry it, so those three have stories
 and no docs page. It read `CategoriesPanel`/`TheoryDiffDialog` until 2026-08-14: that panel is
 two files now, and neither half declares it any more than the whole did. The other surfaces of
-that change went the other way — `DeckDialog`, the shell `CategoriesDialog` and `TagsDialog` are
+that change went the other way — `DeckDialog`, the shell `CategoriesDialog` and `LabelsDialog` are
 drawn in (`TheoryDiffDialog` is not: it still carries its own chrome), and `DeckHistoryDialog`,
 which was `AuditDrawer`, both carry it. A new story file gets neither unless
 it says `tags: ["autodocs"]`.
@@ -77,7 +77,7 @@ it says `tags: ["autodocs"]`.
   worth of drift, because a prose-only edit routes to neither CI job and nothing goes red.
   **`deckMeta` is the one that refuses
   _reads_** — the six a deck screen makes _beside_ the deck (`deck_category_list`,
-  `deck_tag_list`, `deck_tag_suggestions`, `deck_folder_list`, `deck_audit_list`,
+  `deck_label_list`, `deck_label_all`, `deck_folder_list`, `deck_audit_list`,
   `deck_theory_diff`), each in its own Rust sentence, and deliberately not `deck_get`/
   `deck_list`: a screen that could not read the deck would not be showing a panel about it.
   **`feedFetchError` is the network at the far end of a price feed**, added 2026-08-12 with

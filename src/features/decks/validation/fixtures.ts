@@ -332,9 +332,9 @@ export function card(overrides: Partial<CardFacts> = {}): CardFacts {
     // by card **name** and summed across rows, so a foil row and a plain row of one card are
     // four copies of one card — see `engine.test.ts`.
     finish: null,
-    tagId: null,
-    tagName: null,
-    tagColor: null,
+    labelId: null,
+    labelName: null,
+    labelColor: null,
     quantity: 1,
     name,
     setCode: "lea",

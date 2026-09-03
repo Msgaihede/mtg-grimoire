@@ -6,7 +6,8 @@ import {
   type DeckDetail,
   type DeckFinish,
   type DeckPatch,
-  type DeckTag,
+  type DeckLabel,
+  type DeckPullPick,
   type DeckVariant,
   type DeckViewState,
   type MoveOutcome,
@@ -35,7 +36,7 @@ const NONE: readonly DeckCard[] = [];
 
 /** The same, for the two lists a deck read now also answers with. */
 const NO_CATEGORIES: readonly DeckCategory[] = [];
-const NO_TAGS: readonly DeckTag[] = [];
+const NO_LABELS: readonly DeckLabel[] = [];
 
 /**
  * The variant every surface that has no opinion reads.
@@ -307,8 +308,8 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    *
    * **And, for most writes, nothing wider than that.** Owned/missing is a sum over the rows
    * sitting in this deck's collection group, so a write that only changes the *list* — an add, a
-   * move between piles, a finish, a tag — provably leaves `collection_entries` where it was, and
-   * firing the collection's root as well would be a refetch per press of the stepper that can
+   * move between piles, a finish, a label — provably leaves `collection_entries` where it was,
+   * and firing the collection's root as well would be a refetch per press of the stepper that can
    * only answer what is already on screen. `missingToWishlist` takes `["wishlist"]` on top,
    * because it is the one command here that actually writes wishes.
    *
@@ -329,7 +330,7 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    * the shape PR 2 shipped a ghost row for: the collection's list, its summary, both folder
    * cards and the folder tree are all now wrong, and the deck root reaches none of them.
    *
-   * **Three writes here call it, and each is as precise as its own answer allows.** All three
+   * **Four writes here call it, and each is as precise as its own answer allows.** All four
    * only *move* a row between folders, so the total the reader owns cannot have changed — which is
    * why this is narrower than `query.ts`'s `OWNED_WRITE_KEYS` rather than a smaller version of it. The
    * one write in this hook that could create a binder row went with the `own` add on 2026-08-25;
@@ -355,6 +356,15 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    * more — a `theory` clear moves nothing (the backend's release is fenced on `live`), and a
    * clear that answered `0` emptied nothing to move — and it is deliberately **not** written as
    * a claim that a positive answer means copies changed folders. It only means they might have.
+   *
+   * The **pull** ({@link pullFromCollection}) is the fourth, and it is the one that needs no
+   * gate at all — the other three are precise about *when* copies moved because their commands
+   * can honestly answer "none". This one cannot: `deck_pull_from_collection` is all-or-nothing
+   * and refuses in words, so a resolved promise means every pick landed and rows changed folder
+   * by construction. It is also the only one of the four that moves copies **into** the group
+   * rather than out of it, which changes nothing here: a row leaving the root for a deck group,
+   * and possibly being folded into what the group already held and deleted, is the same edit to
+   * the same four surfaces read the other way round.
    */
   const invalidateCollection = () => {
     void queryClient.invalidateQueries({ queryKey: ["collection"] });
@@ -699,7 +709,7 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
   });
 
   /**
-   * Empty **one whole list** of this deck — Deck settings' **Clear live list…** and
+   * Empty **one whole list** of this deck — Deck settings' **Clear actual list…** and
    * **Clear theory list…** — and answer the copies
    * it removed.
    *
@@ -928,21 +938,62 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
   });
 
   /**
-   * Put the deck's one tag on a card, or take it off with `tagId: null`.
+   * Copies the reader already owns, moved into this deck's group — the write half of the pull.
+   *
+   * {@link missingToWishlist} read in the other direction, and that is not a resemblance: the
+   * two commands ask one question about the same shortfall. What the deck has *not* got goes on
+   * a shopping list; what it *has* got is sitting in a binder and only needs moving. So where
+   * that one takes `["wishlist"]` on top of the deck root, this one takes `["collection"]`.
+   *
+   * **It writes no `deck_cards` row**, which is worth stating here because it decides what
+   * `["decks"]` is doing. Nothing about the *list* changes — a 4-copy line the reader is 3 short
+   * of is still a 4-copy line — so the deck root is fired for `ownedQuantity` alone, which is a
+   * sum over the collection rows sitting in this deck's group and is exactly what this moved.
+   * The shortfall line, every card's owned/missing mark and the gallery tile all read off it.
+   *
+   * **{@link invalidateCollection} unconditionally**, unlike the three writes that gate on their
+   * own answer: a pick the backend re-reads and disagrees with refuses the whole batch, so there
+   * is no "succeeded and moved nothing" state to tell apart. Read that function's doc before
+   * touching this — a row that leaves the root for a deck group can be folded into what the
+   * group already held and deleted outright, which is four collection surfaces wrong at once and
+   * none of them under `["decks"]`.
+   *
+   * **And `["cards", "search"]`, which is not optional.** The backend runs this through
+   * `collection_source::with_write_owned`, which rebuilds the facet index's `owned` dimension —
+   * so a search wall left on screen behind the dialog is drawing a stale `owned` facet, over
+   * tiles whose printings really have changed hands. The same key {@link missingToWishlist}
+   * takes and for the same shape of reason: this is a write that is visibly wrong on a surface
+   * the reader can see rather than stale in a field nothing draws.
+   *
+   * **No optimistic patch, and none to write.** Every number this could move is a sum the
+   * backend computes over rows in another table, so there is nothing in the cached `DeckDetail`
+   * this file could correct without re-deriving the allocator in TypeScript.
+   */
+  const pullFromCollection = useMutation({
+    mutationFn: (picks: DeckPullPick[]) => ipc.deckPullFromCollection(opened(id), picks),
+    onSuccess: () => {
+      invalidate();
+      invalidateCollection();
+      void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+    },
+  });
+
+  /**
+   * Put the deck's one label on a card, or take it off with `labelId: null`.
    *
    * A **card** write, addressed by the same slot as the stepper and the move — which is why it
-   * lives here rather than in `useDeckMeta` beside the tag CRUD. The label is per-deck data; a
+   * lives here rather than in `useDeckMeta` beside the label CRUD. The label is app-wide data; a
    * card *wearing* one is a fact about a row of `deck_cards`, and a stale editor pointing at a
    * row that has since moved, folded or been stepped to zero is answered in words.
    *
-   * **No optimistic patch, and no reallocation to wait for.** A tag changes what a row is
+   * **No optimistic patch, and no reallocation to wait for.** A label changes what a row is
    * *called* and nothing about what is in the deck — the backend does not run the allocator for
    * it — so there is no number on screen that this could get wrong for a beat. It still takes
-   * the `["decks"]` root on the way out, because the tag counts on every `DeckTag` row moved.
+   * the `["decks"]` root on the way out, because the card counts on every `DeckLabel` row moved.
    */
-  const setTag = useMutation({
-    mutationFn: ({ cardId, categoryId, finish, tagId }: Slot & { tagId: number | null }) =>
-      ipc.deckCardSetTag(opened(id), cardId, categoryId, variant, finish, tagId),
+  const setLabel = useMutation({
+    mutationFn: ({ cardId, categoryId, finish, labelId }: Slot & { labelId: number | null }) =>
+      ipc.deckCardSetLabel(opened(id), cardId, categoryId, variant, finish, labelId),
     onSuccess: invalidate,
     onError: invalidate,
   });
@@ -959,8 +1010,8 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
      *  editor's columns are this list, not the categories that happen to hold a card. The list
      *  is the same in both variants; only the counts on each row are scoped. */
     categories: query.data?.categories ?? NO_CATEGORIES,
-    /** Every tag of the deck, alphabetically — the palette a row's label is drawn from. */
-    tags: query.data?.tags ?? NO_TAGS,
+    /** Every label this list is wearing — the palette a row's mark is drawn from. */
+    labels: query.data?.labels ?? NO_LABELS,
     /** Which of the two lists this hook is reading and writing. Handed back so a caller that
      *  took the default does not have to know what it was. */
     variant,
@@ -978,13 +1029,58 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
     refileCard,
     swapPrinting,
     setCardFinish,
-    setTag,
+    setLabel,
     missingToWishlist,
+    /** The mirror of the line above — what the deck is short of **and the reader owns**, moved
+     *  into its group. See the mutation's own doc for the three roots it invalidates, and for
+     *  why the third of them is not optional. */
+    pullFromCollection,
   };
 }
 
 /** The whole of what the editor consumes, named so the view and the hook agree. */
 export type Deck = ReturnType<typeof useDeck>;
+
+/**
+ * What the deck is short of that the reader **already owns** — the read half of the pull, and
+ * the whole of what the dialog draws.
+ *
+ * **Its own hook rather than a member of {@link useDeck}, because it is the one read here that
+ * nobody wants by default.** Everything that hook answers is what the editor is drawing right
+ * now; this is a plan over every unallocated collection row that could fill a hole, asked once,
+ * by one dialog, when a reader presses one button. Folding it in would mean either a `deck_pull_plan`
+ * behind every mounted editor — the card pane's `useSwapFromPane` included — or an `enabled`
+ * flag threaded through a hook whose other fifteen members have no use for it.
+ *
+ * **Keyed under the `["decks"]` root** so `useDeck`'s own `invalidate` reaches it, which is the
+ * whole reason the key is shaped this way: every write in that hook can move the shortfall this
+ * answers, and the pull itself moves the *candidates* as well as the holes — a plan left in the
+ * cache after a successful pull offers copies that are now in the deck's own group and are
+ * therefore excluded from it by definition. `["decks", "pullPlan", deckId]` is
+ * `["decks", "theorySlots", deckId]`'s shape, which is this folder's shape for a read that is
+ * about one deck and is not the deck itself: the root, the question, the id.
+ *
+ * **No `variant` and no `marketplace` in the key, and neither is an omission.** The command
+ * reads the live list only — a plan holds no cards, so there is nothing there to be short of —
+ * and nothing it answers is priced. A key carrying either would be two cached answers to one
+ * question, refetched on a switch that cannot change it.
+ *
+ * **`enabled` is the caller's, and what it means is "the dialog is open".** `DeckEditor`'s
+ * `Layer` doc is explicit that a surface nobody opened has no business asking for anything, and
+ * this is the widest read that surface makes. It is a gate on a mounted query rather than a
+ * conditionally mounted hook for the ordinary reason — the answer stays in the cache across an
+ * open and a close, so a reader who shuts the dialog and reopens it pays nothing.
+ *
+ * `deckId` is nullable for {@link useDeck}'s reason: a caller with no deck open mounts an idle
+ * query rather than branching around one, and a `null` id can never satisfy the gate.
+ */
+export function usePullPlan(deckId: number | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ["decks", "pullPlan", deckId],
+    queryFn: () => ipc.deckPullPlan(opened(deckId)),
+    enabled: enabled && deckId !== null,
+  });
+}
 
 /**
  * The printing swap, for the surface that presses it: the card pane's printings rows.

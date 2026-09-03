@@ -1,12 +1,12 @@
 /**
- * What a deck tag's stored colour is: a **hex string**, `#rrggbb`.
+ * What a deck label's stored colour is: a **hex string**, `#rrggbb`.
  *
- * `deck_tags.color` holds whatever word the webview hands it — the backend checks only that it
+ * `deck_labels.color` holds whatever word the webview hands it — the backend checks only that it
  * is non-empty, because picking what a colour *is* belongs to the webview (CLAUDE.md's Rust/TS
  * boundary) and this file owns that decision. What it hands over changed on 2026-08-20: it used
  * to be a **token** from a fixed palette of six, and it is now the colour itself.
  *
- * **The six are still here and still first**, as {@link TAG_COLORS} — they are the frame/pie
+ * **The six are still here and still first**, as {@link LABEL_COLORS} — they are the frame/pie
  * deeps the visual direction sanctions "for identity pips", they are what the quick row of the
  * picker offers, and a reader who never opens the wheel writes one of them and nothing else. The
  * change is that the wheel and the hex field beside them can now write a colour that is not one
@@ -15,9 +15,9 @@
  * frame has is a reasonable thing for a reader to want.
  *
  * **What it costs, stated rather than discovered**: a stored hex does not follow the theme. While
- * the token lasted, retiring `--color-pie-u` would have moved every azure tag in the database
+ * the token lasted, retiring `--color-pie-u` would have moved every azure label in the database
  * with it; a hex written today is that colour for as long as the row lives. The app has one
- * palette and one `:root`, so nothing has ever moved under a tag — but the day one does, these
+ * palette and one `:root`, so nothing has ever moved under a label — but the day one does, these
  * rows will not, and that is the trade the picker was worth.
  *
  * **Rows written before the change still read**, through {@link LEGACY_TOKENS}: six words, mapped
@@ -26,13 +26,13 @@
  * a build being newer than it.
  *
  * A colour this file cannot read at all — a token retired before the map, a truncated write — is
- * {@link DEFAULT_TAG_COLOR} rather than nothing: a dot the reader cannot see is a label the
+ * {@link DEFAULT_LABEL_COLOR} rather than nothing: a dot the reader cannot see is a label the
  * reader cannot find.
  */
 
 /** One of the six the picker offers first. `hex` is `#rrggbb` lowercase, which is the shape
  *  everything stored goes in. */
-export interface TagColorChoice {
+export interface LabelColorChoice {
   hex: string;
   label: string;
 }
@@ -45,13 +45,13 @@ export interface TagColorChoice {
  * change means here.** These strings are *written to the database* when a reader presses one, so
  * they cannot be a reference to something a stylesheet decides later — a `var()` in a column is a
  * colour with no value outside this build. They are duplicated from `index.css` deliberately, and
- * `tagColors.test.ts` is what keeps the two honest.
+ * `labelColors.test.ts` is what keeps the two honest.
  *
- * A tag dot is 10px, the same scale as a rarity gem, so the direction's boldness budget is
+ * A label dot is 10px, the same scale as a rarity gem, so the direction's boldness budget is
  * untouched however loud a reader's own choice is: the loud colour on a deck screen is still the
  * card art.
  */
-export const TAG_COLORS: readonly TagColorChoice[] = [
+export const LABEL_COLORS: readonly LabelColorChoice[] = [
   { hex: "#d9b95c", label: "Gold" },
   { hex: "#f8e7b9", label: "Bone" },
   { hex: "#0e68ab", label: "Azure" },
@@ -60,12 +60,12 @@ export const TAG_COLORS: readonly TagColorChoice[] = [
   { hex: "#00733e", label: "Moss" },
 ];
 
-/** The default: what a new tag's picker opens on, and what an unreadable stored colour draws
+/** The default: what a new label's picker opens on, and what an unreadable stored colour draws
  *  as. */
-export const DEFAULT_TAG_COLOR = TAG_COLORS[0];
+export const DEFAULT_LABEL_COLOR = LABEL_COLORS[0];
 
 /**
- * The six words `deck_tags.color` held until 2026-08-20, and the colours they drew.
+ * The six words `deck_labels.color` held until 2026-08-20, and the colours they drew.
  *
  * **A read path only.** Nothing writes a token any more — the picker writes hex, and a rename
  * sends back whatever the row already had — so this map exists to keep a database older than the
@@ -89,10 +89,10 @@ const HEX = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i;
  * Total over three shapes, because all three arrive: a hex with or without the `#` (the field
  * lets a reader type either), a three-digit shorthand (`#f00`, which a reader typing by hand
  * will try), and one of {@link LEGACY_TOKENS}. `null` is the honest answer for anything else, and
- * it is what lets the *field* refuse a half-typed colour while {@link tagColorCss} still draws
+ * it is what lets the *field* refuse a half-typed colour while {@link labelColorCss} still draws
  * something.
  */
-export function normalizeTagColor(raw: string | null | undefined): string | null {
+export function normalizeLabelColor(raw: string | null | undefined): string | null {
   if (raw == null) return null;
   const trimmed = raw.trim();
   const legacy = LEGACY_TOKENS[trimmed.toLowerCase()];
@@ -107,24 +107,24 @@ export function normalizeTagColor(raw: string | null | undefined): string | null
     : `#${digits}`;
 }
 
-/** One tag's colour as CSS. Total: every string is answered, including `null` and a colour from
+/** One label's colour as CSS. Total: every string is answered, including `null` and a colour from
  *  a build this one has never seen. */
-export function tagColorCss(color: string | null): string {
-  return normalizeTagColor(color) ?? DEFAULT_TAG_COLOR.hex;
+export function labelColorCss(color: string | null): string {
+  return normalizeLabelColor(color) ?? DEFAULT_LABEL_COLOR.hex;
 }
 
 /** The six digits, uppercase, for the picker's hex field — where the `#` is drawn beside the box
  *  rather than typed into it. */
-export function tagColorHex(color: string | null): string {
-  return tagColorCss(color).slice(1).toUpperCase();
+export function labelColorHex(color: string | null): string {
+  return labelColorCss(color).slice(1).toUpperCase();
 }
 
 /**
- * What is legible printed on {@link tagColorCss}'s answer.
+ * What is legible printed on {@link labelColorCss}'s answer.
  *
- * **Computed now, where it used to be a seventh column on each of six rows.** A tag was an 8px
+ * **Computed now, where it used to be a seventh column on each of six rows.** A label was an 8px
  * dot for as long as nothing was written on one, and a dot needs no foreground; the deck stack's
- * quantity tag is a *filled* mark in the tag's own colour with the copy count printed on it, so
+ * quantity tag is a *filled* mark in the label's own colour with the copy count printed on it, so
  * every colour has to answer what reads on it — and once the reader picks the colour, no table
  * can hold the answer in advance.
  *
@@ -132,12 +132,12 @@ export function tagColorHex(color: string | null): string {
  * weighted 0.2126/0.7152/0.0722 **without** linearisation, which is what put `#f8e7b9` at 0.91
  * and `#0e68ab` at 0.35 in its own doc. At or above 0.55, the app's near-black; below it, the
  * app's text colour. Kept rather than swapped for WCAG relative luminance because the six
- * hand-made answers are the specification here — `tagColors.test.ts` asserts every one of them
+ * hand-made answers are the specification here — `labelColors.test.ts` asserts every one of them
  * unchanged, and a "more correct" curve that flips one of the six is a regression on a screen
  * somebody looked at.
  */
-export function tagFgCss(color: string | null): string {
-  const hex = tagColorCss(color);
+export function labelFgCss(color: string | null): string {
+  const hex = labelColorCss(color);
   const channel = (at: number) => parseInt(hex.slice(at, at + 2), 16) / 255;
   const luma = 0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5);
   return luma >= 0.55 ? "var(--color-accent-fg)" : "var(--color-text)";
@@ -145,11 +145,13 @@ export function tagFgCss(color: string | null): string {
 
 /**
  * **`UNTAGGED_COLOR` used to live here and has moved to `components/CountTag.tsx`**, where it is
- * `NEUTRAL_COUNT_PAINT`. It said what a mark in a tag's colour wears when the card carries no tag
- * at all — the colourless deep, grey being the whole point, since a filled mark has to be *some*
- * colour and an untagged one in gold would stop gold meaning "there is a tag here". That reason
- * survives unchanged; what changed is that the search wall draws the same mark over cards that
- * have no tags at all, so the neutral fill is a fact about the mark rather than about this
- * palette. It was never {@link DEFAULT_TAG_COLOR}, which answers a different question — the
- * colour of a tag this build cannot read, and such a tag is still a tag.
+ * `NEUTRAL_COUNT_PAINT`. (The old spelling is kept as written: it is the name that constant
+ * actually had, from the years this was called a tag.) It said what a mark in a label's colour
+ * wears when the card carries no label at all — the colourless deep, grey being the whole point,
+ * since a filled mark has to be *some* colour and an unlabelled one in gold would stop gold
+ * meaning "there is a label here". That reason survives unchanged; what changed is that the
+ * search wall draws the same mark over cards that have no labels at all, so the neutral fill is a
+ * fact about the mark rather than about this palette. It was never {@link DEFAULT_LABEL_COLOR},
+ * which answers a different question — the colour of a label this build cannot read, and such a
+ * label is still a label.
  */

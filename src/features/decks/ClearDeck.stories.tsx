@@ -54,8 +54,8 @@ const meta = {
           "into it. That is the difference between this and deleting the deck, and it is the " +
           "destructive sentence's second clause rather than a footnote.\n\n" +
           "**Where the copies go depends on the list, and the two arms are one ternary.** " +
-          "Since schema v25 a Live row is backed by a collection row in the deck's group, so " +
-          "emptying the live list files every copy the reader owns into `Recently removed`. A " +
+          "Since schema v25 an Actual row is backed by a collection row in the deck's group, so " +
+          "emptying the actual list files every copy the reader owns into `Recently removed`. A " +
           "theory list is a plan and holds no copies, so it promises nothing instead of " +
           "promising a folder nothing will arrive in.",
       },
@@ -67,7 +67,7 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 /**
- * The ordinary case: a Commander deck whose plan is finished and whose live list is forty cards
+ * The ordinary case: a Commander deck whose plan is finished and whose actual list is forty cards
  * into being assembled. The reader is emptying what they have sleeved up; the hundred-card plan
  * beside it is what the reassurance is about.
  */
@@ -75,7 +75,7 @@ export const LiveListWithAPlan: Story = {
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement);
 
-    await expect(canvas.getByText("Clear the live list?")).toBeVisible();
+    await expect(canvas.getByText("Clear the actual list?")).toBeVisible();
     await expect(canvas.getByText(/leave the deck and the piles stay/)).toHaveTextContent(
       "Any copies you own go back to Recently removed.",
     );

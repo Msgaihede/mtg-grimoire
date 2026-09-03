@@ -194,26 +194,26 @@ export const RuleBreakAndGameChanger: Story = {
 };
 
 /**
- * Tags, as **the colour of the copy count**, with the name one hover away — and a card the deck
+ * Labels, as **the colour of the copy count**, with the name one hover away — and a card the deck
  * wants more copies of than the collection could give it.
  *
- * A colour rather than a word: a tag is a mark the reader put there and already knows, and a
+ * A colour rather than a word: a label is a mark the reader put there and already knows, and a
  * 224px column has no room for a second label beside a card's name. It is not a separate dot
- * either — down a fifteen-card stack the column of coloured tags *is* the structure of the pile,
+ * either — down a fifteen-card stack the column of coloured labels *is* the structure of the pile,
  * and the count is the thing the reader wants beside it, so the two are one object.
  */
-export const TaggedAndShortOfCopies: Story = {
+export const LabelledAndShortOfCopies: Story = {
   args: {
     cards: [
       deckCard(printing("lea", "288"), {
         quantity: 3,
         ownedQuantity: 1,
-        tagId: 1,
-        tagName: "Wincon",
-        tagColor: "gold",
+        labelId: 1,
+        labelName: "Wincon",
+        labelColor: "gold",
       }),
-      deckCard(printing("mh2", "138"), { tagId: 2, tagName: "Cut candidate", tagColor: "ember" }),
-      deckCard(printing("lea", "161"), { tagId: 3, tagName: "Keeper", tagColor: "moss" }),
+      deckCard(printing("mh2", "138"), { labelId: 2, labelName: "Cut candidate", labelColor: "ember" }),
+      deckCard(printing("lea", "161"), { labelId: 3, labelName: "Keeper", labelColor: "moss" }),
     ],
   },
   play: async ({ canvasElement }) => {

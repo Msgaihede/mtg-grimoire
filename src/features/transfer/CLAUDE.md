@@ -107,9 +107,9 @@ and `ImportDialog.tsx` (two steps, one panel, nothing written until Import).
   [import-export.md](../../../docs/reference/import-export.md).
 - **Four decorations and one heading rule, and the heading rule is the _only_ lookahead in the
   file.** The four are per-line and cost nothing: an **empty `()`** printing hint, an Archidekt
-  `^Tag,#colour^`, the `[Category]` bracket, and the `*F*`/`*E*` finish markers it always had (a
+  `^Label,#colour^`, the `[Category]` bracket, and the `*F*`/`*E*` finish markers it always had (a
   trailing `#tag` rides with those). **Two of the four are read rather than merely stripped** —
-  `*F*`/`*E*` since 2026-08-17 and `^Tag,#colour^` since 2026-08-24, each because the app grew
+  `*F*`/`*E*` since 2026-08-17 and `^Label,#colour^` since 2026-08-24, each because the app grew
   somewhere to put it. `namesASection` is the fifth rule and it reads one line past
   the one in front of it, because `Anthem`, `Creature` and `Land` are indistinguishable from card
   lines to a per-line reader and a category name can be a real card (`Fog`, `Wrath`, `Duress`).
@@ -139,9 +139,10 @@ and `ImportDialog.tsx` (two steps, one panel, nothing written until Import).
   `parse.test.ts` counts the 17 and pins the flat list at **0** excluded lines, which is the whole
   of the difference.
 - **`^Keeper,#4aab08^` is a label and the reader picks which ones come across** (2026-08-24).
-  Archidekt's caret group is per-card and this app's `deck_cards.tag_id` holds exactly one, so the
-  two line up; the parser reads `ParsedLine.tagName`/`tagColor`, the planner folds the distinct
-  ones onto `ImportPlan.tags`, `shared/ImportTags.tsx` draws a checkbox each — **all ticked**,
+  Archidekt's caret group is per-card and this app's `deck_cards.label_id` holds exactly one, so
+  the two line up; the parser reads `ParsedLine.labelName`/`labelColor`, the planner folds the
+  distinct ones onto `ImportPlan.labels`, `shared/ImportLabels.tsx` draws a checkbox each — **all
+  ticked**,
   because a list that carries labels is a list somebody labelled on purpose — and
   `toImportItems` puts the surviving name and colour on every item wearing it. Six rules, each
   with a failure behind it:
@@ -149,19 +150,19 @@ and `ImportDialog.tsx` (two steps, one panel, nothing written until Import).
     `Fence (flavor)` is a real one — so a comma inside it is possible, and `/^([^,]+),(#.+)$/`
     would be right by accident and wrong on the first `Cut, maybe`. A tail that is not a hex is
     read as part of the name, and a group with no colour at all is still a label:
-    `ImportPlan.tags` gives it `DEFAULT_TAG_COLOR` so the swatch on the step is the colour the row
-    would really be made with.
-  - **Distinct by `tagNameKey`, never by the word** — the webview's copy of
-    `schema::tag_name_key`, which is `deck_tags.name_key`'s own grain. A file writing `Keeper` and
+    `ImportPlan.labels` gives it `DEFAULT_LABEL_COLOR` so the swatch on the step is the colour the
+    row would really be made with.
+  - **Distinct by `labelNameKey`, never by the word** — the webview's copy of
+    `schema::label_name_key`, which is `deck_labels.name_key`'s own grain. A file writing `Keeper` and
     `keeper` names one label, and two boxes for it would let a reader tick one and untick the
     other over a distinction the database does not have. First spelling and first colour win, for
     `ImportItem.inactive`'s reason.
   - **The picker draws what the import will _use_, not what the file said.** One
-    `deck_tag_all` read (the same `["decks", "tagsAll"]` key `useDeckMeta` holds, so an open
+    `deck_label_all` read (the same `["decks", "labelsAll"]` key `useDeckMeta` holds, so an open
     editor makes it free): a name this app already has draws that row's swatch and that row's
     capitals and reads *already yours*. `commit_import` finds before it creates and changes
     nothing it finds, so drawing the file's green over a reader's purple would be a preview of an
-    import that is not going to happen — and a tag is app-wide since schema v21, so a recolour
+    import that is not going to happen — and a label is app-wide since schema v21, so a recolour
     would reach every deck they own.
   - **The selection is held as the labels that are _off_.** "All ticked" as a `useState` seeded
     from the plan is derived state, stale the moment the plan changes, and repairable only with a
@@ -174,7 +175,7 @@ and `ImportDialog.tsx` (two steps, one panel, nothing written until Import).
     two are filing and the command zone outranks filing; a label is what the reader thinks of the
     card, and a commander they marked `Keeper` is still a keeper.
 
-  The Rust half — find-or-create by `name_key`, the `coalesce` that makes a merge keep a tag the
+  The Rust half — find-or-create by `name_key`, the `coalesce` that makes a merge keep a label the
   reader put on by hand, and the undo step that sweeps the labels an import invented — is
   [`src-tauri/CLAUDE.md`](../../../src-tauri/CLAUDE.md)'s and
   [decks-storage.md](../../../docs/reference/decks-storage.md)'s. The **export** half is the
@@ -253,7 +254,7 @@ Pathway` is one card and there are seven such names in the reference list alone,
   `replace` on a `live` list, and it is a Rust-side fact rather than a second write from here**
   (2026-09-01, issue #336): that mode deletes the variant's `deck_cards` rows, and
   `deck::release_live_copies` inside the same commit files the copies behind them into
-  `Recently removed` — the same act `Clear live list…` performs. One press, still one
+  `Recently removed` — the same act `Clear actual list…` performs. One press, still one
   transaction, still one command; what changed is that the press is a **collection** write too,
   which is why the dialog says so. `useImport`'s fourth mutation, `importIntoNewDeck`, is
   `deck_create` then that commit with a **hand-rolled rollback** — two commands are two
@@ -397,11 +398,11 @@ measured on: [import-export.md](../../../docs/reference/import-export.md).
   partial**: a `Partial` map let a future section-writing format compile with no discriminator at
   all, reproducing this same defect by omission rather than by a typo anyone would catch.
 - **The deck label goes out too, and it is the one field a format writes more of than it
-  declares** (2026-08-24). `tag` is the name and `tagColor` is the colour, and they are two fields
-  because the two media differ: Archidekt writes both as `^Keeper,#4aab08^`, so its line has room
-  for the pair and it offers **only `tag`** — a colour checkbox there would be a control that
-  changed nothing, and `writeLine` reads `card.tagColor` off the card whenever `tag` is on. A CSV
-  cell holds one value, so it spends a column each and offers both boxes. Four rules:
+  declares** (2026-08-24). `label` is the name and `labelColor` is the colour, and they are two
+  fields because the two media differ: Archidekt writes both as `^Keeper,#4aab08^`, so its line has
+  room for the pair and it offers **only `label`** — a colour checkbox there would be a control
+  that changed nothing, and `writeLine` reads `card.labelColor` off the card whenever `label` is
+  on. A CSV cell holds one value, so it spends a column each and offers both boxes. Four rules:
   - **Archidekt and CSV, and no other format.** The trailing `#tag` shape the other writers could
     borrow is stripped-and-discarded by `MARKERS`, so emitting it would be a channel this app
     writes and cannot read — and `\S+` cannot hold `Cut candidate` anyway.
@@ -412,14 +413,19 @@ measured on: [import-export.md](../../../docs/reference/import-export.md).
     suffix rather than dropping rows.
   - **The label goes last on the line**, after the bracket and after `*F*` — where Archidekt puts
     it, and the order `stripDecorations` peels from the end.
-  - **No `DISCRIMINATOR` entry**: a label is not structural, so with `tag` on it is an ordinary
+  - **No `DISCRIMINATOR` entry**: a label is not structural, so with `label` on it is an ordinary
     keyed field and with it off the fold merging two labels is the fold working. Checked rather
     than assumed, in `format.test.ts`.
 
-  **`Tag` and the collection's `Tags` are two different facts one field apart** — a `deck_tags`
-  row against `collection_entries.tags`, free text on a copy the reader owns. No surface holds
-  both, so the two boxes can never be drawn together and no file can carry both columns;
-  `fields.test.ts` asserts that emptiness rather than leaving it to the naming. Full record:
+  **The near-collision this bullet used to warn about is gone, and the fence stays anyway.** The
+  deck's column was `Tag` and the collection's free-text one is `Tags` — two different facts one
+  letter apart, a `deck_labels` row against `collection_entries.tags`. The deck's is `Label` now
+  and nothing about the collection's moved, so a reader reading a header row can no longer take one
+  for the other. No surface holds both, so the two boxes can never be drawn together and no file
+  can carry both columns; `fields.test.ts` asserts that emptiness rather than leaving it to the
+  naming, and it asserts it for the same reason it always did — the naming is what changed, not
+  the guarantee. **The reader still accepts `Tag` and `Tag colour`** as aliases for the two new
+  ids, so a CSV an older build wrote reads its labels back. Full record:
   [import-export.md](../../../docs/reference/import-export.md).
 - **`export/scope.ts` sweeps a filter into a whole list before the dialog opens on it.** The
   collection and the wishlist are paged at 100 rows for their own views, so what is in memory at

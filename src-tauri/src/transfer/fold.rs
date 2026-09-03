@@ -112,8 +112,8 @@ mod tests {
             rarity: None,
             type_line: None,
             unit_price: None,
-            tag_name: None,
-            tag_color: None,
+            label_name: None,
+            label_color: None,
             legalities: None,
         }
     }

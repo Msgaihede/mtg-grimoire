@@ -227,9 +227,9 @@ const CARDS: DeckCard[] = [
   card({
     name: "Arcane Signet",
     unitPrice: 0.99,
-    tagId: 1,
-    tagName: "Ramp piece",
-    tagColor: "moss",
+    labelId: 1,
+    labelName: "Ramp piece",
+    labelColor: "moss",
   }),
   { ...card({ name: "Serah Farron", categoryKind: "commander" }), unitPrice: 4.93 },
   {
@@ -2370,7 +2370,7 @@ describe("GridView tiles", () => {
 
   /**
    * The tile publishes the reader's zoom as the two custom properties every mark drawn on it sizes
-   * itself against — the copy count, the tag dot, the rule break, the gem in the foot and the
+   * itself against — the copy count, the label dot, the rule break, the gem in the foot and the
    * stepper laid over it. It is a variable rather than a prop because three of those five are also
    * drawn in this view's table and text siblings, where nothing zooms and the `, 1` fallback is the
    * answer. See `MARK_SCALE_VAR` in `lib/cardZoom.ts`.
@@ -2737,7 +2737,7 @@ describe("TableView", () => {
       "Mana cost",
       "Type",
       "Owned",
-      "Tags",
+      "Labels",
       "Rarity",
       "Printing",
     ]) {
@@ -2757,7 +2757,7 @@ describe("TableView", () => {
    *
    * Measured in the shipped window before this: seven fixed columns took 696px of an 843px
    * grid, so the two flexible ones split 147px and the card name got **84px** — about ten
-   * characters — while the usually-empty Tags column held 112. A deck list whose card names are
+   * characters — while the usually-empty Labels column held 112. A deck list whose card names are
    * unreadable is not a deck list.
    *
    * The template is an inline style, so this is one of the few layout facts jsdom really can

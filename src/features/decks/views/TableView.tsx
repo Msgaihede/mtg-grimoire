@@ -2,7 +2,7 @@
  * The deck as a table: one row per card, under a band naming its group.
  *
  * The view to reach for when the question is comparative — what is dearest, what is not
- * owned, what is tagged. It is the app's one `VirtualTable` and not a fourth table of its
+ * owned, what is labelled. It is the app's one `VirtualTable` and not a fourth table of its
  * own, which is what keeps the row pitch, the sticky header, the focus ring and the
  * interactive-cell guards identical to the collection's and the wishlist's.
  *
@@ -31,8 +31,8 @@ import { cn } from "@/lib/utils";
 import {
   DeckFinishMark,
   GameChangerBadge,
+  LabelDot,
   rowMarkColor,
-  TagDot,
   theoryMatchLabel,
   TheoryMatchBadge,
 } from "../CardMarks";
@@ -188,7 +188,7 @@ export function TableView({
          *
          * Measured in the shipped window: seven fixed columns took 696px of an 843px grid, so
          * the two flexible ones split 147px in a 2:1.5 ratio and the card name got **84px** —
-         * about ten characters — while the usually-empty Tags column held 112px. A deck list
+         * about ten characters — while the usually-empty Labels column held 112px. A deck list
          * whose card names are unreadable is not a deck list.
          *
          * Two changes, and they work together. The fixed columns lost 72px between them (every
@@ -286,16 +286,16 @@ export function TableView({
           ) : null,
       },
       {
-        key: "tag",
-        // A dot and a truncated label; empty in most decks, and it was holding 112px while the
+        key: "label",
+        // A dot and a truncated name; empty in most decks, and it was holding 112px while the
         // card name held 84.
         width: "5rem",
-        header: "Tags",
+        header: "Labels",
         cell: (row) =>
-          row.kind === "card" && row.card.tagName !== null ? (
+          row.kind === "card" && row.card.labelName !== null ? (
             <span className="flex min-w-0 items-center gap-1.5">
-              <TagDot name={row.card.tagName} color={row.card.tagColor} />
-              <span className="min-w-0 truncate text-xs">{row.card.tagName}</span>
+              <LabelDot name={row.card.labelName} color={row.card.labelColor} />
+              <span className="min-w-0 truncate text-xs">{row.card.labelName}</span>
             </span>
           ) : null,
       },

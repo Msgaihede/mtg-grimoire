@@ -93,7 +93,7 @@ const WISHLIST_ONLY: Dirty = Dirty {
 /// update hook per connection.
 pub fn surface_of(table: &str) -> Option<Dirty> {
     match table {
-        "deck_cards" | "deck_categories" | "deck_tags" | "deck_folders" => Some(DECKS_ONLY),
+        "deck_cards" | "deck_categories" | "deck_labels" | "deck_folders" => Some(DECKS_ONLY),
         // Both, and the over-approximation is deliberate: a deck's name titles its group
         // folder in the cabinet, so a rename that only marked decks would leave the folder
         // named after the old one until something else touched the collection. Being wrong
@@ -844,7 +844,7 @@ mod tests {
                 "deck_cards",
                 "deck_categories",
                 "deck_folders",
-                "deck_tags",
+                "deck_labels",
                 "decks",
                 "wishlist_entries",
                 "wishlist_folders",
@@ -936,7 +936,7 @@ mod tests {
         assert!(surface_of("deck_cards").unwrap().decks);
         assert!(!surface_of("deck_cards").unwrap().collection);
         assert!(surface_of("deck_categories").unwrap().decks);
-        assert!(surface_of("deck_tags").unwrap().decks);
+        assert!(surface_of("deck_labels").unwrap().decks);
         assert!(surface_of("deck_folders").unwrap().decks);
         assert!(surface_of("wishlist_entries").unwrap().wishlist);
         assert!(surface_of("wishlist_folders").unwrap().wishlist);
