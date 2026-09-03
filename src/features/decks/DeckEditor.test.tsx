@@ -2942,9 +2942,9 @@ describe("DeckEditor", () => {
    * The hand-back is the interesting half and it is why this is not folded into the sweeps
    * above. Those triggers are named elements this file holds a ref to; `DeckStats` owns this
    * one and hands no ref up, so `openPull` reads `document.activeElement` at the press —
-   * `openAddTag`'s answer, made for `openAddTag`'s reason. A browser focuses what it presses, so
-   * the caret is on the button by the time the callback runs; if that ever stopped being true
-   * the layer would still open and only this assertion would notice.
+   * `openAddLabel`'s answer, made for `openAddLabel`'s reason. A browser focuses what it
+   * presses, so the caret is on the button by the time the callback runs; if that ever stopped
+   * being true the layer would still open and only this assertion would notice.
    */
   it("opens the pull from the stats band and hands the caret back on Escape", async () => {
     await open();

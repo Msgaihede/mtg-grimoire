@@ -11894,7 +11894,7 @@ export function writeHandlers(db: FakeDb) {
       // and a map keyed on the raw string would count them as two in the history row.
       const categories = new Map<string, FakeDeckCategory>();
       let categoriesCreated = 0;
-      // `import::tag_for_name`'s memo, keyed on {@link labelKey}'s answer for that function's
+      // `import::label_for_name`'s memo, keyed on {@link labelKey}'s answer for that function's
       // reason: `deck_labels.name_key` is the grain, so a list writing `Keeper` and `keeper` names
       // one label and must count as one creation.
       const labels = new Map<string, FakeDeckLabel>();

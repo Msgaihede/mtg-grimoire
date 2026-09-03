@@ -202,8 +202,9 @@ deliberately**: no screenshots are stored.
   plainly in it, and a session acted on that once, adding handlers the file already had until
   `tsc -p .storybook` caught it with `TS1117`. **The cause was never the size**: it was a single
   NUL byte, from `deck_tag_suggestions` building a group key as `` `${t.name}\0${t.color}` ``.
-  Schema v21 replaced that function with `deck_tag_all` and the byte went with it on 2026-08-22.
-  Verified 2026-09-03 — zero NULs in the file (717 KB) and Grep returns real counts.
+  Schema v21 replaced that function with `deck_label_all` (`deck_tag_all` until v33 renamed the
+  deck card's mark) and the byte went with it on 2026-08-22.
+  Verified 2026-09-03 — zero NULs in the file (733 KB) and Grep returns real counts.
   **The rule that outlives the fix**: a NUL is invisible in every editor, eslint and `tsc` stay
   green over one, and a `\0` separator in a template literal is the plausible way one gets in.
   So if Grep ever calls a file here binary again, suspect that rather than the length —

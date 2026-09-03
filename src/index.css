@@ -292,7 +292,7 @@
   --color-pie-g: #00733e;
   --color-pie-gold: #d9b95c;
   /* The Game Changer banner's stamp, and a deeper gold than `--color-pie-gold` on purpose:
-     a *tag* may be gold, and the two marks can land on the same card in the same 27px strip.
+     a *label* may be gold, and the two marks can land on the same card in the same 27px strip.
      A stamped seal and a label the reader chose must not be one colour. Near-black sits on
      it, exactly as it does on the fills above. */
   --color-pie-gold-deep: #a9873c;
