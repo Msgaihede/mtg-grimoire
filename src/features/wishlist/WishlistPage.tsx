@@ -8,7 +8,7 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { useMutation, useQueryClient, type InfiniteData } from "@tanstack/react-query";
-import { FolderInput, Pencil, Trash2 } from "lucide-react";
+import { FolderInput, Pencil, TrendingDown, Trash2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import type { MenuItem } from "@/components/menu/types";
 import { useContextMenu } from "@/components/menu/useContextMenu";
@@ -54,8 +54,10 @@ import { WishFolderCard, WishParentFolderCard } from "./WishFolderCard";
 import { WishlistBreadcrumb } from "./WishlistBreadcrumb";
 import { WishlistGrid } from "./WishlistGrid";
 import { WishlistTable } from "./WishlistTable";
+import { OptimizeWishlistDialog } from "./OptimizeWishlistDialog";
 import { useWishlist, type Wishlist } from "./useWishlist";
 import { useWishlistFolders } from "./useWishlistFolders";
+import { useWishlistOptimize } from "./useWishlistOptimize";
 import { missingOf } from "./wish";
 import type { WishDrag } from "./wishDrag";
 
@@ -297,6 +299,22 @@ export function WishlistPage() {
   /** The import dialog. One destination, so no radio group is drawn — a choice between one
    *  thing is not a choice. */
   const [importing, setImporting] = useState(false);
+
+  /**
+   * The price sweep (issue #352), and the read behind it.
+   *
+   * **`optimizing` is the whole of what `enabled` means**, and the dialog below is mounted
+   * unconditionally like the other two — so this hook runs every render and the flag is what stops
+   * `wishlist_optimize_plan` sweeping the whole list on every filter keystroke nobody asked to
+   * optimise. `useExportScope` above is the same arrangement for the same reason.
+   *
+   * It is handed `wishlist.filters` whole: the plan is taken over **the query the list is
+   * currently drawn from**, so the folder, the Flatten switch, every active filter and the
+   * marketplace all scope the sweep, and `considered` comes back equal to the `Wishes` figure in
+   * the header above.
+   */
+  const [optimizing, setOptimizing] = useState(false);
+  const optimize = useWishlistOptimize(wishlist.filters, optimizing);
 
   /**
    * Which folder layer is open, and what the caret goes back to when it closes.
@@ -1212,13 +1230,61 @@ export function WishlistPage() {
       <FigureRow
         // The band's far end, where they used to sit beside the filter row — see `FigureRow`,
         // which is where the placement is argued, and `CollectionPage`, whose twin this is.
+        //
+        // **The price sweep rides here too**, because this band is where the controls that act on
+        // *the whole list* live and that is exactly what it does — it is scoped by the same query
+        // the figures beside it are counted from. It is not a filter and must not join the row
+        // below: nothing about it narrows what is on screen, so it is one more thing Reset all
+        // could not undo.
         actions={
-          <ImportExportPair
-            onImport={() => setImporting(true)}
-            onExport={() => setExporting(true)}
-            importLabel="Import wishes"
-            exportLabel="Export wishlist"
-          />
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              // **The write is reset on the way *in*, and that is not tidiness.** `Dialog` unmounts
+              // its body on close, so the dialog's own state starts clean — but the mutation lives
+              // out here and keeps its last answer, and the body draws the outcome *instead of*
+              // the preview whenever there is one. Without this, a reader who optimised once and
+              // pressed the button again would be shown the receipt from last time and no list at
+              // all. On open rather than on close, because that is the moment a new question is
+              // being asked; the sentence is meant to survive for as long as the dialog it
+              // answered is up.
+              onClick={() => {
+                optimize.apply.reset();
+                setOptimizing(true);
+              }}
+              aria-haspopup="dialog"
+              // The visible word is shorter than the accessible name, `ImportExportPair`'s rule
+              // and legally the same trade: `Optimise` is contained in the name beside it (WCAG
+              // 2.5.3), and the name says *what* is being optimised — the dialog it opens carries
+              // a control of its own, and two things called `Optimise` on one screen is a pair a
+              // screen reader can only tell apart by position.
+              aria-label="Optimise wishlist prices"
+              // `ImportExportPair`'s button shape, spelled out rather than shared: that component
+              // is a joined *pair* whose hairline is its second button's own border, and this is
+              // one control standing beside it. What is shared is the geometry a reader
+              // recognises — 36px tall, 12px type, dim until hovered.
+              className={cn(
+                "inline-flex h-9 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap",
+                "rounded-md border border-border bg-surface px-2.5 text-xs text-dim",
+                "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
+                FOCUS,
+              )}
+            >
+              {/* A falling price line. **Not `Sparkles`, `Gem` or anything tag-shaped** — the
+                  first two are finishes in this app (`FinishMark`) and a *tag* is one of
+                  Scryfall's two taxonomies, so any of the three would spend a word this app has
+                  already given away. */}
+              <TrendingDown className="size-4 shrink-0" aria-hidden="true" />
+              Optimise
+            </button>
+
+            <ImportExportPair
+              onImport={() => setImporting(true)}
+              onExport={() => setExporting(true)}
+              importLabel="Import wishes"
+              exportLabel="Export wishlist"
+            />
+          </div>
         }
       >
         {/* **Both figures describe what is on screen**, which is the folder the reader is
@@ -1600,6 +1666,38 @@ export function WishlistPage() {
         onDismiss={() => setImporting(false)}
         onClose={() => setImporting(false)}
         onDone={() => setImporting(false)}
+      />
+
+      {/* Mounted unconditionally for the two dialogs above's reason, and at the section's own top
+          level for a third: `@container` makes a box the containing block for every `fixed`
+          descendant under it, so a modal mounted inside `FilterBar`'s container box would have a
+          scrim stretched to the filter row rather than to the window — and jsdom applies no
+          container query, so nothing in the suite can see it (`src/CLAUDE.md`).
+
+          Everything about the sweep arrives as a prop: the dialog holds no query and no mutation,
+          so it renders in a test with no query client. */}
+      <OptimizeWishlistDialog
+        open={optimizing}
+        // The scope the plan was taken over, in the three facts that decide the sentence. The
+        // folder is named through `folderNameOf`, which answers the root's own word for `null`;
+        // a folder id this page cannot name resolves to the root too, which is the same "resolve
+        // towards the root" rule `trailOf` applies to a broken trail.
+        scope={{
+          folder: folderNameOf(folderId) ?? ROOT_LABEL,
+          flatten,
+          filtered: wishlist.activeCount > 0,
+        }}
+        plan={optimize.plan.data ?? null}
+        loading={optimize.plan.isLoading}
+        readError={optimize.plan.isError ? ipcError(optimize.plan.error) : null}
+        marketplace={marketplace}
+        apply={optimize.apply}
+        // Only read while flattened, where a row can have come from any drawer — see the prop.
+        folderNameOf={folderNameOf}
+        // One callback for both rungs, `ExportDialog`'s and `ImportDialog`'s arrangement above:
+        // every way out of this one is the reader saying "put me back", and the caret's
+        // destination is the button in the figures band they pressed to open it.
+        onClose={() => setOptimizing(false)}
       />
     </section>
   );

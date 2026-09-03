@@ -12,6 +12,7 @@ import type {
   WishlistFolder,
   WishlistFolderSummary,
   WishlistQuery,
+  WishOptimizeMove,
   WishRow,
 } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
@@ -45,6 +46,10 @@ const wishlistFolderMove = vi.hoisted(() => vi.fn());
 const wishlistFolderReorder = vi.hoisted(() => vi.fn());
 const wishlistFolderDelete = vi.hoisted(() => vi.fn());
 const wishlistSetFolder = vi.hoisted(() => vi.fn());
+// The price sweep (issue #352). Two commands and one dialog — the plan writes nothing, and only
+// the ticked rows reach the apply.
+const wishlistOptimizePlan = vi.hoisted(() => vi.fn());
+const wishlistOptimizeApply = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -65,6 +70,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     wishlistFolderReorder,
     wishlistFolderDelete,
     wishlistSetFolder,
+    wishlistOptimizePlan,
+    wishlistOptimizeApply,
   },
 }));
 
@@ -451,6 +458,12 @@ beforeEach(() => {
   wishlistFolderReorder.mockReset().mockResolvedValue([]);
   wishlistFolderDelete.mockReset().mockResolvedValue(undefined);
   wishlistSetFolder.mockReset().mockResolvedValue({ id: 7, quantity: 4, removed: false });
+  // A wishlist already on its cheapest printings, which is what every block but the price sweep's
+  // is about — so the dialog is drawable everywhere and reaches nothing unless a case presses it.
+  wishlistOptimizePlan
+    .mockReset()
+    .mockResolvedValue({ moves: [], considered: 1, alreadyCheapest: 1, skipped: 0 });
+  wishlistOptimizeApply.mockReset().mockResolvedValue({ results: [] });
   // The table, which is not this view's default — the wall is (`store.ts`). Everything in the
   // first block below is about the list view and says so by asking for it; `the wall` block at
   // the end switches to the grid, and one test there holds the default itself. The same
@@ -2980,5 +2993,177 @@ describe("rearranging the wishlist's cabinet", () => {
     await held.drop();
 
     await waitFor(() => expect(wishlistFolderReorder).toHaveBeenCalledWith(null, [1, 3, 2]));
+  });
+});
+
+/**
+ * **The price sweep** — issue #352's one press, and the preview that stands between it and a
+ * shopping list somebody would have to audit card by card.
+ *
+ * What is checked here is the *wiring*: that nothing is fetched until the reader asks, that the
+ * sweep is scoped by the same query the list is drawn from, and that the press sends exactly the
+ * rows left ticked. Everything about how the preview reads — the em dash, the tri-state, the
+ * outcome's wording — belongs to `OptimizeWishlistDialog.test.tsx`, which drives the dialog with
+ * no page and no query client under it.
+ */
+describe("the price sweep", () => {
+  /** One move, at the two prices the assertions below read. */
+  const MOVE: WishOptimizeMove = {
+    wishId: 7,
+    name: "Lightning Bolt",
+    quantity: 2,
+    preferredFinish: null,
+    folderId: null,
+    from: { cardId: "c1", setCode: "lea", collectorNumber: "161", lang: "en", price: 5 },
+    to: { cardId: "c2", setCode: "2x2", collectorNumber: "117", lang: "en", price: 2 },
+    savedPerCopy: 3,
+    saved: 6,
+  };
+  const SECOND: WishOptimizeMove = {
+    ...MOVE,
+    wishId: 8,
+    name: "Ancestral Recall",
+    quantity: 1,
+    from: { cardId: "c3", setCode: "lea", collectorNumber: "48", lang: "en", price: 9 },
+    to: { cardId: "c4", setCode: "vma", collectorNumber: "1", lang: "en", price: 4 },
+    savedPerCopy: 5,
+    saved: 5,
+  };
+
+  const openSweep = async () => {
+    await screen.findByText("Lightning Bolt");
+    await userEvent.click(screen.getByRole("button", { name: "Optimise wishlist prices" }));
+    return screen.findByRole("dialog");
+  };
+
+  it("fetches nothing until the button is pressed", async () => {
+    wrap(<WishlistPage />);
+    await screen.findByText("Lightning Bolt");
+    // The dialog is mounted unconditionally so its close can fade, and the query behind it is
+    // gated on the flag rather than on the mount — which is the whole difference between a read
+    // nobody asked for and one they did.
+    expect(wishlistOptimizePlan).not.toHaveBeenCalled();
+
+    await openSweep();
+    await waitFor(() => expect(wishlistOptimizePlan).toHaveBeenCalledTimes(1));
+  });
+
+  it("takes the sweep over the same query the list is drawn from", async () => {
+    wrap(<WishlistPage />);
+    await openSweep();
+
+    await waitFor(() => expect(wishlistOptimizePlan).toHaveBeenCalled());
+    const asked = wishlistOptimizePlan.mock.calls[0][0] as WishlistQuery;
+    // The marketplace decides every figure in the answer, so it travels with the question.
+    expect(asked.marketplace).toBe(lastQuery().marketplace);
+    // `limit`/`offset` are ignored by the command — the plan covers the whole query rather than
+    // the page on screen, which is what makes its `considered` the header's own `Wishes` figure.
+    expect(asked).toMatchObject({ limit: 0, offset: 0 });
+  });
+
+  it("draws the moves and sends only the rows left ticked", async () => {
+    wishlistOptimizePlan.mockResolvedValue({
+      moves: [MOVE, SECOND],
+      considered: 2,
+      alreadyCheapest: 0,
+      skipped: 0,
+    });
+    wrap(<WishlistPage />);
+    const dialog = await openSweep();
+
+    const second = await within(dialog).findByRole("checkbox", {
+      name: /^Switch Ancestral Recall/,
+    });
+    expect(within(dialog).getByText("LEA · 161 · EN")).toBeInTheDocument();
+    expect(within(dialog).getByText("2X2 · 117 · EN")).toBeInTheDocument();
+
+    await userEvent.click(second);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Switch 1 wish" }));
+
+    await waitFor(() =>
+      expect(wishlistOptimizeApply).toHaveBeenCalledWith([
+        { wishId: 7, fromCardId: "c1", toCardId: "c2" },
+      ]),
+    );
+  });
+
+  it("re-reads the list and the search once the sweep lands", async () => {
+    wishlistOptimizePlan.mockResolvedValue({
+      moves: [MOVE],
+      considered: 1,
+      alreadyCheapest: 0,
+      skipped: 0,
+    });
+    wishlistOptimizeApply.mockResolvedValue({ results: [{ wishId: 7, status: "changed" }] });
+    const { client } = wrap(<WishlistPage />);
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    const dialog = await openSweep();
+
+    await userEvent.click(await within(dialog).findByRole("button", { name: "Switch 1 wish" }));
+
+    // A repointed wish changes its printing, its price and the folder subtotal above it — none of
+    // it arithmetic this page could redo — and it moves the heart on every search tile of the
+    // card. `settleWhole`'s two roots, made in bulk.
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] }));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
+  });
+
+  it("stays open afterwards and says what it did", async () => {
+    wishlistOptimizePlan.mockResolvedValue({
+      moves: [MOVE],
+      considered: 1,
+      alreadyCheapest: 0,
+      skipped: 0,
+    });
+    wishlistOptimizeApply.mockResolvedValue({ results: [{ wishId: 7, status: "merged" }] });
+    wrap(<WishlistPage />);
+    const dialog = await openSweep();
+
+    await userEvent.click(await within(dialog).findByRole("button", { name: "Switch 1 wish" }));
+
+    // The page underneath has no place for a transient sentence, and the reader has just asked a
+    // question they are owed an answer to. One way out, and the preview's own button gone.
+    expect(await within(dialog).findByRole("button", { name: "Done" })).toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: /^Switch/ })).not.toBeInTheDocument();
+
+    // Scoped to the body: the same sentence is in the footer's permanently mounted `sr-only`
+    // live region, which is the only arrangement that announces anything.
+    const body = dialog.querySelector("footer")?.previousElementSibling as HTMLElement;
+    expect(
+      within(body).getByText("Switched 1 wish to the cheapest printing, saving $6.00."),
+    ).toBeInTheDocument();
+    expect(
+      within(body).getByText(/folded into a wish you already had in the same folder/),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * **The dialog's own state resets on close; the mutation's does not**, and the body draws the
+   * outcome *instead of* the preview whenever there is one — so a reader who optimised once and
+   * pressed the button again would be handed last time's receipt and no list at all.
+   */
+  it("opens on a fresh preview rather than on the last sweep's receipt", async () => {
+    wishlistOptimizePlan.mockResolvedValue({
+      moves: [MOVE],
+      considered: 1,
+      alreadyCheapest: 0,
+      skipped: 0,
+    });
+    wishlistOptimizeApply.mockResolvedValue({ results: [{ wishId: 7, status: "changed" }] });
+    wrap(<WishlistPage />);
+    const dialog = await openSweep();
+
+    await userEvent.click(await within(dialog).findByRole("button", { name: "Switch 1 wish" }));
+    await within(dialog).findByRole("button", { name: "Done" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Done" }));
+
+    // Straight to the button rather than through `openSweep`: a closing panel is still in the
+    // tree for the length of its fade, so a text query would match the row twice.
+    await userEvent.click(screen.getByRole("button", { name: "Optimise wishlist prices" }));
+    const reopened = await screen.findByRole("dialog");
+    expect(
+      await within(reopened).findByRole("button", { name: "Switch 1 wish" }),
+    ).toBeInTheDocument();
+    expect(within(reopened).queryByRole("button", { name: "Done" })).not.toBeInTheDocument();
   });
 });
