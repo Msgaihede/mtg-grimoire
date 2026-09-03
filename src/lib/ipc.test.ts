@@ -11,6 +11,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen }));
 // TypeScript only quotes it, so the quote is what can rot.
 import collectionRs from "../../src-tauri/src/collection.rs?raw";
 import deckRs from "../../src-tauri/src/deck.rs?raw";
+import deckPullRs from "../../src-tauri/src/deck_pull.rs?raw";
 import deckTheoryRs from "../../src-tauri/src/deck_theory.rs?raw";
 import resetRs from "../../src-tauri/src/reset.rs?raw";
 import searchRs from "../../src-tauri/src/search.rs?raw";
@@ -2303,6 +2304,19 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     ["CollectionCleared", resetRs, "CollectionCleared"],
     ["DecksCleared", resetRs, "DecksCleared"],
     ["CacheCleared", resetRs, "CacheCleared"],
+    // **The pull's four, added with the feature** (2026-09-03, issue #351). Three of them are
+    // read-only shapes and the fourth is the only DTO in this file the app *sends*, which is
+    // the one where a drift is loudest: `deck_pull_from_collection` is all-or-nothing, so a
+    // renamed `Pick` field deserialises to a serde default and the batch is refused whole
+    // rather than half-applied — a press that always fails, with nothing red anywhere.
+    //
+    // `PullRow` is on this list rather than on `mirrors` above even though it carries a
+    // picture, because that table's floor of ten fields is a property of a card *wall*'s row
+    // and this one has nine. The picture is asserted on its own instead, below.
+    ["DeckPullRow", deckPullRs, "PullRow"],
+    ["DeckPullCandidate", deckPullRs, "PullCandidate"],
+    ["DeckPullPick", deckPullRs, "Pick"],
+    ["DeckPullOutcome", deckPullRs, "PullOutcome"],
   ];
 
   it.each(plainMirrors)(
@@ -2318,4 +2332,28 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
       expect([...ts].sort()).toEqual([...rust].sort());
     },
   );
+
+  /**
+   * `PullRow`'s picture, named on its own — the assertion `mirrors` makes for the four card
+   * walls, owed here for their reason and made separately because that table's other two rules
+   * are properties of a wall's row rather than of a mirror.
+   *
+   * The pull dialog draws an art crop per row, and the failure a missing `image_uris` produces
+   * is the silent one this whole block exists for: `undefined` at the call site, a bare frame on
+   * screen, and no type error anywhere — because the field is optional on the TypeScript side,
+   * as every `imageUris` in this file is. jsdom has no network and cannot notice a picture that
+   * never arrives, so the field name agreeing on both sides is the whole of the fence.
+   *
+   * It costs the crate nothing to carry: `deck_pull` clones the value off the `DeckCardRow`s the
+   * plan is already built from, rather than running a second `front_face_selects` query.
+   */
+  it("names the front face's image URLs on both sides of the pull row", () => {
+    expect(rustFields(deckPullRs, "PullRow"), "`PullRow` (Rust) has no `image_uris`").toContain(
+      "image_uris",
+    );
+    expect(
+      tsFields(ipcSource, "DeckPullRow"),
+      "`DeckPullRow` (ipc.ts) has no `imageUris`",
+    ).toContain("imageUris");
+  });
 });

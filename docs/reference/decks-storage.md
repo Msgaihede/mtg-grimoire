@@ -384,8 +384,10 @@ preferred_finish`'s nullability one table over.
 
   **The run list is not replaced by a shorter run list; it is replaced by nothing.** There is no
   derived table to keep in step, so no write "runs the allocator" and none can forget to. What
-  moves a row *across* the deck boundary is exactly the pair in `collection_alloc.rs` —
-  `collection_to_deck` and `deck_to_collection` — plus the six bulk presses that empty a group
+  moves a row *across* the deck boundary is the pair in `collection_alloc.rs` —
+  `collection_to_deck` and `deck_to_collection` — **and, since 2026-09-03, `deck_pull.rs`'s
+  `deck_pull_from_collection`, which is the third and is not a member of that pair** (see
+  [the pull](#the-pull-filling-a-hole-the-list-already-has)) — plus the six bulk presses that empty a group
   the reader is throwing away, every one of them into `Recently removed`: `delete_deck`,
   `deck_meta::delete_category`'s cascade arm, `deck::clear_category`, `deck::clear_variant`,
   `import::commit_import`'s `replace` arm, and Settings' `reset::clear_decks`. The five that
@@ -1424,3 +1426,90 @@ clientWidth` — so the tenth bar fitted the 250px content box with no overflow,
   left open is _parked_ rather than forgotten since 2026-08-27** (issue #162), and that does
   not soften this: the park is a field of its own and the deck is not handed back until Decks
   is on screen again, so on those three views the entry is inert exactly as it was.
+
+## The pull: filling a hole the list already has
+
+`deck_pull.rs`, [issue #351](https://github.com/Msgaihede/mtg-grimoire/issues/351), landed
+2026-09-03. **The third crossing of the deck boundary, and the first that changes only custody.**
+A deck lists four Bolts and its group holds one, so the editor reads `3 missing`; the reader owns
+three more in a binder. One press moves them.
+
+**It writes no `deck_cards` row, and that is the whole of what separates it from
+`collection_to_deck`.** That command is *"add this card to the deck"*, so it folds the quantity
+into the list — `ON CONFLICT … DO UPDATE SET quantity = deck_cards.quantity + excluded.quantity` —
+as well as moving the cardboard. Pointing it at a four-copy line the reader is three short of
+would make the line seven. A shortfall is a fact about *where copies sit* and about nothing else,
+so the write that fills one touches one table.
+
+**Two commands, and the read is the interesting half.** `deck_pull_plan` answers what the live
+list is short of **that the reader already owns**; `deck_pull_from_collection` moves what the
+reader picked. Splitting them is what makes the dialog possible at all: the issue asks for a
+prompt when redundant options exist in different folders, and a prompt needs the options named
+before anything moves.
+
+### What counts as a candidate, and the two narrowings
+
+- **Not in a deck folder** — `collection::Allocation::Unallocated`'s clause reused verbatim
+  rather than respelled, so the root, a folder the reader made and `Recently removed` are all
+  cards on their desk. `unallocated_excludes_only_deck_folders` is the test that already pins
+  that reading. **This deck's own group is excluded by the same clause and has to be**: those
+  copies are already counted in `owned_quantity`, so offering them would be offering to fill a
+  hole with the thing already in it.
+- **The exact printing and the exact finish, which is narrower than the number it is filling.**
+  Owned/missing is attributed at the **oracle** grain — `owned_by_oracle`, "a Bolt is a Bolt" —
+  so an Alpha Bolt filed in the group makes an M10 line read as owned. The pull deliberately does
+  not do that. It fills strictly fewer holes than the app itself would count as fillable, and
+  what the trade buys is that nothing is ever moved that is not the exact piece of cardboard the
+  list names. **A reader who wants the substitution still has it**: the Collection Search tab
+  files any copy into any deck, one press at a time. The narrowing is a decision (2026-09-03,
+  the reader's own call) and not an oversight — it is pinned on both sides so that changing it
+  later is deliberate.
+
+**The shortfall folds to `(card_id, finish)` and never to the pile.** The same card short in two
+categories is one row for the sum, because what a reader is short of is cardboard and custody is
+a fact about the deck rather than about a column. `missing_to_wishlist` makes the same fold one
+grain wider. The piles are named on the row for the reader to read and are never a term in the
+arithmetic.
+
+**A row with no candidate is dropped from the plan entirely**, so an empty plan is the ordinary
+answer rather than an error — the issue says in as many words that not every card in a deck will
+have a collection option.
+
+### The candidate order is a decision
+
+The root first, then `Recently removed`, then the reader's own folders by `sort_order`; ties
+broken oldest-row-first, which is `take_copies`' own rule. It ranks by **how little of the
+reader's filing a pull disturbs**: the root is a decision nobody has made and the holding area is
+the app's own transient bin, where a folder somebody named is a decision they made on purpose. It
+is only a pre-pick — every candidate stays in the dialog's picker, which is the issue's *"prompt
+the user to choose which option to pull from"*.
+
+### All-or-nothing, and no undo step
+
+One transaction, and every pick is re-validated against a plan re-read **inside** it: an entry
+that has since moved into a deck, been folded away by a merge, or a hole another window has
+already filled. One disagreement refuses the whole batch in words and moves nothing.
+
+That strictness is bought by the absence below rather than by taste. **The write files no
+`deck_undo` step**, for `collection_to_deck`'s reason exactly: `take_copies` files the copies
+*through the merge*, so a source row may have been folded into whatever the group already held
+and no longer exists to restore — and putting them back is a quantity moved between two folders,
+which is a command run backwards and the one design that journal rejects. So a half-applied pull
+would leave copies in neither place the reader was looking at, with no press that takes it back.
+The way back is the Collection Search tab, a card at a time.
+
+### The history row reuses `move`, and `AUDIT_KINDS` stays at nine
+
+One row per press: `kind = 'move'`, no `card_id`, `delta = 0`, payload
+`{"pull": {"copies": N, "cards": M}}`. `auditText.ts` reads it **before** the per-card branches,
+exactly where an import's row is read, because those branches would render it as "Moved a card" —
+a sentence about a card the row has not got.
+
+**A tenth `AUDIT_KINDS` word was never an option**, and the reason is `schema.rs`'s own: SQLite
+has no `ALTER … CHECK`, so widening `deck_audit.kind`'s constraint means rebuilding every
+reader's whole deck history for a spelling. `commit_import` met this first and reused
+`add`/`remove`; `deck_undo` met it second and reused `deck` with a `field` payload. This is the
+third time and the third reuse.
+
+**`delta` is 0 and that is honest.** `delta` is what the drawer's day header adds up, and the
+deck's *list* gained nothing — only its custody did.

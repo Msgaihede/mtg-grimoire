@@ -17,9 +17,9 @@
 use crate::sync::AppState;
 use crate::{
     camera, card, collection, collection_alloc, collection_folders, combos, db, deck, deck_audit,
-    deck_meta, deck_theory, deck_undo, errors, export, flatten, images, import, index, listview,
-    marketplace, marketplace_feed, mirror, nav, paths, reset, schema, scryfall, search, sync,
-    sync_engine, sync_pair, tags, update, wishlist, wishlist_folders, zoom,
+    deck_meta, deck_pull, deck_theory, deck_undo, errors, export, flatten, images, import, index,
+    listview, marketplace, marketplace_feed, mirror, nav, paths, reset, schema, scryfall, search,
+    sync, sync_engine, sync_pair, tags, update, wishlist, wishlist_folders, zoom,
 };
 // **Not in the list above, because this file compiles for Android too.** Its name says
 // `desktop`, but its gate is `cfg(not(target_family = "wasm"))` — desktop *and* mobile — while
@@ -385,6 +385,12 @@ pub fn run() {
             // module. `generate_handler!` names a command after the last path segment.
             collection_alloc::commands::collection_to_deck,
             collection_alloc::commands::deck_to_collection,
+            // The third crossing, and the one that moves custody without writing a
+            // `deck_cards` row — see `deck_pull`. Registered from its `commands` module for
+            // the pair above's reason: `generate_handler!` names a command after the last
+            // path segment, so these are `deck_pull_plan` and `deck_pull_from_collection`.
+            deck_pull::commands::deck_pull_plan,
+            deck_pull::commands::deck_pull_from_collection,
             wishlist::wishlist_add,
             wishlist::wishlist_set_quantity,
             wishlist::wishlist_remove,

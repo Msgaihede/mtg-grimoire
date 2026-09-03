@@ -115,6 +115,16 @@ export function auditSentence(
     if (line !== null) return line;
   }
 
+  // A pull is the `move` that names no card, for the import's reason one kind over: one press
+  // moves copies of several printings at once, so the payload carries the counts instead. Read
+  // **before** the per-card branches, because the `move` arm would call it "Moved a card" — a
+  // sentence about a card the row has not got.
+  const pulled = nested(p.pull);
+  if (pulled !== null) {
+    const line = pullLine(entry.kind, pulled);
+    if (line !== null) return line;
+  }
+
   switch (entry.kind) {
     case "add": {
       const quantity = numberField(p.quantity);
@@ -307,6 +317,40 @@ function importLine(kind: DeckAuditKind, p: Record<string, unknown>): AuditLine 
     default:
       return null;
   }
+}
+
+/**
+ * The one row a pull writes: copies the reader already owned, moved into this deck's group.
+ *
+ * **It wears `move` and is not a tenth audit kind**, which is `reversalLine`'s paragraph applied
+ * a second time and for exactly the same reason: `deck_audit.kind` carries a CHECK, SQLite has no
+ * `ALTER … CHECK`, and a tenth word would mean rebuilding every reader's whole deck history for a
+ * spelling. `deck_import_commit` reached that conclusion first and reused `add`/`remove`; the undo
+ * reached it second and reused `deck`. This is the third, and `move` is the honest word — nothing
+ * was added to the list and nothing taken off it, only *where the copies sit* changed.
+ *
+ * **`delta` is `0` on the row and that is honest rather than a hole.** The column counts copies
+ * the deck's *list* gained or lost, and a pull writes no `deck_cards` row at all: a 4-copy line
+ * the reader was 3 short of is still a 4-copy line afterwards. The two counts in the payload are
+ * what moved, and they are deliberately not the delta.
+ *
+ * **Copies in the sentence, cards in the detail**, because they are different units of the same
+ * press — three copies of one card and three copies of three cards are the same first number and
+ * a different act. The detail is drawn only when the row carries a card count: `numberField`
+ * reads an absent key as `0`, and "across 0 cards" beside "Pulled 3 copies" is arithmetic that
+ * cannot be true. That is `importLine`'s `tagsCreated` rule, one payload over.
+ *
+ * `null` for any kind but `move`, so a row a newer build wrote with a `pull` payload on a kind
+ * this one has no sentence for falls through to its own branch instead of being claimed here —
+ * {@link importLine}'s own defensive rule, and the reason a plain card move is untouched by this.
+ */
+function pullLine(kind: DeckAuditKind, p: Record<string, unknown>): AuditLine | null {
+  if (kind !== "move") return null;
+  const cards = numberField(p.cards);
+  return {
+    text: `Pulled ${plural(numberField(p.copies), "copy", "copies")} from your collection`,
+    detail: cards > 0 ? `across ${plural(cards, "card")}` : null,
+  };
 }
 
 /**

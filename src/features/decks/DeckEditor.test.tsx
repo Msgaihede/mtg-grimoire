@@ -53,6 +53,8 @@ const deckToCollection = vi.hoisted(() => vi.fn());
 const deckMoveCard = vi.hoisted(() => vi.fn());
 const deckAddCard = vi.hoisted(() => vi.fn());
 const deckMissingToWishlist = vi.hoisted(() => vi.fn());
+const deckPullPlan = vi.hoisted(() => vi.fn());
+const deckPullFromCollection = vi.hoisted(() => vi.fn());
 const deckSwapPrinting = vi.hoisted(() => vi.fn());
 // The other write that changes a row's *address* rather than its quantity — the card menu's
 // `Set as foil` / `Set as regular`.
@@ -143,6 +145,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckMoveCard,
     deckAddCard,
     deckMissingToWishlist,
+    deckPullPlan,
+    deckPullFromCollection,
     deckSwapPrinting,
     deckSetCardFinish,
     deckSetViewState,
@@ -707,6 +711,12 @@ beforeEach(() => {
   deckMoveCard.mockReset().mockResolvedValue(undefined);
   deckAddCard.mockReset().mockResolvedValue({ id: 9, quantity: 1, removed: false });
   deckMissingToWishlist.mockReset().mockResolvedValue(3);
+  // **A plan of no rows, which is the ordinary answer rather than a failure** — a deck whose
+  // shortfall is all cards the reader has never owned. Every test here is about the layer
+  // rather than about the list inside it (`PullFromCollectionDialog.test.tsx` owns that), and
+  // the empty state still draws the ✕, Cancel and Pull that the Tab sweep walks.
+  deckPullPlan.mockReset().mockResolvedValue([]);
+  deckPullFromCollection.mockReset().mockResolvedValue({ copies: 0, cards: 0 });
   deckSwapPrinting.mockReset().mockResolvedValue({ folded: false, quantity: 4 });
   deckSetCardFinish.mockReset().mockResolvedValue({ folded: false, quantity: 4 });
   deckSetViewState.mockReset().mockResolvedValue(undefined);
@@ -2911,6 +2921,93 @@ describe("DeckEditor", () => {
   });
 
   /**
+   * **The pull, which is the one layer opened from outside the header** — its control is in the
+   * stats band at the foot of the page, beside the shortfall number it acts on.
+   *
+   * The hand-back is the interesting half and it is why this is not folded into the sweeps
+   * above. Those triggers are named elements this file holds a ref to; `DeckStats` owns this
+   * one and hands no ref up, so `openPull` reads `document.activeElement` at the press —
+   * `openAddTag`'s answer, made for `openAddTag`'s reason. A browser focuses what it presses, so
+   * the caret is on the button by the time the callback runs; if that ever stopped being true
+   * the layer would still open and only this assertion would notice.
+   */
+  it("opens the pull from the stats band and hands the caret back on Escape", async () => {
+    await open();
+    const trigger = await screen.findByRole("button", { name: "Pull from collection" });
+
+    await userEvent.click(trigger);
+    expect(
+      await screen.findByRole("dialog", { name: "Pull from collection" }),
+    ).toBeInTheDocument();
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(
+      screen.queryByRole("dialog", { name: "Pull from collection" }),
+    ).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+    // One press, one layer: the deck is still open behind it, which is the floor Escape falls
+    // to once every dismissible rung above it has passed.
+    expect(useAppStore.getState().openDeckId).toBe(4);
+  });
+
+  /**
+   * **The plan is not read until the dialog that draws it is open**, which is the `Layer` doc's
+   * rule made checkable: a `deck_pull_plan` is every hole in the list joined to every
+   * unallocated copy that could fill one, and nothing on the screen behind the dialog draws a
+   * word of it.
+   *
+   * The two halves are one test on purpose. "It was not called" passes just as well against a
+   * gate that never opens, so the press has to follow it in the same case.
+   */
+  it("reads no pull plan until the dialog is opened", async () => {
+    await open();
+    // Past the first paint and every query the editor makes for itself.
+    await screen.findByRole("button", { name: "Pull from collection" });
+    expect(deckPullPlan).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Pull from collection" }));
+
+    await waitFor(() => expect(deckPullPlan).toHaveBeenCalledWith(4));
+  });
+
+  /**
+   * **No pull on the plan, and it is the list rather than the feature.** Since schema v25 a deck
+   * holds a card because a collection row sits in its group, so a theory row holds no cards at
+   * all and there is nothing on that tab to pull copies into — which is also why
+   * `deck_pull_plan` takes no variant.
+   *
+   * The Live half is asserted in the same case, because a button absent on both tabs would pass
+   * a bare absence check while being broken everywhere.
+   */
+  it("offers the pull on the deck and not on the plan", async () => {
+    const over = { theoryEnabled: true };
+    const live = detail(over, [bolt({ quantity: 4 })]);
+    const theory = detail(over, [bolt({ quantity: 4, variant: "theory" })]);
+    deckGet.mockImplementation((_id: number, variant: string) =>
+      Promise.resolve(variant === "theory" ? theory : live),
+    );
+    await open();
+
+    expect(await screen.findByRole("button", { name: "Pull from collection" })).toBeInTheDocument();
+
+    await userEvent.click(
+      within(screen.getByRole("group", { name: "Deck list" })).getByRole("button", {
+        name: "Theory",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Pull from collection" })).not.toBeInTheDocument(),
+    );
+    // The other half of the line is still there, so the absence above is this one prop: a plan
+    // is exactly the list a reader wants a shopping list for.
+    expect(
+      screen.getByRole("button", { name: "Send missing to wishlist" }),
+    ).toBeInTheDocument();
+  });
+
+  /**
    * **The full-window overlays are modal, and Tab cannot leave one.**
    *
    * Each paints a scrim over the whole app, which is a statement that what is behind it is not
@@ -2949,6 +3046,11 @@ describe("DeckEditor", () => {
     ["Labels", "Labels", null],
     ["History", "History", null],
     ["Deck settings", "Deck settings", null],
+    // The one row here whose control is not in the header: `Pull from collection` is drawn in
+    // the stats band at the foot of the page, beside the shortfall it acts on. It belongs in
+    // this sweep by the sweep's own rule — a full-window overlay with a control in the view —
+    // and the fixture deck is short of three copies, which is what draws that control at all.
+    ["Pull from collection", "Pull from collection", null],
     [
       "Compare",
       "Theory to Actual difference",
