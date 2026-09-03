@@ -4789,6 +4789,201 @@ tab through `http://localhost:9333/json/close/<id>` before reloading, and take t
 `adb reverse` — the server binds too narrowly for the tunnel to reach, and the failure looks like
 a broken tunnel rather than a bound socket.
 
+---
+
+## Settings became a rail and a pane, and the two flex numbers are lopsided on purpose
+
+**Written 2026-09-03 as arithmetic off the class strings, and driven the same day.** The section
+was drafted before any of it had been in front of a window, and the subsection at its foot said so
+in those words. It has since been driven over CDP under `tauri dev` (debug build, Windows,
+2026-09-03) and **every calculated figure came back exact** — including the tight one. The figures
+below are now measurements; where a number is still only arithmetic it says so at its own site,
+and the foot of this section records what the pass could not settle.
+
+### The shape: six entries over twelve panels
+
+The page was one scroll of twelve panels, ordered by what a press costs. That ordering is a real
+rule and is still the rule *inside* a group, but an ordering only helps a reader who already knows
+what they are scrolling towards. It is now a left rail of six entries and a pane drawing only the
+selected entry's panels, with a search box above the rail that filters panels across every group.
+
+**`src/features/settings/nav.ts` is the whole of the decision and neither component that draws it
+decides anything.** `SettingsNav` draws the rail, `SettingsPage` draws the pane, and both of the
+things worth getting wrong here — which panels a group holds, and which panels a query matches —
+are decidable with no DOM in front of them.
+
+| Rail entry | Panels under it, in drawing order |
+| --- | --- |
+| Updates | `updates` |
+| Card data | `prices`, `combos` |
+| Sync — badge: the `Needs review` queue | `sync`, `review` |
+| Tags | `hidden-tags` |
+| Storage and data | `data-folder`, `backup`, `cache`, `web-storage` (web build only), `danger` |
+| Errors — badge: the error count | `errors` |
+
+**Where two panels answer one question they share an entry**, and where a panel is the only answer
+to its own question it gets one to itself. `Prices` and `Combos` are both optional bulk feeds of
+card facts; `Needs review` is what sync asks *of* a reader. A rail as long as the page it indexes
+would be a second scroll rather than a way through the first, which is the whole argument for six.
+
+**`Clear data` has no entry of its own and sits at the foot of `Storage and data`.** The three
+clears empty the part of the app the data folder holds, so that is the question they answer — and
+`DangerZonePanel`'s distance from everything else is kept *inside* the pane, where it has always
+been, rather than turned into a rail row that would put "delete my collection" one press from
+every visit to Settings.
+
+**The panel ids are the panels' own `SettingsSection` stems, character for character, and that
+claim now has a fence.** The stem is a `string` prop, so a `PanelId` no heading answers to
+type-checks perfectly and costs the reader a rail entry that scrolls to nothing.
+`src/features/settings/nav.test.ts` sweeps `/src/**/*.{ts,tsx}` through Vite's `?raw` — the
+`layers.test.ts` trick, for its reason: no `@types/node`, so no `node:fs` — and asserts the set of
+drawn stems against `Object.keys(PANELS)`. Two things the sweep has to get right and a naive one
+would not: it **strips comments first**, because this repo keeps its reasoning in prose and the
+prose quotes markup freely, so a doc comment containing `<SettingsSection id="…">` would otherwise
+read as a thirteenth panel that nothing draws (proved by mutation — with the stripper disarmed, a
+tag quoted in one of `nav.ts`'s own comments turns the sweep red); and it **reports a tag carrying
+no literal `id` by name** rather than skipping it, so a dynamic id makes the sweep fail loudly
+instead of quietly under-reporting. `BackupPanel` draws `id="backup"` at two sites — the folder
+variant and the archive variant — and those are one panel, which is why the sweep collects a set.
+
+### The row, and why 999 against 1
+
+The page root is `mx-auto flex max-w-4xl flex-wrap items-start gap-8 py-2`. The rail is
+`flex-[1_1_232px]` and the pane `flex-[999_1_480px]`, so with the 32px gap **the row holds both
+only while the content box is at least 744px** (232 + 32 + 480) and wraps below that. There is no
+`sm:`/`md:`/`lg:` anywhere in it: `src/lib/viewports.ts` forbids a viewport branch outside
+`AppShell`, and none is needed, because plain flex already puts the rail above the pane when there
+is no room beside it.
+
+**The grow ratio is what makes the wrap legible to the rail itself.** Free space is
+`C − 744`, split by grow factor, so at any content box `C`:
+
+| `C` | Where it comes from | Rail | Pane |
+| --- | --- | --- | --- |
+| 744 | The wrap point exactly | 232.0 | 480.0 |
+| 761 | 1024px window, sidebar expanded, `main` scrolling | 232.0 | 497.0 |
+| 776 | The same, with no scrollbar | 232.0 | 512.0 |
+| 896 | `max-w-4xl`'s ceiling | 232.2 | 631.8 |
+| 1024 | The imported design's 64rem, for comparison | 232.3 | 759.7 |
+
+The rail sits at its 232px basis at every width the page can reach, to within a third of a pixel.
+That is the point: **the rail decides whether it is beside the pane or wrapped above it by running
+a container query off its own inline size**, and it can only do that if "beside" is one width and
+"wrapped" — where the rail is the full width of the page — is always a much larger one. The
+threshold is `@min-[260px]/rail`, and 260 rather than 233 because a threshold sitting a pixel off a
+computed value flips the moment a scrollbar appears; there is nothing between 232 and the narrowest
+page this app supports for it to catch by mistake.
+
+**The imported design file's 1-against-3 would have broken that, and not only at the extremes.**
+With a 3:1 split the rail is `232 + (C − 744)/4`, which reaches the 260px threshold at
+**`C` = 856** — a content box the page has at roughly a **1119px** window with the sidebar
+expanded, and at the **1024px** desktop floor itself with the sidebar collapsed (`w-17`, 68px,
+leaves 901 and the `max-w-4xl` cap takes it to 896, where the rail would be **270px**). So on any
+ordinary window the rail would have drawn as the *wrapped* chip strip while standing beside the
+pane: not a state the query answers wrongly at one width, but a state it cannot tell from the
+other one at all. At the design's own 64rem the rail would be **302px**.
+
+**This is the first thing a reviewer will want to change back**, which is why the arithmetic is
+written out here rather than left as a magic number.
+
+### Why the container query is on the `<nav>` and never on the settings root
+
+`container-type: inline-size` — what every `@container` in this app compiles to — applies **layout
+containment**, and a layout-contained box is the containing block for every `position: fixed`
+descendant under it, exactly as a `transform` is. This document already records that trap from the
+other end: `FilterBar.tsx:1286` explains why that component's root is a **fragment**, so the
+phone's filter sheet is the container box's sibling rather than its child.
+
+Settings meets it from the inside. **Its panels mount their dialogs inline, and there is no
+`createPortal` anywhere in `src/`** — verified 2026-09-03: `grep -rn createPortal src/` matches
+nothing, and neither does `from "react-dom"`. The chain is `ConfirmDialog` → `Dialog` →
+**`Dialog.tsx:333`**, which is a bare `fixed inset-0` scrim that corrects for nothing. No settings
+file writes `fixed inset-0` itself, so grepping for that class in `src/features/settings/` finds
+zero and is the wrong grep; **`ConfirmDialog` is the census**, and today it names four sites in
+three panels — `CachePanel.tsx:54`, `DangerZonePanel.tsx:169`, `SyncPanel.tsx:1527` and
+`SyncPanel.tsx:1552`. `SettingsNav.tsx`'s own comment names two of the four and the plan this
+change came from named three, which is the usual reason not to write a list down: **the grep is
+the fact, and a fifth panel that grows a confirm step joins it without anybody editing a
+sentence.**
+
+So a container box wrapped around the settings root would size every one of those scrims to the
+**page box** instead of the window — a scrim covering the panel it came out of, and a confirm
+dialog clamped to a column. The container therefore goes on the `<nav>`, which no panel is a
+descendant of. **jsdom applies no stylesheet and computes no containment**, so nothing in the suite
+can go red for the failure; what a test can pin is the structure — the container is that element,
+and the panels are outside it.
+
+The container is **named** (`@container/rail`) for `FilterBar`'s reason: `@container` variants bind
+to the nearest ancestor container, so an unnamed one here would be what any future `@container`
+inside a panel resolved against.
+
+### Why not `useNarrowWindow()`
+
+`src/lib/viewports.ts` demands a reason at the site of any viewport branch, and `useNarrowWindow`'s
+own doc comment states the test to apply: **name the box the question is about, and if it is not
+the window, this is not the mechanism.** `AppShell` passes that test because the shell *is* the
+window. The rail does not — its question is whether the pane is beside it, which is a fact about
+the rail's own box and about the page's flex bases, and a window-width branch would be a different
+question that happens to agree today and stops agreeing the moment those bases move.
+
+There is a second, blunter reason: `useNarrowWindow` is `(max-width: 390px)`, built from `PHONE_PX`.
+It is a phone question and could not have answered this one at any width.
+
+### `max-w-4xl`, and not the imported design's 64rem
+
+The pane's measure is what decided it. At **64rem** the pane draws **760px** and these panels'
+prose runs to about **106 characters** a line; at **`max-w-4xl`** (56rem, 896px) it draws about
+**632px**, within **40px** of the `max-w-2xl` (42rem, 672px) column every one of these panels was
+written for and drawn in until this change. The rail took width from the row, so the pane must not
+also grow into it. The character figure is a typographic estimate from average character width at
+the panels' body size — like everything else in this section, computed rather than measured.
+
+### Driven in the shipped window, 2026-09-03 (debug build, `tauri dev`, Windows)
+
+**The desktop floor clears the wrap point, and by half as much as the obvious sum suggests.** This
+was the section's flagged risk and it is now read off the window. At a 1024px window with the
+sidebar expanded (`w-52`, 208px): `main` is **816px**, its scrollbar **15px**, `clientWidth`
+**801px**, and the content box **761px** after `main`'s `p-5`. The wrap point is 744, so the
+clearance is **17px** and `wrapped` is false. The naive 776px sum — the one that ignores the
+scrollbar — would have promised 32px. **17px is the true margin on the narrowest window this app
+allows**, so anything that widens the sidebar, `main`'s padding or the rail's basis wraps the rail
+on a desktop at the floor. It is the first number to re-measure after any of those.
+
+| Measured | At | Result |
+| --- | --- | --- |
+| Rail width | 1920px window, `max-w-4xl` reached | **232.16px** (calculated 232.2) |
+| Rail width | 1024px floor, content box 761px | **232.02px** (calculated 232.0) |
+| Pane width | 1920px window | **632px** (calculated 631.8) |
+| Wrap | 1024px floor | **not wrapped**, 17px to spare |
+| Strip | 390×844 viewport | rail **335px**, `flex-direction: row`, `overflow-x: auto` |
+| Strip scrolls | the same | `scrollWidth` **492** against `clientWidth` **335** |
+
+**The container-query placement is confirmed by the failure it was chosen to avoid.** With the
+Storage group open, `Clear cache`'s `ConfirmDialog` — mounted *inside* `main`, inside the settings
+tree, with no portal — measured its scrim at **1280×800 at (0, 0)** against a 1280×800 window. It
+covers the window exactly. Had the container gone on the settings root instead, layout containment
+would have clamped that scrim to the 896px page box. This is the one claim in the section that
+could only ever have been settled live, and it is the reason the `<nav>` carries the query.
+
+**The strip costs 167px above the pane on a phone, which is more than the sketch promised.** At
+390×844 the rail is **127px** tall — a 34px search box, a 53px strip, and the `Import.` footnote —
+and `gap-8` adds 32 before the pane, so the first panel starts **167px** below the top of the page.
+The wrapped full-width column this replaced would have been roughly **280px**. The strip is the
+right call and it is not the ~90px a sketch suggested; the footnote and the gap are what the sketch
+left out.
+
+**Also driven, and correct:** the six entries and their panel sets, `web-storage` absent on
+desktop, `aria-current` on exactly one entry at rest and on **none** while the box has words in it,
+the query cleared and `main.scrollTop` back to 0 on a group press, `Escape` clearing the field, a
+cross-group search (`dropbox` typed while standing on Updates draws `backup-heading` and nothing
+else — a word that appears nowhere in that panel's own text, so it is the keyword registry
+answering), the `Nothing in Settings matches that.` line on a query that matches none, and both
+badges with the written accessible name (`Sync (1)`, `Errors (2)`, forced through the live query
+cache since this database has neither).
+
+**Still not driven:** the sticky rail's behaviour under a long pane's scroll was not stepped
+frame by frame, and nothing here was read on Android or in the browser build.
+
 ## The folder wall names its own folders (2026-09-03) — measured over the built CSS, not in the window
 
 The Collection and Wishlist walls were rearranged from a Claude Design mock, and **the geometry it
@@ -4932,3 +5127,4 @@ state the dragger cannot see.
 right residue rather than a leftover: the answer to "into which folder" is a list of the *other*
 folders, and the answer to "delete this?" is a sentence about what happens to the cards inside.
 Neither is a name typed on a line, neither has a tile of its own, and neither fits on a 62px card.
+
