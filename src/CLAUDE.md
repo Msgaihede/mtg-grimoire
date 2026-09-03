@@ -619,6 +619,16 @@ Every one of these has its measurement and its story in
   `ring-inset`, which is what `TableView` draws for rows absolutely positioned inside a
   virtualiser. **jsdom has no layout engine and therefore no clip**, so nothing here is visible to
   the suite — `views.test.tsx` sweeps the class instead.
+  **Since 2026-09-03 that alternative is the default and this rule survives for `FOCUS` alone.**
+  `DROP_RING` is `ring-1 ring-inset ring-accent/45`, so the drop ring is painted *within* the
+  border box and can no longer be clipped by anything — the failure above is a history rather than
+  a live hazard for that mark. `DROP_MARK_ROOM` does not change and must not: `FOCUS` still stands
+  4px proud, and the 6px was always sized for it rather than for the ring. The same pass moved
+  both drop marks onto **the element carrying the target's own edge** — a folder card's `<button>`,
+  never the `<li>` around it — because a ring on a wrapper stood 2px outside a dashed border it was
+  meant to agree with, which is what a reader reported as highlights that do not line up. A card
+  that already has a border wears `DROP_EDGE` (its dash goes gold) instead of growing a second
+  outline. `src/lib/dropMarks.ts` carries all of it.
 - **Anything `fixed` positioned from a measured rect takes its viewport width from
   `document.documentElement.clientWidth`, never `window.innerWidth`.** `innerWidth` includes the
   classic vertical scrollbar; the initial containing block a `fixed` box is laid out against
