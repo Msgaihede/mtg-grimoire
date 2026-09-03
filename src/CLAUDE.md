@@ -415,6 +415,17 @@ Every one of these has its measurement and its story in
   shrink is given *whatever is left*, which at a 369px container was 5px and spilled the 36px
   sort-direction button 53px out of the panel. **jsdom applies no container query and loads no
   stylesheet**, so every test sees the base arrangement and nothing here can go red in the suite.
+- **A chord is written down in `src/lib/shortcuts.ts` and nowhere else** — the catalogue is both
+  the keyboard map's content and what the handlers match against, so the panel cannot advertise a
+  keyboard chord nothing binds. `matchesChord` is **exact in both directions** (a modifier the
+  chord does not name must be absent), which is what lets `Ctrl+Z` and `Ctrl+Shift+Z` be two
+  entries rather than one loose comparison — and it narrowed `Ctrl+Shift+Y` and `Shift+Delete`
+  away, both of which only ever worked because the old guards never tested `shiftKey`. The
+  `isTextField` yield stays at each **call site**: the deck editor's undo must yield to the
+  browser's own and `Ctrl+1…6` must not. Four rows stand outside the fence and
+  [keyboard-shortcuts.md](../docs/reference/keyboard-shortcuts.md) names each — `Escape` and
+  `Shift+F10` are bound by `useDismissOnEscape` and `menu/useContextMenu`, which do not read the
+  catalogue, and the two pointer rows can never be matched by construction.
 - **Ctrl/⌘-click adds a card to a picked set and Shift-click takes a range, and the whole of what
   a modified click means is `src/lib/multiSelect.ts`** (issue #214). Four cases and no others —
   plain collapses to one and anchors there, Ctrl toggles, Shift replaces with the run from the
