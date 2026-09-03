@@ -66,6 +66,9 @@ const BOLT = CARDS.find((c) => c.name === "Lightning Bolt")!;
 /** The second Bolt printing — `2x2 117`, uncommon. Used wherever "a different printing of
  *  the same card" is the point. */
 const BOLT_2X2 = CARDS.filter((c) => c.name === "Lightning Bolt")[1];
+/** The corpus's one non-English printing — `sta 105`, a Japanese Lightning Bolt. Used wherever
+ *  a test is about a *language* changing rather than about which card it is. */
+const BOLT_JA = CARDS.find((c) => c.lang !== "en")!;
 /** The corpus's foil-only printing — the `mp2` Consecrated Sphinx Invocation, `finishes:
  *  ["foil"]`, `usd` null and `usd_foil` 164.95. What a deck row priced at a flat `nonfoil`
  *  rendered as an em dash. */
@@ -3184,6 +3187,210 @@ describe("the wishlist's folders", () => {
     // leave every folder standing and every folder card drawing zeroes.
     expect(writeHandlers(db).wishlist_clear()).toBe(1);
     expect(db.wishlistFolders).toHaveLength(0);
+  });
+});
+
+/**
+ * Re-pointing a wishlist at its cheapest printings (issue #352) — the one read in this file
+ * whose whole answer is a **classification**, which is what earns it a block.
+ *
+ * Every assertion here is about which of the three buckets a wish lands in and what the fourth
+ * number says about them, because a preview that quietly leaves a wish out and a preview that
+ * quietly counts it twice look identical on screen: the dialog draws `moves` and a sentence made
+ * of the other three, and nothing in it can be checked against anything else.
+ */
+describe("the cheapest-printing plan", () => {
+  /** `lea 47`: `usd` null in a corpus where its only sibling is priced — the unpriced *current*
+   *  printing, which is a move with no saving rather than a row left out. */
+  const RECALL_LEA = CARDS.find((c) => c.name === "Ancestral Recall" && c.setCode === "lea")!;
+  const RECALL_2ED = CARDS.find((c) => c.name === "Ancestral Recall" && c.setCode === "2ed")!;
+  /** `lea 232` and `vma 4`: **no** printing of this card is priced at any marketplace this app
+   *  quotes, which is the third way a wish is passed over. */
+  const LOTUS_LEA = CARDS.find((c) => c.name === "Black Lotus" && c.setCode === "lea")!;
+  const SOL = CARDS.find((c) => c.name === "Sol Ring" && c.setCode === "c21")!;
+
+  const plan = (db: FakeDb, over: Partial<WishlistQuery> = {}) =>
+    readHandlers(db).wishlist_optimize_plan({ query: { limit: 10, offset: 0, ...over } });
+
+  it("offers the strictly cheaper printing, and accounts for every wish it did not", () => {
+    const db = makeDb({
+      wishlistEntries: [
+        // $620.00 at `lea 161`, $2.50 at `2x2 117`.
+        wish({ id: 1, cardId: BOLT.id, quantity: 2 }),
+        // Already on that $2.50 printing — the arm the `>=` is for.
+        wish({ id: 2, cardId: BOLT_2X2.id }),
+        // Any printing: cheapest by construction, and never a move.
+        wish({ id: 3, oracleId: SOL.oracleId, name: SOL.name }),
+        // Neither of this card's two printings is priced anywhere this app quotes.
+        wish({ id: 4, cardId: LOTUS_LEA.id }),
+      ],
+    });
+
+    const answer = plan(db);
+    expect(answer.moves).toHaveLength(1);
+    expect(answer.moves[0]).toMatchObject({
+      wishId: 1,
+      quantity: 2,
+      from: { cardId: BOLT.id, setCode: "lea", price: 620 },
+      to: { cardId: BOLT_2X2.id, setCode: "2x2", price: 2.5 },
+      savedPerCopy: 617.5,
+      saved: 1235,
+    });
+    expect(answer.alreadyCheapest).toBe(2);
+    expect(answer.skipped).toBe(1);
+    // The four numbers are one piece of arithmetic, and this is the whole of what makes the
+    // dialog's sentence checkable: `considered` is the list's own `total` for the same query.
+    expect(answer.considered).toBe(4);
+    expect(answer.moves.length + answer.alreadyCheapest + answer.skipped).toBe(answer.considered);
+    expect(readHandlers(db).wishlist_list({ query: { limit: 10, offset: 0 } }).total).toBe(
+      answer.considered,
+    );
+  });
+
+  /** The query scopes the sweep and the **page does not**, which is the difference between a
+   *  preview of the list and a preview of what happens to be on screen. */
+  it("sweeps the whole query rather than the page, and only the folder the list is in", () => {
+    const db = makeDb({
+      wishlistFolders: [{ id: 1, parentId: null, name: "Ordered", sortOrder: 0 }],
+      wishlistEntries: [
+        wish({ id: 1, cardId: BOLT.id }),
+        wish({ id: 2, cardId: BOLT.id, folderId: 1 }),
+      ],
+    });
+
+    // `limit: 1` would leave the second wish off page one; the plan reads neither field.
+    expect(plan(db, { limit: 1, flatten: true }).considered).toBe(2);
+    expect(plan(db, { folderId: 1 }).moves.map((m) => m.wishId)).toEqual([2]);
+  });
+
+  it("offers a wish this marketplace cannot price, and invents no saving for it", () => {
+    const db = makeDb({ wishlistEntries: [wish({ id: 1, cardId: RECALL_LEA.id, quantity: 3 })] });
+
+    expect(plan(db).moves[0]).toMatchObject({
+      from: { cardId: RECALL_LEA.id, price: null },
+      to: { cardId: RECALL_2ED.id, price: 4999.95 },
+      // `null` and not `0`: an unlisted printing may be cheap rather than dear, and a figure
+      // invented for it would inflate the headline the dialog adds up.
+      savedPerCopy: null,
+      saved: null,
+    });
+  });
+
+  /** No language fence: the preview carries `lang` on both sides precisely so the swap is
+   *  something the reader can see before they tick it. */
+  it("offers a cheaper printing in another language, and says so on both sides", () => {
+    const db = makeDb({ wishlistEntries: [wish({ id: 1, cardId: BOLT_JA.id })] });
+
+    expect(plan(db).moves[0]).toMatchObject({
+      from: { cardId: BOLT_JA.id, lang: "ja" },
+      to: { cardId: BOLT_2X2.id, lang: "en" },
+    });
+  });
+
+  /**
+   * The `digital = 0` clause, which cannot be reached with the corpus as it stands — both
+   * digital rows in it are unpriced, so the filter excludes nothing and a test over them would
+   * pass with the clause deleted. A priced digital printing is minted here for that reason.
+   */
+  it("never re-points a wish onto a digital printing, however cheap", () => {
+    const online: FakeCard = {
+      ...BOLT,
+      id: "0dd0dd0d-0000-4000-8000-000000000001",
+      setCode: "mtgo",
+      collectorNumber: "1",
+      digital: true,
+      isPaper: false,
+      prices: '{"usd":"0.01","usd_foil":null,"usd_etched":null,"eur":null,"eur_foil":null}',
+      priceUsd: 0.01,
+    };
+    const db = makeDb({
+      cards: [BOLT, online],
+      wishlistEntries: [wish({ id: 1, cardId: BOLT.id })],
+    });
+
+    // The only paper printing left is the one the wish is already on, so there is nothing
+    // cheaper — and one cent of it is not on the list at all.
+    expect(plan(db).moves).toHaveLength(0);
+    expect(plan(db).alreadyCheapest).toBe(1);
+  });
+});
+
+/**
+ * Committing that plan — one result per item, and the three ways a row does not move.
+ *
+ * The **order** is asserted rather than the set, because that is the whole of the caller's
+ * contract: a dialog sums the saving over the rows that actually moved by walking its own items
+ * beside these results, and a result list in any other order sums the wrong rows while looking
+ * perfectly plausible.
+ */
+describe("applying the cheapest-printing plan", () => {
+  it("reports one result per item, in the order they were sent", () => {
+    const db = makeDb({
+      wishlistEntries: [
+        wish({ id: 1, cardId: BOLT.id, quantity: 2 }),
+        // Repointed by something else since the preview: the guard is `fromCardId`, not the id.
+        wish({ id: 2, cardId: BOLT_2X2.id }),
+      ],
+    });
+
+    const outcome = writeHandlers(db).wishlist_optimize_apply({
+      items: [
+        { wishId: 9, fromCardId: BOLT.id, toCardId: BOLT_2X2.id },
+        { wishId: 2, fromCardId: BOLT.id, toCardId: BOLT_2X2.id },
+        { wishId: 1, fromCardId: BOLT.id, toCardId: BOLT_JA.id },
+      ],
+    });
+
+    expect(outcome.results).toEqual([
+      { wishId: 9, status: "missing" },
+      { wishId: 2, status: "stale" },
+      { wishId: 1, status: "changed" },
+    ]);
+    // The stale row is untouched — not repointed, and not stamped either.
+    expect(db.wishlistEntries.find((w) => w.id === 2)).toMatchObject({ cardId: BOLT_2X2.id });
+    // The changed one carries the new printing's three denormalised columns, `set_wish_printing`'s
+    // rule: a wish that outlives its printing has to have described one.
+    expect(db.wishlistEntries.find((w) => w.id === 1)).toMatchObject({
+      cardId: BOLT_JA.id,
+      setCode: BOLT_JA.setCode,
+      collectorNumber: BOLT_JA.collectorNumber,
+      lang: BOLT_JA.lang,
+    });
+  });
+
+  /** {@link mergeWishOnto}'s rule, reported rather than refused — and the saving still stands. */
+  it("merges onto a wish already holding the grain, and calls it merged", () => {
+    const db = makeDb({
+      wishlistEntries: [
+        wish({ id: 1, cardId: BOLT.id, quantity: 2 }),
+        wish({ id: 2, cardId: BOLT_2X2.id, quantity: 3 }),
+      ],
+    });
+
+    expect(
+      writeHandlers(db).wishlist_optimize_apply({
+        items: [{ wishId: 1, fromCardId: BOLT.id, toCardId: BOLT_2X2.id }],
+      }).results,
+    ).toEqual([{ wishId: 1, status: "merged" }]);
+    // The **destination** survives, holding both quantities, and the source row is gone —
+    // which is why the result names the item's wish id and not the row that is left.
+    expect(db.wishlistEntries).toHaveLength(1);
+    expect(db.wishlistEntries[0]).toMatchObject({ id: 2, quantity: 5 });
+  });
+
+  it("rolls the whole batch back when an item names a printing the card database has not", () => {
+    const db = makeDb({ wishlistEntries: [wish({ id: 1, cardId: BOLT.id, quantity: 2 })] });
+
+    expect(() =>
+      writeHandlers(db).wishlist_optimize_apply({
+        items: [
+          { wishId: 1, fromCardId: BOLT.id, toCardId: BOLT_2X2.id },
+          { wishId: 1, fromCardId: BOLT_2X2.id, toCardId: "gone" },
+        ],
+      }),
+    ).toThrow(/no card with that id/);
+    // One transaction: the first item really ran, and the throw takes it back out again.
+    expect(db.wishlistEntries[0]).toMatchObject({ cardId: BOLT.id, quantity: 2 });
   });
 });
 
@@ -6832,6 +7039,15 @@ describe("the busy fault", () => {
       // and here for `collapsed`'s reason: `invoke` matches by name, and a boolean has no
       // junk state that could fail this loop instead.
       locked: true,
+      // `wishlist_optimize_apply`'s, and the **second** key on this record that three writes
+      // share — `collection_import_commit` and `wishlist_import_commit` take an `items` of their
+      // own shape, and `section`'s three values above are the precedent for saying so out loud.
+      // It is harmless for exactly the reason every other collision here is: all three reach
+      // `refuseIfBusy` before they look at an argument. Valid for this one all the same, for
+      // `root`'s reason — an empty list is a plausible early return, so a handler that counted
+      // its items before taking the lock would fail this loop by answering an outcome instead of
+      // BUSY.
+      items: [{ wishId: 1, fromCardId: BOLT.id, toCardId: BOLT_B.id }],
     };
     // The five above excluded, this is every command that really takes the write lock —
     // re-counted 2026-08-12 **after a merge in which three branches had each added one**,
@@ -7069,7 +7285,16 @@ describe("the busy fault", () => {
     // **Both landed the same day on two branches, and 89 is what the sweep answered after the
     // merge** — not 88 twice, which is what each branch's own note said and what adding one on
     // paper to either would have produced. Re-counted by running it.
-    expect(names).toHaveLength(89);
+    //
+    // Re-pointing a wishlist at its cheapest printings then added **one**, 89 → 90:
+    // `wishlist_optimize_apply` takes `sync::with_write` like every other wishlist write, and it
+    // is the second write in this table whose whole body is a transaction over a list of items
+    // (`wishlist_import_commit` being the first), which is why `items` joins the record above.
+    // Its read half, `wishlist_optimize_plan`, writes nothing and goes through `db_read` — so it
+    // is in `readHandlers` and not in this table at all, exactly as `deck_pull_plan` is not.
+    // Re-counted by running the sweep on this branch; a merge with any sibling that adds a write
+    // has to run it again rather than adding one to this figure.
+    expect(names).toHaveLength(90);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,

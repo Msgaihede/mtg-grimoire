@@ -19,6 +19,7 @@ import searchRs from "../../src-tauri/src/search.rs?raw";
 import syncCommandsRs from "../../src-tauri/src/sync_engine/commands.rs?raw";
 import syncLiveRs from "../../src-tauri/src/sync_engine/live.rs?raw";
 import wishlistRs from "../../src-tauri/src/wishlist.rs?raw";
+import wishlistOptimizeRs from "../../src-tauri/src/wishlist_optimize.rs?raw";
 import ipcSource from "./ipc.ts?raw";
 import {
   AUTO_BRACKET,
@@ -2373,6 +2374,32 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     ["DeckPullCandidate", deckPullRs, "PullCandidate"],
     ["DeckPullPick", deckPullRs, "Pick"],
     ["DeckPullOutcome", deckPullRs, "PullOutcome"],
+    // **The cheapest-printing sweep's six, added with the feature** (2026-09-03, issue #352).
+    // They are here rather than on `mirrors` above for `DecksCleared`'s reason and not for a new
+    // one: none is a card wall's row, none carries a picture, and the smallest of them is two
+    // fields — so the parity rule is the only one of that table's three they can pass.
+    //
+    // The list is longer than the feature looks because a plan is **nested**: `OptimizePrinting`
+    // is not sent or received on its own, it is the `from` and the `to` of every move, and a
+    // field renamed inside it would leave the row's two halves reading `undefined` while
+    // `WishOptimizeMove` itself still agreed field for field. A parity check on the outer struct
+    // cannot see that, so each level is named.
+    //
+    // `WishOptimizeApplyItem` is the one the app **sends**, which is where a drift is loudest —
+    // `deck_pull_from_collection`'s lesson four rows up: apply is one transaction, so a renamed
+    // field deserialises to a serde default, `fromCardId` matches nothing, and every ticked row
+    // comes back `stale`. A press that always appears to do nothing, with nothing red anywhere.
+    //
+    // `WishOptimizeStatus` is deliberately absent: it is a TypeScript union and a Rust `enum`,
+    // and this fence parses `pub struct`/`export interface` field lists. The four words are
+    // pinned by `WishOptimizeResult.status`'s type on one side and `#[serde(rename_all)]` on the
+    // other, which is a gap worth naming rather than one worth papering over here.
+    ["OptimizePrinting", wishlistOptimizeRs, "OptimizePrinting"],
+    ["WishOptimizeMove", wishlistOptimizeRs, "WishOptimizeMove"],
+    ["WishlistOptimizePlan", wishlistOptimizeRs, "WishlistOptimizePlan"],
+    ["WishOptimizeApplyItem", wishlistOptimizeRs, "WishOptimizeApplyItem"],
+    ["WishOptimizeResult", wishlistOptimizeRs, "WishOptimizeResult"],
+    ["WishlistOptimizeOutcome", wishlistOptimizeRs, "WishlistOptimizeOutcome"],
   ];
 
   it.each(plainMirrors)(
