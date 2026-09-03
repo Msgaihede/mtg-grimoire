@@ -1481,6 +1481,140 @@ export interface WishlistPage {
 }
 
 /**
+ * One printing in an optimise plan — either the one a wish is pinned to now, or the one the
+ * sweep would move it to.
+ *
+ * The three descriptive columns are `cards`', not the wish's: a plan is about printings that
+ * exist today, and the denormalised `setCode`/`collectorNumber`/`lang` a wish carries can
+ * describe a printing Scryfall has since removed. `from` is therefore read off the wish's
+ * printing **through `cards`** — a wish pinned to a vanished id is skipped entirely, because
+ * there is nothing to compare against.
+ */
+export interface OptimizePrinting {
+  cardId: string;
+  setCode: string;
+  collectorNumber: string;
+  lang: string;
+  /**
+   * Per copy, at the plan's marketplace and **at the wish's finish** —
+   * `sorting::row_price_expr` over `w.preferred_finish`, the same expression
+   * {@link WishRow.unitPrice} is. So a foil wish is compared foil-to-foil and never against a
+   * nonfoil rate nobody quoted.
+   *
+   * `null` is *unpriced there*, and it can only ever appear on {@link WishOptimizeMove.from}:
+   * a candidate with no price is not a candidate at all — issue #352's own sentence, "a card
+   * without a price should not be considered the cheapest printing" — so `to.price` is always
+   * a number.
+   */
+  price: number | null;
+}
+
+/**
+ * One row of the preview: a wish, where it is, and where one press would put it.
+ *
+ * **Only pinned wishes are ever here.** An any-printing wish is already drawn and priced at the
+ * cheapest printing of its oracle card by `list_wishes`' join, so there is no saving to find,
+ * and pinning it would take away the very flexibility that makes it cheap. It is counted in
+ * {@link WishlistOptimizePlan.alreadyCheapest} instead.
+ */
+export interface WishOptimizeMove {
+  wishId: number;
+  /** The wish's own name, as the list draws it. */
+  name: string;
+  quantity: number;
+  /** `null` is "the reader has not said", which prices through the `nonfoil → foil → etched`
+   *  chain rather than at the nonfoil rate. Never coalesced — see `row_price_expr`. */
+  preferredFinish: Finish | null;
+  /** Where the wish is filed, so a flattened preview can say which drawer each row is in.
+   *  `null` is the root. */
+  folderId: number | null;
+  from: OptimizePrinting;
+  to: OptimizePrinting;
+  /**
+   * `from.price - to.price`, per copy — and **`null` exactly when `from.price` is**.
+   *
+   * A wish whose current printing this marketplace does not list is still offered as a move,
+   * and counted as no saving: an unlisted printing may be cheap rather than dear, and a figure
+   * invented for it would inflate the headline. The preview draws that row `— → $2.00` and
+   * leaves it unticked.
+   */
+  savedPerCopy: number | null;
+  /** {@link savedPerCopy} times {@link quantity}, or `null` with it. */
+  saved: number | null;
+}
+
+/**
+ * What `wishlist_optimize_plan` answers: every improvement available over **the rows the list is
+ * currently showing**, and an account of the ones it passed over.
+ *
+ * **The plan is taken over the whole query, not over the visible page.** It is handed the same
+ * {@link WishlistQuery} the list drew — folder, flatten switch and every active card filter —
+ * with `limit`/`offset` ignored, so `considered` equals the `total` in the page header and the
+ * preview cannot silently leave out a wish on page two.
+ *
+ * The three counts partition `considered`: `moves.length + alreadyCheapest + skipped`.
+ *
+ * **It does not echo the marketplace back, deliberately.** Every price here was quoted at the
+ * one the query carried, which came from `useMarketplace()`, which is also what the dialog
+ * renders with — and the query is in the caller's key, so a switch refetches rather than
+ * relabels. A second copy of that fact travelling in the answer is one more thing that can
+ * disagree with the hook, which is the rule `src/CLAUDE.md` states for every price surface.
+ */
+export interface WishlistOptimizePlan {
+  moves: WishOptimizeMove[];
+  /** How many wishes the sweep looked at — the list's own `total` for the same query. */
+  considered: number;
+  /** Already on the cheapest priced printing, plus every any-printing wish, which is cheapest
+   *  by construction. */
+  alreadyCheapest: number;
+  /** Passed over: a wish with no oracle id (nothing to find siblings by), a wish pinned to a
+   *  printing `cards` no longer has, and an oracle card **no** printing of which this
+   *  marketplace prices at this wish's finish. */
+  skipped: number;
+}
+
+/**
+ * One ticked row on its way to `wishlist_optimize_apply`.
+ *
+ * **`fromCardId` is a guard, not a description.** Between the preview and the press a sync can
+ * land, or another pane can repoint the same wish; applying regardless would move a printing the
+ * reader never saw. A wish whose `card_id` no longer matches is left exactly as it is and
+ * reported {@link WishOptimizeStatus} `"stale"`.
+ */
+export interface WishOptimizeApplyItem {
+  wishId: number;
+  fromCardId: string;
+  toCardId: string;
+}
+
+/**
+ * What became of one ticked row.
+ *
+ * * `changed` — repointed, the ordinary answer.
+ * * `merged` — the cheaper printing collided with a wish already in the same folder at the same
+ *   finish, so the two quantities summed into that row and this one was deleted.
+ *   {@link ipc.wishlistSetPrinting}'s documented rule rather than a failure, and the saving
+ *   still stands.
+ * * `stale` — the wish had moved on since the preview; nothing was written.
+ * * `missing` — the wish is not on the list any more; nothing was written.
+ */
+export type WishOptimizeStatus = "changed" | "merged" | "stale" | "missing";
+
+export interface WishOptimizeResult {
+  wishId: number;
+  status: WishOptimizeStatus;
+}
+
+/**
+ * The outcome of one press of Apply — **one result per item sent, in the order they were sent**,
+ * so the caller can sum the saving over exactly the rows that actually moved rather than over
+ * the rows it hoped would.
+ */
+export interface WishlistOptimizeOutcome {
+  results: WishOptimizeResult[];
+}
+
+/**
  * What a deck category *is for* — `schema::CATEGORY_KINDS`, which `deck_categories.kind`'s
  * own CHECK is built from.
  *
@@ -4911,6 +5045,30 @@ export const ipc = {
    */
   wishlistSetPrinting: (id: number, cardId: string | null) =>
     invoke<EntryChange>("wishlist_set_printing", { id, cardId }),
+  /**
+   * What re-pricing the list on screen would change, and **nothing is written** — issue #352's
+   * "preview you can verify before committing", which is the whole reason this is two commands
+   * and not one.
+   *
+   * Takes the query the list is currently drawn from, so the folder, the flatten switch and
+   * every active card filter scope the sweep; `limit` and `offset` are ignored, because a
+   * preview that stopped at the end of page one would quietly leave wishes un-optimised.
+   *
+   * The **`marketplace` on the query decides every figure in the answer**, so it belongs in the
+   * caller's query key like every other priced read — see {@link WishlistOptimizePlan}.
+   */
+  wishlistOptimizePlan: (query: WishlistQuery) =>
+    invoke<WishlistOptimizePlan>("wishlist_optimize_plan", { query }),
+  /**
+   * Commit the ticked rows of a plan — **one transaction**, {@link ipc.wishlistImportCommit}'s
+   * rule: a sweep seen half done is a shopping list nobody can reason about.
+   *
+   * Each item names the printing it is coming *from* as well as the one it is going to, and a
+   * wish that has moved since the preview is skipped rather than repointed. Every item gets a
+   * {@link WishOptimizeResult}, in order.
+   */
+  wishlistOptimizeApply: (items: WishOptimizeApplyItem[]) =>
+    invoke<WishlistOptimizeOutcome>("wishlist_optimize_apply", { items }),
   /** The gallery: every deck, archived last, most recently touched first. */
   deckList: () => invoke<DeckRow[]>("deck_list"),
   /**

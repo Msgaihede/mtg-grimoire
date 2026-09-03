@@ -158,6 +158,14 @@ pub mod update;
 pub mod web;
 pub mod wishlist;
 pub mod wishlist_folders;
+/// **The wishlist's cheapest-printing sweep** — issue #352, and two commands rather than one
+/// button because the reader has to be able to see what a press would do before making it.
+/// Beside [`wishlist`] rather than inside it: that module is the wishlist's storage and its
+/// list, and this one is a *policy* over both — it reads through
+/// [`wishlist::wishlist_scope`] and writes through [`wishlist::set_printing_inner`], adding
+/// no SQL over `wishlist_entries` of its own except the one guard read that tells a stale
+/// row from a live one.
+pub mod wishlist_optimize;
 pub mod zoom;
 
 // ── Desktop and Android ──────────────────────────────────────────────────────────

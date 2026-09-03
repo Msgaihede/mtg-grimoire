@@ -196,10 +196,15 @@ import type {
   UpdateAsset,
   UpdateStatus,
   WishInput,
+  WishOptimizeApplyItem,
+  WishOptimizeMove,
+  WishOptimizeResult,
   WishRow,
   WishlistFolder,
   WishlistFolderSummary,
   WishlistImportItem,
+  WishlistOptimizeOutcome,
+  WishlistOptimizePlan,
   WishlistQuery,
   WishlistSortKey,
 } from "@/lib/ipc";
@@ -4218,6 +4223,78 @@ function wishCard(db: FakeDb, w: Pick<FakeWish, "cardId" | "oracleId">): FakeCar
 }
 
 /**
+ * `sorting::row_price_expr(market, WISH_PREFERRED_FINISH)` — what one copy of one printing costs
+ * *this wish*, at the finish the wish names.
+ *
+ * **One function for four callers** — {@link toWishRow}, {@link wishlistOrder},
+ * `wishlist_folder_summary` and `wishlist_optimize_plan` — where the expression used to be
+ * written out at each, and the last is why it was worth collapsing: the optimise preview's whole
+ * subject is a comparison between two of these figures, so a dialog quoting a wish under one
+ * rule beside a row quoted under another would be a workbench teaching a saving nobody can
+ * reproduce.
+ *
+ * **It is this fake's rule and not the crate's, and the difference is one `??`.**
+ * `row_price_expr` has two arms told apart by whether the wish has said — NULL is
+ * `printing_price_by_finish_expr`'s `nonfoil → foil → etched` chain, a named finish is that
+ * finish and no fallback of any kind — while this coalesces the unsaid case to `nonfoil`, which
+ * is what `wishlist.rs` did until 2026-08-26 (`wishlist-folders.md`, "A wish that names no
+ * finish is priced at the chain, not at nonfoil"). The two answers part company only on a
+ * printing with **no** nonfoil price and a price in some other finish — four of this corpus's 52
+ * (`mp2 8`, `acr 211`, `mul 133` and `mul 133z`, counted 2026-09-03). It is **named here rather
+ * than fixed in passing**, because moving it moves every wishlist figure in the workbench at
+ * once, which is a change to what the wishlist stories draw.
+ */
+function wishPriceAt(
+  db: FakeDb,
+  card: FakeCard | null,
+  preferredFinish: FakeWish["preferredFinish"],
+  mp: MarketplaceId,
+): number | null {
+  return finishPriceAt(db, card, preferredFinish ?? "nonfoil", mp);
+}
+
+/**
+ * The cheapest printing of a wish's oracle card that this marketplace **actually quotes**, at
+ * the wish's finish — `wishlist_optimize_plan`'s candidate query, and its only caller.
+ *
+ * Three clauses, each a decision rather than arithmetic:
+ *
+ * * **priced, or not a candidate at all.** Issue #352's own sentence — "a card without a price
+ *   should not be considered the cheapest printing" — which is why a move's `to.price` is a
+ *   number and never `null`, where its `from.price` may be either.
+ * * **not digital.** A digital printing is not a piece of cardboard anybody can be sent. It
+ *   excludes nothing here — this corpus's two digital rows are quoted by no marketplace this app
+ *   prices at (`vma 4` carries a `tix` figure and nothing else) — exactly as it excludes nothing
+ *   in the live card database, which is what makes it a fence against a feed that one day prices
+ *   them rather than part of the sum.
+ * * **no language term.** A cheaper printing in another language is a real candidate, and the
+ *   preview shows `lang` on both sides so the swap is visible. `sta 105` is this corpus's one
+ *   non-English printing and it is a Lightning Bolt, so the case is reachable in a story.
+ *
+ * The order is `list_wishes`' own cheapest-printing join verbatim — price ascending, then
+ * `released_at DESC, id ASC` — so the printing this offers a *pinned* wish and the printing an
+ * un-pinned one is drawn as are chosen by one rule and not by two.
+ */
+function cheapestPrinting(
+  db: FakeDb,
+  w: FakeWish,
+  mp: MarketplaceId,
+): { card: FakeCard; price: number } | null {
+  return (
+    db.cards
+      .filter((c) => c.oracleId === w.oracleId && !c.digital)
+      .map((c) => ({ card: c, price: wishPriceAt(db, c, w.preferredFinish, mp) }))
+      .filter((c): c is { card: FakeCard; price: number } => c.price !== null)
+      .sort(
+        (a, b) =>
+          numeric(a.price, b.price) ||
+          cmp(b.card.releasedAt, a.card.releasedAt) ||
+          cmp(a.card.id, b.card.id),
+      )[0] ?? null
+  );
+}
+
+/**
  * `wishlist::OWNED_SQL` — copies the collection holds **against this wish**.
  *
  * Every term of the wish narrows it: the printing if it names one, else every printing of
@@ -4260,8 +4337,6 @@ function elsewhereWishes(db: FakeDb, w: FakeWish): number {
 
 function toWishRow(db: FakeDb, w: FakeWish, mp: MarketplaceId): WishRow {
   const card = wishCard(db, w);
-  // The cheapest way to satisfy the wish: the preferred finish's price, else nonfoil's.
-  const finish = w.preferredFinish ?? "nonfoil";
   return {
     id: w.id,
     oracleId: w.oracleId,
@@ -4284,7 +4359,10 @@ function toWishRow(db: FakeDb, w: FakeWish, mp: MarketplaceId): WishRow {
     artCardId: card?.id ?? null,
     quantity: w.quantity,
     preferredFinish: w.preferredFinish,
-    unitPrice: finishPriceAt(db, card, finish, mp),
+    // The cheapest way to satisfy the wish, per copy — {@link wishPriceAt}, which the folder
+    // subtotals and the optimise preview are quoted from too, so no two of the three can
+    // disagree about what one copy of one printing costs this wish.
+    unitPrice: wishPriceAt(db, card, w.preferredFinish, mp),
     ownedQuantity: ownedAgainstWish(db, w),
     elsewhere: elsewhereWishes(db, w),
     notes: w.notes,
@@ -5176,7 +5254,7 @@ function wishlistOrder(
 ): Compare<FakeWish> {
   const ownedBy = new Map(rows.map((w) => [w.id, ownedAgainstWish(db, w)]));
   const priceBy = new Map(
-    rows.map((w) => [w.id, finishPriceAt(db, wishCard(db, w), w.preferredFinish ?? "nonfoil", mp)]),
+    rows.map((w) => [w.id, wishPriceAt(db, wishCard(db, w), w.preferredFinish, mp)]),
   );
   const owned = (w: FakeWish) => ownedBy.get(w.id) ?? 0;
   /** The cheapest way to satisfy the wish, per copy: the preferred finish's price if it names
@@ -6176,6 +6254,120 @@ export function readHandlers(db: FakeDb) {
     },
 
     /**
+     * `wishlist_optimize::plan` — what re-pointing the list on screen at each card's cheapest
+     * printing would change, and **nothing is written**. Issue #352's "preview you can verify
+     * before committing", which is why this feature is two commands and not one.
+     *
+     * **Over the query, never over the page.** It is handed the same {@link WishlistQuery} the
+     * list drew and runs {@link wishlistScope} on it, so the folder, the Flatten switch and every
+     * active card filter scope the sweep — while `limit` and `offset` are read by nothing here.
+     * That is what makes `considered` the very number {@link readHandlers.wishlist_list} puts in
+     * `total`, and what stops a preview quietly ending at the foot of page one.
+     *
+     * **The three counts partition `considered`**, so the four numbers are one piece of
+     * arithmetic and a story can assert it:
+     *
+     * * an **any-printing** wish is `alreadyCheapest` and can never be a move —
+     *   {@link wishCard}'s join already draws and prices it at a printing chosen for it, so
+     *   there is no saving to find, and pinning it would take away the flexibility that makes it
+     *   cheap in the first place;
+     * * a wish with **no oracle id** (nothing to find siblings by), a wish pinned to a printing
+     *   `cards` no longer has, and an oracle card **no** printing of which this marketplace
+     *   prices at this wish's finish are `skipped` — three different ways there is nothing to
+     *   compare against, counted together because the dialog says "passed over" once;
+     * * everything else is a **move** when {@link cheapestPrinting} is *strictly* cheaper, and
+     *   `alreadyCheapest` when it is not. Strictly, because a printing tied at the same price
+     *   sorts ahead of the one the reader is already on and would offer a saving of 0.00.
+     *
+     * **A wish whose current printing this marketplace does not list is offered as a move and
+     * counts no saving.** `savedPerCopy` and `saved` are `null` exactly when `from.price` is,
+     * because an unlisted printing may be cheap rather than dear and a figure invented for it
+     * would inflate the headline — the preview draws that row `— → $1.74` and leaves it unticked.
+     *
+     * **The moves come back in `list_wishes`' *fallback* order — name, then id — and not in the
+     * reader's chosen sort**, which is the crate's call rather than a simplification: the money
+     * sorts order by output aliases (`unit_price`, `owned_quantity`) this statement does not
+     * select, so honouring `sort` would mean selecting columns a preview has no use for. A
+     * preview is a list of changes, not a second rendering of the page.
+     *
+     * **No marketplace on the answer, deliberately**, and no fault of its own: this is a read,
+     * so it answers through every second of a sync like every other read in this table, and every
+     * figure in it was quoted at the marketplace the query carried. A second copy of that fact
+     * travelling back is one more thing that can disagree with the hook the dialog renders with.
+     */
+    wishlist_optimize_plan: (args: { query: WishlistQuery }): WishlistOptimizePlan => {
+      const q = args.query;
+      const mp = marketplaceOf(q.marketplace);
+      const rows = wishlistScope(db, q);
+      const moves: WishOptimizeMove[] = [];
+      let alreadyCheapest = 0;
+      let skipped = 0;
+      for (const w of [...rows].sort((a, b) => cmp(a.name, b.name) || a.id - b.id)) {
+        // Cheapest by construction, and the one arm decided before any price is read.
+        if (w.cardId === null) {
+          alreadyCheapest += 1;
+          continue;
+        }
+        if (w.oracleId === null) {
+          skipped += 1;
+          continue;
+        }
+        // **Read off `cards`, never off the wish's own denormalised columns.** A plan is about
+        // printings that exist today, and a wish pinned to an id Scryfall has since removed still
+        // carries a set, a number and a language describing it — so trusting the row would draw
+        // a `from` side there is nothing to compare against.
+        const from = cardById(db, w.cardId);
+        if (from === null) {
+          skipped += 1;
+          continue;
+        }
+        const best = cheapestPrinting(db, w, mp);
+        if (best === null) {
+          skipped += 1;
+          continue;
+        }
+        const fromPrice = wishPriceAt(db, from, w.preferredFinish, mp);
+        // `>=` and not `>`, which is the whole of the "strictly cheaper" rule. It also answers
+        // the two cases that arrive here without being about a tie at all: the wish is already on
+        // the cheapest printing (`best` *is* `from`), and the wish is pinned to a digital
+        // printing this marketplace happens to price, which no candidate can be.
+        if (fromPrice !== null && best.price >= fromPrice) {
+          alreadyCheapest += 1;
+          continue;
+        }
+        moves.push({
+          wishId: w.id,
+          // The wish's own name, as the list draws it — a wish outlives the printing it was made
+          // from and may never have had one.
+          name: w.name,
+          quantity: w.quantity,
+          preferredFinish: w.preferredFinish,
+          folderId: w.folderId,
+          from: {
+            cardId: from.id,
+            setCode: from.setCode,
+            collectorNumber: from.collectorNumber,
+            lang: from.lang,
+            price: fromPrice,
+          },
+          to: {
+            cardId: best.card.id,
+            setCode: best.card.setCode,
+            collectorNumber: best.card.collectorNumber,
+            lang: best.card.lang,
+            // Never `null`: an unpriced printing is not a candidate. See {@link cheapestPrinting}.
+            price: best.price,
+          },
+          // `null` with `from.price` and never `0` — the paragraph above, and the reason the
+          // dialog can leave such a row unticked without lying about what it would save.
+          savedPerCopy: fromPrice === null ? null : fromPrice - best.price,
+          saved: fromPrice === null ? null : (fromPrice - best.price) * w.quantity,
+        });
+      }
+      return { moves, considered: rows.length, alreadyCheapest, skipped };
+    },
+
+    /**
      * `collection_folders::list_folders` — every folder there is, flat, `ORDER BY sort_order,
      * id`. No scoping of any kind: a folder belongs to no card, it files them.
      *
@@ -6274,7 +6466,7 @@ export function readHandlers(db: FakeDb) {
           unpriced: 0,
         };
         const missing = Math.max(0, w.quantity - ownedAgainstWish(db, w));
-        const unit = finishPriceAt(db, wishCard(db, w), w.preferredFinish ?? "nonfoil", mp);
+        const unit = wishPriceAt(db, wishCard(db, w), w.preferredFinish, mp);
         row.wishes += 1;
         row.missing += missing;
         row.cost += unit === null ? 0 : missing * unit;
@@ -10453,6 +10645,81 @@ export function writeHandlers(db: FakeDb) {
       if (merged) return merged;
       Object.assign(wish, pinned, { needsReview: null, updatedAt: stamp(db) });
       return { id: wish.id, quantity: wish.quantity, removed: false };
+    },
+
+    /**
+     * `wishlist_optimize::apply` — the rows the reader left ticked in a plan, committed.
+     *
+     * **One transaction**, `wishlist_import_commit`'s rule and the same snapshot-and-restore
+     * stand-in for it, because a sweep seen half done is a shopping list nobody can reason about.
+     * What the transaction is for here is the one *refusal* rather than the four statuses: every
+     * status below is a row this command declined to touch and said so about, and only a
+     * `toCardId` no card carries throws — which is a caller bug, since a plan offers ids off
+     * `cards` and nothing else.
+     *
+     * **`fromCardId` is a guard, not a description.** Between the preview and the press a sync
+     * can land, or another pane can repoint the same wish; applying regardless would move a
+     * printing the reader never saw. So a wish whose `cardId` no longer matches is left exactly
+     * as it is and reported `stale`, and a wish that has left the list entirely is `missing` —
+     * the same thought one step further along.
+     *
+     * **A repoint landing on a taken grain merges**, {@link mergeWishOnto} and therefore
+     * `wishlist_set_printing`'s own rule: the two quantities sum into the row that was already
+     * there, this row is deleted, and it is reported `merged` rather than as a failure, with the
+     * saving still standing. The result names **the item's** `wishId` and not the survivor's,
+     * because the caller matches results to the rows it sent.
+     *
+     * One result per item, **in the order they were sent**, so the dialog can sum the saving over
+     * exactly the rows that moved rather than over the rows it hoped would.
+     */
+    wishlist_optimize_apply: (args: {
+      items: WishOptimizeApplyItem[];
+    }): WishlistOptimizeOutcome => {
+      refuseIfBusy(db);
+      const items = args.items ?? [];
+      const snapshot = db.wishlistEntries.map((w) => ({ ...w }));
+      const results: WishOptimizeResult[] = [];
+      try {
+        for (const item of items) {
+          const wish = db.wishlistEntries.find((w) => w.id === item.wishId);
+          if (!wish) {
+            results.push({ wishId: item.wishId, status: "missing" });
+            continue;
+          }
+          if (wish.cardId !== item.fromCardId) {
+            results.push({ wishId: item.wishId, status: "stale" });
+            continue;
+          }
+          const printing = cardById(db, item.toCardId);
+          // `wishlist_set_printing`'s sentence verbatim — one rule, two commands.
+          if (printing === null) throw refuse("no card with that id is in the card database");
+          const pinned: FakeWish = {
+            ...wish,
+            cardId: printing.id,
+            // The wish's own oracle id is not up for revision, {@link addWish}'s fallback: this
+            // command moves the wish between printings *of one card*, so the only row that can
+            // want one is an orphan that never had one.
+            oracleId: wish.oracleId ?? nonblank(printing.oracleId),
+            setCode: printing.setCode,
+            collectorNumber: printing.collectorNumber,
+            lang: printing.lang,
+          };
+          const merged = mergeWishOnto(db, wish, pinned);
+          if (merged) {
+            results.push({ wishId: item.wishId, status: "merged" });
+            continue;
+          }
+          // `needsReview` clears for `wishlist_set_printing`'s reason: the only sentences that
+          // column ever carries are the reconciler's, and both are about an id this write has
+          // just replaced.
+          Object.assign(wish, pinned, { needsReview: null, updatedAt: stamp(db) });
+          results.push({ wishId: item.wishId, status: "changed" });
+        }
+      } catch (e) {
+        db.wishlistEntries = snapshot;
+        throw e;
+      }
+      return { results };
     },
 
     /**

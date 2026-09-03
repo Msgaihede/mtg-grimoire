@@ -691,7 +691,36 @@ pub fn remove_wish(conn: &Connection, id: i64) -> Result<EntryChange, String> {
 ///
 /// One transaction, for the reason every fold in this crate is one: mid-merge the copies are
 /// in both rows or in neither.
+///
+/// **The transaction is all this wrapper is**, and the split is [`set_printing_inner`]'s doc:
+/// `wishlist_optimize::apply` repoints a whole ticked batch inside *its* transaction, and
+/// rusqlite cannot nest one.
 pub fn set_wish_printing(
+    conn: &Connection,
+    id: i64,
+    card_id: Option<String>,
+) -> Result<EntryChange, String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let change = set_printing_inner(&tx, id, card_id)?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(change)
+}
+
+/// [`set_wish_printing`] with no transaction of its own — every rule that function's doc
+/// states, and none of the `BEGIN`.
+///
+/// **Extracted rather than copied, because the rules are the expensive part.** The merge onto a
+/// taken [`WISHLIST_GRAIN`], the `needs_review` clear and the four-column refresh from `cards`
+/// are one behaviour the reader has already been taught by the printings pane, and
+/// [`crate::wishlist_optimize::apply`] repoints N wishes with exactly it — inside a transaction
+/// of its own, because a sweep seen half done is a shopping list nobody can reason about.
+/// `Connection::unchecked_transaction` cannot nest, so the caller that already holds one needs
+/// the body without the wrapper rather than a second copy of the body.
+///
+/// **An `Err` here rolls back whatever the caller's transaction is holding**, which is the
+/// point of it being one transaction and is the rare case: the likeliest cause is the target
+/// printing having left `cards` between a preview and the press.
+pub(crate) fn set_printing_inner(
     conn: &Connection,
     id: i64,
     card_id: Option<String>,
@@ -700,7 +729,6 @@ pub fn set_wish_printing(
     // shape of the write here: `Some("")` is a caller sending an empty text input, not a
     // printing, and treating it as one would pin the wish to an id no card has.
     let card_id = crate::filters::nonblank(&card_id).map(str::to_owned);
-    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     // The three grain terms this write does *not* touch, plus the quantity the merge moves.
     // Read before anything is decided, because "is that wish still there?" is answered by the
     // same statement — an `UPDATE` that changed no rows cannot tell a missing row apart from
@@ -710,7 +738,7 @@ pub fn set_wish_printing(
         Option<String>,
         Option<i64>,
         i64,
-    ) = tx
+    ) = conn
         .query_row(
             "SELECT oracle_id, preferred_finish, folder_id, quantity
                FROM wishlist_entries WHERE id = ?1",
@@ -722,7 +750,7 @@ pub fn set_wish_printing(
         .ok_or_else(|| "That wishlist entry is not there any more.".to_owned())?;
 
     let printing: Option<(Option<String>, String, String, String)> = match &card_id {
-        Some(cid) => tx
+        Some(cid) => conn
             .query_row(
                 "SELECT oracle_id, set_code, collector_number, lang FROM cards WHERE id = ?1",
                 params![cid],
@@ -760,7 +788,7 @@ pub fn set_wish_printing(
     // bound values. Every term is here — a fold that matched on three of the four would merge
     // a wish into a row in another folder, which is exactly the bug the fourth term exists to
     // make impossible.
-    let target: Option<(i64, i64)> = tx
+    let target: Option<(i64, i64)> = conn
         .query_row(
             "SELECT id, quantity FROM wishlist_entries
               WHERE id <> ?1
@@ -775,7 +803,7 @@ pub fn set_wish_printing(
         .map_err(|e| e.to_string())?;
 
     if let Some((target, held)) = target {
-        tx.execute(
+        conn.execute(
             "UPDATE wishlist_entries SET
                 quantity = quantity + ?2,
                 notes = coalesce(notes, (SELECT notes FROM wishlist_entries WHERE id = ?3)),
@@ -784,9 +812,8 @@ pub fn set_wish_printing(
             params![target, quantity, id],
         )
         .map_err(|e| e.to_string())?;
-        tx.execute("DELETE FROM wishlist_entries WHERE id = ?1", params![id])
+        conn.execute("DELETE FROM wishlist_entries WHERE id = ?1", params![id])
             .map_err(|e| e.to_string())?;
-        tx.commit().map_err(|e| e.to_string())?;
         return Ok(EntryChange {
             id: target,
             quantity: held + quantity,
@@ -801,7 +828,7 @@ pub fn set_wish_printing(
         Some(p) => (Some(p.1.clone()), Some(p.2.clone()), Some(p.3.clone())),
         None => (None, None, None),
     };
-    tx.execute(
+    conn.execute(
         "UPDATE wishlist_entries SET
             card_id = ?2, oracle_id = ?3, set_code = ?4, collector_number = ?5, lang = ?6,
             needs_review = NULL, updated_at = unixepoch()
@@ -809,7 +836,6 @@ pub fn set_wish_printing(
         params![id, card_id, oracle_id, set_code, collector_number, lang],
     )
     .map_err(|e| e.to_string())?;
-    tx.commit().map_err(|e| e.to_string())?;
     Ok(EntryChange {
         id,
         quantity,
@@ -817,18 +843,28 @@ pub fn set_wish_printing(
     })
 }
 
-pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage, String> {
-    let limit = if q.limit == 0 {
-        DEFAULT_LIMIT
-    } else {
-        q.limit.min(MAX_LIMIT)
-    };
+/// The `FROM` and `WHERE` every read of the wishlist shares — the join that resolves what a
+/// wish is *drawn as*, and every filter term the query carries.
+///
+/// **One implementation, because the second one is the drift.** [`list_wishes`] draws the page;
+/// [`crate::wishlist_optimize::plan`] sweeps the very same rows looking for a cheaper printing,
+/// and a preview taken over a *different* set of wishes than the list is showing is wrong with
+/// nothing on screen to say so. Every rule here has already been paid for once — the
+/// `paper_only: Some(false)` default, the `Some("w")` set-code fallback, `IS` rather than `=` on
+/// the folder — and a copy is a place for each of them to be got wrong again.
+///
+/// `price` is the caller's [`crate::sorting::row_price_expr`] output. It is an argument rather
+/// than something built here because the join **chooses** the printing an any-printing wish is
+/// drawn as by it, and the caller wants the same string for its own price column: one
+/// expression, so the picture and the figure under it can never come from two different rules.
+///
+/// **`limit` and `offset` are deliberately not its business.** This is the scope; paging is the
+/// caller's, and [`crate::wishlist_optimize::plan`] has none.
+pub(crate) fn wishlist_scope(
+    q: &WishlistQuery,
+    price: &str,
+) -> (String, String, Vec<Box<dyn rusqlite::ToSql>>) {
     let mut p = crate::filters::Predicates::default();
-    // What one copy of this wish costs, built once and used twice: to *choose* the printing an
-    // any-printing wish is drawn as, and to price whichever printing that turns out to be. One
-    // expression rather than two, so the picture and the figure under it can never come from two
-    // different rules.
-    let price = crate::sorting::row_price_expr(q.marketplace, WISH_PREFERRED_FINISH);
     // The card a wish is *about*: its pinned printing, or the **cheapest** printing of its oracle
     // card at the marketplace this query named. A LEFT JOIN, because a wish outlives the printing
     // it was made from.
@@ -884,9 +920,10 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
             Box::new(escape_like(text)),
         );
     }
-    // Named once for the whole statement build: the filter below and the `owned_quantity`
-    // column further down have to be the same expression, or a list could hide a row whose
-    // own badge says it is still short.
+    // [`OWNED_SQL`] and not a second spelling of it: this filter and the `owned_quantity`
+    // column [`list_wishes`] selects have to be the same expression, or a list could hide a row
+    // whose own badge says it is still short. Naming the constant is what survived the two
+    // being pulled apart into two functions.
     let owned = OWNED_SQL;
     match q.fulfilled {
         Some(true) => p.wheres.push(format!("{owned} >= w.quantity")),
@@ -913,7 +950,25 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
         p.push("w.folder_id IS ?".to_owned(), Box::new(q.folder_id));
     }
     let where_sql = p.where_sql();
-    let mut params = p.params;
+    (from, where_sql, p.params)
+}
+
+pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage, String> {
+    let limit = if q.limit == 0 {
+        DEFAULT_LIMIT
+    } else {
+        q.limit.min(MAX_LIMIT)
+    };
+    // What one copy of this wish costs, built once and used twice: to *choose* the printing an
+    // any-printing wish is drawn as, and to price whichever printing that turns out to be. One
+    // expression rather than two, so the picture and the figure under it can never come from two
+    // different rules.
+    let price = crate::sorting::row_price_expr(q.marketplace, WISH_PREFERRED_FINISH);
+    let (from, where_sql, mut params) = wishlist_scope(q, &price);
+    // Named once for the whole statement build: the `fulfilled` filter [`wishlist_scope`]
+    // pushed and the `owned_quantity` column below have to be the same expression, or a list
+    // could hide a row whose own badge says it is still short.
+    let owned = OWNED_SQL;
 
     let total: i64 = conn
         .query_row(
