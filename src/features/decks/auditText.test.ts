@@ -264,7 +264,7 @@ describe("auditSentence", () => {
 
   /** A card count the row does not carry reads as `0` through `numberField`, and "across 0
    *  cards" beside "Pulled 3 copies" is arithmetic that cannot be true — so there is no detail
-   *  at all. `importLine`'s `tagsCreated` rule, one payload over. */
+   *  at all. `importLine`'s `labelsCreated` rule, one payload over. */
   it("draws no detail for a pull row that carries no card count", () => {
     expect(
       auditSentence(entry("move", { pull: { copies: 3 } }, { cardId: null })).detail,

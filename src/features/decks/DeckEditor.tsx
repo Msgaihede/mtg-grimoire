@@ -2082,7 +2082,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   /**
    * **Pull from collection** — the one layer opened from the stats band at the foot of the page.
    *
-   * **The hand-back is read off `document.activeElement`**, which is `openAddTag`'s answer rather
+   * **The hand-back is read off `document.activeElement`**, which is `openAddLabel`'s answer rather
    * than the two above it, and for its reason: those two hold a ref to the control they are
    * drawn on, and this button is `DeckStats`' own. A ref threaded down through that component
    * would be a second `sendRef` — one prop, one `RefObject`, one more thing a strip rendered in

@@ -1181,7 +1181,7 @@ is false: it is an action *about* the two lists rather than a third list in a `r
 **`Compare` is 36px tall where the two joined groups are 38, and that is the row as it already
 was.** A group's own 1px borders sit outside its `h-9` children, so `Deck list` and
 `Import and export` measure 38 at y 118 while every standalone button — `Compare`,
-`Categories`, `Tags`, `History`, `Deck settings` — measures 36 at y 119. `Compare` is now
+`Categories`, `Labels`, `History`, `Deck settings` — measures 36 at y 119. `Compare` is now
 byte-identical in geometry to the four beside it, which is what moving it onto `CONTROL` bought.
 
 ### The word goes at `TIGHT_HEADER_PX` and the control does not
