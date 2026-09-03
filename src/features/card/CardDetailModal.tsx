@@ -748,8 +748,11 @@ function Body({
    *
    * `src/CLAUDE.md` states the reason as a rule with a shipped failure behind it: *a menu opened
    * from inside a `LAYER.overlay` dialog paints behind that dialog's scrim.* The context menu is
-   * mounted at the app root at `LAYER.popup` (z-30) and this modal's scrim is z-45, neither
-   * inside the other — so `menuClick` here would open a picker that is invisible and unreachable,
+   * mounted at the app root at `LAYER.popup` and this modal's scrim is at `LAYER.overlay`, two
+   * rungs above it and neither inside the other — the numbers are `layers.ts`'s and are
+   * deliberately not repeated here, because `layers.test.ts` sweeps `src/` for a spelled z-index
+   * and reads a doc comment as markup. So `menuClick` here would open a picker that is invisible
+   * and unreachable,
    * with **nothing going red**, because jsdom has no opinion about a z-index. A `Dropdown` is
    * rendered *inside* the panel, so its `fixed` panel is a descendant of the scrim's own stacking
    * context and paints above it whatever number it carries. That is also why the printing,

@@ -154,9 +154,11 @@ const meta = {
           "With no stop for the open card there is no pair at all — `flanks: undefined` — " +
           "because a chevron that cannot say where it would go is worse than no chevron.\n\n" +
           "**`Add to deck` is a `Dropdown` rather than the card menu's deck picker**, and that " +
-          "is forced: the context menu is mounted at the app root at `LAYER.popup` (z-30) and " +
-          "this modal's scrim is z-45, so a menu opened from in here would paint *behind* the " +
-          "scrim — invisible, unreachable, and with nothing going red.",
+          "is forced: the context menu is mounted at the app root at `LAYER.popup` and this " +
+          "modal's scrim is two rungs above it at `LAYER.overlay`, so a menu opened from in here " +
+          "would paint *behind* the scrim — invisible, unreachable, and with nothing going red. " +
+          "The numbers are `layers.ts`'s and are deliberately not spelled here: " +
+          "`layers.test.ts` sweeps `src/` for one and reads a doc string as markup.",
       },
     },
   },

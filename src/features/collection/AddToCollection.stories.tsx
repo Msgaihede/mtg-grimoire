@@ -1,16 +1,15 @@
 import { useCallback, useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
-import { CardDetailPane } from "@/features/card/CardDetailPane";
 import { parseFinishes } from "@/lib/finish";
+import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { openDropdown } from "@/test-dropdown";
 import { printing } from "../../../.storybook/fake/fixtures";
 import { AddToCollectionButton, type AddTarget } from "./AddToCollection";
 
 /**
- * One fixture printing as the quick-add's target, built exactly as its busiest call site builds
- * one — `CardDetailPane.tsx:832-839`, the printings row: the **row's** id, set code, collector
- * number and finishes, with the card's name and oracle id.
+ * One fixture printing as the quick-add's target, built exactly as a call site builds one: the
+ * **row's** id, set code, collector number and finishes, with the card's name and oracle id.
  *
  * Derived rather than hand-written, and that is the difference between two of the stories below
  * being claims and being tautologies. {@link FoilOnlyPrinting}'s whole subject is that the popup
@@ -35,23 +34,43 @@ function target(setCode: string, collectorNumber: string): AddTarget {
 }
 
 /**
- * The card pane, with a real close — the outer dismissible layer
- * {@link EscapeClosesThePopupNotThePane} presses Escape *inside*.
+ * The quick-add with an **outer** dismissible layer around it, and a real close — the layer
+ * {@link EscapeClosesThePopupNotTheLayerBehindIt} presses Escape *inside*.
  *
- * `onClose` genuinely unmounts it. A host that ignored the callback would make "the pane stayed
- * open" true by construction, which is the one thing that story must not be.
+ * Built on the real `useDismissOnEscape` rather than on a `keydown` handler of its own, because
+ * the whole subject of that story is which phase each rung listens in, and a hand-written outer
+ * layer would be a second implementation of exactly the thing under test.
+ * `SetCombobox.stories.tsx` carries the identical stand-in for the identical reason.
  *
- * Alpha Lightning Bolt because it has the corpus's longest printings list — four rows, so the
- * quick-add pressed is one of four identical-looking controls and has to be addressed by the
- * printing in its accessible name.
+ * **It was `CardDetailPane` until 2026-09-03, when the docked card surface was deleted.** The
+ * pane was the outer layer this popup was designed against, and its printings rows were where a
+ * reader met four of these controls at once — which is where the printing in the accessible name
+ * earns its keep. The card is a centred modal now: an `"inner"` layer with a focus trap, drawing
+ * no quick-add at all, so it is the wrong shape to stand here. What this story needs from an
+ * outer layer is the one line every outer layer shares — bubble phase, and an early return on
+ * `defaultPrevented`, both of which live in the hook.
+ *
+ * The dismissal genuinely unmounts. A host that ignored the callback would make "the layer stayed
+ * open" true by construction, which is the one thing this story must not be.
  */
-function PaneWithQuickAdds() {
+function QuickAddOverAnOuterLayer() {
   const [open, setOpen] = useState(true);
-  // Stable, because it is the pane's `onDismiss` and therefore a dependency of the `keydown`
+  // Stable, because it is the layer's `onDismiss` and therefore a dependency of the `keydown`
   // listener behind it.
   const close = useCallback(() => setOpen(false), []);
-  if (!open) return <p className="text-sm text-dim">The pane closed.</p>;
-  return <CardDetailPane cardId={target("lea", "161").cardId} onClose={close} />;
+  useDismissOnEscape({ layer: "outer", onDismiss: close, enabled: open });
+  if (!open) return <p className="text-sm text-dim">The layer closed.</p>;
+  return (
+    <aside
+      aria-label="Card details"
+      className="flex w-full flex-col gap-3 rounded-lg border border-border bg-surface p-4"
+    >
+      <p className="text-sm text-dim">An outer layer, standing in for a card surface.</p>
+      <div className="flex justify-end">
+        <AddToCollectionButton target={target("2x2", "117")} />
+      </div>
+    </aside>
+  );
 }
 
 const meta = {
@@ -63,8 +82,8 @@ const meta = {
     // Sized for both shapes this file renders: the popup is `w-64` (256px) and anchored — not
     // portalled, because the shipped CSP is `style-src 'self'` and every overlay primitive in
     // reach injects a runtime `<style>` — so it needs an ancestor with room beside and below
-    // its trigger. 416px is the card pane's own 384px (`CardDetailPane.tsx:347`) plus a margin,
-    // which is what {@link EscapeClosesThePopupNotThePane} puts in the same frame.
+    // its trigger. 416px was the docked card pane's own 384px plus a margin, and it is kept
+    // because it is what {@link EscapeClosesThePopupNotTheLayerBehindIt} puts in the same frame.
     //
     // `justify-end` and `items-start` because that is where this control lives on three of its
     // four surfaces: the right-hand end of a row, at the top of it.
@@ -85,9 +104,7 @@ const meta = {
           "Invisible until its row or tile is hovered or holds the caret — a wall of art is not " +
           "a wall of plus signs — and **always in the tab order**, because “visible on hover” is " +
           "not a state a keyboard has. That is the *caller's* half: `REVEAL_ON_HOVER` is a class " +
-          "the surface passes in (`CardDetailPane.tsx:831`), so every story below draws the " +
-          "trigger plainly except {@link EscapeClosesThePopupNotThePane}, which renders the real " +
-          "printings rows.\n\n" +
+          "the surface passes in, so every story below draws the trigger plainly.\n\n" +
           "**The trigger is named for the card, the printing and the destination** — `Add " +
           "Lightning Bolt (2X2 117) to collection` — never “Add”. Forty of these in a printings " +
           "list are forty different cards, and the destination is whatever the popup was last " +
@@ -100,11 +117,11 @@ const meta = {
           "not have. {@link FoilOnlyPrinting} is the corpus's one foil-only row.\n\n" +
           "**It is a dismissible layer, and the protocol is a handshake rather than a z-index.** " +
           "It listens on `window` in the **capture** phase and consumes the press " +
-          "(`AddToCollection.tsx:188`); the card pane underneath listens in the bubble phase and " +
+          "(`AddToCollection.tsx:188`); the outer layer underneath listens in the bubble phase and " +
           "returns early on `defaultPrevented`. Capture is the load-bearing half — two `window` " +
-          "listeners for one event run in *registration* order and the pane was mounted first " +
+          "listeners for one event run in *registration* order and the layer was mounted first " +
           "(`useDismissOnEscape.ts:12-51`). Escape hands the caret back to the trigger; an " +
-          "outside click deliberately does not. {@link EscapeClosesThePopupNotThePane} and " +
+          "outside click deliberately does not. {@link EscapeClosesThePopupNotTheLayerBehindIt} and " +
           "{@link ClickingAwayClosesIt} are those two, and `App.test.tsx` owns the full-stack " +
           "version over the *set filter* rather than this popup.\n\n" +
           "**One state has no story: the wishlist's “Any printing” refusal.** The control is " +
@@ -200,7 +217,7 @@ export const Open: Story = {
  *
  * Strixhaven's Japanese Lightning Bolt is the corpus's one three-finish row — measured
  * 2026-08-10 over `.storybook/fake/cards.ts`, which gives it `["nonfoil","foil","etched"]` and a
- * price under each of `usd`, `usd_foil` and `usd_etched`. `Card/DetailPane`'s `AllFinishes`
+ * price under each of `usd`, `usd_foil` and `usd_etched`. `Card/DetailModal`'s left column
  * shows the three prices those keys answer.
  */
 export const AllThreeFinishes: Story = {
@@ -409,13 +426,13 @@ export const Busy: Story = {
 };
 
 /**
- * **One Escape closes the popup and leaves the card behind it open.**
+ * **One Escape closes the popup and leaves the layer behind it open.**
  *
- * The pane and the popup both listen for the key on `window`, so neither can see the other and
- * no z-index can order them. What separates them is the phase: the popup listens in **capture**
- * and consumes the press, the pane listens in the bubble phase and returns early on
+ * The outer layer and the popup both listen for the key on `window`, so neither can see the other
+ * and no z-index can order them. What separates them is the phase: the popup listens in
+ * **capture** and consumes the press, the layer listens in the bubble phase and returns early on
  * `defaultPrevented`. Capture is not a detail — two `window` listeners for one event run in
- * *registration* order, and the pane has been mounted since before the popup inside it existed,
+ * *registration* order, and the layer has been mounted since before the popup inside it existed,
  * so in the bubble phase it would act first, read `defaultPrevented` as false, and close the card
  * *and* the popup on one press with two focus hand-backs racing for the caret
  * (`useDismissOnEscape.ts:12-50`).
@@ -425,29 +442,27 @@ export const Busy: Story = {
  * top of the app. It is handed over from `onDismiss`, *before* React flushes the close, while the
  * popup is still mounted (`AddToCollection.tsx:85-88`).
  *
- * The pane host really unmounts on `onClose`, so "the pane stayed open" is a measurement rather
- * than a property of the story. `App.test.tsx` owns the full-stack version of this over the
- * search view's **set filter**; this one is about the layer the quick-add opens.
+ * The host really unmounts on dismissal, so "the layer stayed open" is a measurement rather than
+ * a property of the story. `App.test.tsx` owns the full-stack version of this over the search
+ * view's **set filter**; this one is about the layer the quick-add opens.
  */
-export const EscapeClosesThePopupNotThePane: Story = {
-  render: () => <PaneWithQuickAdds />,
+export const EscapeClosesThePopupNotTheLayerBehindIt: Story = {
+  render: () => <QuickAddOverAnOuterLayer />,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const pane = await canvas.findByRole("complementary", { name: "Card details" });
-    // One of four identical-looking controls in the printings list, addressed by the printing
-    // its accessible name carries.
-    const trigger = await within(pane).findByRole("button", {
+    const layer = await canvas.findByRole("complementary", { name: "Card details" });
+    const trigger = await within(layer).findByRole("button", {
       name: "Add Lightning Bolt (2X2 117) to collection",
     });
     await userEvent.click(trigger);
-    await expect(within(pane).getByRole("dialog", { name: "Add Lightning Bolt" })).toHaveFocus();
+    await expect(within(layer).getByRole("dialog", { name: "Add Lightning Bolt" })).toHaveFocus();
 
     await userEvent.keyboard("{Escape}");
 
     await expect(canvas.queryByRole("dialog", { name: "Add Lightning Bolt" })).toBeNull();
     await expect(canvas.getByRole("complementary", { name: "Card details" })).toBeInTheDocument();
     await expect(trigger).toHaveFocus();
-    await expect(canvas.queryByText("The pane closed.")).toBeNull();
+    await expect(canvas.queryByText("The layer closed.")).toBeNull();
   },
 };
 
