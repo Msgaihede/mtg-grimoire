@@ -260,10 +260,12 @@ beforeEach(() => {
   // The open deck decides whether the Decks entry can take a card, so it is reset with the
   // view — a deck left open by one test would make the next one's inert case a lie.
   //
-  // `keyMapOpen` joins them for a sharper version of the same reason: the shell's `F1` binding
-  // toggles it, so the two cases below that press the key would otherwise hand the next test a
-  // caption row with a panel hanging off it — and `getAllByRole("button")` inside the title bar
-  // is exactly the kind of assertion that would then start counting somebody else's rows.
+  // `keyMapOpen` joins them for a sharper version of the same reason: the flag is what draws
+  // `TitleBar`'s shortcut panel, every case in this file mounts `TitleBar`, and the cases below
+  // that press `F1` leave the flag wherever the last press put it. A leaked `true` would put a
+  // popover full of rows and captions into the tree of whatever ran next — where the queries are
+  // `screen`-wide rather than scoped — and the red would land on that test rather than on the
+  // one that pressed the key.
   useAppStore.setState({ activeView: "search", openDeckId: null, keyMapOpen: false });
   queryClient.clear();
   invalidate.mockClear();
@@ -1692,5 +1694,79 @@ describe("the shell's keyboard bindings", () => {
 
     await user.keyboard("{F1}");
     expect(useAppStore.getState().keyMapOpen).toBe(false);
+  });
+
+  /**
+   * The listener goes on once and stays on — which none of the four cases above can see.
+   *
+   * **The obvious wrong implementation passes every one of them.** Closing over `keyMapOpen` and
+   * listing it as a dependency tears the listener down and puts a new one up each time the flag
+   * turns over, and `user.keyboard` flushes React between two presses, so the second press reads
+   * a perfectly fresh closure and the toggle looks correct. What that costs is not correctness on
+   * these inputs but a `window` listener churning under every press of the key, and a stale
+   * closure the moment anything dispatches two presses without a flush between them.
+   *
+   * **Asserted as "nothing that was here at mount is ever removed", and the shape is forced.** A
+   * rebind is a cleanup followed by a fresh registration, and the fresh one is a *new* function —
+   * so the add side cannot tell a rebind from a component legitimately registering a listener of
+   * its own. The remove side can: the only reason a handler present at mount comes off `window`
+   * while the shell is still standing is that its effect re-ran. Identity is also why this is
+   * about the whole set rather than about one member of it — nothing here can pick this
+   * component's handler out of its neighbours', and it does not need to, because none of them
+   * should be coming off either.
+   */
+  it("binds its keydown listener once for the life of the shell", async () => {
+    const user = userEvent.setup();
+    const add = vi.spyOn(window, "addEventListener");
+    const remove = vi.spyOn(window, "removeEventListener");
+    /**
+     * The handlers a spy saw registered or torn down for `keydown`, in call order.
+     *
+     * `String(...)` rather than a bare comparison, and it is the type-checker rather than the
+     * runtime that asks for it: `addEventListener` is overloaded, `vi.spyOn` resolves the
+     * overload keyed on `DedicatedWorkerGlobalScopeEventMap`, and TS then reads `"keydown"` as
+     * having no overlap with a worker's event names. The value arriving here is the string the
+     * shell passed.
+     */
+    const handlers = (spy: typeof add): unknown[] =>
+      spy.mock.calls.filter((call) => String(call[0]) === "keydown").map((call) => call[1]);
+    try {
+      render(
+        <AppShell update={noUpdate}>
+          <div>content</div>
+        </AppShell>,
+      );
+
+      const atMount = new Set(handlers(add));
+      // Belt and braces against the whole case going vacuous: an empty set would make both
+      // assertions below true of an app that binds nothing at all.
+      expect(atMount.size).toBeGreaterThan(0);
+      add.mockClear();
+      remove.mockClear();
+
+      // Three view changes, which is three re-renders of the entire shell — and nothing about
+      // the caption row, so nothing new is mounted that could register a listener of its own.
+      // Neither number may move.
+      await user.keyboard("{Control>}3{/Control}");
+      await user.keyboard("{Control>}4{/Control}");
+      await user.keyboard("{Control>}1{/Control}");
+      expect(handlers(add)).toEqual([]);
+      expect(handlers(remove)).toEqual([]);
+
+      // And now the press that changes the flag the handler reads, twice — the input the
+      // closure-shaped implementation gets wrong.
+      await user.keyboard("{F1}");
+      await user.keyboard("{F1}");
+      // Filtered to the mount-time set rather than empty, because the panel `F1` opens registers
+      // an Escape listener of its own while it is up and takes it away again on the way down.
+      // Those two are somebody else's and are supposed to happen; a mount-time handler coming
+      // off is not.
+      expect(handlers(remove).filter((handler) => atMount.has(handler))).toEqual([]);
+    } finally {
+      // Restored by hand rather than by `vi.restoreAllMocks()`, which would also undo the
+      // module-level `invalidate` spy this file installs once and every later test reads.
+      add.mockRestore();
+      remove.mockRestore();
+    }
   });
 });
