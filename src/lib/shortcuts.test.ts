@@ -249,8 +249,12 @@ describe("chordParts", () => {
     expect(chordParts({ key: "z", ctrl: true, shift: true })).toEqual(["Ctrl", "Shift", "Z"]);
   });
 
-  it("orders the modifiers Ctrl, Alt, Shift whatever order the chord was written in", () => {
-    expect(chordParts({ shift: true, alt: true, ctrl: true, key: "z" })).toEqual([
+  // `chordParts` reads named properties, so the order the chord's fields were *written* in
+  // cannot reach it — the fixed order is a property of the function and this is where it is
+  // pinned. A reader scanning a column of caps reads the shape of a row, so two rows spelling
+  // one pair of modifiers two ways would read as two different chords.
+  it("draws all three modifiers in Ctrl, Alt, Shift order", () => {
+    expect(chordParts({ key: "z", ctrl: true, alt: true, shift: true })).toEqual([
       "Ctrl",
       "Alt",
       "Shift",
@@ -305,6 +309,12 @@ describe("activeScopes", () => {
     expect(activeScopes({ activeView: "search", openDeckId: null })).toEqual(["global", "search"]);
   });
 
+  // The other side of the swap: with no deck open, `decks` is the section drawn — so a matcher
+  // that always answered `deckEditor` would go red here rather than only in the pair below.
+  it("names decks itself when no deck is open", () => {
+    expect(activeScopes({ activeView: "decks", openDeckId: null })).toEqual(["global", "decks"]);
+  });
+
   it("swaps decks for deckEditor when a deck is open", () => {
     expect(activeScopes({ activeView: "decks", openDeckId: 12 })).toEqual(["global", "deckEditor"]);
   });
@@ -353,6 +363,25 @@ describe("the catalogue's shape", () => {
     expect(SHORTCUTS.deckEditor.map((s) => s.id)).toEqual(["undo", "redo", "remove"]);
   });
 
+  // The other half of the cross-task contract: the panel renders these strings, so a reworded
+  // label is a change to what a reader is told and belongs in a diff rather than in a sweep that
+  // only counts words. Keyed by id so a reordering of the rows is the id test's business alone.
+  it("carries the labels the panel draws, word for word", () => {
+    expect(Object.fromEntries(SHORTCUTS.global.map((s) => [s.id, s.label] as const))).toEqual({
+      switchView: "Jump to a section",
+      keyMap: "Show this list",
+      dismiss: "Close what is open",
+      contextMenu: "Open the menu for what is focused",
+      zoom: "Resize the cards",
+      select: "Pick more than one card",
+    });
+    expect(Object.fromEntries(SHORTCUTS.deckEditor.map((s) => [s.id, s.label] as const))).toEqual({
+      undo: "Undo the last change",
+      redo: "Redo the change you undid",
+      remove: "Remove the picked cards",
+    });
+  });
+
   it("has an entry for every scope, and the six views are honestly empty", () => {
     expect(SHORTCUTS.search).toEqual([]);
     expect(SHORTCUTS.tags).toEqual([]);
@@ -382,10 +411,11 @@ describe("the catalogue's shape", () => {
     expect(matchesChord(chords[2], press("3", { ctrl: true, shift: true }))).toBe(false);
   });
 
-  it("labels every entry with an imperative rather than a bare verb", () => {
+  // A row with no chords would draw a label and nothing to press. The labels themselves are
+  // pinned literally above rather than counted here, where any two words would pass.
+  it("gives every row at least one chord", () => {
     for (const rows of Object.values(SHORTCUTS)) {
       for (const row of rows) {
-        expect(row.label.split(" ").length).toBeGreaterThan(1);
         expect(row.chords.length).toBeGreaterThan(0);
       }
     }
