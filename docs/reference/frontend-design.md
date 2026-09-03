@@ -5250,3 +5250,127 @@ this; the classes are pinned and the numbers come from a browser.
   locking a folder that a deck's live list is linked to — are separate features. Stepping to zero
   already deletes a collection entry, so "remove" exists there without a named route on the wall.
 
+
+## The focus outline that appeared on any keystroke (2026-09-03)
+
+Reported as: *"whenever we click a button, the app seems to highlight / focus random elements on
+the page — this is almost no matter the button (wasd, space, other letters etc.)"*, with five
+screenshots — the card detail modal ringed in gold, the printings modal, the sidebar's `Search`
+row, and the deck editor outlined right down past the fold.
+
+### `:focus-visible` is modality-based, not navigation-based
+
+The name promises "focused, and the reader got here by keyboard". It does not mean that. Chromium
+arms the pseudo-class on **any** `keydown` and from that moment whatever *already* holds focus
+matches — the focus never has to move. Measured in Chromium 2026-09-03 against a two-element page,
+one `<button>` and one `tabIndex={-1}` `<div>`, reading `activeElement.matches(":focus-visible")`:
+
+| step | action | matches |
+| --- | --- | --- |
+| A | mouse click on the button | `false` |
+| B | programmatic `.focus()` on the `tabIndex={-1}` div | `false` |
+| C | **press `w`** — focus never moved | **`true`** |
+| D | mouse click again | `false` |
+
+Step C is the entire bug, and it explains every screenshot: a reader clicks a card, the dialog
+opens and focuses its own `tabIndex={-1}` panel (step B), then presses any key at all (step C).
+Nothing in `src/` was at fault — the app had **no** `focus:` variants anywhere, only
+`focus-visible:`, which is the correct spelling and was already the fix for the mouse case.
+
+### The rule that replaced it
+
+**Focus is keyboard-driven when it *moved* and the reader's most recent input was a key.**
+`src/lib/keyboardModality.ts` decides that at one moment — `focusin` — rather than continuously
+off a flag any keystroke can flip, and publishes `data-kbd` on `<html>`.
+
+Two things fall out of it that a key allowlist does not give:
+
+- **No list to maintain.** `Shift+F10` onto a context menu's first row and `F1` onto the key map's
+  button both move focus, so both are covered without an entry; so is any shortcut added later.
+  The first key forgotten from an allowlist would be a reader arrow-keying a menu with no visible
+  caret — a WCAG 2.4.7 failure, which is the direction worth engineering against.
+- **No timer.** An earlier draft opened a "steering window" on `keydown` and closed it a frame
+  later so a focus React committed after its passive effects still counted. That is a number that
+  has to be right; the modality simply persisting until the reader's next input is not.
+
+### One line gates every outline in the app
+
+`src/index.css` redefines Tailwind's own `focus-visible` variant rather than introducing a new
+name at the call sites. Confirmed against the built stylesheet — **every** `focus-visible:` utility
+the app emits is rewritten, including the composed `group-focus-visible:` form nobody edited. Grep
+`dist/assets/*.css` for `data-kbd` for the current set; a count here would be a fact about one tree:
+
+```
+.focus-visible\:outline-2:is(html[data-kbd] *):focus-visible
+.focus-visible\:ring-accent:is(html[data-kbd] *):focus-visible
+.group-focus-visible\:opacity-100:is(:where(.group):is(html[data-kbd] *):focus-visible *)
+```
+
+Two things the variant cannot reach, both handled beside it:
+
+- **The user agent's own `:focus-visible { outline: auto }`** runs off the browser heuristic and no
+  Tailwind rewrite touches it. Without the `html:not([data-kbd])` base rule the fix would have read
+  as a *recolour* — the gold outline swapped for the platform's blue one, on the same keystroke.
+- **`PriceRange`'s thumb**, which spells the pseudo-class inside an arbitrary variant — a string
+  the component wrote, not the variant Tailwind owns. It gets the named `focus-thumb` variant, and
+  `keyboardModality.test.ts` sweeps `src/` so a second component cannot reintroduce the shape.
+
+**A `@custom-variant` this Tailwind mis-parses emits nothing, silently, with `tsc` and the whole
+suite green** — the standing warning at the head of `index.css`, and it applies double to an
+*override*, where the built-in simply stays and the bug returns looking exactly like the fix. So
+the suite compiles the declarations out of `index.css` against real Tailwind through its `compile`
+API and reads the selectors back. Both halves were mutation-tested: writing the attribute on
+`keydown` reds *"stays quiet when a key moves no focus"*, and dropping `[data-kbd]` from the
+variant reds *"makes every focus-visible: utility require the keyboard attribute"*.
+
+### Eleven landing pads lost their outline outright
+
+The second half, and it is a different question from *when*: some elements should carry no focus
+outline in **any** modality. A `tabIndex={-1}` container that exists only so focus can be *put*
+somewhere — instead of dropped on `<body>`, where the next Tab restarts the tab order — is a
+landing pad, not a control. A reader can neither Tab nor arrow onto one, so the ring states
+nothing, and what it draws is the whole modal or the whole editor ringed in gold.
+
+`Dialog`'s panel, `CardDetailPane`, the deck editor's root, `AnchoredPopup`, `DeckBracket`,
+`ValidationPanel`, `MoveToFolder`, `PickCopies`, and the delete confirmations on `DeckTile`,
+`DecksPage` and `CollectionPage`.
+
+**Ten of them by the end of the same day**, and the heading is left at eleven because that is what
+was measured: `CardDetailPane` was deleted for the card modal hours later. Nothing was undone by
+that — the modal is drawn by `Dialog`, whose panel is the first name above, so the pane's entry
+was absorbed rather than lost.
+
+**The line is drawn at "can the caret move *from* here", not at `tabIndex`.** A deck pile's section
+(`deckGroupProps`) and the printings dialog's rows are `tabIndex={-1}` too and keep their marks,
+because the caret landing on one is a fact the *next* keypress depends on. Menu rows, table rows,
+cards in a wall and grid tiles are all roving targets and all keep theirs.
+
+### Driven in a browser, against the built stylesheet
+
+The app lock was held by another worktree, so this was verified lock-free: a `file://` page over
+the real `dist/assets/*.css` and the real module through `esbuild`, driven with real mouse and key
+events. `getComputedStyle(el).outlineStyle` on four elements after each step — a real control, a
+roving target, the shipped panel, and a copy of the panel still carrying the old class string:
+
+| step | action | `data-kbd` | control | roving | panel | panel *(old class)* |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | mouse click on the control | `false` | — | — | — | — |
+| 2 | **press `w`** (the report) | `false` | — | — | — | — |
+| 3 | click a card → dialog focuses its panel | `false` | — | — | — | — |
+| 4 | **press space** inside that modal | `false` | — | — | — | — |
+| 5 | press `Tab` | `true` | **ring** | — | — | — |
+| 6 | arrow onto a card | `true` | — | **ring** | — | — |
+| 7 | click the control the caret was already on | `false` | — | — | — | — |
+
+Step 4 is the reported flow and paints nothing. The pair worth reading twice is the panel columns
+under a keyboard-driven caret: identical conditions, ring on the old class string and nothing on
+the shipped one — which is the eleven-site half doing work the modality gate alone does not.
+
+### What was deliberately left alone
+
+`TooltipProvider.focus()` guards on `anchor.matches(":focus-visible")` in JS and still asks the
+browser rather than the new attribute. It was checked rather than assumed: both answers key off
+"was the reader's last input a key", and a `pointerdown` resets both, so they agree in every
+reachable case — the divergence is only *when* the answer is applied, and that guard runs on a
+`focus` event, which is the one moment they cannot differ. Rewriting it would have destabilised a
+well-tested subsystem for no behaviour change.
