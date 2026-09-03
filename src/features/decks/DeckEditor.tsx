@@ -128,6 +128,20 @@ const GROUP_BY_PICKER = sortOptions(GROUP_BY_OPTIONS, (o) => o.label);
 const SORT_BY_PICKER = sortOptions(SORT_OPTIONS, (o) => o.label);
 
 /**
+ * The three chords this editor binds, looked up **once at module scope** — `AppShell`'s
+ * arrangement for the two it binds, and it is the right one here for the same reason.
+ *
+ * `shortcut()` throws on an id the catalogue does not carry, which is the whole reason it is a
+ * function rather than an index; resolving at import makes that throw arrive before a render and
+ * before a press. Resolved inside a `keydown` handler instead, a renamed id throws on a `window`
+ * listener where no error boundary is standing — the editor keeps drawing, and the only symptom
+ * is a key that quietly stopped working.
+ */
+const UNDO = shortcut("deckEditor", "undo");
+const REDO = shortcut("deckEditor", "redo");
+const REMOVE = shortcut("deckEditor", "remove");
+
+/**
  * A header/toolbar press that is not a chip — since 2026-08-26 exactly the undo/redo pair and
  * the header's Categories/Tags/History/Deck settings row.
  *
@@ -1876,12 +1890,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   /**
    * Undo and redo, on `window` for the length of this editor.
    *
-   * **The chords are the catalogue's** — `deckEditor`'s `undo` and `redo` in
+   * **The chords are the catalogue's** — {@link UNDO} and {@link REDO}, `deckEditor`'s entries in
    * `src/lib/shortcuts.ts` — rather than comparisons written out here, so the key map cannot
-   * advertise a chord this handler does not bind. `redo` carries **two** spellings and this
-   * site does not know there are two: `Ctrl+Y` is Windows' and `Ctrl+Shift+Z` is everywhere
-   * else's, both are what a reader's hands know, and this app ships on Windows to people who
-   * use both. A third spelling is an edit to the catalogue and to nothing here.
+   * advertise a chord this handler does not bind. `redo` carries more than one spelling and this
+   * site does not know how many; the argument for the pair is written at that entry, where the
+   * chords are, and a spelling added there is bound with no edit here.
    *
    * **It yields inside a text field**, which is the whole of what keeps the quick-add box, the
    * deck name and the notes usable: those get the browser's own undo, which this cannot
@@ -1891,22 +1904,27 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * `isTextField` is `useContextMenu`'s — the same predicate the native-context-menu carve-out
    * already turns on, rather than a second spelling of "is the caret in something typed".
    *
-   * There is no modifier pre-check left: {@link matchesShortcut} is exact in both directions,
-   * so an unlisted modifier is already a non-match and a guard for it would be a second, looser
+   * **The match runs first and the caret test second**, which is the `Delete` handler's order one
+   * screen down and the *inverse* of `useContextMenu.ts:119`'s. Both orders are the same rule —
+   * pay for the cheap half first — read against two different expensive halves: there the item
+   * list is built on every press and `isTextField` is the cheap guard, here matching two chords
+   * is arithmetic over an event and `isTextField` is a `closest()` walk up the DOM. Tested first
+   * it walked the tree on every keystroke typed into the quick-add box, for the two presses in a
+   * session that are `Ctrl+Z`.
+   *
+   * There is no modifier pre-check left: {@link matchesChord} is exact in both directions, so an
+   * unlisted modifier is already a non-match and a guard for it would be a second, looser
    * statement of the same rule.
    */
   const runUndo = undo.runUndo;
   const runRedo = undo.runRedo;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      const run = matchesShortcut(UNDO, e) ? runUndo : matchesShortcut(REDO, e) ? runRedo : null;
+      if (run === null) return;
       if (isTextField(e.target)) return;
-      if (matchesShortcut(shortcut("deckEditor", "undo"), e)) {
-        e.preventDefault();
-        runUndo();
-      } else if (matchesShortcut(shortcut("deckEditor", "redo"), e)) {
-        e.preventDefault();
-        runRedo();
-      }
+      e.preventDefault();
+      run();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -3076,9 +3094,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
 
   /**
    * **The catalogue's `remove` takes the picked cards out of the deck** — issue #214, and the one
-   * keyboard verb this editor has that is not undo. The chord is `deckEditor`'s `remove` in
-   * `src/lib/shortcuts.ts` rather than a comparison written out here, so the key map cannot
-   * advertise a chord this handler does not bind.
+   * keyboard verb this editor has that is not undo. The chord is {@link REMOVE}, `deckEditor`'s
+   * `remove` entry in `src/lib/shortcuts.ts`, rather than a comparison written out here, so the
+   * key map cannot advertise a chord this handler does not bind.
    *
    * ## Why it exists here and nowhere else in the app
    *
@@ -3112,7 +3130,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   useEffect(() => {
     if (layerOpen) return;
     const onKey = (event: KeyboardEvent) => {
-      if (!matchesShortcut(shortcut("deckEditor", "remove"), event)) return;
+      if (!matchesShortcut(REMOVE, event)) return;
       if (isTextField(event.target)) return;
       const held = pickedRef.current;
       if (held.length < 2) return;

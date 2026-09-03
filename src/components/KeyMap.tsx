@@ -65,13 +65,18 @@ function headingFor(scope: ShortcutScope): string {
 /**
  * A shortcut's caps: one `<kbd>` per {@link chordParts} entry, and a word between spellings.
  *
- * **Three shapes rather than one, and the third is why the rule is not simply "join with `or`".**
- * One chord draws itself. *Two* are two spellings of one intent — `Ctrl+Y` and `Ctrl+Shift+Z`
- * both redo — so the word between them is `or`. A run *longer* than two is not a list of
- * alternatives a reader picks from; it is a **range** (`switchView` carries six, one per `NAV`
- * entry, and the index is the binding), and drawing all six with `or` five times over would fill
- * the widest row in the panel with an arithmetic sequence. So the ends are drawn and the word is
- * `to`.
+ * **Two shapes, and the catalogue says which — this does not work it out.** Chords are ordinarily
+ * spellings of one intent, so the word between them is `or`: `Ctrl+Y` and `Ctrl+Shift+Z` both
+ * redo, and a reader presses whichever their hands know. An entry that declares
+ * {@link Shortcut.range} is a contiguous run instead, so only its ends are drawn and the word is
+ * `to` — `switchView` carries six, one per `NAV` entry, and drawing all six with `or` five times
+ * over would fill the widest row in the panel with an arithmetic sequence.
+ *
+ * **The flag, never `chords.length`.** Counting was right for exactly as long as `switchView` was
+ * the only multi-chord entry with more than two: a count cannot tell six steps of a sequence from
+ * three genuine alternatives, so the first shortcut written with three spellings would have drawn
+ * "`A` **to** `C`" — a promise about a chord nothing binds, in the one panel whose whole job is
+ * to be true.
  *
  * Both ends are drawn **whole** — `Ctrl` `1` to `Ctrl` `6`, not `Ctrl` `1` to `6` — because
  * collapsing the second chord's modifiers assumes the run shares them, which is true of the one
@@ -79,10 +84,14 @@ function headingFor(scope: ShortcutScope): string {
  *
  * A word rather than a glyph in both cases: an en dash between two caps is read out as nothing
  * at all by a screen reader, and `1 6` is a different shortcut from `1 to 6`.
+ *
+ * **Exported for its own test.** The catalogue holds no multi-chord entry that is *not* a range —
+ * that is the case the flag exists for and the case a count got wrong — so pinning the `or` shape
+ * over three chords means constructing one, and the alternative is a fake row in the catalogue
+ * that the panel would then draw for real readers.
  */
-function Caps({ shortcut }: { shortcut: Shortcut }) {
-  const { chords } = shortcut;
-  const range = chords.length > 2;
+export function Caps({ shortcut }: { shortcut: Shortcut }) {
+  const { chords, range = false } = shortcut;
   const drawn = range ? [chords[0], chords[chords.length - 1]] : chords;
   return (
     <dd className="flex flex-wrap items-center justify-end gap-1">

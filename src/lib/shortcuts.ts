@@ -41,6 +41,20 @@ export interface Shortcut {
   label: string;
   /** More than one when a chord has two spellings a reader's hands might know. */
   chords: readonly Chord[];
+  /**
+   * The chords are a contiguous **run** — first, last, and every step between — rather than a
+   * list of spellings a reader picks one of.
+   *
+   * **Declared here because nothing downstream can work it out.** The panel draws the two apart
+   * (`Ctrl` `1` *to* `Ctrl` `6` against `Ctrl` `Y` *or* `Ctrl` `Shift` `Z`), and the only thing
+   * it has to go on otherwise is how many chords there are — which cannot tell six steps of one
+   * sequence from six alternatives. Under a count rule the first entry ever written with three
+   * genuine spellings draws "A **to** C", promising a reader a chord nothing binds: a documented
+   * chord with no handler behind it, which is precisely the drift this module exists to end.
+   * Whether the middle of a run can be inferred is a fact about the run, so it is the entry's to
+   * state and nobody else's.
+   */
+  range?: boolean;
 }
 
 /**
@@ -70,9 +84,15 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
       id: "switchView",
       label: "Jump to a section",
       /**
+       * A run rather than six alternatives: the digits are consecutive and a reader shown the
+       * ends knows every chord between them, which is what buys the panel one row instead of
+       * eleven caps of arithmetic.
+       */
+      range: true,
+      /**
        * Six chords in `NAV` order, and the *index* is the binding: `AppShell` walks these and
        * activates `NAV[i]`, so the rail's own order stays the single list rather than being
-       * restated as a sixth-and-seventh copy here. One row in the panel, showing the range.
+       * restated as a sixth-and-seventh copy here.
        */
       chords: [
         { key: "1", ctrl: true },
@@ -113,8 +133,16 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
       label: "Redo the change you undid",
       /**
        * Both spellings, because both are muscle memory somewhere: `Ctrl+Y` is Windows' and
-       * `Ctrl+Shift+Z` is what an editor-shaped app teaches. They are two chords rather than one
-       * with a loose modifier test, which is exactly what keeps `Ctrl+Shift+Z` out of `undo`.
+       * `Ctrl+Shift+Z` is what an editor-shaped app teaches — and this app ships on Windows to
+       * people who use both, so binding either one alone leaves half of them pressing a dead
+       * key. They are two chords rather than one with a loose modifier test, which is exactly
+       * what keeps `Ctrl+Shift+Z` out of `undo`.
+       *
+       * **This is the whole of the argument and it lives here, where the chords are.** The
+       * handler in `DeckEditor.tsx` matches the entry and does not know how many spellings it
+       * holds, so a third is an edit to this array and to nothing else — restating the reason at
+       * that call site would put one argument in two files and make it exactly the prose that
+       * drifts.
        */
       chords: [
         { key: "y", ctrl: true },

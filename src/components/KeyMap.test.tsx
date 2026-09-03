@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { KEY_MAP_LABEL, KeyMap } from "@/components/KeyMap";
+import { Caps, KEY_MAP_LABEL, KeyMap } from "@/components/KeyMap";
+import type { Shortcut } from "@/lib/shortcuts";
 import { useAppStore } from "@/lib/store";
 
 /**
@@ -87,16 +88,48 @@ describe("KeyMap", () => {
   });
 
   /**
-   * Six chords is a range rather than six alternatives, so the ends are drawn and the word
-   * between them is `to`. The count is the assertion that matters: `Ctrl 1 or Ctrl 2 or …` down
-   * to `Ctrl 6` is eleven caps of arithmetic in the widest row of a 384px panel.
+   * `switchView` **declares** itself a range, so the ends are drawn and the word between them is
+   * `to`. The count is the assertion that matters: `Ctrl 1 or Ctrl 2 or …` down to `Ctrl 6` is
+   * eleven caps of arithmetic in the widest row of a 384px panel.
    */
-  it("draws a run of more than two chords as a range", () => {
+  it("draws a shortcut that declares itself a range as its two ends, joined by to", () => {
     useAppStore.setState({ activeView: "search", openDeckId: null, keyMapOpen: true });
     render(<Harness />);
 
     expect(capsFor("Jump to a section")).toEqual(["Ctrl", "1", "Ctrl", "6"]);
     expect(screen.getByText("Jump to a section").nextElementSibling?.textContent).toContain("to");
+  });
+
+  /**
+   * The other direction, and the one the catalogue cannot supply: **three chords that are three
+   * spellings**, which the old `chords.length > 2` rule would have drawn as `Alt A` to `Alt C` —
+   * a panel promising a reader `Alt+B` when nothing binds it.
+   *
+   * Constructed here rather than added to `SHORTCUTS`, because a row in the catalogue is a row
+   * the shipped panel draws: the fixture would be advertising a chord to real readers to keep a
+   * test honest. {@link Caps} is exported for exactly this.
+   */
+  it("draws a multi-chord shortcut that is not a range as every chord, joined by or", () => {
+    const alternatives: Shortcut = {
+      id: "threeSpellings",
+      label: "Do the thing three ways",
+      chords: [
+        { key: "a", alt: true },
+        { key: "b", alt: true },
+        { key: "c", alt: true },
+      ],
+    };
+    render(
+      <dl>
+        <dt>{alternatives.label}</dt>
+        <Caps shortcut={alternatives} />
+      </dl>,
+    );
+
+    expect(capsFor(alternatives.label)).toEqual(["Alt", "A", "Alt", "B", "Alt", "C"]);
+    const drawn = screen.getByText(alternatives.label).nextElementSibling?.textContent ?? "";
+    expect(drawn).toContain("or");
+    expect(drawn).not.toContain("to");
   });
 
   /** A gesture no `KeyboardEvent` matcher can serve is still a row, and its caps say so. */

@@ -403,6 +403,28 @@ describe("the catalogue's shape", () => {
     ]);
   });
 
+  // The flag `KeyMap`'s `Caps` reads. Pinned in **both** directions on purpose: the panel decided
+  // range-ness from `chords.length > 2` until this field existed, and against that rule an entry
+  // that declares nothing still draws a range — so asserting only `switchView` would pass over
+  // the defect the field was added to close.
+  it("declares switchView a range, and declares no other entry one", () => {
+    expect(shortcut("global", "switchView").range).toBe(true);
+    for (const [scope, rows] of Object.entries(SHORTCUTS)) {
+      for (const row of rows) {
+        if (row.id === "switchView") continue;
+        expect(row.range, `${scope}/${row.id}`).toBeUndefined();
+      }
+    }
+  });
+
+  // `redo` is the entry a count cannot read: more than one chord, and every one of them a
+  // spelling of the same intent rather than a step of a run.
+  it("leaves the one other multi-chord entry undeclared", () => {
+    const redo = shortcut("deckEditor", "redo");
+    expect(redo.chords.length).toBeGreaterThan(1);
+    expect(redo.range).toBeUndefined();
+  });
+
   it("binds each switchView chord to its own press and to no other", () => {
     const chords = shortcut("global", "switchView").chords;
     expect(matchesChord(chords[2], press("3", { ctrl: true }))).toBe(true);
