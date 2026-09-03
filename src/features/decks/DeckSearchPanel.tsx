@@ -949,6 +949,7 @@ export function DeckSearchPanel({
                 add={add}
                 onAdded={onAdded}
                 categories={categories}
+                deckId={deckId}
                 targetCategoryId={targetCategoryId}
                 defaultFormat={defaultFormat}
                 cardMenu={cardMenu}
@@ -1235,6 +1236,7 @@ function OpenPanel({
   add,
   onAdded,
   categories,
+  deckId,
   targetCategoryId,
   defaultFormat,
   cardMenu,
@@ -1244,6 +1246,7 @@ function OpenPanel({
   | "add"
   | "onAdded"
   | "categories"
+  | "deckId"
   | "targetCategoryId"
   | "defaultFormat"
   | "cardMenu"
@@ -1267,7 +1270,15 @@ function OpenPanel({
   // this used to answer one as though it were: the panel remounted on the way back and put the
   // deck's format over a filter the reader had cleared.
   const tip = useTooltip();
-  const search = useCardSearch({ defaultFormat });
+  // **`availableForDeck` is not a filter and does not belong with the seed above it.** It
+  // changes what the word *owned* means for this whole request: every tile's `×N` and the
+  // Owned/Missing chip count the copies **this deck can use**, so a playset sleeved into
+  // another deck stops being an offer this column makes. The Collection tab two components
+  // over has answered the same question since folders landed (`DEFAULT_ALLOCATION`), and until
+  // now the two tabs of one panel disagreed about the same card — issue #349. The deck's own
+  // group still counts, which is what keeps this number and the deck row's "you own 2 of 4"
+  // one story rather than two.
+  const search = useCardSearch({ defaultFormat, availableForDeck: deckId });
   const { query, rows, searchKey, marketplace } = search;
   // The currency this column's chins quote in. Taken off the search's own marketplace rather
   // than read again here, so the rows and the money on them come from one answer — that

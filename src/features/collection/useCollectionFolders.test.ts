@@ -352,15 +352,24 @@ describe("useCollectionFolders", () => {
    * the header's totals and the count. A `settleOrder` here would leave the table drawing the
    * copies the reader has just put away, and `lib/query.ts`'s `staleTime: 30_000` means a
    * mounted observer that is merely stale never refetches on its own.
+   *
+   * **`["cards", "search"]` is the second root and joined on 2026-09-03** (issue #349). The deck
+   * builder's card search counts *what a deck can use* and reads the **effective** lock, so this
+   * is the one folder write that moves an `×N` without moving a quantity. The exact call list
+   * still is the assertion, now naming both — a third root appearing here would mean a folder
+   * write had quietly started claiming to change something else.
    */
-  it("refreshes every collection query after a lock, not just the folder list", async () => {
+  it("refreshes every collection query and the card search after a lock", async () => {
     const { result } = renderHook(() => useCollectionFolders(), { wrapper });
     await waitFor(() => expect(result.current.folders).toHaveLength(2));
     const invalidate = vi.spyOn(client, "invalidateQueries");
 
     await result.current.setLocked.mutateAsync({ id: 1, locked: true });
 
-    expect(invalidate.mock.calls).toEqual([[{ queryKey: ["collection"] }]]);
+    expect(invalidate.mock.calls).toEqual([
+      [{ queryKey: ["collection"] }],
+      [{ queryKey: ["cards", "search"] }],
+    ]);
   });
 
   /** A refused lock re-reads too, `writes`' rule: the refusal is a busy database or a folder

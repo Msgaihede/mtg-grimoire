@@ -3751,16 +3751,50 @@ function cardById(db: FakeDb, id: string | null): FakeCard | null {
 }
 
 /**
+ * `collection_source::Availability` — **which** of the reader's copies a figure counts.
+ *
+ * `undefined` is `Availability::Everything`, the answer every caller but one asks: a collection
+ * lists what its owner owns, wherever it is filed. A deck id is `ForDeck`, the deck builder's
+ * card search, where the question is *what can this deck use* — issue #349.
+ *
+ * The three arms are the crate's, in the crate's order, and each has to let a row through on
+ * its own:
+ *
+ * * **The root is always available.** Not a folder, so nothing to look up — and in SQL the arm
+ *   is load-bearing rather than tidy, because a `<>` over a NULL is NULL rather than true.
+ * * **This deck's own group counts**, which is the whole difference from {@link ownedSpare}: a
+ *   copy filed into the open deck is a copy that deck has, and the row one column over already
+ *   says so. The theory diff excludes every deck group including its own because its live list
+ *   is counted separately.
+ * * **Anywhere else, unless it is another deck's group or set aside.** `Recently removed` is a
+ *   `kind` of its own and stays counted, exactly as it does in `Allocation::Unallocated`.
+ *
+ * **A folder id nothing answers to is not available**, which mirrors the SQL rather than
+ * guessing: three of its terms go NULL over a missing row and NULL is not true. No live
+ * database can hold one — the column is a cascading foreign key — so this is the arm that says
+ * the fake did not quietly pick the friendlier answer.
+ */
+function availableToDeck(db: FakeDb, e: FakeEntry, forDeck: number | undefined): boolean {
+  if (forDeck === undefined || e.folderId === null) return true;
+  const folder = collectionFolderById(db, e.folderId);
+  if (!folder) return false;
+  if (folder.deckId === forDeck) return true;
+  if (folder.kind === COLLECTION_DECK_KIND) return false;
+  return !collectionFolderLocked(db, e.folderId);
+}
+
+/**
  * `search.rs`'s two correlated subqueries, per result row.
  *
  * `sum(e.quantity)` over *this printing*: finish-blind, condition-blind, and `0` rather than
  * null because "you own none of these" is a fact.
  *
- * **`collection_source::copies_of_printing`.**
+ * **`collection_source::copies_of_printing`**, at {@link availableToDeck}'s scope — which every
+ * caller but the deck builder's search leaves absent, exactly as the request field is.
  */
-function ownedOfPrinting(db: FakeDb, cardId: string): number {
+function ownedOfPrinting(db: FakeDb, cardId: string, forDeck?: number): number {
   return db.collectionEntries
-    .filter((e) => e.cardId === cardId)
+    .filter((e) => e.cardId === cardId && availableToDeck(db, e, forDeck))
     .reduce((n, e) => n + e.quantity, 0);
 }
 
@@ -3773,7 +3807,12 @@ function wishlisted(db: FakeDb, card: FakeCard): boolean {
   );
 }
 
-function toCardSummary(db: FakeDb, c: FakeCard, mp: MarketplaceId): CardSummary {
+function toCardSummary(
+  db: FakeDb,
+  c: FakeCard,
+  mp: MarketplaceId,
+  forDeck?: number,
+): CardSummary {
   // The display **column** at the marketplace the request named: a fallback chain across
   // finishes, never summed, and one number rather than a pair — the backend has already
   // decided whose price this is, so the row carries no second figure to pick between.
@@ -3800,7 +3839,7 @@ function toCardSummary(db: FakeDb, c: FakeCard, mp: MarketplaceId): CardSummary 
     // with itself. A plain boolean, unlike `DeckCard.gameChanger`: a search row came back
     // from `cards`, so it can never be the orphan that field's `null` is for.
     gameChanger: c.gameChanger,
-    ownedQuantity: ownedOfPrinting(db, c.id),
+    ownedQuantity: ownedOfPrinting(db, c.id, forDeck),
     wishlisted: wishlisted(db, c),
     // Uncollapsed, a row *is* a printing: it stands for one, and its "range" is its own
     // price. One shape for both modes, exactly as `search.rs` returns it.
@@ -3836,7 +3875,12 @@ function collapseKey(c: FakeCard): string {
  * * `ownedQuantity` sums copies of **every** printing of the card, because "do I have this
  *   card" is the question a collapsed row asks. Uncollapsed it stays per printing.
  */
-function collapseToCards(db: FakeDb, matched: FakeCard[], mp: MarketplaceId): CardSummary[] {
+function collapseToCards(
+  db: FakeDb,
+  matched: FakeCard[],
+  mp: MarketplaceId,
+  forDeck?: number,
+): CardSummary[] {
   const groups = new Map<string, FakeCard[]>();
   for (const c of matched) {
     const key = collapseKey(c);
@@ -3891,12 +3935,12 @@ function collapseToCards(db: FakeDb, matched: FakeCard[], mp: MarketplaceId): Ca
     // showing up as an absent range rather than as a narrower one.
     const priced = [...prices.values()].filter((p): p is number => p !== null);
     return {
-      ...toCardSummary(db, rep, mp),
+      ...toCardSummary(db, rep, mp, forDeck),
       name: group.reduce((min, c) => (c.name < min ? c.name : min), group[0].name),
       printings: group.length,
       priceLow: priced.length > 0 ? Math.min(...priced) : null,
       priceHigh: priced.length > 0 ? Math.max(...priced) : null,
-      ownedQuantity: group.reduce((n, c) => n + ownedOfPrinting(db, c.id), 0),
+      ownedQuantity: group.reduce((n, c) => n + ownedOfPrinting(db, c.id, forDeck), 0),
       wishlisted: group.some((c) => wishlisted(db, c)),
     };
   });
@@ -4053,8 +4097,10 @@ function collectionFinish(finish: DeckFinish): FakeEntry["finish"] {
  * An **entry**, not a copy: a row emptied to zero is a row the collection keeps and this
  * question counts it.
  */
-function ownsPrinting(db: FakeDb, cardId: string): boolean {
-  return db.collectionEntries.some((e) => e.cardId === cardId);
+function ownsPrinting(db: FakeDb, cardId: string, forDeck?: number): boolean {
+  return db.collectionEntries.some(
+    (e) => e.cardId === cardId && availableToDeck(db, e, forDeck),
+  );
 }
 
 /* ------------------------------------------------------------------ scopes ------------ */
@@ -5644,6 +5690,22 @@ export function readHandlers(db: FakeDb) {
        */
       const priceMin = req.priceMin;
       const priceMax = req.priceMax;
+      /**
+       * Which deck this search counts copies **for** — `SearchRequest.availableForDeck`, and the
+       * one field on this request that narrows no rows at all.
+       *
+       * It decides what *owned* means for the two things that say it: the `owned` filter below
+       * and every row's `ownedQuantity`. Both, together — a count narrowed while its filter was
+       * left alone would put a card under the Owned chip wearing `×0`. Absent everywhere but the
+       * deck builder's card search tab, which is the backend's own default.
+       *
+       * **`facet_cards` does not take it**, and `useCardFacets` states why from the other side:
+       * `CardIndex` has one global `owned` bitset and no deck-relative dimension, so the
+       * Owned/Missing counts in that panel's filter row are taken as if every copy were
+       * reachable and read **high**. Over-reading only ever leaves a control live, which is the
+       * direction the whole row fails in.
+       */
+      const forDeck = req.availableForDeck;
       const matched = db.cards.filter((c) => {
         if (text !== null && !cardMatchesText(c, text)) return false;
         if (oracleId !== null && c.oracleId !== oracleId) return false;
@@ -5659,7 +5721,9 @@ export function readHandlers(db: FakeDb) {
         // copies, because a wish is filled by copies rather than by paperwork.
         // {@link ownsPrinting} is `collection_source::owns_printing`, so the filter follows
         // whichever source the collection is — the same swap the badge beside it makes.
-        if (req.owned !== undefined && req.owned !== ownsPrinting(db, c.id)) return false;
+        if (req.owned !== undefined && req.owned !== ownsPrinting(db, c.id, forDeck)) {
+          return false;
+        }
         return true;
       });
       // `SEARCH_SORTS` over the browse order, with `c.id ASC` appended. Simplification 1 is
@@ -5675,8 +5739,8 @@ export function readHandlers(db: FakeDb) {
       // be a lie in both places. Grouping *after* the sort keeps the representative-picking
       // and the ordering independent, which is what the two-step SQL does too.
       const rows: CardSummary[] = req.collapse
-        ? collapseToCards(db, sorted, mp)
-        : sorted.map((c) => toCardSummary(db, c, mp));
+        ? collapseToCards(db, sorted, mp, forDeck)
+        : sorted.map((c) => toCardSummary(db, c, mp, forDeck));
       // The count stops at the cap rather than walking the table on every keystroke.
       const counted = Math.min(rows.length, TOTAL_CAP + 1);
       return {
@@ -8665,11 +8729,19 @@ function theoryCopies(db: FakeDb, deckId: number): number {
  * **A locked folder is the second arm, added beside the deck one in user schema v33**, and this
  * function's own sentence is the argument for it: a deck on a table has its cards, so a copy in
  * its group is not one a plan can count on — and a card in a display case is not one a plan can
- * count on either. It is the **only** ownership-shaped figure a lock moves, because `ownedSpare`
- * means *spare* rather than *owned*: every count of what the reader **has** — the search's owned
- * pip, both owned badges, the Owned/Missing facet, a wish's filled quantity — counts a locked
- * copy, and must, or the app would be denying cardboard on the reader's shelf. The effective
- * lock, so a sub-folder of a set-aside drawer goes with it.
+ * count on either. What a lock moves is **the figures that mean *spare*, never the ones that
+ * mean *owned***: a count of what the reader **has** — the collection wall's badge, the search
+ * page's, the Owned/Missing facet, a wish's filled quantity — counts a locked copy, and must,
+ * or the app would be denying cardboard on the reader's shelf. The effective lock, so a
+ * sub-folder of a set-aside drawer goes with it.
+ *
+ * **This was the only such figure until issue #349**, and the second one is a *spare* count too
+ * wearing an owned count's clothes: the deck builder's card search asks {@link availableToDeck}
+ * with the open deck's id, so its `×N` and its Owned chip drop a locked drawer's copies for
+ * exactly this sentence's reason. The two are not one helper because they disagree about one
+ * arm — a plan cannot count on its own deck's cards, and the deck builder's search can — and a
+ * shared helper would have had to take a flag saying which, which is the same two functions with
+ * the difference hidden.
  *
  * This used to be `held − what every built deck had claimed`, floored at zero because a stored
  * claim could outlive the copies under it. Nothing can be stale any more, so nothing has to be

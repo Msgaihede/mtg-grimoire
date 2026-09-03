@@ -126,6 +126,28 @@ pub struct SearchRequest {
     /// rule is unchanged and is a rule about *this* filter rather than about what the collection
     /// happens to store, which is why it is worth keeping written down.
     pub owned: Option<bool>,
+    /// The deck this search is being run **for** — set by the deck builder's card search tab
+    /// and by nothing else. It is not a filter over cards: it decides which of the reader's
+    /// copies count as theirs, for [`Self::owned`] and [`CardSummary::owned_quantity`] alike.
+    ///
+    /// Absent is [`crate::collection_source::Availability::Everything`], which is what every
+    /// caller written before it asked for without saying so — the search page, the Tags page
+    /// and the web route all still count every copy wherever it is filed, because none of them
+    /// has a deck to be relative to.
+    ///
+    /// **Why the deck builder is different** ([#349](https://github.com/Msgaihede/mtg-grimoire/issues/349)):
+    /// a badge reading `×4` over a card whose four copies are all sleeved into other decks is
+    /// telling the reader they have something they cannot use. The Collection tab in the same
+    /// panel has answered the narrower question since folders landed — it defaults to
+    /// [`crate::collection::Allocation::Unallocated`] — so until now the two tabs of one panel
+    /// disagreed about the same card.
+    ///
+    /// **Both halves move together or neither may.** Narrowing the count and leaving the
+    /// `owned` filter alone would put a card under the Owned chip wearing a badge of `×0`,
+    /// which is the one refusal a reader cannot act on. See
+    /// [`crate::collection_source::Availability`] for the three arms and for what is *not*
+    /// excluded (this deck's own group, and `Recently removed`).
+    pub available_for_deck: Option<i64>,
     /// How to order the page: columns in priority order, the first deciding and the rest
     /// breaking its ties. Empty or absent is the default — relevance when `text` is set,
     /// name order when it is not. Keys outside [`SEARCH_SORTS`] are dropped, never
@@ -149,6 +171,19 @@ pub struct SearchRequest {
 }
 
 impl SearchRequest {
+    /// Which of the reader's copies this request counts as theirs — see
+    /// [`Self::available_for_deck`].
+    ///
+    /// **One reader, three call sites**: the `owned` filter and both branches of the badge.
+    /// Written here rather than at each of them so the filter and the count it labels cannot
+    /// come to disagree — the failure the field's own doc names.
+    fn availability(&self) -> crate::collection_source::Availability {
+        self.available_for_deck.map_or(
+            crate::collection_source::Availability::Everything,
+            crate::collection_source::Availability::ForDeck,
+        )
+    }
+
     /// The card half of this request, in the shape every other list uses.
     ///
     /// Cloned rather than borrowed, and the fields stay flat on this struct rather than
@@ -802,13 +837,29 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
     //
     // `NOT EXISTS (…)` and `NOT (EXISTS (…))` are the same plan to SQLite, which is what lets
     // the negative arm come out of the same builder rather than out of a second literal.
+    //
+    // **Narrowed by [`SearchRequest::availability`], which is the half that is easy to leave
+    // out.** In the deck builder this chip means *what have I got for this deck*, so a copy
+    // sleeved into another deck is not one it may offer — and the same scope has to reach the
+    // badge two hundred lines down, or a card sits under Owned wearing `×0`. `Everything` adds
+    // no SQL at all, so every measurement in the table above still describes what it ran on.
+    //
+    // **The scoped shape is unmeasured**, and that is worth saying rather than guessing at: it
+    // adds two correlated probes of `collection_folders` per surviving *entry*, both by indexed
+    // key (`id` is the primary key, `deck_id` carries a partial unique index), plus the
+    // `locked_folders` walk — which is recursive over a table holding a handful of rows. It runs
+    // only in one 384px column, where the reader has almost always typed something, and the note
+    // above says what that narrows the whole filter to. Nobody has taken the numbers on the real
+    // 116 k-row database; the table above is the one to add them beside if it ever bites.
     match req.owned {
-        Some(true) => p
-            .wheres
-            .push(crate::collection_source::owns_printing(conn, "c.id")),
+        Some(true) => p.wheres.push(crate::collection_source::owns_printing(
+            conn,
+            "c.id",
+            req.availability(),
+        )),
         Some(false) => p.wheres.push(format!(
             "NOT {}",
-            crate::collection_source::owns_printing(conn, "c.id")
+            crate::collection_source::owns_printing(conn, "c.id", req.availability())
         )),
         None => {}
     }
@@ -1022,7 +1073,12 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
         // The owned badge, by **oracle card** because the row stands for a whole group of
         // printings — built by [`crate::collection_source`] rather than written out, so the
         // wall and the Collection page cannot disagree about what the reader has.
-        let owned_by_oracle = crate::collection_source::copies_of_oracle(conn, "c.oracle_id");
+        //
+        // Counted at [`SearchRequest::availability`]'s scope, the same one the `owned` filter
+        // above was pushed at: in the deck builder this number is *what this deck can use*,
+        // everywhere else it is what the reader owns.
+        let owned_by_oracle =
+            crate::collection_source::copies_of_oracle(conn, "c.oracle_id", req.availability());
         // The front face's picture, as `image_uri::FRONT_FACE_COLUMNS` `json_extract`s off the
         // `cards` row the query already has in hand — no join and no second statement. Built by
         // [`crate::image_uri::front_face_selects`] rather than written out, because the
@@ -1065,7 +1121,8 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
     } else {
         // The same badge, by **printing**: an uncollapsed row is one printing, so the count
         // beside it is that printing's.
-        let owned_by_printing = crate::collection_source::copies_of_printing(conn, "c.id");
+        let owned_by_printing =
+            crate::collection_source::copies_of_printing(conn, "c.id", req.availability());
         // The same columns, in the same place: the branches share one row mapping.
         let image_uris = crate::image_uri::front_face_selects("c").join(", ");
         format!(
@@ -3812,6 +3869,125 @@ mod tests {
         assert!(bolt.wishlisted);
         assert_eq!(helix.owned_quantity, 0);
         assert!(!helix.wishlisted);
+    }
+
+    /// Four copies of the Bolt in four places, and one Helix sleeved into somebody else's deck
+    /// — the shape [#349](https://github.com/Msgaihede/mtg-grimoire/issues/349) is about.
+    ///
+    /// Folder ids start at 11 because the head schema seeds `Recently removed` as row 1, and
+    /// the decks are inserted so no folder points at a deck that is not there.
+    fn filed_for_two_decks() -> Connection {
+        let conn = seeded();
+        conn.execute_batch(
+            "INSERT INTO decks (id, name, created_at, updated_at)
+                  VALUES (1, 'Mine', 0, 0), (2, 'Theirs', 0, 0);
+
+             INSERT INTO collection_folders (id, parent_id, name, kind, deck_id, sort_order,
+                                             locked, created_at, updated_at)
+                  VALUES (11, NULL, 'Mine',         'deck',    1, 0, 0, 0, 0),
+                         (12, NULL, 'Theirs',       'deck',    2, 1, 0, 0, 0),
+                         (13, NULL, 'Display case', 'user', NULL, 2, 1, 0, 0);
+
+             INSERT INTO collection_entries (card_id, set_code, collector_number, lang, finish,
+                                             condition, quantity, folder_id, created_at,
+                                             updated_at)
+                  VALUES ('1','lea','161','en','nonfoil','NM',1,NULL,0,0),
+                         ('1','lea','161','en','nonfoil','NM',1,  11,0,0),
+                         ('1','lea','161','en','nonfoil','NM',1,  12,0,0),
+                         ('1','lea','161','en','nonfoil','NM',1,  13,0,0),
+                         ('2','rav','213','en','nonfoil','NM',1,  12,0,0);",
+        )
+        .unwrap();
+        conn
+    }
+
+    /// The badge, at both scopes, on one database — so the two numbers are the field's doing
+    /// and nothing else's.
+    ///
+    /// Unscoped the Bolt reads 4, which is what every wall outside the deck builder must go on
+    /// saying: the reader does own four. Asked for deck 1 it reads 2 — the copy on the desk and
+    /// the copy in this deck's own group — because the other deck's is spoken for and the
+    /// display case is set aside.
+    #[test]
+    fn the_badge_counts_only_what_the_named_deck_can_use() {
+        let conn = filed_for_two_decks();
+        let ask = |for_deck: Option<i64>| {
+            run_search(
+                &conn,
+                &SearchRequest {
+                    limit: 50,
+                    available_for_deck: for_deck,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+        let owned_of = |r: &SearchResponse, id: &str| {
+            r.items.iter().find(|c| c.id == id).unwrap().owned_quantity
+        };
+
+        let every = ask(None);
+        assert_eq!(owned_of(&every, "1"), 4, "the reader does own four");
+        assert_eq!(owned_of(&every, "2"), 1);
+
+        let mine = ask(Some(1));
+        assert_eq!(
+            owned_of(&mine, "1"),
+            2,
+            "the desk and this deck's own group"
+        );
+        assert_eq!(owned_of(&mine, "2"), 0, "sleeved into the other deck");
+
+        // The asking deck's own group is the arm `deck_theory::OWNED_SPARE_SQL` does not have,
+        // so deck 2's answer must not be deck 1's: its Helix is its own.
+        let theirs = ask(Some(2));
+        assert_eq!(owned_of(&theirs, "2"), 1);
+    }
+
+    /// The half that is easy to leave behind. A card whose only copy is in another deck must
+    /// drop out of `owned: true` for *this* deck, or the chip offers a row the badge then
+    /// marks `×0` — a refusal the reader cannot act on.
+    #[test]
+    fn the_owned_filter_follows_the_same_scope_as_the_badge() {
+        let conn = filed_for_two_decks();
+        let ids = |for_deck: Option<i64>, owned: bool| {
+            run_search(
+                &conn,
+                &SearchRequest {
+                    limit: 50,
+                    owned: Some(owned),
+                    available_for_deck: for_deck,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .items
+            .iter()
+            .map(|c| c.id.clone())
+            .collect::<Vec<_>>()
+        };
+
+        assert_eq!(ids(None, true), ["1", "2"], "unscoped, both are owned");
+        assert_eq!(
+            ids(Some(1), true),
+            ["1"],
+            "the Helix is not deck 1's to use"
+        );
+        assert!(
+            ids(Some(1), false).contains(&"2".to_owned()),
+            "and it is therefore on the Missing side of the same chip"
+        );
+    }
+
+    /// The wire name, and the default an omitted field carries. `availableForDeck` is what
+    /// `src/lib/ipc.ts` sends; absent is every copy, which is what every caller written before
+    /// the deck builder's badge relies on without saying so.
+    #[test]
+    fn available_for_deck_is_camel_cased_and_absent_by_default() {
+        let asked: SearchRequest = serde_json::from_str(r#"{"availableForDeck":7}"#).unwrap();
+        assert_eq!(asked.available_for_deck, Some(7));
+        let bare: SearchRequest = serde_json::from_str("{}").unwrap();
+        assert_eq!(bare.available_for_deck, None);
     }
 
     /// What a quick-add from a result row needs to be honest.

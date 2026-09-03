@@ -2256,6 +2256,22 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
   });
 
   /**
+   * The request's side of the same rot, for the one field on it that changes what a *number*
+   * means rather than which rows come back.
+   *
+   * A misspelling here is silent in the worst way this file guards: `#[serde(default)]` means
+   * an unrecognised key is simply dropped, so the deck builder would go on rendering every
+   * copy the reader owns — the exact behaviour issue #349 reports — with a green build, a
+   * passing wall and no error anywhere. Pinned by name rather than field for field, because
+   * `SearchRequest`'s two sides part company on purpose elsewhere (`CardFilters` is flattened
+   * into the Rust struct and spelled out in the TypeScript one).
+   */
+  it("names the deck-relative owned scope on both sides of the search request", () => {
+    expect(rustFields(searchRs, "SearchRequest")).toContain("available_for_deck");
+    expect(tsFields(ipcSource, "SearchRequest")).toContain("availableForDeck");
+  });
+
+  /**
    * **The other three card walls, pinned the same way and for a failure that has already
    * shipped.** `CardSummary` was the only DTO carrying `image_uris` until 2026-08-31, on the
    * belief that `search_cards` was the one card-bearing command a browser could call. It is

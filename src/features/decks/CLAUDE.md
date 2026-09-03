@@ -1176,6 +1176,18 @@ price | type`). An **inactive category stays its own group in all three grouping
     group is offered only under a confirmation that names that deck, because the press takes the
     card off that deck's list too. Full rules:
     [collection-folders.md](../../../docs/reference/collection-folders.md).
+  - **The `All cards` tab counts owned copies for the open deck too** (2026-09-03,
+    [#349](https://github.com/Msgaihede/mtg-grimoire/issues/349)) — `useCardSearch`'s
+    `availableForDeck`, the open deck's id, straight through to `SearchRequest.availableForDeck`.
+    Until it rode, the two tabs of one panel disagreed about the same card: the Collection tab
+    hid a playset sleeved into other decks and this one badged it `×4`. It is **not a filter** —
+    no row is narrowed and nothing is reordered — it decides what *owned* means for the request,
+    on every tile's `×N` and on the Owned/Missing chip **together**, because a count narrowed
+    while its chip was left alone offers a row the badge then marks `×0`. The open deck's own
+    group still counts, which keeps the number and the deck row's *you own 2 of 4* one story.
+    The facet counts behind that chip's tooltip deliberately do not follow — the index has no
+    deck axis — and read high there; `useCardFacets` and
+    [search-faceting.md](../../../docs/reference/search-faceting.md) carry the argument.
   - **The Collection tab draws `FilterBar`, and since 2026-08-25 that is the *same component* the
     `All cards` tab draws.** It had a filter row of its own for two days — built out of
     `@/components/FilterChips`, which is the sanctioned reuse and is still how

@@ -425,6 +425,22 @@ export interface CardSearchOptions {
    * string is stable across two selections that mean the same thing.
    */
   tagTerms?: Pick<SearchRequest, "artTags" | "oracleTags" | "artWeightFloor">;
+  /**
+   * The deck this search is being run **for** — the deck builder's panel passes the open deck's
+   * id, `SearchPage` and the Tags page pass nothing.
+   *
+   * The fourth thing a caller owns here, and unlike the other three it is not a default the
+   * reader can move: no control in `FilterBar` reaches it, because it is not a filter. It
+   * changes what "owned" *means* for the whole request — the badge on every tile and the
+   * Owned/Missing chip together — from *copies I have* to *copies this deck can use*. See
+   * {@link SearchRequest.availableForDeck}.
+   *
+   * **It is a query-key segment**, which is the half that would be invisible if it were left
+   * out: two decks are two answers to the same filters, and the second one opened would be
+   * served the first one's cached pages — instantly, from local SQLite, with no spinner and
+   * nothing to notice.
+   */
+  availableForDeck?: number | null;
 }
 
 export function useCardSearch(options: CardSearchOptions = {}) {
@@ -443,6 +459,14 @@ export function useCardSearch(options: CardSearchOptions = {}) {
    * this inline costs nothing.
    */
   const callerTagTerms = options.tagTerms ?? EMPTY_TAG_TERMS;
+  /**
+   * Which deck this search counts copies for, normalised to the one absent value.
+   *
+   * `null` and `undefined` both mean "no deck" — the caller may hold a `number | null` and
+   * should not have to translate — and they collapse here so the query key below has one
+   * spelling of absent rather than two that would mint two keys for one search.
+   */
+  const availableForDeck = options.availableForDeck ?? undefined;
   // Which marketplace's prices this list is quoting. It is an input to the query rather than
   // a formatting choice: the backend prices the page with it, so it is in the key below and a
   // switch re-asks.
@@ -695,6 +719,13 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   const queryKey = [
     "cards",
     "search",
+    // **Which deck this search is for, and it is the one key segment that is not a filter.**
+    // It changes the `ownedQuantity` on every row and which rows the Owned chip returns, so two
+    // decks are two answers to identical filters — and the cheapest bug available here is the
+    // second deck opened being served the first one's pages out of cache, with no request, no
+    // spinner and nothing on screen to notice. Spelled rather than stringified, like every other
+    // optional segment: `String(undefined)` is the truthy `"undefined"`.
+    availableForDeck === undefined ? "" : String(availableForDeck),
     debouncedText,
     // **Two request fields in one segment, and it is exact rather than lossy.** The select
     // decides `format` *and* `playableOnly`, and its three values map to three distinct strings
@@ -772,6 +803,11 @@ export function useCardSearch(options: CardSearchOptions = {}) {
         // Sent only when it is set, so an untouched filter row produces exactly the payload
         // it always did. `false` is meaningful here and `undefined` is not sent at all.
         owned,
+        // Not a filter: it decides what `owned` above and every row's `ownedQuantity` are
+        // counted over. Absent on every caller but the deck builder's panel, which is the
+        // backend's own default — see {@link CardSearchOptions.availableForDeck}. Deliberately
+        // **not** on `facetReq` below; `useCardFacets` says why.
+        availableForDeck,
         // Absent rather than `[]` when nothing is sorted, so an untouched table produces
         // exactly the payload it always did.
         sort: sort.length > 0 ? sort : undefined,
