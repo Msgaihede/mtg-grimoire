@@ -53,6 +53,18 @@ function update(over: Partial<Update> = {}): Update {
   };
 }
 
+/**
+ * Press a rail entry, which is how every story below reaches a panel outside `Updates`.
+ *
+ * **Matched as a prefix of the accessible name rather than the whole of it**, because two of the
+ * six entries carry a badge and `SettingsNav` writes that count into the name as ` (3)`. A story
+ * that named an entry exactly would pass on a seeded world with nothing waiting and fail on one
+ * with something waiting, which is the wrong thing for a badge to be able to break.
+ */
+async function pickGroup(canvas: ReturnType<typeof within>, label: string) {
+  await userEvent.click(canvas.getByRole("button", { name: new RegExp(`^${label}`) }));
+}
+
 const meta = {
   title: "Settings/Page",
   component: SettingsPage,
@@ -61,9 +73,10 @@ const meta = {
   decorators: [
     // The content column at the 1280×800 window `tauri.conf.json:16-17` opens: 1280 less the
     // sidebar's `w-52` (208px) and less `main`'s `p-5` on both sides (40px), from
-    // `AppShell.tsx:93` and `AppShell.tsx:148`. The page's own `max-w-2xl` is narrower than
-    // that, which is the thing worth seeing — a settings column that ran the full width would
-    // be a 1032px line of prose.
+    // `AppShell.tsx:93` and `AppShell.tsx:148`. The page's own `max-w-4xl` is narrower than
+    // that, which is the thing worth seeing — and it is wide enough at 1032 for the rail and
+    // the pane to share a line, which is the shape the rail's container query calls "beside the
+    // pane". A narrower box here would story the wrapped strip instead.
     (Story) => (
       <div className="w-[1032px] p-2">
         <Story />
@@ -77,13 +90,18 @@ const meta = {
           // Deliberately no count of the sections: this line said six while the page drew
           // seven, and a prose-only edit routes to neither CI job — so nothing went red. The
           // headings are a fact about the tree, which `Default`'s play reads off the tree.
-          "Settings: the sections that are real, and an honest note about the rest.\n\n" +
-          "**Ordered by what a press costs.** Updates, prices, combos and errors first, since none "  +
-          "of them throws anything away; then the local cache, which throws away bytes the "  +
-          "app fetches again; then the three clears that cannot be taken back, alone at the "  +
-          "foot in a region of their own. "  +
-          "That distance is the first fence and the typed word inside each dialog is the "  +
-          "second — see `Settings/DangerZonePanel`.\n\n" +
+          "Settings: a rail of groups, a pane that draws one of them, and a box that searches " +
+          "all of them.\n\n" +
+          "**The page was one scroll of every panel until 2026-09-03**, ordered by what a press " +
+          "costs. That rule is still the rule — but *inside a group* now, because an ordering " +
+          "only helps a reader who already knows what they are scrolling towards. `nav.ts` owns " +
+          "which panels a group holds and which a query matches; this page owns the two pieces " +
+          "of state that decision is taken over, and every hook the panels are fed from.\n\n" +
+          "**A query outranks the group**, which is the one rule worth watching here: typing " +
+          "`dropbox` while standing on `Updates` draws `Backup`, from a group nobody selected, " +
+          "and no entry is marked current for as long as the box has words in it. Picking an " +
+          "entry is what clears the query — see `Searching` below, and `Settings/Nav` for the " +
+          "rail on its own.\n\n" +
           "**`update` is a prop, and that is the design rather than a convenience.** " +
           "`App.tsx` calls `useUpdate` once and hands the answer to both `AppShell` — for the " +
           "ribbon's gold button — and to this page, for the panel. Two calls would be two " +
@@ -93,25 +111,27 @@ const meta = {
           "`Chrome/AppShell`'s `Settings` and `UpdateAvailable` are the same page driven by a " +
           "**seeded world** instead, through the real hook — which is where the ribbon button " +
           "and this panel are shown agreeing with each other.\n\n" +
-          "The other panels are the opposite and reach the fake. Two are hooked up *here*: the " +
-          "error log, because nothing else in the window reads it, and the marketplace, because " +
+          "The other panels are the opposite and reach the fake. Three hooks are held *here*: " +
+          "the error log, because nothing else in the window reads it; the marketplace, because " +
           "half the window does — every price surface asks `useMarketplace()` for its currency, " +
           "and one TanStack Query entry with `staleTime: Infinity` means they are all reading " +
-          "the same cached answer rather than opening a second channel. So both reach the fake, " +
-          "and `SwitchingMarketplace` below is a real write to the fake's `app_meta` row.\n\n" +
+          "the same cached answer rather than opening a second channel; and the review queue, " +
+          "which is the marketplace's argument plus one of its own — the rail's `Sync` badge " +
+          "has to count while `ReviewPanel` is unmounted, which is every group but its own. So " +
+          "all three reach the fake, and `SwitchingMarketplace` below is a real write to the " +
+          "fake's `app_meta` row.\n\n" +
           "**Backup and Combos take no props at all** and hold their own hooks, which is the " +
           "same argument from one step further along: threading either down would buy a prop " +
-          "and nothing else. Combos sits directly under Prices because it is the same kind of " +
-          "thing — an optional bulk feed from a third party that the app works entirely " +
-          "without. See `Settings/CombosPanel` for the four states it draws.\n\n" +
+          "and nothing else. Combos shares the `Card data` entry with Prices because it is the " +
+          "same kind of thing — an optional bulk feed from a third party that the app works " +
+          "entirely without. See `Settings/CombosPanel` for the four states it draws.\n\n" +
           "**Sync is two halves in one panel** and the second one is new: pairing says who is " +
           "in the group, and the relay under it says how their changes reach each other — an " +
           "address the reader runs themselves, what is waiting to go, and one press that makes " +
-          "a round trip. `Needs review` sits directly beneath it, because the rows it lists are " +
-          "what a sync asks of a person.\n\n" +
-          "The blurb this view used to be is now a section of it. What is genuinely still " +
-          "missing — the data folder and import — says so under its own dim heading rather " +
-          "than standing in for a panel that exists.",
+          "a round trip. `Needs review` shares its entry, because the rows it lists are what a " +
+          "sync asks of a person.\n\n" +
+          "What is genuinely still missing — import — says so at the foot of the rail, under " +
+          "the six real destinations rather than as a seventh that draws nothing.",
       },
     },
   },
@@ -121,44 +141,87 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 /**
- * The page most days: a version, a check, and the one thing that is not here yet.
+ * The page as a reader arrives at it: six ways in, and the one group that opens by itself.
  *
- * Two `h2`s and they are deliberately not equal. The panel's is plain, in Cinzel at 18px —
- * the display face's one job in the content, and the direction's floor for it. "Not here yet"
- * is the same size in `text-dim`, because a heading over an absence should not compete with a
- * heading over something a reader can act on.
+ * `Updates` is the landing group because it is the one thing that sends somebody to this page
+ * without their having chosen to come — the ribbon's gold button says there is a new version and
+ * this is where it lands.
  *
- * The column is `max-w-2xl` and centred inside a 1032px view. Settings is prose and controls,
- * and prose set to the full width of this window would be 1032px of measure — roughly twice
- * what is comfortable to read.
+ * **The play's second half is the half that is new.** It reads the rail's six entries off the
+ * tree, and then asserts that three panels which used to be on this page *are not* — which is
+ * the whole of what the regrouping did, and the one claim a screenshot of this story cannot
+ * make. Before 2026-09-03 the same play asserted seven headings were present at once.
+ *
+ * The pane is `max-w-4xl` less the rail, centred inside a 1032px view: ~632px, within 40px of
+ * the 42rem column every one of these panels was written for. Settings is prose and controls,
+ * and prose set to the full width of this window would be roughly twice a comfortable measure.
  */
 export const Default: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    // Labelled sections, each named by its own heading through `aria-labelledby` — which is
-    // what makes them regions a screen reader can jump between rather than three `div`s.
-    await expect(canvas.getByRole("heading", { name: "Updates", level: 2 })).toBeInTheDocument();
-    await expect(canvas.getByRole("heading", { name: "Prices", level: 2 })).toBeInTheDocument();
-    // Directly under Prices, and it has to be *found* rather than assumed: both are optional
-    // bulk feeds from a third party, and both leave the app working when they are absent.
-    await expect(canvas.getByRole("heading", { name: "Combos", level: 2 })).toBeInTheDocument();
-    await expect(
-      canvas.getByRole("heading", { name: "Not here yet", level: 2 }),
-    ).toBeInTheDocument();
-    // The page's one undo, high up for the reason `SettingsPage` gives: the rail tells a reader
-    // who has just hidden a tag that this is where it comes back, and until 2026-08-20 the page
-    // it sent them to had no such list.
-    await expect(canvas.getByRole("heading", { name: "Hidden tags", level: 2 })).toBeInTheDocument();
-    // The two new ones, and their order on the page: the reversible sweep above the blurb,
-    // the irreversible clears below it.
-    await expect(canvas.getByRole("heading", { name: "Local cache", level: 2 })).toBeInTheDocument();
-    await expect(canvas.getByRole("heading", { name: "Clear data", level: 2 })).toBeInTheDocument();
-    await expect(canvas.getByText(/You’re on the latest version\./)).toBeInTheDocument();
-    // The setting an install starts on, read through the real hook rather than passed in.
-    await expect(await canvas.findByRole("button", { name: "TCGplayer USD" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
+    // The rail, by its own landmark rather than by position — six destinations, in `nav.ts`'s
+    // declaration order, which is the only place that order is written.
+    const rail = within(canvas.getByRole("navigation", { name: "Settings" }));
+    for (const label of ["Updates", "Card data", "Sync", "Tags", "Storage and data", "Errors"]) {
+      await expect(rail.getByRole("button", { name: new RegExp(`^${label}`) })).toBeInTheDocument();
+    }
+    // The group that opens by itself, marked as current — and its panel, drawn as a labelled
+    // region named by its own heading, which is what makes it something a screen reader can
+    // jump to rather than a `div`.
+    await expect(rail.getByRole("button", { name: "Updates" })).toHaveAttribute(
+      "aria-current",
+      "page",
     );
+    await expect(canvas.getByRole("heading", { name: "Updates", level: 2 })).toBeInTheDocument();
+    await expect(canvas.getByText(/You’re on the latest version\./)).toBeInTheDocument();
+
+    // One panel from each of three other groups, absent — the pane draws one group, not twelve
+    // panels with a rail beside them.
+    await expect(canvas.queryByRole("heading", { name: "Prices", level: 2 })).not.toBeInTheDocument();
+    await expect(
+      canvas.queryByRole("heading", { name: "Hidden tags", level: 2 }),
+    ).not.toBeInTheDocument();
+    await expect(
+      canvas.queryByRole("heading", { name: "Clear data", level: 2 }),
+    ).not.toBeInTheDocument();
+
+    // What is still genuinely missing, at the foot of the rail rather than as a seventh entry:
+    // a heading in a rail is a destination, and a destination with no panels behind it is a
+    // place a reader can be sent to that draws nothing.
+    await expect(rail.getByText("Import. Coming in a later plan.")).toBeInTheDocument();
+  },
+};
+
+/**
+ * A word instead of a category.
+ *
+ * `dropbox` is one of `Backup`'s keywords in `nav.ts` and appears in no other panel's, so this
+ * is the rule the whole search exists for, driven end to end: a reader standing on `Updates`
+ * types a word, and the panel that answers it is drawn from a group nobody selected. **No entry
+ * is current while the box has words in it**, because the page is answering rather than the
+ * group — and pressing an entry is what clears the box, which is why the two states can never
+ * both apply.
+ *
+ * Keywords are the half of `nav.ts` a reader never sees, so this story is where they are visible
+ * at all: the word typed here is in no heading on the page.
+ */
+export const Searching: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const rail = within(canvas.getByRole("navigation", { name: "Settings" }));
+
+    await userEvent.type(canvas.getByRole("searchbox", { name: "Search settings" }), "dropbox");
+
+    await expect(
+      await canvas.findByRole("heading", { name: "Backup", level: 2 }),
+    ).toBeInTheDocument();
+    await expect(canvas.queryByRole("heading", { name: "Updates", level: 2 })).not.toBeInTheDocument();
+    await expect(rail.getByRole("button", { name: "Updates" })).not.toHaveAttribute("aria-current");
+
+    // And back: the press clears the box, so the group answers again.
+    await pickGroup(rail, "Updates");
+    await expect(canvas.getByRole("searchbox", { name: "Search settings" })).toHaveValue("");
+    await expect(canvas.getByRole("heading", { name: "Updates", level: 2 })).toBeInTheDocument();
   },
 };
 
@@ -173,10 +236,23 @@ export const Default: Story = {
  * The mark moves and **nothing else on the page does**, which is the point of watching it
  * here rather than on the panel alone: every price surface in the real window re-renders off
  * the cache it already has, with no sync, no spinner and no gap.
+ *
+ * `Prices` shares the `Card data` entry with `Combos`, so the play opens that group first —
+ * both are optional bulk feeds from a third party that the app works entirely without, which is
+ * the same argument that used to put them next to each other on the scroll.
  */
 export const SwitchingMarketplace: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
+    await pickGroup(canvas, "Card data");
+
+    // The setting an install starts on, read through the real hook rather than passed in. It
+    // used to be `Default`'s last assertion, and it moved here with the panel.
+    await expect(await canvas.findByRole("button", { name: "TCGplayer USD" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
     await userEvent.click(await canvas.findByRole("button", { name: "Cardmarket EUR" }));
 
     await waitFor(async () => {
@@ -201,7 +277,8 @@ export const SwitchingMarketplace: Story = {
  * current version, the last check and "Check now" stay exactly where they were, so the reader
  * who came here to look something up is not made to re-find it because a release happened.
  *
- * Nothing else on the page moves, which is the point of storying it beside {@link Default}.
+ * Nothing else on the page moves, which is the point of storying it beside {@link Default} — and
+ * it needs no press, because `Updates` is the group this page opens on.
  */
 export const UpdateAvailable: Story = {
   args: { update: update() },
@@ -226,16 +303,31 @@ export const ReadyToRestart: Story = {
  * (`fault: "errorLog"`). Which makes it the only place the Clear button is real: the fake's
  * `error_log_clear` writes to the table, so pressing it here actually empties the panel.
  *
+ * **It is also the one place the rail's second badge is worth looking at.** The count on the
+ * `Errors` entry is `log.entries.length` — the same hook the panel reads, held on the page for
+ * exactly this reason, and drawn while the group is unselected. So the entry is pressed *after*
+ * the badge is read, which is the order a reader meets them in.
+ *
  * `Settings/ErrorLogPanel` stories the same three rows as arguments; this is the page they
- * arrive on, in the column they arrive in, under a panel about something else entirely.
+ * arrive on, in the group they arrive in, under an entry that says how many there are.
  */
 export const SomethingFailed: Story = {
   parameters: { fake: { fault: "errorLog" } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
+    const rail = within(canvas.getByRole("navigation", { name: "Settings" }));
+
+    // The badge, before the group is opened — which is the whole reason the hook is on the page
+    // rather than inside the panel.
+    const entry = await rail.findByRole("button", { name: /^Errors/ });
+    await waitFor(async () => {
+      await expect(entry).toHaveAccessibleName(/Errors \(\d/);
+    });
+
+    await pickGroup(rail, "Errors");
     await expect(await canvas.findByText("×617")).toBeInTheDocument();
-    // The panel's own heading, beside the update panel's — each section named by its own
-    // heading rather than by its position on the page.
+    // The panel's own heading — the section named by its own heading rather than by the entry
+    // that led here.
     await expect(canvas.getByRole("heading", { name: "Errors", level: 2 })).toBeInTheDocument();
   },
 };
@@ -253,6 +345,11 @@ export const SomethingFailed: Story = {
  * that sentence would never be exercised, and that clause is the consequence the reader did not
  * ask for.
  *
+ * `Clear data` has **no rail entry of its own** and sits at the foot of `Storage and data`, so
+ * the play opens that group: the three clears empty the part of the app the data folder holds,
+ * and an entry naming them would have put "delete my collection" one press from every visit to
+ * Settings. The distance stays inside the pane, where it has always been.
+ *
  * The dialog is a modal over the whole window rather than a child of the story's box, so it is
  * reached through `document.body`.
  */
@@ -261,8 +358,9 @@ export const ClearingTheCollection: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const page = within(document.body);
+    await pickGroup(canvas, "Storage and data");
 
-    await userEvent.click(canvas.getByRole("button", { name: "Clear collection" }));
+    await userEvent.click(await canvas.findByRole("button", { name: "Clear collection" }));
     const dialog = await page.findByRole("dialog");
     const confirm = within(dialog).getByRole("button", { name: "Clear collection" });
 
@@ -291,13 +389,18 @@ export const ClearingTheCollection: Story = {
  * A word typed on every dialog is a word nobody reads — which is what would make it useless on
  * the three below. So the cache asks once and takes the answer, and the sentence it leaves says
  * what came back rather than what went.
+ *
+ * Same group as the three clears, and that is the ordering rule surviving the regrouping: within
+ * `Storage and data` the cache sits above them, because it throws away bytes the app fetches
+ * again and they throw away what a reader owns.
  */
 export const ClearingTheCache: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const page = within(document.body);
+    await pickGroup(canvas, "Storage and data");
 
-    await userEvent.click(canvas.getByRole("button", { name: "Clear cache" }));
+    await userEvent.click(await canvas.findByRole("button", { name: "Clear cache" }));
     const dialog = await page.findByRole("dialog");
 
     await expect(within(dialog).queryByRole("textbox")).not.toBeInTheDocument();

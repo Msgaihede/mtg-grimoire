@@ -575,6 +575,14 @@ Every one of these has its measurement and its story in
   dialog is not a descendant of the container), which is what `FilterBar.test.tsx` does. The
   dropdowns escape this a different way and their own comment says so: `usePopupPlacement`
   measures a zero-size frame precisely to subtract whatever containing block it landed in.
+  **Settings met the same rule from the inside on 2026-09-03, and the lesson is where a container
+  may not go rather than where a dialog may not.** That page's panels mount their dialogs inline —
+  grep `ConfirmDialog` under `src/features/settings/` for the census, since none of them writes
+  the `fixed inset-0` itself and the class is `Dialog.tsx:333`'s — so the rail's container query
+  had to go on the `<nav>` and never on the settings root, which would have reparented every one
+  of those scrims. What made that possible is that the rail's own inline size answers the
+  question being asked; the arithmetic is in
+  [frontend-design.md](../docs/reference/frontend-design.md).
 - **A scroll container is `relative`, because a scroll container has to be the containing block
   for its own absolutely positioned content.** `overflow` clips a descendant only when the
   scroller lies between it and that descendant's **containing block** — and Tailwind's `.sr-only`
@@ -611,6 +619,16 @@ Every one of these has its measurement and its story in
   `ring-inset`, which is what `TableView` draws for rows absolutely positioned inside a
   virtualiser. **jsdom has no layout engine and therefore no clip**, so nothing here is visible to
   the suite — `views.test.tsx` sweeps the class instead.
+  **Since 2026-09-03 that alternative is the default and this rule survives for `FOCUS` alone.**
+  `DROP_RING` is `ring-1 ring-inset ring-accent/45`, so the drop ring is painted *within* the
+  border box and can no longer be clipped by anything — the failure above is a history rather than
+  a live hazard for that mark. `DROP_MARK_ROOM` does not change and must not: `FOCUS` still stands
+  4px proud, and the 6px was always sized for it rather than for the ring. The same pass moved
+  both drop marks onto **the element carrying the target's own edge** — a folder card's `<button>`,
+  never the `<li>` around it — because a ring on a wrapper stood 2px outside a dashed border it was
+  meant to agree with, which is what a reader reported as highlights that do not line up. A card
+  that already has a border wears `DROP_EDGE` (its dash goes gold) instead of growing a second
+  outline. `src/lib/dropMarks.ts` carries all of it.
 - **Anything `fixed` positioned from a measured rect takes its viewport width from
   `document.documentElement.clientWidth`, never `window.innerWidth`.** `innerWidth` includes the
   classic vertical scrollbar; the initial containing block a `fixed` box is laid out against

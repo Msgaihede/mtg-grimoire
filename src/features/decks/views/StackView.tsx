@@ -610,10 +610,15 @@ export function StackView({
     // block to fill — and is kept because it is the sentence a host in a *row* reads: it is how
     // the view takes its share of the width, which is the axis this box has ever shared.
     //
-    // **{@link DROP_MARK_ROOM} is the padding, and it is what keeps a drag's own affordance on
-    // screen.** This box clips at its padding box, so with none the leftmost pile's `DROP_RING`
-    // and the rail's were each sliced down the edge for the whole length of a drag, and a pile's
-    // focus outline with them. The bottom edge is {@link ROOT_GUTTER} instead — the `pb-2` this
+    // **{@link DROP_MARK_ROOM} is the padding, and what it keeps on screen is a pile's focus
+    // outline.** This box clips at its padding box, so with none the leftmost pile's mark and the
+    // rail's were each sliced down the edge, and a pile's focus outline with them.
+    //
+    // **The drag half of that is history since 2026-09-03 and the padding is not**: `DROP_RING`
+    // became `ring-1 ring-inset ring-accent/45`, and an inset ring is painted *within* the border
+    // box, so nothing here can clip it any more. `FOCUS` still stands 4px proud and is still the
+    // reason for the number — which it always was, since 6px is that 4 plus two to spare and was
+    // never the ring's 2. The bottom edge is {@link ROOT_GUTTER} instead — the `pb-2` this
     // was written as until the reserve above needed adding to it, and an inline `padding-bottom`
     // replaces a Tailwind one rather than adding to it — because the foot of a column is the one
     // edge that was never clipped and 8px is what the layout was drawn with.

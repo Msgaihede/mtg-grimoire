@@ -13,7 +13,7 @@ import { ParentFolderCard } from "@/components/ParentFolderCard";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { cardScaleVars } from "@/lib/cardZoom";
 import { plural } from "@/lib/counts";
-import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
+import { DROP_EDGE, DROP_OVER } from "@/lib/dropMarks";
 import { useFolderDropTarget, type FolderDrag, type FolderEdge } from "@/lib/folderDrag";
 import { FOCUS } from "@/lib/focus";
 import { cardArtSrc, cardImageUrl } from "@/lib/images";
@@ -173,7 +173,7 @@ export function FolderCard({
       // inside the card inherits them, so the strip, the name, the count and the credit follow
       // one number and nothing has to be threaded down.
       style={cardScaleVars(zoom)}
-      className={cn("group relative rounded-xl", eligible && DROP_RING)}
+      className="group relative rounded-xl"
     >
       {/* **Two boxes for two drags, and it is the drag library that insists.**
           `dropTargetForElements` keeps one registration per element — a second one replaces the
@@ -182,11 +182,24 @@ export function FolderCard({
           is picked up, so a single element is the whole of what the folder gesture reads and
           writes. The two are the same rectangle, which matters because this one is *measured*:
           `folderEdge` divides its box into the three landings.
-          The marks are the deck drag's, borrowed rather than reinvented — only one drag is ever in
-          the air, and `armed` and an `inside` landing are the same two claims about the other
-          payload. The third landing is what a deck has no equivalent of, and it is the line
-          below. */}
-      <div ref={folderRef} className={cn("relative rounded-xl", armed && DROP_RING)}>
+          **Neither box wears a mark any more, and that is 2026-09-03's change.** They are
+          wrappers *around* the card rather than the card, and a Tailwind ring is a box shadow
+          painted **outside** the border box — so what shipped was a ring on the `<li>` for the
+          deck drag, a second one here for the folder drag, and the button's own dashed edge
+          inside both: three concentric outlines for one landing, none of them touching. This card
+          was the worst case in the app, and it is what the reader's report about affordances
+          being bulky, overlapping their neighbours and not lining up with the dotted outline was
+          made against. Both marks moved onto the `<button>` below — the element that already
+          carries the card's own edge — so the dash a folder card draws all day is the thing that
+          changes colour, and there is no second outline left to fail to line up with. The
+          registrations stayed exactly where they are and had to: they are the boxes the two drags
+          are read and measured against, and only the `className` moved.
+          **`eligible` and `armed` collapse onto that one mark**, which is sound rather than a
+          shortcut and is already the arrangement the sibling folder cards use: only one drag is
+          ever in the air, so the two are the same claim — *this card could take what you are
+          holding* — about different payloads, and no card can be answering both at once. The
+          third landing is what a deck has no equivalent of, and it is the line below. */}
+      <div ref={folderRef} className="relative rounded-xl">
         <button
           type="button"
           // Starts with the visible label, then says the two things the card's marks say — WCAG
@@ -199,6 +212,11 @@ export function FolderCard({
             "block w-full rounded-xl border border-dashed border-border text-left",
             "p-[calc(0.625rem*var(--mark-scale,1))]",
             "transition-colors duration-150 hover:border-accent motion-reduce:transition-none",
+            // Both drags' *eligible* mark, on the card's own dash rather than around it — and it
+            // has to be written **before** the line below, because `tailwind-merge` resolves the
+            // border colour by argument order: the card the pointer is actually over would
+            // otherwise have its full-strength edge pulled back down to 45% by the wider claim.
+            (eligible || armed) && DROP_EDGE,
             (over || edge === "inside") && cn("border-accent", DROP_OVER),
             FOCUS,
           )}

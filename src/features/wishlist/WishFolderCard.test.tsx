@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FOLDER_DROP_LINE_ATTR } from "@/components/FolderDropLine";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { useContextMenu } from "@/components/menu/useContextMenu";
-import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
+import { DROP_EDGE, DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import {
   folderDraggable,
   readFolderDrag,
@@ -39,10 +39,12 @@ import { wishDraggable, type WishDrag } from "./wishDrag";
  * target is `null` on every frame — which is why the boxes below are setup rather than
  * decoration.
  *
- * What is out of reach here and stays the live pass's to prove: that a ring drawn *outside* a
- * card's border box survives the wall's own `overflow` (that is `DROP_MARK_ROOM`, and jsdom has
- * no layout engine and therefore no clip), and the drag preview a reader watches follow the
- * pointer.
+ * What is out of reach here and stays the live pass's to prove: that the marks a card draws line
+ * up with each other and with the card's own dashed edge, and that whatever is painted *outside*
+ * a card's border box survives the wall's own `overflow` (that is `DROP_MARK_ROOM`, and jsdom has
+ * no layout engine and therefore no clip — since 2026-09-03 the mark it buys room for is `FOCUS`
+ * rather than a drop mark, both of the card's own being drawn inside its border box now). And the
+ * drag preview a reader watches follow the pointer.
  */
 
 const WISH: WishDrag = { wishId: 7, name: "Lightning Bolt", folderId: null };
@@ -272,8 +274,9 @@ describe("WishFolderCard", () => {
     };
   }
 
-  /** The card's own box — the element the ring is drawn on, the one registered as a wish target,
-   *  and the one a reader picks the folder up by. */
+  /** The card's own box — the element registered as a wish target and the one a reader picks the
+   *  folder up by. **It wears no mark**: since 2026-09-03 both go on {@link face} inside it, which
+   *  is the element carrying the card's own dashed edge. */
   function card(name = "Expensive"): HTMLElement {
     return screen.getByRole("button", { name: new RegExp(`^${name} folder`) }).closest("li")!;
   }
@@ -282,13 +285,16 @@ describe("WishFolderCard", () => {
    * The same `<li>`, reached without going through the face.
    *
    * **The face is gone while the name is being edited**, so every claim about the card's boxes —
-   * the ring, the two drop targets, the drag source — needs a handle that survives the field
-   * replacing it. One card per mount, so the list item is unambiguous.
+   * the two drop targets and the drag source — needs a handle that survives the field replacing
+   * it. One card per mount, so the list item is unambiguous. (It named the ring too until
+   * 2026-09-03; the `<li>` draws no mark at all now, which is what {@link card}'s note is about.)
    */
   const item = () => screen.getByRole("listitem");
 
-  /** The face inside it, which is what wears the wash — and the element a real pointer is over
-   *  for all but the `⋯`'s corner, so it is where the folder drags below are aimed. */
+  /** The face inside it, which is what wears **both** marks — `DROP_EDGE`'s faintly gold dash for
+   *  a drawer that would take what is in the air and `DROP_OVER`'s wash for the one under the
+   *  pointer. It is also the element a real pointer is over for all but the `⋯`'s corner, so it is
+   *  where the folder drags below are aimed. */
   const face = () => card().querySelector("button")!;
 
   /**
@@ -479,7 +485,7 @@ describe("WishFolderCard", () => {
     expect(Number.parseFloat(panel.style.top)).toBe(232);
   });
 
-  it("raises a ring for a wish it can take, and a wash under the pointer", async () => {
+  it("turns its own dash gold for a wish it can take, and washes under the pointer", async () => {
     mount({ withSource: true });
     stand();
     const held = await startPointerDrag(screen.getByText("the wish"));
@@ -487,9 +493,12 @@ describe("WishFolderCard", () => {
     // operation rather than a remembered flag, so after a cancel or a drop it is false for every
     // drag there has ever been.
     expect(held.started).toBe(true);
-    // The ring is a `dragstart` fact and needs no pointer over this card — that is the whole point
-    // of it: every drawer a wish could go in lights up at once, not only the one under the hand.
-    expect(marked(card(), DROP_RING)).toBe(true);
+    // The eligible mark is a `dragstart` fact and needs no pointer over this card — that is the
+    // whole point of it: every drawer a wish could go in lights up at once, not only the one under
+    // the hand. **On the face**, which is the box carrying the dash it recolours; the `<li>` wears
+    // nothing, and a mark drawn there stood 2px proud of the edge it was meant to line up with.
+    expect(marked(face(), DROP_EDGE)).toBe(true);
+    expect(marked(card(), DROP_EDGE)).toBe(false);
     expect(marked(face(), DROP_OVER)).toBe(false);
 
     await held.over(card());
@@ -498,11 +507,11 @@ describe("WishFolderCard", () => {
     await held.cancel();
   });
 
-  it("draws no ring at all for a wish it refuses", async () => {
+  it("leaves its dash alone for a wish it refuses", async () => {
     mount({ withSource: true, canDrop: () => false });
     stand();
     const held = await startPointerDrag(screen.getByText("the wish"));
-    expect(marked(card(), DROP_RING)).toBe(false);
+    expect(marked(face(), DROP_EDGE)).toBe(false);
 
     // And refusing means refusing the drop too, not merely declining to advertise it — which is
     // why the pointer really travels onto the card first.
@@ -569,12 +578,14 @@ describe("WishFolderCard", () => {
   });
 
   /** The middle of a drawer means *into* it, and it wears the same wash a wish over it does —
-   *  only one thing is ever in the air, so the two claims are one mark rather than two. */
-  it("rings for a folder it can take, and washes over the middle it would nest in", async () => {
+   *  only one thing is ever in the air, so the two claims are one mark rather than two. The
+   *  eligible mark is shared the same way: one `DROP_EDGE` on the face for either payload. */
+  it("turns its dash gold for a folder it can take, and washes over the middle it nests in", async () => {
     mount({ withFolder: true });
     stand();
     const held = await startPointerDrag(screen.getByText("the folder"));
-    expect(marked(card(), DROP_RING)).toBe(true);
+    expect(marked(face(), DROP_EDGE)).toBe(true);
+    expect(marked(card(), DROP_EDGE)).toBe(false);
     expect(marked(face(), DROP_OVER)).toBe(false);
 
     await held.over(slot(), INSIDE);
@@ -611,14 +622,14 @@ describe("WishFolderCard", () => {
    * **No mark means no drop.** `useFolderDropTarget` reports `edge: null` over a part of the card
    * the page refuses, deliberately keeping the whole element in the library's hierarchy so the
    * reported edge keeps following the pointer — so the card has to draw nothing there rather than
-   * a line leading to a write that never happens. The ring stays up, because this drawer *would*
-   * take the folder beside it.
+   * a line leading to a write that never happens. The gold dash stays up, because this drawer
+   * *would* take the folder beside it.
    */
   it("draws nothing at all over a landing the page refuses, and refuses the drop too", async () => {
     mount({ withFolder: true, canDropFolder: (_drag, edge) => edge !== "inside" });
     stand();
     const held = await startPointerDrag(screen.getByText("the folder"));
-    expect(marked(card(), DROP_RING)).toBe(true);
+    expect(marked(face(), DROP_EDGE)).toBe(true);
 
     await held.over(slot(), INSIDE);
     expect(marked(face(), DROP_OVER)).toBe(false);
@@ -628,11 +639,11 @@ describe("WishFolderCard", () => {
     expect(onDropFolder).not.toHaveBeenCalled();
   });
 
-  it("draws no ring at all for a folder the page refuses outright", async () => {
+  it("leaves its dash alone for a folder the page refuses outright", async () => {
     mount({ withFolder: true, canDropFolder: () => false });
     stand();
     const held = await startPointerDrag(screen.getByText("the folder"));
-    expect(marked(card(), DROP_RING)).toBe(false);
+    expect(marked(face(), DROP_EDGE)).toBe(false);
 
     await held.over(slot(), INSIDE);
     await held.drop();
@@ -661,7 +672,7 @@ describe("WishFolderCard", () => {
     });
     stand();
     const held = await startPointerDrag(screen.getByText("the folder"));
-    expect(marked(card(), DROP_RING)).toBe(false);
+    expect(marked(face(), DROP_EDGE)).toBe(false);
 
     await held.over(slot(), INSIDE);
     await held.drop();
