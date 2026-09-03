@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, expect, it, vi } from "vitest";
@@ -23,6 +23,10 @@ const deckFolderList = vi.fn();
 const deckGet = vi.fn();
 const deckSetCardQuantity = vi.fn();
 const deckCardSetLabel = vi.fn();
+const deckLabelAll = vi.fn();
+const deckLabelCreate = vi.fn();
+const deckCategoryCreate = vi.fn();
+const deckMoveCard = vi.fn();
 const getMarketplace = vi.fn();
 const marketplaceFeedStatus = vi.fn();
 
@@ -58,12 +62,19 @@ vi.mock("@/lib/ipc", async (original) => ({
       deckGet(id, variant, marketplace),
     deckSetCardQuantity: (...args: unknown[]) => deckSetCardQuantity(...args),
     deckCardSetLabel: (...args: unknown[]) => deckCardSetLabel(...args),
+    // **The list `deck_get` cannot answer.** `deckLabelList` only ever sees a label some card is
+    // wearing, so the picker's own list is this one — see the modal's `labelOptions`.
+    deckLabelAll: () => deckLabelAll(),
+    deckLabelCreate: (...args: unknown[]) => deckLabelCreate(...args),
+    deckCategoryCreate: (...args: unknown[]) => deckCategoryCreate(...args),
+    deckMoveCard: (...args: unknown[]) => deckMoveCard(...args),
     getMarketplace: () => getMarketplace(),
     marketplaceFeedStatus: () => marketplaceFeedStatus(),
   },
 }));
 
 import { CardDetailModal } from "./CardDetailModal";
+import { LABEL_COLORS } from "@/features/decks/labelColors";
 import { useAppStore } from "@/lib/store";
 
 const detail: CardDetail = {
@@ -162,6 +173,16 @@ beforeEach(() => {
   deckGet.mockReset().mockResolvedValue(null);
   deckSetCardQuantity.mockReset().mockResolvedValue({ quantity: 5, removed: false });
   deckCardSetLabel.mockReset().mockResolvedValue(undefined);
+  deckLabelAll.mockReset().mockResolvedValue([]);
+  deckLabelCreate.mockReset().mockResolvedValue({
+    id: 8,
+    name: "Cut candidate",
+    color: "#d9b95c",
+    cardCount: 0,
+    deckCount: 0,
+  });
+  deckCategoryCreate.mockReset().mockResolvedValue({ id: 42, name: "Ramp" });
+  deckMoveCard.mockReset().mockResolvedValue(42);
   // Nobody has chosen one, which is what a fresh install reads.
   getMarketplace.mockReset().mockResolvedValue("tcgplayer");
   marketplaceFeedStatus.mockReset().mockResolvedValue([]);
@@ -492,9 +513,209 @@ it("sizes the panel with one variant family, never a named breakpoint", async ()
   renderModal("c1");
   const panel = await screen.findByRole("dialog");
 
-  const sized = [...panel.classList].filter((c) => /(^|:)(w|h)-/.test(c));
-  // Sanity, so the filter below is looking at something: the four rungs are on this element.
-  expect(sized.length).toBeGreaterThanOrEqual(4);
+  // `min-` as well as the bare utility since 2026-09-03: the heights are `min-h-[…]` floors now,
+  // and a sweep that only looked at `h-` would have stopped watching three of the four rungs the
+  // moment they changed shape. `max-` is deliberately not swept — `max-h-full`/`max-w-full` are
+  // `Dialog`'s own and carry no variant.
+  const sized = [...panel.classList].filter((c) => /(^|:)min-(w|h)-|(^|:)(w|h)-/.test(c));
+  // Sanity, so the filter below is looking at something: every rung is on this element.
+  expect(sized.length).toBeGreaterThanOrEqual(6);
 
   expect(sized.filter((c) => /^(sm|md|lg|xl|2xl):/.test(c))).toEqual([]);
+});
+
+/**
+ * **The panel asks for a floor and lets the content decide the rest — issue "the card scrolls".**
+ *
+ * Measured live at 2560×1392 before the change: a fixed `h-[50rem]` sat the panel at y=296 with
+ * ~590px of window unused, while the art column needed 666px against the 614px it had — 52px of
+ * overflow, drawn as a scrollbar down the picture a reader opened the card to look at.
+ *
+ * **jsdom has no layout engine, so nothing here can go red for the geometry** — the same standing
+ * carve-out `Dialog.test.tsx` works under. What is testable is the shape of the rule, and it has
+ * three parts that only work together:
+ *
+ * * a `min-h` floor rather than a fixed `h`, so a tall window is usable at all;
+ * * `min(…, 100%)` around every floor, because CSS resolves `min-height` **after** `max-height` —
+ *   a bare floor beats `Dialog`'s `max-h-full` and puts the action row off the bottom of a short
+ *   window, which is the failure `src/CLAUDE.md` makes a rule of;
+ * * `flex-auto` on the two boxes the height is now driven by, since `flex-1` is `flex-basis: 0%`
+ *   and contributes **nothing** to an auto-height column — with `flex-1` the panel sits at its
+ *   floor at every window size and the whole change is inert.
+ */
+it("floors the panel's height instead of fixing it, and clamps every floor to the window", async () => {
+  renderModal("c1");
+  const panel = await screen.findByRole("dialog");
+  const classes = [...panel.classList];
+
+  // Full-bleed on a phone, and content-driven from the 640 rung up.
+  expect(classes).toContain("h-full");
+  expect(classes).toContain("min-[640px]:h-auto");
+  // No rung fixes a height any more; all three are floors.
+  expect(classes.filter((c) => /^min-\[\d+px\]:h-\[/.test(c))).toEqual([]);
+  expect(classes).toContain("min-[640px]:min-h-[min(52.5rem,100%)]");
+  expect(classes).toContain("min-[900px]:min-h-[min(47.5rem,100%)]");
+  expect(classes).toContain("min-[1200px]:min-h-[min(50rem,100%)]");
+
+  // The other half. Both boxes, because the panel's height is the sum of what they report — the
+  // body wrapper and the column grid inside it, which are this panel's only two `min-h-0`
+  // flexible children. Awaited on the card, since the grid is not drawn until there is one.
+  await screen.findByRole("button", { name: /view all printings/i });
+  expect(panel.querySelectorAll(".min-h-0.flex-auto").length).toBe(2);
+  expect(panel.querySelectorAll(".min-h-0.flex-1").length).toBe(0);
+});
+
+/**
+ * **A different printing of a card is the same entry in the list it was opened from.**
+ *
+ * Picking one out of `AllPrintingsDialog` writes a `selectedCardId` the walk has never heard of —
+ * the wall published the printing *it* drew — so a lookup by `cardId` alone answered `-1`, both
+ * chevrons vanished, and the modal had lost its place in the list behind the scrim. Measured in
+ * the shipped window on 2026-09-03: `indexOfSelected: -1`, zero chevrons rendered.
+ *
+ * The chevrons are asserted by *stepping* rather than by being present, because presence alone
+ * would pass on a fix that found the wrong stop: an oracle-only match would land on the first
+ * printing of the card on a wall searched with `collapse: false`, which is why the real one tries
+ * the exact printing first.
+ */
+it("keeps its place in the list when another printing of the same card is opened", async () => {
+  // The Beta printing of the same oracle card — a card id no stop carries.
+  cardDetail.mockImplementation((id: string) =>
+    Promise.resolve(
+      id === "c1b" ? { ...detail, id: "c1b", setCode: "leb", setName: "Limited Edition Beta" } : detail,
+    ),
+  );
+  useAppStore.setState({
+    cardWalk: {
+      label: "Search results",
+      stops: [
+        { cardId: "c0", oracleId: "o0", name: "Ancestral Recall", deck: null },
+        { cardId: "c1", oracleId: "o1", name: "Lightning Bolt", deck: null },
+        { cardId: "c2", oracleId: "o2", name: "Black Lotus", deck: null },
+      ],
+    },
+  });
+  renderModal("c1");
+  await screen.findByRole("dialog");
+  await screen.findByRole("button", { name: /next card in search results/i });
+
+  // Exactly what `AllPrintingsDialog` writes on a pick — `setSelectedCardId`, which is also why
+  // the `Printing ▾` picker beside it never showed this: `viewPrinting` keeps the deck context,
+  // and a card opened out of a deck is found through `sameDeckSlot` instead.
+  act(() => {
+    useAppStore.getState().setSelectedCardId("c1b");
+  });
+
+  const next = await screen.findByRole("button", { name: /next card in search results/i });
+  await userEvent.click(next);
+  // Still stop 1 of 3, so the step lands on stop 2 rather than on nothing.
+  expect(useAppStore.getState().selectedCardId).toBe("c2");
+});
+
+/** A card opened out of the deck row above, which is the only surface that draws the two
+ *  pickers — `scope.deckControls`, resolved from `paneDeckContext`. */
+async function renderFromDeck() {
+  deckGet.mockResolvedValue(deckDetail());
+  useAppStore.setState({ activeView: "decks" });
+  useAppStore.getState().openCardFromDeck(deckRow);
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  render(
+    <QueryClientProvider client={qc}>
+      <CardDetailModal />
+    </QueryClientProvider>,
+  );
+  await screen.findByRole("dialog");
+  // The panel is on screen while the card is still a fetch away, and the controls column is not
+  // drawn until there is a card — so the dialog alone is not far enough to press anything.
+  await screen.findByRole("button", { name: /view all printings/i });
+}
+
+it("offers every label the reader has, not only the ones this deck's list wears", async () => {
+  // **The bug, stated as its cause.** The picker was built from `deck.labels`, which comes off
+  // `deck_get` — and `ipc.ts` says outright at `deckLabelList` that it *cannot* answer a label
+  // nothing is wearing. So the label a reader made and has not used in this deck yet was missing
+  // from the one control they would use to apply it, which reads as "my labels are gone".
+  deckLabelAll.mockResolvedValue([
+    { id: 7, name: "Needs testing", color: "#d9b95c", cardCount: 4, deckCount: 1 },
+    { id: 8, name: "Cut candidate", color: "#d3202a", cardCount: 0, deckCount: 0 },
+  ]);
+  await renderFromDeck();
+
+  await userEvent.click(screen.getByRole("button", { name: "Label" }));
+
+  // **The order is the assertion as much as the membership is.** Both commands answer
+  // most-used-first, which `features/decks/CLAUDE.md` names as one of this app's two exemptions
+  // from the alphabetical option-list rule — an order that *is* the information. In-use first,
+  // then the rest, and no label in both halves.
+  // `waitFor` rather than `findAllBy`: the popup opens with whatever has landed, and a query that
+  // resolved on the first render would be asserting about a list that is still two reads short.
+  await waitFor(() =>
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "No label",
+      "Needs testing",
+      "Cut candidate",
+      "Create new…",
+    ]),
+  );
+
+  // And it writes: a label offered but not wired would be the silently inert control this file's
+  // deck test already exists to catch.
+  await userEvent.click(screen.getByRole("option", { name: "Cut candidate" }));
+  await waitFor(() => expect(deckCardSetLabel).toHaveBeenCalledWith(1, "c1", 2, "live", null, 8));
+});
+
+it("asks for the app-wide label list only where the pickers are drawn", async () => {
+  // A card opened off a wall has no deck behind it and nothing to do with a label, so it must
+  // not pay for the read — `scope.deckControls` is the same fact the pickers are drawn on.
+  renderModal("c1");
+  await screen.findByRole("dialog");
+  await waitFor(() => expect(cardPrintings).toHaveBeenCalled());
+
+  expect(deckLabelAll).not.toHaveBeenCalled();
+});
+
+it("makes a category from the picker and files the card into it", async () => {
+  await renderFromDeck();
+
+  await userEvent.click(screen.getByRole("button", { name: /deck category/i }));
+  // The typed text is both the filter and the name — one field, two jobs, which is
+  // `AddLabelDialog`'s grammar. Nothing in this deck matches it, and the create row is still
+  // there: it is the last row of the list at every query rather than one that appears when a
+  // search fails.
+  await userEvent.type(screen.getByRole("combobox"), "Ramp");
+  await userEvent.click(screen.getByRole("option", { name: /^create/i }));
+
+  // …and it travels, so the reader is not asked for the same word twice.
+  expect(await screen.findByLabelText("New category")).toHaveValue("Ramp");
+
+  await userEvent.click(screen.getByRole("button", { name: /^Create/ }));
+  await waitFor(() => expect(deckCategoryCreate).toHaveBeenCalledWith(1, "Ramp"));
+  // deckId, cardId, from, to, toName, variant, finish — the new pile is the destination of the
+  // very same move a pick would have made, which is the whole point of creating one from here.
+  await waitFor(() =>
+    expect(deckMoveCard).toHaveBeenCalledWith(1, "c1", 2, 42, null, "live", null),
+  );
+});
+
+it("makes a label with a colour from the app's own palette, and puts it on the card", async () => {
+  // `deck_labels.color` is NOT NULL and `deck_label_create` refuses a name with no colour rather
+  // than inventing one — so the picker is not decoration, and the hex it writes comes from
+  // `labelColors.ts` rather than from anything typed into this feature.
+  await renderFromDeck();
+
+  await userEvent.click(screen.getByRole("button", { name: "Label" }));
+  await userEvent.type(screen.getByRole("combobox"), "Cut");
+  await userEvent.click(screen.getByRole("option", { name: /^create/i }));
+
+  expect(await screen.findByLabelText("New label")).toHaveValue("Cut");
+
+  await userEvent.click(screen.getByRole("button", { name: "Choose label colour" }));
+  const ember = LABEL_COLORS.find((c) => c.label === "Ember");
+  await userEvent.click(await screen.findByRole("button", { name: "Ember" }));
+
+  await userEvent.click(screen.getByRole("button", { name: /^Create/ }));
+  await waitFor(() => expect(deckLabelCreate).toHaveBeenCalledWith(1, "Cut", ember?.hex));
+  // The created label is then worn, which is the second half of one act — `mutateAsync` and an
+  // explicit chain, because a `mutate`-scoped callback is dropped when its observer unmounts.
+  await waitFor(() => expect(deckCardSetLabel).toHaveBeenCalledWith(1, "c1", 2, "live", null, 8));
 });

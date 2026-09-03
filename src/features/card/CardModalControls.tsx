@@ -1,7 +1,15 @@
-import { useId, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import type { DropdownOption } from "@/components/Dropdown/types";
 import { QuantityStepper } from "@/components/QuantityStepper";
+// The deck's own vocabulary for these two acts, drawn on a surface that is not a deck dialog.
+// `metaRows` is the grammar of a name-and-submit row and `LabelColorPicker` is the app's only
+// answer to "what colour is this label" — a second spelling of either here would be the drift
+// both of those modules were extracted to prevent.
+import { LabelColorButton, LabelColorPanel } from "@/features/decks/LabelColorPicker";
+import { DEFAULT_LABEL_COLOR } from "@/features/decks/labelColors";
+import { labelNameKey } from "@/features/decks/labelNames";
+import { META_FIELD, META_SUBMIT } from "@/features/decks/metaRows";
 import { FOCUS } from "@/lib/focus";
 import type { CardDetail } from "@/lib/ipc";
 import { PRESS } from "@/lib/motion";
@@ -48,6 +56,27 @@ const CONTROL_HEIGHT = "h-11 @min-[900px]/card:h-9";
  * this column reads as one thing with the rail beside it.
  */
 const FIELD_LABEL = "block text-xs uppercase tracking-wide text-dim";
+
+/**
+ * The value the `Create new…` row carries, and the whole of how a create is told from a pick.
+ *
+ * **It cannot collide.** Every other value in either picker is a row id spelled with `String(id)`,
+ * plus the label picker's empty string for "no label" — so a value with brackets in it is not a
+ * thing either list can produce.
+ */
+const NEW_VALUE = "__create__";
+
+/** The quiet way out of the create row — `RenameField`'s cancel, at this file's own timing token
+ *  rather than `metaRows`' literal, so it agrees with the action row one column over. */
+const CREATE_CANCEL = cn(
+  "h-8 shrink-0 rounded-md border border-border px-3 text-xs text-dim",
+  "transition-colors duration-[var(--duration-fast)] ease-standard hover:text-text",
+  "motion-reduce:transition-none",
+  FOCUS,
+);
+
+/** Which picker's create form is open, and the text the reader had typed when they opened it. */
+type Creating = { kind: "category" | "label"; seed: string };
 
 /** One labelled cell: a word, and the control it names under it. */
 function Field({
@@ -99,6 +128,24 @@ export interface CardModalControlsProps {
   /** The label the deck row wears, or `null` for none. */
   labelId?: number | null;
   onPickLabel?: (labelId: number | null) => void;
+
+  /**
+   * Make a pile that does not exist yet and file the card into it — `deck_category_create`, whose
+   * rows are `origin: "user"` by construction.
+   *
+   * **Optional like every other handler here, and the row is absent rather than inert where it
+   * is not wired**: a `Create new…` a reader can press and watch do nothing is worse than a
+   * picker that only picks. Both creates are deck-only by construction, since the pickers
+   * themselves are drawn on `scope.deckControls` alone.
+   */
+  onCreateCategory?: (name: string) => void;
+  /**
+   * Make a label and put it on the card — the name **and a colour**, because `deck_labels.color`
+   * is NOT NULL and `deck_label_create` refuses a name with no colour rather than inventing one.
+   * The colour comes from `labelColors.ts` through the Labels dialog's own picker; nothing here
+   * writes a hex of its own.
+   */
+  onCreateLabel?: (name: string, color: string) => void;
 }
 
 /**
@@ -134,9 +181,14 @@ export function CardModalControls({
   labels = [],
   labelId = null,
   onPickLabel,
+  onCreateCategory,
+  onCreateLabel,
 }: CardModalControlsProps) {
   const uid = useId();
   const stepper = scope.quantity === null ? null : QUANTITY_LABEL[scope.quantity];
+  /** At most one create form at a time — there is one column to draw it in, and a reader naming
+   *  two things at once is not a thing to design for. */
+  const [creating, setCreating] = useState<Creating | null>(null);
 
   return (
     <div className="flex flex-col gap-4">
@@ -218,48 +270,292 @@ export function CardModalControls({
           `repeat(2, minmax(0, 1fr))`, and the `minmax(0,` is what lets a long category name
           truncate instead of pushing the label picker out of the column. */}
       {scope.deckControls && (
-        <div className="grid grid-cols-1 gap-3 @min-[900px]/card:grid-cols-2">
-          <Field id={`${uid}-category`} label="Deck category">
-            <Dropdown
-              id={`${uid}-category-control`}
-              labelledBy={`${uid}-category`}
-              // `scope.deck` is non-null whenever `deckControls` is — they are set together in
-              // `cardModalScope.ts` — but the optional chain is kept rather than asserted,
-              // because a `!` here would be a claim about a *different* file's invariant.
-              value={scope.deck === null ? "" : String(scope.deck.categoryId)}
-              onChange={(v) => onPickCategory?.(Number(v))}
-              options={categories}
-              placeholder={scope.deck?.categoryName ?? "—"}
-              // The mockup draws a search field inside this popup, and `Dropdown` supports one
-              // (`searchable`) — so it is the shell's box rather than one grown here. A deck can
-              // hold dozens of piles once the auto categories have filed a few hundred cards.
-              searchable
-              searchLabel="Search categories"
-              fill
-              className={CONTROL_HEIGHT}
-            />
-          </Field>
+        <div className="flex flex-col gap-3">
+          <div className="grid grid-cols-1 gap-3 @min-[900px]/card:grid-cols-2">
+            <Field id={`${uid}-category`} label="Deck category">
+              <CreatablePicker
+                id={`${uid}-category-control`}
+                labelledBy={`${uid}-category`}
+                // `scope.deck` is non-null whenever `deckControls` is — they are set together in
+                // `cardModalScope.ts` — but the optional chain is kept rather than asserted,
+                // because a `!` here would be a claim about a *different* file's invariant.
+                value={scope.deck === null ? "" : String(scope.deck.categoryId)}
+                onChange={(v) => onPickCategory?.(Number(v))}
+                options={categories}
+                placeholder={scope.deck?.categoryName ?? "—"}
+                // The mockup draws a search field inside this popup, and `Dropdown` supports one
+                // (`searchable`) — so it is the shell's box rather than one grown here. A deck can
+                // hold dozens of piles once the auto categories have filed a few hundred cards.
+                searchLabel="Search categories"
+                onCreate={
+                  onCreateCategory === undefined
+                    ? undefined
+                    : (seed) => setCreating({ kind: "category", seed })
+                }
+              />
+            </Field>
 
-          <Field id={`${uid}-label`} label="Label">
-            <Dropdown
-              id={`${uid}-label-control`}
-              labelledBy={`${uid}-label`}
-              // A row wears at most one label and `null` is a real answer, so the empty string is
-              // the value that means "none" — `Dropdown` speaks strings and has no null.
-              value={labelId === null ? "" : String(labelId)}
-              onChange={(v) => onPickLabel?.(v === "" ? null : Number(v))}
-              options={labels}
-              placeholder="No label"
-              // App-wide since schema v21, so the list is every label the reader has ever made
-              // rather than this deck's — which is exactly the list that needs a search box.
-              searchable
-              searchLabel="Search labels"
-              fill
-              className={CONTROL_HEIGHT}
+            <Field id={`${uid}-label`} label="Label">
+              <CreatablePicker
+                id={`${uid}-label-control`}
+                labelledBy={`${uid}-label`}
+                // A row wears at most one label and `null` is a real answer, so the empty string
+                // is the value that means "none" — `Dropdown` speaks strings and has no null.
+                value={labelId === null ? "" : String(labelId)}
+                onChange={(v) => onPickLabel?.(v === "" ? null : Number(v))}
+                options={labels}
+                placeholder="No label"
+                // App-wide since schema v21, so the list is every label the reader has ever made
+                // rather than this deck's — which is exactly the list that needs a search box.
+                searchLabel="Search labels"
+                onCreate={
+                  onCreateLabel === undefined
+                    ? undefined
+                    : (seed) => setCreating({ kind: "label", seed })
+                }
+              />
+            </Field>
+          </div>
+
+          {/* **Under the pickers rather than inside the popup, and that is a measurement rather
+              than a taste.** `usePopupPlacement` measures the panel *once*, on the frame it
+              mounts — a footer that grew after that would leave the popup placed for the box it
+              used to be, and nothing clips these panels, so an overgrown one scrolls the whole
+              app sideways. The row also has a colour picker in it at the label rung, which is
+              not a thing that fits on a line inside a `max-h-64` list.
+
+              Keyed on what it is naming, so switching from one create to the other re-seeds the
+              field and puts the caret back in it — React's own answer for per-subject state, and
+              the one this repo allows (`src/CLAUDE.md` forbids a `setState` in an effect). */}
+          {creating !== null && (
+            <CreateRow
+              key={`${creating.kind}:${creating.seed}`}
+              kind={creating.kind}
+              seed={creating.seed}
+              existing={creating.kind === "category" ? categories : labels}
+              onCreate={(name, color) => {
+                setCreating(null);
+                if (creating.kind === "category") onCreateCategory?.(name);
+                else onCreateLabel?.(name, color);
+              }}
+              onUse={(value) => {
+                setCreating(null);
+                if (creating.kind === "category") onPickCategory?.(Number(value));
+                else onPickLabel?.(value === "" ? null : Number(value));
+              }}
+              onCancel={() => setCreating(null)}
             />
-          </Field>
+          )}
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * A `<Dropdown>` with one extra row at the end of its list: **Create new…**
+ *
+ * ## Why the row is always there
+ *
+ * The alternative — reveal it only when the typed text matches nothing — is the shape that reads
+ * as clever and behaves as a surprise: the control a reader is reaching for appears and vanishes
+ * as they type, and a reader who wants a *second* pile called something close to one they already
+ * have (`Removal`, `Removal — sweepers`) can never reach it at all, because their text matches. A
+ * row that is always last is a row that can be learnt.
+ *
+ * ## Why the search is controlled here
+ *
+ * `<Dropdown>` filters an **uncontrolled** `searchable` list by label substring — which would eat
+ * the create row on exactly the query that needs it most, the one matching nothing. So this
+ * supplies `query`/`onQueryChange` and does the filtering itself: the same case-insensitive
+ * substring test the shell would have made, applied to the caller's options and to nothing else.
+ * `onOpen` clears the box, because the shell's own reset is skipped for a controlled caller
+ * (deliberately — it owns `query`) and a reader who typed, closed and reopened must not meet a
+ * pre-filtered list.
+ *
+ * **The typed text travels with the press.** A reader who types `Ramp`, finds nothing and presses
+ * the row has already said what they want to call it, and asking again in the next field would be
+ * the app not listening. Empty text seeds an empty field, which is the plain "make me a new one".
+ */
+function CreatablePicker({
+  id,
+  labelledBy,
+  value,
+  onChange,
+  options,
+  placeholder,
+  searchLabel,
+  onCreate,
+}: {
+  id: string;
+  labelledBy: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: readonly DropdownOption[];
+  placeholder: string;
+  searchLabel: string;
+  /** `undefined` where the host wired no create — the row is then absent rather than inert. */
+  onCreate?: (seed: string) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const typed = query.trim();
+
+  const drawn = useMemo(() => {
+    const needle = typed.toLowerCase();
+    const matched =
+      needle === "" ? options : options.filter((o) => o.label.toLowerCase().includes(needle));
+    if (onCreate === undefined) return matched;
+    // The typed words in the row itself, so the press says what it is about to make.
+    const label = typed === "" ? "Create new…" : `Create “${typed}”…`;
+    return [...matched, { value: NEW_VALUE, label }];
+  }, [options, typed, onCreate]);
+
+  return (
+    <Dropdown
+      id={id}
+      labelledBy={labelledBy}
+      value={value}
+      onChange={(v) => (v === NEW_VALUE ? onCreate?.(typed) : onChange(v))}
+      options={drawn}
+      placeholder={placeholder}
+      searchable
+      searchLabel={searchLabel}
+      query={query}
+      onQueryChange={setQuery}
+      onOpen={() => setQuery("")}
+      fill
+      className={CONTROL_HEIGHT}
+    />
+  );
+}
+
+/**
+ * The name — and, for a label, the colour — of the thing about to be made.
+ *
+ * **A row in the column, not a dialog.** A nested `Dialog` would need `layer="stacked"`, a second
+ * focus trap and a second Escape rung inside one that is already `"inner"`, all to ask for one
+ * word; and the word is being typed on the surface the answer appears on, which is the naming
+ * grammar the folder wall settled on for the same reason. Escape is left to the modal around it,
+ * which is `RenameField`'s decision verbatim: a second rung inside an `"inner"` layer is the case
+ * `useDismissOnEscape` explicitly does not order.
+ *
+ * **The duplicate check is a courtesy and behaves like one.** `labelNameKey` normalises exactly
+ * as Rust's `label_name_key` does, and the `UNIQUE INDEX` behind it is the actual fence — two
+ * windows racing one name is what an index is for. What this buys is that a reader who types a
+ * name they already have is handed *that row* instead of a round trip and a refusal: the submit
+ * changes its word to `Use “…”`, and picking it is all the press then does. The same test serves
+ * the category picker, where the grain is `(deckId, name)` and `deck_category_create` refuses a
+ * duplicate the same way.
+ *
+ * The colour is behind one press rather than open, unlike `AddLabelDialog`'s panel: this row
+ * lives in a column beside a card and a wheel with a hex field is not a thing that fits on it at
+ * rest. {@link DEFAULT_LABEL_COLOR} is what it opens on — `labelColors.ts`' own answer for a new
+ * label, never a hex chosen here.
+ */
+function CreateRow({
+  kind,
+  seed,
+  existing,
+  onCreate,
+  onUse,
+  onCancel,
+}: {
+  kind: "category" | "label";
+  seed: string;
+  /** The picker's own rows, for the duplicate courtesy — the list the reader can already see. */
+  existing: readonly DropdownOption[];
+  onCreate: (name: string, color: string) => void;
+  /** The name is one the reader already has: use that row instead of making a second. */
+  onUse: (value: string) => void;
+  onCancel: () => void;
+}) {
+  const uid = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [name, setName] = useState(seed);
+  const [color, setColor] = useState(DEFAULT_LABEL_COLOR.hex);
+  const [palette, setPalette] = useState(false);
+
+  // **Both calls, in this order**, which is `RenameField`'s note and the same trap: per spec
+  // `select()` only sets a selection, and jsdom implements the spec where Chromium focuses
+  // anyway — so a missing `focus()` looks sufficient in the shipped window and fails in the
+  // suite. The caret belongs here because the reader has just pressed a row that says the next
+  // thing they do is type a name.
+  useEffect(() => {
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, []);
+
+  const trimmed = name.trim();
+  const clash = useMemo(() => {
+    const key = labelNameKey(trimmed);
+    if (key === "") return undefined;
+    // The empty value is the label picker's "No label", which is a row rather than a label and
+    // can never be the thing a reader is naming.
+    return existing.find((o) => o.value !== "" && labelNameKey(o.label) === key);
+  }, [existing, trimmed]);
+
+  const word = kind === "label" ? "label" : "category";
+  // One text node in every arm: a `gap` is not a word separator to the accessible-name
+  // computation, so a name split across two spans reads as one run-on word.
+  const submitWord =
+    clash !== undefined
+      ? `Use “${clash.label}”`
+      : trimmed === ""
+        ? "Create"
+        : `Create “${trimmed}”`;
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (clash !== undefined) {
+          onUse(clash.value);
+          return;
+        }
+        if (trimmed === "") return;
+        onCreate(trimmed, color);
+      }}
+      className="flex flex-wrap items-end gap-2 border-t border-border pt-3"
+    >
+      <div className="flex min-w-0 flex-1 basis-40 flex-col gap-1">
+        <label htmlFor={`${uid}-name`} className={FIELD_LABEL}>
+          {kind === "label" ? "New label" : "New category"}
+        </label>
+        <input
+          ref={inputRef}
+          id={`${uid}-name`}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder={`Name this ${word}…`}
+          className={cn(META_FIELD, "w-full flex-none")}
+        />
+      </div>
+
+      {kind === "label" && (
+        <LabelColorButton color={color} open={palette} onToggle={() => setPalette((o) => !o)} />
+      )}
+
+      <button type="submit" disabled={trimmed === ""} className={META_SUBMIT}>
+        {submitWord}
+      </button>
+      <button type="button" onClick={onCancel} className={CREATE_CANCEL}>
+        Cancel
+      </button>
+
+      {/* `basis-full` rather than a second row of markup: the picker is at most half this column
+          wide above the 900 fold, and a colour wheel on that line would push the submit out of
+          reach. */}
+      {kind === "label" && palette && (
+        <div className="basis-full">
+          <LabelColorPanel value={color} onChange={setColor} />
+        </div>
+      )}
+
+      {clash !== undefined && (
+        <p role="status" className="basis-full text-[0.6875rem] text-dim">
+          “{clash.label}” already exists — this uses it.
+        </p>
+      )}
+    </form>
   );
 }

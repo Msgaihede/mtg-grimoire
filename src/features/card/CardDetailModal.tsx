@@ -57,10 +57,18 @@ import { DEFAULT_VARIANT, useDeck } from "@/features/decks/useDeck";
 import { useDeckFolders } from "@/features/decks/useDeckFolders";
 import { useDecks } from "@/features/decks/useDecks";
 import { sameDeckSlot } from "@/features/decks/deckWalk";
+import { LabelSwatch } from "@/features/decks/LabelColorPicker";
 import type { DropdownOption } from "@/components/Dropdown/types";
 import { soleFinish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
-import { ipc, ipcError, type CardDetail, type DeckFinish, type MeldRelation } from "@/lib/ipc";
+import {
+  ipc,
+  ipcError,
+  type CardDetail,
+  type DeckFinish,
+  type LabelColor,
+  type MeldRelation,
+} from "@/lib/ipc";
 import { PRESS } from "@/lib/motion";
 import { sortOptions } from "@/lib/options";
 import { useAppStore, type CardWalkStop } from "@/lib/store";
@@ -133,11 +141,37 @@ import { useCardMenuDeps } from "./useCardMenuDeps";
  * "prefer arbitrary variants" but **"never mix the two families on one property"** — a named
  * variant added to this string later re-breaks it exactly as invisibly.
  */
+/**
+ * **The heights are floors rather than sizes, and the artboard numbers are what they floor at.**
+ *
+ * They were fixed heights until 2026-09-03, which is a decision about the *panel* being made in a
+ * file that cannot see the content: measured live at 2560×1392, the 1200 rung's `h-[50rem]` sat
+ * the panel at y=296 with **~590px of window unused**, while the art column wanted 666px against
+ * the 614px the panel left it — 52px of overflow, drawn as a scrollbar down the picture. A card
+ * is the one thing in this app a reader opens *to look at*, so a tall monitor spending its height
+ * on glass and then clipping the card is the arrangement backwards.
+ *
+ * So: `h-auto` from the 640 rung up, with the rung's own number as a `min-h`. On a tall window
+ * the panel grows to whatever the columns need and the art column stops scrolling; on a short one
+ * it is `Dialog`'s `max-h-full` that decides, exactly as before.
+ *
+ * **`min(…, 100%)` and never a bare `min-h`, and this is the trap rather than a flourish.** CSS
+ * resolves `min-height` **after** `max-height`, so a bare `min-h-[50rem]` beats `max-h-full`: at a
+ * 700px window the panel would draw 800px, centred, with its action row off the bottom of the
+ * glass where neither pointer nor wheel reaches it — which is the exact failure `src/CLAUDE.md`
+ * makes a rule of and `Dialog` documents at its own site. `100%` is the grid area the scrim's
+ * `grid-rows-[minmax(0,1fr)]` bounds, so the floor can never ask for more window than there is.
+ *
+ * **The other half is `flex-auto` on the two boxes below**, and neither works without the other:
+ * a `flex-1` child is `flex-basis: 0%`, so in an auto-height column it contributes *nothing* to
+ * its parent's content height and the panel would sit at its floor at every window size — the fix
+ * present, and the measurement unchanged. See {@link Body}'s two `flex-auto`s.
+ */
 const PANEL_SIZE =
   "w-full h-full " +
-  "min-[640px]:w-[47.75rem] min-[640px]:h-[52.5rem] " +
-  "min-[900px]:w-[66.25rem] min-[900px]:h-[47.5rem] " +
-  "min-[1200px]:w-[77.5rem] min-[1200px]:h-[50rem]";
+  "min-[640px]:w-[47.75rem] min-[640px]:h-auto min-[640px]:min-h-[min(52.5rem,100%)] " +
+  "min-[900px]:w-[66.25rem] min-[900px]:min-h-[min(47.5rem,100%)] " +
+  "min-[1200px]:w-[77.5rem] min-[1200px]:min-h-[min(50rem,100%)]";
 
 /**
  * Whether the window has room for `Dialog`'s flank columns — spec §2.1's "chevrons as flanks at
@@ -332,15 +366,39 @@ export function CardDetailModal() {
    * card opened from the deck editor's docked search panel — which has no slot — would find *the
    * deck's* row for the same printing and start arrow-stepping the desk from a surface that is
    * not the desk.
+   *
+   * ## The plain arm is two tries, and the second one is the whole of issue "detached modal"
+   *
+   * **A different printing of a card is the same entry in the list it was opened from.** Picking
+   * one out of `AllPrintingsDialog` writes a `selectedCardId` the walk has never heard of — the
+   * wall published the printing *it* drew — so a lookup by `cardId` alone answered `-1`, both
+   * chevrons vanished, and the modal had quietly lost its place in the list behind the scrim.
+   * Measured in the shipped window on 2026-09-03: `indexOfSelected: -1`, zero chevrons rendered.
+   * `AllPrintingsDialog` is the working example of the other answer — it anchors on the card it
+   * was *opened* on, which does not move while a reader browses printings — and the oracle id is
+   * that same anchor expressed as a fact about the card rather than as a remembered argument.
+   *
+   * **Exact first, and that order is load-bearing rather than defensive.** A wall searched with
+   * `collapse: false` lists several printings of one card as separate stops, so an oracle-only
+   * match would land the reader on the first of those — a chevron pair that walks from a card
+   * they are not on. The oracle arm is reached only when no stop *is* the open printing.
+   *
+   * `CardWalkStop.oracleId` is non-null by construction (a printing with no oracle id is not a
+   * stop), so the fallback needs no lookup of its own; the open card's own id comes off the
+   * detail this component already has in hand, and is `null` only for the length of that read.
    */
   const stops = walk.stops;
   const deckSlot = scope.deck;
+  const shownOracle = card.data?.oracleId ?? null;
   const at = useMemo(() => {
     if (shown === null) return -1;
-    return deckSlot === null
-      ? stops.findIndex((stop) => stop.deck === null && stop.cardId === shown)
-      : stops.findIndex((stop) => stop.deck !== null && sameDeckSlot(stop.deck, deckSlot));
-  }, [stops, shown, deckSlot]);
+    if (deckSlot !== null) {
+      return stops.findIndex((stop) => stop.deck !== null && sameDeckSlot(stop.deck, deckSlot));
+    }
+    const exact = stops.findIndex((stop) => stop.deck === null && stop.cardId === shown);
+    if (exact !== -1 || shownOracle === null) return exact;
+    return stops.findIndex((stop) => stop.deck === null && stop.oracleId === shownOracle);
+  }, [stops, shown, deckSlot, shownOracle]);
   const previous = at > 0 ? stops[at - 1] : null;
   const next = at >= 0 && at + 1 < stops.length ? stops[at + 1] : null;
 
@@ -889,15 +947,143 @@ function Body({
     [deck.categories],
   );
 
-  /** Every label, with the empty string first — a row wears at most one and `null` is a real
-   *  answer, so "no label" has to be a row a reader can press rather than only a placeholder. */
-  const labelOptions: DropdownOption[] = useMemo(
-    () => [
-      { value: "", label: "No label" },
-      ...deck.labels.map((l) => ({ value: String(l.id), label: l.name })),
-    ],
-    [deck.labels],
-  );
+  /**
+   * **Every label the reader has**, not the ones this deck's list happens to be wearing.
+   *
+   * `deck.labels` comes off `deck_get`, and `ipc.ts` states the limit outright at
+   * `deckLabelList`: it *cannot* answer a label nothing is wearing. So a label the reader made
+   * and has not used here yet was missing from the picker — which is precisely the label they
+   * opened it to apply, and it read as "my labels are gone". `deck_label_all` is the only list
+   * that can answer one, and it is the same `["decks", "labelsAll"]` entry `useDeckMeta` reads,
+   * so the Labels dialog and this picker share a cache line and one `["decks"]` invalidation
+   * settles both.
+   *
+   * **Gated on the pickers being drawn.** A card opened off a wall has no deck behind it and
+   * nothing to do with a label, so it must not pay for the list — `scope.deckControls` is the
+   * same fact `CardModalControls` draws the two pickers on, rather than a second opinion about
+   * when a deck is in play.
+   */
+  const allLabels = useQuery({
+    queryKey: ["decks", "labelsAll"],
+    queryFn: () => ipc.deckLabelAll(),
+    enabled: scope.deckControls,
+  });
+
+  /**
+   * "No label", then the labels this list wears, then the rest — and **nothing here sorts.**
+   *
+   * Both commands answer **most-used-first**, which `features/decks/CLAUDE.md` names as the first
+   * of this app's two exemptions from the alphabetical option-list rule: an order that *is* the
+   * information. Merging them alphabetically would throw away a count the backend went and made.
+   * In-use first because those are the labels this deck already speaks in; `seen` is what keeps a
+   * label from appearing in both halves, since `deck_label_all` answers every label including the
+   * worn ones.
+   *
+   * The empty string is first because a row wears at most one label and `null` is a real answer,
+   * so "no label" has to be a row a reader can press rather than only a placeholder. The swatch is
+   * `aria-hidden`, so the row's name is still the label's name — colour is what a reader tells two
+   * labels apart by on every other surface in the app, and a picker without it would be the one
+   * place a label is only a word.
+   */
+  const labelOptions: DropdownOption[] = useMemo(() => {
+    const seen = new Set(deck.labels.map((l) => l.id));
+    const rest = (allLabels.data ?? []).filter((l) => !seen.has(l.id));
+    const row = (l: { id: number; name: string; color: LabelColor }) => ({
+      value: String(l.id),
+      label: l.name,
+      icon: <LabelSwatch color={l.color} />,
+    });
+    return [{ value: "", label: "No label" }, ...deck.labels.map(row), ...rest.map(row)];
+  }, [deck.labels, allLabels.data]);
+
+  /**
+   * The two picks, as functions rather than as inline arrows — because the `Create new…` rows
+   * below end in exactly the same two writes and a second copy of either would be a second
+   * opinion about the slot a press addresses.
+   */
+  const pickCategory = (categoryId: number) => {
+    if (scope.deck === null) return;
+    deck.moveCard.mutate({
+      cardId: scope.deck.cardId,
+      from: scope.deck.categoryId,
+      to: categoryId,
+      finish: scope.deck.finish,
+    });
+  };
+  const pickLabel = (labelId: number | null) => {
+    if (scope.deck === null) return;
+    deck.setLabel.mutate({
+      cardId: scope.deck.cardId,
+      categoryId: scope.deck.categoryId,
+      finish: scope.deck.finish,
+      labelId,
+    });
+  };
+
+  /**
+   * Making one, from inside the modal — the two writes behind `CardModalControls`' `Create new…`
+   * rows, and the only writes in this file that bring something into existence rather than move
+   * something that already exists.
+   *
+   * **Both take the whole `["decks"]` root, on success and on refusal alike** — `useDeckMeta`'s
+   * rule for every label and category write, and it is what refreshes the picker that is about to
+   * draw the new row. `["decks", "labelsAll"]` sits under it, which is the entire reason
+   * {@link labelOptions}' read is keyed there rather than somewhere of this file's own.
+   *
+   * **A label needs a colour and the backend will not invent one**: `deck_labels.color` is NOT
+   * NULL and `deck_label_create` refuses a name with no colour, which is `LabelColor`'s "picking
+   * what a colour *is* belongs to the webview". The webview's answer is `labelColors.ts` and the
+   * control is the Labels dialog's own picker, drawn in the form — never a hex written here.
+   */
+  const settleDecks = () => {
+    void queryClient.invalidateQueries({ queryKey: ["decks"] });
+  };
+  const createCategory = useMutation({
+    mutationFn: ({ deckId, name }: { deckId: number; name: string }) =>
+      ipc.deckCategoryCreate(deckId, name),
+    onSuccess: settleDecks,
+    onError: settleDecks,
+  });
+  const createLabel = useMutation({
+    mutationFn: ({ deckId, name, color }: { deckId: number; name: string; color: LabelColor }) =>
+      ipc.deckLabelCreate(deckId, name, color),
+    onSuccess: settleDecks,
+    onError: settleDecks,
+  });
+
+  /**
+   * Make it, then use it — **`mutateAsync` and an explicit chain, never a `mutate`-scoped
+   * `onSuccess`.**
+   *
+   * `features/decks/CLAUDE.md` states the rule at the editor's own create, with the failure
+   * behind it: a callback passed to `mutate` belongs to its *observer*, and TanStack drops it
+   * when that observer unmounts — so a create chained that way loses its attach to an Escape
+   * landing during the round trip, leaving the label made and silently never worn. A chained
+   * promise is held by the closure instead, so the second write lands whatever the panel does.
+   *
+   * The refusal is a sentence rather than a silence, like every other write in this file: a
+   * duplicate name is the one refusal a reader can actually hit, and `CardModalControls` spends
+   * a courtesy check to keep them off it — but the `UNIQUE INDEX` is the fence and two windows
+   * racing one name is exactly what it is for.
+   */
+  const makeCategory = (name: string) => {
+    const slot = scope.deck;
+    if (slot === null) return;
+    setRefusal(null);
+    createCategory
+      .mutateAsync({ deckId: slot.deckId, name })
+      .then((category) => pickCategory(category.id))
+      .catch((e: unknown) => setRefusal(`Could not make that category — ${ipcError(e)}`));
+  };
+  const makeLabel = (name: string, color: LabelColor) => {
+    const slot = scope.deck;
+    if (slot === null) return;
+    setRefusal(null);
+    createLabel
+      .mutateAsync({ deckId: slot.deckId, name, color })
+      .then((label) => pickLabel(label.id))
+      .catch((e: unknown) => setRefusal(`Could not make that label — ${ipcError(e)}`));
+  };
 
   const target = card === null ? null : cardTarget(card);
 
@@ -962,8 +1148,15 @@ function Body({
   return (
     <>
       {/* The panel's own scroller lives on the grid below; this wrapper is the flex column
-          `Dialog`'s panel expects a body to be. */}
-      <div ref={panelRef} className="flex min-h-0 flex-1 flex-col">
+          `Dialog`'s panel expects a body to be.
+
+          **`flex-auto` rather than `flex-1`, and it is half of {@link PANEL_SIZE}'s height rule.**
+          `flex-1` is `flex: 1 1 0%`, and a zero basis contributes *nothing* to an auto-height
+          column's content height — so with the panel sized from its content this box would report
+          0, the panel would sit at its `min-h` floor at every window size, and the fix would be
+          present and inert. `flex: 1 1 auto` reports what is in it and still shrinks to nothing
+          under `max-h-full`, which is what `min-h-0` beside it is for. */}
+      <div ref={panelRef} className="flex min-h-0 flex-auto flex-col">
         <CardMenuRefusal error={refusal ?? menuFailure} className="mx-5 mt-3 shrink-0" />
 
         {error !== null && (
@@ -985,7 +1178,10 @@ function Body({
               // every block stacked in it, the rail's entries included. The *grid* is the
               // scroller there and the columns are not, which is the one arrangement that gives
               // a phone a single thumb-driven scroll rather than three nested ones.
-              "grid min-h-0 flex-1 grid-cols-1 gap-5 overflow-y-auto p-5",
+              // `flex-auto` and not `flex-1`, for the reason spelled on the wrapper above: this
+              // is the box whose content the panel's height is now driven *by*, and a zero
+              // flex-basis would report none of it.
+              "grid min-h-0 flex-auto grid-cols-1 gap-5 overflow-y-auto p-5",
               // At and above the fold the grid stops scrolling and each column starts.
               // `grid-rows-[minmax(0,1fr)_auto]` and not a bare `1fr`: an implicit row is
               // `auto`, which sizes to its own content, so the columns' `overflow-y-auto` would
@@ -1071,26 +1267,12 @@ function Body({
                 quantity={quantity}
                 onQuantityChange={changeQuantity}
                 categories={categoryOptions}
-                onPickCategory={(categoryId) => {
-                  if (scope.deck === null) return;
-                  deck.moveCard.mutate({
-                    cardId: scope.deck.cardId,
-                    from: scope.deck.categoryId,
-                    to: categoryId,
-                    finish: scope.deck.finish,
-                  });
-                }}
+                onPickCategory={pickCategory}
+                onCreateCategory={makeCategory}
                 labels={labelOptions}
                 labelId={deckCard?.labelId ?? null}
-                onPickLabel={(labelId) => {
-                  if (scope.deck === null) return;
-                  deck.setLabel.mutate({
-                    cardId: scope.deck.cardId,
-                    categoryId: scope.deck.categoryId,
-                    finish: scope.deck.finish,
-                    labelId,
-                  });
-                }}
+                onPickLabel={pickLabel}
+                onCreateLabel={makeLabel}
               />
 
               <InlineCounts counts={counts} scope={scope} />
