@@ -184,9 +184,24 @@ export function CardModalPrintings({
     // The rule above it separates "this card" from "every card like it", which is the panel's
     // deepest division — the same hairline `InlineCounts` draws above, so the middle column reads
     // as stacked sections rather than as boxes.
+    // **A fixed head and a scrolling body, at the rung where this column is its own scroller.**
+    // The heading, the control that reorders the list and the count line all describe what is
+    // below them, so a reader three hundred rows down had lost the name of the thing they were
+    // reading, the control they would use to re-sort it, and the only statement of how many
+    // there are. Everything above the rows is `shrink-0`; the rows take what is left.
+    //
+    // **`flex flex-col gap-2` rather than the `space-y-2` this had**: the body needs
+    // `flex-1 min-h-0` to be given a definite height to scroll inside, which is a thing only a
+    // flex parent can hand it. The gap is the same 2 the margins were, so nothing moves.
+    //
+    // Below `@min-[1200px]/card` none of it applies and none of it has to be turned off: the
+    // main column is the scroller there, this section is auto-height inside it, and a body with
+    // no height to overflow draws no bar. The classes are unconditional for that reason — a
+    // container-query variant on them would be four more classes saying what the layout already
+    // says.
     <section
       aria-labelledby={headingId}
-      className="relative space-y-2 border-t border-border pt-3"
+      className="relative flex flex-col gap-2 border-t border-border pt-3 @min-[1200px]/card:min-h-0 @min-[1200px]/card:flex-1"
     >
       {/* The heading and the control that reorders what it names, on one line — and
           **`flex-wrap`, which is `src/CLAUDE.md`'s rule about a row of fixed-width controls
@@ -236,9 +251,9 @@ export function CardModalPrintings({
         />
       </div>
 
-      {loading && <p className="text-xs text-dim">Loading printings…</p>}
+      {loading && <p className="shrink-0 text-xs text-dim">Loading printings…</p>}
       {error !== null && (
-        <p className="text-xs text-destructive">
+        <p className="shrink-0 text-xs text-destructive">
           Could not read the other printings — {error}. The card above is unaffected.
         </p>
       )}
@@ -252,7 +267,7 @@ export function CardModalPrintings({
           under Set. It is dropped whole in `price` mode rather than reworded — there is one group
           there and it has no heading, so "1 price" would count a thing that is not on screen. */}
       {items.length > 0 && (
-        <p className="font-mono text-[0.7rem] tabular-nums text-dim">
+        <p className="shrink-0 font-mono text-[0.7rem] tabular-nums text-dim">
           {items.length < total
             ? `${items.length} of ${plural(total, "printing")}`
             : plural(total, "printing")}
@@ -272,9 +287,21 @@ export function CardModalPrintings({
           space this whole change exists to fill. A reader who asked which printings a card has
           is owed the answer "none", in words. */}
       {!loading && error === null && items.length === 0 && (
-        <p className="text-sm text-dim">This card has no paper printings.</p>
+        <p className="shrink-0 text-sm text-dim">This card has no paper printings.</p>
       )}
 
+      {/* **The body, and the only thing in this section that scrolls.** `space-y-2` here is the
+          spacing the section's own used to give between groups; it moved with them.
+
+          `relative` because this is the box with the overflow now, which is `src/CLAUDE.md`'s
+          phantom-scrollbar rule: every row draws a rarity gem and a language badge, each
+          carrying an `sr-only` span, and `.sr-only` is `position: absolute` — laid out against
+          the viewport rather than this box, an absolutely positioned descendant lands outside it
+          and the box grows a bar for a caption nobody can see.
+
+          The gold thumb is here rather than on the column, since this is the box that draws
+          one — see `.scrollbar-accent` in `index.css` for why this list and no other. */}
+      <div className="scrollbar-slim scrollbar-accent relative min-h-0 flex-1 space-y-2 overflow-y-auto">
       {groups.map((group) => (
         // The key is the group's own — `printings.ts` makes it, because only the thing that
         // decided what a group *is* can say what tells two of them apart (an artist, a date, a
@@ -304,6 +331,7 @@ export function CardModalPrintings({
           </ul>
         </div>
       ))}
+      </div>
     </section>
   );
 }

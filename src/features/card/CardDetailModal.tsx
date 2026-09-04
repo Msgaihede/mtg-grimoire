@@ -1337,7 +1337,7 @@ function Body({
               // `flex-auto` and not `flex-1`, for the reason spelled on the wrapper above: this
               // is the box whose content the panel's height is now driven *by*, and a zero
               // flex-basis would report none of it.
-              "grid min-h-0 flex-auto grid-cols-1 gap-5 overflow-y-auto p-5",
+              "scrollbar-slim grid min-h-0 flex-auto grid-cols-1 gap-5 overflow-y-auto p-5",
               // At and above the fold the grid stops scrolling and each column starts.
               // `grid-rows-[minmax(0,1fr)_auto]` and not a bare `1fr`: an implicit row is
               // `auto`, which sizes to its own content, so the columns' `overflow-y-auto` would
@@ -1362,7 +1362,7 @@ function Body({
                 "min-w-0",
                 // Spans both rows at the two-column rung, so the picture is not cut off at the
                 // height of the controls beside it.
-                "@min-[640px]/card:row-span-2 @min-[640px]/card:min-h-0 @min-[640px]/card:overflow-y-auto",
+                "scrollbar-slim @min-[640px]/card:row-span-2 @min-[640px]/card:min-h-0 @min-[640px]/card:overflow-y-auto",
                 "@min-[900px]/card:row-span-1",
               )}
             >
@@ -1414,7 +1414,7 @@ function Body({
                 // scrolling moves into them.
                 "relative flex min-w-0 flex-col gap-5",
                 "@min-[640px]/card:col-start-2 @min-[640px]/card:row-start-1",
-                "@min-[640px]/card:min-h-0 @min-[640px]/card:overflow-y-auto",
+                "scrollbar-slim @min-[640px]/card:min-h-0 @min-[640px]/card:overflow-y-auto",
                 // **Two columns at the widest rung: the printings list on the left, everything
                 // that writes to the card on the right.** Below it they are one stack, controls
                 // first, which is the order a reader wants when the list is long enough to push
@@ -1450,7 +1450,7 @@ function Body({
                   "relative min-w-0",
                   "@min-[1200px]/card:col-start-1 @min-[1200px]/card:row-start-1",
                   "@min-[1200px]/card:flex @min-[1200px]/card:min-h-0 @min-[1200px]/card:flex-col",
-                  "@min-[1200px]/card:gap-5 @min-[1200px]/card:overflow-y-auto",
+                  "scrollbar-slim @min-[1200px]/card:gap-5 @min-[1200px]/card:overflow-y-auto",
                 )}
               >
               <CardModalControls
@@ -1488,7 +1488,11 @@ function Body({
                 className={cn(
                   "relative min-w-0",
                   "@min-[1200px]/card:col-start-2 @min-[1200px]/card:row-start-1",
-                  "@min-[1200px]/card:min-h-0 @min-[1200px]/card:overflow-y-auto",
+                  // **This column does not scroll; the list inside it does.** Its heading, its
+                  // sort control and its count line stay put while the rows move, which they
+                  // cannot do if the scroller is out here — so all this box does is hand the
+                  // section a definite height to divide between its own head and body.
+                  "@min-[1200px]/card:flex @min-[1200px]/card:min-h-0 @min-[1200px]/card:flex-col",
                 )}
               >
               <CardModalPrintings
@@ -1520,7 +1524,7 @@ function Body({
                 "min-w-0",
                 "@min-[640px]/card:col-start-2 @min-[640px]/card:row-start-2",
                 "@min-[900px]/card:col-start-3 @min-[900px]/card:row-start-1",
-                "@min-[900px]/card:min-h-0 @min-[900px]/card:overflow-y-auto",
+                "scrollbar-slim @min-[900px]/card:min-h-0 @min-[900px]/card:overflow-y-auto",
                 // **The rule between the options and the content, and it is drawn at exactly the
                 // rung where there is something to divide.** At `@min-[900px]/card` and above the
                 // rail is the grid's third column, standing beside the controls; below it the

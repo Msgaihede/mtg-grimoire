@@ -627,3 +627,115 @@ html[data-dragging] * {
 [data-dnd-dragging] {
   opacity: 0.75;
 }
+
+/* ---------------------------------------------------------------------------------------
+   A slim scrollbar, for a scroll area **inside** a panel.
+
+   The app draws no scrollbars of its own anywhere else: `color-scheme: dark` up in the base
+   layer is the whole of the treatment, because every other scroller in this app is a *page* or
+   a view filling the window, where the platform's own bar is the right one and a reader already
+   knows it. A column inside a dialog is the case that is not — 15px of opaque native gutter down
+   the side of a 329px list reads as a second window rather than as part of the panel.
+
+   **`::-webkit-scrollbar` rather than `scrollbar-width: thin`, and the two cannot be mixed:**
+   setting the standard property makes Chromium ignore the pseudo-elements entirely, so this
+   block deliberately sets neither `scrollbar-width` nor `scrollbar-color`. `thin` was measured in
+   this webview at **10px** (`src/features/decks/CLAUDE.md`, where it was rejected as a *width*
+   fix for the desk row's arithmetic) and it buys the narrower bar without the rounded thumb or
+   the transparent track — which is most of what makes a bar read as the panel's rather than the
+   platform's. This target is WebView2, so the pseudo-elements are not a progressive enhancement.
+
+   **The visible thumb is 6px inside a 10px track.** The track keeps the full width so the thumb
+   stays a real pointer target; the `border` is transparent and `background-clip: content-box` is
+   what turns the rest of it into breathing room rather than into a stripe. Nothing here reserves
+   space when there is nothing to scroll — an unscrollable box draws no bar at all, which is why
+   this carries no `scrollbar-gutter`.
+
+   Applied by name, at each scroller that wants it, rather than to everything inside a dialog:
+   which boxes scroll is a layout fact those files already state, and a descendant rule here
+   would be a second opinion about it living somewhere nobody reads.
+   --------------------------------------------------------------------------------------- */
+
+.scrollbar-slim::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.scrollbar-slim::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-slim::-webkit-scrollbar-thumb {
+  background-color: var(--color-border);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.scrollbar-slim::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-dim);
+}
+
+/* Where a vertical and a horizontal bar meet. Transparent, or it is a grey square in the
+   corner of a panel that has no other grey squares in it. */
+.scrollbar-slim::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+
+/* ---------------------------------------------------------------------------------------
+   The gold thumb, on **one** scroller: the card modal's printings list.
+
+   Worn together with `.scrollbar-slim` above rather than instead of it — that block owns the
+   geometry (the 10px track, the 6px thumb inside a transparent border, the pill radius) and this
+   one owns nothing but colour. So a change to how slim a slim bar is reaches this one too, and
+   nothing here can drift into a second set of measurements.
+
+   **Only that list, and the restriction is the point.** Gold is this app's mark for *the
+   reader's own* — the owned badge, a deck line's count, `In your grimoire` — and a panel where
+   every scrollbar is gold spends the colour on furniture. The printings list is the one column
+   in the modal a reader is *working* down rather than glancing at, and it is the only scroller
+   in the panel that is routinely long enough to need the bar at all.
+
+   **`::-webkit-scrollbar-track` has to be restated here even though it changes only a colour**:
+   the block above sets it transparent, the two selectors have identical specificity, and this
+   one wins on source order alone. Same for the thumb's `:hover` — the slim block's hover carries
+   a `:hover` and would otherwise outrank this block's base rule on the one state a reader is
+   most likely to be in when they look at it.
+
+   The track is the border grey at just over half strength, so it reads as a channel the thumb
+   runs in rather than as a second border down the column — visible against the panel, and gone
+   the moment there is nothing to scroll, since an unscrollable box draws no bar.
+   --------------------------------------------------------------------------------------- */
+
+.scrollbar-accent::-webkit-scrollbar-track {
+  background-color: color-mix(in oklab, var(--color-border) 22%, transparent);
+  border-radius: 9999px;
+}
+
+/* **The channel comes up under the pointer, and it is the *area's* hover rather than the
+   track's.** `::-webkit-scrollbar-track:hover` fires only across the few pixels of the bar
+   itself, which is the one place a reader is already looking; what is worth answering is the
+   pointer arriving anywhere in the list, when they are about to reach for it. At rest the track
+   is barely a tint, so the gold thumb is the only thing the eye catches.
+
+   **22 → 30 → 36, which is a smaller ladder than it first shipped as.** It was 22 → 45 → 65, and
+   at those numbers the channel arriving under the pointer read as a second control appearing
+   rather than as the one that was already there becoming easier to aim at. The thumb is the
+   thing worth seeing; the track only has to stop being invisible. */
+.scrollbar-accent:hover::-webkit-scrollbar-track {
+  background-color: color-mix(in oklab, var(--color-border) 30%, transparent);
+}
+
+/* And a little further again once they are actually on the bar. */
+.scrollbar-accent::-webkit-scrollbar-track:hover {
+  background-color: color-mix(in oklab, var(--color-border) 36%, transparent);
+}
+
+.scrollbar-accent::-webkit-scrollbar-thumb {
+  background-color: var(--color-accent);
+}
+
+.scrollbar-accent::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in oklab, var(--color-accent) 78%, var(--color-text));
+}

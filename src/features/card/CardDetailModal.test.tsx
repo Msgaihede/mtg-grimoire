@@ -825,15 +825,39 @@ it("splits the main area into list and controls at the widest rung only", async 
     screen.getByRole("button", { name: /^View all printings/ }),
   );
 
-  // Each child owns its own scrolling at that rung, and neither claims any below it.
+  // The controls column scrolls itself.
+  const controlsClasses = [...(controls as HTMLElement).classList];
+  expect(controlsClasses).toContain("@min-[1200px]/card:overflow-y-auto");
+  expect(controlsClasses).toContain("@min-[1200px]/card:min-h-0");
+
+  // **The list column does not — the list inside it does**, which is the whole of what keeps
+  // the heading, the sort control and the count line on screen while the rows move. A scroller
+  // out here takes them with it, and that is exactly the shape this had first.
+  const listClasses = [...(list as HTMLElement).classList];
+  expect(listClasses).toContain("@min-[1200px]/card:min-h-0");
+  expect(listClasses, "the list column must not scroll; its body does").not.toContain(
+    "@min-[1200px]/card:overflow-y-auto",
+  );
+
+  // Neither claims any scrolling below the rung, where the main column is the one scroller.
   for (const box of [list, controls]) {
-    const cs = [...(box as HTMLElement).classList];
-    expect(cs).toContain("@min-[1200px]/card:overflow-y-auto");
-    expect(cs).toContain("@min-[1200px]/card:min-h-0");
-    expect(cs, "a child that scrolls at every rung is a second scroller in the stack").not.toContain(
-      "overflow-y-auto",
-    );
+    expect(
+      [...(box as HTMLElement).classList],
+      "a child that scrolls at every rung is a second scroller in the phone's single one",
+    ).not.toContain("overflow-y-auto");
   }
+
+  // **The head is outside the body**, named piece by piece rather than by counting children:
+  // each of the three is a thing a reader three hundred rows down would otherwise have lost.
+  const heading = screen.getByRole("heading", { name: "Printings" });
+  const section = heading.closest("section");
+  const body = section?.querySelector(".overflow-y-auto");
+  expect(body, "the printings section draws no scroller of its own").toBeTruthy();
+  expect(body).not.toContainElement(heading);
+  expect(body).not.toContainElement(screen.getByRole("button", { name: /group printings by/i }));
+  expect(body).not.toContainElement(screen.getByText(/\bprintings?\b/i, { selector: "p" }));
+  // And it is the box that carries the one gold scrollbar in the app.
+  expect([...(body as HTMLElement).classList]).toContain("scrollbar-accent");
 });
 
 /**
@@ -883,7 +907,19 @@ it("floors the panel's height instead of fixing it, and clamps every floor to th
   // flexible children. Awaited on the card, since the grid is not drawn until there is one.
   await screen.findByRole("button", { name: /view all printings/i });
   expect(panel.querySelectorAll(".min-h-0.flex-auto").length).toBe(2);
-  expect(panel.querySelectorAll(".min-h-0.flex-1").length).toBe(0);
+
+  // **`flex-1` is still banned on the height chain and is now allowed off it.** A zero
+  // flex-basis reports none of its content, so a box the panel's height is *measured through*
+  // must be `flex-auto` — that is what these two are. The printings list's body is the opposite
+  // case: it sits inside a column that already has a definite height and its whole job is to
+  // take what is left and scroll, which is what `flex-1` means. So the rule is where the class
+  // is, not whether it appears.
+  for (const box of panel.querySelectorAll(".min-h-0.flex-1")) {
+    expect(
+      box.closest("section")?.querySelector("h3")?.textContent,
+      "a `min-h-0 flex-1` box outside the printings list is on the panel's height chain",
+    ).toBe("Printings");
+  }
 });
 
 /**
