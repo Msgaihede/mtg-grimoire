@@ -126,8 +126,20 @@ describe("CardModalControls", () => {
     // The count is *in* the accessible name rather than beside it: a label and its count in
     // two spans separated by a CSS `gap` compute to "View all printings4", because a gap is
     // not a word separator. One text node is what keeps the name readable.
-    fireEvent.click(screen.getByRole("button", { name: "View all printings (4)" }));
+    const button = screen.getByRole("button", { name: "View all printings (4)" });
+    fireEvent.click(button);
     expect(onViewAllPrintings).toHaveBeenCalledOnce();
+
+    // **Accent outline and accent text**, which is `FilterChips`' recipe for a lit control and
+    // the app's one spelling of it. This is the only box in the column that *opens* something
+    // rather than reporting a settled value, and in `border-border text-dim` it read as a fourth
+    // field. `classList` rather than `className.includes`, so a `hover:` variant carrying the
+    // same words cannot satisfy it — that has made an assertion here vacuous before.
+    expect([...button.classList]).toContain("border-accent");
+    expect([...button.classList]).toContain("text-accent");
+    // Outline, not fill: the footer's row owns the panel's primary treatment, and a second
+    // filled control up here would compete with `Add to deck` for the same claim.
+    expect([...button.classList]).not.toContain("bg-accent");
   });
 
   it("draws no printing picker, and keeps the way out to the wall", () => {

@@ -230,15 +230,30 @@ export function CardModalControls({
           It shared a line with the `Printing` combobox until 2026-09-03, inside a `Field`
           labelled `Printing`; the combobox moved to `CardModalPrintings` and the label went with
           it, because a `<label htmlFor>` pointing at a control that is no longer rendered is a
-          dangling association rather than a heading. The button itself is untouched — same
-          geometry, same recipe, same one-text-node name. */}
+          dangling association rather than a heading. The geometry and the one-text-node name are
+          untouched; only the colour changed. */}
       <div className="flex min-w-0">
         <button
           type="button"
           onClick={onViewAllPrintings}
           className={cn(
-            "shrink-0 whitespace-nowrap rounded-md border border-border px-3 text-xs text-dim",
-            "hover:text-text",
+            "shrink-0 whitespace-nowrap rounded-md border px-3 text-xs",
+            // **Accent outline and accent text, which is `FilterChips`' recipe for a pressed
+            // chip** — `border-accent text-accent`, the app's one spelling of "this control is
+            // lit". It was `border-border text-dim`, the same recipe every settled value in this
+            // column wears, and that is what made it disappear: the column is four boxes a
+            // reader looks *at*, and this is the one that opens something. The accent is what
+            // this app already uses to mark a thing that acts rather than reports.
+            //
+            // **It does not become a primary button.** `ACTION`'s filled treatment belongs to
+            // the footer's row, where the panel's real writes live; a second filled control up
+            // here would compete with `Add to deck` for the same claim. An outline says
+            // *pressable* without saying *press this one*.
+            "border-accent text-accent",
+            // The hover cannot go on saying `hover:text-text` — that reads as the accent draining
+            // out of the control the moment the pointer arrives, which is backwards. Brightening
+            // the outline is the same move `RAIL_ENTRY` makes one column over.
+            "hover:border-accent hover:bg-accent/10",
             CONTROL_HEIGHT,
             PRESS,
             FOCUS,

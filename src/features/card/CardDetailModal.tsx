@@ -1389,12 +1389,50 @@ function Body({
                 // ancestor is laid out against the *viewport* — so it lands outside the box and
                 // the box grows a scrollbar for a caption nobody can see. The column held
                 // nothing absolute until the printings list arrived; it draws a rarity gem and a
-                // language badge per row and each of those carries one.
+                // language badge per row and each of those carries one. The two sub-columns
+                // below take the same class for the same reason, because at the widest rung the
+                // scrolling moves into them.
                 "relative flex min-w-0 flex-col gap-5",
                 "@min-[640px]/card:col-start-2 @min-[640px]/card:row-start-1",
                 "@min-[640px]/card:min-h-0 @min-[640px]/card:overflow-y-auto",
+                // **Two columns at the widest rung: the printings list on the left, everything
+                // that writes to the card on the right.** Below it they are one stack, controls
+                // first, which is the order a reader wants when the list is long enough to push
+                // them off the screen.
+                //
+                // **The scrolling moves down a level here and that is the point of the row
+                // track.** As one scroller this column would have scrolled the quantity stepper
+                // and the pickers away the moment a reader went looking down a 400-row list —
+                // the controls are about the card, not about the list, so they must not travel
+                // with it. `grid-rows-[minmax(0,1fr)]` and `min-h-0` on both children is what
+                // gives each one a definite height to scroll inside; an implicit `auto` row
+                // sizes to its own content, so the children would have all the room they asked
+                // for and never scroll, which is the same circular clamp the body grid above
+                // documents.
+                //
+                // **`15rem` for the controls, a fixed width against the list's `1fr`.** The
+                // controls are four boxes whose widths say nothing about the card; the list is a
+                // table whose rows want every pixel that is going. At the 1200 rung this leaves
+                // the list about the 352px the docked pane drew it at, which is the width the row
+                // was designed for.
+                "@min-[1200px]/card:grid @min-[1200px]/card:grid-cols-[15rem_minmax(0,1fr)]",
+                "@min-[1200px]/card:grid-rows-[minmax(0,1fr)] @min-[1200px]/card:overflow-y-visible",
               )}
             >
+              {/* **First in the source and first on the screen, at every rung.** The controls
+                  lead the stack below 1200 and take the left-hand column above it, so the caret
+                  never crosses back over the list to reach them and a screen reader hears the
+                  quantity stepper before a table that can be 865 rows long. The columns were the
+                  other way round for one commit; putting the list on the left made the source
+                  and the reading order disagree at exactly one rung, for nothing. */}
+              <div
+                className={cn(
+                  "relative min-w-0",
+                  "@min-[1200px]/card:col-start-1 @min-[1200px]/card:row-start-1",
+                  "@min-[1200px]/card:flex @min-[1200px]/card:min-h-0 @min-[1200px]/card:flex-col",
+                  "@min-[1200px]/card:gap-5 @min-[1200px]/card:overflow-y-auto",
+                )}
+              >
               <CardModalControls
                 card={card}
                 scope={scope}
@@ -1424,7 +1462,15 @@ function Body({
               />
 
               <InlineCounts counts={counts} scope={scope} />
+              </div>
 
+              <div
+                className={cn(
+                  "relative min-w-0",
+                  "@min-[1200px]/card:col-start-2 @min-[1200px]/card:row-start-1",
+                  "@min-[1200px]/card:min-h-0 @min-[1200px]/card:overflow-y-auto",
+                )}
+              >
               <CardModalPrintings
                 card={card}
                 scope={scope}
@@ -1446,6 +1492,7 @@ function Body({
                 // (`viewPrinting`). Moving the control must not move that.
                 onPick={pickPrinting}
               />
+              </div>
             </div>
 
             <div

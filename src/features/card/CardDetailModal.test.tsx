@@ -774,6 +774,69 @@ it("draws the rail's divider only at the rung where the rail is a column", async
 });
 
 /**
+ * **The main area is two columns at the widest rung and one stack below it** — everything that
+ * writes to the card on the left, the printings list on the right.
+ *
+ * jsdom resolves no container query and every box is 0, so this pins the classes and the widths
+ * are settled in the window. Measured at a 1240px panel; at 1100, 950, 820, 600 and 390 the two
+ * share a left edge with the controls above the list.
+ *
+ * **The scroller moving down a level is the half worth pinning.** As one column this box scrolled
+ * everything together, so going looking down Forest's 865 printings took the quantity stepper and
+ * the pickers off the screen with it — controls are about the card, not about the list. Measured
+ * after the change: the printings column scrolled 4000px and `View all printings` did not move
+ * from y=102.
+ */
+it("splits the main area into list and controls at the widest rung only", async () => {
+  renderModal("c1");
+  const panel = await screen.findByRole("dialog");
+  await screen.findByRole("button", { name: "Legality" });
+
+  // `classList` rather than a selector, for the reason the divider test above spells out.
+  const middle = [...panel.querySelectorAll("div")].find((d) =>
+    d.classList.contains("@min-[1200px]/card:grid-cols-[15rem_minmax(0,1fr)]"),
+  );
+  expect(middle, "the middle column declares no two-column track").toBeDefined();
+  const middleClasses = [...(middle as HTMLElement).classList];
+
+  // The row track and the released overflow are what hand the scrolling to the children: an
+  // implicit `auto` row sizes to its content, so each child would have all the room it asked for
+  // and never scroll — and a parent still carrying `overflow-y-auto` would scroll them together.
+  expect(middleClasses).toContain("@min-[1200px]/card:grid-rows-[minmax(0,1fr)]");
+  expect(middleClasses).toContain("@min-[1200px]/card:overflow-y-visible");
+  // Below the rung it is the stack it always was, and the scroller is this box.
+  expect(middleClasses).toContain("@min-[640px]/card:overflow-y-auto");
+  expect(middleClasses).toContain("flex-col");
+
+  const child = (n: string) =>
+    [...(middle as HTMLElement).children].find((c) =>
+      c.classList.contains(`@min-[1200px]/card:${n}`),
+    );
+
+  // **Left is the controls and right is the list**, which is the whole of what was asked for.
+  // Named on each side rather than counted: the columns shipped the other way round for one
+  // commit, and a test that only checked there were two of them passed on both.
+  const controls = child("col-start-1");
+  const list = child("col-start-2");
+  expect(list, "no column-1 child").toBeDefined();
+  expect(controls, "no column-2 child").toBeDefined();
+  expect(list).toContainElement(screen.getByRole("heading", { name: "Printings" }));
+  expect(controls).toContainElement(
+    screen.getByRole("button", { name: /^View all printings/ }),
+  );
+
+  // Each child owns its own scrolling at that rung, and neither claims any below it.
+  for (const box of [list, controls]) {
+    const cs = [...(box as HTMLElement).classList];
+    expect(cs).toContain("@min-[1200px]/card:overflow-y-auto");
+    expect(cs).toContain("@min-[1200px]/card:min-h-0");
+    expect(cs, "a child that scrolls at every rung is a second scroller in the stack").not.toContain(
+      "overflow-y-auto",
+    );
+  }
+});
+
+/**
  * **The panel asks for a floor and lets the content decide the rest — issue "the card scrolls".**
  *
  * Measured live at 2560×1392 before the change: a fixed `h-[50rem]` sat the panel at y=296 with
