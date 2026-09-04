@@ -156,7 +156,7 @@ export interface CardModalControlsProps {
 
 /**
  * The card modal's controls: **Quantity**, `View all printings`, and — for a card opened out of
- * a deck — **Deck category** and **Label**.
+ * a deck — **Category** and **Label**, one to a row.
  *
  * **The `Printing` combobox was the third field and is gone** (2026-09-03). It was a picker over
  * every printing of the card, and it moved to `CardModalPrintings` — the list that now fills the
@@ -221,6 +221,9 @@ export function CardModalControls({
               value={quantity}
               onChange={(next) => onQuantityChange?.(next)}
               label={stepper.name(card.name)}
+              // Every row in this column spans it — see the button below and the two pickers,
+              // which have always taken `fill`. This is the one control that had to be taught.
+              fill
             />
           </div>
         </div>
@@ -237,7 +240,10 @@ export function CardModalControls({
           type="button"
           onClick={onViewAllPrintings}
           className={cn(
-            "shrink-0 whitespace-nowrap rounded-md border px-3 text-xs",
+            // `w-full` and not `shrink-0`: this is a row of the column like every other, and a
+            // button sized to its own words left a ragged edge beside four boxes that fill.
+            // `truncate` because the name carries a count that can reach four digits.
+            "w-full truncate rounded-md border px-3 text-xs",
             // **Accent outline and accent text, which is `FilterChips`' recipe for a pressed
             // chip** — `border-accent text-accent`, the app's one spelling of "this control is
             // lit". It was `border-border text-dim`, the same recipe every settled value in this
@@ -267,14 +273,20 @@ export function CardModalControls({
         </button>
       </div>
 
-      {/* Deck category and Label, side by side above the fold and stacked below it.
-          `grid-cols-2` rather than the spec's literal `repeat(2,1fr)`: Tailwind's spelling is
-          `repeat(2, minmax(0, 1fr))`, and the `minmax(0,` is what lets a long category name
-          truncate instead of pushing the label picker out of the column. */}
+      {/* **Category and Label, one to a row.** They sat side by side above `@min-[900px]/card`
+          until the main area became two columns: the controls are a 15rem column now, and two
+          pickers sharing 15rem gave each about 110px of trigger — a width where every category
+          name a reader has is an ellipsis. One per row is the same stack the phone rung always
+          drew, applied at every rung because the column is narrow at all of them now. */}
       {scope.deckControls && (
         <div className="flex flex-col gap-3">
-          <div className="grid grid-cols-1 gap-3 @min-[900px]/card:grid-cols-2">
-            <Field id={`${uid}-category`} label="Deck category">
+          <div className="flex flex-col gap-3">
+            {/* **`Category`, not `Deck category`.** The modal is already about a card in a deck
+                — the pickers are drawn on `scope.deckControls` and on nothing else — so the
+                qualifier named the surface the reader is standing on. It also cost a third of
+                the label's width to a word that adds nothing, in a column where the pickers
+                below it truncate. */}
+            <Field id={`${uid}-category`} label="Category">
               <CreatablePicker
                 id={`${uid}-category-control`}
                 labelledBy={`${uid}-category`}

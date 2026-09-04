@@ -177,11 +177,31 @@ import { useCardMenuDeps } from "./useCardMenuDeps";
  * its parent's content height and the panel would sit at its floor at every window size — the fix
  * present, and the measurement unchanged. See {@link Body}'s two `flex-auto`s.
  */
+/**
+ * The panel's ceiling from the 640 rung up: **825px, or 80% of the window when that is less.**
+ *
+ * **Not on the phone rung, and that is the point of the variant.** Below 640 the panel is
+ * full-bleed by design — `Dialog`'s own `p-0 sm:p-6`, a 16px inset and rounded corners on a
+ * 358px panel being chrome nobody chose — so a ceiling there would put the glass back and undo
+ * exactly that. The cap belongs to the widths where the panel is a card floating over something.
+ *
+ * **It is also the ceiling the floors below are written against.** `min-height` beats
+ * `max-height` in the cascade, so a floor above this cap would win and the ceiling would read as
+ * a suggestion: the 640 rung's own floor was `52.5rem` — 840px — which is 15px over it. Every
+ * floor therefore carries the same two terms, and none of them can outrank this.
+ *
+ * The `100%` those floors used to carry is gone rather than kept beside `80vh`: the scrim's
+ * column is `100vh` less its `p-6`, so `80vh` is the tighter of the two for any window taller
+ * than 240px and the term it replaces could never have been the binding one.
+ */
+const PANEL_MAX_H = "min-[640px]:max-h-[min(825px,80vh)]";
+
 const PANEL_SIZE =
   "w-full h-full " +
-  "min-[640px]:w-[47.75rem] min-[640px]:h-auto min-[640px]:min-h-[min(52.5rem,100%)] " +
-  "min-[900px]:w-[66.25rem] min-[900px]:min-h-[min(47.5rem,100%)] " +
-  "min-[1200px]:w-[77.5rem] min-[1200px]:min-h-[min(50rem,100%)]";
+  "min-[640px]:w-[47.75rem] min-[640px]:h-auto min-[640px]:min-h-[min(52.5rem,80vh,825px)] " +
+  "min-[900px]:w-[66.25rem] min-[900px]:min-h-[min(47.5rem,80vh,825px)] " +
+  "min-[1200px]:w-[77.5rem] min-[1200px]:min-h-[min(50rem,80vh,825px)] " +
+  PANEL_MAX_H;
 
 /**
  * Whether the window has room for `Dialog`'s flank columns — spec §2.1's "chevrons as flanks at

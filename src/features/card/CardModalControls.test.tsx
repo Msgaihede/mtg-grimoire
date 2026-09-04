@@ -74,7 +74,7 @@ function renderControls(props: Partial<Parameters<typeof CardModalControls>[0]> 
 
 describe("CardModalControls", () => {
   it("draws the deck controls only for a card opened out of a deck", () => {
-    // Spec §7: `Deck category` and `Label` are the deck editor's column of that table and
+    // Spec §7: the category and label pickers are the deck editor's column of that table and
     // nothing else's. `scope.deckControls` gates the pair together, so neither can arrive
     // on a surface the other did not.
     //
@@ -87,7 +87,7 @@ describe("CardModalControls", () => {
       labels: [{ value: "7", label: "Cut candidate" }],
     });
 
-    expect(screen.getByRole("button", { name: /deck category/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^category/i })).toBeInTheDocument();
     // Named exactly, not `/label/i`: the picker's own name is the one visible word, and a
     // loose pattern would just as happily match a control that grew the word later.
     expect(screen.getByRole("button", { name: "Label" })).toBeInTheDocument();
@@ -99,7 +99,7 @@ describe("CardModalControls", () => {
     // greyed stepper would be a claim that this surface keeps a number, which it does not.
     renderControls({ scope: searchScope });
 
-    expect(screen.queryByRole("button", { name: /deck category/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^category/i })).not.toBeInTheDocument();
     // The other half of the pair `scope.deckControls` gates — asserted here so the claim the
     // test above makes about the two arriving together is checked from both ends.
     expect(screen.queryByRole("button", { name: "Label" })).not.toBeInTheDocument();
@@ -142,6 +142,47 @@ describe("CardModalControls", () => {
     expect([...button.classList]).not.toContain("bg-accent");
   });
 
+  /**
+   * **Every control is a row of the column, and the column is 15rem.**
+   *
+   * The two pickers shared a line above `@min-[900px]/card` until the main area became two
+   * columns; in a 15rem column that gave each about 110px of trigger, which is a width where
+   * every category name a reader has is an ellipsis. And the stepper and the button were sized to
+   * their own content beside two pickers that have always taken `fill`, so the column read as a
+   * ragged stack rather than a set of rows.
+   *
+   * jsdom measures nothing, so this pins what makes the widths true. Measured in the window at a
+   * 1240px panel: the column and all four rows are 240px, and the two pickers sit at one x.
+   */
+  it("gives every control its own full-width row", () => {
+    renderControls({ scope: deckScope, printingCount: 4 });
+
+    // The button: `w-full`, and specifically *not* the `shrink-0` it wore when it was sized to
+    // its own words.
+    const button = screen.getByRole("button", { name: "View all printings (4)" });
+    expect([...button.classList]).toContain("w-full");
+    expect([...button.classList]).not.toContain("shrink-0");
+
+    // The pickers, one to a row: the box holding them must carry no two-column track at any
+    // rung. Asserted as the absence of the class rather than the presence of `flex-col`, because
+    // it is the `@min-[900px]/card:grid-cols-2` that was there and could come back.
+    const category = screen.getByRole("button", { name: /^category/i });
+    const label = screen.getByRole("button", { name: /^label/i });
+    const holder = category.closest("div")?.parentElement?.parentElement;
+    expect(holder).toBe(label.closest("div")?.parentElement?.parentElement);
+    const holderClasses = [...(holder as HTMLElement).classList];
+    expect(holderClasses).not.toContain("@min-[900px]/card:grid-cols-2");
+    expect(holderClasses).not.toContain("grid");
+
+    // The stepper spans the row too — the one control here that had to be taught how, since
+    // every other surface draws it as one item in a row and wants it sized to its own boxes.
+    const stepper = screen
+      .getByRole("spinbutton", { name: /Lightning Bolt/ })
+      .closest("span");
+    expect(stepper).not.toBeNull();
+    expect([...(stepper as HTMLElement).classList]).toContain("w-full");
+  });
+
   it("draws no printing picker, and keeps the way out to the wall", () => {
     // **The two used to share a row and only one of them moved** (2026-09-03). The combobox is
     // `CardModalPrintings` now — a picker that announced the printing you were on and hid the
@@ -181,7 +222,7 @@ describe("CardModalControls", () => {
       onCreateCategory: vi.fn(),
     });
 
-    await userEvent.click(screen.getByRole("button", { name: /deck category/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^category/i }));
     expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
       "Burn spells",
       "Lands",
@@ -249,7 +290,7 @@ describe("CardModalControls", () => {
       onPickCategory,
     });
 
-    await userEvent.click(screen.getByRole("button", { name: /deck category/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^category/i }));
     await userEvent.type(screen.getByRole("combobox"), "Ramp");
     await userEvent.click(screen.getByRole("option", { name: /^create/i }));
 

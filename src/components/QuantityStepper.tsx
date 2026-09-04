@@ -68,11 +68,26 @@ export function QuantityStepper({
   focus = "outside",
   orientation = "horizontal",
   tone = "panel",
+  fill = false,
 }: {
   value: number;
   onChange: (next: number) => void;
   min?: number;
   max?: number;
+  /**
+   * Span the width the caller gives it, the number box taking whatever the two buttons leave.
+   *
+   * **Off everywhere else, and it has to be.** Every other surface draws this inside a *row* of
+   * controls — a deck line, a wall tile, a card's right margin — where the stepper is one item
+   * among several and an `inline-flex` sized to its own three boxes is what keeps it from
+   * elbowing the rest of the row. The card modal's controls column is the one place it is a
+   * **row of its own**, in a stack where every other control fills the column, and there an
+   * intrinsically-sized stepper reads as a stray fragment against four full-width boxes.
+   *
+   * The buttons keep their square geometry at every size — they are touch targets, and a `+`
+   * stretched to 120px is a worse control, not a bigger one. Only the number grows.
+   */
+  fill?: boolean;
   /** The accessible name of the number itself — "Quantity of Lightning Bolt", not "Quantity". */
   label: string;
   /**
@@ -175,7 +190,10 @@ export function QuantityStepper({
       : size === "sm"
         ? "h-7 w-12"
         : "h-9 w-14";
-  const field = cn(vertical ? box : wide, text);
+  // `fill` trades the fixed width for whatever the row has left. `min-w-0` beside it because a
+  // flex item's floor is its content, and `w-14`'s replacement has to be allowed to shrink below
+  // the digits it holds when the column is narrow.
+  const field = cn(vertical ? box : wide, fill && !vertical && "w-auto min-w-0 flex-1", text);
   // The glyph is a fixed fraction of its button — 7/12 at `card`, held through both resizes of
   // that box, so a button is never a small sign in the middle of an empty square. That fraction
   // is what makes the two card sizes scale here too: a glyph left at 12px inside a box the zoom
@@ -304,6 +322,8 @@ export function QuantityStepper({
       className={cn(
         "inline-flex items-center gap-[calc(0.25rem*var(--control-scale,1))]",
         vertical && "flex-col",
+        // `flex` rather than `inline-flex`, so the span is a block that takes the row.
+        fill && !vertical && "flex w-full",
       )}
     >
       {vertical ? (

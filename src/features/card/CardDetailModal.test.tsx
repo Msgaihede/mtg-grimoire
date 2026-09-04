@@ -436,7 +436,7 @@ it("wires every control a card opened out of a deck draws", async () => {
   // as `tagId` for a whole wave, because the props are declared locally rather than off
   // `DeckCard` — so a host could have wired `labelId` into a prop named `tagId` with nothing
   // going red.
-  expect(screen.getByRole("button", { name: /deck category/i })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /^category/i })).toBeInTheDocument();
   const label = screen.getByRole("button", { name: /^label/i });
   await userEvent.click(label);
   await userEvent.click(await screen.findByRole("option", { name: "Needs testing" }));
@@ -865,9 +865,18 @@ it("floors the panel's height instead of fixing it, and clamps every floor to th
   expect(classes).toContain("min-[640px]:h-auto");
   // No rung fixes a height any more; all three are floors.
   expect(classes.filter((c) => /^min-\[\d+px\]:h-\[/.test(c))).toEqual([]);
-  expect(classes).toContain("min-[640px]:min-h-[min(52.5rem,100%)]");
-  expect(classes).toContain("min-[900px]:min-h-[min(47.5rem,100%)]");
-  expect(classes).toContain("min-[1200px]:min-h-[min(50rem,100%)]");
+  expect(classes).toContain("min-[640px]:min-h-[min(52.5rem,80vh,825px)]");
+  expect(classes).toContain("min-[900px]:min-h-[min(47.5rem,80vh,825px)]");
+  expect(classes).toContain("min-[1200px]:min-h-[min(50rem,80vh,825px)]");
+
+  // **The ceiling, and the reason every floor above carries its two terms.** `min-height` beats
+  // `max-height`, so a floor left at a bare `52.5rem` — 840px, 15px over the cap — would win and
+  // the ceiling would be a suggestion. Asserted as "no floor names a rem alone" rather than by
+  // listing the three again, so a fourth rung added later cannot quietly opt out.
+  expect(classes).toContain("min-[640px]:max-h-[min(825px,80vh)]");
+  expect(classes.filter((c) => /min-h-\[min\([\d.]+rem,100%\)\]/.test(c))).toEqual([]);
+  // Never on the phone, where the panel is full-bleed and a ceiling would put the glass back.
+  expect(classes).not.toContain("max-h-[min(825px,80vh)]");
 
   // The other half. Both boxes, because the panel's height is the sum of what they report — the
   // body wrapper and the column grid inside it, which are this panel's only two `min-h-0`
@@ -989,7 +998,7 @@ it("asks for the app-wide label list only where the pickers are drawn", async ()
 it("makes a category from the picker and files the card into it", async () => {
   await renderFromDeck();
 
-  await userEvent.click(screen.getByRole("button", { name: /deck category/i }));
+  await userEvent.click(screen.getByRole("button", { name: /^category/i }));
   // The typed text is both the filter and the name — one field, two jobs, which is
   // `AddLabelDialog`'s grammar. Nothing in this deck matches it, and the create row is still
   // there: it is the last row of the list at every query rather than one that appears when a
@@ -1161,7 +1170,7 @@ it("follows the card into the pile a category pick filed it in", async () => {
   // reader named, so nothing downstream can translate the id back into a word.
   await renderFromDeck();
 
-  await userEvent.click(screen.getByRole("button", { name: /deck category/i }));
+  await userEvent.click(screen.getByRole("button", { name: /^category/i }));
   await userEvent.click(await screen.findByRole("option", { name: "Lands" }));
 
   await waitFor(() => expect(deckMoveCard).toHaveBeenCalledWith(1, "c1", 2, 3, null, "live", null));
