@@ -1362,7 +1362,14 @@ function Body({
                 "min-w-0",
                 // Spans both rows at the two-column rung, so the picture is not cut off at the
                 // height of the controls beside it.
-                "scrollbar-slim @min-[640px]/card:row-span-2 @min-[640px]/card:min-h-0 @min-[640px]/card:overflow-y-auto",
+                // **This column never scrolls, and it is not clipped either.** A reader asked
+                // for the card to shrink to fit rather than for a bar down the side of it, and
+                // `overflow-hidden` is separately forbidden here: a card mid-quarter-turn is a
+                // rectangle wider than the box holding it, so a clip at this edge chops its
+                // corners off for the length of the turn. Nothing overflows once the picture
+                // fits, which is what `CardModalArt` now arranges — this box only has to be a
+                // flex column with a definite height for it to fit *into*.
+                "@min-[640px]/card:row-span-2 @min-[640px]/card:flex @min-[640px]/card:min-h-0 @min-[640px]/card:flex-col",
                 "@min-[900px]/card:row-span-1",
               )}
             >

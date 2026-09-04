@@ -338,7 +338,13 @@ export function CardModalArt({
   };
 
   return (
-    <div className="space-y-3">
+    // **A flex column, so the picture can be the thing that gives way.** `gap-3` is the
+    // `space-y-3` this had, spelled as a gap because the frame below needs `flex-1` and a
+    // margin-spaced stack has no main axis to hand it one on.
+    //
+    // `min-h-0` only from `@min-[640px]/card`: below it this column is one block in the panel's
+    // single scroller, where its height is its content's and there is nothing to fit into.
+    <div className="flex flex-col gap-3 @min-[640px]/card:min-h-0 @min-[640px]/card:flex-1">
       {/* The picture and the line naming the printing, in **one** bordered box — they are the
           same statement, and a chin floating under a separate frame reads as a caption about
           something else.
@@ -350,7 +356,7 @@ export function CardModalArt({
           instead, which is where the rounded corners actually are; at rest the card fills the
           frame exactly, so the only thing the missing clip changes is that the turn is drawn
           whole. */}
-      <div className="rounded-xl border border-border bg-bg">
+      <div className="grid rounded-xl border border-border bg-bg @min-[640px]/card:min-h-0 @min-[640px]/card:grid-rows-[minmax(0,1fr)_auto]">
         {/* **The frame is what the column sees, and the card inside it is what turns.**
 
             Two elements rather than one, because a quarter-turned card is a *landscape* rectangle
@@ -370,10 +376,41 @@ export function CardModalArt({
             The proportions are `CARD_ASPECT` and never a hand-written ratio: the deck editor's
             Grid view kept `aspect-[488/680]` beside it for weeks and drew one card two ways on
             one screen. */}
+        {/* **The sizer, and it exists because "fit a fixed-ratio box into a box" needs both
+            axes and CSS will only give you one at a time.**
+
+            A single box cannot do it. Width-led (`w-full` + `aspect-ratio`, which is what this
+            was) is as tall as the column is wide, so on a short panel the picture pushed the
+            meld buttons and the price cells past the fold — the report this closes. Height-led
+            (`h-full` + `aspect-ratio`) fixes that and breaks the other way: a grid item's
+            automatic minimum size is its own height-derived width, which **outranks
+            `max-width`**, so on a narrower column the card hung 5px past its own frame.
+            Measured, at a 950px panel: track 320, card 325.
+
+            So the height is settled here and the shape is settled below. This box is width-led
+            and `max-h-full` clamps it, which makes its height exactly
+            `min(column width ÷ ratio, row height)` — the smaller of what each axis allows. Its
+            own proportions go wrong when the clamp bites and that costs nothing, because it
+            draws nothing: it is a measurement, and the frame inside it is the card.
+
+            It carries the same animated `aspect-ratio` as the frame so a quarter-turn moves both
+            together; a turn that resized the card inside a sizer still holding the portrait
+            height would jump at the end of the tween. */}
         <div
           className={cn(
-            "relative w-full transition-[aspect-ratio] duration-[var(--duration-slow)]",
+            // `self-start` is what lets this box size *itself*. It is a grid item, and a grid
+            // item stretches to its row by default — which overrode the ratio, made the height
+            // the row's, and handed the frame below a height its width could not fit in. That
+            // was the 5px overhang.
+            "w-full max-h-full self-start transition-[aspect-ratio] duration-[var(--duration-slow)]",
             "ease-standard motion-reduce:transition-none",
+          )}
+          style={{ aspectRatio: quarter ? TURNED_CARD_ASPECT : CARD_ASPECT }}
+        >
+        <div
+          className={cn(
+            "relative mx-auto h-full w-auto transition-[aspect-ratio]",
+            "duration-[var(--duration-slow)] ease-standard motion-reduce:transition-none",
           )}
           style={{ aspectRatio: quarter ? TURNED_CARD_ASPECT : CARD_ASPECT }}
         >
@@ -466,7 +503,8 @@ export function CardModalArt({
             same rule the price cells below follow: the picture is a counterpart's, and everything
             else in this panel is still about the card the reader opened. The one fact that has to
             move with the picture is the illustrator, and that is drawn by the host. */}
-        <p className="flex items-center gap-2 border-t border-border px-2.5 py-1.5 text-xs text-dim">
+        </div>
+        <p className="flex shrink-0 items-center gap-2 border-t border-border px-2.5 py-1.5 text-xs text-dim">
           {card.rarity && <RarityGem rarity={card.rarity} className="shrink-0" />}
           {/* One text node rather than three spans in a `gap`: the separator has to survive into
               the text a screen reader reads, and `LEA` `·` `161` in three boxes reads as
