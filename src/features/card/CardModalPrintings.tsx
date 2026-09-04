@@ -38,7 +38,7 @@
  * name, which of the two a press is about to do — because a reader who cannot see the row finds
  * out by pressing it otherwise.
  */
-import { useId, useMemo } from "react";
+import { useEffect, useId, useMemo } from "react";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import type { DropdownOption } from "@/components/Dropdown/types";
 import { FinishMark } from "@/components/FinishMark";
@@ -60,6 +60,12 @@ import {
   isPrintingGroupBy,
   PRINTING_GROUP_BY_OPTIONS,
 } from "./printings";
+import {
+  PrintingPreview,
+  PREVIEW_FRAME_ATTR,
+  usePrintingDwell,
+  type DwellRowProps,
+} from "./PrintingPreview";
 import { usePrintingGroupBy } from "./usePrintingGroupBy";
 
 /**
@@ -160,6 +166,10 @@ export function CardModalPrintings({
   onViewAll,
 }: CardModalPrintingsProps) {
   const headingId = useId();
+  // **One dwell for the whole list**, not one timer per row — see `usePrintingDwell`, whose
+  // doc carries the measurement. What is built per render is the two closures a row already
+  // costs; a four-hundred-row list pays for nothing until a pointer rests on one.
+  const dwell = usePrintingDwell();
   /**
    * The ordering, which is **a stored preference and not this component's own state.**
    *
@@ -181,6 +191,26 @@ export function CardModalPrintings({
   // `items` keeps its identity across a refetch that changed nothing (React Query's structural
   // sharing), so this is not work repeated per render.
   const groups = useMemo(() => buildPrintingGroups(items, mode), [items, mode]);
+
+  // **A picture measured against a row that has moved is worse than no picture**, so both things
+  // that move the rows take it down.
+  //
+  // A refetch that replaces them takes any preview with it: the frame is measured against the
+  // row it hangs off, and a row that has left the document measures 0×0 — an invisible layer,
+  // at the top of the list, that Escape still has to be spent on. Nothing tells a hover that its
+  // element was unmounted, so the list says so; this is the only place that knows the rows
+  // changed. (`items` keeps its identity across a refetch that changed nothing — query
+  // structural sharing — so this is not an effect that runs on every render.)
+  //
+  // **`mode` is here for the same reason one step further on.** A new grouping leaves every row
+  // mounted and *moves* them: the element the picture was measured against is still in the
+  // document, still the right size, and now under a different printing than the pointer that
+  // asked for it was resting on. A preview that survived the re-order would be a picture of one
+  // card hanging off another's row — worse than the detached case, because it looks correct.
+  const dropPreview = dwell.cancel;
+  useEffect(() => {
+    dropPreview();
+  }, [items, mode, dropPreview]);
 
   // What the groups *are*, in this mode's own word — `null` in `price`, which makes none.
   const noun = PRINTING_GROUP_BY_OPTIONS.find((option) => option.value === mode)?.noun ?? null;
@@ -352,7 +382,15 @@ export function CardModalPrintings({
 
           The gold thumb is here rather than on the column, since this is the box that draws
           one — see `.scrollbar-accent` in `index.css` for why this list and no other. */}
-      <div className="scrollbar-slim scrollbar-accent relative min-h-0 flex-1 space-y-2 overflow-y-auto">
+      <div
+        // **The box the preview is positioned in and clipped by, in one mark**, because they are
+        // one box: this is `relative`, so an absolutely positioned picture takes its coordinates
+        // from here, and it is the scroller, so it is also what would cut one in half. An
+        // attribute rather than a ref chain, for `PREVIEW_FRAME_ATTR`'s own documented reason —
+        // the preview is two components away from this box and owns none of it.
+        {...{ [PREVIEW_FRAME_ATTR]: true }}
+        className="scrollbar-slim scrollbar-accent relative min-h-0 flex-1 space-y-2 overflow-y-auto"
+      >
       {groups.map((group) => (
         // The key is the group's own — `printings.ts` makes it, because only the thing that
         // decided what a group *is* can say what tells two of them apart (an artist, a date, a
@@ -372,6 +410,7 @@ export function CardModalPrintings({
               <PrintingRow
                 key={printing.id}
                 printing={printing}
+                dwell={dwell.rowProps(printing.id)}
                 deck={scope.deck}
                 current={printing.id === card.id}
                 busy={busy}
@@ -382,6 +421,17 @@ export function CardModalPrintings({
           </ul>
         </div>
       ))}
+
+      {/* **The URL comes from here because this is the only place that has it.** `dwell` carries
+          a printing *id*, and on the web build there is no local cache to ask for the bytes —
+          `cardArtSrc` needs the row's own `image_uris`, which the hook never sees. The `find`
+          runs only while a preview is open, over a list already capped by the page the host
+          asked for. */}
+      <PrintingPreview
+        printingId={dwell.printingId}
+        imageUrl={items.find((p) => p.id === dwell.printingId)?.imageUris?.display}
+        anchor={dwell.anchor}
+      />
       </div>
     </section>
     </>
@@ -403,6 +453,7 @@ export function CardModalPrintings({
  */
 function PrintingRow({
   printing,
+  dwell,
   deck,
   current,
   busy,
@@ -410,6 +461,8 @@ function PrintingRow({
   onPick,
 }: {
   printing: Printing;
+  /** This row's half of the list's one hover preview — see `usePrintingDwell`. */
+  dwell: DwellRowProps;
   /** The deck row behind the modal, or `null` — read for the row's name, never for its write. */
   deck: CardModalScope["deck"];
   /** This is the printing the panel is drawing. */
@@ -445,6 +498,10 @@ function PrintingRow({
 
   return (
     <li
+      // The pointer and caret handlers that open and close the picture. Spread on the `<li>`
+      // rather than the button inside it, because the row a reader rests on is the whole line —
+      // and the current printing draws no button at all.
+      {...dwell}
       // **The state, not a decoration.** `aria-current` is what says "this is the one on screen"
       // to a reader who cannot see the gold hairline — and the hairline is the only other thing
       // saying it, since the current row draws no button and so has no name to put it in.
