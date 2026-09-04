@@ -650,6 +650,22 @@ function Body({
   const { marketplace } = useMarketplace();
   const queryClient = useQueryClient();
   const openAllPrintings = useAppStore((s) => s.openAllPrintings);
+  /**
+   * **Whether the controls column has anything to draw**, which decides whether the main area is
+   * one column or two.
+   *
+   * `CardModalControls` draws a quantity stepper on the three surfaces that keep a count and the
+   * category and label pickers on a deck row; on the search and tags walls it is `scope.quantity
+   * === null` and `deckControls === false`, so it draws **nothing**. That was not reachable
+   * until 2026-09-04 — `View all printings` was unconditional and kept the column occupied — and
+   * the moment that button moved to the list, a two-column split on those walls would have been
+   * a 15rem hole beside a list squeezed out of the width it was taking.
+   *
+   * Read off the same `scope` the column itself reads, rather than from whether the rendered box
+   * came out empty: a layout that measures its own children to decide its tracks is a layout
+   * that changes shape one frame late.
+   */
+  const hasControls = scope.quantity !== null || scope.deckControls;
   const viewPrinting = useAppStore((s) => s.viewPrinting);
   /**
    * How the meld controls under the art re-point the modal at the melded card.
@@ -1442,8 +1458,15 @@ function Body({
                 // table whose rows want every pixel that is going. At the 1200 rung this leaves
                 // the list about the 352px the docked pane drew it at, which is the width the row
                 // was designed for.
-                "@min-[1200px]/card:grid @min-[1200px]/card:grid-cols-[15rem_minmax(0,1fr)]",
-                "@min-[1200px]/card:grid-rows-[minmax(0,1fr)] @min-[1200px]/card:overflow-y-visible",
+                "@min-[1200px]/card:overflow-y-visible",
+                // Two tracks only where there is something to put in the first one — see
+                // `hasControls`. Without controls this stays a flex column and the list takes it
+                // whole, which is the same box it had before the split.
+                hasControls &&
+                  cn(
+                    "@min-[1200px]/card:grid @min-[1200px]/card:grid-cols-[15rem_minmax(0,1fr)]",
+                    "@min-[1200px]/card:grid-rows-[minmax(0,1fr)]",
+                  ),
               )}
             >
               {/* **First in the source and first on the screen, at every rung.** The controls
@@ -1452,6 +1475,7 @@ function Body({
                   quantity stepper before a table that can be 865 rows long. The columns were the
                   other way round for one commit; putting the list on the left made the source
                   and the reading order disagree at exactly one rung, for nothing. */}
+              {hasControls && (
               <div
                 className={cn(
                   "relative min-w-0",
@@ -1463,20 +1487,6 @@ function Body({
               <CardModalControls
                 card={card}
                 scope={scope}
-                printingCount={printings.data?.total ?? 0}
-                onViewAllPrintings={() => {
-                  if (card.oracleId === null) return;
-                  openAllPrintings({
-                    cardId: card.id,
-                    oracleId: card.oracleId,
-                    name: card.name,
-                    deck: scope.deck,
-                    // The reader is asking about *this card*, not repointing a wish — see
-                    // `PrintingsRequest.wish`, where the field is required so that every caller
-                    // has to say which it means.
-                    wish: null,
-                  });
-                }}
                 quantity={quantity}
                 onQuantityChange={changeQuantity}
                 categories={categoryOptions}
@@ -1488,13 +1498,28 @@ function Body({
                 onCreateLabel={makeLabel}
               />
 
-              <InlineCounts counts={counts} scope={scope} />
               </div>
+              )}
+
+              {/* **Outside the controls wrapper, because it is not a control.** It is the
+                  sub-1200 copy of the rail's grimoire block, drawn at every rung and hidden by
+                  its own class at the widest one — so it must not inherit the wrapper's
+                  condition. It did for one commit, and the counts vanished on the search and
+                  tags walls, which are exactly the surfaces with no controls to draw. */}
+              <InlineCounts counts={counts} scope={scope} />
 
               <div
                 className={cn(
-                  "relative min-w-0",
+                  // **A flex column at every rung**, because `CardModalPrintings` hands back two
+                  // children now: the button that opens the printings wall, and the section it
+                  // stands over. The gap is what separates them; the section's own `border-t`
+                  // draws the rule under the button.
+                  "relative flex min-w-0 flex-col gap-3",
+                  // `col-start-2` where there are two tracks; `flex-1` where the parent stayed a
+                  // flex column because there was nothing to put in the first one. Each is inert
+                  // under the other's layout, so both are unconditional.
                   "@min-[1200px]/card:col-start-2 @min-[1200px]/card:row-start-1",
+                  "@min-[1200px]/card:flex-1",
                   // **This column does not scroll; the list inside it does.** Its heading, its
                   // sort control and its count line stay put while the rows move, which they
                   // cannot do if the scroller is out here — so all this box does is hand the
@@ -1522,6 +1547,19 @@ function Body({
                 // printing* (`useDeck.swapPrinting`), with no deck row it browses
                 // (`viewPrinting`). Moving the control must not move that.
                 onPick={pickPrinting}
+                onViewAll={() => {
+                  if (card.oracleId === null) return;
+                  openAllPrintings({
+                    cardId: card.id,
+                    oracleId: card.oracleId,
+                    name: card.name,
+                    deck: scope.deck,
+                    // The reader is asking about *this card*, not repointing a wish — see
+                    // `PrintingsRequest.wish`, where the field is required so that every caller
+                    // has to say which it means.
+                    wish: null,
+                  });
+                }}
               />
               </div>
             </div>

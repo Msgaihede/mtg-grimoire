@@ -50,6 +50,7 @@ import { FOCUS } from "@/lib/focus";
 import type { CardDetail, Printing } from "@/lib/ipc";
 import { languageHint } from "@/lib/languages";
 import type { Marketplace } from "@/lib/marketplace";
+import { PRESS } from "@/lib/motion";
 import { formatPrice } from "@/lib/prices";
 import { finishTreatments } from "@/lib/treatment";
 import { cn } from "@/lib/utils";
@@ -125,6 +126,16 @@ export interface CardModalPrintingsProps {
    * with {@link card}'s own id.
    */
   onPick: (printingId: string) => void;
+  /**
+   * Open the printings **wall** — `AllPrintingsDialog`, the filtered grid of art.
+   *
+   * **A different surface from this list rather than a bigger version of it**, which is why both
+   * exist: this is a column of facts a reader compares down, that is a wall of pictures they
+   * search across. It sits here because it is about the printings, and a reader who wants more of
+   * them than this column shows is looking at this column when they decide that — it lived in the
+   * controls column, two boxes away from the thing it is about, until 2026-09-04.
+   */
+  onViewAll: () => void;
 }
 
 /**
@@ -146,6 +157,7 @@ export function CardModalPrintings({
   marketplace,
   busy = false,
   onPick,
+  onViewAll,
 }: CardModalPrintingsProps) {
   const headingId = useId();
   /**
@@ -174,31 +186,70 @@ export function CardModalPrintings({
   const noun = PRINTING_GROUP_BY_OPTIONS.find((option) => option.value === mode)?.noun ?? null;
 
   return (
-    // **`relative`, and it is not decoration.** `RarityGem` and the language badge below each
-    // carry an `sr-only` span, and Tailwind's `.sr-only` is `position: absolute` — a
-    // screen-reader label with no positioned ancestor takes its containing block from far
-    // outside the column this list is drawn in and is then laid out at a static position the
-    // scroller cannot clip. That is `src/CLAUDE.md`'s phantom-scrollbar rule, met from the inside
-    // rather than at the box carrying the `overflow`; one word here bounds this whole subtree.
-    //
-    // The rule above it separates "this card" from "every card like it", which is the panel's
-    // deepest division — the same hairline `InlineCounts` draws above, so the middle column reads
-    // as stacked sections rather than as boxes.
-    // **A fixed head and a scrolling body, at the rung where this column is its own scroller.**
-    // The heading, the control that reorders the list and the count line all describe what is
-    // below them, so a reader three hundred rows down had lost the name of the thing they were
-    // reading, the control they would use to re-sort it, and the only statement of how many
-    // there are. Everything above the rows is `shrink-0`; the rows take what is left.
-    //
-    // **`flex flex-col gap-2` rather than the `space-y-2` this had**: the body needs
-    // `flex-1 min-h-0` to be given a definite height to scroll inside, which is a thing only a
-    // flex parent can hand it. The gap is the same 2 the margins were, so nothing moves.
-    //
-    // Below `@min-[1200px]/card` none of it applies and none of it has to be turned off: the
-    // main column is the scroller there, this section is auto-height inside it, and a body with
-    // no height to overflow draws no bar. The classes are unconditional for that reason — a
-    // container-query variant on them would be four more classes saying what the layout already
-    // says.
+    // **A fragment, because the button above the rule is not part of the section below it.** The
+    // two are siblings in the wrapper `CardDetailModal` draws around them, which is the flex
+    // column that gives the section its height and leaves the button its own.
+    <>
+      {/* **The door to the printings wall, above the rule rather than under it.**
+
+          That rule is the section's own `border-t`, and it separates "this card" from "every
+          card like it" — the panel's deepest division, the one `Legality` draws too. The button
+          is not part of the list it sits over: it opens a *different* surface, a filtered grid of
+          art at three or four times this width. Under the rule it read as the list's first row.
+
+          Its count is the same `total` the line below states, and saying it twice is the point:
+          that line says how many there are and this says it will show them, so a reader who has
+          read "12 of 865 printings" and wants the rest has the way there under their eyes rather
+          than two boxes away in another column, which is where it was until 2026-09-04.
+
+          **Accent outline and accent text** — `FilterChips`' recipe for a lit control and the
+          app's one spelling of it. Everything around it reports; this is the only thing here that
+          opens something. Outline and not fill: the panel's footer row owns the primary
+          treatment, and a second filled control would compete with `Add to deck`.
+
+          `shrink-0` because the section below it is the flexible one — see the wrapper in
+          `CardDetailModal`, which is the flex column the two of them are children of. */}
+      <button
+        type="button"
+        onClick={onViewAll}
+        className={cn(
+          "h-9 w-full shrink-0 truncate rounded-md border px-3 text-xs",
+          "border-accent text-accent hover:border-accent hover:bg-accent/10",
+          PRESS,
+          FOCUS,
+        )}
+      >
+        {/* One text node, count included: a label and its count in two spans separated by a CSS
+            `gap` compute to "View all printings865" — a gap is not a word separator, and the
+            accessible name is what a test and a screen reader both read. */}
+        {`View all printings (${total})`}
+      </button>
+
+      {/* **`relative`, and it is not decoration.** `RarityGem` and the language badge below each
+          carry an `sr-only` span, and Tailwind's `.sr-only` is `position: absolute` — a
+          screen-reader label with no positioned ancestor takes its containing block from far
+          outside the column this list is drawn in and is then laid out at a static position the
+          scroller cannot clip. That is `src/CLAUDE.md`'s phantom-scrollbar rule, met from the inside
+          rather than at the box carrying the `overflow`; one word here bounds this whole subtree.
+
+          The rule above it separates "this card" from "every card like it", which is the panel's
+          deepest division — the same hairline `InlineCounts` draws above, so the middle column reads
+          as stacked sections rather than as boxes.
+          **A fixed head and a scrolling body, at the rung where this column is its own scroller.**
+          The heading, the control that reorders the list and the count line all describe what is
+          below them, so a reader three hundred rows down had lost the name of the thing they were
+          reading, the control they would use to re-sort it, and the only statement of how many
+          there are. Everything above the rows is `shrink-0`; the rows take what is left.
+
+          **`flex flex-col gap-2` rather than the `space-y-2` this had**: the body needs
+          `flex-1 min-h-0` to be given a definite height to scroll inside, which is a thing only a
+          flex parent can hand it. The gap is the same 2 the margins were, so nothing moves.
+
+          Below `@min-[1200px]/card` none of it applies and none of it has to be turned off: the
+          main column is the scroller there, this section is auto-height inside it, and a body with
+          no height to overflow draws no bar. The classes are unconditional for that reason — a
+          container-query variant on them would be four more classes saying what the layout already
+          says. */}
     <section
       aria-labelledby={headingId}
       className="relative flex flex-col gap-2 border-t border-border pt-3 @min-[1200px]/card:min-h-0 @min-[1200px]/card:flex-1"
@@ -333,6 +384,7 @@ export function CardModalPrintings({
       ))}
       </div>
     </section>
+    </>
   );
 }
 

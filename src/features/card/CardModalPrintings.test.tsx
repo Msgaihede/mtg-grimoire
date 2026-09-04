@@ -136,6 +136,7 @@ function renderList(props: Partial<Parameters<typeof CardModalPrintings>[0]> = {
       error={null}
       marketplace={USD}
       onPick={vi.fn()}
+      onViewAll={vi.fn()}
       {...props}
     />,
     { wrapper: Wrapper },
@@ -297,5 +298,50 @@ describe("CardModalPrintings", () => {
     expect(
       screen.queryByText("This card has no paper printings."),
     ).not.toBeInTheDocument();
+  });
+
+  /**
+   * **The door to the printings wall, which arrived here on 2026-09-04.**
+   *
+   * It was in `CardModalControls` because it once shared a row with the `Printing` combobox;
+   * that combobox became this list a day earlier, which left the door two boxes away from the
+   * room. It is drawn above the rows, in the head that does not scroll — a reader who has read
+   * "3 of 862 printings" and wants the rest should not have to go looking for the way there.
+   *
+   * The count is in the name rather than beside it: a label and its count in two spans separated
+   * by a CSS `gap` compute to "View all printings862", because a gap is not a word separator, and
+   * the accessible name is what a test and a screen reader both read.
+   */
+  it("offers the printings wall above the list, with the count in its name", async () => {
+    const onViewAll = vi.fn();
+    renderList({ total: 862, onViewAll });
+
+    const button = await screen.findByRole("button", { name: "View all printings (862)" });
+    await userEvent.click(button);
+    expect(onViewAll).toHaveBeenCalledOnce();
+
+    // **Above the rule, not under it.** That rule is the section's own `border-t` and it
+    // separates "this card" from "every card like it"; the button opens a different surface
+    // altogether, so under the rule it read as the list's first row. Asserted as document order
+    // rather than by a class, since the rule is the section's and the button is its sibling.
+    const section = screen.getByRole("heading", { name: "Printings" }).closest("section");
+    expect(section).toBeTruthy();
+    expect(section).not.toContainElement(button);
+    expect(
+      button.compareDocumentPosition(section as HTMLElement) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+      "the button must come before the section it stands over",
+    ).toBeTruthy();
+
+    // And outside the scroller either way, so it stays put while the rows move.
+    const body = (section as HTMLElement).querySelector(".overflow-y-auto");
+    expect(body, "the section draws no body of its own").toBeTruthy();
+    expect(body).not.toContainElement(button);
+
+    // The lit-control recipe, and an outline rather than a fill: the panel's footer row owns the
+    // primary treatment and a second filled control would compete with `Add to deck`.
+    expect([...button.classList]).toContain("border-accent");
+    expect([...button.classList]).toContain("text-accent");
+    expect([...button.classList]).not.toContain("bg-accent");
   });
 });

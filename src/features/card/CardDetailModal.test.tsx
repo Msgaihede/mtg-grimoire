@@ -778,19 +778,18 @@ it("draws the rail's divider only at the rung where the rail is a column", async
  * writes to the card on the left, the printings list on the right.
  *
  * jsdom resolves no container query and every box is 0, so this pins the classes and the widths
- * are settled in the window. Measured at a 1240px panel; at 1100, 950, 820, 600 and 390 the two
- * share a left edge with the controls above the list.
+ * are settled in the window. Measured at a 1240px panel: controls 240px at x=757, list 329px at
+ * x=1017, one top, 20px between them; at 1100, 950, 820, 600 and 390 the two share a left edge
+ * with the controls above the list.
  *
  * **The scroller moving down a level is the half worth pinning.** As one column this box scrolled
  * everything together, so going looking down Forest's 865 printings took the quantity stepper and
  * the pickers off the screen with it — controls are about the card, not about the list. Measured
- * after the change: the printings column scrolled 4000px and `View all printings` did not move
- * from y=102.
+ * after the change: the printings column scrolled 4000px and the controls did not move.
  */
-it("splits the main area into list and controls at the widest rung only", async () => {
-  renderModal("c1");
-  const panel = await screen.findByRole("dialog");
-  await screen.findByRole("button", { name: "Legality" });
+it("splits the main area into controls and list at the widest rung only", async () => {
+  await renderFromDeck();
+  const panel = screen.getByRole("dialog");
 
   // `classList` rather than a selector, for the reason the divider test above spells out.
   const middle = [...panel.querySelectorAll("div")].find((d) =>
@@ -818,21 +817,23 @@ it("splits the main area into list and controls at the widest rung only", async 
   // commit, and a test that only checked there were two of them passed on both.
   const controls = child("col-start-1");
   const list = child("col-start-2");
-  expect(list, "no column-1 child").toBeDefined();
-  expect(controls, "no column-2 child").toBeDefined();
+  expect(controls, "no column-1 child").toBeDefined();
+  expect(list, "no column-2 child").toBeDefined();
+  expect(controls).toContainElement(screen.getByRole("button", { name: /^category/i }));
   expect(list).toContainElement(screen.getByRole("heading", { name: "Printings" }));
-  expect(controls).toContainElement(
-    screen.getByRole("button", { name: /^View all printings/ }),
-  );
+  expect(
+    list,
+    "the door to the wall belongs above the list it opens more of",
+  ).toContainElement(screen.getByRole("button", { name: /^View all printings/ }));
 
   // The controls column scrolls itself.
-  const controlsClasses = [...(controls as HTMLElement).classList];
-  expect(controlsClasses).toContain("@min-[1200px]/card:overflow-y-auto");
-  expect(controlsClasses).toContain("@min-[1200px]/card:min-h-0");
+  expect([...(controls as HTMLElement).classList]).toContain(
+    "@min-[1200px]/card:overflow-y-auto",
+  );
 
-  // **The list column does not — the list inside it does**, which is the whole of what keeps
-  // the heading, the sort control and the count line on screen while the rows move. A scroller
-  // out here takes them with it, and that is exactly the shape this had first.
+  // **The list column does not — the list inside it does**, which is what keeps the heading, the
+  // sort control and the count line on screen while the rows move. A scroller out here takes
+  // them with it, and that is exactly the shape this had first.
   const listClasses = [...(list as HTMLElement).classList];
   expect(listClasses).toContain("@min-[1200px]/card:min-h-0");
   expect(listClasses, "the list column must not scroll; its body does").not.toContain(
@@ -848,16 +849,45 @@ it("splits the main area into list and controls at the widest rung only", async 
   }
 
   // **The head is outside the body**, named piece by piece rather than by counting children:
-  // each of the three is a thing a reader three hundred rows down would otherwise have lost.
+  // each is a thing a reader three hundred rows down would otherwise have lost.
   const heading = screen.getByRole("heading", { name: "Printings" });
-  const section = heading.closest("section");
-  const body = section?.querySelector(".overflow-y-auto");
+  const body = heading.closest("section")?.querySelector(".overflow-y-auto");
   expect(body, "the printings section draws no scroller of its own").toBeTruthy();
   expect(body).not.toContainElement(heading);
   expect(body).not.toContainElement(screen.getByRole("button", { name: /group printings by/i }));
-  expect(body).not.toContainElement(screen.getByText(/\bprintings?\b/i, { selector: "p" }));
+  expect(body).not.toContainElement(screen.getByRole("button", { name: /^View all printings/ }));
   // And it is the box that carries the one gold scrollbar in the app.
   expect([...(body as HTMLElement).classList]).toContain("scrollbar-accent");
+});
+
+/**
+ * **One column where there are no controls, which became reachable the day the button moved.**
+ *
+ * `CardModalControls` draws a stepper on the surfaces that keep a count and the two pickers on a
+ * deck row — on the search and tags walls it draws nothing at all. That was invisible while
+ * `View all printings` sat in it unconditionally; once that moved to the list, a two-column split
+ * on those walls would be a 15rem hole beside a list squeezed out of the width it was using.
+ *
+ * The counts are the other half. `InlineCounts` lived inside the controls wrapper and inherited
+ * its condition for one commit, which deleted the grimoire figures on exactly the two surfaces
+ * this test covers — so it is asserted here rather than left to the pair of tests above.
+ */
+it("gives the list the whole main area where there are no controls to draw", async () => {
+  renderModal("c1");
+  const panel = await screen.findByRole("dialog");
+  await screen.findByRole("heading", { name: "Printings" });
+
+  expect(screen.queryByRole("button", { name: /^category/i })).not.toBeInTheDocument();
+  expect(screen.queryByRole("spinbutton")).not.toBeInTheDocument();
+  expect(
+    [...panel.querySelectorAll("div")].find((d) =>
+      d.classList.contains("@min-[1200px]/card:grid-cols-[15rem_minmax(0,1fr)]"),
+    ),
+    "an empty controls column still claiming a 15rem track",
+  ).toBeUndefined();
+
+  // The counts are not a control and must survive the column that is not drawn.
+  expect(screen.getAllByRole("heading", { name: "In your grimoire" })).toHaveLength(2);
 });
 
 /**

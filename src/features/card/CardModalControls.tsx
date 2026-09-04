@@ -12,7 +12,6 @@ import { labelNameKey } from "@/features/decks/labelNames";
 import { META_FIELD, META_SUBMIT } from "@/features/decks/metaRows";
 import { FOCUS } from "@/lib/focus";
 import type { CardDetail } from "@/lib/ipc";
-import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import type { CardModalScope } from "./cardModalScope";
 
@@ -102,19 +101,6 @@ export interface CardModalControlsProps {
   card: CardDetail;
   /** Spec §7's per-view table, resolved once by `useCardModalScope`. */
   scope: CardModalScope;
-  /** How many printings this card has — drawn **inside** the button's name, see below. */
-  printingCount: number;
-  /**
-   * Open the printings **wall** — `AllPrintingsDialog`.
-   *
-   * **It stays, and `CardModalPrintings` does not make it redundant** (2026-09-03). The inline
-   * list beneath this column is a column of facts a reader reads down; the wall is a filtered
-   * grid of *art*, at three or four times the width, with a set / language / treatment / finish
-   * filter row this column has no room for. They answer two different questions about one card,
-   * and the door to the second is here.
-   */
-  onViewAllPrintings: () => void;
-
   // ── Everything below is wiring Task 10 supplies. ────────────────────────────────────────
   // Each is optional with an inert default, and that is deliberate rather than lax: this
   // component has to render with no deck, no query client and no store in the tree, or its own
@@ -155,8 +141,14 @@ export interface CardModalControlsProps {
 }
 
 /**
- * The card modal's controls: **Quantity**, `View all printings`, and — for a card opened out of
- * a deck — **Category** and **Label**, one to a row.
+ * The card modal's controls: **Quantity** and — for a card opened out of a deck — **Category**
+ * and **Label**, one to a row.
+ *
+ * **`View all printings` left on 2026-09-04** for `CardModalPrintings`, directly above the list
+ * it opens more of. It was here because it once shared a row with the `Printing` combobox; when
+ * that combobox became the list, this was a door standing two boxes away from the room. The wall
+ * it opens is still a different surface from that list — a filtered grid of *art* at three or
+ * four times the width — which is why it exists at all; only where it hangs has changed.
  *
  * **The `Printing` combobox was the third field and is gone** (2026-09-03). It was a picker over
  * every printing of the card, and it moved to `CardModalPrintings` — the list that now fills the
@@ -189,8 +181,6 @@ export interface CardModalControlsProps {
 export function CardModalControls({
   card,
   scope,
-  printingCount,
-  onViewAllPrintings,
   quantity = 0,
   onQuantityChange,
   categories = [],
@@ -228,50 +218,6 @@ export function CardModalControls({
           </div>
         </div>
       )}
-
-      {/* **The door to the printings wall, and it is a row of its own now.**
-          It shared a line with the `Printing` combobox until 2026-09-03, inside a `Field`
-          labelled `Printing`; the combobox moved to `CardModalPrintings` and the label went with
-          it, because a `<label htmlFor>` pointing at a control that is no longer rendered is a
-          dangling association rather than a heading. The geometry and the one-text-node name are
-          untouched; only the colour changed. */}
-      <div className="flex min-w-0">
-        <button
-          type="button"
-          onClick={onViewAllPrintings}
-          className={cn(
-            // `w-full` and not `shrink-0`: this is a row of the column like every other, and a
-            // button sized to its own words left a ragged edge beside four boxes that fill.
-            // `truncate` because the name carries a count that can reach four digits.
-            "w-full truncate rounded-md border px-3 text-xs",
-            // **Accent outline and accent text, which is `FilterChips`' recipe for a pressed
-            // chip** — `border-accent text-accent`, the app's one spelling of "this control is
-            // lit". It was `border-border text-dim`, the same recipe every settled value in this
-            // column wears, and that is what made it disappear: the column is four boxes a
-            // reader looks *at*, and this is the one that opens something. The accent is what
-            // this app already uses to mark a thing that acts rather than reports.
-            //
-            // **It does not become a primary button.** `ACTION`'s filled treatment belongs to
-            // the footer's row, where the panel's real writes live; a second filled control up
-            // here would compete with `Add to deck` for the same claim. An outline says
-            // *pressable* without saying *press this one*.
-            "border-accent text-accent",
-            // The hover cannot go on saying `hover:text-text` — that reads as the accent draining
-            // out of the control the moment the pointer arrives, which is backwards. Brightening
-            // the outline is the same move `RAIL_ENTRY` makes one column over.
-            "hover:border-accent hover:bg-accent/10",
-            CONTROL_HEIGHT,
-            PRESS,
-            FOCUS,
-          )}
-        >
-          {/* **One text node, count included.** A label and its count in two sibling spans
-              separated by a CSS `gap` compute to "View all printings4" — the gap is not a
-              word separator, and the accessible name is what a test and a screen reader
-              both read. This has cost this repo a round before. */}
-          {`View all printings (${printingCount})`}
-        </button>
-      </div>
 
       {/* **Category and Label, one to a row.** They sat side by side above `@min-[900px]/card`
           until the main area became two columns: the controls are a 15rem column now, and two

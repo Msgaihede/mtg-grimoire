@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_LABEL_COLOR } from "@/features/decks/labelColors";
@@ -65,8 +65,6 @@ function renderControls(props: Partial<Parameters<typeof CardModalControls>[0]> 
     <CardModalControls
       card={card}
       scope={searchScope}
-      printingCount={4}
-      onViewAllPrintings={vi.fn()}
       {...props}
     />,
   );
@@ -119,29 +117,6 @@ describe("CardModalControls", () => {
     expect(screen.getByRole("spinbutton")).toHaveValue(2);
   });
 
-  it("offers the printings modal with the count in its name", () => {
-    const onViewAllPrintings = vi.fn();
-    renderControls({ printingCount: 4, onViewAllPrintings });
-
-    // The count is *in* the accessible name rather than beside it: a label and its count in
-    // two spans separated by a CSS `gap` compute to "View all printings4", because a gap is
-    // not a word separator. One text node is what keeps the name readable.
-    const button = screen.getByRole("button", { name: "View all printings (4)" });
-    fireEvent.click(button);
-    expect(onViewAllPrintings).toHaveBeenCalledOnce();
-
-    // **Accent outline and accent text**, which is `FilterChips`' recipe for a lit control and
-    // the app's one spelling of it. This is the only box in the column that *opens* something
-    // rather than reporting a settled value, and in `border-border text-dim` it read as a fourth
-    // field. `classList` rather than `className.includes`, so a `hover:` variant carrying the
-    // same words cannot satisfy it — that has made an assertion here vacuous before.
-    expect([...button.classList]).toContain("border-accent");
-    expect([...button.classList]).toContain("text-accent");
-    // Outline, not fill: the footer's row owns the panel's primary treatment, and a second
-    // filled control up here would compete with `Add to deck` for the same claim.
-    expect([...button.classList]).not.toContain("bg-accent");
-  });
-
   /**
    * **Every control is a row of the column, and the column is 15rem.**
    *
@@ -155,13 +130,7 @@ describe("CardModalControls", () => {
    * 1240px panel: the column and all four rows are 240px, and the two pickers sit at one x.
    */
   it("gives every control its own full-width row", () => {
-    renderControls({ scope: deckScope, printingCount: 4 });
-
-    // The button: `w-full`, and specifically *not* the `shrink-0` it wore when it was sized to
-    // its own words.
-    const button = screen.getByRole("button", { name: "View all printings (4)" });
-    expect([...button.classList]).toContain("w-full");
-    expect([...button.classList]).not.toContain("shrink-0");
+    renderControls({ scope: deckScope });
 
     // The pickers, one to a row: the box holding them must carry no two-column track at any
     // rung. Asserted as the absence of the class rather than the presence of `flex-col`, because
@@ -183,22 +152,21 @@ describe("CardModalControls", () => {
     expect([...(stepper as HTMLElement).classList]).toContain("w-full");
   });
 
-  it("draws no printing picker, and keeps the way out to the wall", () => {
-    // **The two used to share a row and only one of them moved** (2026-09-03). The combobox is
-    // `CardModalPrintings` now — a picker that announced the printing you were on and hid the
-    // ones you were choosing between — and `View all printings` stays here, because the wall it
-    // opens is a filtered grid of art rather than the column of facts that replaced the picker.
-    //
-    // Asserted as a pair, because "no combobox" alone would pass on a build that deleted both,
-    // and "the button is here" alone would pass on the build before the change.
-    renderControls({ scope: deckScope, quantity: 1 });
+  it("draws no printing picker at all", () => {
+    // **The combobox became a list** (2026-09-03): a picker announced the printing you were *on*
+    // and hid the ones you were choosing *between*, which is the comparison the control existed
+    // for. `View all printings` went with it a day later — it had only ever been here because it
+    // shared that combobox's row, and once the combobox was the list, the door was standing two
+    // boxes away from the room. Neither is this column's any more, and both halves are asserted
+    // because a picker coming back would be a silent second opinion about the open printing.
+    renderControls({ scope: deckScope });
 
-    expect(screen.queryByRole("button", { name: "Printing" })).not.toBeInTheDocument();
-    // …and nothing else in this column is a `Printing`-labelled control either: the `Field`
-    // wrapper went with the combobox, since a `<label htmlFor>` naming an unrendered control is
-    // a dangling association rather than a heading.
-    expect(screen.queryByText("Printing")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "View all printings (4)" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^printing$/i })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/^printing$/i)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /view all printings/i }),
+      "the door belongs to the printings list now",
+    ).not.toBeInTheDocument();
   });
 
   /**
