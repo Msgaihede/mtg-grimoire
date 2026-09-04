@@ -47,11 +47,13 @@ const FOIL_SHEEN =
  * One card's art in its 5:7 frame — the picture, its retry, and what is drawn when there is
  * no picture.
  *
- * Extracted from `CardGrid`'s tile because five surfaces draw a card and each had rebuilt
- * part of this: the wall's tiles, the pane's main art, the pane's printings rows, the deck
+ * Extracted from `CardGrid`'s tile because five surfaces drew a card and each had rebuilt
+ * part of this: the wall's tiles, the card pane's main art, the pane's printings rows, the deck
  * editor's zone rows and `PrintingPreview`. They agreed on the aspect ratio and disagreed
  * about everything else, which is how a foil marking would otherwise have come to exist in
- * five slightly different versions.
+ * five slightly different versions. (Two of those five went with the docked pane on 2026-09-03:
+ * its main art is `CardModalArt`'s now, and the printings rows became `AllPrintingsDialog`'s
+ * tile wall — which is a `CardGrid`, so it draws this frame rather than one of its own.)
  *
  * **The deck editor's Grid view is a caller since 2026-08-16**, and it is the case that shows
  * what "one definition" is worth: it had opted out and kept a copy of this file inline, which
@@ -59,7 +61,7 @@ const FOIL_SHEEN =
  * {@link CARD_ASPECT}), a smaller no-picture fallback and no hover lift at all — so the deck a
  * reader was building and the wall docked beside it drew the same card two ways, on one screen.
  * The surfaces that still draw their own frame each say why at their own site
- * (`CardStack`, `CardDetailPane`, `PrintingPreview`, the two cover pickers); none of them is
+ * (`CardStack`, `CardModalArt`, the two cover pickers); none of them is
  * 5:7 with an aspect-driven height, which is the whole of what this owns.
  *
  * `CardImage` stays underneath and does the one thing it has always done — key the `<img>`
@@ -270,10 +272,11 @@ export function CardArt({
 /**
  * The marks laid over a card's art — the sheen and the chip that say what this cardboard *is*.
  *
- * Its own component because the card detail pane's main art is **not** a `CardArt`: it keeps
- * a flip fade, a bespoke "no image yet" panel and no retry hook, and routing it through the
- * shared frame would trade three deliberate behaviours for one shared one. What the two must
- * agree on is the marking, so that is what is shared.
+ * Its own component because the card detail modal's main art (`CardModalArt`) is **not** a
+ * `CardArt`: it keeps a flip fade, a bespoke "no image yet" panel and no retry hook, and routing
+ * it through the shared frame would trade three deliberate behaviours for one shared one. That
+ * was true of the docked pane's main art before it, and it is why this survived the pane's
+ * deletion. What the two must agree on is the marking, so that is what is shared.
  *
  * Two facts share one chip, and the crown is drawn first because it is the broader one.
  * **A game changer is a fact about the card; a finish is a fact about the printing** — every
@@ -312,7 +315,7 @@ export function FoilOverlay({
   treatments?: readonly Treatment[];
   /**
    * Optional, and it has to stay optional: two callers outside `CardArt` draw this overlay
-   * (the card detail pane's main art and the deck stack's card) and neither says anything about
+   * (`CardModalArt`'s main art and the deck stack's card) and neither says anything about
    * the bracket. Those surfaces have their own drawings of it — `GameChangerBanner` on the
    * stack, `GameChangerBadge` on the deck's table and text views. The deck's **Grid** view was
    * a third such caller until 2026-08-16 and is now a `CardArt` like the search wall, so it gets

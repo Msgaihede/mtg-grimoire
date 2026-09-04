@@ -9768,6 +9768,64 @@ describe("categories, labels, folders, history and the plan", () => {
     ).toThrow(/not in this deck's category any more/);
   });
 
+  /**
+   * **The finish is the fifth term of the grain, and this fake matched on four until 2026-09-03.**
+   * That is not a fake-only detail: the real `deck_card_set_label` command declared no `finish`
+   * either and passed `None` to the writer, so every foil and etched deck row answered "not in
+   * this deck's category any more" for a row the reader was looking straight at. Nothing here
+   * noticed, because a `find` on four fields reached the foil row anyway - the fake was *more*
+   * permissive than the crate, which is the one direction a fake must never be.
+   *
+   * So both halves are pinned: the foil row is reachable when the finish is given, and the
+   * regular copy beside it is a different row that keeps its own label.
+   */
+  it("labels the foil row and the regular copy as the separate rows they are", () => {
+    const { db, w } = testbed();
+    const label = db.deckLabels.find((l) => l.name === "Budget swap")!;
+    const plain = db.deckCards.find(
+      (dc) => dc.deckId === 4 && dc.variant === "live" && dc.finish === null,
+    )!;
+    // The same card in the same category in the other finish - two rows on the grain, which is
+    // what schema v18 made possible and what the four-field match could not tell apart.
+    const foil = { ...plain, id: 9_001, finish: "foil" as const, labelId: null };
+    db.deckCards.push(foil);
+
+    w.deck_card_set_label({
+      deckId: 4,
+      cardId: foil.cardId,
+      categoryId: foil.categoryId,
+      variant: "live",
+      finish: "foil",
+      labelId: label.id,
+    });
+
+    expect(foil.labelId).toBe(label.id);
+    expect(plain.labelId, "the regular copy is a different row and was not touched").toBeNull();
+  });
+
+  /**
+   * The refusal that remains once the finish is part of the address: a finish this pile holds no
+   * row in is the stale editor's case, exactly as a moved category is.
+   */
+  it("refuses a finish the pile holds no row in", () => {
+    const { db, w } = testbed();
+    const label = db.deckLabels.find((l) => l.name === "Budget swap")!;
+    const plain = db.deckCards.find(
+      (dc) => dc.deckId === 4 && dc.variant === "live" && dc.finish === null,
+    )!;
+
+    expect(() =>
+      w.deck_card_set_label({
+        deckId: 4,
+        cardId: plain.cardId,
+        categoryId: plain.categoryId,
+        variant: "live",
+        finish: "etched",
+        labelId: label.id,
+      }),
+    ).toThrow(/not in this deck's category any more/);
+  });
+
   it("takes a folder's sub-folders and leaves its decks at the root", () => {
     const { db, w } = testbed();
     // Deck 4 is in `Constructed › Commander`; deleting the *parent* cascades onto the child.

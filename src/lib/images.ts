@@ -42,9 +42,10 @@ export type ImageVariant = (typeof IMAGE_VARIANTS)[number];
  * then fetches cold anyway. `SearchPage`'s `prefetchImages` call and `CardArt`'s default are
  * that pair; `images::COLLECTION_PREWARM` is the Rust half and has to agree with this.
  *
- * It is what `CardDetailPane` and `PrintingPreview` already draw, which is the part that pays
+ * It is what the open card already draws — `CardModalArt` names `"display"` outright, as the
+ * docked pane and its `PrintingPreview` did before it — which is the part that pays
  * for the bigger file: a card the reader opens used to cost two cache keys — a `grid` for the
- * tile and a `display` for the pane — and now costs one.
+ * tile and a `display` for the open card — and now costs one.
  */
 export const WALL_CARD_VARIANT: ImageVariant = "display";
 

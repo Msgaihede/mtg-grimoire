@@ -170,11 +170,12 @@ function columnsFor(
       sortable: true,
       // `setName` is nullable and the code is not, so the code is what is shown; the full name
       // rides along as the tooltip when there is one. Mono because a collector number is data
-      // — the same rule as the grid caption and the pane.
+      // — the same rule as the grid caption and `CardChin`'s printing line.
       //
       // No `whenClipped`: the span shows the set *code* and the tip says its *name*, so gating
       // the panel on the code's own clip gates it on a different string than the one it says —
-      // the rule is stated once at `CardDetailPane.tsx`'s printings row.
+      // the rule is stated at `CardChin`'s `printingTitle`, which inherited it from the docked
+      // pane's printings row.
       cellClassName: "flex items-center gap-1.5 font-mono text-xs text-dim",
       cell: (row) => (
         <>

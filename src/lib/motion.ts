@@ -169,10 +169,10 @@ export const scrim: EnterExit = {
 };
 
 /**
- * A centred surface drawn over the view: `Dialog` (and through it the deck editor's
- * categories, labels, history and settings), `CreateDeckDialog`, `TheoryDiffDialog`,
- * `ImportDialog`, and `CardDetailPane`, which is docked but arrives by scaling from its own
- * right edge.
+ * A centred surface drawn over the view: `Dialog` (and through it the card detail modal, the
+ * deck editor's categories, labels, history and settings), `CreateDeckDialog`,
+ * `TheoryDiffDialog` and `ImportDialog`. The docked `CardDetailPane` was on this preset too —
+ * docked, but arriving by scaling from its own right edge — until it was deleted on 2026-09-03.
  *
  * **There is no drawer preset, and its absence is a decision** (2026-08-14). `drawerRight` slid a
  * right-docked panel in from `x: "100%"` for the deck editor's two drawers; both are centred

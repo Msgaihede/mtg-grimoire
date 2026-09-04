@@ -551,8 +551,31 @@ reader to configure the deck they had just made; it now asks all of them.
   could be pressed once and never pressed back. `swapPrinting` met this one axis over and answered
   it the same way — `openCardFromDeck` is both "which card is open" and "which row it came from".
   **The fold needs no arm**: two rows becoming one leaves the survivor at the target finish, which
-  is where the context lands either way. **`move` and `refile` change the third part and have the
-  same hole**; they are not fixed and the mark goes out there too.
+  is where the context lands either way.
+- **Every write that moves a row's address re-anchors, through that one helper** (2026-09-03).
+  This bullet said `move` and `refile` "change the third part and have the same hole; they are not
+  fixed", and that stopped being true with issue "detached modal": `moveCard`, `refileCard`,
+  `swapPrinting` and `setCardFinish` all call `reanchorPane` on their own mutation now, and the
+  guard is unchanged — the **whole** five-part address is compared, so only the row that was
+  actually written moves and a card open from another pile, another deck or the other list is left
+  alone. Two things came with the generalisation. **`swapPrinting`'s re-anchor moved off its call
+  site**, where it had been justified by the docked pane being its only presser and carrying a
+  `handover` only the pane could build — the pane is gone, `AllPrintingsDialog` is the presser, and
+  the `handover` it holds is a *caret* note rather than a context, so for a while nothing
+  re-anchored a swap at all and a card open on the row went on addressing the printing the deck
+  had stopped playing. And **a category name travels with a move**, because `PaneDeckContext`
+  carries `categoryName` beside `categoryId` and the word is not derivable from the id where the
+  context is read; `refileCard` has it in its own answer, `moveCard` reads it out of the cached
+  `deck_get`, and the one caller that can outrun that read — the card modal's `Create new…` —
+  passes the name it was just handed as `toName`.
+- **Stepping to zero has no address to re-anchor to, so it _clears_ the context** — `unanchorPane`,
+  which calls `setSelectedCardId(cardId)`: the card stays open and stops being a deck row. Leaving
+  it was not available (`deck_set_card_quantity` answers `card_gone` for a slot with no row, and
+  the card modal draws no error state for the deck's mutations, so its stepper would become a `+`
+  that could only be refused in silence), and closing the modal was refused as answering a question
+  the reader had not asked. **`clearCategory` and `clearDeck` are deliberately not wired to it**:
+  a context lives exactly as long as the card modal is open on a deck row, and both of those are
+  pressed from behind that modal's scrim, so neither can orphan one.
 - **What a deck card is drawn as is `playedFinish(card.finish, card.finishes)`** — the reader's
   own statement first, `soleFinish`'s second. The order carries the argument: `soleFinish` says
   what the *object* is and deliberately says nothing about a printing sold in both (a sheen on
@@ -2588,10 +2611,12 @@ longer-form record of the two hand-rolled comboboxes and their shared panel is
   `debouncedText`: clearing the field changes the key to `""`, which the query is `enabled: false`
   for, so the last five rows would hang under an empty box for the rest of the session.
 - **The Escape rung is `enabled: listOpen`, never `enabled: open`.** With the caret in a quick add
-  whose list is closed, the press belongs to the card detail pane, which listens on `window` in the
-  bubble phase — a capture-phase listener here would consume it and close nothing at all.
-  `DeckEditor.test.tsx`'s "lets Escape through to the card pane when no layer of its own is open"
-  focuses this very field and asserts the press arrives with `defaultPrevented` false. Escape here
+  whose list is closed, the press belongs to whatever layer is open over the desk — the card
+  modal, and otherwise the editor's own `"navigation"` floor, which closes the deck (it was the
+  docked card pane's, on the `"outer"` rung, until 2026-09-03). A capture-phase listener here would
+  consume it and close nothing at all. `DeckEditor.test.tsx`'s "lets Escape reach the window from
+  every field, where the deck's own floor takes it"
+  focuses this very field and asserts the press reaches `window`. Escape here
   closes the list and hands focus to nobody: the field is not unmounting and is what the caret was
   in the whole time, so the hook's focus-hand-back clause has nothing to do.
 - **The list is one more `"inner"` peer on this screen and deliberately outside the `Layer` union

@@ -433,15 +433,16 @@ export interface DeckSearchPanelProps {
  * `badge` slot keeps telling the collection story (a card in the binder is one the deck can be
  * built out of today) and the `action` slot becomes **Add to deck**.
  *
- * A **fixture of the editor, not a dismissible layer**: Escape pressed in here belongs to the
- * card detail pane, which listens on `window` in the bubble phase, and the way to put the
- * panel away — and the way to get it out in the first place, since it opens collapsed — is the
- * disclosure control it names itself by. The one dismissible thing inside it is the set picker's
- * listbox, which is already an `"inner"` layer of its own.
+ * A **fixture of the editor, not a dismissible layer**: this panel registers no rung of its own,
+ * so Escape pressed in here falls past it — to whatever card or dialog is open over the desk
+ * (`"inner"`), and otherwise to the editor's own `"navigation"` floor, which closes the deck. The
+ * way to put the panel away — and the way to get it out in the first place, since it opens
+ * collapsed — is the disclosure control it names itself by. The one dismissible thing inside it
+ * is the set picker's listbox, which is already an `"inner"` layer of its own.
  *
  * It is a docked column rather than one of the editor's dialogs because it is **worked out of**:
  * its tiles are drag sources into the deck's own category columns beside it, and a scrim would
- * end that drag path and cover the card pane a reader flips printings in. `src/CLAUDE.md` carries
+ * end that drag path. `src/CLAUDE.md` carries
  * that rule; everything the reader merely *consults* is a `Dialog`.
  *
  * The tiles stay selectable, so the pane keeps working from inside the editor: clicking the
@@ -571,20 +572,23 @@ export function DeckSearchPanel({
   const selectedCardId = useAppStore((s) => s.selectedCardId);
 
   /**
-   * The caret, when the card pane closes and what opened it is not there any more.
+   * The caret, when the open card closes and what opened it is not there any more.
    *
-   * This panel is what took it away: at 1024 a tile press opens the pane, the pane's arrival
-   * squeezes the row, the row squeezes this panel down to its rail — and the tile that was
-   * pressed goes `display: none` with it, which is as good as gone to the caret, because focus
-   * cannot land on a box that is not rendered. `CardDetailPane` hands the caret back to whatever
-   * opened it and checks `isConnected` before it does; a hidden tile is still connected, so the
-   * hand-back is attempted and does nothing, and either way the caret ends on `<body>` with the
-   * next Tab restarting from the top of the app. The disclosure is the honest place for it: it
-   * is where the reader's search went, and it is a Tab away from the search box and the results
-   * either way.
+   * This panel is what took it away. **The case this was written for was the docked pane's**: at
+   * 1024 a tile press opened the pane, the pane's arrival squeezed the row, the row squeezed this
+   * panel down to its rail — and the tile that was pressed went `display: none` with it, which is
+   * as good as gone to the caret, because focus cannot land on a box that is not rendered. The
+   * card is a centred modal since 2026-09-03 and takes width from neither column, so that road is
+   * closed; what still reaches this is the overlay case in the effect below, where the editor
+   * takes the panel's overlay away because there is room for one surface. Either way the card
+   * surface hands the caret back to whatever opened it and checks `isConnected` before it does; a
+   * hidden tile is still connected, so the hand-back is attempted and does nothing, and the caret
+   * ends on `<body>` with the next Tab restarting from the top of the app. The disclosure is the
+   * honest place for it: it is where the reader's search went, and it is a Tab away from the
+   * search box and the results either way.
    *
    * Read off a *remembered* collapse rather than off `roomy` at the moment the card closes,
-   * because by then it is usually false again — closing the pane is what gives the width back,
+   * because by then it is usually false again — closing the card is what gives the overlay back,
    * so the panel is already reopening on the same commit. What matters is that this panel shut
    * while the card was open, which is the thing that unmounted the opener.
    *

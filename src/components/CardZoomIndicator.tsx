@@ -67,7 +67,14 @@ export function anchorFor(section: ZoomSection | null): ZoomAnchor {
   if (!el) return { top: ZOOM_BADGE_INSET, right: ZOOM_BADGE_INSET };
   const rect = el.getBoundingClientRect();
   return {
-    top: rect.top + ZOOM_BADGE_INSET,
+    // **Clamped to the window, because a section's top is no longer always on screen.** A wall
+    // drawn with `CardGrid`'s `grow` is as tall as its list and `main` scrolls it, so a reader who
+    // has scrolled two rows in is holding a gesture over an element whose `top` is negative — and
+    // an unclamped badge is drawn above the window, where the figure the gesture is about cannot
+    // be read at all. Every bounded section is its own scrollport and its top is wherever the
+    // layout put it, so this changes nothing for them: `Math.max` is only reached once a section
+    // has scrolled past the top of the viewport.
+    top: Math.max(ZOOM_BADGE_INSET, rect.top + ZOOM_BADGE_INSET),
     // `right` in CSS is measured from the viewport's right edge inwards, and a rect's `right` is
     // measured from its left edge outwards — so the section's own inset is the difference, and
     // the badge stays in the section's corner however far from the window's that is.

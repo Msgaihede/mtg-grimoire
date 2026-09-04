@@ -562,8 +562,10 @@ function collectionItem(
    * "Add to → Collection" as a single press, and turning that into a submenu so it could offer
    * decks would put a fork in the commonest path in the app to describe a cabinet they do not
    * have — with `Add to → Deck` sitting one row above it the whole time. It cost a test to learn:
-   * `CardDetailPane`'s refusal case clicks Add to → Collection → Nonfoil on a printing with no
-   * folders, and the extra rung swallowed the add.
+   * the docked pane's refusal case clicked Add to → Collection → Nonfoil on a printing with no
+   * folders, and the extra rung swallowed the add. **That test went with `CardDetailPane.test.tsx`
+   * on 2026-09-03 and nothing has replaced it**, so the rule above is currently guarded by this
+   * comment rather than by a build.
    */
   const appTargets = (rows: readonly CardMenuTarget[]): CollectionAppSection | undefined =>
     deps.toDeck === undefined

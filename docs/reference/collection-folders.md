@@ -1666,14 +1666,16 @@ defaults to `id`, so six of the seven walls pass none and are untouched. `id` st
 art, what a press opens and what `onSelect` is about; `key` is what the ring compares, what
 `data-grid-index` walks and what the picked set remembers.
 
-**The pane's side of that composite is the store's `paneFinish`.** Two openers set it —
+**The open card's side of that composite is the store's `paneFinish`.** Two openers set it —
 `openCardAsFinish`, the collection wall's, and `openCardFromDeckSearch`, *widened* to carry the
 docked Collection tab's finish rather than the app gaining a fifth opener — and `setSelectedCardId`
 clears it in its existing `set`, so a press from a surface that names no finish cannot leave a stale
 seed behind. `viewPrinting` deliberately touches neither it nor the deck context: browsing printings
-inside the pane keeps the reader's foil view. `CardDetailPane` then seeds that view from
-`paneFinish === "foil" || paneFinish === "etched"` — narrower than "a finish was named", so a foil
-tile opens showing the sheen and a nonfoil one opens plain.
+inside the modal keeps the reader's foil view. `CardDetailModal` reads that field and hands it to
+`CardModalArt` as `openedAs`, which seeds the view from `openedAs === "foil" || openedAs ===
+"etched"` — narrower than "a finish was named", so a foil tile opens showing the sheen and a
+nonfoil one opens plain. (The field is still spelled `paneFinish`: it was the docked
+`CardDetailPane`'s until that surface was deleted on 2026-09-03, and the store name outlived it.)
 
 **The card walk is deliberately not split.** `listWalkStops` de-duplicates by `cardId`, so a
 printing held in two finishes publishes one stop. That is correct: the walk drives the printings
@@ -1789,8 +1791,10 @@ is in flight the body draws a note rather than pressable rows, for
 picker may not mislabel its own write. Not for a reader with no folders, because
 `Add to → Collection` has always been a single press for them, and forking the commonest path in
 the app to describe a cabinet they do not have — with `Add to → Deck` sitting one row above it the
-whole time — is a cost paid by everybody. That one cost a test to learn: `CardDetailPane`'s refusal
-case clicks through to a finish on a printing with no folders, and the extra rung swallowed the add.
+whole time — is a cost paid by everybody. That one cost a test to learn: the docked pane's refusal
+case clicked through to a finish on a printing with no folders, and the extra rung swallowed the
+add. **That test went with `CardDetailPane.test.tsx` on 2026-09-03 and has no successor**, so the
+rule is currently guarded by `cardMenu.tsx`'s comment rather than by a build.
 
 **`Recently removed` is drawn greyed, and it cannot become a destination.** The sanctioned route in
 is `deck_to_collection`, which addresses a `deck_cards` row — and **schema v25 dropped

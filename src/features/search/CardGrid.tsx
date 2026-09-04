@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -125,6 +126,29 @@ const TILE_BASE_WIDTH = 170;
 
 /** Gap between tiles, matching the `gap-3` used elsewhere. */
 const GAP = 12;
+
+/**
+ * The nearest ancestor that actually scrolls, for a wall drawn with {@link CardGrid}'s `grow`.
+ *
+ * A growing wall has no scrollport of its own, and the virtualiser has to be told which box the
+ * rows are being scrolled *through* — on the search page that is `AppShell`'s `main`, the one
+ * scroller the app has above a view. Walking the tree for it rather than taking it as a prop is
+ * what keeps the answer honest through a layout change: nothing has to thread a ref down four
+ * components, and a wall that is later moved inside some other scroller finds that one instead.
+ *
+ * **`null` means "nothing above this scrolls", and the caller falls back to the wall itself.**
+ * That is not a defensive shrug: it is the state every test is in. jsdom applies no stylesheet, so
+ * `overflow-y` computes to the empty string on `main` exactly as it does on a plain `<div>` — the
+ * walk can never find a scroller under vitest, and without the fallback a growing wall would draw
+ * zero tiles in every test that renders one.
+ */
+function nearestScroller(from: HTMLElement | null): HTMLElement | null {
+  for (let el = from?.parentElement ?? null; el; el = el.parentElement) {
+    const { overflowY } = getComputedStyle(el);
+    if (overflowY === "auto" || overflowY === "scroll") return el;
+  }
+  return null;
+}
 
 /**
  * How wide a tile is on a phone, in px — what the four page-width walls pass as
@@ -343,6 +367,7 @@ export function CardGrid<T extends GridCard>({
   arrowNav = false,
   selectionScope,
   baseTileWidth = TILE_BASE_WIDTH,
+  grow = false,
 }: {
   rows: T[];
   /**
@@ -656,12 +681,13 @@ export function CardGrid<T extends GridCard>({
   dragRecord?: (card: T) => Record<string, unknown> | null;
   /**
    * Whether the arrow keys walk the wall — left and right one tile, up and down one row — and
-   * **move the selection with them**, so the card the detail pane is showing follows the caret.
+   * **move the selection with them**, so the card the detail surface is showing follows the
+   * caret.
    *
    * That last part is what makes this a prop rather than a behaviour. Every press calls
    * {@link onSelect}, which on the two walls that pass this *is* the store's `selectedCardId` and
-   * therefore what the docked 384px `CardDetailPane` reads — the reader asked for the next card
-   * to be *selected*, not merely outlined, and a focus ring that moved while the pane held still
+   * therefore what `CardDetailModal` reads — the reader asked for the next card
+   * to be *selected*, not merely outlined, and a focus ring that moved while the card held still
    * would be a wall with two carets on it. So a caller who passes this is signing up for the
    * arrow keys to open cards.
    *
@@ -716,8 +742,33 @@ export function CardGrid<T extends GridCard>({
    * card in a 331px column with 31px of gutter split either side of it.
    */
   baseTileWidth?: number;
+  /**
+   * **Grow to the whole list and let the page scroll it, instead of scrolling inside a box.**
+   *
+   * Off by default, and the default is the wall this component was written as: `min-h-0 flex-1
+   * overflow-auto` inside a framed box that takes whatever height its surface has left. On it,
+   * the wall has no scrollport, no frame and no height of its own — it is as tall as its rows,
+   * and the scroller is whatever ancestor already scrolls ({@link nearestScroller}), which on a
+   * page is `AppShell`'s `main`. The virtualiser is unchanged either way; only which box it
+   * measures and reads an offset from moves.
+   *
+   * **It is opt-in per call site because "bounded" is a real property of two of them, not an
+   * oversight.** The deck editor's docked panel is `MIN_PANEL_WIDTH_PX` — 206 — at its floor,
+   * which is one column: a browse fetched through in there would make the editor page many
+   * times taller than the deck laid out beside it, and the panel's tiles are drag *sources*
+   * into that deck's category columns, which have to be on screen at the same time. And
+   * `AllPrintingsDialog` is inside a `Dialog`, where the panel is clamped to the window and
+   * scrolls inside itself — a modal that grows past the bottom of the window takes its own
+   * controls with it, which is the one failure `Dialog`'s clamp exists to prevent.
+   *
+   * The frame goes with the scrollport rather than staying behind, and that is the same rule
+   * read once: a border around a box is a border around something the reader can see the edges
+   * of. Around a wall as tall as its list it is two vertical lines running off the top and
+   * bottom of the window, which is the bounded box's look without the bounded box.
+   */
+  grow?: boolean;
 }) {
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const wallRef = useRef<HTMLDivElement>(null);
   const rowsRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
 
@@ -773,14 +824,18 @@ export function CardGrid<T extends GridCard>({
    */
   const cardZoom = useAppStore((s) => s.cardZoom[zoomSection]);
 
-  // Ctrl+wheel, attached to the **scroller** rather than to the sizer inside it: the scroller is
-  // what the pointer is actually over, since the sizer sits inside this wall's padding and the
+  // Ctrl+wheel, attached to **the wall's own box** rather than to the sizer inside it: that box
+  // is what the pointer is actually over, since the sizer sits inside this wall's padding and the
   // rows on top of it are positioned absolutely — so a wheel over the padding, or in the gap
-  // between two rows, would miss a listener bound any further in. The listener is a native
+  // between two rows, would miss a listener bound any further in. It is deliberately this element
+  // and not `scroller`: under `grow` the scroller is `main`, and a ctrl+wheel over the filter bar
+  // or the sidebar would then step this section's zoom from outside the wall it is about. The
+  // element is also what the zoom badge is drawn over, so a wall that registered `main` would put
+  // its figure in the window's corner rather than in its own. The listener is a native
   // non-passive one for the usual reason (it has to `preventDefault`, or the browser zooms the
   // whole window underneath it), which is what the hook is for; React registers its own wheel
   // listeners passively at the root and could not.
-  useCardZoomGesture(scrollRef, zoomSection);
+  useCardZoomGesture(wallRef, zoomSection);
 
   // The zoom sizes **the tile**, and the column count is what falls out of it: however many of
   // that size fit across the wall with the gap between them is however many are drawn, and the
@@ -810,10 +865,80 @@ export function CardGrid<T extends GridCard>({
   const captionHeight = chinHeight(cardZoom) - CHIN_RISE;
   const tileHeight = Math.round(tileWidth * (7 / 5)) + captionHeight;
 
+  /**
+   * The box the rows are scrolled through — this wall's own, or under {@link grow} whatever
+   * ancestor scrolls.
+   *
+   * State rather than a ref because the virtualiser has to *hear* about it: `getScrollElement`
+   * is read on each render, so an answer that only ever changed inside a ref would leave the
+   * first render's `null` in place and the wall would draw nothing until something else happened
+   * to re-render it. The walk runs in a layout effect, so the element is known before the browser
+   * paints the first frame.
+   *
+   * The fallback to this wall's own element is what keeps every existing test and story green —
+   * see {@link nearestScroller} for why the walk can never succeed under jsdom.
+   */
+  const [scroller, setScroller] = useState<HTMLElement | null>(null);
+  useLayoutEffect(() => {
+    if (!grow) {
+      setScroller(wallRef.current);
+      return;
+    }
+    setScroller(nearestScroller(wallRef.current) ?? wallRef.current);
+  }, [grow]);
+
+  /**
+   * How far the first row sits below the top of {@link scroller}'s content — 0 for a wall that is
+   * its own scroller, and the filter bar plus the status line plus `main`'s padding for one that
+   * grows.
+   *
+   * The virtualiser positions rows from the scroller's origin, so without this every tile on a
+   * growing wall is drawn that many pixels too high and `scrollToIndex` lands short by the same
+   * amount. It is measured rather than summed from constants because everything above the wall
+   * moves: the filter bar rewraps into four different arrangements by its own width, and the two
+   * banners above the rows grow into place when a page fails.
+   *
+   * **Which is why it is remeasured from a `ResizeObserver` over every box between the wall and
+   * the scroller, rather than once on mount or on every render.** A box moves down the page when
+   * a box *above* it grows, and nothing observable happens to the box that moved — so watching
+   * the wall alone would see none of it. Watching its ancestors does: whatever grows above the
+   * wall is inside one of them, so its parent's height changes and that is a resize. The
+   * scroller itself is in the set for the window resize that rewraps the bar in the first place.
+   *
+   * It writes only when the number actually moved — a resize of the wall's own box is the common
+   * case (a page of rows arriving) and moves nothing — so a measurement is not a render.
+   * `clientTop` is the scroller's top border, which `scrollTop` is measured from the inside of
+   * and a bounding rect from the outside of.
+   */
+  const [scrollMargin, setScrollMargin] = useState(0);
+  useLayoutEffect(() => {
+    const rowsEl = rowsRef.current;
+    const wall = wallRef.current;
+    if (!grow || !scroller || !rowsEl || !wall) return;
+    const measure = () => {
+      const next =
+        rowsEl.getBoundingClientRect().top -
+        scroller.getBoundingClientRect().top -
+        scroller.clientTop +
+        scroller.scrollTop;
+      // Sub-pixel jitter is what a fractional layout answers on a zoomed display; a threshold
+      // rather than an equality keeps that from being an endless pair of renders.
+      setScrollMargin((prev) => (Math.abs(prev - next) < 0.5 ? prev : next));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    for (let el: HTMLElement | null = wall; el && el !== scroller; el = el.parentElement) {
+      observer.observe(el);
+    }
+    observer.observe(scroller);
+    return () => observer.disconnect();
+  }, [grow, scroller]);
+
   const virtualizer = useVirtualizer({
     count: rowCount,
-    getScrollElement: () => scrollRef.current,
+    getScrollElement: () => scroller,
     estimateSize: () => tileHeight + GAP,
+    scrollMargin,
     // Two rows of tiles beyond the viewport, which is the prefetch: their `<img>`s mount
     // and the protocol fills the cache before the reader scrolls onto them.
     overscan: 2,
@@ -879,12 +1004,21 @@ export function CardGrid<T extends GridCard>({
       // it answers `false`, which is what keeps the ring and the pane agreeing.
       if (selectionScope !== undefined && event && picked.pick(key, event)) return;
       // **The note is stamped with the *card*, and it is the one thing here that is not the tile.**
-      // Its only reader is `CardDetailPane`'s mount effect, which asks `consumeCaretNote(cardId)`
-      // with the card it is opening — so a note filed under `bolt:foil` is a note the pane asking
-      // about `bolt` discards, and it then takes the caret anyway. That is the exact failure this
-      // note exists to prevent, arriving on the one wall that will have keys *and* `arrowNav`: the
-      // collection's. The note is about "is the caret already where this selection belongs", the
-      // pane is keyed on the printing, so the printing is what it is stamped with.
+      // Its reader was `CardDetailPane`'s mount effect, which asked `consumeCaretNote(cardId)`
+      // with the card it was opening — so a note filed under `bolt:foil` is a note the surface
+      // asking about `bolt` discards, and it then takes the caret anyway. That is the exact
+      // failure this note exists to prevent, arriving on the one wall that will have keys *and*
+      // `arrowNav`: the collection's. The note is about "is the caret already where this
+      // selection belongs", the card surface is keyed on the printing, so the printing is what it
+      // is stamped with.
+      //
+      // **It has had no reader since that pane was deleted on 2026-09-03, and needs none.**
+      // `consumeCaretNote` has no caller outside the suite, so this write is a note nobody opens
+      // — but the walk is *not* one press long again, which is how this comment first read.
+      // `Dialog`'s panel-focus effect has `[]` deps, so it fires once when the modal opens rather
+      // than per card, and the modal is `aria-modal` with `trapTab`: while a card is open this
+      // wall is not reachable by keyboard at all, so its arrow handler never runs. See
+      // `caretWalk.ts`, which carries the whole argument.
       if (arrowNav) keepCaretForCard(cardId);
       onSelect(cardId, card);
     },
@@ -1016,7 +1150,7 @@ export function CardGrid<T extends GridCard>({
     // dependency array, because a dependency that the body never looks at is one a later reader
     // deletes as noise, and this effect's whole timing rests on it.
     if (virtualRows.length === 0) return;
-    const tile = scrollRef.current?.querySelector<HTMLElement>(
+    const tile = wallRef.current?.querySelector<HTMLElement>(
       `[${GRID_INDEX_ATTR}="${pendingIndex}"]`,
     );
     if (!tile) {
@@ -1107,10 +1241,10 @@ export function CardGrid<T extends GridCard>({
 
   return (
     <div
-      ref={scrollRef}
+      ref={wallRef}
       role="group"
       aria-label={label}
-      // No `tabIndex`: every tile is a button, so the scroller is reachable and
+      // No `tabIndex`: every tile is a button, so the wall is reachable and
       // scrollable from the keyboard through its own contents. A tab stop on the box
       // around them would be one more press between the reader and the cards.
       //
@@ -1118,7 +1252,24 @@ export function CardGrid<T extends GridCard>({
       // box holds no caret of its own, it holds every tile, and one listener is one closure
       // instead of 117 k. The handler bails on a wall that was not given `arrowNav`.
       onKeyDown={onArrowKey}
-      className="min-h-0 flex-1 overflow-auto rounded-md border border-border p-3"
+      className={cn(
+        // `p-3` is both shapes' and is not decoration: `overflow` clips at the padding box, so on
+        // a bounded wall it is the room a tile's focus ring and drop mark are drawn in
+        // (`DROP_MARK_ROOM`'s rule, and `scroll-m-1.5` on the tile is the same 6px as a scroll
+        // margin). A growing wall clips nothing, but the marks on its outermost tiles would
+        // otherwise sit flush against the surrounding content.
+        "p-3",
+        grow
+          ? // **`shrink-0`, because the box above is very often still a bounded flex column.** A
+            // flex item defaults to `shrink: 1`, so a wall taller than the room its parent has
+            // would be squashed to fit and its rows — absolutely positioned inside a sizer of the
+            // full height — would spill out of a box that says it is shorter. The wall states its
+            // own height and lets the overflow reach whatever scrolls.
+            //
+            // No frame here: see {@link grow}.
+            "shrink-0"
+          : "min-h-0 flex-1 overflow-auto rounded-md border border-border",
+      )}
     >
       {/* Holds the scrollbar open to the full height of the wall while the rows inside it
           are positioned absolutely — and, having no padding of its own, is the honest
@@ -1144,7 +1295,16 @@ export function CardGrid<T extends GridCard>({
             // `sideGutterFor` for why it is not on the box around them either.
             style={{
               height: tileHeight,
-              transform: `translateY(${v.start}px)`,
+              // **`- scrollMargin`, because a virtual item's `start` is measured from the
+              // scroller's origin and this row is positioned from the sizer's.** The two are the
+              // same box only when the wall *is* the scroller, which is why this read `v.start`
+              // for as long as it was. Under `grow` they differ by everything above the wall —
+              // measured live at 165px on the search page (`main`'s padding, the filter bar and
+              // the status line), which is exactly how far down the page the first row was drawn
+              // before this subtraction existed. `getTotalSize` already takes it off, so the
+              // sizer was the right height and only the rows inside it were displaced: a wall
+              // that looks correct until you compare its first tile with its own top edge.
+              transform: `translateY(${v.start - scrollMargin}px)`,
               paddingLeft: gutter,
               paddingRight: gutter,
             }}

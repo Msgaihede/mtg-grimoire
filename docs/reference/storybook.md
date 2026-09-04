@@ -168,8 +168,7 @@ it says `tags: ["autodocs"]`.
   three unit-testable layers, each proven by breaking it.
 - **`useAppStore` is the one global that cannot be made per-story from `.storybook/`** —
   zustand's `create` does not expose its initializer, and the actions close over that one
-  store's `set`. So the four story files that write it during render (`AppShell`,
-  `CardDetailPane`, `SearchPage`, `CollectionPage`) carry
+  store's `set`. So the story files that write it during render carry
   `docs: { story: { inline: false, height } }`, which gives each of their docs stories its own
   **frame** and with it its own module graph. `DeckDialog`, `DeckSettingsDialog`,
   `CreateDeckDialog` and `import/ImportDialog` — **four** files — carry the same parameter for
@@ -201,6 +200,11 @@ it says `tags: ["autodocs"]`.
   writing down is the list above, which a grep settles in a second, and the rule it exists for.
   A new story file that writes the store needs the same parameter or its docs
   page shows one story's view under every heading.
+  **And the list went the same way the count did, which is the joke this paragraph did not see
+  coming.** Re-checked 2026-09-03: `CardDetailPane.stories.tsx` was deleted with the docked card
+  surface, and by then the store-writing side had grown well past four. So the names above are the
+  2026-08-14 reading and nothing more. `grep -rl "useAppStore" src --include=*.stories.tsx` is the
+  live answer, and `grep -rl "inline: false" src --include=*.stories.tsx` is the other one.
 - **`images.ts` is handed the installed world's corpus** (`installWorld` → `installCorpus`),
   because the `large` seed mints ~5,200 synthetic printings that a module-load snapshot of
   `CARDS` cannot see — they all drew the "Unknown card" placeholder, which is the affordance

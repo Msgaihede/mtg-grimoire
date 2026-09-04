@@ -463,8 +463,9 @@ export const NotDraggable: Story = {
  *
  * **The error is fired rather than provoked**, because nothing here can fail on its own: the
  * fake's `cardImageUrl` answers every id — including ids in no fixture row — with a synthetic
- * data URI, and a data URI needs no network. `Card/PrintingPreview`'s story of the same name
- * does it the same way, over the frame that has no sentence to change.
+ * data URI, and a data URI needs no network. `Card/PrintingPreview` had a story of the same name
+ * that did it the same way, over the frame that has no sentence to change; it went with the
+ * docked card pane on 2026-09-03.
  *
  * **The word is "Retrying…", not "No image", and only one of the two is reachable here.**
  * `useImageRetry` answers the first error with `src: null` and a scheduled retry, so `retrying`

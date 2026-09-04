@@ -729,6 +729,48 @@ export interface MeldRelation {
   artist: string | null;
 }
 
+/**
+ * What the reader holds of one card — the three figures the card pane's **In your grimoire**
+ * block states, in one read.
+ *
+ * **Every one of them is at the oracle grain**, because that is what "in your grimoire" means: a
+ * reader who owns the Alpha Bolt and opens the M10 one owns *Lightning Bolt*. The per-printing
+ * question — how many of *this* printing are in a binder, which is what the pane's stepper writes
+ * to — is a different one and is not answered here.
+ *
+ * **Facts, not a sentence.** Rust counts; what the block says about the counts, and whether it
+ * draws at all when all three are zero, is this side's. Three zeros is a real answer about a card
+ * nobody holds — never `null`, and never a rejection.
+ */
+export interface CardHoldings {
+  /**
+   * Copies in the collection — **every printing, every finish and every folder together**. A
+   * copy on a locked shelf or sleeved into a deck is still a copy the reader owns, which is the
+   * scope every surface outside the deck builder's own card search asks for.
+   *
+   * A copy whose printing the corpus has lost is **not** counted: the row joins `cards` to find
+   * its oracle card and an orphan joins nothing. That is the same figure `collectionList({
+   * oracleId })` answered before this command existed, so it is a limit rather than a change.
+   */
+  owned: number;
+  /**
+   * Copies the wishlist asks for, every wish for the card together. The wishlist's grain makes a
+   * foil wish and a nonfoil wish two rows for one card, so this is a sum across rows and not a
+   * row count — and it narrows by neither finish nor folder, because "how many are wished for"
+   * is a fact about the card.
+   */
+  wished: number;
+  /**
+   * How many **decks** play the card — decks, not copies: a deck playing four counts once, and so
+   * does a deck listing it in two piles.
+   *
+   * **Live lists only**, which is `deckIdsPlaying`'s own rule rather than a second one: a plan
+   * holds no cards, so a deck that has only *thought about* this card is not one that plays it.
+   * Archived decks count, for the same reason — that read has never had a deck filter.
+   */
+  decks: number;
+}
+
 /** One row of the set picker. */
 export interface SetSummary {
   /** Lowercase, as `cards.set_code` stores it — this is what the filter sends back. */
@@ -4704,6 +4746,27 @@ export const ipc = {
    */
   cardMeldParts: (id: string) => invoke<MeldRelation[]>("card_meld_parts", { id }),
   /**
+   * What the reader holds of one oracle card — see {@link CardHoldings}.
+   *
+   * **One read where the pane made three.** The card modal's "In your grimoire" block used to
+   * fire `collectionList({ oracleId })`, `wishlistList({ oracleId })` and `deckIdsPlaying` on
+   * every card open, and summed two pages of rows in the webview to draw two numbers. Rust sums
+   * them, through the same three rules those reads use, so a figure here cannot disagree with the
+   * list it sits beside.
+   *
+   * **It answers counts and nothing addressable**, which is the line between this and the reads it
+   * replaces: a surface that needs a *row* to write to — the stepper, the wishlist's edit — still
+   * asks for the rows. This is for the block that only ever states numbers.
+   *
+   * **No `marketplace`**, unlike every other card read on this object: these are counts, and
+   * nothing about them moves when the setting does. Keying it on the marketplace would refetch a
+   * fixed fact on every switch.
+   *
+   * A blank `oracleId` answers three zeros rather than rejecting — a card with no oracle id is a
+   * card nothing can be held *of*, and a pane must not fail to fill a block over it.
+   */
+  cardHoldings: (oracleId: string) => invoke<CardHoldings>("card_holdings", { oracleId }),
+  /**
    * Warm the image cache for a page of results. Fire-and-forget: it resolves as soon as
    * the work is queued, and an image that fails to prefetch simply fetches when it is
    * rendered. The backend takes the front face only and caps the batch at 100.
@@ -5306,10 +5369,16 @@ export const ipc = {
    * Put the one label a deck card carries on it, or take it off with `labelId: null`.
    *
    * A **card** write wearing a label command's name: it addresses the slot by the full grain
-   * `(deckId, cardId, categoryId, variant)` like every other card write, and answers "that
-   * card is not in this deck's category any more" for a row that has since moved, folded or
-   * been stepped to zero. A `labelId` belonging to another deck is refused before anything is
-   * written.
+   * `(deckId, cardId, categoryId, variant, finish)` like every other card write, and answers
+   * "that card is not in this deck's category any more" for a row that has since moved, folded
+   * or been stepped to zero. A `labelId` belonging to another deck is refused before anything
+   * is written.
+   *
+   * **`finish` is the fifth term and was sent here for months without arriving.** The command
+   * declared no such parameter, Tauri drops a payload field a command does not name, and the
+   * writer behind it addressed the row without one — so no foil or etched row in any deck could
+   * be labelled at all. Fixed 2026-09-03; `ipc.test.ts` now pins the crate's parameter list
+   * against the keys sent from here, which is the only place the two spellings meet.
    */
   deckCardSetLabel: (
     deckId: number,

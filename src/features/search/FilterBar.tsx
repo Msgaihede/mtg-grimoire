@@ -1459,18 +1459,19 @@ export function FilterBar<SortKey extends string>({
           // answer to say "Filters".
           title="Filters"
           closeLabel="Close filters"
-          // **Full width, and the height is the shell's existing clamp rather than a new prop.**
-          // 9a is right that `width` is this shell's only geometry prop — and the height rule it
-          // would be reaching for is already written: the panel's `max-h-full` against the
-          // scrim's `grid-rows-[minmax(0,1fr)]`, the pair `Dialog.tsx` spells out and
-          // `src/CLAUDE.md` names, which bounds the panel to the scrim's content box and hands
-          // the overflow to the body's own scroller below. On a 696px phone viewport that is
-          // 664px of panel over a tray measured at 922, so the clamp *is* the full height here
-          // and a `h-full` would buy nothing but a half-empty sheet on a surface with three
-          // cells in it. A prop or a panel class would therefore be a second answer to a
+          // **Full width, and the height is the shell's existing clamp rather than a class of its
+          // own.** `size` carries a height as readily as a width since it was renamed from
+          // `width` on 2026-09-03 — so this sheet *could* name one, and deliberately does not:
+          // the height rule it would be reaching for is already written as the panel's
+          // `max-h-full` against the scrim's `grid-rows-[minmax(0,1fr)]`, the pair `Dialog.tsx`
+          // spells out and `src/CLAUDE.md` names, which bounds the panel to the scrim's content
+          // box and hands the overflow to the body's own scroller below. On a 696px phone
+          // viewport that is 664px of panel over a tray measured at 922, so the clamp *is* the
+          // full height here and a `h-full` would buy nothing but a half-empty sheet on a surface
+          // with three cells in it. A height class here would therefore be a second answer to a
           // question this shell has already settled, on a file every dialog in the app is drawn
           // by — which is exactly what folding the last three copies in on 2026-08-16 was for.
-          width="w-full"
+          size="w-full"
           onDismiss={() => setTrayOpen(false)}
           onClose={() => setTrayOpen(false)}
         >

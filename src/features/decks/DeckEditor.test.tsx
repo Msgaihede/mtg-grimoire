@@ -36,7 +36,6 @@ import {
 } from "./cardControl";
 import { THEORY_MATCH_ATTR } from "./CardMarks";
 import { deckCardSlot, DECK_CARD_ATTR } from "./dnd";
-import { PANE_OVER_ATTR } from "./DeckEditor";
 import { SEARCH_OVER_ATTR } from "./DeckSearchPanel";
 import { CUT_CARDS_NOTE } from "./PriceStrip";
 import { theorySlot } from "./theoryMatch";
@@ -365,9 +364,9 @@ function found(name: string): CardSummary {
  * The same printing as {@link found}, as `card_detail` answers it.
  *
  * **Complete rather than shaped for its caller**, and that is the point: an owned add reads this
- * command for the card's oracle id, and `CardDetailPane` reads it for a dozen fields it indexes
+ * command for the card's oracle id, and `CardDetailModal` reads it for a dozen fields it indexes
  * without a fence (`card.setCode.toUpperCase()`, `card.faces[face]`). A partial stub therefore
- * takes the pane down as an *unhandled* error the moment a test leaves a card open, and vitest
+ * takes the modal down as an *unhandled* error the moment a test leaves a card open, and vitest
  * reports it against whichever test ran next.
  */
 function detailOf(name: string): CardDetail {
@@ -756,8 +755,8 @@ beforeEach(() => {
   /**
    * **Refused by default, which is what this command did here before it was stubbed at all** —
    * the whole `ipc` object is replaced above, so `cardDetail` was `undefined` and every caller
-   * of it threw. `CardDetailPane` is the other caller and reads a dozen fields off the answer
-   * without a fence, so a stub shaped for the add path takes the pane down as an *unhandled*
+   * of it threw. `CardDetailModal` is the other caller and reads a dozen fields off the answer
+   * without a fence, so a stub shaped for the add path takes the modal down as an *unhandled*
    * error that vitest then reports against whichever test happened to be running. The four tests
    * that drive an owned add state their own answer.
    */
@@ -1780,62 +1779,22 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * **The pane is the editor's own, and which column it covers is decided by where the reader
-   * was looking** (issue #183).
+   * **A card opened from the deck outlives the deck going away under it.**
    *
-   * The attribute rather than the geometry, for the reason its own doc gives: what the two
-   * positions differ by is a `right` offset and a width, and jsdom lays nothing out, so both
-   * read `0` here. What a suite can hold is the decision — and the decision is the whole of the
-   * bug this replaced, where the pane docked at the shell's edge and took 384px out of the desk
-   * on every click.
+   * The pane that used to draw this sentence was the editor's own — a sticky overlay over one of
+   * the desk's two columns (issue #183), and the structural claim was that its frame was a
+   * sibling of the desk row rather than a child, so unmounting the row left the card standing.
+   * The card is an `App`-level modal since 2026-09-03 and is not in this tree at all, so what is
+   * left here is the half this file can still see: the editor stops painting a deck that is gone
+   * and **does not clear the reader's card on the way**.
    *
-   * Both directions in one test, because the interesting claim is that it *moves*: a pane pinned
-   * to one side would pass either half on its own.
+   * That is not nothing — `setSelectedCardId(null)` is one line away in three handlers in this
+   * file — and it is the state `App.test.tsx`'s refused-swap case is built on top of.
    */
-  it("draws the card pane over the column the reader was not looking at", async () => {
-    searchCards.mockResolvedValue({
-      items: [found("Goblin Guide")],
-      total: 1,
-      totalIsCapped: false,
-    });
-
-    await open();
-
-    // Nothing open: the editor draws the frame either way — it is `h-0` and transparent — and
-    // there is no pane in it.
-    expect(screen.queryByRole("complementary", { name: "Card details" })).toBeNull();
-
-    // A card out of the deck covers the search column, so the deck it came from stays whole.
-    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
-    await screen.findByRole("complementary", { name: "Card details" });
-    expect(document.querySelector(`[${PANE_OVER_ATTR}]`)).toHaveAttribute(
-      PANE_OVER_ATTR,
-      "search",
-    );
-
-    // A card out of the search column covers the deck instead — a search whose answer covered
-    // the search is the failure the two positions exist to avoid.
-    await openSearchPanel();
-    await userEvent.click(await screen.findByRole("button", { name: /^Goblin Guide/ }));
-    await waitFor(() =>
-      expect(document.querySelector(`[${PANE_OVER_ATTR}]`)).toHaveAttribute(
-        PANE_OVER_ATTR,
-        "deck",
-      ),
-    );
-  });
-
-  /**
-   * **And it survives the deck going away under it**, which is the state the pane matters most
-   * in: a swap refused with GONE draws its sentence *in the pane*, over an editor that has
-   * stopped painting the deck (`App.test.tsx` holds that whole path). This is the structural
-   * half of it — the frame is a sibling of the desk row rather than a child, so unmounting the
-   * row leaves the card standing.
-   */
-  it("keeps the card pane up when the deck read says the deck is gone", async () => {
+  it("keeps the reader's card when the deck read says the deck is gone", async () => {
     await open();
     await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
-    await screen.findByRole("complementary", { name: "Card details" });
+    await waitFor(() => expect(useAppStore.getState().selectedCardId).not.toBeNull());
 
     // The deck goes, and the editor's own re-read is what tells it. Any deck write would do it;
     // the name field is the cheapest one left in this header.
@@ -1845,9 +1804,7 @@ describe("DeckEditor", () => {
     expect(
       await screen.findByText(/this deck is not there any more\. it may have been deleted/i),
     ).toBeInTheDocument();
-    expect(
-      screen.getByRole("complementary", { name: "Card details" }),
-    ).toBeInTheDocument();
+    expect(useAppStore.getState().selectedCardId).not.toBeNull();
   });
 
   it("opens a panel tile as a card and not as a row of this deck", async () => {
@@ -2527,7 +2484,9 @@ describe("DeckEditor", () => {
       // top — see `panelOverWidth`, where the paint-order argument is written out.
       await openSearchPanel();
       await userEvent.click(await screen.findByRole("button", { name: /^Goblin Guide/ }));
-      await screen.findByRole("complementary", { name: "Card details" });
+      // The card itself is an `App`-level modal and is not in this tree, so the open card is
+      // read off the store — which is what `panelOverWidth` reads too.
+      await waitFor(() => expect(useAppStore.getState().selectedCardId).not.toBeNull());
 
       await waitFor(() => expect(panel).not.toHaveAttribute(SEARCH_OVER_ATTR));
       // Not a control that records an intention and moves nothing: there is no width for what
@@ -3311,27 +3270,27 @@ describe("DeckEditor", () => {
 
   /**
    * The Escape handshake, from the layer that was added last: an `"inner"` rung consumes the
-   * press in the **capture** phase and calls `preventDefault()`, so the card detail pane docked
-   * beside this view — a bubble-phase listener that returns early on `defaultPrevented` — keeps
-   * its own press for the next one. One press, one layer.
+   * press in the **capture** phase and calls `preventDefault()`, so the rung under it — a
+   * bubble-phase listener that returns early on `defaultPrevented` — keeps its own press for the
+   * next one. One press, one layer.
+   *
+   * **The middle rung of this ladder is not in this tree.** It was the docked card pane, which
+   * the editor drew itself; the card is an `App`-level modal since 2026-09-03, so what this file
+   * can still see is the dialog and the floor beneath it. `App.test.tsx`'s
+   * "gives one Escape to each layer" is where the three-rung version lives now, and it is the
+   * only place that can render all three.
    */
-  it("closes the import dialog on Escape and leaves the card pane open", async () => {
+  it("closes the import dialog on Escape and leaves the deck open", async () => {
     cardDetail.mockResolvedValue(detailOf("Lightning Bolt"));
     await open();
     const heard: boolean[] = [];
     const listen = (e: KeyboardEvent) => {
       if (e.key === "Escape") heard.push(e.defaultPrevented);
     };
-    // Registered *before* the pane mounts and after the editor did, which is what makes the two
-    // readings below different: the editor's `"navigation"` rung is ahead of this probe on
-    // `window` and the pane's `"outer"` rung is behind it.
+    // Registered after the editor mounted, so the editor's own `"navigation"` rung is ahead of
+    // this probe on `window` — which is what makes both readings below `true` rather than one of
+    // each, and is the half that would change if a rung were ever added between them.
     window.addEventListener("keydown", listen);
-
-    // **A card really is open**, which this case used to only say. Without it the second press
-    // has no pane to belong to and the floor takes it — a passing test about a ladder with one
-    // rung in it.
-    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
-    await screen.findByRole("complementary", { name: "Card details" });
 
     await userEvent.click(screen.getByRole("button", { name: "Import cards" }));
     await screen.findByRole("dialog", { name: "Import a decklist" });
@@ -3339,16 +3298,17 @@ describe("DeckEditor", () => {
     await waitFor(() =>
       expect(screen.queryByRole("dialog", { name: "Import a decklist" })).not.toBeInTheDocument(),
     );
-    // With the dialog gone, the next press is the pane's.
+    // The deck is still open behind it: the dialog took that press and nothing else did.
+    expect(useAppStore.getState().openDeckId).toBe(4);
+
+    // With the dialog gone, the next press reaches the floor.
     await userEvent.keyboard("{Escape}");
 
     window.removeEventListener("keydown", listen);
-    // `true` from an `"inner"` rung that ran in capture, then `false` because the rung that owns
-    // the second press is *behind* this probe — the pane, which outranks the floor.
-    expect(heard).toEqual([true, false]);
-    await waitFor(() => expect(useAppStore.getState().selectedCardId).toBeNull());
-    // And the deck the pane was open over is still open: three presses, three rungs, in order.
-    expect(useAppStore.getState().openDeckId).toBe(4);
+    // `true` from the dialog's `"inner"` rung, running in capture ahead of this probe; `true`
+    // again from the editor's `"navigation"` rung, which was registered before it.
+    expect(heard).toEqual([true, true]);
+    await waitFor(() => expect(useAppStore.getState().openDeckId).toBeNull());
   });
 
   /**

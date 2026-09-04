@@ -2,8 +2,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { CardDetail, Printing, PrintingsResponse } from "@/lib/ipc";
-import type { MarketplaceId } from "@/lib/marketplace";
-import { boxed, startPointerDrag } from "@/test-drag";
+import { MARKETPLACES, type MarketplaceId } from "@/lib/marketplace";
 import { isWebTarget } from "@/pwa/target";
 
 /** Which build a card frame thinks it is in. `isWebTarget()` reads `__CORE__`, a build-time
@@ -76,7 +75,8 @@ vi.mock("@/lib/ipc", async (original) => ({
     cardPrintings: (o: string, marketplace: MarketplaceId) => cardPrintings(o, marketplace),
   },
 }));
-import { CardDetailPane } from "./CardDetailPane";
+import { CardModalPrintings } from "./CardModalPrintings";
+import type { CardModalScope } from "./cardModalScope";
 import { previewBox, PREVIEW_DWELL_MS } from "./PrintingPreview";
 import { useAppStore } from "@/lib/store";
 
@@ -99,34 +99,67 @@ const preview = () => previews()[0] ?? null;
 const previewFrame = () =>
   document.querySelector<HTMLElement>("div.pointer-events-none.absolute.rounded-xl");
 
-/** The row a printing is drawn in, found by the one control that names the printing. */
-const rowOf = (setAndNumber: string) =>
-  screen
-    .getByRole("button", { name: new RegExp(`\\(${setAndNumber}\\)`) })
-    .closest("li") as HTMLElement;
+/**
+ * The row a printing is drawn in, found by the one control that names the printing.
+ *
+ * **`Show M10 · 146`, not `(M10 146)`.** The docked pane's rows put the set and number in
+ * parentheses after an add control's verb; `CardModalPrintings` names the whole row for what
+ * pressing it does, and on a wall with no deck row behind it that is "Show". One helper, so the
+ * sixteen cases below say which *printing* they mean and nothing about how a row is worded.
+ */
+const rowButton = (setAndNumber: string) => {
+  const [set, number] = setAndNumber.split(" ");
+  // A predicate rather than a `RegExp`: the row names the year too when the printing carries
+  // a release date, which every fixture here does, and the separator between the three parts
+  // is a `·` that a hand-built pattern has to spell. Matching the parts is what this means.
+  return screen.getByRole("button", {
+    name: (n: string) => n.startsWith(`Show ${set} `) && n.includes(` ${number}`),
+  });
+};
+
+const rowOf = (setAndNumber: string) => rowButton(setAndNumber).closest("li") as HTMLElement;
 
 const onClose = vi.fn();
 
 /**
  * The pane, open, with its printings list on screen — and the clock frozen from that point on.
  *
- * Real timers for the two queries, because `userEvent` and Testing Library's async wrapper
- * drain the microtask queue through a real `setTimeout(…, 0)` and only ever advance *jest*'s
- * fake clock (`SearchPage.test.tsx` says the same, having hung on it). Everything the dwell
- * itself does is `fireEvent` plus an explicit tick, so nothing here needs the wrapper.
+ * **Mounted directly rather than through a host, which is what this file gained when the docked
+ * pane became a modal.** The dwell and its picture live in `CardModalPrintings`, and that
+ * component takes its rows as a prop — so a `QueryClientProvider` and two `ipc` mocks are no
+ * longer between this suite and the thing it is about. `CardImage` still wants the provider, so
+ * that stays.
+ *
+ * The fake clock is installed *after* the render, so nothing the mount does has to be ticked;
+ * everything the dwell itself does is `fireEvent` plus an explicit tick.
  */
+const searchScope: CardModalScope = {
+  surface: "search",
+  deck: null,
+  quantity: null,
+  deckControls: false,
+};
+
 async function openPane(printings: PrintingsResponse = PRINTINGS) {
-  cardDetail.mockResolvedValue(detail);
-  cardPrintings.mockResolvedValue(printings);
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  render(
+  const view = render(
     <QueryClientProvider client={qc}>
-      <CardDetailPane cardId="p1" onClose={onClose} />
+      <CardModalPrintings
+        card={detail}
+        scope={searchScope}
+        items={printings.items}
+        total={printings.total}
+        loading={false}
+        error={null}
+        marketplace={MARKETPLACES.tcgplayer}
+        onPick={vi.fn()}
+        onViewAll={onClose}
+      />
     </QueryClientProvider>,
   );
   await screen.findByText(/3 printings/);
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  return qc;
+  return { ...view, qc };
 }
 
 /** Move the frozen clock, and let React commit what that woke up. */
@@ -347,7 +380,7 @@ describe("the printings list preview", () => {
    */
   it("draws the same art on the same dwell when the caret arrives in the row", async () => {
     await openPane();
-    const add = screen.getByRole("button", { name: /\(M10 146\)/ });
+    const add = rowButton("M10 146");
 
     act(() => add.focus());
     tick(PREVIEW_DWELL_MS - 1);
@@ -361,29 +394,16 @@ describe("the printings list preview", () => {
   });
 
   /**
-   * A row that is being dragged is not a row being read.
+   * **The drag case left with the docked pane, and it is a deletion rather than a port.**
    *
-   * **The gesture is a real pointer drag**, because `@dnd-kit/dom` is pointer-driven and the app
-   * fires no native `dragstart` anywhere any more — a synthetic one would prove nothing about a
-   * drag a reader can make. What takes the picture down is therefore the press the drag begins
-   * with, which is the same claim reached one event earlier: the handlers are the **row's** own
-   * rather than any drag machinery's, so the dwell has never had to know which library carries
-   * the printing away.
+   * The pane's rows were a drag source: a printing could be carried out of the list and dropped
+   * on a pile. `CardModalPrintings` draws no such source, and deliberately — every drop target
+   * this app has is behind the modal's own scrim, so the gesture has nowhere to land. A test
+   * that fired a synthetic `dragstart` at a row would assert a handler nobody can reach, which
+   * is worse than no test: the claim it used to make (a press takes the picture down) is
+   * covered by `takes it down on a press inside the row` below, one event earlier and through
+   * an interaction a reader really has.
    */
-  it("cancels the dwell when the row starts a drag", async () => {
-    await openPane();
-    // Boxed, because dnd-kit hit-tests by coordinate and jsdom measures every rect as zero.
-    const row = boxed(rowOf("M10 146"), 0);
-
-    fireEvent.mouseEnter(row);
-    tick(200);
-    const held = await startPointerDrag(row);
-    expect(held.started).toBe(true);
-
-    tick(10_000);
-    expect(preview()).toBeNull();
-    await held.cancel();
-  });
 
   /**
    * The Escape handshake, one rung further in than it has ever been in this pane: the preview
@@ -391,8 +411,15 @@ describe("the printings list preview", () => {
    * which returns early on a press something else has taken — stays open. The second press has
    * nothing in front of it and closes the card, which is where it was always going.
    */
-  it("closes on Escape without taking the pane with it, and lets the next press through", async () => {
+  it("closes on Escape, and lets the next press through to the layer behind it", async () => {
     await openPane();
+
+    // What the modal is, from this suite's point of view: something behind the list that the
+    // second press is owed. Registered on `window` because that is where `useDismissOnEscape`
+    // puts its own listeners, and in the bubble phase because the preview takes the press in
+    // the capture phase — which is the whole of the ordering under test.
+    const behind = vi.fn();
+    window.addEventListener("keydown", behind);
 
     fireEvent.mouseEnter(rowOf("M10 146"));
     tick(PREVIEW_DWELL_MS);
@@ -401,15 +428,19 @@ describe("the printings list preview", () => {
     const first = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
     act(() => void window.dispatchEvent(first));
 
+    // Taken, and taken *before* anything behind it could act on it.
     expect(first.defaultPrevented).toBe(true);
     expect(preview()).toBeNull();
-    expect(screen.getByRole("complementary", { name: /card details/i })).toBeInTheDocument();
-    expect(onClose).not.toHaveBeenCalled();
 
     const second = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
     act(() => void window.dispatchEvent(second));
 
-    expect(onClose).toHaveBeenCalledTimes(1);
+    // The second press has nothing in front of it: it reaches the layer behind undefended,
+    // which in the app is the modal closing.
+    expect(second.defaultPrevented).toBe(false);
+    expect(behind).toHaveBeenCalledTimes(2);
+
+    window.removeEventListener("keydown", behind);
   });
 
   /**
@@ -464,7 +495,7 @@ describe("the printings list preview", () => {
    */
   it("takes it down on Enter in the row, where no blur would", async () => {
     await openPane();
-    const add = screen.getByRole("button", { name: /\(M10 146\)/ });
+    const add = rowButton("M10 146");
 
     act(() => add.focus());
     tick(PREVIEW_DWELL_MS);
@@ -487,14 +518,19 @@ describe("the printings list preview", () => {
   it("stays out of the way of a layer the reader already opened", async () => {
     await openPane();
 
-    act(() => void fireEvent.click(screen.getByRole("button", { name: /\(M10 146\)/ })));
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    // **The list's own popup rather than the pane's quick-add dialog.** `Group printings by` is
+    // a `Dropdown`, so it writes the pair this guard reads — `aria-haspopup` and
+    // `aria-expanded="true"` — which is exactly the signature every popup trigger in this app
+    // carries. Opening it is the reader's real way to have a layer over this column.
+    const sort = screen.getByRole("button", { name: "Group printings by" });
+    act(() => void fireEvent.click(sort));
+    expect(sort).toHaveAttribute("aria-expanded", "true");
 
     fireEvent.mouseEnter(rowOf("STA 42"));
     tick(PREVIEW_DWELL_MS);
 
     expect(preview()).toBeNull();
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(sort).toHaveAttribute("aria-expanded", "true");
   });
 
   /**
@@ -508,12 +544,15 @@ describe("the printings list preview", () => {
   it("is not suppressed by a disclosure that is merely open", async () => {
     await openPane();
 
-    // A future section of this pane, in the shape the app already writes them: expanded, and
-    // not a layer — no `aria-haspopup`.
+    // A future section of this column, in the shape the app already writes them: expanded, and
+    // not a layer — no `aria-haspopup`. Hung off the section itself, since the guard is a
+    // document-wide query and the pane's landmark is gone.
     const rulings = document.createElement("button");
     rulings.setAttribute("aria-expanded", "true");
     rulings.textContent = "Rulings";
-    screen.getByRole("complementary", { name: /card details/i }).append(rulings);
+    (screen.getByRole("heading", { name: "Printings" }).closest("section") as HTMLElement).append(
+      rulings,
+    );
 
     fireEvent.mouseEnter(rowOf("M10 146"));
     tick(PREVIEW_DWELL_MS);
@@ -527,25 +566,33 @@ describe("the printings list preview", () => {
    * a hover that its element was unmounted, so the list says so when its rows are replaced.
    */
   it("goes down with the rows it was measured against", async () => {
-    const qc = await openPane();
+    const view = await openPane();
 
     fireEvent.mouseEnter(rowOf("M10 146"));
     tick(PREVIEW_DWELL_MS);
     expect(preview()).not.toBeNull();
 
-    // What a refetch does: the same query, a different list. (`p2` is gone from it, so React
-    // cannot reuse the row the picture was hung on.)
+    // **What a refetch does, expressed the way this component now sees one: a new `items`.**
+    // The pane read the rows out of a query and this takes them as a prop, so the event is a
+    // re-render rather than a cache write — the effect that drops the picture keys on `items`
+    // either way. `p2` is gone from the new list, so React cannot reuse the row the picture was
+    // hung on, which is the case the effect exists for.
     act(() => {
-      // The marketplace is the last segment of the key — `card_printings` prices every row with
-      // it, so two marketplaces are two lists. Nothing here has chosen one.
-      qc.setQueryData(["card", "printings", "o1", "tcgplayer"], {
-        items: [printing(), printing({ id: "p4", setCode: "2ed", collectorNumber: "162" })],
-        total: 2,
-      });
-      // Query-core batches every observer notification through a `setTimeout(…, 0)`, and the
-      // clock is frozen — so without this the cache holds the new list and nothing has been
-      // told about it yet.
-      vi.advanceTimersByTime(0);
+      view.rerender(
+        <QueryClientProvider client={view.qc}>
+          <CardModalPrintings
+            card={detail}
+            scope={searchScope}
+            items={[printing(), printing({ id: "p4", setCode: "2ed", collectorNumber: "162" })]}
+            total={2}
+            loading={false}
+            error={null}
+            marketplace={MARKETPLACES.tcgplayer}
+            onPick={vi.fn()}
+            onViewAll={onClose}
+          />
+        </QueryClientProvider>,
+      );
     });
 
     expect(preview()).toBeNull();

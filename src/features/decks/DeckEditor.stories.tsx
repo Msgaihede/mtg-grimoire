@@ -1,6 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
+import { AllPrintingsDialog } from "@/features/card/AllPrintingsDialog";
+import { CardDetailModal } from "@/features/card/CardDetailModal";
 import { ipc } from "@/lib/ipc";
 import { openDropdown, pickOption } from "@/test-dropdown";
 import { DeckEditor } from "./DeckEditor";
@@ -28,12 +30,17 @@ import { DeckEditor } from "./DeckEditor";
  * else. It is in the query key too: a deck is made once per key, so two formats have to be two
  * keys or the second story would open the first one's deck.
  *
- * **The pane is the editor's own now** (issue #183, 2026-08-22) and this wrapper no longer draws
- * one. It used to render a `CardDetailPane` as a *sibling*, exactly as `App.tsx` did, keyed on
- * the card id — and both halves of that have moved: the editor draws the pane as an overlay over
- * one of its two columns, and `App` steps aside for it. A copy left here would be a second
- * `complementary` landmark answering to the same name as the real one, which is precisely what
- * `SwapFolds` reaches for.
+ * **The card is a centred modal mounted beside the editor** (2026-09-03), which is what this
+ * wrapper draws and where `App.tsx` draws it. Its two predecessors were a docked `CardDetailPane`
+ * this file rendered as a sibling (until issue #183) and then the editor's own sticky overlay
+ * (until the modal); the pane is deleted and the overlay with it, so there is one mount again and
+ * the wrapper is where it goes. `AllPrintingsDialog` comes with it because it is the only way to
+ * a printing **swap** now — `SwapFolds` is the one story that needs either, and a story that
+ * mounts what the app mounts is the whole reason it can be trusted about a ladder of surfaces.
+ *
+ * Both are `App`-level siblings rather than children of anything, for the reason `App.tsx` states
+ * at its own site: the modal's panel is a container-query context and a `fixed` scrim rendered
+ * inside it would resolve against the panel.
  */
 function Editor({ deckId, formatKey = "modern" }: { deckId: number | null; formatKey?: string }) {
   const created = useQuery({
@@ -47,6 +54,8 @@ function Editor({ deckId, formatKey = "modern" }: { deckId: number | null; forma
   return (
     <div className="flex h-full min-h-0 gap-4">
       <div className="min-w-0 flex-1">{id !== null && <DeckEditor key={id} deckId={id} />}</div>
+      <CardDetailModal />
+      <AllPrintingsDialog />
     </div>
   );
 }
@@ -1158,26 +1167,31 @@ export const Gone: Story = {
 };
 
 /**
- * Two printings of one card in one category, folded into one row — and the sentence that says so.
+ * Two printings of one card in one category, folded into one row.
  *
- * **`deck_swap_printing` folds on `(deck, variant, category, card)`.** A category holds a
- * printing at most once per list, so swapping onto one it already has is not an error and not two
- * rows: the quantities sum, the answer carries `folded: true` with the landed total, and the pane
- * announces it. Without the sentence a card would simply disappear out of the deck, which reads
- * like a bug.
+ * **`deck_swap_printing` folds on `(deck, variant, category, card)`.** A category holds a printing
+ * at most once per list, so swapping onto one it already has is not an error and not two rows: the
+ * quantities sum and the answer carries `folded: true` with the landed total. What a reader sees
+ * is one of their two rows going away, which is the whole of what this play asserts.
  *
- * **This is the one editor story that opens the card pane, because the swap has no control in
- * the editor at all.** "Use this printing" is drawn on the pane's printings rows and only for a
- * card opened *as a deck card* — `openCardFromDeck` is the sole writer of `paneDeckContext`, so
- * the offer exists exactly where a slot exists to rewrite. The context carries the **variant**
- * too, since schema v8: a swap addressed to the wrong list either misses or rewrites a row the
- * reader is not looking at.
+ * **The sentence that used to say so is gone with the docked pane** (2026-09-03). `SwapResult`
+ * still carries `folded` and the total, and nothing draws them: the pane announced the fold in a
+ * `role="status"` of its own and `AllPrintingsDialog`, which is where the swap lives now, closes
+ * on success and says nothing. Recorded here rather than quietly dropped, because a card
+ * disappearing out of a deck with no sentence is the failure the old announcement existed for.
+ *
+ * **This is the one editor story that opens a card, because the swap has no control in the editor
+ * at all.** It is a tile of the printings modal, reached from the card modal's
+ * `View all printings`, and it is offered only for a card opened *as a deck card* —
+ * `openCardFromDeck` is the sole writer of `paneDeckContext`, so the write exists exactly where a
+ * slot exists to rewrite. The context carries the **variant** too, since schema v8: a swap
+ * addressed to the wrong list either misses or rewrites a row the reader is not looking at.
  *
  * Sol Ring is the only fold the corpus can produce: it is the one card with two printings in the
  * fixture that a seeded deck already plays (deck 2's main category holds `c21 263`; `sld 913` is
  * the other). The play adds `sld 913` from the docked panel — a Commander deck's singleton rule
- * now broken, which is beside the point — clicks it, and swaps it onto the printing already in
- * the category.
+ * now broken, which is beside the point — opens *that* row, and swaps it onto the printing
+ * already in the category.
  */
 export const SwapFolds: Story = {
   args: { deckId: 2 },
@@ -1185,9 +1199,8 @@ export const SwapFolds: Story = {
     const user = userEvent.setup();
     const canvas = within(canvasElement);
     // **The panel is open at rest again** (issue #183), so there is no disclosure to press
-    // first — the card pane it used to trade width with is an overlay now and takes none. The
-    // button and the search field share the name "Search cards" — the disclosure names what it
-    // reveals — so each is still addressed by its own role.
+    // first. The button and the search field share the name "Search cards" — the disclosure
+    // names what it reveals — so each is still addressed by its own role.
     //
     // **The tab is pressed, though.** The panel opens on its Collection tab, and the card
     // search — the wall this play adds `sld 913` from — is the second one. Without this the
@@ -1238,29 +1251,32 @@ export const SwapFolds: Story = {
       { timeout: 4000 },
     );
 
-    // The pane, opened as a deck card — which is what puts the offer on the *other* printing.
-    // Either of the two rows does: they are two printings of one card in one category, so
-    // whichever is opened, the swap offered is onto the one that is not open.
-    await userEvent.click(within(main()).getAllByRole("button", { name: /^Sol Ring/ })[0]);
-    const pane = await canvas.findByRole("complementary", { name: "Card details" });
-    const use = await within(pane).findByRole(
-      "button",
-      { name: /^Use this printing .* in Main deck$/ },
-      { timeout: 4000 },
-    );
-    await userEvent.click(use);
+    // **The `sld 913` row specifically, and it is addressed by its own data line.** Which of the
+    // two the swap is *from* decides which tile it is *onto*, so "either one does" — true while
+    // the pane drew a row per printing and offered the other — is no longer enough: the printings
+    // wall draws every printing and the tile pressed has to be the one the open row is not.
+    const rows = within(main()).getAllByRole("button", { name: /^Sol Ring/ });
+    const sld = rows.find((row) => row.closest("li")?.textContent?.includes("SLD"));
+    await expect(sld).toBeDefined();
+    await userEvent.click(sld as HTMLElement);
+    await canvas.findByRole("button", { name: /^View all printings/ });
+    await userEvent.click(canvas.getByRole("button", { name: /^View all printings/ }));
 
-    // One card of two, and the pane saying which. The number is the server's arithmetic, never a
-    // guess: `useDeck.swapPrinting` writes no optimistic patch precisely because the fold is the
-    // one number only the backend can compute.
+    // **Both dialogs are named after the card**, because `AllPrintingsDialog`'s title is the
+    // card's name and the card modal's is too. The close label is what tells them apart, and it
+    // is a label rather than a heuristic: `closeLabel` is a required prop of `Dialog`.
+    const closePrintings = await canvas.findByRole("button", { name: "Close printings" });
+    const printings = within(closePrintings.closest('[role="dialog"]') as HTMLElement);
+    await userEvent.click(await printings.findByRole("button", { name: /C21/ }, { timeout: 4000 }));
+
+    // One card of two. The number is the server's arithmetic, never a guess: `useDeck.swapPrinting`
+    // writes no optimistic patch precisely because the fold is the one number only the backend can
+    // compute.
     await waitFor(
       async () => {
         await expect(within(main()).getAllByRole("button", { name: /^Sol Ring/ })).toHaveLength(1);
       },
       { timeout: 4000 },
     );
-    await expect(
-      await canvas.findByText(/^Folded into one row of 2 in Main deck\.$/),
-    ).toBeInTheDocument();
   },
 };

@@ -30,10 +30,16 @@ describe("the layer scale", () => {
     expect(numberOf(LAYER.header)).toBeLessThan(numberOf(LAYER.popup));
     expect(numberOf(LAYER.popup)).toBeLessThan(numberOf(LAYER.dragTray));
     expect(numberOf(LAYER.dragTray)).toBeLessThan(numberOf(LAYER.overlay));
-    // A tooltip is shown over the deck editor's dialogs, so it outranks the scrim they draw at
-    // `overlay` — and it stays under `gate` because `SyncProgress`'s full-window takeover must
-    // still cover a hint describing a control the reader can no longer see.
-    expect(numberOf(LAYER.overlay)).toBeLessThan(numberOf(LAYER.tooltip));
+    // A dialog opened over another dialog is above the one it covers. Both are `fixed inset-0`
+    // siblings in the root stacking context, so this number is the only thing ordering them —
+    // at one rung they would fall back to document order, which is the bug `layers.ts` opens with.
+    expect(numberOf(LAYER.overlay)).toBeLessThan(numberOf(LAYER.overlayStacked));
+    // A tooltip is shown over the deck editor's dialogs, so it outranks the scrim they draw —
+    // and it has to clear the *highest* dialog rung, not just the base one, because a control
+    // inside a nested overlay has as much to explain as one anywhere else. It stays under `gate`
+    // because `SyncProgress`'s full-window takeover must still cover a hint describing a control
+    // the reader can no longer see.
+    expect(numberOf(LAYER.overlayStacked)).toBeLessThan(numberOf(LAYER.tooltip));
     expect(numberOf(LAYER.tooltip)).toBeLessThan(numberOf(LAYER.gate));
     // And the window's own caption is above every one of them. `decorations: false` makes that
     // row the only way to move, minimize or close the app, so a surface covering it does not

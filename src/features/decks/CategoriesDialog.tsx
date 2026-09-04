@@ -121,7 +121,7 @@ export function CategoriesDialog({
       open={open}
       title="Categories"
       closeLabel="Close categories"
-      width="w-[48rem]"
+      size="w-[48rem]"
       onDismiss={onDismiss}
       onClose={onClose}
     >

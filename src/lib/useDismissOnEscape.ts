@@ -9,13 +9,15 @@ import {
  * Which rung of the dismissible stack a layer sits on.
  *
  * `"inner"` is anything opened *over* something else that Escape could also close — a
- * popup, a listbox, a menu. `"outer"` is what it was opened over: the card detail pane
- * today, and whatever else ends up docked beside a view.
+ * popup, a listbox, a menu, and every {@link import("@/components/Dialog").Dialog} in the app.
+ * `"outer"` is what it was opened over: `KeyMap`'s shortcuts panel today, and whatever else ends
+ * up drawn beside a view rather than over it. It was the docked card detail pane until
+ * 2026-09-03, when that surface became a `Dialog` and moved to the rung above.
  *
  * `"navigation"` is the floor — not a layer drawn over anything, but the view itself, and the
  * press it takes is the one nothing else wanted. It is what makes Escape mean "back" all the way
  * down rather than only as far as the last popup: a deck closes to the gallery, a folder closes
- * to its parent. A rung below `"outer"` on purpose — a card pane open beside a folder is still
+ * to its parent. A rung below `"outer"` on purpose — a panel open beside a folder is still
  * the nearer thing to close, so it gets the press and the folder gets the next one.
  */
 export type DismissLayer = "inner" | "outer" | "navigation";
@@ -63,15 +65,17 @@ const captureStack: symbol[] = [];
  * {@link RANK}.
  *
  * **The same fix as {@link captureStack}, arriving on the other side of the event for the same
- * reason.** While `"outer"` had exactly one occupant in the whole app — the card detail pane —
+ * reason.** While `"outer"` had exactly one occupant in the whole app — the docked card detail
+ * pane, at the time this was written —
  * registration order was a question nobody could get wrong. `"navigation"` makes that false: a
- * view is mounted long *before* the pane that docks beside it, so in registration order the
+ * view is mounted long *before* a panel that opens beside it, so in registration order the
  * view's listener runs first, and a reader with a card open would press Escape and have the
  * folder walk out from under the pane still on screen. That is the pane's own bug from
  * 2026-08-14 read backwards, and the cure is the same shape.
  *
- * Rank rather than depth, because these two rungs are not nested: the pane is not drawn *inside*
- * the view, it is docked beside it, and there is no mount order that makes "the nearer thing"
+ * Rank rather than depth, because these two rungs are not nested: an `"outer"` layer is not drawn
+ * *inside* the view, it is drawn beside or over it, and there is no mount order that makes "the
+ * nearer thing"
  * true. So the rungs are ordered by what they are rather than by when they arrived, and mount
  * order breaks ties among peers — which is what a second `"outer"` would need the day one exists.
  *
@@ -106,26 +110,26 @@ function bubbleOwner(): symbol | undefined {
  *   `e.defaultPrevented`.
  *
  * Capture is the load-bearing half. Two `window` listeners for one event run in
- * *registration* order, and the outer layer is always the one mounted first — the pane has
+ * *registration* order, and the outer layer is always the one mounted first — it has
  * been open since before the popup inside it existed. In the bubble phase it would
- * therefore act first and read `defaultPrevented` as false, closing the card *and* the
+ * therefore act first and read `defaultPrevented` as false, closing the layer *and* the
  * popup on one press, with two focus hand-backs racing for the caret. Capture puts the
  * innermost open thing first no matter who mounted when, because every capture listener on
  * `window` runs before the event has descended to its target, let alone bubbled back.
  *
  * `defaultPrevented` is checked by both rungs rather than only by the outer one: the rule
  * this encodes is "never act on a press something else has already consumed", and it is
- * true of a second popup as much as of a pane.
+ * true of a second popup as much as of the layer underneath it.
  *
  * **Two `"inner"` peers are ordered now, by a stack rather than by registration order.**
  * Every capture-phase layer pushes a token on mount and pops it on unmount, and only the
  * token on top acts. A lone `"inner"` layer is a stack of one and behaves exactly as it did.
- * This is what lets a context menu open over a dialog opened over the card pane and give one
- * press to each: menu, dialog, pane.
+ * This is what lets a context menu open over a dialog opened over the card modal and give one
+ * press to each: menu, dialog, card.
  *
  * **The bubble rung is ordered now too, and by rank rather than by mount order.** It did not need
  * to be while `"outer"` had one occupant in the entire app; `"navigation"` gave it a second, and
- * a view is always mounted *before* the pane that docks beside it — so in registration order the
+ * a view is always mounted *before* a panel that opens beside it — so in registration order the
  * floor would act first and walk the reader out of a folder while their card sat open. See
  * {@link bubbleStack}. Across the two phases nothing changed: `defaultPrevented` is still the
  * whole of it, because every capture listener runs before any bubble one.
