@@ -165,7 +165,7 @@ export function QuickUnwishDialog({
             "do they come off?"
       }
       closeLabel="Close which wish"
-      width="w-[26rem]"
+      size="w-[26rem]"
       onDismiss={onDismiss}
       onClose={onClose}
     >

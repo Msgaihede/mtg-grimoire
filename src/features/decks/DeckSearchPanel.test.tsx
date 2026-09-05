@@ -1087,10 +1087,16 @@ describe("DeckSearchPanel", () => {
   /**
    * The panel is what took the caret away, so the panel is what gives it somewhere to go.
    *
-   * At 1024 a tile press opens the card pane, the pane's arrival squeezes this panel down to
-   * its rail, and the tile that was pressed unmounts with it — so `CardDetailPane`'s hand-back
-   * finds an opener that is not connected, and Escape drops the caret on `<body>` with the next
-   * Tab restarting from the top of the app.
+   * A tile press opens the card, the card's arrival takes this panel down to its rail, and the
+   * tile that was pressed unmounts with it — so the card surface's hand-back finds an opener that
+   * is not connected, and Escape drops the caret on `<body>` with the next Tab restarting from
+   * the top of the app.
+   *
+   * **The road in has narrowed since this was written.** It was the docked pane squeezing the
+   * desk at 1024; the card is a centred modal since 2026-09-03 and takes width from neither
+   * column, so what reaches it now is the overlay case — a desk with room for one surface, where
+   * the editor takes the panel's overlay away when a card opens. The shape under test is the
+   * same, which is why this drives `roomy` itself rather than a width.
    */
   it("takes the caret when the pane closes and the tile that opened it has gone", async () => {
     const view = await openPanel();
@@ -1218,8 +1224,10 @@ describe("DeckSearchPanel", () => {
   /**
    * The Escape stack, from inside the panel: the set picker is an `"inner"` layer and consumes
    * its press in the capture phase, and the next press reaches `window` untouched — which is
-   * where the card detail pane listens, in the bubble phase. Observed in the running window;
-   * this is what holds it.
+   * where the layer behind it listens. That was the docked card pane, in the bubble phase, when
+   * this was observed in the running window; the card is a `Dialog` since 2026-09-03, so the
+   * press it falls to is the editor's `"navigation"` floor. What this holds is the half that did
+   * not move: one layer per press, and this panel is not one of them.
    */
   it("spends the first Escape on the set picker and lets the second through to the pane", async () => {
     listSets.mockResolvedValue([
@@ -1237,7 +1245,7 @@ describe("DeckSearchPanel", () => {
     await screen.findByRole("combobox", { name: /search sets/i });
 
     const heard: boolean[] = [];
-    // The bubble phase, which is the rung the card pane is on.
+    // The bubble phase, which is the rung the layer behind this panel is on.
     const listen = (e: KeyboardEvent) => {
       if (e.key === "Escape") heard.push(e.defaultPrevented);
     };

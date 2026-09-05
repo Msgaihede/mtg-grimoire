@@ -46,7 +46,7 @@ export function FeedDownloadDialog({
       open={open}
       title="Download now?"
       closeLabel="Close download question"
-      width="w-[26rem]"
+      size="w-[26rem]"
       onDismiss={onNotNow}
       onClose={onNotNow}
     >

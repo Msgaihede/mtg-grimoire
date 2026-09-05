@@ -361,6 +361,7 @@ pub fn run() {
             card::card_detail,
             card::card_printings,
             card::card_meld_parts,
+            card::card_holdings,
             card::card_image_uri,
             card::printing_group_by,
             card::set_printing_group_by,

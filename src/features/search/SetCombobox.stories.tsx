@@ -36,15 +36,17 @@ function Picker({
 }
 
 /**
- * The picker with an **outer** dismissible layer behind it — a stand-in for the card detail pane.
+ * The picker with an **outer** dismissible layer behind it — a stand-in for one.
  *
  * Built on the real `useDismissOnEscape` rather than on a `keydown` handler of its own, because
  * the whole subject of {@link EscapeClosesOneLayer} is which phase each rung listens in, and a
  * hand-written outer layer would be a second implementation of exactly the thing under test.
  *
- * A stand-in and not `CardDetailPane`: that component takes a card id and talks to the backend,
- * and what this needs from it is the one line it shares with every future outer layer — bubble
- * phase, and an early return on `defaultPrevented`, both of which live in the hook.
+ * **It stood in for `CardDetailPane` until 2026-09-03, when the docked card surface was
+ * deleted**; the app's `"outer"` occupant is `KeyMap`'s shortcuts panel now. A stand-in either
+ * way: a real one takes state this story has no use for, and what this needs from it is the one
+ * line every outer layer shares — bubble phase, and an early return on `defaultPrevented`, both
+ * of which live in the hook.
  */
 function WithOuterLayer({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(true);

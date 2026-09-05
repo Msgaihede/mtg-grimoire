@@ -191,7 +191,7 @@ export function DeckHistoryDialog({ deckId, open, onDismiss, onClose }: DeckHist
       open={open}
       title="History"
       closeLabel="Close history"
-      width="w-[48rem]"
+      size="w-[48rem]"
       onDismiss={onDismiss}
       onClose={onClose}
     >

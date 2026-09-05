@@ -107,6 +107,7 @@ import type {
   CacheCleared,
   CardFace,
   CardFilters,
+  CardHoldings,
   CardSummary,
   CardTags,
   CategoryKind,
@@ -6105,6 +6106,52 @@ export function readHandlers(db: FakeDb) {
     },
 
     /**
+     * `card::holdings` — the three figures the card modal's **In your grimoire** block states,
+     * in one read.
+     *
+     * **All three at the oracle grain**, which is what that heading means: a reader who owns the
+     * Alpha Bolt and opens the M10 one owns *Lightning Bolt*. Three zeros is a real answer about
+     * a card nobody holds, so this never refuses and never answers `null`.
+     *
+     * Each third is the fake's *existing* rule rather than a fourth spelling of it, exactly as
+     * the crate composes `copies_of_oracle`, `wished_copies` and `decks_playing`: a figure here
+     * that disagreed with the wall it sits beside would be the drift the fake exists to catch.
+     *
+     * * **owned** joins `cards` for the oracle id and narrows by nothing else — every printing,
+     *   every finish, every folder, which is `Availability::Everything`. A copy on a locked
+     *   shelf or filed into a deck's group is still a copy the reader owns, and an orphaned row
+     *   names no oracle card and contributes nothing (the crate's `JOIN cards`).
+     * * **wished** is `coalesce(w.oracle_id, cards[w.card_id].oracle_id)` and a `sum` rather than
+     *   a row count — `WISHLIST_GRAIN` makes a foil wish and a nonfoil wish two rows for one
+     *   card. `coalesce` and not two comparisons: a wish pinned to a printing this corpus has
+     *   lost has no key at all, and must not match by falling through to the other arm.
+     * * **decks** is {@link decksPlaying} over the oracle id as a single key, so it is **live
+     *   lists only** (a plan holds no cards) and archived decks count, exactly as the read the
+     *   modal made before this command existed.
+     *
+     * A blank `oracleId` answers three zeros rather than refusing — `cards.oracle_id` is
+     * nullable, and a card with no oracle id is a card nothing can be held *of*.
+     */
+    card_holdings: (args: { oracleId: string }): CardHoldings => {
+      const oracleId = args.oracleId.trim();
+      if (oracleId === "") return { owned: 0, wished: 0, decks: 0 };
+      const owned = db.collectionEntries
+        .filter((e) => cardById(db, e.cardId)?.oracleId === oracleId)
+        .reduce((n, e) => n + e.quantity, 0);
+      const wished = db.wishlistEntries
+        .filter((w) => {
+          // The pinned printing's own `cards` row and never {@link playedKey}, whose fallback is
+          // the printing id: a wish pinned to a printing this corpus has lost has **no key**,
+          // which is what the crate's sub-select answering NULL means, and a fallback here would
+          // give it one that could only ever match by accident.
+          const pinned = w.cardId === null ? null : (cardById(db, w.cardId)?.oracleId ?? null);
+          return (w.oracleId ?? pinned) === oracleId;
+        })
+        .reduce((n, w) => n + w.quantity, 0);
+      return { owned, wished, decks: decksPlaying(db, [oracleId]).length };
+    },
+
+    /**
      * `card::list_printings`: every **paper** printing of one oracle card, newest first,
      * capped with an uncapped count so a truncated list can say what it truncates. Every row
      * is priced per finish at the marketplace asked for, like the card above.
@@ -6112,7 +6159,8 @@ export function readHandlers(db: FakeDb) {
      * **`limit` is honoured here because the mirror sends it**, which is the whole argument for
      * this fake sitting *under* `src/lib/ipc.ts` rather than beside it: a handler that quietly
      * ignored an argument would let a story pass over a call the window answers differently. The
-     * card detail pane sends nothing and gets {@link MAX_PRINTINGS}; the printings modal names
+     * card detail modal sends nothing and gets {@link MAX_PRINTINGS} — as the docked pane it
+     * replaced did — while the printings modal names
      * the ceiling, because it filters client-side and a filter over a truncated list draws an
      * empty wall that reads as an answer.
      *
@@ -12332,6 +12380,7 @@ export function writeHandlers(db: FakeDb) {
       cardId: string;
       categoryId: number;
       variant: DeckVariant;
+      finish?: DeckFinish;
       labelId: number | null;
     }): void => {
       const variant = validVariant(args.variant);
@@ -12344,13 +12393,13 @@ export function writeHandlers(db: FakeDb) {
         applied = label.name;
       }
       const deck = requireDeck(db, args.deckId);
-      const row = db.deckCards.find(
-        (dc) =>
-          dc.deckId === args.deckId &&
-          dc.cardId === args.cardId &&
-          dc.categoryId === args.categoryId &&
-          dc.variant === variant,
-      );
+      // **`deckCardAt`, the same five-term address every other card writer here uses**, rather
+      // than the four-field `find` this had until 2026-09-03. That `find` matched the first row
+      // for the card in the category *whatever its finish*, so it drew a label onto the regular
+      // copy when a foil one was asked for — and it was the reason nothing in this suite noticed
+      // that the real command dropped `finish` and could label no foil row at all.
+      const finish = normaliseFinish(args.finish);
+      const row = deckCardAt(db, args.deckId, args.cardId, args.categoryId, variant, finish);
       if (!row) throw refuse(CARD_NOT_IN_CATEGORY);
       const previous = row.labelId === null ? null : (labelById(db, row.labelId)?.name ?? null);
       row.labelId = args.labelId;

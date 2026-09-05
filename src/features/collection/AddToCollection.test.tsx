@@ -31,9 +31,13 @@ const BOLT: AddTarget = {
 const written = { id: 7, quantity: 1, removed: false };
 
 /**
- * The rung the card detail pane sits on, mounted *first* exactly as the app mounts it: the
- * pane has been listening for Escape since before the popup inside it existed, which is the
- * whole reason the popup has to consume the press in the capture phase.
+ * The `"outer"` rung, mounted *first* exactly as the app mounts one: an outer layer has been
+ * listening for Escape since before the popup inside it existed, which is the whole reason the
+ * popup has to consume the press in the capture phase.
+ *
+ * The layer this stood in for was the docked card detail pane until 2026-09-03; `KeyMap`'s
+ * shortcuts panel is the app's `"outer"` occupant now. What the test needs is the rung, not the
+ * surface.
  */
 function Pane({ onDismiss }: { onDismiss: () => void }) {
   useDismissOnEscape({ layer: "outer", onDismiss });

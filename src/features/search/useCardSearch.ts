@@ -528,7 +528,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   //
   // Off is one row per card — 37 553 cards rather than 107 337 printings — because "which
   // cards exist" is the question a search box is asked, and "which printings exist" is the
-  // question the card detail pane answers.
+  // question `AllPrintingsDialog` answers.
   //
   // Seeded `false` unconditionally, and nothing outside this row can seed it otherwise any
   // more: "View all printings" used to arrive here as a card to open up, and is a modal drawn

@@ -2761,14 +2761,19 @@ export function CollectionPage() {
               // which the other six walls ignore.
               onSelect={(cardId, tile) => openCardAsFinish(cardId, tile.finish)}
               // The same arrow-key walk the search wall takes, on the same terms: both slots
-              // above reach the store the card pane reads, so a press moves the pane rather than
-              // only an outline. The two walls that are a *page* pass this and the two that are
-              // a panel do not — `CardGrid`'s `arrowNav` is where that split is argued.
+              // above reach the store the card surface reads, so a press moves the open card
+              // rather than only an outline. The two walls that are a *page* pass this and the
+              // two that are a panel do not — `CardGrid`'s `arrowNav` is where that split is
+              // argued.
               //
               // **What the caret note is filed under is still the card**, not the tile key:
-              // `CardGrid` hands `keepCaretForCard` the printing because `CardDetailPane` reads
-              // the note back by the card it was opened on, so a note filed under `c1:foil`
-              // would break this wall's walk after exactly one step.
+              // `CardGrid` hands `keepCaretForCard` the printing because the note is read back by
+              // the card it was opened on, so a note filed under `c1:foil` would break this
+              // wall's walk after exactly one step. **Nothing reads it since the docked pane was
+              // deleted on 2026-09-03, and nothing needs to** — the modal is `aria-modal`, so
+              // this wall takes no arrow press while a card is open, and `Dialog` focuses its
+              // panel once per open rather than per card. Dormant, not broken; `caretWalk.ts`
+              // carries the argument.
               arrowNav
               onNeedNextPage={onNeedNextPage}
               // The same mark search draws, and only the mark: the corner and the felt
@@ -2971,7 +2976,7 @@ export function CollectionPage() {
         open={picking !== null}
         title="Which copies?"
         closeLabel="Close the copy picker"
-        width="w-[30rem]"
+        size="w-[30rem]"
         onDismiss={() => setPicking(null)}
         onClose={() => setPicking(null)}
       >

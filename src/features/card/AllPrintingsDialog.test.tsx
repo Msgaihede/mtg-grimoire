@@ -131,7 +131,7 @@ const wishlistSetPrinting = vi.fn();
  * The arrows are not decoration: `vi.mock` is hoisted above the `const`s above it, and the mocked
  * module is pulled in by the component's own imports — so the factory is *evaluated* before those
  * bindings are initialised. Deferring the reference into a call that happens later is what makes
- * that legal. `CardDetailPane.test.tsx` mocks the same module the same way and for the same
+ * that legal. `CardDetailModal.test.tsx` mocks the same module the same way and for the same
  * reason.
  */
 vi.mock("@/lib/ipc", async (original) => ({
@@ -160,6 +160,7 @@ vi.mock("@/lib/ipc", async (original) => ({
 }));
 
 import { AllPrintingsDialog } from "./AllPrintingsDialog";
+import { DECK_CARD_ATTR, deckCardSlot } from "@/features/decks/dnd";
 import { CardToDeckProvider } from "./cardMenu";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import {
@@ -205,6 +206,16 @@ beforeEach(() => {
   wishlistSetPrinting.mockReset().mockResolvedValue({ id: 7, quantity: 1, removed: false });
   // The modal is driven by one store field and nothing else, so the store is the fixture.
   useAppStore.setState(useAppStore.getInitialState());
+  // The stand-ins {@link deckCard} and {@link standInDialog} leave in the document. They are
+  // appended to `body` rather than to the render container — which is what makes them stand in for
+  // surfaces this suite does not mount — so React's own cleanup never sees them.
+  //
+  // **Swept here rather than removed at the end of each test that makes one**, which is the same
+  // rule as any other fixture teardown and is not fastidiousness: a test that fails before its own
+  // clean-up line leaves a second `role="dialog"` in the document, and every later `getByRole`
+  // then finds two. Measured while mutation-checking this file — one broken assertion cost seven
+  // failures in tests that had nothing to do with it.
+  document.querySelectorAll(`[${STAND_IN_ATTR}]`).forEach((node) => node.remove());
 });
 
 /**
@@ -277,6 +288,44 @@ function withDeckWalk(): void {
 /** The same, for a surface whose rows are not deck rows — see {@link LIST_WALK}. */
 function withListWalk(): void {
   act(() => useAppStore.getState().setCardWalk({ label: "your collection", stops: LIST_WALK }));
+}
+
+/** What every hand-made element below is marked with, so `beforeEach` can sweep them all. */
+const STAND_IN_ATTR = "data-stand-in";
+
+/** One element appended to `body`, outside anything React owns, and marked for the sweep. */
+function standIn(tag: string, attrs: Record<string, string>): HTMLElement {
+  const el = document.createElement(tag);
+  el.setAttribute(STAND_IN_ATTR, "");
+  for (const [name, value] of Object.entries(attrs)) el.setAttribute(name, value);
+  document.body.appendChild(el);
+  return el;
+}
+
+/**
+ * The deck's own control for one slot, as the deck editor would have drawn it.
+ *
+ * **A stand-in rather than the real thing, and it has to be one here.** The caret hand-back is a
+ * document-wide `querySelector` for {@link DECK_CARD_ATTR} — that is the whole design, because the
+ * modal is not in the deck's tree and a ref taken when it opened points at an element the swap
+ * deletes — and this suite mounts no editor at all. So the deck is one button carrying the slot
+ * the swap moves *to*, which is what the pile looks like once the refetch has landed.
+ *
+ * `App.test.tsx` is where the same hand-back is driven against the real editor, with a real swap
+ * rebuilding a real card. This one pins the wiring; that one pins the joint.
+ */
+function deckCard(row: PaneDeckContext): HTMLElement {
+  const el = standIn("button", {
+    type: "button",
+    [DECK_CARD_ATTR]: deckCardSlot(row.categoryId, row.cardId, row.finish),
+  });
+  el.textContent = "the deck's card";
+  return el;
+}
+
+/** Some other modal, still standing when this one closes — see the fence it is driven against. */
+function standInDialog(): HTMLElement {
+  return standIn("div", { role: "dialog" });
 }
 
 /**
@@ -559,6 +608,136 @@ describe("AllPrintingsDialog", () => {
       expect(deckSwapPrinting).toHaveBeenCalledWith(4, "card-1", "b", 9, "live", null),
     );
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  /**
+   * **The half of a live region a text assertion cannot see**: it is there, and it is empty.
+   *
+   * A region that first appears with its sentence already inside it announces nothing, so the
+   * shape being pinned is *mounted before the write*. Asserted on a wall whose reader has done
+   * nothing at all, and outside every gate the body has — the query has not resolved on the first
+   * commit either, and drawing the region behind `query.data` would put it back a fetch away.
+   */
+  it("mounts the swap announcement empty, before there is anything to say", async () => {
+    cardPrintings.mockResolvedValue(page([p("a", "lea"), p("b", "leb")]));
+    renderDialog();
+    open({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: slot });
+
+    const dialog = await screen.findByRole("dialog", { name: /Sol Ring/ });
+    expect(within(dialog).getByRole("status")).toBeEmptyDOMElement();
+  });
+
+  /**
+   * **A fold is the one swap that owes the reader a sentence, and the modal stays open to say it.**
+   *
+   * A category holds a printing at most once, so swapping onto one it already had turns two rows
+   * into one: the card the reader was looking at leaves the deck and its copies land on another
+   * row. `SwapResult.folded` exists to say so and nothing was drawing it.
+   *
+   * The close is what makes this a *behaviour* rather than a string. The plain swap above closes
+   * on success, and announcing into a panel that is unmounting announces nothing — so the sentence
+   * and the surface it is read on are one decision, and both halves are asserted here.
+   */
+  it("says a fold and stays open, so the sentence can be read", async () => {
+    cardPrintings.mockResolvedValue(page([p("a", "lea"), p("b", "leb")]));
+    deckSwapPrinting.mockResolvedValue({ folded: true, quantity: 3 });
+    const user = userEvent.setup();
+    renderDialog();
+    open({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: slot });
+    const dialog = await screen.findByRole("dialog", { name: /Sol Ring/ });
+
+    await user.click(await screen.findByRole("button", { name: /LEB/ }));
+
+    // The server's own arithmetic and the context's own category name — neither is a guess this
+    // surface makes, and both are in the sentence.
+    await waitFor(() =>
+      expect(within(dialog).getByRole("status")).toHaveTextContent(
+        "Folded into one row of 3 in Ramp.",
+      ),
+    );
+    expect(screen.getByRole("dialog", { name: /Sol Ring/ })).toBeInTheDocument();
+    // And the wall is re-pointed at the row the deck holds now. Without this the modal would go on
+    // offering to swap *from* a slot the write has just deleted, and the reader's next press would
+    // be refused for a reason nothing on screen could explain.
+    expect(useAppStore.getState().printingsRequest).toEqual({
+      cardId: "b",
+      oracleId: "o1",
+      name: "Sol Ring",
+      deck: { ...slot, cardId: "b" },
+      wish: null,
+    });
+  });
+
+  /**
+   * **The caret, handed to the deck's card for the printing the deck now holds.**
+   *
+   * A swap deletes the control the modal was opened from — the row it was drawn from is gone and
+   * the new printing's row is a different React key — so the caret has nowhere to fall back to and
+   * lands on `<body>`, from which the next Tab restarts at the top of the app. The way home is the
+   * slot, looked up in the document after the fact ({@link DECK_CARD_ATTR}), because the modal owns
+   * none of the deck's elements. See `deckControl.ts`.
+   */
+  it("hands the caret to the deck's card when a swap closes the modal", async () => {
+    cardPrintings.mockResolvedValue(page([p("a", "lea"), p("b", "leb")]));
+    const user = userEvent.setup();
+    renderDialog();
+    // The pile as the refetch leaves it: the same slot, on the printing that was pressed.
+    const home = deckCard({ ...slot, cardId: "b" });
+    open({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: slot });
+
+    await user.click(await screen.findByRole("button", { name: /LEB/ }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    await waitFor(() => expect(home).toHaveFocus());
+  });
+
+  /**
+   * **And it refuses while another modal is still standing, which is what keeps the hand-back
+   * inside the modality rather than breaking it.**
+   *
+   * This wall is opened two ways: from a deck card's own menu, where it is the only surface up and
+   * the caret is genuinely owed to the deck — and from the card modal's `View all printings`, where
+   * closing it leaves *that* modal on screen. Walking the caret into the view behind an
+   * `aria-modal` panel is the defect `caretWalk.ts` was written for one surface over, and this
+   * modal's own step used to commit it.
+   *
+   * The stand-in is a bare `role="dialog"`, because the test is for **any** dialog: this file has
+   * no business naming another surface, and the shell keeps a panel mounted for the length of its
+   * fade, so at the moment the close runs the dialog still standing is usually this one.
+   */
+  it("leaves the caret alone while another modal is still on screen", async () => {
+    cardPrintings.mockResolvedValue(page([p("a", "lea"), p("b", "leb")]));
+    const user = userEvent.setup();
+    renderDialog();
+    const home = deckCard({ ...slot, cardId: "b" });
+    standInDialog();
+    open({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: slot });
+
+    await user.click(await screen.findByRole("button", { name: /LEB/ }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /Sol Ring/ })).toBeNull());
+    expect(home).not.toHaveFocus();
+  });
+
+  /**
+   * A press that wrote nothing to a deck takes no caret with it either.
+   *
+   * The fall-through opens the card on the printing that was pressed, which is a *navigation*: the
+   * reader is being moved somewhere, and the deck card the swap would have rebuilt was never
+   * touched. Driven with a deck control in the document for exactly that slot, so a hand-back that
+   * fired on every close would have somewhere to land and would be visible here.
+   */
+  it("takes no caret to the deck when the press was a look rather than a swap", async () => {
+    cardPrintings.mockResolvedValue(page([p("a", "lea"), p("b", "leb")]));
+    const user = userEvent.setup();
+    renderDialog();
+    const home = deckCard({ ...slot, cardId: "b" });
+    open({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: null });
+
+    await user.click(await screen.findByRole("button", { name: /LEB/ }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(home).not.toHaveFocus();
   });
 
   it("keeps the modal open and says why when a swap is refused", async () => {

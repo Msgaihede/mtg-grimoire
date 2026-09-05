@@ -47,10 +47,12 @@ export const FOCUS_INSET =
  * The *what* is a separate question, and it has a separate answer: *some elements should carry
  * no focus outline at all, in any modality.*
  *
- * **A `tabIndex={-1}` container is a landing pad, not a control.** Eleven of them exist here —
- * the dialog shell's panel, the card pane, the deck editor's root, `AnchoredPopup`,
- * `DeckBracket`, `ValidationPanel`, `MoveToFolder`, `PickCopies`, `DeckTile`'s and `DecksPage`'s
- * delete confirmations, `CollectionPage`'s. Every one exists so that focus can be *put*
+ * **A `tabIndex={-1}` container is a landing pad, not a control.** Ten of them exist here —
+ * the dialog shell's panel, the deck editor's root, `AnchoredPopup`, `DeckBracket`,
+ * `ValidationPanel`, `MoveToFolder`, `PickCopies`, `DeckTile`'s and `DecksPage`'s delete
+ * confirmations, `CollectionPage`'s. It was eleven until the card *pane* was replaced by a
+ * modal; that modal is drawn by the dialog shell, so it needs no entry of its own — the first
+ * name on this list already covers it. Every one exists so that focus can be *put*
  * somewhere when a layer opens or a menu closes, instead of being dropped on `<body>` where the
  * next Tab starts the tab order over. A reader can never Tab to one and can never arrow onto
  * one; nothing inside them answers to the container's own keypresses. So an outline around one

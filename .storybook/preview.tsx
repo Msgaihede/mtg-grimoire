@@ -112,11 +112,16 @@ function FakeWorld({
  * not expose the initializer it was given, and the store's actions close over that one store's
  * `set`, so a second instance of it cannot be built from `.storybook/` — it would take an edit
  * to component source, which this branch does not have. So the store is reset per story on the
- * canvas and left alone on a docs page, and the story files that **write** it during render —
- * `AppShell`, `CardDetailPane`, `SearchPage`, `CollectionPage`, `AllPrintingsDialog` — carry
+ * canvas and left alone on a docs page, and the story files that **write** it during render carry
  * `docs.story.inline: false`, which gives each of their docs stories its own frame and with it
  * its own module graph. Most of the catalogue is isolated in-process instead, which is what
- * keeps it readable. The list is named rather than counted, for the reason two paragraphs down.
+ * keeps it readable.
+ *
+ * **Which files those are is a grep and not a list here**, and that is a correction: this
+ * paragraph named five of them and the naming rotted exactly the way the count below did —
+ * `CardDetailPane` was on it until the docked card surface was deleted on 2026-09-03, and by
+ * then the real set was more than twice as long. `grep -rl "useAppStore" src/ --include=*.stories.tsx`
+ * is the question; every answer needs the parameter.
  *
  * **There is no longer a count here, and its deletion is the fix rather than a gap.** This
  * paragraph used to carry "43 of the 51 story files still render inline" and it rotted three

@@ -4,13 +4,13 @@ import { shouldFlipUp } from "./shouldFlipUp";
 /**
  * The flip is arithmetic on purpose: jsdom lays nothing out, so every rectangle a component
  * test could read is zero and a test of a *rendered* anchored layer would pass over any
- * decision at all. Both callers clip — the card pane's printings scroller and, while it
- * existed, the deck editor's category column — and there is nothing under a clipped edge to
- * scroll to.
+ * decision at all. Both callers clipped — the deck editor's category column, and the card pane's
+ * printings scroller after it — and there is nothing under a clipped edge to scroll to.
  *
  * These cases came here from `ZoneColumn.test.tsx`, which the deck builder rebuild retired.
- * They are the only tests this module has, and it is still live: `PrintingPreview` places its
- * hover preview with it.
+ * They are the only tests this module has, and since 2026-09-03 they are the only thing that
+ * mounts it at all: `PrintingPreview` was deleted with the docked card pane. See the module's
+ * own doc for why it is kept.
  */
 describe("shouldFlipUp", () => {
   /** A row at the top of a scroller: the layer fits below it, so it opens where the reader is

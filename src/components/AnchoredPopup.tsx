@@ -86,8 +86,9 @@ export function AnchoredPopup({
     buttonRef.current?.focus();
   }, []);
 
-  // The innermost open layer: capture phase, and the press is consumed so the card detail pane
-  // underneath does not close on the same one. See `useDismissOnEscape` — and note that two
+  // The innermost open layer: capture phase, and the press is consumed so the layer underneath
+  // does not close on the same one — the card detail modal, when this popup is opened from its
+  // action row. See `useDismissOnEscape` — and note that two
   // "inner" peers are *not* ordered by it, so this and the set picker must never be open at
   // once. Each closes when focus leaves its own root, and opening either moves focus into it,
   // which closes the other on the way.
@@ -258,7 +259,7 @@ function Panel({
         // No focus outline: a landing pad, not a control — `tabIndex={-1}` only so the caret has
         // somewhere to go while the popup is open, and neither Tab nor an arrow reaches the
         // panel itself. Its trigger and its own contents keep theirs. `src/lib/focus.ts` has
-        // the rule and all eleven sites.
+        // the rule and all ten sites.
         panelClassName,
       )}
     >

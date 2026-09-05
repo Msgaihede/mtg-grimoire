@@ -190,7 +190,7 @@ export function ExportDialog({
       open={open}
       title={`Export "${subject}"`}
       closeLabel="Close export"
-      width="w-[40rem]"
+      size="w-[40rem]"
       onDismiss={onDismiss}
       onClose={onClose}
     >
