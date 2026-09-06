@@ -84,13 +84,27 @@ export const LAYER = {
   dragTray: "z-40",
   /**
    * A full-window layer a view opens over everything it owns: the deck editor's import,
-   * categories, labels, history, theory-difference, settings and export dialogs.
+   * categories, labels, history, theory-difference, settings and export dialogs, and the card
+   * detail modal.
    *
-   * **One rung for all of them, deliberately, where a rung apiece looks more careful.** They are
-   * held in one piece of state (`DeckEditor`'s `Layer` union), so **at most one is ever
-   * mounted** — there is no pair for a second number to order, and inventing one would be a
-   * claim about an overlap that cannot occur. If a layer ever has to open *over* one of these,
-   * that is the day the rung splits, and the split will have a real overlap to point at.
+   * **One rung for all of them, deliberately, where a rung apiece looks more careful.** Not one
+   * of them is ever opened *over* another: the editor's are held in one piece of state
+   * (`DeckEditor`'s `Layer` union), so at most one of those is ever mounted, and the card modal is
+   * opened from a card on a view rather than from a dialog. There is no pair **here** for a second
+   * number to order, and inventing one would be a claim about an overlap that cannot occur.
+   *
+   * **The day this doc promised arrived on 2026-09-03, and the split is
+   * {@link LAYER.overlayStacked}.** The sentence that stood here — "if a layer ever has to open
+   * *over* one of these, that is the day the rung splits, and the split will have a real overlap
+   * to point at" — is spent, and the overlap it asked for is the card detail modal's three nested
+   * surfaces: legality, oracle tags and card text, each opened from the modal's own options rail
+   * and each drawn **over** it. They are `App`-level siblings of the modal rather than children
+   * of its panel (the panel is a container-query context, and a layout-contained box is the
+   * containing block for its `fixed` descendants, so a scrim drawn inside it would stretch to the
+   * panel instead of the window) — which is exactly what puts them in the same stacking context
+   * as the thing they cover, with nothing but a number between them. Two `z-45` scrims, neither
+   * inside the other, would be resolved by document order, and the paragraph at the top of this
+   * file is the bug report for that.
    *
    * This used to argue from Escape as well — "because `useDismissOnEscape` orders exactly two
    * rungs and two `"inner"` peers open at once are not ordered at all" — and that clause is
@@ -119,18 +133,47 @@ export const LAYER = {
    */
   overlay: "z-45",
   /**
+   * A dialog opened **over another dialog** — the card detail modal's three nested surfaces
+   * (legality, oracle tags, card text), each opened from its options rail and drawn over it.
+   *
+   * **This is a claim about an overlap that really occurs**, which is the whole standard
+   * {@link LAYER.overlay} sets for splitting a rung: the modal is mounted and scrimmed, one of
+   * these opens on top of it, and both are `fixed inset-0` siblings under `App` in the root
+   * stacking context. Nothing is inside anything, so nothing but a number orders them — and
+   * equal numbers are resolved by document order, which is the failure this file opens with.
+   *
+   * **A surface that can be opened over a dialog *and* over a bare view belongs here, not one
+   * rung down.** A rung is a claim about the highest thing the surface can be asked to cover, so
+   * a modal reachable both from a card menu on a wall and from the card detail modal has to clear
+   * `overlay`; drawn at `overlay` it would tie with the modal it was opened from and win or lose
+   * on render order in `App.tsx`. `AllPrintingsDialog` is the one this sentence is written for.
+   *
+   * **One rung for all of them, for {@link LAYER.overlay}'s reason read one floor up**:
+   * `AppState.cardOverlay` is a single field, so at most one of the three is ever mounted, and
+   * they cannot overlap each other. A surface that could be open *beside* one of these rather
+   * than instead of it is the next split, and it would need a real overlap of its own to point
+   * at rather than this one's.
+   */
+  overlayStacked: "z-46",
+  /**
    * The app's one tooltip, over anything a view or a dialog draws.
    *
-   * **Above {@link LAYER.overlay} because a hint is shown over the deck editor's dialogs** — a
+   * **Above every dialog rung because a hint is shown over the deck editor's dialogs** — a
    * control inside a modal has as much to explain as one outside it, and a tooltip painted behind
    * the scrim would be a tooltip that never appears. Below {@link LAYER.gate} because
    * `SyncProgress` takes the window: a hint floating over it would describe a control the reader
    * cannot see or reach.
    *
+   * **It moved from `z-46` to `z-47` on 2026-09-03 rather than staying put while
+   * {@link LAYER.overlayStacked} was inserted below it**, and the reason is the one already
+   * written above: the argument names *a dialog*, so this has to clear the highest number a
+   * dialog is drawn at, whatever that number becomes. A control inside a nested overlay is a
+   * control inside a modal, and its hint is exactly the one the old number would have lost.
+   *
    * One rung and one panel — the provider holds at most one open tooltip, so there is no second
    * one for a number to order against.
    */
-  tooltip: "z-46",
+  tooltip: "z-47",
   /**
    * `SyncProgress`'s full-window takeover, over everything the *app* draws.
    *

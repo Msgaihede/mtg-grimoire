@@ -194,10 +194,11 @@ export function QuickAdd({
   /**
    * **Only while the list is actually up.** `enabled: listOpen` rather than `enabled: open` is
    * the whole of what keeps the app's Escape ladder working: with the caret in an empty quick
-   * add, a press belongs to the card detail pane, which listens on `window` in the bubble phase
-   * — and a capture-phase listener here would consume it first and close nothing at all.
+   * add, a press belongs to whatever layer is open over the desk — the card modal, or, with
+   * nothing open, the editor's own `"navigation"` floor, which closes the deck. A capture-phase
+   * listener here would consume it first and close nothing at all.
    * `DeckEditor.test.tsx` presses Escape from this very field and asserts the press reaches the
-   * window unconsumed.
+   * window.
    *
    * And it is one more `"inner"` peer on a screen that already carries several.
    * **No ordinal here on purpose**: `DeckEditor`'s `Layer` union is where that census is kept,

@@ -417,9 +417,10 @@ export const RestrictedMaxOne: Story = {
  * was meant to show.
  *
  * Closing this needs a corpus regeneration (`scripts/gen-storybook-cards.mjs`) that deliberately
- * picks up a duel-restricted printing — a change to a fixture **six other story files** read
- * (grepped 2026-08-09, re-checked after the deck rebuild retired `ZoneColumn`: `CardImage`,
- * `VirtualTable`, `PrintingPreview`, `CollectionSummary`, `CollectionTable` and `CardGrid`).
+ * picks up a duel-restricted printing — a change to a fixture many other files read. **The list
+ * is not written down here**, because it is a fact about a tree and it has already drifted twice
+ * (the deck rebuild retired `ZoneColumn`; `PrintingPreview` went with the docked card pane on
+ * 2026-09-03): `grep -rl "fake/cards" src/ .storybook/` is the answer.
  */
 export const RestrictedBannedAsCommander: Story = {
   args: {

@@ -22,11 +22,14 @@ const meta = {
         component:
           "One card's art in its 5:7 frame — the picture, its retry, and what is drawn when " +
           "there is no picture.\n\n" +
-          "**Extracted because five surfaces draw a card** and each had rebuilt part of this: " +
-          "the search wall's tiles, the pane's main art, the pane's printings rows, the deck " +
-          "editor's card views and `PrintingPreview`. They agreed on the aspect ratio and " +
+          "**Extracted because five surfaces drew a card** and each had rebuilt part of this: " +
+          "the search wall's tiles, the card pane's main art, the pane's printings rows, the " +
+          "deck editor's card views and `PrintingPreview`. They agreed on the aspect ratio and " +
           "disagreed about everything else, which is how a foil marking would otherwise have " +
-          "come to exist in five slightly different versions.\n\n" +
+          "come to exist in five slightly different versions. Two of those five went with the " +
+          "docked pane on 2026-09-03: its main art is `CardModalArt`'s now, and the printings " +
+          "rows became `AllPrintingsDialog`'s tile wall, which is a `CardGrid` and so draws " +
+          "this frame.\n\n" +
           "**The foil treatment says what the object *is*, never what it could have been.** " +
           "`soleFinish` (`src/lib/finish.ts`) marks only a printing that leaves no choice — " +
           "12,366 foil-only and 892 etched-only paper printings, measured 2026-08-11 over the " +

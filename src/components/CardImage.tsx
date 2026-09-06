@@ -23,8 +23,9 @@ import { IMAGE_STALL_LIMIT, imageStallDeadlineMs } from "@/lib/images";
  * The `key` is the whole component, and it has to be *inside* one: a rule that every call
  * site has to remember is a rule that four call sites will drift on, and the drift is
  * invisible — a stale frame looks exactly like a slow one until you know which card you were
- * looking at. `PrintingPreview` reached the same answer independently by keying its whole
- * `Preview` on the printing; this is that, for the frames that cannot remount themselves.
+ * looking at. `PrintingPreview` had reached the same answer independently, by keying its whole
+ * `Preview` on the printing — that file was deleted with the docked card pane on 2026-09-03, and
+ * this is what it was doing, for the frames that cannot remount themselves.
  *
  * **The second rule it carries: the picture never starts a drag of itself.** An `<img>` is
  * draggable by default and the browser picks the *nearest* draggable ancestor as a drag's
@@ -35,7 +36,7 @@ import { IMAGE_STALL_LIMIT, imageStallDeadlineMs } from "@/lib/images";
  *
  * **Here rather than at the seven call sites, because it went missing at two of them.**
  * `CardArt` and `CardStack` each passed it by hand with a copy of that paragraph; `DeckTile`'s
- * cover and `CardDetailPane`'s printing rows never did — so a deck tile could be dragged by
+ * cover and the docked pane's printing rows never did — so a deck tile could be dragged by
  * its name and not by its picture, which is what a reader reports as "drag and drop is
  * broken". A rule every caller has to remember is a rule some caller forgets, and the failure
  * is invisible: a dead drag looks exactly like a drag the reader aimed badly.
@@ -52,9 +53,10 @@ import { IMAGE_STALL_LIMIT, imageStallDeadlineMs } from "@/lib/images";
  * was written for; it was measured that the picture in one of them had been on disk, current,
  * for ten days, so nothing had failed and nothing had been slow.
  *
- * **Here rather than in `useImageRetry`, for this file's own recurring reason.** Two of the
- * frames that draw a card — `CardDetailPane`'s printing rows and `TheoryDiffDialog`'s — use
- * this component with no retry hook at all, so a watchdog in the hook would have missed them,
+ * **Here rather than in `useImageRetry`, for this file's own recurring reason.** Several of the
+ * frames that draw a card — `CardModalArt`'s open card, `TheoryDiffDialog`'s rows and
+ * `PullFromCollectionDialog`'s — use this component with no retry hook at all, so a watchdog in
+ * the hook would have missed them,
  * the way `draggable` went missing at two call sites above. This component is the one thing
  * every card picture in the app passes through, and it owns the `<img>` and its `key`, which
  * is the whole of what asking again requires.

@@ -407,11 +407,11 @@ export function deckCardName(
 }
 
 /**
- * What a card's own control spreads so the card pane can find it again.
+ * What a card's own control spreads so the printings modal can find it again.
  *
- * The pane is not in the deck's tree and owns none of its elements — and least of all this one,
+ * That modal is not in the deck's tree and owns none of its elements — and least of all this one,
  * whose whole story is that a printing swap replaces it: the card it was drawn from is deleted
- * and the new printing's card is a different React key, so a ref taken when the pane opened
+ * and the new printing's card is a different React key, so a ref taken when the modal opened
  * points at something unmounted by the time Escape is pressed. A slot is a question the DOM can
  * answer after the fact, and `dnd.ts` owns both ends of the spelling.
  *

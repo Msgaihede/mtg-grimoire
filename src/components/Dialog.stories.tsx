@@ -83,7 +83,7 @@ function Flank({ children, label }: { children: React.ReactNode; label: string }
  * Three things it guarantees to every host, all visible here. **Closed is nothing mounted** — see
  * {@link Closed}, where the body is an element React never puts in the tree, so its queries never
  * run. **The body owns its own scroller**, because the builder's dialogs do not agree about what
- * scrolls inside them — see {@link LongBody}. And **the width is written out whole** by the host
+ * scrolls inside them — see {@link LongBody}. And **the size is written out whole** by the host
  * (`w-[55rem]` here), because Tailwind scans source text and a class built by interpolation emits
  * no rule at all.
  */
@@ -95,7 +95,7 @@ const meta = {
     open: true,
     title: "Deck settings",
     closeLabel: "Close deck settings",
-    width: "w-[55rem]",
+    size: "w-[55rem]",
     onDismiss: fn(),
     onClose: fn(),
     children: <Body paragraphs={1} />,
@@ -154,14 +154,14 @@ export const LongBody: Story = {
   args: {
     title: "Categories & labels",
     closeLabel: "Close categories and labels",
-    width: "w-[48rem]",
+    size: "w-[48rem]",
     children: <Body paragraphs={24} />,
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const dialog = await canvas.findByRole("dialog", { name: "Categories & labels" });
 
-    // The width is the host's, verbatim; `max-w-full` is the shell's, so a panel wider than the
+    // The size is the host's, verbatim; `max-w-full` is the shell's, so a panel wider than the
     // window still fits inside it.
     await expect(dialog).toHaveClass("w-[48rem]");
     await expect(dialog).toHaveClass("max-w-full");
@@ -244,7 +244,7 @@ export const Flanked: Story = {
   args: {
     title: "Sol Ring",
     closeLabel: "Close printings",
-    width: "w-[72rem]",
+    size: "w-[72rem]",
     flanks: {
       left: (
         <Flank label="Previous card in the deck, Lightning Bolt">

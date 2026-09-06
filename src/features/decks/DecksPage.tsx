@@ -1371,7 +1371,9 @@ function DeleteFolderConfirm({
         "absolute right-0 top-9 w-72 rounded-lg border border-border bg-bg/95 p-2",
         "text-xs shadow-lg",
         LAYER.popup,
-        FOCUS,
+        // No focus outline: a landing pad, not a control — `tabIndex={-1}` only so the caret has
+        // somewhere to go while the confirmation is open, and neither Tab nor an arrow reaches
+        // it. Its two buttons keep theirs. `src/lib/focus.ts` has the rule.
       )}
       onBlur={(e) => {
         if (pending) return;

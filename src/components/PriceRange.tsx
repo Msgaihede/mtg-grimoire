@@ -193,8 +193,15 @@ export function PriceRange({
     // The focus ring goes on the thumb rather than on the input, which is a full-width box with
     // no edges a reader could make sense of. Same shape as the row's `FILTER_FOCUS`: an outline
     // standing off the control, so focus and on are told apart by shape and not by hue.
-    "[&:focus-visible::-webkit-slider-thumb]:outline-2 [&:focus-visible::-webkit-slider-thumb]:outline-offset-2",
-    "[&:focus-visible::-webkit-slider-thumb]:outline-accent focus-visible:outline-none",
+    //
+    // **`focus-thumb:` rather than the arbitrary variant this was written with.** Spelled by
+    // hand, inside square brackets, the pseudo-class is a string the *component* wrote — not the
+    // variant Tailwind owns — so the redefinition in `src/index.css` never rewrote it. This one
+    // control would have gone on drawing its ring for a keystroke that moved no focus, while
+    // every other focus outline in the app correctly stopped. `keyboardModality.test.ts` sweeps
+    // for the shape, which is why the words above describe it instead of quoting it.
+    "focus-thumb:outline-2 focus-thumb:outline-offset-2 focus-thumb:outline-accent",
+    "focus-visible:outline-none",
   );
 
   return (

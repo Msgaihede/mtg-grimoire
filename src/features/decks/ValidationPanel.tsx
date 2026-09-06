@@ -381,7 +381,9 @@ function Findings({
         // formats is sixty findings, and a layer taller than the window has no way back to its
         // own chip.
         "max-h-[60vh] overflow-y-auto",
-        FOCUS,
+        // No focus outline: a landing pad, not a control — `tabIndex={-1}` only so the caret has
+        // somewhere to go while the panel is open, and neither Tab nor an arrow reaches it. The
+        // chip it was opened from is what wears the mark. `src/lib/focus.ts` has the rule.
       )}
     >
       {issues.length === 0 ? (

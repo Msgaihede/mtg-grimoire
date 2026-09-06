@@ -73,7 +73,7 @@ function largeCard(name: string): { oracleId: string; name: string } {
  * whichever object that row plays. Looking the trio up through the deck card itself is also the
  * honest staging — it is exactly the row a reader would have right-clicked to open this modal.
  *
- * `CardDetailPane.stories.tsx` carries the same helper. Neither can export it: every non-default
+ * `CardDetailModal.stories.tsx` carries the same helper. Neither can export it: every non-default
  * export of a CSF file is indexed as a *story*, and `.storybook/fake/fixtures.ts` is where a
  * shared one would go — see that file's header for the whole of that argument.
  */
@@ -221,7 +221,7 @@ function truncatedPage(oracleId: string, total: number): PrintingsResponse {
  * deck ones draw the actual row the swap rewrites, read back through `useDeck` from the same
  * `deck_get` the modal's own `useSwapFromPane` mounted.
  *
- * **`useState`'s lazy initializer rather than an effect**, which is `CardDetailPane.stories.tsx`'
+ * **`useState`'s lazy initializer rather than an effect**, which is `CardDetailModal.stories.tsx`'s
  * answer and for its reason: an effect runs after the first paint, so the modal would render one
  * frame closed — and {@link Truncated}'s seeded answer would land one frame after the query that
  * was supposed to find it, which is a refetch rather than a fixture.
@@ -364,8 +364,8 @@ const meta = {
        * read. And every story here writes `useAppStore` during render — the one global
        * `.storybook/` cannot make per-story — so inline, the last story to render would own
        * `printingsRequest` for all of them and each heading would sit over the same card. One
-       * parameter, two problems; `DeckSettingsDialog` has the first alone and `CardDetailPane` the
-       * second.
+       * parameter, two problems; `DeckSettingsDialog` has the first alone and
+       * `CardDetailModal.stories.tsx` the second.
        *
        * The height is the frame's, not a minimum: `inline: false` makes `height` the iframe's
        * actual height, so it is this file's own decorator box plus room for the chrome around it.
@@ -379,19 +379,21 @@ const meta = {
           "destinations and both moved the reader: outside the deck editor one `set` wrote " +
           '`activeView: "search"` and cleared the open card *and* the open deck, so asking ' +
           "which printings a card had closed the deck it was being asked about; inside the " +
-          "editor it opened the 384px card pane, which is the right content at the wrong width. " +
+          "editor it opened the 384px docked card pane, which was the right content at the " +
+          "wrong width. " +
           "Printings are *consulted*, like deck history and categories, so this is a " +
           "`Dialog` like both of them and the store field behind it writes one thing.\n\n" +
           "**What a press means is decided by one field.** With a deck slot the press **is** the " +
-          "swap — `deck_swap_printing`, through the same `useSwapFromPane` the card pane presses " +
-          "— and the modal closes on success ({@link FromADeckRow}) or stays open and says why " +
-          "({@link RefusedSwap}). Without one it opens the card pane on the printing that was " +
-          "pressed, which is the *go and look at this one* a reader who is not building a deck " +
-          "asked for.\n\n" +
+          "swap — `deck_swap_printing`, through `useSwapFromPane`, named for the docked pane " +
+          "that used to press it and this file's since that pane was deleted — and the modal " +
+          "closes on success ({@link FromADeckRow}) or stays open and says why " +
+          "({@link RefusedSwap}). Without one it opens the card detail modal on the printing " +
+          "that was pressed, which is the *go and look at this one* a reader who is not " +
+          "building a deck asked for.\n\n" +
           "**The filters are TypeScript's and the wall is `CardGrid`'s.** `printingFilters.ts` " +
           "decides what survives the text box, the set and language pickers and the treatment " +
-          "chips; the sort control is the **card pane's persisted `PrintingGroupBy`**, shared " +
-          "with it through `app_meta`, and it is labelled *Sort* rather than *Group by* because " +
+          "chips; the sort control is a **persisted `PrintingGroupBy`**, an `app_meta` row that " +
+          "outlives the modal, and it is labelled *Sort* rather than *Group by* because " +
           "this wall draws no headings — `CardGrid` positions rows absolutely inside a " +
           "virtualiser, so a heading cannot be interleaved without this surface owning the " +
           "virtualisation.\n\n" +

@@ -72,8 +72,8 @@ export interface PaneDeckContext {
    * answer.
    *
    * Written by whichever surface opened the card, because that surface is the one that knows
-   * which list it is drawing; read at `CardDetailPane`'s `useSwapFromPane` call, which is the
-   * only place the swap is pressed.
+   * which list it is drawing; read at `AllPrintingsDialog`'s `useSwapFromPane` call, which is the
+   * only place the swap is pressed (it was the docked pane's until 2026-09-03).
    */
   variant: DeckVariant;
   /**
@@ -690,6 +690,34 @@ interface AppState {
   /** Close it. */
   closeAllPrintings: () => void;
   /**
+   * Which overlay the card detail modal has open **over itself**, or `null` for none.
+   *
+   * **One field, so at most one is ever open** — the same shape {@link printingsRequest} uses one
+   * line up, and it is load-bearing twice over. All three are opened from one options rail on one
+   * modal, so a reader is asking exactly one of these questions at a time and a field apiece
+   * would only be somewhere for two of them to disagree; and `LAYER.overlayStacked` is one rung
+   * for the three *because* of it — a rung is only allowed to serve surfaces that cannot overlap
+   * each other, which this field is what guarantees.
+   *
+   * **It carries nothing but which one**, unlike `printingsRequest`, which carries a question:
+   * that one names the printing the reader asked *from* and the row a press would rewrite, and it
+   * is opened from card menus all over the app rather than from this modal alone. These three are
+   * read-only surfaces about {@link selectedCardId} and there is nothing else for them to say —
+   * so the printings modal keeps its own field rather than becoming a fourth value here.
+   *
+   * **It goes with the card, and every writer that changes which card is open clears it.** An
+   * overlay outliving the card under it is a legality grid for a card nobody has open, or — worse,
+   * because it looks right — a grid that silently re-answers about whichever card the store
+   * moved on to. That is structural here for {@link setSelectedCardId}'s reason one field over:
+   * the clear lives in each `set` rather than in the surfaces, so it is true by construction
+   * instead of by five call sites remembering.
+   */
+  cardOverlay: CardOverlay | null;
+  /** Open one over the card modal. Writes one field — see {@link cardOverlay} for why. */
+  openCardOverlay: (overlay: CardOverlay) => void;
+  /** Close it. */
+  closeCardOverlay: () => void;
+  /**
    * **The list the reader is standing in**, in the order it is drawn — the open deck's cards,
    * the search results, the collection, the wishlist — or an empty walk when whatever is on
    * screen has no list of cards on it.
@@ -754,6 +782,20 @@ interface AppState {
   importDefaults: { condition: Condition; finish: DeckFinish };
   setImportDefaults: (defaults: { condition: Condition; finish: DeckFinish }) => void;
 }
+
+/**
+ * Which surface the card detail modal has open over itself — see {@link AppState.cardOverlay},
+ * the only field of this type and where the single-field design is argued.
+ *
+ * A union of three names rather than three booleans, which is the same statement the field makes
+ * about there being at most one: three flags can all be true at once and one of them would then
+ * have to be declared the winner somewhere, by a reader rather than by the type.
+ *
+ * **The printings modal is deliberately not a fourth name** — it carries a question
+ * ({@link PrintingsRequest}) and is opened from card menus that have nothing to do with this
+ * modal, so it keeps the field it already has.
+ */
+export type CardOverlay = "legality" | "oracleTags" | "cardText";
 
 /**
  * The question the printings modal is open on — see {@link AppState.printingsRequest}, which is
@@ -883,6 +925,10 @@ export const useAppStore = create<AppState>((set) => ({
       return {
         activeView,
         selectedCardId: null,
+        // And whatever the card modal had open over itself. It is a question *about* the card on
+        // the line above, so it cannot outlive it — a legality grid left standing over an empty
+        // Settings page would be a popup with no card behind it and no modal to close back to.
+        cardOverlay: null,
         cardSelection: null,
         paneDeckContext: null,
         paneFromDeckSearch: false,
@@ -1072,8 +1118,20 @@ export const useAppStore = create<AppState>((set) => ({
   // **And which finish the last card was opened as**, for the identical reason one field along:
   // a search tile, a wishlist row and the pane's own close each open something no surface has
   // named a finish for, and `openCardAsFinish` is the one that does.
+  //
+  // **And whatever the modal had open over itself**, which covers both halves of this setter at
+  // once: `null` is the modal closing, and any other id is a *different* card — and the three
+  // overlays read `selectedCardId` themselves, so one left open across a card change would not
+  // close, it would quietly re-answer about the new card. Every other opener below clears it in
+  // its own `set` for the same reason.
   setSelectedCardId: (selectedCardId) =>
-    set({ selectedCardId, paneDeckContext: null, paneFromDeckSearch: false, paneFinish: null }),
+    set({
+      selectedCardId,
+      cardOverlay: null,
+      paneDeckContext: null,
+      paneFromDeckSearch: false,
+      paneFinish: null,
+    }),
   cardSelection: null,
   // A press in a scope the held set does not name starts a new set rather than adding to one the
   // reader made on another surface — see the field's doc for why that is the whole scoping rule.
@@ -1088,6 +1146,8 @@ export const useAppStore = create<AppState>((set) => ({
     set({
       selectedCardId: paneDeckContext.cardId,
       paneDeckContext,
+      // A different card is a different question — see `setSelectedCardId`.
+      cardOverlay: null,
       // The two openers exclude each other in one `set` apiece, which is what makes "the pane
       // came from one side" a fact about one write rather than an agreement between two.
       paneFromDeckSearch: false,
@@ -1097,11 +1157,29 @@ export const useAppStore = create<AppState>((set) => ({
     }),
   paneFromDeckSearch: false,
   openCardFromDeckSearch: (selectedCardId, paneFinish = null) =>
-    set({ selectedCardId, paneDeckContext: null, paneFromDeckSearch: true, paneFinish }),
+    set({
+      selectedCardId,
+      cardOverlay: null,
+      paneDeckContext: null,
+      paneFromDeckSearch: true,
+      paneFinish,
+    }),
   paneFinish: null,
   openCardAsFinish: (selectedCardId, paneFinish) =>
-    set({ selectedCardId, paneFinish, paneDeckContext: null, paneFromDeckSearch: false }),
+    set({
+      selectedCardId,
+      paneFinish,
+      cardOverlay: null,
+      paneDeckContext: null,
+      paneFromDeckSearch: false,
+    }),
   // Deliberately not touching `paneDeckContext` or `paneFinish` — see the interface doc.
+  //
+  // **Nor `cardOverlay`**, which is the one opener that leaves it alone and is worth saying out
+  // loud beside the four that clear it: this verb means "another printing of the card that is
+  // already open", and all three overlays are about the *card* rather than the printing — a
+  // legality table, an oracle-tag list and an oracle text are the same answer for every printing
+  // of one card. Clearing here would shut a popup for a change it does not see.
   viewPrinting: (selectedCardId) => set({ selectedCardId }),
   // Decks opens on the gallery: a deck is something the reader picks, and reopening the last
   // one would be a decision made for them by the previous session.
@@ -1139,6 +1217,12 @@ export const useAppStore = create<AppState>((set) => ({
   // here has an opinion about the view, the open card or the open deck behind it.
   openAllPrintings: (printingsRequest) => set({ printingsRequest }),
   closeAllPrintings: () => set({ printingsRequest: null }),
+  cardOverlay: null,
+  // One field, exactly like the pair above and for the same reason — see the interface. Nothing
+  // here has an opinion about the open card: this write says *which question*, and the card it is
+  // a question about is `selectedCardId`, which every opener already owns.
+  openCardOverlay: (cardOverlay) => set({ cardOverlay }),
+  closeCardOverlay: () => set({ cardOverlay: null }),
   // No walk until a surface with a list of cards on it publishes one, and back to this the
   // moment that surface unmounts.
   cardWalk: NO_WALK,

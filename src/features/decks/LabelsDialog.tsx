@@ -116,7 +116,7 @@ export function LabelsDialog({
       title="Labels"
       subtitle={LABELS_SUBTITLE}
       closeLabel="Close labels"
-      width="w-[36rem]"
+      size="w-[36rem]"
       onDismiss={onDismiss}
       onClose={onClose}
     >

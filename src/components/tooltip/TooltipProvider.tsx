@@ -131,9 +131,10 @@ export function TooltipProvider({ children }: { children: ReactNode }) {
           timers.current.openFor = null;
           // The anchor can leave the DOM during the delay — a filter chip the reader's next
           // keystroke removes, a deck tile a mutation deletes — and there is nothing to arm the
-          // tooltip *for* any more. `PrintingPreview`'s dwell timer takes the same guard for the
-          // same reason: measuring a detached node answers all zeros, and a hint that opens at
-          // the window's corner attached to nothing is worse than one that never opens.
+          // tooltip *for* any more. The docked pane's `PrintingPreview` took the same guard on
+          // its own dwell timer for the same reason, until it was deleted on 2026-09-03:
+          // measuring a detached node answers all zeros, and a hint that opens at the window's
+          // corner attached to nothing is worse than one that never opens.
           if (!anchor.isConnected) return;
           show(anchor, content, options);
         }, TOOLTIP_OPEN_MS);

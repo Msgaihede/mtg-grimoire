@@ -757,7 +757,7 @@ export function CardStack({
  *
  * Not `CardArt`, which is the 5:7 box with its own no-art fallback and retry: the height here is
  * a constant the stack's arithmetic depends on, and the fallback has to fill exactly it. It
- * borrows `FoilOverlay`'s sheen, which is the same trade the card detail pane's main art makes
+ * borrows `FoilOverlay`'s sheen, which is the same trade `CardModalArt`'s main art makes
  * and for the same reason — what the surfaces must agree on is the marking — and says the
  * *word* on the data line rather than in a chip, which is `FoilOverlay`'s own rule for a
  * surface with room for it.

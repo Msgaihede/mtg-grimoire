@@ -638,7 +638,9 @@ function DeleteConfirm({
         "absolute inset-x-0 top-8 rounded-lg border border-border bg-bg/95 p-2",
         "text-xs shadow-lg",
         LAYER.popup,
-        FOCUS,
+        // No focus outline: a landing pad, not a control — `tabIndex={-1}` only so the caret has
+        // somewhere to go while the confirmation is open, and neither Tab nor an arrow reaches
+        // it. Its two buttons keep theirs. `src/lib/focus.ts` has the rule.
       )}
       // Clicking or tabbing away is an answer too, and it is the safe one — `onClose`, not
       // `onCancel`: the reader is already somewhere else, and yanking the caret back to the

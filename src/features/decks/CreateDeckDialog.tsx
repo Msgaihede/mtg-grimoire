@@ -208,7 +208,7 @@ export function CreateDeckDialog({
       open={open}
       title="New deck"
       closeLabel="Close"
-      width="w-[55rem]"
+      size="w-[55rem]"
       onDismiss={onDismiss}
       onClose={onClose}
     >

@@ -32,10 +32,10 @@ const meta = {
           "card. Every card frame in this app belongs to a *slot* rather than to a card, so " +
           "React hands the same element a different printing and a bare `<img>` would keep " +
           "the previous card's art under the new card's name for the length of the fetch. " +
-          'There are five call sites, and **three of the five pass `alt=""`**: ' +
-          "`PrintingPreview`'s hover preview, `DecksPage`'s cover tile and the deck views' " +
-          "card art. The two that name the card are `CardGrid`'s tile and " +
-          "`CardDetailPane`'s open card. Which is why `alt` is required rather than " +
+          '**Most call sites pass `alt=""`**: the deck views\' card art, the two cover ' +
+          "pickers, `DecksPage`'s tile and `TheoryDiffDialog`'s rows. Only two name the " +
+          "card — `CardArt`'s frame, which is what every wall of tiles draws through, and " +
+          "`CardModalArt`'s open card. Which is why `alt` is required rather than " +
           "optional — “decorative” has to be a decision someone made rather than a prop " +
           "someone forgot.",
       },
@@ -173,9 +173,9 @@ export const SwapCard: Story = {
  * returns off Windows, and nothing outside the Tauri window registers that scheme — so in a
  * Storybook page there is nothing on the other end of it.
  *
- * `CardImage` draws no fallback of its own, deliberately — the five surfaces that draw card art
+ * `CardImage` draws no fallback of its own, deliberately — the surfaces that draw card art
  * disagree about what a missing picture should look like and each supplies its own
- * (`CardDetailPane`, for one, swaps in a panel reading "No image yet"). This story is the raw
+ * (`CardModalArt`, for one, swaps in a panel reading "No image yet"). This story is the raw
  * component, so what shows is whatever the browser draws for a broken image, plus the `alt`.
  */
 export const FailedLoad: Story = {

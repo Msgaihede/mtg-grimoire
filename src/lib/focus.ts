@@ -36,3 +36,36 @@ export const FOCUS =
  */
 export const FOCUS_INSET =
   "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent";
+
+/* ## Who these are for, and who they are not for
+ *
+ * Both constants above are gated on `data-kbd` — `src/index.css` redefines Tailwind's
+ * `focus-visible` variant to require it, and `src/lib/keyboardModality.ts` is what sets it. So
+ * neither draws anything for a reader who is using the mouse, and neither draws anything for a
+ * keystroke that moved no focus. That is the *when*.
+ *
+ * The *what* is a separate question, and it has a separate answer: *some elements should carry
+ * no focus outline at all, in any modality.*
+ *
+ * **A `tabIndex={-1}` container is a landing pad, not a control.** Ten of them exist here —
+ * the dialog shell's panel, the deck editor's root, `AnchoredPopup`, `DeckBracket`,
+ * `ValidationPanel`, `MoveToFolder`, `PickCopies`, `DeckTile`'s and `DecksPage`'s delete
+ * confirmations, `CollectionPage`'s. It was eleven until the card *pane* was replaced by a
+ * modal; that modal is drawn by the dialog shell, so it needs no entry of its own — the first
+ * name on this list already covers it. Every one exists so that focus can be *put*
+ * somewhere when a layer opens or a menu closes, instead of being dropped on `<body>` where the
+ * next Tab starts the tab order over. A reader can never Tab to one and can never arrow onto
+ * one; nothing inside them answers to the container's own keypresses. So an outline around one
+ * communicates no state — there is no "you are here" to draw, because nobody navigated here —
+ * and what it looks like instead is the whole modal, or the whole editor, ringed in gold.
+ * Removed 2026-09-03.
+ *
+ * **The line is drawn at "can the caret move *from* here", not at `tabIndex`.** A deck pile's
+ * section (`deckGroupProps`) and a printings row are `tabIndex={-1}` too and they keep their
+ * marks, because the caret landing on one is a fact the *next* keypress depends on. A menu row,
+ * a table row, a card in a wall and a grid tile are all likewise roving targets and all keep
+ * theirs; stripping those would be the WCAG 2.4.7 failure {@link FOCUS_INSET} warns about, one
+ * step removed. If a container ever grows a keyboard interaction of its own, it stops being a
+ * landing pad and this note stops applying to it.
+ */
+

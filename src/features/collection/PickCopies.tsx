@@ -214,7 +214,10 @@ export function PickCopies({
       // A press in here is a press on a control, never the start of a drag of whatever this panel
       // was opened over — `MoveToFolder`'s mark, for its reason.
       data-no-drag=""
-      className={cn("w-full space-y-3 p-1", FOCUS)}
+      // No `FOCUS`: a landing pad, not a control — the `tabIndex` above is there only so the
+      // caret has somewhere to go, and neither Tab nor an arrow reaches this box. The controls
+      // it groups keep theirs. `src/lib/focus.ts` has the rule.
+      className={cn("w-full space-y-3 p-1")}
     >
       <div className="space-y-1">
         <p id={titleId} className="text-sm leading-snug">

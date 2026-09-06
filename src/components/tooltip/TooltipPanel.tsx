@@ -16,7 +16,9 @@ export const TOOLTIP_PANEL_ID = "app-tooltip";
  * that would otherwise clip it. A virtualised row is `position: absolute` *and* transformed, so it
  * caps every `z-index` inside it and becomes the containing block for every `fixed` descendant;
  * an `overflow-hidden` scroller cuts off anything anchored within it. A panel whose DOM node is
- * outside both needs neither a raised number nor `PrintingPreview`'s scroll-offset arithmetic.
+ * outside both needs neither a raised number nor the scroll-offset arithmetic a panel anchored
+ * *inside* a scroller is forced into — which is what the docked pane's `PrintingPreview` did,
+ * until it was deleted with that pane on 2026-09-03.
  */
 export function TooltipPanel({
   open,

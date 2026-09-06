@@ -403,7 +403,9 @@ function Advisory({
         // findings list and arrived here with the combos: a cEDH deck can match dozens of them,
         // and a layer taller than the window has no way back to its own button.
         "max-h-[60vh] overflow-y-auto",
-        FOCUS,
+        // No focus outline: a landing pad, not a control — `tabIndex={-1}` only so the caret has
+        // somewhere to go while the panel is open, and neither Tab nor an arrow reaches it. The
+        // button it was opened from is what wears the mark. `src/lib/focus.ts` has the rule.
       )}
     >
       {/* **The mismatch leads**, above the reading it is about. It is the one thing in this
