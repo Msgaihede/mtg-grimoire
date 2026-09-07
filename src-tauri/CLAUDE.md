@@ -116,7 +116,7 @@ both plus the frontend.
   every upgraded one, and a fresh worktree is a fresh install, so nothing else here can see it.
   The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
-  numbers from there (`USER_SCHEMA_VERSION` **35** since a condition learned to say nothing,
+  numbers from there (`USER_SCHEMA_VERSION` **36** since the theory mark grew a second tier,
   `CORPUS_SCHEMA_VERSION` 1, deliberately
   incomparable). This line read **v25** while that was head, and
   [the ladder's history](../docs/reference/data-and-sync.md) is the story. (This line read
@@ -139,7 +139,15 @@ both plus the frontend.
   free number when you land, never reuse one, and never assume the number you wrote is the one
   you ship. v35 widens `collection_entries.condition` to a sixth value, `NONE` — *not set* — and
   makes it the column's `DEFAULT`, for
-  [issue #361](https://github.com/Msgaihede/mtg-grimoire/issues/361).)
+  [issue #361](https://github.com/Msgaihede/mtg-grimoire/issues/361). **v35 and v36 then landed
+  the same day from two branches as well**, which is the third time this list has recorded that
+  and the second in a week: v36 adds `decks.theory_mark_exact` and `decks.theory_mark_name`,
+  `NOT NULL DEFAULT 1` both, and **it was written as 35 and renumbered at the merge** — the
+  number belongs to whoever lands first, and the sixth grade landed first. Which of the theory
+  mark's two tiers a deck draws is an answer *about the deck*, so both columns are on
+  `capture::TABLES`' `decks` spec beside `bracket`; **that spec spells its field list by hand and
+  has no fence in the other direction**, so a column added to a synced table and not to it is
+  captured by nothing and goes red nowhere.)
 - **v35 is the user ladder's third table rebuild, and a CHECK is why.** SQLite cannot alter one,
   so widening the grade list means building `collection_entries_v35`, copying every column
   **including `id`**, dropping, renaming and replaying all five indexes as frozen literals — the
