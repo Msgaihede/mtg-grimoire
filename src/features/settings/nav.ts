@@ -3,7 +3,7 @@
  *
  * The page was one scroll of twelve panels until 2026-09-03 — ordered by what a press costs,
  * which is a real rule and still the rule *inside* a group, but an ordering only helps somebody
- * who already knows what they are scrolling towards. This module is the other half: six groups
+ * who already knows what they are scrolling towards. This module is the other half: seven groups
  * a reader picks from, and a keyword per panel so that typing the word they actually have in
  * mind ("dropbox", "tcgplayer", "patreon") lands on the panel that answers it.
  *
@@ -17,9 +17,11 @@
  * Every panel Settings can draw, as a closed union.
  *
  * **Closed on purpose, and it is the only fence available on this side.** {@link PANELS} is a
- * total `Record` over it, so a twelfth panel that reaches the page without a title, a group and
+ * total `Record` over it, so a further panel that reaches the page without a title, a group and
  * a keyword line is a compile error rather than a section that silently belongs to no group and
  * can be found by nothing. `ReviewPanel`'s `TABLE_LABEL` is the same shape for the same reason.
+ * (Written without a count: the number of panels is a fact a build already answers, and every
+ * prose figure in this file has drifted at least once.)
  *
  * The ids are the panels' own `SettingsSection` stems, character for character, so the heading
  * id in the shipped window and the entry here cannot come apart.
@@ -31,6 +33,8 @@ export type PanelId =
   | "sync"
   | "review"
   | "hidden-tags"
+  | "theory-marks"
+  | "labels"
   | "data-folder"
   | "backup"
   | "cache"
@@ -38,8 +42,15 @@ export type PanelId =
   | "errors"
   | "danger";
 
-/** The six entries in the rail. */
-export type GroupId = "updates" | "carddata" | "sync" | "tags" | "storage" | "errors";
+/** The seven entries in the rail. */
+export type GroupId =
+  | "updates"
+  | "carddata"
+  | "sync"
+  | "tags"
+  | "appearance"
+  | "storage"
+  | "errors";
 
 /** What the rail's badge counts, where a group has one. */
 export type BadgeId = "review" | "errors";
@@ -106,6 +117,38 @@ export const PANELS: Record<PanelId, PanelMeta> = {
     group: "tags",
     keywords: "show again unhide scryfall tagger oracle illustration art mute",
   },
+  /**
+   * **Under `Appearance`, and under `Tags` over this repo's dead body.**
+   *
+   * A *tag* in this app is one of Scryfall's two tagger datasets and nothing else; the coloured
+   * per-card mark a reader puts on a deck card is a **label**, which is a third thing again from
+   * the collection's free-text `tags` column. Filing the label list beside `Hidden tags` would
+   * put both words on one rail entry and teach a reader that they mean the same thing — the one
+   * confusion the whole vocabulary rule exists to prevent, arriving in the one place where the
+   * app names its own parts.
+   *
+   * So the group is the *other* question these two answer together: what the reader's own marks
+   * look like. The theory tick's two colours and the labels' are the same decision made twice,
+   * and neither is about what a card is filed under.
+   *
+   * **Colour words lead the line, and both spellings are in it.** A reader hunting for the green
+   * tick types "green" or "colour"; nobody types "theory", which is this codebase's word for it.
+   * `matches` splits the query on whitespace and every word has to land, so `customise` and
+   * `customize` are two entries rather than a stem — a British reader and an American one must
+   * not get different answers.
+   */
+  "theory-marks": {
+    title: "Theory marks",
+    group: "appearance",
+    keywords:
+      "colour color green blue tick checkmark check match plan printing deck mark customise " +
+      "customize theory",
+  },
+  labels: {
+    title: "Labels",
+    group: "appearance",
+    keywords: "colour color rename recolour delete swatch dot cut candidate deck card",
+  },
   "data-folder": {
     title: "Data folder",
     group: "storage",
@@ -149,11 +192,17 @@ type GroupMeta = {
 /**
  * The rail, top to bottom.
  *
- * **Six entries and not twelve**, which is the whole point: a list as long as the page it
+ * **Seven entries and not fourteen**, which is the whole point: a list as long as the page it
  * indexes is a second scroll rather than a way through the first. Where two panels answer one
  * question they share an entry — `Prices` and `Combos` are both optional bulk feeds of card
- * facts, and `Needs review` is what sync asks of a reader — and where a panel is the only
- * answer to its own question it gets an entry to itself.
+ * facts, `Needs review` is what sync asks of a reader, and `Appearance`'s two are the reader's
+ * own marks recoloured — and where a panel is the only answer to its own question it gets an
+ * entry to itself.
+ *
+ * **`Appearance` sits after `Tags` and before `Storage and data`**, which is the last entry
+ * about the app itself before the three about the folder on disk. It is emphatically not a
+ * section *of* `Tags`: see the comment on `theory-marks` in {@link PANELS} for the vocabulary
+ * rule that decides it.
  *
  * **`Clear data` has no entry of its own and sits at the foot of `Storage and data`.** The
  * three clears empty the part of the app the data folder holds, so that is the question they
@@ -166,6 +215,7 @@ export const GROUPS: Record<GroupId, GroupMeta> = {
   carddata: { label: "Card data" },
   sync: { label: "Sync", badge: "review" },
   tags: { label: "Tags" },
+  appearance: { label: "Appearance" },
   storage: { label: "Storage and data" },
   errors: { label: "Errors", badge: "errors" },
 };

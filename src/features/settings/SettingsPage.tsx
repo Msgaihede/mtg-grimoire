@@ -10,6 +10,7 @@ import { MarketplacePanel } from "@/features/settings/MarketplacePanel";
 import { ReviewPanel } from "@/features/settings/ReviewPanel";
 import { SettingsNav } from "@/features/settings/SettingsNav";
 import { SyncPanel } from "@/features/settings/SyncPanel";
+import { TheoryMarksPanel } from "@/features/settings/TheoryMarksPanel";
 import { UpdatePanel } from "@/features/settings/UpdatePanel";
 import { WebStoragePanel, useWebStorage } from "@/features/settings/WebStoragePanel";
 import { visiblePanels, type BadgeId, type GroupId, type PanelId } from "@/features/settings/nav";
@@ -51,7 +52,7 @@ export function imageFailureLine(failures: number | undefined): string {
 /**
  * Settings.
  *
- * **A rail of six entries and a pane, since 2026-09-03.** This page was one scroll of twelve
+ * **A rail of seven entries and a pane, since 2026-09-03.** This page was one scroll of twelve
  * panels until then, and the scroll's own rule — *ordered by what a press costs* — is still the
  * rule, but it survives **inside a group** rather than down the length of the page. An ordering
  * only helps a reader who already knows what they are scrolling towards; a rail is what tells
@@ -296,6 +297,17 @@ export function SettingsPage({ update }: { update: Update }) {
             that sent them here, which is shorter than any scroll could be. Worth keeping because
             it is the reason this panel exists at all. */}
         {shown("hidden-tags") && <HiddenTagsPanel hidden={hidden} />}
+
+        {/* **First in `Appearance`, and that group is not a section of `Tags`** — the argument is
+            `nav.ts`'s and it is a vocabulary one: a *tag* here is one of Scryfall's two tagger
+            datasets, and the coloured mark a reader puts on a deck card is a *label*. Putting the
+            two words on one rail entry would teach a reader they mean the same thing.
+
+            It reaches the backend itself, which is `BackupPanel`'s rule and its reason exactly:
+            `useMarkColors` is one TanStack entry with `staleTime: Infinity` that `AppShell`
+            already holds for `useMarkColorVars`, so a hook here would be a second reader of one
+            cached answer rather than a second channel — and threading it down would buy a prop. */}
+        {shown("theory-marks") && <TheoryMarksPanel />}
 
         {/* **The two facts that reached the reader at exactly one place each, and that place was a
             hover tooltip** on the ribbon's status line — `Ribbon.tsx:96` names the folder and
