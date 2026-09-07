@@ -5,7 +5,14 @@
  * `availableFields` reads to decide a checkbox does not exist: a deck has no condition, so a
  * deck's rows carry `condition: null` and the Condition box never draws — rather than drawing
  * over a column of blanks.
+ *
+ * **{@link TransferCard.condition} is the one field where a `null` can now mean either**, and it
+ * costs nothing because the two never meet: a deck's rows are `null` for the first reason, a
+ * not-set collection row is `null` for the second, and *which* surface a card came off is what
+ * `SURFACE_FIELDS` decides the checkbox from. So the column still draws for a collection whose
+ * every row is ungraded, and every writer already spells the value `c.condition ?? ""`.
  */
+import { CONDITION_NOT_SET } from "@/lib/conditions";
 import type { CategoryKind, CollectionRow, DeckCard, DeckFinish, WishRow } from "@/lib/ipc";
 
 export interface TransferCard {
@@ -18,6 +25,18 @@ export interface TransferCard {
   categoryName: string | null;
   categoryKind: CategoryKind | null;
   categoryActive: boolean | null;
+  /**
+   * The grade, or `null` — which on this field is *two* answers with one spelling. See the
+   * module doc: a deck has no such fact, and a collection row nobody has graded has the fact
+   * and nothing in it.
+   *
+   * **A collection row's `NONE` arrives here as `null`, and no fence watches that.** The
+   * plain-text mirror builds its own cards from the same rows in `src-tauri/src/mirror/read.rs`
+   * and makes the identical substitution there; the golden corpus starts *after* both, so the
+   * pair is held by a unit test on each side and by nothing else — see {@link conditionOf}. An
+   * empty Condition cell is also exactly what the importer reads back as "the file did not say",
+   * which is `NONE` again, so the round trip closes on the value rather than on a spelling of it.
+   */
   condition: string | null;
   tradelistQuantity: number | null;
   purchasePrice: number | null;
@@ -104,6 +123,32 @@ function finishOf(raw: string | null | undefined): DeckFinish {
   return null;
 }
 
+/**
+ * `NONE` is the column's word for *nobody said*; `null` is this shape's, and a file's is an
+ * empty cell.
+ *
+ * The sentinel exists because `condition` is the third term of a UNIQUE index and SQLite counts
+ * two NULLs as distinct — it is a storage decision and it stops at the database. Writing the
+ * four letters into a Condition column would export the mechanism instead of the fact, and a
+ * re-import would then have to know them: `normalizeCondition` does know them, so the round trip
+ * would still close, but every other tool a reader opens that CSV in would show a column of
+ * `NONE` where the truthful answer is a blank.
+ *
+ * **The twin is `src-tauri/src/mirror/read.rs`** — `from_collection_row` there calls its own
+ * `condition_of` with the same predicate, because the plain-text mirror builds its `Card`s from
+ * collection rows exactly as this builds `TransferCard`s.
+ *
+ * **`__golden__/` does not fence this line, and it is worth knowing which guard is missing.**
+ * The corpus holds already-built cards — `transfer/card.rs` is its *deserializer*, not a second
+ * row → card step — so the fence starts downstream of here and neither this function nor the
+ * Rust one is executed by any golden case. What holds the two together is one unit test on each
+ * side, and both assert the **written cell** rather than the field: `TransferCard.test.ts` here,
+ * `mirror/read.rs`' own there. Do not read the golden suite going green as this agreeing.
+ */
+function conditionOf(raw: string | null | undefined): string | null {
+  return raw === CONDITION_NOT_SET ? null : (raw ?? null);
+}
+
 export function fromDeckCard(card: DeckCard): TransferCard {
   return {
     ...NOTHING,
@@ -137,7 +182,7 @@ export function fromCollectionRow(row: CollectionRow): TransferCard {
     collectorNumber: row.collectorNumber,
     finish: finishOf(row.finish),
     lang: row.lang,
-    condition: row.condition,
+    condition: conditionOf(row.condition),
     tradelistQuantity: row.tradelistQuantity,
     purchasePrice: row.purchasePrice,
     purchaseCurrency: row.purchaseCurrency,

@@ -36,6 +36,7 @@ import {
   Inbox,
   Layers,
   LibraryBig,
+  Pencil,
   Plus,
 } from "lucide-react";
 import { MenuRows } from "@/components/menu/ContextMenu";
@@ -206,6 +207,26 @@ export interface CardMenuDeps {
    * set has always done and is not a regression to introduce here.
    */
   pickCopies?: (entryIds: readonly number[], folderId: number | null) => void;
+  /**
+   * Open the editor for one copy the reader owns — its grade and what they paid for it.
+   *
+   * **Optional for {@link moveToFolder}'s reason and fenced harder than it**: that write needs a
+   * row, and this one needs a row the reader *pointed at*. A surface with no
+   * {@link CardMenuTarget.entryId} leaves both out and neither row is built.
+   *
+   * **It takes an id and answers nothing**, which is the whole of what a menu can do here. The
+   * dialog is a layer, the layer belongs to the page, and a `MenuAction.onSelect` is a bare
+   * callback the panel closes on top of — so the host raises the surface and this row's only job
+   * is to say which copy it is about.
+   *
+   * **No plural, and that is a statement rather than a gap** — {@link picked}'s own paragraph
+   * about "Copy card name" and "View all printings", reached from the write side. Editing four
+   * copies at once is not this row with a bigger number in its label; it is a bulk edit, which is
+   * a different feature and would have to decide what "the grade" of a foil, a played nonfoil and
+   * a slab is. So a group's press is about the card that was right-clicked, exactly as it is for
+   * the four rows above.
+   */
+  editCopy?: (entryId: number) => void;
   /**
    * The collection's filing cabinet, flat, as the host page already holds it.
    *
@@ -415,6 +436,11 @@ export function buildCardMenu(target: CardMenuTarget, deps: CardMenuDeps): MenuI
     // and of one they do. Absent entirely on every surface that cannot name a row; see
     // {@link CardMenuTarget.entryId} for why that is an absence rather than a greyed row.
     ...toItems(moveItem(rows, deps)),
+    // Ruled off from the two filing rows above it, because it is a different question about the
+    // same cardboard: those two say where a copy *goes*, this one says what it *is*. Built as a
+    // pair so the rule arrives with the row — a separator with nothing under it is a menu that
+    // looks broken, and every surface that can name no row gets neither.
+    ...editItems(target, deps),
   ];
 }
 
@@ -770,6 +796,52 @@ function movableEntryIds(rows: readonly CardMenuTarget[]): number[] {
     for (const id of row.entryIds ?? []) seen.add(id);
   }
   return [...seen];
+}
+
+/**
+ * "Edit copy…" — the rule and, where it is offered, the separator above it.
+ *
+ * **Fenced on {@link CardMenuTarget.entryId}, the *field* and not a count**, which is the whole
+ * of the difference from `Move to` directly above it. That row reads `entryId` **and**
+ * {@link CardMenuTarget.entryIds}, because it can express the several: one id is a move, and
+ * more than one is a question `pickCopies` asks. There is no such question here. A dialog editing
+ * a grade and a price over three rows would have to decide what "the condition" of a foil, a
+ * played nonfoil and a slabbed copy is, and every answer to that is the app choosing a copy the
+ * reader never named.
+ *
+ * **So a wall tile gets no row even when it stands for exactly one entry**, which is deliberate
+ * and is `entryIds`' own doc read as a rule: it "is not a weaker `entryId`". A tile is the page's
+ * *summary* of a printing — the reader pointed at a picture, and how many rows happen to be
+ * behind it today is an accident of what else they own. A row that appeared on some tiles of one
+ * wall and not on others would read as a bug in the menu rather than as a fact about the card,
+ * and the collection's table is one press away with the copy itself on it.
+ *
+ * **Out rather than greyed**, `moveItem`'s judgement for `moveItem`'s reason: it is missing from
+ * every card of every surface that owns no rows, so the absence reads as a property of the
+ * surface. "View all printings" greys instead because it is on every other card of the surface it
+ * refuses on — that is the test, and this row fails it.
+ *
+ * **Nothing is read here but the id.** The menu does not know the row's grade, its price or
+ * whether it still exists; the host looks all of that up against the list it is drawing, which is
+ * the same division `pickCopies` uses for the card's name.
+ */
+function editItems(target: CardMenuTarget, deps: CardMenuDeps): MenuItem[] {
+  const edit = deps.editCopy;
+  const { entryId } = target;
+  if (edit === undefined || entryId === undefined) return [];
+  return [
+    { kind: "separator", id: "sep-edit" },
+    {
+      kind: "action",
+      id: "edit-copy",
+      // The ellipsis is the app's mark for a row that opens a surface rather than making a
+      // write — the folder card's `Rename…`, `Move to folder…` and `Delete…` all wear it, and
+      // this row is the first on a *card* menu that does.
+      label: "Edit copy…",
+      Icon: Pencil,
+      onSelect: () => edit(entryId),
+    },
+  ];
 }
 
 /**

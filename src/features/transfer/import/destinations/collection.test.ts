@@ -1,8 +1,15 @@
 import { describe, expect, it } from "vitest";
-import type { ImportResolveRow } from "@/lib/ipc";
-import type { ParsedLine, ParsedList } from "../parse";
+import { CONDITION_NOT_SET } from "@/lib/conditions";
+import type { CollectionRow, ImportResolveRow } from "@/lib/ipc";
+import { formatExport } from "../../export/format";
+import { defaultFields } from "../../fields";
+import { fromCollectionRow } from "../../TransferCard";
+import { parseDecklist, type ParsedLine, type ParsedList } from "../parse";
 import { planCollectionImport } from "./collection";
 
+/** Deliberately **not** the store's own default: these are the reader's answers to the two
+ *  dropdowns, and a fixture that happened to match the default would leave every "the dropdown
+ *  wins" case below asserting nothing. The not-set default has its own cases. */
 const OPTIONS = { condition: "NM" as const, finish: null };
 
 /** A whole `ParsedLine`. Four of `ParsedList`'s fields are easy to forget — `totalCards` and
@@ -28,6 +35,75 @@ describe("planCollectionImport", () => {
   it("gives a line with no condition the reader's chosen default", () => {
     const plan = planCollectionImport(listOf(line({ quantity: 2 })), [hit(0, "c1")], OPTIONS);
     expect(plan.items[0]).toMatchObject({ cardId: "c1", quantity: 2, condition: "NM" });
+  });
+
+  /**
+   * The shape a plain decklist takes since schema v35, and the state the dropdown opens on.
+   *
+   * A text list carries no Condition column at all, so every line of one lands here — and what
+   * it records now is that nobody said, rather than the best grade on the scale written on the
+   * reader's behalf three hundred times.
+   */
+  it("records no grade at all when the file says nothing and the reader has not chosen one", () => {
+    const plan = planCollectionImport(
+      listOf(line({ quantity: 2 })),
+      [hit(0, "c1")],
+      { condition: CONDITION_NOT_SET, finish: null },
+    );
+    expect(plan.items[0]).toMatchObject({ condition: "NONE" });
+    // Nothing to warn about: a file that said nothing is a file this app read correctly.
+    expect(plan.unknownConditions).toEqual([]);
+    // `conditionOriginal` stays absent — there is no original, and `undefined` rather than
+    // `null` is the seam `CollectionImportItem`'s optional fields want.
+    expect(plan.items[0].conditionOriginal).toBeUndefined();
+  });
+
+  /**
+   * A blank Condition cell takes the **dropdown's** answer, not `normalizeCondition`'s.
+   *
+   * The two agree by accident today — both are `NONE` when the reader has not touched the
+   * dropdown — so the only way to tell which road a blank took is to set the dropdown to
+   * something else and look. `parseCsvGrid` drops an empty cell before it becomes an `extra`,
+   * which is what makes the dropdown win; this pins that, because the difference is invisible in
+   * the default case and one edit to `parse.ts` away from being visible again.
+   */
+  it("gives a blank Condition cell the reader's chosen default, not the sentinel", () => {
+    const plan = planCollectionImport(
+      listOf(line({ extra: {} })),
+      [hit(0, "c1")],
+      { condition: "LP", finish: null },
+    );
+    expect(plan.items[0].condition).toBe("LP");
+  });
+
+  /**
+   * A file that spells the absence out loud is read, not flagged.
+   *
+   * This app's own CSV writes an empty cell for an ungraded copy, so this is about somebody
+   * else's file — but `Not set` is a word `SYNONYMS` knows, and reading it as an unknown grade
+   * would put a warning row on every line of one.
+   */
+  it("reads a `Not set` cell as no grade, and does not call it unrecognised", () => {
+    const plan = planCollectionImport(
+      listOf(line({ extra: { condition: "Not set" } })),
+      [hit(0, "c1")],
+      { condition: "LP", finish: null },
+    );
+    expect(plan.items[0].condition).toBe("NONE");
+    expect(plan.unknownConditions).toEqual([]);
+  });
+
+  /** The grain's third term is a value like any other, so an ungraded copy and a Near Mint one
+   *  of the same printing are two rows — which is the whole reason the sentinel is a string and
+   *  not a NULL. */
+  it("keeps an ungraded copy apart from a graded one", () => {
+    const plan = planCollectionImport(
+      listOf(line(), line({ lineNumber: 2, extra: { condition: "NM" } })),
+      [hit(0, "c1"), hit(1, "c1")],
+      { condition: CONDITION_NOT_SET, finish: null },
+    );
+    expect(plan.items).toHaveLength(2);
+    expect(plan.items.map((i) => i.condition)).toEqual(["NONE", "NM"]);
   });
 
   it("lets a CSV column override the default, per row", () => {
@@ -173,5 +249,56 @@ describe("planCollectionImport", () => {
     const plan = planCollectionImport(
       listOf(line({ extra: { purchasePrice: "ask seller" } })), [hit(0, "c1")], OPTIONS);
     expect(plan.items[0].purchasePrice).toBeUndefined();
+  });
+});
+
+/**
+ * Writer → file → parser → planner, over one ungraded copy and one Near Mint one.
+ *
+ * **The golden corpus cannot be asked this**, and it is worth being exact about why: its
+ * scenarios hold already-built `TransferCard`s, so `fromCollectionRow` runs *upstream* of every
+ * golden case and the fence never sees a collection row at all. Growing the corpus a not-set row
+ * in the same commit as the writers that would generate it is how a fence stops fencing anyway.
+ * So the round trip is asserted here, on rows built in the test — the corpus proves bytes from a
+ * card, and this proves the value survives the trip from a row out to a file and back.
+ */
+describe("an ungraded copy round-trips through the collection's own CSV", () => {
+  const rowOf = (condition: string): CollectionRow =>
+    ({
+      name: "Sol Ring", quantity: 1, setCode: "LTC", collectorNumber: "285",
+      finish: "nonfoil", lang: "en", condition,
+    }) as unknown as CollectionRow;
+
+  it("writes an empty Condition cell, never the sentinel, and reads it back as no grade", () => {
+    const text = formatExport(
+      [fromCollectionRow(rowOf(CONDITION_NOT_SET)), fromCollectionRow(rowOf("NM"))],
+      "csv",
+      defaultFields("csv", "collection"),
+    );
+
+    // The written **cell**, not just the field it came from: every other tool the reader opens
+    // this CSV in would show a column of `NONE` where the truthful answer is a blank, and this
+    // unit test plus the one on `mirror/read.rs` are the whole of what holds the two
+    // implementations of that substitution together.
+    const [header, ...rows] = text.trimEnd().split("\n");
+    const at = header.split(",").indexOf("Condition");
+    expect(at).toBeGreaterThan(-1);
+    expect(rows[0].split(",")[at]).toBe("");
+    expect(rows[1].split(",")[at]).toBe("NM");
+    expect(text).not.toContain("NONE");
+    // Two lines, not one — the grain's third term still tells them apart, which is the whole
+    // reason the sentinel is a string rather than a NULL.
+    const list = parseDecklist(text);
+    expect(list.lines).toHaveLength(2);
+    expect(list.lines[0].extra.condition).toBeUndefined();
+    expect(list.lines[1].extra.condition).toBe("NM");
+
+    const plan = planCollectionImport(list, [hit(0, "c1"), hit(1, "c1")], {
+      condition: CONDITION_NOT_SET,
+      finish: null,
+    });
+    expect(plan.items.map((i) => i.condition)).toEqual(["NONE", "NM"]);
+    // An empty cell is a file this app read correctly, not a grade it failed to.
+    expect(plan.unknownConditions).toEqual([]);
   });
 });

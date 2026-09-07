@@ -24,6 +24,7 @@ import syncLiveRs from "../../src-tauri/src/sync_engine/live.rs?raw";
 import wishlistRs from "../../src-tauri/src/wishlist.rs?raw";
 import wishlistOptimizeRs from "../../src-tauri/src/wishlist_optimize.rs?raw";
 import ipcSource from "./ipc.ts?raw";
+import { CONDITIONS, CONDITION_NOT_SET } from "@/lib/conditions";
 import {
   AUTO_BRACKET,
   ipc,
@@ -2687,5 +2688,76 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
       tsFields(ipcSource, "DeckPullRow"),
       "`DeckPullRow` (ipc.ts) has no `imageUris`",
     ).toContain("imageUris");
+  });
+});
+
+/**
+ * **The condition scale is a Rust↔TypeScript contract with no compiler behind it**, and it is
+ * the same shape of seam as the sync event names above: `collection.rs` refuses a grade it does
+ * not know *in words* (`valid_condition`), and `conditions.ts` is what fills every dropdown the
+ * reader picks from. Nothing else in the build makes the two agree.
+ *
+ * The two ways it breaks are not symmetrical, and both are silent on this side:
+ *
+ * * a grade in `CONDITIONS` here that Rust does not know is a menu row that always fails, with
+ *   the backend's sentence surfacing as a red line under a control that looked ordinary;
+ * * a grade Rust accepts that this list omits is a stored row this app cannot label, filter or
+ *   offer — which is exactly what an imported database or a synced device can hand it.
+ *
+ * So the crate is read for the list, the way `deck_played_keys` is read for its name above.
+ * Compared as **sets**, because the two orders are allowed to differ and are not the same
+ * question: Rust's is the order `COLLECTION_SORTS`' `CASE` ranks a column by, and this side's is
+ * the order a dropdown offers.
+ */
+describe("the condition scale agrees with the crate that enforces it", () => {
+  /** Not `toContain` on the source alone: a pass has to mean "the crate spells it", never
+   *  "the crate was never read". */
+  it("read collection.rs", () => {
+    expect(collectionRs.length).toBeGreaterThan(1_000);
+  });
+
+  /** `[\s\S]` rather than the `s` flag, and a lazy body: the array fits on one line today and
+   *  rustfmt is free to wrap it the day a seventh grade is added. */
+  const rustList = (): string[] => {
+    const m = /pub const CONDITIONS: \[&str; \d+\] = \[([\s\S]*?)\];/.exec(collectionRs);
+    expect(
+      m,
+      "`collection.rs` no longer declares `CONDITIONS` in a shape this test can read",
+    ).not.toBeNull();
+    return [...(m as RegExpExecArray)[1].matchAll(/"([^"]+)"/g)].map((g) => g[1]);
+  };
+
+  it("offers exactly the grades the backend accepts", () => {
+    expect([...rustList()].sort()).toEqual([...CONDITIONS].sort());
+  });
+
+  it("declares the same length on both sides", () => {
+    // The `N` in Rust's `[&str; N]` is a third statement of the same fact and can rot on its
+    // own. A *widened* array with a stale length does not compile; a narrowed one does not
+    // either — but the pair only stays honest while something reads the number, and this is the
+    // only thing that does.
+    const m = /pub const CONDITIONS: \[&str; (\d+)\]/.exec(collectionRs);
+    expect(m).not.toBeNull();
+    expect(Number((m as RegExpExecArray)[1])).toBe(CONDITIONS.length);
+  });
+
+  it("records the same grade for a write that names none", () => {
+    // What a write naming no grade stores, asked on both sides by unrelated code —
+    // `valid_condition`'s `unwrap_or` there, `MENU_CONDITION` and the add popup's opening value
+    // here. A disagreement draws one grade and stores another.
+    const m = /pub const DEFAULT_CONDITION: &str = "([^"]+)";/.exec(collectionRs);
+    expect(m, "`collection.rs` no longer declares `DEFAULT_CONDITION`").not.toBeNull();
+    expect((m as RegExpExecArray)[1]).toBe(CONDITION_NOT_SET);
+  });
+
+  it("agrees on the sentinel's spelling", () => {
+    // `CONDITION_NOT_SET` and `DEFAULT_CONDITION` hold one string and are not one idea: the
+    // sentinel is *the grade meaning nobody said*, the default is *what an unnamed write
+    // records*. Pinned separately so a later release that defaults to something else does not
+    // silently take the sentinel with it.
+    const m = /pub const CONDITION_NOT_SET: &str = "([^"]+)";/.exec(collectionRs);
+    expect(m, "`collection.rs` no longer declares `CONDITION_NOT_SET`").not.toBeNull();
+    expect((m as RegExpExecArray)[1]).toBe(CONDITION_NOT_SET);
+    expect(CONDITIONS).toContain(CONDITION_NOT_SET);
   });
 });

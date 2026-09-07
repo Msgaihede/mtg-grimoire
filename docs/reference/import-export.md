@@ -40,6 +40,14 @@ headings are the reader's own words rather than a fixed vocabulary, and the only
 `{noDeck}` — the flag that is what makes an Archidekt export and a re-import agree about a
 maybeboard.
 
+**Every sentence in that paragraph is about the _writer_, and since issue #390 the writer is no
+longer handed the whole deck.** `Include inactive categories` narrows the list in the export
+dialog, above `formatExport`, and it opens **off** — so "no other format drops a row" and
+"`tcgplayer` keeps a switched-off pile" are still true of `format.ts` and are no longer true of
+the file a reader gets by pressing Copy. Which piles reach the writer is
+[the inactive-category filter](#the-inactive-category-filter--the-dialogs-second-row-filter)'s
+subject, one section down from the Arena one it is modelled on.
+
 ## The deck label, both directions
 
 `^Keeper,#4aab08^` — a `deck_labels` row on a deck card. Read on import since 2026-08-24
@@ -66,7 +74,11 @@ itself emits. CSV's defaults are a deliberate core (printing, category, finish, 
 everything else opt-in, so both boxes join the opt-in side there. `exportPrefs` is session state
 and not persisted (`store.ts`), so a default really does reach every reader on their next launch;
 what makes that acceptable here and not for the Arena filter is that this **adds a suffix** where
-that one **drops rows**, and the tickbox is on screen saying so.
+that one **drops rows**, and the tickbox is on screen saying so. **`Include inactive categories`
+is where that rule was knowingly broken**: its default drops rows, because those rows are the
+reported bug — see
+[the inactive-category filter](#the-inactive-category-filter--the-dialogs-second-row-filter),
+where what stands in for the rule is a count line.
 
 **The trailing `#tag` shape is deliberately not used.** `parse.ts`'s `MARKERS` strips `\s+#\S+$`
 and reads nothing out of it, so writing a label that way into a plain or Moxfield line would be a
@@ -113,6 +125,13 @@ filter rather than a field: it changes which cards there are lines for, never wh
 about one, which is why it is not in `fields.ts` and not in the dialog's `Fields` row. Off on
 every surface when the dialog first opens (`useAppStore`'s `exportPrefs.<surface>.arenaOnly`),
 because this format has written every card handed to it since it shipped.
+
+**It was the only row filter until 2026-09-07**, and the shape it settled — under the format
+radios, in `exportPrefs`, fenced on the format, applied before the writer — is what the second one
+was built to. That one is
+[the inactive-category filter](#the-inactive-category-filter--the-dialogs-second-row-filter),
+below; the rest of this section is about what *this* checkbox measures, which is a question no
+other format can be asked.
 
 **The obvious fact is the wrong one.** Scryfall's `games` array literally lists `arena`, but it
 is a property of a **printing**: the Alpha printing of Lightning Bolt says `["paper"]` while the
@@ -166,6 +185,149 @@ why `CollectionRow` and `WishRow` gained the **blob** rather than the mask when 
 `DeckCard` already carried one — at a measured cost of **483 bytes** on average and **528** at
 most per row, against `promo_types`' 23 on the same corpus. `src/features/transfer/export/` is
 the only reader on any of the three.
+
+## The inactive-category filter — the dialog's second row filter
+
+Issue #390, shipped 2026-09-07: a reader exported a deck and found their maybeboard in the file.
+**`Include inactive categories`** is the answer — a checkbox under the format radios, beside the
+Arena one it is modelled on, and a *row* filter for the same reason that one is: it changes which
+cards there are lines for, never what a line says about one. So it is **not in `fields.ts`**, it
+rides in `useAppStore`'s `exportPrefs.<surface>.includeInactive`, and it **survives a format
+switch** where `fields` is re-derived — a field set chosen for CSV means nothing to Arena, while
+"write my switched-off piles" is the same answer whatever the reader passed through on the way
+back.
+
+**Named for what ticking it _does_**, where `Only cards MTG Arena has` is named for what ticking
+that one leaves out. The reader's question is "is my maybeboard in this file"; a box called
+`Leave out…` answers it inverted, and each box is named for whichever direction its own reader is
+thinking in rather than for a convention the two are made to share.
+
+### The two fences
+
+| Fence | Where | What it stops |
+| --- | --- | --- |
+| `SURFACE_HAS_PILES[surface]` | `fields.ts` — `deck: true`, `collection: false`, `wishlist: false` | A collection or wishlist row carries `categoryActive: null`, so there is no pile to be in and the box would be a control over nothing |
+| `!dropsInactive(format)` | `export/format.ts` — `ACTIVE_ONLY` is `arena` and `mtgo` | Those two have no maybeboard, so writing one produces an illegal import at the other end; a box there could never move a byte, which is the furniture `src/CLAUDE.md` forbids |
+
+`offersInactive` in `ExportDialog.tsx` is the pair read together, and **it gates the filter as
+well as the checkbox** (`excludesInactive = offersInactive && !includeInactive`). Both halves of
+that matter. A preference the reader cannot see must never be quietly narrowing the file — and
+under Arena and MTGO the honest sentence is the *format's* own, "not written in this format",
+which stops being true the moment a reader's preference is what is doing the work.
+
+**`SURFACE_HAS_PILES` is a declaration of its own rather than
+`SURFACE_FIELDS[surface].includes("category")`**, and the two questions only happen to have the
+same answer today: `category` is a *column a reader switches on*, this is about whether
+`TransferCard.categoryActive` is ever anything but `null` on rows from that surface. A surface
+could hold piles and offer no category column, and the field list would then answer the wrong
+question with no symptom. It is total over `TransferSurface` for `DISCRIMINATOR`'s reason — a
+fourth surface has to answer rather than defaulting to `undefined` and drawing the box over a
+list with no piles in it.
+
+### Off by default, and what that cost
+
+**This is the one place the argument the Arena filter makes for its own default is deliberately
+spent.** That argument — a filter that starts on quietly changes what an existing reader's next
+export contains — is true here too, and is overruled because the *reported bug* is that those
+exports contained the maybeboard. Shipping the box on by default would have shipped the fix with
+the bug still in it.
+
+Read off `ACTIVE_ONLY` in `format.ts` and `offersInactive`/`excludesInactive` in
+`ExportDialog.tsx`, so re-read it there rather than trusting this table:
+
+| Format | Wrote a switched-off pile before #390 | Box off (the default) | Box on |
+| --- | --- | --- | --- |
+| Plain text | yes | no | yes |
+| MTGO | no — `ACTIVE_ONLY` | no; **box not drawn** | — |
+| Arena | no — `ACTIVE_ONLY` | no; **box not drawn** | — |
+| Moxfield | yes | no | yes |
+| Archidekt | yes, with `{noDeck}` | no | yes, with `{noDeck}` |
+| TCGplayer | yes | no | yes |
+| CSV | yes | no | yes |
+
+So **five formats changed what an existing reader's next deck export contains**, and Archidekt is
+the one where ticking the box is also a round trip: the flag goes out with the pile and comes back
+as `is_active = 0`. **What pays for the change is the count line** — whatever the box is holding
+back is on screen, in copies, before Copy is pressed, so the change is never a silent one.
+
+`exportPrefs` is session state and is not persisted, so the default reaches every reader on every
+launch rather than only once.
+
+### Two omission lines, and why the sentences differ
+
+| Line | Drawn when | Sentence |
+| --- | --- | --- |
+| The reader's | `heldBackInactive > 0` — the box is off, on a surface with piles, in a format that has not already decided | `1 card in an inactive category is not written.` / `6 cards in inactive categories are not written.` |
+| The format's | `omitted > 0` — `arena` or `mtgo` | `1 card in a switched-off pile is not written in this format.` / `6 cards in switched-off piles are not written in this format.` |
+
+**`inactive categories` because that is the box the reader just pressed**; `switched-off piles`
+because under those two formats there is no box, the pile is the only thing to name, and `in this
+format` is the true ending there and false here. **The two can never be on screen together** —
+they are fenced on complementary halves of `dropsInactive`, so each is non-zero exactly where the
+other cannot be. Both count **copies** rather than rows, for `omittedCount`'s own reason: six
+basic lands on one cut row are six cards missing from the file. Both are ordinary `text-dim`
+lines rather than `role="alert"`, because nothing has failed.
+
+The Arena line (`N cards are not in MTG Arena and are not written.`) is a third and can share the
+panel with the format's, which is why they were never summed into one number: a maybeboard the
+reader can switch back on and a card Arena has never printed are two different things to do
+something about.
+
+**Which list each count is taken over is load-bearing.** `omitted` counts over the list the writer
+is *handed* — after whichever row filters were in force — so a card that is both outside Arena and
+in a switched-off pile is reported once rather than twice. `heldBackInactive` and `notInArena` each
+count over the unfiltered `cards`, which is the only list still holding what they removed.
+
+### One piece of arithmetic behind two gates
+
+`omittedCount` is now `dropsInactive(format) ? inactiveCopies(cards) : 0`, and its behaviour is
+unchanged — the lift is the whole point. The dialog computes what the *reader* is holding back
+from that same `inactiveCopies`, behind the complementary half of the same fence, so what the
+format leaves out and what the reader asked to leave out cannot drift apart. Written twice, the
+failure would be a line under the format radios describing a different file from the one Copy puts
+on the clipboard: silent, plausible, and wrong in the direction nobody checks.
+`format.test.ts` pins `EXPORT_FORMATS.filter(dropsInactive)` **by name** rather than by a count,
+for `READABLE`'s reason — a format joining or leaving `ACTIVE_ONLY` should arrive as a red build
+naming the format rather than as arithmetic somebody updates without reading.
+
+### Neither golden bytes nor the Rust port moved
+
+The filter is applied **in the dialog, before `formatExport`**, which keeps that function
+`(cards, format, fields) => string` — the boundary the whole feature is built on, and what lets
+`decklists.test.ts` drive the writer at all. Three consequences, all of them the fence working
+rather than a gap:
+
+- **No golden regeneration.** `__golden__/*.txt` is the writer's output over a fixed corpus and
+  the writer's output did not change.
+- **No Rust change.** `src-tauri/src/transfer/write.rs` already has `active_only` and
+  `omitted_count`; there is nothing to port, because there is no reader in Rust for a preference
+  the mirror never applies. `SURFACE_HAS_PILES` therefore sits **outside `fields.json`** too — that
+  golden pins `SURFACE_FIELDS`, `availableFields` and `defaultFields`, which are what the writer
+  renders from.
+- **The plain-text mirror does not get the filter**, exactly as it never got the Arena one. A
+  backup that narrows itself is not a backup; [text-mirror.md](text-mirror.md) carries the
+  divergence. **`README.txt` is silent about this one and says the Arena filter out loud**, for the
+  reason [the mirror section below](#the-three-ways-a-mirrored-file-differs-from-the-dialogs)
+  gives — a mirrored file holding a pile the reader's export left out is not a thing they need
+  warning about.
+
+### A pile exported alone, with the box off, is an empty file
+
+A category heading's `Export cards…` over a pile the reader has switched off writes `""`: the
+disclosure reads `Show decklist (0 lines)` and the count line says how many copies are being held
+back. **Deliberate rather than a hole**, and the difference from the Arena case is the whole
+argument — there the same emptiness is the format's decision and nothing on screen can undo it,
+here the box is on screen to untick. It is the same reason the deck scope passes *every* row of
+the variant to the dialog: a caller that filtered first would take the box's answer away before
+the question was asked.
+
+**No live figures here yet.** Nothing about this checkbox has been driven in the shipped window at
+the time of writing, and a number written before the window was driven would be a guess with a
+date on it. What a pass owes an answer to: the box on a deck whose only inactive pile is empty
+(both count lines absent, no state in between), the file a tick actually produces through
+Archidekt's `{noDeck}` round trip, and whether the two count lines can be made to appear together
+by any sequence of presses — the fences say no, and only the window can say it about the shipped
+build.
 
 ## The field registry and the intersection rule
 
@@ -528,6 +690,45 @@ than the picker gesture:
 3. Exported the same two rows to CSV and read the preview: `2,Lightning Bolt,2x2,117,,LP` and
    `1,Sol Ring,c21,263,foil,NM` — the condition survived exactly, on both rows, at both finishes.
 
+### An ungraded copy is an empty Condition cell, and that is what closes the round trip
+
+Schema v35 gave `collection_entries.condition` a sixth value, `NONE` — *not set*, the grade that
+says nobody assessed the copy, and the column's `DEFAULT` since 2026-09-07
+([issue #361](https://github.com/Msgaihede/mtg-grimoire/issues/361)). It is a **storage** decision
+— a sentinel exists because `condition` is `idx_collection_grain`'s third term and SQLite counts
+two NULLs as distinct in a unique index — and **it stops at the database**. A row → `TransferCard`
+mapping turns it into `null`, `fields.ts` already writes `c.condition ?? ""`, and the cell comes
+out **empty**.
+
+Writing the four letters instead would export the mechanism rather than the fact. A re-import
+would still close, because `normalizeCondition` knows the word — but every other tool a reader
+opens that CSV in would show a column of `NONE` where the truthful answer is a blank. The blank is
+also *exactly* what the importer already reads as "the file did not say", which is now `NONE`
+again: the round trip closes because the two ends were already speaking about silence, not because
+anything was added to make them.
+
+**This is the one mapping the golden fence does not cover, and that is worth stating plainly**
+because the shape of `__golden__/` suggests otherwise. Its `corpus.json` holds *already-built*
+`TransferCard`s, so the fence begins **downstream** of the row → Card step; neither
+`src/features/transfer/TransferCard.ts`'s `conditionOf` nor `src-tauri/src/mirror/read.rs`'s
+`condition_of` is executed by any golden test, and the corpus contains no `NONE`. The two
+implementations of this substitution are held by one unit test each and by nothing else. Two
+agents writing the halves in parallel both recorded the fence as covering it; it does not.
+
+### A recorded purchase price can be corrected, never removed
+
+`EntryPatch` is `coalesce(?n, column)` in all eighteen of its holes, so an absent field means
+"leave it" and **there is no value that means "make it null"**. That is right for a patch built
+from an eight-field form, and it leaves one thing a reader cannot do: unsay a price. The Edit copy
+dialog does not pretend otherwise — the box is seeded with the recorded figure, and a line under
+it says emptying the box leaves that figure recorded. The alternative considered was a box that
+opens blank, which makes "empty means leave it" true by construction and buys it by hiding the
+number the reader opened the dialog to check.
+
+The neighbouring trap is the same no-op reached from the other side: a box holding something
+unparseable **greys Save and names the trouble**, rather than dropping the field from the patch
+and writing nothing while looking like it wrote something.
+
 ### A plain-text list into the wishlist
 
 Pasted `1 Lightning Bolt`, `1 Sol Ring`, `1 Counterspell` — no set, no collector number on any line
@@ -573,7 +774,12 @@ writer. What the two implementations cover:
 | `export/format.ts`, `export/fold.ts`, `csv.ts` | `transfer/write.rs`, `fold.rs`, `csv.rs` |
 | `TransferCard.ts` and its three row adapters | `transfer::Card`, built by `mirror/read.rs` |
 | `import/parse.ts` | **nothing — the parser stays TypeScript-only** |
-| `export/arena.ts` — the row filter | **nothing — the mirror leaves it off** |
+| `export/arena.ts` — the Arena row filter | **nothing — the mirror leaves it off** |
+| `fields.ts`'s `SURFACE_HAS_PILES`, `format.ts`'s `isActivePile`/`inactiveCopies` — the inactive row filter | **nothing — the mirror leaves it on** |
+
+The last two rows are one rule: a row filter is the *dialog's*, so neither side of the fence has
+anything to keep in step. `dropsInactive` is the exception that proves it — `write.rs`'s
+`active_only` is the same fact, and it is ported because the *writer* branches on it.
 
 **`src/features/transfer/__golden__/` is what makes that legal.** One committed corpus and one
 committed golden set per scenario × format × field set; `npm run golden` regenerates them from
@@ -590,10 +796,15 @@ were byte-identical to what this dialog produces with every field ticked — `Az
 at 11,527 bytes against 11,471 characters, so the 56 bytes of multi-byte UTF-8 in the type lines
 matched too.
 
-### The two things a mirrored file still cannot say
+### The three ways a mirrored file differs from the dialog's
 
-Both are properties of the *format*, not settings the mirror could have switched on, and the
-mirror's own `README.txt` names both rather than leaving them to be discovered:
+The first is a property of the *format*, not a setting the mirror could have switched on. The
+other two are the same sentence about two different checkboxes: **every row filter the export
+dialog offers is a filter the mirror leaves off**, because a backup that narrows itself is not a
+backup. **The mirror's own `README.txt` names the first two and deliberately not the third**, which
+is an asymmetry rather than an oversight: the first two cost the reader something — a pile missing
+from two of the files, and an `*.arena.txt` Arena would reject — while the third only ever hands
+them a pile their export left out. A backup that holds more than you asked for needs no warning.
 
 - **MTGO and Arena have no maybeboard.** Both write only the piles the reader has switched on, so
   a switched-off pile is absent from `*.mtgo.txt` and `*.arena.txt` and present in the other five
@@ -604,6 +815,13 @@ mirror's own `README.txt` names both rather than leaving them to be discovered:
   backup first; a reader who wants an importable Arena list uses this dialog, where the filter is
   a checkbox — and it is off by default there too, for the reason
   [the Arena filter section](#the-arena-filter--what-in-mtg-arena-is-measured-as) gives.
+- **`Include inactive categories` stays on in the mirror**, which is the same decision worded the
+  other way up, because that box is named for what ticking it *does*. Since 2026-09-07 the dialog's
+  default is **off** — a deck exported to plain, Moxfield, Archidekt, TCGplayer or CSV leaves a
+  switched-off pile out unless the reader says otherwise — and the mirror ignores the preference
+  entirely, so those five mirrored files still carry every pile. The divergence is the point: the
+  dialog writes a file about to be handed to a deck site, where a maybeboard is usually noise, and
+  the mirror writes the copy that has to still hold the reader's `Cuts` pile in a year.
 
 ## Where the code is
 
@@ -616,6 +834,12 @@ TypeScript side, with `__golden__/` and `scripts/golden.mjs` the fence between i
 `wishlist_import_commit` are the Rust side. `src/components/Dialog.tsx` is the shared modal shell
 both `ExportDialog` and `ImportDialog` are built on. `src/features/decks/CLAUDE.md` still owns
 deck-specific rules this feature reads or reaches into — categories, validation, formats.
+
+**The inactive-category filter added no file to any of that**, which is the shape a row filter has:
+`fields.ts` (`SURFACE_HAS_PILES`), `export/format.ts` (`dropsInactive`, `isActivePile`,
+`inactiveCopies` — the three answers the writer already knew privately, each now a named export
+with a test under it), `export/ExportDialog.tsx` (the checkbox, `offersInactive`, the filter above
+`formatExport` and the count line) and `src/lib/store.ts` (`ExportPrefs.includeInactive`).
 
 The "Add cards to collection" box is three files of that tree: `destinations/DeckPreview.tsx`
 (`OwnCopies`, `OWN_COPIES_HINT`, and the outcome line), `destinations/NewDeckPreview.tsx` (which
