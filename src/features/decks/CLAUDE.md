@@ -912,7 +912,8 @@ reader to configure the deck they had just made; it now asks all of them.
   views, and `TheoryMatchBadge` is the same fact for the two that draw no art.
   **Since 2026-08-26 it says *how far off* the count is as well** (issue #212): a card the plan
   asks for a different number of draws `+2` or `-8` in place of the tick, in the same box and the
-  same azure, and the tick is what the **matching** card wears. The two are never drawn together —
+  mark's own colour — which was *the* colour, one azure, until the tiers below split it in two —
+  and the tick is what the **matching** card wears. The two are never drawn together —
   a tick beside a `-8` is two clauses of one sentence in a 25px box. Two rules carry it and both
   live in `theoryMatch.ts`: the difference is `live − planned` at the **slot's** grain, with both
   sides summed across their piles before they are subtracted (per-row arithmetic draws `-1` and
@@ -924,7 +925,58 @@ reader to configure the deck they had just made; it now asks all of them.
   over a `min-w` of one digit's advance plus `COUNT_TAG_BOX`'s own paddings — the quantity tag's
   width holding a single digit, by construction. Paddings alone could not settle it, because the
   content is a glyph on one card and two characters on the next.
-  **The grain is `(cardId, finish)` and deliberately not the category**: a card planned as Ramp and
+  **Since 2026-09-07 the mark answers in two tiers, and the whole rule is that the number's grain
+  follows the tier.** Every Live row resolves to exactly one mark or to none:
+
+  | The row | Tier | Colour | The number it carries |
+  | --- | --- | --- | --- |
+  | Its `(cardId, finish)` is a slot in the plan | `exact` | green | `live − planned` at the `(cardId, finish)` grain — the number this mark always carried |
+  | Its **name** is in the plan, but this `(cardId, finish)` is not | `name` | blue | `live − planned` with **every** printing and finish of that name summed on both sides |
+  | Neither | — | — | no mark |
+
+  `0` draws the tick and anything else the signed number, exactly as before. A green mark is a
+  statement about the *printing* the plan named; a blue one is a statement about the *card*. The
+  reader was shown the case it costs the most in — a plan asking for 8 Forests of one printing
+  against 8 Forests over four printings, which reads **green −6** on two rows and **blue 0** on
+  the other six — and chose it over one name-grain number on both tiers. Both numbers are true at
+  their own grain, and the two colours are what says which question is being answered. Green and
+  blue are **defaults**: both are `--color-theory-*` custom properties and the reader's to change
+  in Settings → Appearance, which is why no component here holds a hex.
+  **The name key is `cards.name` lowercased, and the fold is written in TypeScript only** —
+  `theoryNameKey`, one `trim().toLowerCase()`. SQLite's `lower()` is ASCII-only and JavaScript's
+  is not, so a plan folded in SQL against a live row folded here spells two keys for
+  `Lim-Dûl's Vault` and `Æther Vial`, and the mark goes dark on exactly the names nobody thinks to
+  check. Rust answers `cards.name` **verbatim**, through a **`LEFT JOIN`** so that a printing which
+  has left the corpus keeps its exact key and simply has no name tier: `nameKey` is `null`, an
+  orphan, and an orphan never enters `byName` at all — a `null` folded to `""` and used as a key
+  would make every unnamed live row match every orphan in the plan. Not `oracle_id`, because
+  Scryfall omits it on reversible cards and an identity with a fallback chain is two rules for two
+  sides to disagree about; what that costs is a blue tick on two distinct oracle cards sharing a
+  printed name, a pair no constructed deck holds both of.
+  **Two per-deck switches, both defaulting on, and their off states are not symmetric.**
+  `decks.theory_mark_exact` / `theory_mark_name` (user schema v38) ride `DeckPatch` and are drawn
+  indented under the theory switch in `DeckSettingsForm`, each beside a swatch painted from the
+  mark's own custom property. **Green off re-resolves an exact row as a name row** — blue, with
+  blue's number — because an exact match *is* a name match and what the switch turns off is the
+  finer statement: turning the strict mark off asks for less precision, not less information, and
+  a reader who saw the row go blank would read the control as broken. Blue off silences a
+  name-only row and leaves green untouched. Both off is a real answer and is not a second spelling
+  of the theory switch above being off — which is why this is two booleans rather than one
+  three-valued field: `none | exact | both` cannot spell blue *without* green. **All of that logic
+  is in `theoryMatchMark` and none of it is in the four views**, which is what keeps the fallback
+  from being re-derived four times: a view asks for a mark and draws what it gets.
+  **The maps are built once and read, never consumed, and that is the property the land case turns
+  on.** Every one of those eight Forests carries a mark. A lookup that deleted an entry as it
+  served it would mark one row and pass every other case in the file, so the eight-Forest test is
+  there to say the property out loud rather than to check an arithmetic. It was already how the
+  exact tier worked; the name tier inherits it rather than needing it.
+  **`DIFFERENCE_FLOOR` applies per tier, at that tier's own sums**, which is the same sentence as
+  the grain following the tier: a Commander singleton is a 1-of at both grains and meets no number
+  on either, while a card the plan names two printings of can clear the floor loosely and not
+  exactly.
+  **The grain is `(cardId, finish)` and deliberately not the category** — the exact tier's, and
+  the name tier drops the category for the same reason and sums every pile on each side before
+  subtracting: a card planned as Ramp and
   sleeved into Main deck is still the card that was planned, and a mark that went dark because a
   pile was renamed is a mark nobody can learn to trust. `finish` is read **raw**, never through
   `playedFinish` — that helper falls back to `soleFinish`, which would match a plan's explicit
@@ -949,9 +1001,12 @@ reader to configure the deck they had just made; it now asks all of them.
   `theoryEnabled && variant === "live"`, so a deck with no plan and the whole Theory tab pay
   nothing at all.
   `undefined` rather than an empty map is the other distinction `theoryMatchPlan` keeps: no plan
-  is not the same statement as a plan that wants none of this — and `null` rather than `0` is the
-  same distinction one level down, in `theoryMatchDelta`, where `0` is the card that matches and
-  draws the tick.
+  is not the same statement as a plan that wants none of this — and `null` rather than a delta of
+  `0` is the same distinction one level down, in **`theoryMatchMark`**, where `0` is the card that
+  matches and draws the tick. (That function was `theoryMatchDelta` and answered a bare
+  `number | null` until 2026-09-07, when a number stopped being enough to say which tier it was
+  about; this page named the old one for as long as a prose-only edit can, which is until somebody
+  greps for it.)
   **That `enabled` is a statement about _cost_ and never about the mark, and reading it as both
   was issue #159.** A disabled `useQuery` still serves whatever sits in the cache under its key,
   and the key is `["decks", "theorySlots", deckId]` — the **deck's**, deliberately, so both tabs
@@ -2704,6 +2759,22 @@ price | type`). An **inactive category stays its own group in all three grouping
   for each. **The picker holds a draft and Done is the write**: `input[type=color]` fires all the
   way down a drag through the OS dialog, so a row writing on every change would be a
   `deck_label_update` per pixel of travel.
+- **There is a second labels surface since 2026-09-07, and what it does not have is a deck.**
+  Settings → Appearance → Labels draws the same app-wide list — add, rename, recolour, delete —
+  and calls the same commands `LabelsDialog` does, with **no `deckId`**. It therefore draws no
+  "worn by this list" section, because that split is a fact about a deck and this panel is
+  standing in none; what a deckless write skips, and why, is in
+  [decks-storage.md](../../../docs/reference/decks-storage.md). **The dialog is untouched** and
+  stays the deck's answer. It sits under Appearance rather than under Tags on purpose: a *tag* in
+  this app is one of Scryfall's two tagger datasets and a *label* is this coloured per-card mark,
+  and the rail must not blur the two words.
+  **`useDestructiveFocus` is duplicated rather than lifted, and that is a decision rather than an
+  oversight.** It is eight lines — a ref pair and one effect that hands the caret back to the
+  button a cancelled confirmation came from — and it is private to `LabelsDialog.tsx`, where its
+  own comment already credits `CategoriesDialog`'s. The panel carries its own copy with a comment
+  saying whose it is. **A third caller is where that stops being the cheaper answer**: lift it into
+  `src/components/` then, and not before, because a shared hook whose only users are two spellings
+  of one dialog buys nothing and costs an indirection.
 - **The docked panel's width is the reader's, dragged from its left edge** (2026-08-14).
   `ResizeHandle` is an ARIA window splitter — `role="separator"`, `aria-orientation="vertical"`, a
   `tabIndex`, `aria-valuenow`/`min`/`max` in **px**, arrows and Home/End for the keyboard — bounded

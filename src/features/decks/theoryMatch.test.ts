@@ -457,8 +457,12 @@ describe("an inactive pile counts on neither side of either tier", () => {
 });
 
 describe("the difference floor", () => {
-  /** Commander: every row a 1-of, so no reader there ever meets a number — on either tier. */
-  it("draws a tick rather than a number for a singleton on both tiers", () => {
+  /** Commander: every row a 1-of, so no reader there ever meets a number. This case is the
+   *  **name** tier's half of that — the plan names one printing, the live row is another — and the
+   *  exact tier's own singleton is the case directly below, which asserts `tier: "exact"`. The
+   *  title read "on both tiers" until 2026-09-07 while the body asserted one of them; coverage was
+   *  never the gap, the sentence was. */
+  it("draws a tick rather than a number for a singleton on the name tier", () => {
     const plan = theoryMatchPlan(
       [{ key: "ring-c11|", nameKey: "Sol Ring", quantity: 1 }],
       [card({ cardId: "ring-ltr", finish: null, name: "Sol Ring", quantity: 1 })],

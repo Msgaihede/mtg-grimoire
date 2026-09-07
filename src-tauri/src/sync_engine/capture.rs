@@ -335,11 +335,17 @@ pub const TABLES: [Spec; 13] = [
             // one deck's marks differently, with nothing on screen saying why, is the failure
             // this pair of lines exists to prevent.
             //
-            // **The mark's colours are deliberately not here and never will be.** Green and blue
-            // are a rendering choice and belong to the device that draws them; what a *deck* is
-            // is what these two columns say. That is this spec's oldest distinction — the three
-            // `last_*` columns are absent for the same reason, and they are absent from
-            // `duplicate_deck` too.
+            // **The mark's colours are deliberately not here, and could not have been.** They
+            // are one `mark_colors` row in `app_meta`, which is in no `SYNCED_TABLES` entry at
+            // all, so there is no field for this spec to leave off — the decision was made one
+            // table over and it is the same decision: a rendering choice belongs to the device
+            // that draws it, and what a *deck is* is what these two columns say.
+            //
+            // **The three `last_*` columns are not the analogy**, which this comment claimed
+            // until 2026-09-07: all three are on this very list, just above `separate_x_group`,
+            // and `tokens_open` joined them on the opposite argument — per-deck view state is
+            // about the deck. Where they *are* absent is `duplicate_deck`, which answers a
+            // different question, and that is the list the sentence had been read off.
             //
             // **Adding is the safe direction**, which is what `cover_image_path`'s note above
             // says from the other end: `apply::updates` and `apply::creations` walk the *local*

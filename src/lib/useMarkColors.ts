@@ -70,8 +70,17 @@ export type MarkColorKey = (typeof MARK_COLOR_KEYS)[number];
  *
  * **A `var(--color-theory-exact)` cannot be an `<input type="color">`'s value**, which is the
  * whole reason these are literals here and in the stylesheet both — `LABEL_COLORS`' argument one
- * folder over, where a hex is written to a column rather than read into a control. The two
- * spellings are kept honest by `Appearance`'s own suite reading `index.css`.
+ * folder over, where a hex is written to a column rather than read into a control.
+ *
+ * ⚠️ **Nothing keeps the two spellings in step, and `LABEL_COLORS` is not the precedent here it
+ * looks like.** `labelColors.test.ts` reads `src/index.css` through Vite's `?raw` and compares its
+ * six against the declarations; no suite does that for these two. What exists is
+ * `useMarkColors.test.ts` asserting `#56bd78` and `#0e68ab` as typed literals, which pins this
+ * constant to itself and says nothing about the stylesheet — so a palette edit that moved
+ * `--color-theory-exact` and left this alone would ship a picker opening on a colour the mark is
+ * not drawn in, with nothing red anywhere. The fix is one test in
+ * `labelColors.test.ts`' shape; it is owed rather than done (noted 2026-09-07). This comment
+ * claimed the fence existed until then.
  */
 export const MARK_COLOR_DEFAULTS: Readonly<Record<MarkColorKey, string>> = {
   theoryExact: "#56bd78",

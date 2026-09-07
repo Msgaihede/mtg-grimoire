@@ -826,9 +826,18 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   **Both columns are on the capture spec and travel**, `bracket`'s precedent at v26: which tier a
   deck draws is an answer *about the deck*, and two devices showing one deck's marks differently
   with nothing on screen explaining it is the failure that edit prevents. The mark's **colours**
-  are deliberately not on it — a rendering choice belongs to the device that draws it, which is
-  why the three `last_*` columns are absent too. **`capture.rs` spells its `decks` field list out
-  by hand and there is no fence in the other direction** — nothing asserts every column of a
+  are deliberately not on it, and strictly there was nothing to leave off: they are one
+  `mark_colors` row in `app_meta`, which is in no `SYNCED_TABLES` entry at all, so that decision
+  was made one table over. It is the same decision either way — a rendering choice belongs to the
+  device that draws it, where what a *deck is* travels.
+  **The three `last_*` columns are not the analogy for it**, which this sentence claimed until
+  2026-09-07 and which `capture.rs`'s own comment claimed beside it: `last_variant`,
+  `last_group_by` and `last_sort_by` are all three **on** the `decks` spec, and `tokens_open`
+  joined them at v37 on exactly the opposite argument — per-deck view state is about the deck.
+  Where they *are* absent is `duplicate_deck`, which is a different list answering a different
+  question, and that is where the sentence had been read from.
+  **`capture.rs` spells its `decks` field list out by hand and there is no fence in the other
+  direction** — nothing asserts every column of a
   synced table is on its spec — so the two names needed a deliberate edit rather than travelling
   for free, and a column added to a synced table and not to that list is captured by nothing and
   goes red nowhere.

@@ -225,8 +225,13 @@ function floored(have: number, wanted: number): number {
  * Maybeboard is not something the user has decided to play* — and that function excludes them
  * from **both** sides of its own comparison for the mirror of it: a card parked in the *live*
  * Maybeboard is not something the deck has. Filtering one side and not the other is how a
- * scratchpad comes to fill a shopping list, and it would do the same to these numbers. The one
- * `continue` below is what makes it true of both grains at once.
+ * scratchpad comes to fill a shopping list, and it would do the same to these numbers. The
+ * **`!card.categoryActive` `continue` in the live loop** is what makes it true of both grains at
+ * once: it drops the row before either `sleeved*` map has seen it, so one line answers for the
+ * printing grain and the name grain together. There is a second `continue` a few lines above it
+ * and it is a different rule entirely — the orphan skip in the *plan* loop, which keeps a slot
+ * with no name out of the name grain alone. This sentence said "the one `continue` below" while
+ * there was one.
  *
  * That leaves the one state {@link DIFFERENCE_FLOOR} is a fence around, and it is why the fence
  * is not merely a formality: a plan that asks for one copy of a card the reader has filed only in

@@ -557,6 +557,12 @@ export function deckTheoryMatches(): TheoryPlan {
   // argument `deckGroups` makes for building its groups with `buildGroups`. Both switches on,
   // which is what every deck is born with; a story about a deck that has turned one off passes
   // its own `marks`.
+  // **The cast is a narrowing and not a shortcut.** `theoryMatchPlan` answers
+  // `TheoryPlan | undefined` because `undefined` is its own statement — *there is no question
+  // here*, a deck with no plan — and it is reached only when `slots` is `undefined`, which the
+  // array literal above never is. TypeScript cannot see that, and this function promises a plan
+  // because a story wants one rather than a maybe. It is the one `as` in this feature's surface;
+  // removing it is a signature change, not a tidy-up.
   return theoryMatchPlan(slots, deckGroups().flatMap((group) => group.cards), {
     exact: true,
     name: true,
