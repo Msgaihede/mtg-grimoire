@@ -128,6 +128,10 @@ function Harness({
       // meaning here** — the create host, which has no deck yet and therefore draws no
       // "Add cards to" row at all. A default would make that case untestable.
       categories={"categories" in rest ? rest.categories : CATEGORIES}
+      // Defaulted to the **edit** host's answer, like `categories` above and for the same reason:
+      // absent is the create dialog, which is one case rather than the ordinary one. A test that
+      // wants that case passes `false` and says so.
+      canSetTheoryMarks={rest.canSetTheoryMarks ?? true}
       cover={rest.cover ?? COVER}
       idPrefix={rest.idPrefix ?? "s"}
     />
@@ -420,6 +424,23 @@ describe("DeckSettingsForm", () => {
         "A blue mark on a card your plan asks for in a different printing. Turning the green one off draws this one instead.",
       ),
     ).toBeInTheDocument();
+  });
+
+  /**
+   * **The second gate, and it is a different question from the first.**
+   *
+   * `theoryEnabled` asks whether there is a plan to compare against; this asks whether the host
+   * can write the answer down. `CreateDeckDialog` cannot — `DeckInput` carries neither column and
+   * the schema's `DEFAULT 1` owns a new deck's answer — so a reader who switched the plan on
+   * inside "New deck" would otherwise get a pair of switches whose presses reach nothing.
+   * `defaultCategoryId`'s row is absent from that host for the same shape of reason.
+   */
+  it("draws neither mark switch for a host that cannot write them, plan or no plan", () => {
+    form({ value: { ...VALUE, theoryEnabled: true }, canSetTheoryMarks: false });
+
+    expect(screen.getByRole("switch", { name: "Theory deck Enabled" })).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: /matching printing/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: /different printing/i })).not.toBeInTheDocument();
   });
 
   /**

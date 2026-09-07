@@ -419,6 +419,10 @@ function Settings({ deckId }: { deckId: number }) {
             // draws the "Add cards to" row at all: the create dialog has no deck yet and passes
             // nothing.
             categories={deck.categories}
+            // This host has a deck row and an ordinary `deck_update` for both columns, so the two
+            // mark switches are answerable here — which the create dialog's is not. Drawn only
+            // where the deck also keeps a plan; the form owns that second half.
+            canSetTheoryMarks
             folders={{
               paths,
               unread: folders.query.isError ? ipcError(folders.query.error) : null,

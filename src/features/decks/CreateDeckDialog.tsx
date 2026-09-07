@@ -38,12 +38,13 @@ const BLANK: DeckSettingsValue = {
   // `theory_mark_name` are `NOT NULL DEFAULT 1`, so this pair is the schema's own answer written
   // where the draft can read it — a `deck_create` that carried them would be a second opinion
   // about a default the table already owns, and `DeckInput` deliberately has no field for either.
-  // The two rows are drawn only under a switched-on theory list, so a deck born the ordinary way
-  // never shows them at all. A reader who turns the plan on *here* does get them, and switching
-  // one off then would not reach the new deck — the honest fix for that is a field on
-  // `DeckInput`, not a second write after the INSERT, and it is not what this dialog is for:
-  // both marks are a *reading* preference, one press away in Deck settings on the deck that
-  // opens the moment Create is pressed.
+  // **And the two switches are not drawn here at all** — this dialog passes no
+  // `canSetTheoryMarks`, which is `defaultCategoryId`'s arrangement one field over: the question
+  // is not answerable yet rather than answerable and skipped. A reader who turned the plan on in
+  // *this* dialog would otherwise get a pair of switches whose presses reach nothing, and a
+  // control that cannot take effect teaches them something false about the deck they are making.
+  // Both marks are a *reading* preference, one press away in Deck settings on the deck that opens
+  // the moment Create is pressed.
   theoryMarkExact: true,
   theoryMarkName: true,
   folderId: null,

@@ -329,6 +329,30 @@ describe("the create deck dialog", () => {
   });
 
   /**
+   * **The two theory-mark switches are not drawn here, and turning the plan on does not raise
+   * them.** This dialog passes no `canSetTheoryMarks`, which is the arrangement
+   * `defaultCategoryId`'s "Add cards to" row already has: the question is not answerable yet
+   * rather than answerable and skipped.
+   *
+   * The plan is switched **on** first, because that is the only way to reach the case at all —
+   * the form's other gate would hide them anyway on a deck born with no plan, so a test that
+   * left the switch alone would pass against a create dialog that did draw them.
+   *
+   * What it prevents is a control whose press reaches nothing: `DeckInput` carries neither
+   * column, `decks.theory_mark_exact`/`_name` are `NOT NULL DEFAULT 1`, and the deck would be
+   * born with both marks on however the reader had left the switches.
+   */
+  it("offers no theory-mark switches, even with the plan switched on", async () => {
+    wrap(<Harness />);
+
+    await userEvent.click(await screen.findByRole("switch", { name: /Theory deck/ }));
+
+    expect(screen.getByRole("switch", { name: "Theory deck Enabled" })).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: /matching printing/i })).toBeNull();
+    expect(screen.queryByRole("switch", { name: /different printing/i })).toBeNull();
+  });
+
+  /**
    * A field the reader left empty is **absent**, never `""`.
    *
    * This is an INSERT, so an absent field is the column's own default — NULL — while an empty

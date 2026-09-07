@@ -134,6 +134,33 @@ export interface DeckSettingsFormProps {
    * not answerable yet, rather than answerable and skipped.
    */
   categories?: readonly DeckCategory[];
+  /**
+   * Whether an answer about the deck's two theory marks has anywhere to be **written** — absent
+   * (or `false`) for a host asking about a deck that does not exist yet, and then the two rows
+   * under the theory switch are not drawn at all.
+   *
+   * **This is {@link DeckSettingsFormProps.categories}' rule reaching a second field**, and the
+   * argument is that one word for word: at create the question is *not answerable yet* rather
+   * than answerable and skipped. `DeckInput` carries neither `theoryMarkExact` nor
+   * `theoryMarkName` — the columns are `NOT NULL DEFAULT 1` and the schema owns a new deck's
+   * answer — so a reader who switched the plan on inside "New deck" and then switched a mark off
+   * would be answering a question nothing could write down: the deck would be born with both
+   * marks on, and nothing on screen would say the press was dropped. **A control that cannot take
+   * effect is worse than no control**, because it teaches the reader something false about their
+   * deck. Both marks are a *reading* preference, one press away in Deck settings on the deck that
+   * opens the moment Create is pressed.
+   *
+   * **A prop of its own rather than `categories`' absence read a second time.** The two hosts
+   * happen to answer both the same way today, and they are two questions — "has this deck any
+   * piles to file into" against "is there a deck row for a mark to be written to" — so one prop
+   * standing for both would take the marks away the day a host has a deck and passes no piles.
+   * `src/features/decks/CLAUDE.md`'s "three independent questions" rule, one field over.
+   *
+   * **The two fields stay required on {@link DeckSettingsValue} whatever this says**, which is
+   * that value's own rule: a shape that changed with its host would be two shapes. The create
+   * draft holds `true` for both and sends neither.
+   */
+  canSetTheoryMarks?: boolean;
   cover: DeckCoverPickerProps;
   idPrefix: string;
 }
@@ -188,6 +215,8 @@ export function DeckSettingsForm({
   formats,
   folders,
   categories,
+  // Absent is a host that cannot write the answer, which is the create dialog — see the prop.
+  canSetTheoryMarks = false,
   cover,
   idPrefix,
 }: DeckSettingsFormProps): JSX.Element {
@@ -223,11 +252,14 @@ export function DeckSettingsForm({
             onChange={(theoryEnabled) => onChange({ theoryEnabled })}
             id={idPrefix}
           />
-          {/* **Only while there is a plan**, which is the gate rather than a greyed pair. Both
-              marks are drawn by comparing the live list against the theory list, so on a deck
-              with no theory list there is nothing for either to compare against — a switch there
-              would change what is on screen not at all, and nothing on screen would say why. */}
-          {value.theoryEnabled && (
+          {/* **Two gates, and they are two different questions.** `theoryEnabled` is *is there a
+              plan to compare against* — both marks are drawn by reading the live list against the
+              theory list, so with no plan a switch here would change what is on screen not at all
+              and nothing on screen would say why. {@link DeckSettingsFormProps.canSetTheoryMarks}
+              is *can this host write the answer down* — `false` at create, where `DeckInput`
+              carries neither column. Neither is a greyed pair: a control that changes nothing and
+              a control that cannot take effect are both worse than no control. */}
+          {value.theoryEnabled && canSetTheoryMarks && (
             <TheoryMarkSwitches
               exact={value.theoryMarkExact}
               name={value.theoryMarkName}
