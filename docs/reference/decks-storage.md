@@ -131,12 +131,16 @@ preferred_finish`'s nullability one table over.
     foil — the reader moved a card, or chose a printing, not an object. `deck_set_card_finish` is
     the one command whose subject it is, and the only one that checks the target against
     `cards.finishes`.
-  - **Two things did not change and both look as though they should have.** `engine.ts` counts
-    copies by card **name** and sums across rows, so a foil row and a plain row are two copies of
-    one card; and owned/missing matches on **oracle id** and has always ignored finish, condition
-    and language, so a foil row is answered by whatever copies of that card the deck's group
-    holds. Making a foil deck row want a foil copy specifically is a different feature with its
-    own answer to "what happens when you own three regular and play one foil".
+  - **One thing did not change and one did, and the second looked as though it never would.**
+    `engine.ts` still counts copies by card **name** and sums across rows, so a foil row and a
+    plain row are two copies of one card. Owned/missing is the one that moved: through
+    2026-09-06 it matched on **oracle id** and ignored finish (and condition and language)
+    entirely, so a foil deck row was answered by whatever copies of that card the deck's group
+    held, foil or not — this page used to call making a foil row want a foil copy specifically
+    "a different feature with its own answer". `owned_by_printing` is that answer: it matches
+    `(card_id, finish)` since 2026-09-07, so a foil row now reads missing against a group
+    holding only the regular copy. Condition and language are still ignored — that much really
+    is unchanged.
 - **`is_active = 0` is the whole of what `maybe` used to mean.** An inactive category counts
   toward nothing — not size, not copies, not legality — and `attribute_owned` hands it no copies
   from the group. The Maybeboard is not a special case in five files any more; it is one seeded row with
@@ -167,7 +171,7 @@ preferred_finish`'s nullability one table over.
   which is worth saying plainly because it reads like a leftover. It used to be a fence around
   `deck_allocations` carrying no variant: a `theory` read walked the *live* deck's stored claims,
   and without the filter a plan was handed the copies the sleeved deck had reserved. A **group is
-  not scoped to a variant either**, so `owned_by_oracle` still answers the whole deck's copies;
+  not scoped to a variant either**, so `owned_by_printing` still answers the whole deck's copies;
   what changed is that the map is a fact about where cards *are* rather than a ledger of what was
   reserved. The conclusion is the same one, still drawn explicitly here rather than left to a
   table's shape, and still pinned by `the_allocator_claims_nothing_for_the_theory_variant`. The
@@ -326,7 +330,7 @@ preferred_finish`'s nullability one table over.
   so renaming a category does not answer a Cardmarket reader in dollars.
 - **Owned is where the copies sit, and there is no allocator** (schema v25). `deck_allocations`,
   `allocate_deck`, `allocate_every_deck`, `kind_rank`, `Candidate` and `decks.is_built` are all
-  deleted. What replaced them is one statement:
+  deleted. What replaced them at v25 was one statement grouped by oracle id:
 
   ```sql
   SELECT c.oracle_id, sum(e.quantity)
@@ -337,16 +341,37 @@ preferred_finish`'s nullability one table over.
    GROUP BY c.oracle_id
   ```
 
-  `deck::owned_by_oracle` — **`sum(quantity)` over the deck's own group, keyed by oracle id** —
-  and `attribute_owned` hands that map out along `read_deck_cards`' `ORDER BY`, which is the
-  read's order and never a caller's, so the number a row shows cannot depend on how a view chose
-  to display the list. **Matched by oracle id, not by printing**, so a Bolt is still a Bolt: an
-  Alpha copy in the group answers an M10 row in the list, which is what a reader means by "I have
-  that card". Two kinds of row are passed over rather than served last, and the shape is
-  unchanged from the allocator's day even though the reason for each has moved — a row in an
-  **inactive** category (a switched-off pile counts toward nothing anywhere, so letting it take
-  from the pool would move copies onto a scratchpad) and a row in the **theory** list (a plan
-  reserves nothing).
+  **That statement narrowed to the printing on 2026-09-07**, because the count it answered and
+  [the pull](#the-pull-filling-a-hole-the-list-already-has) that fills it were asking at
+  different grains: the count could read *N missing* while the pull, matching exactly, honestly
+  had nothing to offer for any of it — the disagreement [issue
+  #351](https://github.com/Msgaihede/mtg-grimoire/issues/351) actually reported. The fix narrowed
+  the count to meet the pull rather than widening the pull to meet the count:
+
+  ```sql
+  SELECT e.card_id, e.finish, sum(e.quantity)
+    FROM collection_entries e
+    JOIN collection_folders f ON f.id = e.folder_id
+   WHERE f.deck_id = ?1
+   GROUP BY e.card_id, e.finish
+  ```
+
+  `deck::owned_by_printing` (`owned_by_oracle` before that day) — **`sum(quantity)` over the
+  deck's own group, keyed by `(card_id, finish)`** — and `attribute_owned` hands that map out
+  along `read_deck_cards`' `ORDER BY`, which is the read's order and never a caller's, so the
+  number a row shows cannot depend on how a view chose to display the list. **Matched by printing
+  and finish, not by oracle id, so a Bolt is no longer just a Bolt**: an Alpha copy in the group
+  no longer answers an M10 row in the list, which reverses what this page said until 2026-09-07 —
+  a reader who wants that substitution still has it, one press at a time, through the Collection
+  Search tab. **`JOIN cards` is gone with the rename**, and that is a behaviour change worth
+  stating on its own rather than filing as an optimisation: an orphaned `collection_entries`
+  row — one whose `card_id` is no longer in `cards` — used to have no oracle id to group by and
+  read owned `0`; at the printing grain there is nothing to look up, the deck row and the
+  collection row name the same `card_id`, and the copy counts. Two kinds of row are passed over
+  rather than served last, unchanged in shape from the allocator's day even though the reason for
+  each has now moved twice — a row in an **inactive** category (a switched-off pile counts toward
+  nothing anywhere, so letting it take from the pool would move copies onto a scratchpad) and a
+  row in the **theory** list (a plan reserves nothing).
 
   **The cost is honest and worth stating: owned/missing is now exactly as accurate as the
   reader's filing.** The allocator guessed for them — it swept every collection row a deck's
@@ -354,7 +379,10 @@ preferred_finish`'s nullability one table over.
   whether or not the reader had ever sleeved it up. Now a copy counts for a deck when it is
   *in that deck's group*, and a reader who has not filed their cards sees a deck full of red.
   That is the trade the release makes: a number that is wrong in a way nobody can see, exchanged
-  for a number that is exactly the reader's own filing and can be corrected by dragging.
+  for a number that is exactly the reader's own filing and can be corrected by dragging. **And
+  since 2026-09-07 "the reader's own filing" is read down to the exact printing and finish
+  too**: a deck listing the Alpha Bolt with only an M10 copy on the shelf reads as missing until
+  the reader drags the right printing in or presses *Use this printing*.
 
   Three failure modes went with the allocator, and each was real:
 
@@ -371,14 +399,72 @@ preferred_finish`'s nullability one table over.
     which is now closed by there being nothing to re-run. A `sum()` over the group is current at
     every read.
 
+  **The group is kept honest at the new grain by a sweep, not by the read.**
+  `deck::release_unclaimed_copies(tx, deck_id, variant)` — 2026-09-07 — walks this deck's group
+  and moves every copy no **live** `deck_cards` row claims at `(card_id, finish)` into
+  `Recently removed`, through the same `collection_folders::take_copies` split every other
+  release in this crate uses: a partial take on a row the eleven-term grain would otherwise
+  collide on, never a bare `UPDATE`. "Claimed" means every **live** row, switched-off piles
+  included — `attribute_owned` hands an inactive pile no copies, but the switch decides what is
+  *counted*, not what is *claimed*, and reading it the other way would turn flipping a category
+  off into a press that evicts that pile's cards from the deck. `swap_printing` and
+  `set_card_finish` are the two callers, each running it **after** its own rewrite and inside the
+  same transaction — the only two commands that change a live row's identity while touching no
+  collection table, so before this sweep existed the group still held the *old* printing's
+  copies once the reader swapped away from it (`release_group_copies`'s own doc already recorded
+  the consequence: "after *Use this printing* the group still holds the *old* printing's row").
+  A sweep after the rewrite rather than a targeted release before it, because a swap can *fold*
+  into a line the deck already has — reading the finished list against the group answers both
+  the plain case and the folded one with one query, where a targeted release on the old identity
+  would have to reason about the fold to get the quantity right. A deck with no group holds
+  nothing rather than refusing, and a missing `Recently removed` folder is resolved only when
+  there is something to file — both `release_group_copies`' existing asymmetries, carried over so
+  the two functions behave alike.
+
+  **`release_group_copies` lost the oracle-grain fallback its `ORDER BY CASE` used to fall
+  through to, and keeping it would now be a bug rather than a fix.** That fallback matched the
+  exact `(card_id, finish)` first, then the same `card_id` at another finish, then any row in the
+  group sharing an `oracle_id` — the third arm existing to cure exactly the stranding
+  `release_unclaimed_copies` now prevents at the source. Under the exact grain it would raid a
+  sibling line instead: a deck may legitimately list both LEA Bolt and M10 Bolt, with the group
+  holding both, and cutting the LEA line short would give back M10 copies the M10 line still
+  claims — the second arm is the same bug in the finish dimension. So the query narrows to the
+  exact `(card_id, finish)` match and the `ORDER BY` reduces to `e.id`, and `swap_printing` and
+  `set_card_finish` are the ones that now keep the promise the fallback used to.
+
+  **Schema v36 runs the same sweep once, over every file that predates it.** The v25 conversion
+  "replaced matched candidates by oracle id, so the conversion routinely files a printing the
+  deck does not list" (`release_group_copies`'s own doc) — the `if v < 36` rung inlines
+  `release_unclaimed_copies`'s logic in its own SQL and arithmetic rather than calling the app
+  function (a migration step is history the day it ships, and app code it called would silently
+  change what an old file is converted into), and applies it to every `collection_folders` row
+  with `kind = 'deck'`. Where the copies land is load-bearing: `Recently removed` is ranked
+  **second** in [`deck_pull::CANDIDATE_SQL`](#the-pull-filling-a-hole-the-list-already-has)'s
+  `ORDER BY CASE`, after the root and before the reader's own folders, so the first press of
+  `Import missing cards from collection…` offers those very copies straight back for every line
+  that genuinely matches them, and the lines that do not match are honestly missing. A missing
+  `Recently removed` folder skips the rung's move rather than failing it, for `NO_REMOVED_FOLDER`'s
+  reason one level up: a hand-edited file without that folder must still open.
+
+  **The residual is named rather than mechanised.** A device running an older build can still
+  sync a `collection_entries.folder_id` that mismatches what its own live list claims —
+  `release_unclaimed_copies` is idempotent and cheap to re-run, so the state is curable, but
+  nothing in this design runs it on a sync. That is a known gap, written down here rather than
+  built around.
+
   **`collection_to_deck` refuses a card the deck's live list does not already play** since
   2026-09-03 — `collection_alloc::NOT_IN_DECK`, issue #358. Filing assigns copies to a list rather
   than joining a card to a deck, so the one write that could create a placement is no longer
   allowed to satisfy the invariant by writing the other half itself. **The match is
-  `deck::PLAYED_KEY`, `coalesce(c.oracle_id, dc.card_id)`** — the same oracle-first rule with the
-  same printing fallback that `release_group_copies` holds one function away, so an Alpha Bolt fills
-  a deck listing the M10 one and a `deck_cards` row whose printing has left the corpus is still
-  matched by its own id. **Live only**: a plan holds no cards, so a theory-only listing refuses.
+  `deck::PLAYED_KEY`, `coalesce(c.oracle_id, dc.card_id)`** — oracle-first with the printing as
+  the fallback, so an Alpha Bolt fills a deck listing the M10 one and a `deck_cards` row whose
+  printing has left the corpus is still matched by its own id. **This is a different question
+  from attribution and answers it on purpose**: PLAYED_KEY asks *does the deck play this card at
+  all*, never which copies count toward it, and until 2026-09-07 it was `release_group_copies`'s
+  own oracle-grain fallback rule reused rather than re-spelled. That rule left
+  `release_group_copies` the day the exact-grain change made it a bug there (above), so
+  PLAYED_KEY is the rule's only home now. **Live only**: a plan holds no cards, so a theory-only
+  listing refuses.
   Two thin reads over the same expression serve the surfaces that say it early —
   **`deck_played_keys(deckId)`**, every key a deck's live list plays, and
   **`deck_ids_playing(keys)`**, every deck that plays *every* key given (`GROUP BY … HAVING
@@ -400,8 +486,9 @@ preferred_finish`'s nullability one table over.
   `deck_meta::delete_category`'s cascade arm, `deck::clear_category`, `deck::clear_variant`,
   `import::commit_import`'s `replace` arm, and Settings' `reset::clear_decks`. The five that
   release *one card at a time* share `deck::release_group_copies`, the crate's one walk over a
-  group's rows, which matches on the oracle card with the exact printing first — the four bulk
-  ones reach it through `release_live_copies`, which asks the `live` question for all of them;
+  group's rows, which matches the exact `(card_id, finish)` and nothing looser since 2026-09-07
+  (it fell back to the oracle card before that day; see above) — the four bulk ones reach it
+  through `release_live_copies`, which asks the `live` question for all of them;
   the two that empty a whole folder — `delete_deck` and `clear_decks` — walk the sub-tree and
   re-file every row through `refile_entry`, the `delete_folder` rule reused. Everything else that
   changes the number is an ordinary
@@ -419,8 +506,9 @@ preferred_finish`'s nullability one table over.
   property the old run list was trying to give and could not.
 
   **The card search tab beside the deck answers the same question, and until 2026-09-03 it did
-  not** ([issue #349](https://github.com/Msgaihede/mtg-grimoire/issues/349)). `owned_by_oracle`
-  has been the deck's own group since v25, so the row's `2/4` was already right — but the `×N` a
+  not** ([issue #349](https://github.com/Msgaihede/mtg-grimoire/issues/349)). `owned_by_printing`
+  (`owned_by_oracle` before 2026-09-07) has scoped to the deck's own group since v25, so the
+  row's `2/4` was already right — but the `×N` a
   tile in the search column wears came from `collection_source::copies_of_oracle` with no scope at
   all, so a card whose whole playset was sleeved into other decks read `×4` in the one place the
   reader was deciding what to add. The **Collection** tab two components over had answered the
@@ -1518,15 +1606,20 @@ before anything moves.
   that reading. **This deck's own group is excluded by the same clause and has to be**: those
   copies are already counted in `owned_quantity`, so offering them would be offering to fill a
   hole with the thing already in it.
-- **The exact printing and the exact finish, which is narrower than the number it is filling.**
-  Owned/missing is attributed at the **oracle** grain — `owned_by_oracle`, "a Bolt is a Bolt" —
-  so an Alpha Bolt filed in the group makes an M10 line read as owned. The pull deliberately does
-  not do that. It fills strictly fewer holes than the app itself would count as fillable, and
-  what the trade buys is that nothing is ever moved that is not the exact piece of cardboard the
-  list names. **A reader who wants the substitution still has it**: the Collection Search tab
-  files any copy into any deck, one press at a time. The narrowing is a decision (2026-09-03,
-  the reader's own call) and not an oversight — it is pinned on both sides so that changing it
-  later is deliberate.
+- **The exact printing and the exact finish — and since 2026-09-07 that is also the grain
+  owned/missing counts at, not a narrower one.** Through 2026-09-06, owned/missing was attributed
+  at the **oracle** grain — `owned_by_oracle`, "a Bolt is a Bolt" — so an Alpha Bolt filed in the
+  group made an M10 line read as owned while the pull, matching exactly, could offer nothing for
+  it: a deck could read *N missing* with a dialog that honestly had no candidates for any of it.
+  `owned_by_printing` closed that by narrowing the **count** to `(card_id, finish)` — the same
+  pair `CANDIDATE_SQL` matches on — rather than by widening the
+  pull, so the two no longer disagree about what "owned" means. What survives unchanged is the one
+  sentence that was never about the grain: nothing is ever moved that is not the exact piece of
+  cardboard the list names, so an Alpha Bolt in the binder is never handed to an M10 line instead.
+  **A reader who wants the substitution still has it**: the Collection Search tab files any copy
+  into any deck, one press at a time. The exactness itself is a decision (2026-09-03, the reader's
+  own call) and not an oversight — it is pinned on both sides so that changing it later is
+  deliberate.
 
 **The shortfall folds to `(card_id, finish)` and never to the pile.** The same card short in two
 categories is one row for the sum, because what a reader is short of is cardboard and custody is
@@ -1938,7 +2031,7 @@ right, and the reason no count of commands is written on this page.
 
 ## Tokens and emblems: derived on every open, deviations stored
 
-`deck_tokens.rs` and user schema **v36**,
+`deck_tokens.rs` and user schema **v37**,
 [issue #388](https://github.com/Msgaihede/mtg-grimoire/issues/388), landed 2026-09-07. Every
 figure below was measured that day against the debug corpus at
 `src-tauri/target/debug/data/corpus.db` (117 621 rows), in Node unless it says otherwise; the
@@ -2071,7 +2164,7 @@ CREATE UNIQUE INDEX idx_deck_tokens_uid ON deck_tokens (sync_uid);
 
 ### `quantity` is a synced **field** and not a counter, on two grounds
 
-`deck_tokens` is the **thirteenth** synced table (`schema::SYNCED_TABLES`, user schema v36), and
+`deck_tokens` is the **thirteenth** synced table (`schema::SYNCED_TABLES`, user schema v37), and
 it is where this distinction is written out. Mechanically a counter carries `NEW - OLD` and this
 column is nullable, so there is no arithmetic to carry — `deck_cards.quantity` can be a counter
 precisely because it is `NOT NULL`. Semantically last-write-wins is what is wanted:
@@ -2211,7 +2304,7 @@ Bolt"* — neither suite caught it, because both names were **correct** and mere
 
 ### `decks.tokens_open`, and the one thing it does not do
 
-v36's second half is `decks.tokens_open INTEGER NOT NULL DEFAULT 0` — whether the editor's
+v37's second half is `decks.tokens_open INTEGER NOT NULL DEFAULT 0` — whether the editor's
 **Tokens & emblems** area is expanded, per deck, beside `last_variant`, `last_group_by`,
 `last_sort_by` and `separate_x_group`. It is on the `decks` capture `Spec` with those three, so it
 travels the same way and for the same reason.

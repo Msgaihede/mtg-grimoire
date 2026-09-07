@@ -4471,7 +4471,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         // whole of why this editor scrolls. Both live on the panel's own root, so this mount
         // cannot get either wrong.
         //
-        // `tokensOpen` is the deck's own column (`decks.tokens_open`, schema v36) rather than
+        // `tokensOpen` is the deck's own column (`decks.tokens_open`, schema v37) rather than
         // editor state, for `separateXGroup`'s reason one control over: whether a reader wants
         // the token wall in front of them is an answer about a *particular* deck, and a
         // `useState` here would ask it again every time they opened one.

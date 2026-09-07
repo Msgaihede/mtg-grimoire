@@ -654,9 +654,17 @@ describe("a story can read the world it was given", () => {
    * What a deck owns is what sits in **its own group**, and the two seeded shapes are here in one
    * test because they are one rule read from both ends.
    *
-   * Deck 1's group holds two foil Counterspells and one damaged Ragavan; the deck lists four
-   * *nonfoil* of each, and reads owned 2 and 1 — **finish-blind and oracle-grained**, which is
-   * the half of the old allocator that survived it.
+   * Deck 1's group holds two **nonfoil** Counterspells and one damaged nonfoil Ragavan; the deck
+   * lists four nonfoil of each, and reads owned 2 and 1 — the exact `(card_id, finish)` match
+   * `attribute_owned` has made since 2026-09-07.
+   *
+   * **Both numbers are unchanged from the day the count was finish-blind and oracle-grained, and
+   * the seed is what moved**: those Counterspells were `foil` until 2026-09-07, and the pair
+   * answered a nonfoil line only because the old read was blind to the difference. Under the
+   * exact grain a foil row here would be a copy `release_unclaimed_copies` sweeps out of the
+   * group on sight, so `seeds.ts` was corrected rather than this expectation. Two numbers that
+   * survive a grain narrowing untouched are exactly the case a comment can go on describing the
+   * old world in — which is why this paragraph exists.
    *
    * Deck 2's group holds **one** card, the Sol Ring the deck builder's Collection Search needs
    * filed under a deck a story is not standing in — so its Sol Ring row reads 1 and every other

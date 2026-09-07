@@ -241,6 +241,77 @@ export const DeckIsGone: Story = {
 };
 
 /**
+ * **Filling the deck from the binder** — the third entrance to `Pull from collection`, and the
+ * only one that opens from the gallery rather than from inside the editor.
+ *
+ * The whole story is the entrance. What the pull panel *draws* — the rows, the source pickers
+ * where a printing sits in two places, the shortfall arithmetic — is `Decks/Pull from collection`,
+ * against hand-built rows; here the plan is the fake's own `deck_pull_plan` over deck 1, so what
+ * is being shown is that pressing this button really opens that dialog over this one with the
+ * deck-wide sentence under its heading.
+ *
+ * **And that one Escape closes one layer.** The pull is mounted *inside* the settings dialog, so
+ * the two are peers on `useDismissOnEscape`'s capture stack with the pull on top: the first press
+ * takes the pull and hands the caret back to the button that opened it, and the settings dialog is
+ * still standing behind it. A ladder that collapsed would close both at once, or the wrong one —
+ * which is a thing no rendering assertion can see.
+ */
+export const ImportFromCollection: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findByLabelText("Name");
+
+    const trigger = await canvas.findByRole("button", {
+      name: "Import missing cards from collection…",
+    });
+    await userEvent.click(trigger);
+
+    const pull = await canvas.findByRole("dialog", { name: "Pull from collection" });
+    // The dialog is a `motion` surface inside another one, so its first painted frame carries its
+    // `initial` — see `Default` for the whole reason and why the wait is {@link FRAME_WAIT}.
+    await waitFor(() => expect(pull).toBeVisible(), { timeout: FRAME_WAIT });
+    // The deck-wide sentence, which is the whole of what passing no `cardName` buys: the per-card
+    // entrance says "Copies of X you already own" instead.
+    await expect(
+      within(pull).getByText(/Cards this deck is short of that you already own/),
+    ).toBeInTheDocument();
+    await expect(canvas.getByRole("dialog", { name: "Deck settings" })).toBeInTheDocument();
+
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() =>
+      expect(canvas.queryByRole("dialog", { name: "Pull from collection" })).toBeNull(),
+    );
+    await expect(canvas.getByRole("dialog", { name: "Deck settings" })).toBeInTheDocument();
+    await waitFor(() => expect(trigger).toHaveFocus());
+  },
+};
+
+/**
+ * Deck 4, the testbed, which has nothing on the reader's desk that fits a hole in its live list.
+ *
+ * **An empty plan is the ordinary answer rather than a fault**, so the button greys and says why
+ * in its own visible name — the rule the two Clear buttons under it already follow, and the reason
+ * is that a greyed control whose name is the bare label reads to a screen reader, and to a test,
+ * as a control that is *missing* rather than one with nothing to do.
+ *
+ * A pull moves only the exact printing **and finish** the list names and never a copy another deck
+ * is already holding, which is why a deck can read missing and still have nothing to import.
+ */
+export const NothingToImport: Story = {
+  args: { deckId: 4 },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findByLabelText("Name");
+
+    await expect(
+      await canvas.findByRole("button", {
+        name: "Import missing cards from collection… (nothing to import)",
+      }),
+    ).toBeDisabled();
+  },
+};
+
+/**
  * Closed is **nothing mounted**, not a hidden panel — so a dialog nobody opened asks the
  * backend for no deck, no folder tree and no format table either.
  *

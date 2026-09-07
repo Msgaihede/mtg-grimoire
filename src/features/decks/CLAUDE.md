@@ -498,7 +498,8 @@ reader to configure the deck they had just made; it now asks all of them.
     greyed submenu cannot be opened, so its sentences would be written where nobody can reach them.
   - **The inactive arm is the one a live pass added, and it is the reason this feature owes one**
     (2026-09-03, debug build, real database). `attribute_owned` hands a switched-off pile nothing
-    out of the deck's group — `category_active` is tested before the oracle total is spent — so
+    out of the deck's group — `category_active` is checked before the row is allowed to draw on its
+    `(card_id, finish)` pool, which since 2026-09-07 is the grain the whole count is kept at — so
     **every** row in one reads `0` owned whatever the folder holds. Without the arm that `0` read
     as a shortfall: the submenu offered *Quick add 1 copy* on a Maybeboard line, the press was
     legal (the deck plays the card, so `NOT_IN_DECK` passes), the copies were recorded, **and the
@@ -508,6 +509,11 @@ reader to configure the deck they had just made; it now asks all of them.
     reason and is the precedent rather than a coincidence. It greys rather than being made to
     work, because a shortfall computed against a number the backend refuses to count would put
     two answers on one screen.
+    **That sentence is also `quickAddBlock`'s own doc in `quickCollection.ts`, and the pair drifts
+    together or not at all.** Both said "before the **oracle total** is spent" until 2026-09-07 and
+    both were wrong the moment the grain narrowed — there is no oracle total left to spend. One was
+    corrected and the other was not, which is how the phrase survived a sweep; reword them in the
+    same commit.
   - **The pure half is `quickCollection.ts` and the name is load-bearing on Windows.** It was
     planned as `quickAdd.ts`, and `QuickAdd.tsx` already sits in this folder: a case-insensitive
     file system resolves `./quickAdd` and `./QuickAdd` to whichever the resolver reaches first, so
@@ -550,11 +556,23 @@ reader to configure the deck they had just made; it now asks all of them.
   the reader moved a card or chose a printing, not an object.
   **Two rules did not change and both look as though they should have.** `engine.ts` counts
   copies by card **name** and sums across rows, so `1 foil + 3 regular` is four copies — the
-  rules have never heard of a finish, and `engine.test.ts` pins it. And owned/missing matches
-  on oracle id and has always ignored finish, condition and language, so a foil row is answered
-  by whatever copies of that card the deck's group holds. **The undo `Cell` is deliberately finish-blind** too: a finish change
-  moves quantity *between* two rows of one printing, so a scope naming one would restore half of
-  what it read — `deck_undo::CardRow` is what grew the column instead.
+  rules have never heard of a finish, and `engine.test.ts` pins it. **The undo `Cell` is
+  deliberately finish-blind** too: a finish change moves quantity *between* two rows of one
+  printing, so a scope naming one would restore half of what it read — `deck_undo::CardRow` is
+  what grew the column instead (`deck_undo.rs`'s "A cell names no finish, on purpose").
+  **A third claim stood in this paragraph until 2026-09-07 and it is the one that did change.**
+  It read that owned/missing "matches on oracle id and has always ignored finish, condition and
+  language, so a foil row is answered by whatever copies of that card the deck's group holds" —
+  true for as long as `owned_by_oracle` was the read, and false now. It is `owned_by_printing`:
+  `attribute_owned` matches a deck row against the group at exactly **`(card_id, finish)`**, so a
+  foil row is answered only by foil copies of *that* printing and an Alpha Bolt in the group no
+  longer counts toward an M10 line. **Condition and language are still ignored**, so that half of
+  the old sentence survives intact. What the narrowing closed is a disagreement inside one screen:
+  `deck_pull::CANDIDATE_SQL` already matched at this grain, so a deck could read *N missing* with
+  nothing its own pull dialog could fill. **What it costs is in
+  [`src-tauri/CLAUDE.md`](../../../src-tauri/CLAUDE.md)** — a collection filed under the wrong
+  printing reads as missing until the reader drags or swaps — and `deck::release_unclaimed_copies`
+  plus the schema v36 rung are what keep a group honest at the new grain.
 - **`Set as foil` is one row with three shapes, and it greys _silently_.** `deckCardMenu.tsx`'s
   `finishItem` follows `cardMenu.tsx`'s `collectionItem`: sold in two finishes it is a toggle
   (one press, `Set as foil` / `Set as regular`), in three a `Finish ▸` submenu in Scryfall's own
@@ -2308,7 +2326,8 @@ price | type`). An **inactive category stays its own group in all three grouping
   are one predicate in `cardControl.tsx` — because a figure and the words it is announced by must
   never disagree about whether there is a shortage at all. It guards on **two** ways
   `ownedQuantity` reads `0` without the shelf being empty, and the second is new: an inactive
-  category (the allocator claims no copy for a switched-off pile) and **the theory list**, where
+  category (`attribute_owned` passes a switched-off pile over rather than letting it draw on the
+  pool — there has been no allocator to claim anything since schema v25) and **the theory list**, where
   `deck.rs`'s rule 2 is that _a plan holds nothing_ — the copies in the deck's group belong to what
   is sleeved up, so a theory row reads 0 owned however full the collection is. That drew `0/1` on
   **every card of a plan**: a hundred red marks all saying the same untrue thing, which is what was

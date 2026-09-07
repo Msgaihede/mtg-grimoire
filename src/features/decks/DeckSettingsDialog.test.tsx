@@ -8,6 +8,7 @@ import type {
   DeckCategory,
   DeckDetail,
   DeckFolder,
+  DeckPullRow,
   DeckRow,
   FormatSpec,
 } from "@/lib/ipc";
@@ -27,9 +28,20 @@ const deckSetFolder = vi.hoisted(() => vi.fn());
 const deckFolderList = vi.hoisted(() => vi.fn());
 const formatSpecs = vi.hoisted(() => vi.fn());
 const deckClear = vi.hoisted(() => vi.fn());
+const deckPullPlan = vi.hoisted(() => vi.fn());
+const deckPullFromCollection = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { deckGet, deckUpdate, deckSetFolder, deckFolderList, formatSpecs, deckClear },
+  ipc: {
+    deckGet,
+    deckUpdate,
+    deckSetFolder,
+    deckFolderList,
+    formatSpecs,
+    deckClear,
+    deckPullPlan,
+    deckPullFromCollection,
+  },
 }));
 
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
@@ -112,6 +124,46 @@ function withPlan(): DeckDetail {
   };
 }
 
+/**
+ * One row of the pull plan: a printing this deck is short of, with a loose copy that could fill
+ * it.
+ *
+ * **The whole plan is one row deep on purpose.** This host draws none of the plan's contents —
+ * `PullFromCollectionDialog` does, and its own suite is where a row's sources, its shortfall and
+ * its picker are pinned. What is on trial here is a *count*: whether there is anything to import
+ * at all, which is the only thing about the plan this file's button reads.
+ */
+function pullRow(over: Partial<DeckPullRow> = {}): DeckPullRow {
+  return {
+    cardId: "c-Lightning Bolt",
+    name: "Lightning Bolt",
+    setCode: "2x2",
+    collectorNumber: "117",
+    finish: null,
+    short: 3,
+    categories: ["Sideboard"],
+    imageUris: null,
+    candidates: [
+      {
+        entryId: 11,
+        quantity: 3,
+        folderId: null,
+        folderName: null,
+        folderKind: null,
+        condition: "NM",
+        lang: "en",
+        altered: false,
+        signed: false,
+        proxy: false,
+        misprint: false,
+        grading: null,
+        serialNumber: null,
+      },
+    ],
+    ...over,
+  };
+}
+
 function wrap(ui: ReactElement) {
   // No retries: a test that mocks a refusal should see it on the first answer, not after
   // three, and TanStack's default would otherwise stall every failing-write assertion.
@@ -158,6 +210,10 @@ beforeEach(() => {
   formatSpecs.mockResolvedValue(SPECS);
   // `deck_clear` answers the copies it removed, never a row count — see `ipc.deckClear`.
   deckClear.mockResolvedValue(7);
+  // A deck with something to import, since that is the state every control on the section is
+  // drawn in; the empty plan is the case a test asks for by name.
+  deckPullPlan.mockResolvedValue([pullRow()]);
+  deckPullFromCollection.mockResolvedValue({ copies: 3, cards: 1 });
 });
 
 /**
@@ -848,6 +904,235 @@ describe("DeckSettingsDialog", () => {
     expect(live).toHaveAccessibleName("Clear actual list… (already empty)");
     expect(screen.getByRole("button", { name: /Clear theory list/ })).toBeDisabled();
     expect(deckClear).not.toHaveBeenCalled();
+  });
+
+  /*
+   * ---- Fill this deck from your collection ------------------------------------------------
+   *
+   * The third entrance to `PullFromCollectionDialog`, and the only one that opens from the
+   * gallery. What is on trial in this file is the *entrance*: which query it spends, what its
+   * button is called in both states, that the press really opens that dialog and not a copy of
+   * it, that the two Escape rungs are ordered, and that the write reaching the backend is the
+   * deck's own. Everything the dialog itself draws — the rows, the source pickers, the ticking,
+   * the shortfall arithmetic — is pinned in `PullFromCollectionDialog.test.tsx` and is
+   * deliberately not re-asserted here.
+   */
+
+  /** The plan is the widest read this dialog makes and nothing behind a closed dialog draws a
+   *  word of it, so a settings dialog nobody opened must not ask for one. Same claim as the
+   *  file's first case, about the query that was added last. */
+  it("reads no pull plan while it is closed", () => {
+    wrap(<DeckSettingsDialog deckId={4} open={false} onDismiss={vi.fn()} onClose={vi.fn()} />);
+
+    expect(deckPullPlan).not.toHaveBeenCalled();
+  });
+
+  /**
+   * And no plan for a deck that is not there.
+   *
+   * The section is drawn inside `{row && …}`, so there is no button to gate; what this pins is
+   * the **query** one render earlier. `deck_pull_plan` refuses a missing deck rather than
+   * answering `[]` — it is the one read here that parts company with `deck_get` on that — so an
+   * ungated hook would spend the widest question on this screen on one that can only be refused.
+   */
+  it("reads no pull plan for a deck another view deleted", async () => {
+    deckGet.mockResolvedValue(null);
+    open();
+
+    expect(await screen.findByText(/This deck is gone/)).toBeInTheDocument();
+    expect(deckPullPlan).not.toHaveBeenCalled();
+  });
+
+  /** Something to import is a live button, and the plan it is gated on is this deck's. */
+  it("offers the import when the deck is short of something it owns", async () => {
+    open();
+    await loaded();
+
+    const button = await screen.findByRole("button", {
+      name: "Import missing cards from collection…",
+    });
+    expect(button).toBeEnabled();
+    await waitFor(() => expect(deckPullPlan).toHaveBeenCalledWith(4));
+  });
+
+  /**
+   * Nothing to import is a greyed button that **says so in its own name** — the rule the two
+   * Clear buttons above it already follow, and the reason it is the visible words rather than an
+   * `aria-label`: a bare `Import missing cards from collection…` on a dead control reads to a
+   * screen reader, and to a test, as a control that is missing rather than one with nothing to do.
+   *
+   * An empty plan is the ordinary answer here rather than a failure: a pull moves only the exact
+   * printing and finish the list names, so a deck reading *12 missing* can legitimately have
+   * nothing on the reader's desk that fills a hole.
+   */
+  it("carries its reason in the name when there is nothing to import", async () => {
+    deckPullPlan.mockResolvedValue([]);
+    open();
+    await loaded();
+
+    const button = await screen.findByRole("button", {
+      name: "Import missing cards from collection… (nothing to import)",
+    });
+    expect(button).toBeDisabled();
+  });
+
+  /**
+   * **A plan that has not answered is not an empty one**, and this is the case that keeps two of
+   * the pull dialog's four states reachable.
+   *
+   * `deck_pull_plan` is the widest read this dialog makes, so it lands after `deck_get` and the
+   * section is on screen while it is still in flight. Greying the button on anything but a plan
+   * that has come back empty would make "reading…" a state nobody can see — and, worse, would put
+   * a **refused** read behind a dead control, when the whole job of the dialog's `readError` arm
+   * is to say in the backend's own words why there is no list. So the button is live and the
+   * dialog answers for itself.
+   */
+  it("stays live while the plan is still being read, and does not claim there is nothing", async () => {
+    deckPullPlan.mockReturnValue(new Promise(() => {}));
+    open();
+    await loaded();
+
+    const button = screen.getByRole("button", { name: "Import missing cards from collection…" });
+    expect(button).toBeEnabled();
+  });
+
+  /** A refused read is behind the button rather than instead of it, for the same reason: the
+   *  sentence the reader needs is the backend's, and the dialog is where it is drawn. */
+  it("still opens the dialog when the plan could not be read, so it can say why", async () => {
+    deckPullPlan.mockRejectedValue("Database is busy.");
+    open();
+    await loaded();
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Import missing cards from collection…" }),
+    );
+
+    const pull = await screen.findByRole("dialog", { name: "Pull from collection" });
+    expect(await within(pull).findByText("Database is busy.")).toBeInTheDocument();
+  });
+
+  /** The press opens the shared dialog over this one — nested, both panels in the tree at once,
+   *  which is what the Escape ladder below is about. The pull is deck-wide, so its subtitle is
+   *  the whole-plan sentence rather than the per-card one. */
+  it("opens the pull dialog over the settings dialog", async () => {
+    open();
+    await loaded();
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Import missing cards from collection…" }),
+    );
+
+    expect(await screen.findByRole("dialog", { name: "Pull from collection" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Deck settings" })).toBeInTheDocument();
+    expect(screen.getByText(/Cards this deck is short of that you already own/)).toBeInTheDocument();
+  });
+
+  /**
+   * **One Escape, one layer** — and this is the case the nested mount had to earn.
+   *
+   * `useDismissOnEscape` keeps a module-level stack and only the token on top acts, so the pull
+   * (mounted last) takes the first press and this dialog takes the second. Driven with
+   * `userEvent.keyboard`, never `window.dispatchEvent`: a synthetic window event collapses the
+   * capture phase into *registration* order, which would pass against a broken ladder.
+   */
+  it("closes the pull on the first Escape and the settings on the second", async () => {
+    const user = userEvent.setup();
+    const { onDismiss } = open();
+    await loaded();
+
+    await user.click(
+      await screen.findByRole("button", { name: "Import missing cards from collection…" }),
+    );
+    await screen.findByRole("dialog", { name: "Pull from collection" });
+
+    await user.keyboard("{Escape}");
+    expect(onDismiss).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Pull from collection" })).toBeNull(),
+    );
+    expect(screen.getByRole("dialog", { name: "Deck settings" })).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * **The caret comes back on the Escape path too, and that is the path this matters on.**
+   *
+   * The hand-back below is driven through the ✕, which is a press — and a press has already put
+   * the caret somewhere the reader can see. Escape is the keyboard reader's way out, and it is the
+   * one where a caret dropped on `<body>` costs them the rest of the dialog: their next Tab
+   * restarts at the top of the document rather than on the control they just came back from.
+   *
+   * It is one callback either way — `PullFromCollectionDialog` folds `Dialog`'s two rungs into a
+   * single `onClose` — so this cannot diverge from the ✕ case by construction. It is here because
+   * "cannot diverge" is a claim about the file as it stands, and this is the half a reader
+   * actually walks.
+   */
+  it("hands the caret back to the import button when Escape closes the pull", async () => {
+    const user = userEvent.setup();
+    open();
+    await loaded();
+
+    const trigger = await screen.findByRole("button", {
+      name: "Import missing cards from collection…",
+    });
+    await user.click(trigger);
+    await screen.findByRole("dialog", { name: "Pull from collection" });
+
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  /**
+   * The caret's way back, and it is this host's job rather than the dialog's: `Dialog` splits
+   * Escape and the ✕ from a press on the scrim, and `PullFromCollectionDialog` hands its host one
+   * callback for both because *where the caret lands is the opener's half of the contract*.
+   *
+   * The trigger is in the tree the whole time — the pull is drawn over this dialog rather than in
+   * place of the button — so this needs no effect, which is the one way it differs from the
+   * declined-clear hand-back above.
+   */
+  it("hands the caret back to the import button when the pull closes", async () => {
+    const user = userEvent.setup();
+    open();
+    await loaded();
+
+    await user.click(
+      await screen.findByRole("button", { name: "Import missing cards from collection…" }),
+    );
+    await user.click(await screen.findByRole("button", { name: "Close the pull list" }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Import missing cards from collection…" }),
+      ).toHaveFocus(),
+    );
+  });
+
+  /**
+   * **The write is the deck's own**, which is the half of this entrance a rendering test cannot
+   * see: `useDeck` already mounts `pullFromCollection` here for the clear's sake, so the dialog is
+   * handed that mutation rather than a second one spelled in this file — one command, one set of
+   * invalidations, whichever of the three entrances the reader used.
+   *
+   * The row arrives ticked and pre-picked by the backend, so the ordinary act really is one press
+   * on the footer; the picks it sends are `PullFromCollectionDialog`'s arithmetic and are pinned
+   * there.
+   */
+  it("pulls through the deck's own write, with the picks the dialog planned", async () => {
+    open();
+    await loaded();
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Import missing cards from collection…" }),
+    );
+    await userEvent.click(await screen.findByRole("button", { name: "Pull 3 copies" }));
+
+    await waitFor(() =>
+      expect(deckPullFromCollection).toHaveBeenCalledWith(4, [{ entryId: 11, quantity: 3 }]),
+    );
   });
 });
 

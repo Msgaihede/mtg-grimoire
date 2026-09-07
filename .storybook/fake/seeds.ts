@@ -381,7 +381,7 @@ function emptySeed(): FakeDb {
  * Thirteen collection rows over twelve printings, spanning all three finishes and all six
  * conditions, and every one of them is here for a branch.
  *
- * Counted: nonfoil 8, foil 3, etched 2; NM 8, LP 1, MP 1, HP 1, DMG 1, NONE 1; **21 copies
+ * Counted: nonfoil 9, foil 2, etched 2; NM 8, LP 1, MP 1, HP 1, DMG 1, NONE 1; **21 copies
  * across 13 entries**, which is why `collection_summary`'s `totalCards` and `entries` disagree
  * in every story built on this seed — as they must, since a row at zero is still a row.
  * `uniqueCards` stays **12**, because the thirteenth row is a second grade of a printing already
@@ -429,10 +429,14 @@ function starterEntries(): FakeEntry[] {
     // a story cannot accidentally file a Japanese printing under `en`.
     entry(next(), printing("sta", "105"), "etched", "NM", 1),
     // **In deck 1's group**, which is what "this card is physically in that deck" looks like
-    // since schema v25 — and the fixture that makes `ownedQuantity`'s oracle match visible: deck
-    // 1 lists four *nonfoil* `mh2 267`, this row is foil, and the deck still reads owned 2. A
-    // Bolt is a Bolt.
-    entry(next(), printing("mh2", "267"), "foil", "NM", 2, { folderId: DECK_1_GROUP }),
+    // since schema v25 — and the fixture that makes `ownedQuantity`'s attribution visible: deck
+    // 1 lists four *nonfoil* `mh2 267`, this row is two of them, and the deck reads owned 2.
+    // **Nonfoil, not foil, since 2026-09-07** — `attribute_owned` matches the exact printing and
+    // finish now, so a foil pair here would be a copy the app's own `release_unclaimed_copies`
+    // sweeps out of the group on sight (and the v36 rung sweeps out of every existing file): a
+    // fixture staging that would depict a state the app actively prevents rather than one this
+    // seed needs to draw.
+    entry(next(), printing("mh2", "267"), "nonfoil", "NM", 2, { folderId: DECK_1_GROUP }),
     // Two Sol Rings, and the pair is the fixture for "same card, different printing": the
     // any-printing wish below is filled by both — wherever either is filed, because
     // `ownedAgainstWish` counts copies and not folders — and the row after it is the unpriced
@@ -770,12 +774,12 @@ function starterDecks(): FakeDeck[] {
       formatKey: "modern",
       description: "Sixty legal cards and no plan. The shell every Modern story is cut from.",
       coverCardId: printing("mh2", "138").id,
-      // **The deck whose group holds the most cards** — see {@link starterEntries}: two **foil**
+      // **The deck whose group holds the most cards** — see {@link starterEntries}: two
       // Counterspells (`mh2 267`) and one damaged Ragavan (`mh2 138`) sit in folder 4, this
-      // deck's group, against four *nonfoil* of each on the list. So the Counterspell row reads
-      // owned 2 of 4 off a copy in the other finish, which is `owned_by_oracle`'s "a Bolt is a
-      // Bolt" made visible, and those three copies are unavailable to every other deck — the
-      // whole of what exclusivity means since schema v25.
+      // deck's group, against four of each on the list. Both are matched at `(card_id, finish)`
+      // since 2026-09-07 — nonfoil against nonfoil, exactly as the list names them — so the
+      // Counterspell row reads owned 2 of 4 and the Ragavan row 1 of 4. Those three copies are
+      // unavailable to every other deck — the whole of what exclusivity means since schema v25.
       archived: false,
       updatedAt: CLOCK_BASE - HOUR,
     }),
