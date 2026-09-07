@@ -114,6 +114,16 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     syncLiveState: vi.fn().mockResolvedValue("off"),
     syncLiveForeground: vi.fn().mockResolvedValue(undefined),
     marketplaceFeedStatus: vi.fn().mockResolvedValue([]),
+    // The wall's `+` opens `AddToCollectionButton`, and since that popup grew a purchase-price
+    // field it reads the card for the per-finish figure it offers as a **placeholder**. Absent
+    // from this object it is `undefined`, and calling `undefined()` inside a `queryFn` is an
+    // error react-query swallows into a query state — so the suite would stay green while a
+    // request failed behind every tile. Every finish answers `null`, which is the honest default
+    // here: no placeholder ever draws, so nothing in this file starts depending on a price it
+    // does not assert.
+    cardDetail: vi.fn().mockResolvedValue({
+      finishPrices: { nonfoil: null, foil: null, etched: null },
+    }),
     deckAddCard,
     deckGet,
   },

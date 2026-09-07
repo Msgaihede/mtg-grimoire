@@ -38,6 +38,12 @@ const collectionList = vi.hoisted(() => vi.fn());
 const collectionSummary = vi.hoisted(() => vi.fn());
 const collectionSetQuantity = vi.hoisted(() => vi.fn());
 const collectionRemove = vi.hoisted(() => vi.fn());
+/**
+ * The row's own `Edit copy…`, and **this command's first caller anywhere in `src/`** — it has
+ * existed on both sides of the wire since the v1 rung with only `ipc.test.ts` exercising it, so
+ * an unmocked one here is a rejection about a missing Tauri runtime rather than a write.
+ */
+const collectionUpdate = vi.hoisted(() => vi.fn());
 // The set picker rides the filter row and asks for the set list on the way up.
 const listSets = vi.hoisted(() => vi.fn());
 // The wall pre-warms its own art in the background on the first load that has rows.
@@ -89,6 +95,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     collectionSummary,
     collectionSetQuantity,
     collectionRemove,
+    collectionUpdate,
     collectionAdd,
     wishlistAdd,
     listSets,
@@ -582,6 +589,10 @@ beforeEach(() => {
   collectionSummary.mockReset().mockResolvedValue(summary({ totalCards: 2, uniqueCards: 1 }));
   collectionSetQuantity.mockReset().mockResolvedValue({ id: 7, quantity: 3, removed: false });
   collectionRemove.mockReset().mockResolvedValue({ id: 7, quantity: 0, removed: true });
+  // The edited row, kept — `collection_update` is the one write in the module that leaves a row
+  // at a quantity of zero, and it answers the id it edited unless the edit folded the row onto a
+  // neighbour. Nothing on this page reads the answer beyond the fact that it resolved.
+  collectionUpdate.mockReset().mockResolvedValue({ id: 7, quantity: 2, removed: false });
   listSets.mockReset().mockResolvedValue([]);
   prewarmCollection.mockReset().mockResolvedValue(0);
   // TCGplayer unless a test says otherwise — the default, and what every `$` below asserts.
@@ -621,7 +632,11 @@ beforeEach(() => {
     // holding that tile's key — and the next case's wall rings it, because `CardGrid` draws one
     // gold ring for the pane's card *and* for every picked tile.
     cardSelection: null,
-    importDefaults: { condition: "NM", finish: null },
+    // The store's own opening state, which moved with this PR: an import line whose file is
+    // silent lands on `NONE` rather than on Near Mint. **A persisted `NM` is deliberately
+    // left alone** by that change — a reader who has one chose it, or lived with it — so
+    // this line is the fresh install rather than every reader.
+    importDefaults: { condition: "NONE", finish: null },
     // **Flatten lives in the store now, so it survives a `cleanup()` and leaks into the next
     // test unless something puts it back.** It did: the blocks below press the chip, and every
     // describe after them inherited whichever way the last press had left it — which is how the
@@ -1508,7 +1523,14 @@ describe("CollectionPage", () => {
       expect(collectionAdd).toHaveBeenCalledWith({
         cardId: "c1",
         finish: "nonfoil",
-        condition: "NM",
+        // **`NONE`, and this reverses what the four cases below asserted until this PR.**
+        // `MENU_CONDITION` was Near Mint — the one decision a menu made on the reader's
+        // behalf, stated in the app rather than left to the backend's default. With a sixth
+        // grade meaning *not set* there is nothing left for it to decide, so the quick-add
+        // records silence. Spelled as the literal rather than imported: an assertion that
+        // reads the same constant as the code under test cannot fail when that constant
+        // moves.
+        condition: "NONE",
         quantity: 1,
         folderId: null,
       }),
@@ -2074,7 +2096,7 @@ describe("CollectionPage", () => {
     expect(await screen.findByText(/will be added to your collection/)).toBeInTheDocument();
     expect(
       within(dialog).getByRole("button", { name: "Condition when the file doesn't say" }),
-    ).toHaveTextContent("Near mint");
+    ).toHaveTextContent("Not set");
 
     // Scoped to the dialog: the page's own trigger is still on screen behind it and shares the
     // same accessible name.
@@ -2087,7 +2109,9 @@ describe("CollectionPage", () => {
             cardId: "sol-ring",
             quantity: 1,
             finish: "nonfoil",
-            condition: "NM",
+            // The dialog's own default, which is the store's: a pasted line says nothing
+            // about a grade, and `NONE` is now how the app records that it was not told.
+            condition: "NONE",
             conditionOriginal: undefined,
             purchasePrice: undefined,
             purchaseCurrency: undefined,
@@ -2269,7 +2293,14 @@ describe("the card menu", () => {
       expect(collectionAdd).toHaveBeenCalledWith({
         cardId: "c1",
         finish: "foil",
-        condition: "NM",
+        // **`NONE`, and this reverses what the four cases below asserted until this PR.**
+        // `MENU_CONDITION` was Near Mint — the one decision a menu made on the reader's
+        // behalf, stated in the app rather than left to the backend's default. With a sixth
+        // grade meaning *not set* there is nothing left for it to decide, so the quick-add
+        // records silence. Spelled as the literal rather than imported: an assertion that
+        // reads the same constant as the code under test cannot fail when that constant
+        // moves.
+        condition: "NONE",
         quantity: 1,
         // The root of the cabinet — a real destination, and what the menu names when the reader
         // has no folders for it to offer.
@@ -2510,7 +2541,14 @@ describe("the card menu", () => {
       expect(collectionAdd).toHaveBeenCalledWith({
         cardId: "c1",
         finish: "foil",
-        condition: "NM",
+        // **`NONE`, and this reverses what the four cases below asserted until this PR.**
+        // `MENU_CONDITION` was Near Mint — the one decision a menu made on the reader's
+        // behalf, stated in the app rather than left to the backend's default. With a sixth
+        // grade meaning *not set* there is nothing left for it to decide, so the quick-add
+        // records silence. Spelled as the literal rather than imported: an assertion that
+        // reads the same constant as the code under test cannot fail when that constant
+        // moves.
+        condition: "NONE",
         quantity: 1,
         // The root of the cabinet — a real destination, and what the menu names when the reader
         // has no folders for it to offer.
@@ -2575,13 +2613,71 @@ describe("the card menu", () => {
       expect(collectionAdd).toHaveBeenCalledWith({
         cardId: "c1",
         finish: "foil",
-        condition: "NM",
+        // **`NONE`, and this reverses what the four cases below asserted until this PR.**
+        // `MENU_CONDITION` was Near Mint — the one decision a menu made on the reader's
+        // behalf, stated in the app rather than left to the backend's default. With a sixth
+        // grade meaning *not set* there is nothing left for it to decide, so the quick-add
+        // records silence. Spelled as the literal rather than imported: an assertion that
+        // reads the same constant as the code under test cannot fail when that constant
+        // moves.
+        condition: "NONE",
         quantity: 1,
         // The root of the cabinet, as above: the finish is the tile's, the folder was never
         // the question.
         folderId: null,
       }),
     );
+  });
+
+  /**
+   * `Edit copy…` — the row that carries this page's half of `ipc.collectionUpdate`'s first
+   * caller, driven end to end: right-click a table row, open the dialog, change the grade, save.
+   *
+   * **A table row and never a tile**, which is the whole of the fence: a row *is* one
+   * `collection_entries` entry, and the wall's tile is the page's summary of a printing across
+   * however many entries it happens to hold. The pair of cases below is what says so — a menu
+   * built from the same page, over the same card, with and without the row.
+   */
+  describe("Edit copy…", () => {
+    it("opens the editor on the row's own copy and writes what changed", async () => {
+      const user = userEvent.setup();
+      wrap(<CollectionPage />);
+      rightClick(await screen.findByRole("row", { name: /Lightning Bolt/ }));
+      await screen.findByRole("menu");
+
+      await user.click(screen.getByRole("menuitem", { name: "Edit copy…" }));
+
+      // Seeded from the row the menu was opened on — `BOLT` is a foil Near Mint copy at the root
+      // with no purchase price recorded, so a dialog showing anything else is reading the wrong
+      // entry or none at all.
+      const dialog = await screen.findByRole("dialog", { name: "Edit copy" });
+      expect(within(dialog).getByText("LEA 161 · Foil · Collection")).toBeInTheDocument();
+      expect(within(dialog).getByRole("button", { name: "Condition" })).toHaveTextContent(
+        "Near mint",
+      );
+
+      await pickOption(user, "Condition", "Lightly played");
+      await user.click(within(dialog).getByRole("button", { name: "Save" }));
+
+      // `BOLT.id`, and only the field that moved.
+      await waitFor(() => expect(collectionUpdate).toHaveBeenCalledWith(7, { condition: "LP" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    });
+
+    it("offers no editor on the wall, where a tile stands for the printing", async () => {
+      useAppStore.setState({ collectionView: "grid" });
+      wrap(<CollectionPage />);
+      rightClick(await screen.findByRole("button", { name: "Lightning Bolt" }));
+      await screen.findByRole("menu");
+
+      // Present on the row, absent here — and absent rather than greyed, because it is missing
+      // from every tile of this wall and therefore reads as a fact about the surface.
+      expect(screen.queryByRole("menuitem", { name: "Edit copy…" })).toBeNull();
+      // The neighbouring row that *can* express the several is unaffected: this fixture has no
+      // folders, so `Move to` is out for its own reason and the claim here is only about the
+      // menu still being the collection's.
+      expect(screen.getByRole("menuitem", { name: /Add to/ })).toBeInTheDocument();
+    });
   });
 });
 
@@ -4930,6 +5026,39 @@ describe("Escape walks out of a folder", () => {
 
     await waitFor(() => expect(lastQuery().folderId).toBe(3));
     expect(screen.getByText("Trade binder")).toHaveAttribute("aria-current", "page");
+  });
+
+  /**
+   * **One press, one layer — with the copy editor open the floor gets nothing.**
+   *
+   * `Edit copy…` lives in this page's `Panel` union beside the three folder layers, and it is the
+   * one member that is **not** the page's own Escape rung's business: it is drawn as a `Dialog`,
+   * and every `Dialog` registers its own `"inner"` rung on its open flag. That rung listens in the
+   * capture phase and `preventDefault()`s, so the `"navigation"` rung below — which is bubble
+   * phase and returns early on `defaultPrevented` — never sees the press.
+   *
+   * What would go wrong without the split is not two closes: `captureStack` gives the press to
+   * whichever `"inner"` layer is on top, so it would still be one. It is the *focus* — the page's
+   * `dismiss` hands the caret back to {@link openerRef}, which only ever holds a folder card's
+   * `⋯`, and a copy editor raised from a context-menu row has no opener at all.
+   */
+  it("closes the copy editor and leaves the reader in the folder", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, FOILS]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await user.click(await screen.findByRole("button", { name: /^Trade binder folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(3));
+
+    rightClick(await screen.findByRole("row", { name: /Lightning Bolt/ }));
+    await screen.findByRole("menu");
+    await user.click(screen.getByRole("menuitem", { name: "Edit copy…" }));
+    await screen.findByRole("dialog", { name: "Edit copy" });
+
+    expect(escape()).toBe(false);
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    // Still in the drawer: the press was the dialog's, and the floor got nothing.
+    expect(lastQuery().folderId).toBe(3);
   });
 
   /**

@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID, TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { readDragData } from "@/features/decks/dnd";
+import { MENU_CONDITION } from "@/lib/conditions";
 import { readWishDrag } from "./wishDrag";
 import type {
   ImportMatch,
@@ -1395,7 +1396,9 @@ describe("the card menu", () => {
       expect(collectionAdd).toHaveBeenCalledWith({
         cardId: "c1",
         finish: "foil",
-        condition: "NM",
+        // The constant rather than the grade: a one-press add makes no decision about a copy's
+        // condition, and this suite must go red the day it starts making one again.
+        condition: MENU_CONDITION,
         quantity: 1,
         // The root, because this reader has no collection folders — which is also why
         // `Collection` above is a plain action rather than the folder submenu (v24).

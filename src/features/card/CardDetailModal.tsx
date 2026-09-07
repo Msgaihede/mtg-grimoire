@@ -66,6 +66,7 @@ import { useDecks } from "@/features/decks/useDecks";
 import { sameDeckSlot } from "@/features/decks/deckWalk";
 import { LabelSwatch } from "@/features/decks/LabelColorPicker";
 import type { DropdownOption } from "@/components/Dropdown/types";
+import { MENU_CONDITION } from "@/lib/conditions";
 import { parseFinishes, soleFinish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import {
@@ -283,10 +284,14 @@ const ACTION_PRIMARY =
   "hover:bg-accent hover:text-accent-foreground motion-reduce:transition-none " +
   "@min-[900px]/card:h-9";
 
-/** The condition a one-press add records — `useCardMenuDeps`' `MENU_CONDITION`, and for its
- *  reason: something has to choose, an unmarked card is assumed NM everywhere else in this app,
- *  and the quick-add popup is still there for a played copy. */
-const MODAL_CONDITION = "NM" as const;
+/** The condition a one-press add records — **`MENU_CONDITION` itself now, rather than a third
+ *  spelling of what it holds.** It said `"NM"`, on the argument that something has to choose and
+ *  an unmarked card is assumed Near Mint everywhere else in this app; schema v35 gave the column
+ *  a grade that means "the reader did not say", so a menu chooses nothing and the assumption is
+ *  gone with the need for it. The quick-add popup is still there for a copy whose grade the
+ *  reader knows. Pointed at the constant because two literals holding one decision drift the
+ *  first time either moves — which is `useDeck`'s rule at the app's other one-press add. */
+const MODAL_CONDITION = MENU_CONDITION;
 
 /**
  * The **In your grimoire** figures, under `["card", …]` beside this file's other two card reads.

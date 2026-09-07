@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { CardWalkStop } from "@/features/decks/deckWalk";
+import { CONDITIONS, CONDITION_NOT_SET } from "@/lib/conditions";
 import { useAppStore, type PaneDeckContext } from "@/lib/store";
 
 beforeEach(() => useAppStore.setState(useAppStore.getInitialState()));
@@ -1003,5 +1004,40 @@ describe("the export dialog's remembered choice", () => {
     useAppStore.getState().setExportPrefs("deck", { ...prefs, includeInactive: true });
     expect(useAppStore.getState().exportPrefs.deck.includeInactive).toBe(true);
     expect(useAppStore.getState().exportPrefs.collection.includeInactive).toBe(false);
+  });
+});
+
+/**
+ * What a bulk import writes into a row the file said nothing about.
+ *
+ * **One value, and it is the only thing in this store that decides what reaches the database.**
+ * Everything else here is a view preference — which layout, which pane, which deck a reader
+ * parked on — and the worst a wrong one does is draw the wrong thing. This one is a *default for
+ * a write*: a CSV with no Condition column takes it on every line, and a reader who imports a
+ * three-thousand-card collection under the wrong one has three thousand rows claiming a grade
+ * nobody assessed.
+ *
+ * Pinned against `conditions.ts` rather than against the four letters, because the two are one
+ * decision — the import dialog's dropdown is filled from `CONDITIONS` and opens on this value, so
+ * a default that drifted out of that list would set the control to a row it does not contain.
+ * `Dropdown` draws its `placeholder` for a value it cannot match, which defaults to an **em
+ * dash** — so the drift shows up as a Condition control reading `—` while the writes underneath
+ * it go on using whatever this holds, and the list opens on row 0 rather than on anything the
+ * reader chose (`startIndex`, `Dropdown.tsx:115`).
+ */
+describe("the condition a bulk import assumes", () => {
+  it("assumes nothing — a line with no grade records that no grade was given", () => {
+    expect(useAppStore.getInitialState().importDefaults.condition).toBe(CONDITION_NOT_SET);
+  });
+
+  it("offers that default as a row of the control the reader picks it from", () => {
+    expect(CONDITIONS).toContain(useAppStore.getInitialState().importDefaults.condition);
+  });
+
+  /** The finish half of the same pair, and it stays `null`: `DeckFinish`'s `null` is the regular
+   *  copy, so this pair has always said "no grade, plain cardboard" for a silent file — the
+   *  condition half is what stopped being able to say the first of those two. */
+  it("assumes nothing about the finish either", () => {
+    expect(useAppStore.getInitialState().importDefaults.finish).toBeNull();
   });
 });
