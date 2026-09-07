@@ -12,6 +12,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen }));
 import collectionRs from "../../src-tauri/src/collection.rs?raw";
 import collectionFoldersRs from "../../src-tauri/src/collection_folders.rs?raw";
 import deckRs from "../../src-tauri/src/deck.rs?raw";
+import decksortRs from "../../src-tauri/src/decksort.rs?raw";
 import deckMetaRs from "../../src-tauri/src/deck_meta.rs?raw";
 import deckPullRs from "../../src-tauri/src/deck_pull.rs?raw";
 import deckQuickAddRs from "../../src-tauri/src/deck_quick_add.rs?raw";
@@ -421,6 +422,54 @@ describe("ipc argument names match the Rust command signatures", () => {
     invoke.mockResolvedValue("commander");
     await ipc.deckLastFormat();
     expect(invoke).toHaveBeenCalledWith("deck_last_format");
+  });
+
+  /**
+   * The gallery overview's two reads, and the pair that remembers the wall's order.
+   *
+   * **`set_deck_sort`'s parameter is the one this test exists for.** It is `sort` and not
+   * `value`, and there is nothing in either build that would say so: `invoke` fills a command's
+   * parameters **by name**, so a wrapper sending `{ value }` is a runtime rejection with a green
+   * TypeScript build on one side and a green `cargo test` on the other — the picker would look
+   * like it worked all session and open on the default order at the next launch, which is a bug
+   * report about *persistence* pointing at a spelling. The crate is read for the word rather
+   * than trusted, `deck_played_keys`' rule one test down.
+   *
+   * `deck_pip_costs` takes **no arguments at all**, which is the opposite trap and the one
+   * `prewarm_collection` shipped: a command that takes only the managed state is a
+   * deserialization error when an argument object arrives, not a type error. `deck_bracket_reads`
+   * is the only one of the four with a payload, and `deck_ids` reaches the wire camelCased —
+   * `deckIds` here and `deck_ids: Vec<i64>` there are one name and have to agree.
+   *
+   * The ids go in and come back **in request order** (`bracket_reads` pushes one entry per id
+   * rather than grouping), so a caller may zip the answer against what it sent; a re-ordering
+   * mirror would hand every deck its neighbour's bracket.
+   */
+  it("asks the gallery's overview reads and the remembered sort under the names the crate declares", async () => {
+    // Not `toContain` on the sources alone: a pass has to mean "the crate spells it", never
+    // "the crate was never read".
+    expect(deckRs.length).toBeGreaterThan(1_000);
+    expect(decksortRs.length).toBeGreaterThan(500);
+
+    invoke.mockResolvedValue([]);
+    await ipc.deckPipCosts();
+    expect(invoke).toHaveBeenCalledWith("deck_pip_costs");
+    expect(deckRs).toContain("pub async fn deck_pip_costs(");
+
+    await ipc.deckBracketReads([4, 2]);
+    expect(invoke).toHaveBeenCalledWith("deck_bracket_reads", { deckIds: [4, 2] });
+    expect(deckRs).toContain("pub async fn deck_bracket_reads(");
+    expect(deckRs).toContain("deck_ids: Vec<i64>");
+
+    invoke.mockResolvedValue("name:asc");
+    await ipc.deckSort();
+    expect(invoke).toHaveBeenCalledWith("deck_sort");
+    expect(decksortRs).toContain("pub fn deck_sort(");
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.setDeckSort("colors:asc");
+    expect(invoke).toHaveBeenCalledWith("set_deck_sort", { sort: "colors:asc" });
+    expect(decksortRs).toContain("sort: String,");
   });
 
   /**
@@ -2574,6 +2623,32 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     ["WishOptimizeApplyItem", wishlistOptimizeRs, "WishOptimizeApplyItem"],
     ["WishOptimizeResult", wishlistOptimizeRs, "WishOptimizeResult"],
     ["WishlistOptimizeOutcome", wishlistOptimizeRs, "WishlistOptimizeOutcome"],
+    // **The deck gallery's two reads, added with the feature** (2026-09-07, issue #387). Four
+    // rows because both are **nested** for `OptimizePrinting`'s reason: `PipCost` is the whole
+    // content of a `DeckPipCosts` and `BracketCardRow` the whole content of a
+    // `DeckBracketRead`, so a field renamed one level down leaves the outer struct agreeing
+    // field for field while every value inside it arrives `undefined`.
+    //
+    // **`BracketCardRow` is on this list and not on `mirrors` above, and it is the closest call
+    // either table has had.** It is card-shaped — a name, oracle text, the faces blob — so the
+    // obvious reading is that the card table is where it goes. It is not: that table's two extra
+    // rules are properties of a card *wall's* row rather than of a card, and this row satisfies
+    // neither. It carries no `image_uris`, because the bracket estimate draws no picture and a
+    // gallery-wide read that shipped one would be carrying an art URL per card of every deck for
+    // a number in a caption; and it is five fields against a floor of ten, which is the same
+    // fact said twice — it is `estimateBracket`'s input and nothing else.
+    //
+    // What a drift here costs is worth stating because none of it is loud. A renamed
+    // `game_changer` reads `undefined`, `=== true` takes the other branch, and every deck in the
+    // gallery quietly estimates one bracket too low. A renamed `oracle_text` or `faces` empties
+    // the mass-land-denial and extra-turn greps, which fire on *no* deck rather than on the
+    // wrong one. A renamed `cost` on `PipCost` gives `countPips(undefined)` — no pips, no bar,
+    // on every tile at once. Every one of those is a plausible-looking gallery with a green
+    // build behind it.
+    ["PipCost", deckRs, "PipCost"],
+    ["DeckPipCosts", deckRs, "DeckPipCosts"],
+    ["BracketCardRow", deckRs, "BracketCardRow"],
+    ["DeckBracketRead", deckRs, "DeckBracketRead"],
   ];
 
   it.each(plainMirrors)(
