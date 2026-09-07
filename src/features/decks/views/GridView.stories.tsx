@@ -3,11 +3,16 @@ import { expect, fn, within } from "storybook/test";
 import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { MARKETPLACES } from "@/lib/marketplace";
 import {
+  deckCard,
+  deckCategory,
   deckGroups,
   deckTheoryMatches,
   deckViolations,
+  printing,
 } from "../../../../.storybook/fake/fixtures";
-import { THEORY_MATCH_ATTR } from "../CardMarks";
+import { THEORY_MATCH_ATTR, THEORY_MATCH_NAME_LABEL } from "../CardMarks";
+import { buildGroups } from "../grouping";
+import { theoryMatchPlan, type TheoryMarkSwitches, type TheoryPlan } from "../theoryMatch";
 import { GridView } from "./GridView";
 
 const meta = {
@@ -113,6 +118,180 @@ export const TheoryMatches: Story = {
     expect(both).toHaveAccessibleName(expect.stringContaining("rule break:"));
 
     // And a card the plan does not ask for says neither.
+    expect(canvas.getByRole("button", { name: /^Dismember/ })).toHaveAccessibleName(
+      expect.not.stringContaining("theory"),
+    );
+  },
+};
+
+/* ------------------------------------------------- the two tiers, on one wall ---------- */
+
+/**
+ * The five rows the two stories below are about — a deck whose live list holds **two printings
+ * of one planned card**, which is the shape {@link deckGroups} cannot have.
+ *
+ * That fixture is four planned cards in four printings, so every mark on it is `exact` and the
+ * loose tier is invisible there. The whole of what blue means is *another printing of a card the
+ * plan names*, and a wall with no such row can only show it by accident. So this deck is built
+ * for the comparison and nothing else:
+ *
+ * | Row | What the plan says | The mark |
+ * | --- | --- | --- |
+ * | Lightning Bolt (`lea 161`) | 4 of **this** printing, 2 sleeved | `exact`, `-2` |
+ * | Lightning Bolt (`2x2 117`) | the plan names the card, not this printing | `name`, tick |
+ * | Sol Ring (`c21 263`) | 1 of this printing, 1 sleeved | `exact`, tick |
+ * | Swords to Plowshares (`msc 143`) | 4 of `ema 32`, none of them sleeved | `name`, `-3` |
+ * | Dismember (`nph 57`) | nothing at all | none |
+ *
+ * **Both drawings in both colours, and an unmarked control**, which is the one arrangement that
+ * shows what each half of the mark carries: the two ticks differ only in colour, the two numbers
+ * differ in colour *and* in grain — `-2` is about a printing and `-3` is about a card — and the
+ * fifth row is what stops "every tile is marked" reading as a pass.
+ *
+ * The two Bolts are also the case the name grain exists for. Four copies of the card are sleeved
+ * against four planned, so the loose tier reads `0`: the reader has the Bolts they asked for and
+ * two of them are the wrong art. Green is what says which two.
+ *
+ * **The printings are named rather than the cards**, which is {@link deckTheoryMatches}' rule:
+ * `CARDS` is generated and may be regenerated against a newer sync, so a hardcoded name would go
+ * on reading as true while pointing at whatever printing that slot had become.
+ */
+function tierGroups() {
+  return buildGroups(
+    [
+      deckCard(printing("lea", "161"), { quantity: 2, ownedQuantity: 2 }),
+      deckCard(printing("2x2", "117"), { quantity: 2, ownedQuantity: 2 }),
+      deckCard(printing("c21", "263"), { ownedQuantity: 1 }),
+      deckCard(printing("msc", "143"), { ownedQuantity: 1 }),
+      deckCard(printing("nph", "57"), { ownedQuantity: 1 }),
+    ],
+    [deckCategory("main")],
+    "category",
+    "alphabetical",
+  );
+}
+
+/**
+ * The plan behind {@link tierGroups}, with the deck's own two switches passed in.
+ *
+ * Built through `theoryMatchPlan` over the same rows the view is handed, for
+ * {@link deckTheoryMatches}' reason: the numbers a story draws are then the ones the shipped
+ * arithmetic produces rather than four typed here. The slot keys are spelled the way
+ * `deck_theory.rs` spells them — `` `${cardId}|${finish ?? ""}` `` — rather than through
+ * `theorySlot`, so the fixture cannot agree with the lookup by sharing its bug. `deckCard` builds
+ * every row with `finish: null`, so these are the regular copies.
+ *
+ * **`ema 32` is a slot with no live row of its own**, which is what makes the fourth line of the
+ * table above reachable: the plan names a Swords printing the reader has not got, and the copy
+ * they *have* got is a different one. An exact tier alone would say nothing about that card at
+ * all — no live row carries its key — which is the hole the second tier was added to fill.
+ */
+function tierPlan(marks: TheoryMarkSwitches): TheoryPlan {
+  const slots = [
+    { card: printing("lea", "161"), quantity: 4 },
+    { card: printing("c21", "263"), quantity: 1 },
+    { card: printing("ema", "32"), quantity: 4 },
+  ].map((slot) => ({ key: `${slot.card.id}|`, nameKey: slot.card.name, quantity: slot.quantity }));
+  return theoryMatchPlan(
+    slots,
+    tierGroups().flatMap((group) => group.cards),
+    marks,
+  ) as TheoryPlan;
+}
+
+/**
+ * **Both tiers on one wall** — the printing the plan named in one colour, another printing of a
+ * planned card in the other.
+ *
+ * This is the story the second tier was added for, and it is the only surface where the pair can
+ * be judged: a mark is a small chip on card art, so whether two fills are far enough apart is a
+ * question about a *wall* of them rather than about either one. `CardMarks.tsx` has the four
+ * separations that keep either from reading as the rule break's red — the corner, the colour, the
+ * shape and the card's own edge — and says out loud that the colour is the one of the four a
+ * reader can defeat, in Settings → Appearance.
+ *
+ * **The two numbers are at different grains, and that is deliberate**, which this wall is also
+ * the place to see: `-2` on the green Bolt is about that *printing* (two sleeved of four planned)
+ * while `-3` on the blue Swords is about the *card* (one sleeved of four planned). The tier
+ * decides the colour and the number together — `theoryMatch.ts` carries the reasoning, and the
+ * reader chose this over one name-grain number on both tiers having been shown the case it costs
+ * the most in.
+ */
+export const BothTiers: Story = {
+  args: { groups: tierGroups(), theoryPlan: tierPlan({ exact: true, name: true }) },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const drawn = (tier: string) =>
+      [...canvasElement.querySelectorAll(`[${THEORY_MATCH_ATTR}="${tier}"]`)]
+        .map((mark) => mark.textContent)
+        .sort();
+
+    // Two of each, and **the tier is read off the attribute rather than off a colour**: the fill
+    // is a custom property now, jsdom resolves no stylesheet, and a reader who has picked their
+    // own green in Settings has moved the very value an assertion would be pinning. A tick's
+    // element has no text at all — it is an `<svg>` — so `""` is the tick and a string is a count.
+    expect(drawn("exact")).toEqual(["", "-2"]);
+    expect(drawn("name")).toEqual(["", "-3"]);
+
+    // The clause blue adds, which is the whole of what a reader who cannot see the colour gets.
+    // The mark is `aria-hidden` and bound `describes: false`, so the words are on the button.
+    expect(canvas.getByRole("button", { name: /^Swords to Plowshares/ })).toHaveAccessibleName(
+      expect.stringContaining(THEORY_MATCH_NAME_LABEL.toLowerCase()),
+    );
+    // Green's sentence is the *prefix* of blue's, so "in the theory list" cannot tell the two
+    // apart — what says this row is the printing the plan named is the absence of the rest.
+    expect(canvas.getByRole("button", { name: /^Sol Ring/ })).toHaveAccessibleName(
+      expect.not.stringContaining("a different printing"),
+    );
+
+    // The control: a card the plan does not ask for wears nothing and says nothing.
+    expect(canvas.getByRole("button", { name: /^Dismember/ })).toHaveAccessibleName(
+      expect.not.stringContaining("theory"),
+    );
+  },
+};
+
+/**
+ * The same deck with the deck's **exact** switch off — and the point is that nothing goes blank.
+ *
+ * A row the plan names the exact printing of is re-resolved one tier down rather than silenced:
+ * an exact match *is* a name match, so the fact survives the switch and what the switch turns off
+ * is the finer statement. Both Bolts and the Sol Ring draw blue here, with blue's own
+ * **name-grain** number — the green `-2` about a printing is gone, and the card-grain tick in its
+ * place is the honest reading for a reader who has four Bolts and has stopped caring which art.
+ *
+ * This is the switch for somebody playing proxies on purpose, and it is per **deck**
+ * (`DeckSettingsForm`'s two `MarkSwitch` rows) where the colours are per device — the switch is
+ * about one deck and the colour is about this screen.
+ */
+export const ExactMarkOff: Story = {
+  args: { groups: tierGroups(), theoryPlan: tierPlan({ exact: false, name: true }) },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    // **The same four rows are marked**, which is the assertion this story exists for: a switch
+    // that silenced them instead would leave three tiles bare and make the wall unreadable rather
+    // than less precise.
+    expect(canvasElement.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)).toHaveLength(4);
+    expect(canvasElement.querySelectorAll(`[${THEORY_MATCH_ATTR}="exact"]`)).toHaveLength(0);
+    expect(
+      [...canvasElement.querySelectorAll(`[${THEORY_MATCH_ATTR}="name"]`)]
+        .map((mark) => mark.textContent)
+        .sort(),
+    ).toEqual(["", "", "", "-3"]);
+
+    // The card that was green with a `-2` on it now says blue's sentence with no count at all —
+    // the number followed the tier, because the two are one statement.
+    const bolt = canvas.getAllByRole("button", { name: /^Lightning Bolt/ });
+    for (const tile of bolt) {
+      expect(tile).toHaveAccessibleName(
+        expect.stringContaining(THEORY_MATCH_NAME_LABEL.toLowerCase()),
+      );
+      expect(tile).toHaveAccessibleName(expect.not.stringContaining("than planned"));
+    }
+
+    // And the row that was never in the plan is still not in it: the fallback widens which
+    // *tier* a planned card is drawn at, never which cards are planned.
     expect(canvas.getByRole("button", { name: /^Dismember/ })).toHaveAccessibleName(
       expect.not.stringContaining("theory"),
     );

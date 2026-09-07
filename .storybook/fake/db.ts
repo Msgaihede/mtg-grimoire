@@ -1313,6 +1313,28 @@ export interface FakeDb {
    */
   flattenState: Record<string, boolean>;
   /**
+   * `app_meta.mark_colors` — what colour the reader has each card mark drawn in, as mark name →
+   * `#rrggbb`.
+   *
+   * The **fourth** row here whose value is an object, and it takes {@link FakeDb.listView}'s
+   * contract rather than {@link FakeDb.flattenState}'s beside it: both halves have a junk state.
+   * The keys are whatever some build wrote — which *marks* exist is TypeScript's vocabulary, and
+   * `isMarkColorKey` is what narrows them — while the values are text a hand-edited row really
+   * can fill with something that is not a colour. `markcolors.rs` owns only that second half, and
+   * says so: *the frontend owns which marks exist and this crate owns only the shape a colour may
+   * have.*
+   *
+   * `{}` for "nothing stored", and here the absence is the feature rather than a starting value:
+   * an uncustomised mark is drawn in what `index.css` gives it, so an entry written back at
+   * today's default would freeze the palette into the database — which is exactly what
+   * `set_mark_color`'s `null` exists to avoid. An absent key is the only way a story can stand in
+   * a mark nobody has chosen.
+   *
+   * **The read drops what it cannot use and the write refuses it** — see
+   * {@link readHandlers.mark_colors} and {@link writeHandlers.set_mark_color}.
+   */
+  markColors: Record<string, string>;
+  /**
    * `app_meta.nav_collapsed` — whether the reader has collapsed the global navigation sidebar
    * down to its icons.
    *
@@ -1813,6 +1835,24 @@ function isStorableZoom(zoom: number): boolean {
 }
 
 /**
+ * `markcolors::is_hex` — six digits and a hash, and nothing else.
+ *
+ * **Shorthand is refused here even though the picker's own field accepts it**, which is that
+ * module's stated split: `normalizeLabelColor` expands `#f00` on the frontend before anything is
+ * sent, so three digits arriving at this boundary means a caller that skipped it — and a row
+ * holding two spellings of one colour is a row whose entries cannot be compared.
+ *
+ * Written out rather than imported from `@/lib/hexColor`, for `PRINTING_GROUP_BY_MODES`' reason
+ * turned inside out: that constant is imported because the vocabulary is the *frontend's*, and
+ * this one is spelled here because the shape is the **crate's** — `markcolors.rs` is the only
+ * thing in the app that decides what may go in the row, and a fake validating with the
+ * frontend's own normaliser would agree with it by construction rather than by checking.
+ */
+function isStorableHex(color: string): boolean {
+  return /^#[0-9a-f]{6}$/i.test(color);
+}
+
+/**
  * What the `errorLog` fault seeds: one of each shape the panel has to draw.
  *
  * A folded repeat (the ×600 an unreachable image host produces — the case the whole grain
@@ -2007,6 +2047,12 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // flattened, the wishlist opens on its root. A story that wants a restored session passes the
     // page it cares about and leaves the other out.
     flattenState: {},
+    // Empty a fourth time, and this one is a reader who has chosen no colour at all: both theory
+    // marks are drawn in `index.css`'s own, which is what every story that says nothing about
+    // Appearance is standing in. A colour in here is a **press a story made** — `mutedTags`' rule
+    // one user row over, and for its reason: this panel is where a colour is chosen, so a seeded
+    // one would be a story about a state nobody arrived at.
+    markColors: {},
     // The fifth row, and the first whose default is a *value* rather than an absence: a shell
     // nobody has collapsed. `false` is what the backend answers for the row never having been
     // written and for its holding something unreadable alike, so there is no third state for
@@ -7882,6 +7928,35 @@ export function readHandlers(db: FakeDb) {
      */
     flatten_state: (): Record<string, boolean> =>
       Object.fromEntries(Object.entries(db.flattenState).filter(([section]) => section !== "")),
+
+    /**
+     * `markcolors::mark_colors` — every mark the reader has chosen a colour for.
+     *
+     * The eighth `app_meta` setting and the fourth whose value is an object, so
+     * {@link readHandlers.list_view}'s per-entry rule applies unchanged: one hand-edited entry
+     * costs that mark its colour and leaves the other standing. **Both halves of the filter are
+     * back**, which is what puts it beside the layout rather than beside
+     * {@link readHandlers.flatten_state} — the blank key is dropped as everywhere here, and a
+     * value is dropped when it is not `#rrggbb`, because the row is text and a `bool` is not.
+     *
+     * **Folded on the way out**, which is `markcolors::stored`'s own `to_ascii_lowercase`: the
+     * write folds too, so one colour has one spelling in the row — and an entry hand-written as
+     * `#56BD78` still reads back as a colour rather than being thrown away for its case.
+     *
+     * **A mark is absent rather than defaulted**, and that is the whole contract this pair
+     * carries: what an uncustomised mark is drawn in lives in `index.css`, so a fake inventing a
+     * default here would be a second opinion about a colour the stylesheet owns — and
+     * `useMarkColors` would then be unable to tell a reader who has never chosen from one who has
+     * chosen today's default, which is the distinction Reset turns on.
+     *
+     * A read, so it answers through every second of a sync — the write below does not.
+     */
+    mark_colors: (): Record<string, string> =>
+      Object.fromEntries(
+        Object.entries(db.markColors)
+          .filter(([mark, color]) => mark !== "" && isStorableHex(color))
+          .map(([mark, color]) => [mark, color.toLowerCase()]),
+      ),
 
     /**
      * `nav::nav_collapsed` — whether the global navigation sidebar was left collapsed to icons.
@@ -13967,6 +14042,44 @@ export function writeHandlers(db: FakeDb) {
       refuseIfBusy(db);
       if (args.section === "") throw refuse("A flatten section cannot be blank.");
       db.flattenState = { ...db.flattenState, [args.section]: args.flattened };
+    },
+
+    /**
+     * `markcolors::set_mark_color` — remember one mark's colour, or, with `null`, **forget** it.
+     *
+     * {@link writeHandlers.set_list_view}'s three rules with a fourth of its own. The refusals are
+     * the exact complement of the read's silence above: that one discards an unusable entry
+     * without a word, so a fake that accepted anything would let a story pick a colour, read back
+     * nothing, and look like it worked. The **mark** is unchecked past being non-empty for the
+     * asymmetry every setting here is on — which marks exist is TypeScript's vocabulary and
+     * `markcolors.rs` deliberately does not know it — and only the named mark is touched, so a
+     * key a newer build wrote survives an older build writing beside it.
+     *
+     * **The fourth rule is the `null`, and it is the one thing this handler has that its three
+     * neighbours do not.** Reset **deletes** the entry rather than storing the default, because a
+     * reader who has never chosen and one who has just reset have to end in the same state — and
+     * a default written into the row would pin today's palette forever. A fake that wrote the hex
+     * back would draw an identical panel and make Reset untestable.
+     *
+     * **The refusal is worth surfacing here where its neighbours' are not**, which is the crate's
+     * own split rather than this file's: the reader is standing in front of a swatch watching it
+     * move, so `TheoryMarksPanel` prints what this throws instead of leaving them to find out at
+     * the next launch. It honours `busy` like every other ordinary write — `markcolors.rs` takes
+     * the write connection through `sync::with_write`, and the lock comes first.
+     */
+    set_mark_color: (args: { mark: string; color: string | null }): void => {
+      refuseIfBusy(db);
+      if (args.mark === "") throw refuse("A mark cannot be blank.");
+      const next = { ...db.markColors };
+      if (args.color === null) {
+        delete next[args.mark];
+      } else {
+        if (!isStorableHex(args.color)) {
+          throw refuse(`"${args.color}" is not a colour this app can store. Expected #rrggbb.`);
+        }
+        next[args.mark] = args.color.toLowerCase();
+      }
+      db.markColors = next;
     },
 
     /**
