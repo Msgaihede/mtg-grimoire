@@ -39,7 +39,7 @@ import {
   useDeckCardDrag,
   type DeckCardActions,
 } from "../cardControl";
-import { theoryMatchDelta } from "../theoryMatch";
+import { theoryMatchMark, type TheoryMark, type TheoryPlan } from "../theoryMatch";
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
 import { ruleBreak } from "../violations";
@@ -72,7 +72,7 @@ export function GridView({
   groups,
   marketplace,
   violations,
-  theoryMatches,
+  theoryPlan,
   onSelect,
   actions,
   selectedSlot,
@@ -84,10 +84,10 @@ export function GridView({
    *  tile's own unit price. */
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
-  /** What the deck's plan says about each row — `theoryMatch.ts`'s map of slot → how far the
-   *  live list is from the planned count, handed down whole like `violations` beside it.
-   *  `undefined` for a deck with no plan, and on the plan itself. */
-  theoryMatches?: ReadonlyMap<string, number>;
+  /** The deck's plan — `theoryMatch.ts`'s two lookups and the deck's own two mark switches,
+   *  handed down whole like `violations` beside it. `undefined` for a deck with no plan, and on
+   *  the plan itself. */
+  theoryPlan?: TheoryPlan;
   onSelect?: (card: DeckCard) => void;
   /** What may be done to a card here — see {@link DeckCardActions}. */
   actions?: DeckCardActions;
@@ -156,7 +156,7 @@ export function GridView({
           group={group}
           marketplace={marketplace}
           violations={violations}
-          theoryMatches={theoryMatches}
+          theoryPlan={theoryPlan}
           onSelect={onSelect}
           actions={actions}
           selectedSlot={selectedSlot}
@@ -174,7 +174,7 @@ function GridGroup({
   group,
   marketplace,
   violations,
-  theoryMatches,
+  theoryPlan,
   onSelect,
   actions,
   selectedSlot,
@@ -185,7 +185,7 @@ function GridGroup({
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
   /** Handed through to the tiles — see {@link GridView}'s own props. */
-  theoryMatches?: ReadonlyMap<string, number>;
+  theoryPlan?: TheoryPlan;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
   /** Handed through to the tiles — see {@link GridView}'s own props. */
@@ -241,7 +241,7 @@ function GridGroup({
               card={card}
               currency={marketplace.currency}
               ruleBreakText={ruleBreak(violations?.get(card.cardId))}
-              theoryDelta={theoryMatchDelta(theoryMatches, card)}
+              theoryMark={theoryMatchMark(theoryPlan, card)}
               onSelect={onSelect}
               actions={actions}
               selected={deckCardMarked(card, selectedSlot, actions)}
@@ -283,7 +283,7 @@ function GridCard({
   card,
   currency,
   ruleBreakText,
-  theoryDelta,
+  theoryMark,
   onSelect,
   actions,
   selected,
@@ -294,10 +294,11 @@ function GridCard({
   /** How the tile's foot writes the row's one unit price. */
   currency: Currency;
   ruleBreakText: string | null;
-  /** What the deck's plan says about this row — `theoryMatchDelta`, resolved by the group so a
-   *  tile is handed an answer rather than a map to look itself up in. `null` is a card the plan
-   *  does not ask for, `0` the card it asks for exactly. */
-  theoryDelta: number | null;
+  /** What the deck's plan says about this row — `theoryMatchMark`, resolved by the group so a
+   *  tile is handed an answer rather than a plan to look itself up in. `null` is a card the plan
+   *  does not ask for; otherwise the tier it is in and how far the live list is from the plan at
+   *  that tier's own grain, where `0` is the card the plan asks for exactly. */
+  theoryMark: TheoryMark | null;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
   /** This is the card the pane is open on. */
@@ -356,7 +357,7 @@ function GridCard({
     >
       <button
         type="button"
-        aria-label={deckCardName(card, ruleBreakText, theoryDelta)}
+        aria-label={deckCardName(card, ruleBreakText, theoryMark)}
         {...deckCardProps(card)}
         {...deckCardPress(card, onSelect, actions)}
         // Inset, for the stacked card's reason: the button holds a face that clips its own
@@ -457,7 +458,7 @@ function GridCard({
               spells it (`finish !== null || gameChanger`), because a chip is drawn for **either**
               fact and reading only the finish would put the tick under an empty corner on every
               non-foil game changer. */}
-          {theoryDelta !== null && (
+          {theoryMark !== null && (
             <span
               className={cn(
                 "absolute right-[calc(0.25rem*var(--mark-scale,1))]",
@@ -467,7 +468,7 @@ function GridCard({
               )}
             >
               {/* The tile's own quantity chip, not the stack's banner — see the component. */}
-              <TheoryMatchMark variant="chip" delta={theoryDelta} />
+              <TheoryMatchMark tier={theoryMark.tier} variant="chip" delta={theoryMark.delta} />
             </span>
           )}
 

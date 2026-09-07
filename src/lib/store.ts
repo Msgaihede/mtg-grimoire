@@ -6,7 +6,7 @@ import {
   stepZoom,
   type ZoomSection,
 } from "./cardZoom";
-import type { Condition } from "./conditions";
+import { CONDITION_NOT_SET, type Condition } from "./conditions";
 import type { Finish } from "./finish";
 import { applySelect, EMPTY_SELECTION, type Selection, type SelectModifiers } from "./multiSelect";
 import { defaultFields } from "@/features/transfer/fields";
@@ -198,6 +198,16 @@ export interface ExportPrefs {
   fields: TransferFieldId[];
   /** Leave out cards MTG Arena does not have. Read by the `arena` format alone. */
   arenaOnly: boolean;
+  /**
+   * Write the piles the reader has switched off — issue #390. Read only on a surface that has
+   * piles (`SURFACE_HAS_PILES`) and only by the five formats that do not already answer the
+   * question for themselves (`export/format.ts`'s `dropsInactive`).
+   *
+   * **Named for what ticking it does rather than for what leaving it does**, unlike `arenaOnly`
+   * beside it, and the two therefore default off for opposite reasons — see the initial state,
+   * where the behaviour change this cost is written down.
+   */
+  includeInactive: boolean;
 }
 
 interface AppState {
@@ -761,11 +771,11 @@ interface AppState {
    * collection export wants a CSV with a condition column, and one remembered setting would
    * make each of them wrong half the time.
    *
-   * `arenaOnly` rides along rather than being local dialog state, so it is remembered the way
-   * the two beside it are — and it deliberately **survives a format switch**, unlike `fields`,
-   * which is re-derived from each format's defaults. A field set chosen for CSV means nothing
-   * to Arena; "leave out what Arena does not have" is the same answer whatever else the reader
-   * tries in between, and only the Arena format reads it at all.
+   * `arenaOnly` and `includeInactive` ride along rather than being local dialog state, so they
+   * are remembered the way the two beside them are — and both deliberately **survive a format
+   * switch**, unlike `fields`, which is re-derived from each format's defaults. A field set
+   * chosen for CSV means nothing to Arena; "leave out what Arena does not have" and "write my
+   * switched-off piles" are the same answers whatever else the reader tries in between.
    */
   exportPrefs: Record<TransferSurface, ExportPrefs>;
   setExportPrefs: (surface: TransferSurface, prefs: ExportPrefs) => void;
@@ -775,9 +785,10 @@ interface AppState {
    * this app's collection-only vocabulary).
    *
    * **One shared pair rather than one per surface**, unlike {@link exportPrefs}: a reader who has
-   * just told the collection's import "assume Near Mint, foil" is answering a question about
-   * *their box*, not about the collection screen — so a wishlist import opened next re-reads the
-   * same answer rather than asking again. `NM` matches Rust's `DEFAULT_CONDITION`.
+   * just told the collection's import "assume nothing about the grade, and foil" is answering a
+   * question about *their box*, not about the collection screen — so a wishlist import opened
+   * next re-reads the same answer rather than asking again. `NONE` matches Rust's
+   * `DEFAULT_CONDITION`.
    */
   importDefaults: { condition: Condition; finish: DeckFinish };
   setImportDefaults: (defaults: { condition: Condition; finish: DeckFinish }) => void;
@@ -1243,13 +1254,48 @@ export const useAppStore = create<AppState>((set) => ({
   // `arenaOnly` opens **off** everywhere: the Arena export has written every card handed to it
   // since it shipped, and a filter that starts on would quietly change what an existing reader's
   // next export contains. The dialog's own count line is how they find the box.
+  //
+  // **`includeInactive` opens off too, and that argument is spent on the other side** — issue
+  // #390 is a reader reporting the maybeboard turning up in a deck they exported, so leaving it
+  // on by default would ship the fix with the bug still in it. It is worth naming what that
+  // costs: the five formats that wrote a switched-off pile before this shipped — plain,
+  // Moxfield, Archidekt, TCGplayer, CSV — stop writing one unless the reader ticks the box, so an
+  // existing reader's next deck export **does** change. The dialog's own count line is how they
+  // find the box, and Arena and MTGO are untouched because `dropsInactive` already answers for
+  // them. `false` on the two pile-less surfaces is the value `SURFACE_HAS_PILES` makes
+  // unreachable rather than a decision about them.
   exportPrefs: {
-    deck: { format: "plain", fields: defaultFields("plain", "deck"), arenaOnly: false },
-    collection: { format: "csv", fields: defaultFields("csv", "collection"), arenaOnly: false },
-    wishlist: { format: "plain", fields: defaultFields("plain", "wishlist"), arenaOnly: false },
+    deck: {
+      format: "plain",
+      fields: defaultFields("plain", "deck"),
+      arenaOnly: false,
+      includeInactive: false,
+    },
+    collection: {
+      format: "csv",
+      fields: defaultFields("csv", "collection"),
+      arenaOnly: false,
+      includeInactive: false,
+    },
+    wishlist: {
+      format: "plain",
+      fields: defaultFields("plain", "wishlist"),
+      arenaOnly: false,
+      includeInactive: false,
+    },
   },
   setExportPrefs: (surface, prefs) =>
     set((s) => ({ exportPrefs: { ...s.exportPrefs, [surface]: prefs } })),
-  importDefaults: { condition: "NM", finish: null },
+  // The condition opens on the sentinel since schema v35: an import line that says nothing about
+  // a grade records that it said nothing, rather than the app writing the best grade on the scale
+  // on the reader's behalf.
+  //
+  // **Nothing converts a value already in hand, and today there is none to convert** — this pair
+  // is in-memory session state with no `app_meta` row and no persist middleware behind it, so
+  // this literal is what every launch opens on. If it is ever given a stored home, the migration
+  // to write is *none*: a reader whose stored answer is `NM` either chose it or lived with it,
+  // and silently changing what their next import records is worse than the inconsistency it
+  // would tidy away.
+  importDefaults: { condition: CONDITION_NOT_SET, finish: null },
   setImportDefaults: (importDefaults) => set({ importDefaults }),
 }));

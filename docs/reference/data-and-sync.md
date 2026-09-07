@@ -490,10 +490,24 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   different one. Grep the *calls* rather than the `K_*` constants: `maintenance.rs` names two of
   those and both are `sync_meta` keys. What is worth knowing without grepping is the split: most
   of these rows are a reader's *choice* (`marketplace`, `printing_group_by`, `nav_collapsed`,
-  `card_zoom`, `list_view`, `deck_search_open`), one is a *memory* of what they last did
-  (`last_deck_format`), and the rest are the app's own bookkeeping (the update check's three,
+  `card_zoom`, `list_view`, `flatten`, `search_open`), one is a *memory* of what they last
+  did (`last_deck_format`), and the rest are the app's own bookkeeping (the update check's three,
   `scryfall_penalty_until`). **None of them belongs in `sync_meta`** — a row in that one the sync
   did not write makes every later timing claim a fiction.
+  **`search_open` replaced `deck_search_open` on 2026-09-07 and no rung was spent on it**, which
+  is the shape to copy the next time a one-surface preference grows a second surface. It is a JSON
+  object of section → bool (`{"deck":true,"collection":false}`), `searchopen.rs`, and it exists
+  because the collection and the wishlist each grew a docked search column of their own: three
+  rows, six commands and three query keys for one fact, against one keyed map — which is what
+  `zoom`, `listview` and `flatten` already are. **The old row is carried across by the read rather
+  than by a migration.** `searchopen::stored` falls back to `deck_search_open` when the map has no
+  `deck` entry, and **the bridge decays on its own**: nothing writes the legacy row again, so the
+  first press stores the map and the fallback is only ever consulted for a reader who has not
+  pressed a chevron since upgrading. The dead row is left where it is — the one precedent for
+  deleting an orphaned `app_meta` key (v25's `deck_driven_collection`, below) was a passenger on a
+  rung already doing structural work, and a standalone `DELETE FROM app_meta` rung has no
+  precedent here. A key in a table that has existed since v6 is a preference that cannot fail a
+  launch, which is the whole reason `SCHEMA_VERSION` did not move.
   **`deck_driven_collection` was orphaned from the day its setting was removed and stayed
   orphaned through v24** — the row sat unread on every database that had one. v24 was expected to
   delete it and deliberately did not: that rung creates the collection's folders and files
@@ -503,13 +517,20 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   answers the question the switch was asking — the decks *are* where the cards are now.
 - **The single-file ladder is frozen at v26**, and `schema::LEGACY_SINGLE_FILE_VERSION` is the
   answer; schema 27 splits the file in two and the halves number themselves separately
-  (`USER_SCHEMA_VERSION` **33** on the reader's file, `CORPUS_SCHEMA_VERSION` 1 on the
-  rebuildable one). This line read **v18** for two
+  (`USER_SCHEMA_VERSION` on the reader's file — this page stops spelling out which number two
+  sentences from here, and says why — `CORPUS_SCHEMA_VERSION` 1 on the rebuildable one). This
+  line read **v18** for two
   whole rungs, because a prose-only edit routes to neither CI job and nothing goes red when a
   ladder entry rots. **It then read 30 for two more**, through v31 and v32, and so did
   `src-tauri/CLAUDE.md`'s copy of the same pair — the identical failure, twice over, on the one
   number in this file that a single `grep USER_SCHEMA_VERSION src-tauri/src/schema.rs` answers.
-  Read it off the constant; v30 and v31 have no paragraph of their own below, and
+  **It then read 33 for three more after that**, through v34, v35 and v36 — this time in this file
+  alone, since `src-tauri/CLAUDE.md`'s own copy stayed only one rung behind, at 34, until this
+  pass corrected both. Three drifts now on the one number a `grep` settles, which is why this
+  page stops writing one down here at all rather than opening a fourth. **v37 then landed the
+  same day as v36 and had to be renumbered twice on its way in**, which is the same lesson from
+  the other end: the number is not stable enough to write down even while you are writing it. Read it off the
+  constant; v30 and v31 have no paragraph of their own below, and
   `USER_SCHEMA_VERSION`'s own doc comment is where every rung from 27 to head is described in
   one place, one sentence each.
   **v28 is the first rung above the split, and it is what turned `migrate_user` from a version
@@ -525,8 +546,12 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   ladder and the head shape were the same fifteen tables — and left alone it would have
   failed every upgrade from a pre-27 folder with `cannot split: 'sync_identity' has no
   columns in common`. The whole record is [sync.md](sync.md).
-  **v29 is sync's own rung and it is the widest one on either ladder.** It adds `sync_uid` to
-  all twelve synced tables with a unique index each, `needs_review` to the three folder tables,
+  **v29 is sync's own rung and it is the widest one on either ladder.** It adds `sync_uid` with a
+  unique index to **the eleven tables that were on the census then** — this line said "all twelve"
+  until 2026-09-07 and was wrong in both directions, since the rung's own `ALTER TABLE`s are
+  eleven (spelled out below) and the census is **thirteen** now: `device_names` joined
+  at v31 and `deck_tokens` at v37, and each carries the column in its own `CREATE TABLE` rather
+  than through this rung. It also adds `needs_review` to the three folder tables,
   the op log (`sync_ops`, `sync_clock`, `sync_state`, `sync_peers`), and it **rebuilds
   `error_log`** so `source` can be `'relay'` — that vocabulary is inside a `CHECK` and SQLite
   has no `ALTER — CHECK`. The user side is **twenty-two tables and thirty-six indexes**
@@ -647,6 +672,196 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   **It was written as v33 and renumbered on the way in**, which is the ladder's own rule
   working rather than an accident worth hiding: the rung above took 33 while this branch was
   open, and the number belongs to whoever lands first.
+  **v35 widens `collection_entries.condition` to a sixth value and makes it the column's
+  `DEFAULT`.** `NONE` is *not set* — the grade that says nobody assessed the copy — landed
+  2026-09-07 for [issue #361](https://github.com/Msgaihede/mtg-grimoire/issues/361), and it is a
+  shape rung, so it owes the `USER_SCHEMA_SQL` line and the `UNDO_V35` that v34 owed before it.
+  **It is a table rebuild, and a CHECK is the whole reason**: SQLite cannot alter one, so the
+  rung builds `collection_entries_v35`, copies all 27 columns **including `id`**, drops, renames
+  and replays all five indexes as frozen literals — the v8 `deck_cards` shape, and the user
+  ladder's third rebuild after v29's `error_log` and v33's `deck_audit`.
+  **A sentinel string rather than a nullable column, and the grain is why.** `condition` is
+  `idx_collection_grain`'s third term and SQLite counts two NULLs as **distinct** in a unique
+  index, so a nullable one would make every ungraded add a brand-new row rather than folding onto
+  the row already there — a reader pressing `+` four times would end with four rows of one copy.
+  Reproduced against real SQLite while the rung was being written: four ungraded adds under a
+  nullable column give four rows, under the sentinel one. It costs the fold, the reconcile and the
+  sync no special case at all, and it sorts **last** (`COLLECTION_SORTS` runs `NM 0 … DMG 4,
+  NONE 5`) while every picker lists it **first** — two orders, neither derived from the other,
+  because a sorted column is the scale read as a scale and a dropdown is a default read first.
+  **No existing row is rewritten.** A database full of `NM` stays full of `NM`: nothing can tell
+  which of those grades a reader assessed and which the app chose for them before this rung
+  existed.
+  **It is the first user rung to change `USER_SCHEMA_SQL`'s *shape* for a table rather than only
+  adding to it**, and both halves were forced by
+  `the_user_schema_is_byte_identical_to_what_the_ladder_builds` rather than chosen.
+  `ALTER TABLE … RENAME TO` **quotes the stored name** (measured on SQLite 3.53.0), so
+  `collection_entries` joins `deck_cards`/`deck_labels`/`deck_audit`/`error_log` in wearing quotes
+  there; and the rebuild erases the ALTER artefact tail that v24 and v28 left behind
+  (`… updated_at INTEGER NOT NULL\n, folder_id INTEGER …, sync_uid TEXT);`), which becomes
+  ordinary column lines. `IF NOT EXISTS` is stripped from stored SQL, which is why the head
+  literal's index text has never carried it and the rung's does not either — the `DROP TABLE`
+  takes all five indexes, so there is nothing to guard against.
+  **The rebuild emits no sync ops**, which is the answer to the obvious worry about a table that
+  is dropped and refilled: `DROP TABLE` takes `sync_ins/upd/del_collection_entries` with it,
+  `prepare_database` calls `capture::install` on the very next line, and the copy lands in a table
+  that has no triggers on it while it is being written. SQLite's implicit `DELETE FROM` under
+  `foreign_keys=ON` fires none either. Nothing points an enforced foreign key at
+  `collection_entries` at head — `deck_allocations` went at v25 — so the `foreign_keys` pragma
+  cannot make this rung behave two ways.
+  **`UNDO_V35` maps rather than deletes, and it runs third** — behind `UNDO_V38` and `UNDO_V37`, ahead of
+  everything else. It read "and it runs first" for as long as v35 was head, which **the theory
+  rung made false the same day**; every chain is `{UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} …` — **with no
+  `UNDO_V36` in it, because v36 writes no shape** — and was right throughout,
+  because a chain is code and this sentence is not. The rewind carries an ungraded row
+  back as `'NM'`, which is precisely what the old `DEFAULT` would have recorded for the same
+  press, because no rewind on either ladder may lose one of the reader's cards. It **can** collide
+  on the grain where one printing is held at both `NONE` and `NM`, and the closing
+  `CREATE UNIQUE INDEX` is where that fails loudly rather than quietly; no fixture seeds such a
+  pair. **What is load-bearing is the rung it must precede rather than the place it holds in the
+  list**: `UNDO_V29` does
+  `ALTER TABLE collection_entries DROP COLUMN sync_uid`, and `DROP COLUMN` refuses a column an
+  index names — so `UNDO_V35` has to have put `idx_collection_entries_uid` back before `UNDO_V29`
+  comes to take it away. `UNDO_V38` above it changes nothing there — it drops two `decks` columns
+  and names no index at all.
+  **Two prose chains in `schema.rs` were already stale before this branch opened** and were
+  corrected while the rung was being written: `UNDO_V33` still called itself "the newest rewind on
+  the user ladder", which `UNDO_V34` had already made false, and
+  `migrate_the_real_database_to_v29` enumerated `UNDO_V33/31/30/29` with `UNDO_V34` missing.
+  Neither could go red — a prose-only edit routes to neither CI job — which is this file's own
+  recurring lesson arriving inside the crate rather than in a document.
+  **On the wire this is a version boundary of the quiet kind.** Nothing gates sync on
+  `USER_SCHEMA_VERSION`, so a v35 device pushing a `NONE` row at a device still on v34 lands
+  against that device's narrower CHECK. That is true of every shape rung this repo has shipped —
+  v34's `collection_folders.locked` has exactly the same property — and it is not v35's to fix;
+  it is written down here so the next person meets it in a document rather than in a failure.
+  **Driven on a real v34 database, 2026-09-07, debug `tauri dev`** — a copy of the main
+  checkout's own `user.db`, because a worktree is a fresh install and can never show an upgrade
+  bug. Before: `user_version` **34**, **275** rows over **330** copies, every one of them `NM`,
+  no `purchase_price` anywhere, ids **1–275**, the five-value CHECK. After the app opened it
+  once: `user_version` **35**, the CHECK reading `('NONE','NM','LP','MP','HP','DMG')`, and
+  **all 275 rows still `NM`** at the same ids with all five indexes back. That is the whole of
+  what the rung promises — a widened constraint and nothing rewritten — measured rather than
+  argued. The rebuild is fast enough not to be worth a figure: the window was up and drawing the
+  collection within the ordinary start-up.
+  **The one trap in taking that measurement is reading too early.** Probed 8 s after
+  `mtg-grimoire.exe` appeared in the process list, the file still said **34** — the process
+  exists well before `prepare_database` has opened the user half, and `user.db-wal` was still
+  0 bytes. A single probe at that moment reads exactly like a rung that never ran. Wait for the
+  window to draw, then probe; and note that a read-only `node:sqlite` open **creates the `-shm`
+  file itself**, so a fresh `-shm` timestamp is not evidence the app has touched anything.
+  **v36 is the only rung on either ladder that moves the reader's physical card records between
+  folders, and everything worth carrying about it follows from that one fact.** Every other rung
+  changes shape, renames, or backfills a column with a computed value; this one, landed
+  2026-09-07, sweeps every `collection_folders` row with `kind = 'deck'` and moves whatever copy
+  no **live** `deck_cards` row claims at `(card_id, finish)` into `Recently removed` — the
+  one-time pass that brings a file the v25 conversion filed by matching the old allocator's
+  claims **across** printings under the exact-printing rule `deck::owned_by_printing` now reads
+  by (`owned_by_oracle` before that day). **They land in `Recently removed` and not at the
+  root, and that is chosen rather than convenient**: it is ranked second in `deck_pull.rs`'s
+  `CANDIDATE_SQL`, after the root and before the reader's own folders, so the first press of the
+  new `Import missing cards from collection…` button offers every one of them straight back for
+  the lines that genuinely match, and the lines that do not match are honestly missing.
+  **"Claimed" counts a switched-off pile's rows too** — reading it the other way would empty a
+  reader's Maybeboard into the holding area on the first launch after the upgrade, which is the
+  one way this rung could have been destructive rather than merely correct; `variant = 'live'` is
+  the same sentence's other half, since a plan reserves nothing. **A missing `Recently removed`
+  folder skips the move rather than failing the rung** — a rung that errors blocks startup, and a
+  hand-edited file without that folder must still open. **It adds no DDL, so
+  `the_user_schema_is_byte_identical_to_what_the_ladder_builds` is untouched by it** — the second
+  rung on either ladder to earn that exemption, where v34 and v35 just above it each owed a
+  `USER_SCHEMA_SQL` line and a rewind of their own, and v32 was the first.
+  **It was written as v35 and renumbered on the way in**, the same rule v34 above records: the
+  sixth grade took 35 while this branch was open, and the number belongs to whoever lands first.
+  **Order on the ladder is not cosmetic either** — v35 rebuilds `collection_entries` and this
+  rung reads and writes that table, so it has to run after it.
+  `deck::release_unclaimed_copies`
+  — called from `swap_printing` and `set_card_finish` after each rewrites a row's identity —
+  keeps the same rule true on every write from here on; this rung is only what brings a file made
+  before that day under it once.
+  [collection-folders.md](collection-folders.md) and
+  [decks-storage.md](decks-storage.md) carry the whole change.
+  **v37 gives a deck the tokens it makes, and it is the first rung since v31 to add a table to the
+  sync census.** Landed 2026-09-07 for
+  [issue #388](https://github.com/Msgaihede/mtg-grimoire/issues/388). One `CREATE TABLE`, two
+  indexes and one `ALTER TABLE`: `deck_tokens` (`id`, `deck_id` CASCADEing off `decks`, `oracle_id`, a nullable
+  `card_id` and `quantity`, a `state` CHECKed to `auto | hidden | manual`, the two timestamps and
+  `sync_uid`), `idx_deck_tokens_grain` on `schema::DECK_TOKEN_GRAIN`, `idx_deck_tokens_uid`, and
+  `ALTER TABLE decks ADD COLUMN tokens_open INTEGER NOT NULL DEFAULT 0`. A shape rung, so it owes
+  its `USER_SCHEMA_SQL` lines and its `UNDO_V37` — and the undo has to take **all four** things
+  back, because `CREATE TABLE` without `IF NOT EXISTS` and `ADD COLUMN` are both non-idempotent
+  and every fixture below replays over it.
+  Four things about it are worth carrying.
+  First, **the list this table exists for is never stored.** The tokens a deck needs are derived
+  on every open out of each deck card's `all_parts`, ~5 ms for a 100-card pool; the table holds
+  only the reader's *deviations*, so a token nobody has touched has no row, and `state = 'auto'`
+  with no printing and no quantity is deleted rather than written because it carries nothing. A
+  stored list would need a reconciliation pass on every deck edit and would go stale the next time
+  a Scryfall sync changed a card's `all_parts`, with nothing to notice.
+  Second, **the grain is `(deck_id, oracle_id)`, the schema's third *plain* grain constant beside
+  `DECK_CATEGORY_GRAIN` and `DECK_LABEL_GRAIN`.** Carrying no `coalesce`, it can be read back
+  through `PRAGMA index_info`, which is why
+  `every_plain_grain_constant_names_the_index_the_head_schema_carries` fences it — the only
+  thing that did until the first `ON CONFLICT ({DECK_TOKEN_GRAIN})` interpolated it. Not
+  `card_id`, because the row survives the reader changing which printing they want; not grained on
+  `variant`, because an art choice reverting between the Actual list and the plan would be a
+  surprise with nothing to recommend it.
+  Third, **`deck_tokens` is the thirteenth synced table and the first whose `quantity` is a
+  field rather than a counter.** The column is nullable, so there is no `NEW - OLD` to carry —
+  `deck_cards.quantity` can be a counter precisely because it is `NOT NULL` — and last-write-wins
+  is what a *setting* wants: two devices each sleeving a copy means two copies, but two devices
+  each asking for four Treasures must mean four. No counter, so no `Floor` in `apply::META`. The
+  rung is also what established that **a new synced table owes ten registrations and not nine**;
+  the tenth is `sync_engine/apply/tests.rs`'
+  `every_unique_index_on_a_synced_table_has_been_decided_about`, easy to miss because it sits in a
+  `tests.rs` rather than beside the other nine.
+  Fourth, **the DDL's SQL comments carry no double quote, and they cannot.** The rung is a plain
+  `"…"` Rust string, and since it and `USER_SCHEMA_SQL` are compared byte for byte, both copies
+  lose them — the design document's own two comments had to be rewritten to land. The whole
+  feature, with every measurement:
+  [decks-storage.md](decks-storage.md).
+  **v38 gives `decks` two columns, `theory_mark_exact` and `theory_mark_name`** — which of the
+  theory mark's two tiers a deck draws, now that a live row can be the printing the plan named
+  *or* the same card in one it did not. `NOT NULL DEFAULT 1` both, which is the whole of the
+  upgrade: every deck that already exists draws both marks from the first launch on the new
+  build, so there is no backfill because there is nothing for one to do. **Two columns rather
+  than one three-valued one**, because `none | exact | both` cannot spell blue *without* green,
+  and blue without green is a real answer — a reader who cares that a card is present and not
+  which printing it is. **Appended at the end**, which is what keeps `deck.rs`'s positional
+  `r.get(n)` reads honest: both are `INTEGER` beside seven other `INTEGER`s on that row, so a
+  column inserted anywhere but last hands a bracket to a bool with nothing going red.
+  **It was written as v35 and renumbered three times — to v36, to v37, to v38** — the sixth grade
+  took 35, the deck-group sweep took 36 and the token rung took 37, all while this branch was
+  open. That is this ladder's rule working for the fourth, fifth and sixth time; v12/v13/v14
+  collided three ways in one day and v33/v34 twice. **Three times on one branch is the record**,
+  and the token rung was itself renumbered twice on its own way in — so this is a property of the
+  ladder under parallel work rather than of any one branch, and the strongest argument it has for
+  taking the next free number at the moment you land rather than at the moment you start.
+  **Both columns are on the capture spec and travel**, `bracket`'s precedent at v26: which tier a
+  deck draws is an answer *about the deck*, and two devices showing one deck's marks differently
+  with nothing on screen explaining it is the failure that edit prevents. The mark's **colours**
+  are deliberately not on it, and strictly there was nothing to leave off: they are one
+  `mark_colors` row in `app_meta`, which is in no `SYNCED_TABLES` entry at all, so that decision
+  was made one table over. It is the same decision either way — a rendering choice belongs to the
+  device that draws it, where what a *deck is* travels.
+  **The three `last_*` columns are not the analogy for it**, which this sentence claimed until
+  2026-09-07 and which `capture.rs`'s own comment claimed beside it: `last_variant`,
+  `last_group_by` and `last_sort_by` are all three **on** the `decks` spec, and `tokens_open`
+  joined them at v37 on exactly the opposite argument — per-deck view state is about the deck.
+  Where they *are* absent is `duplicate_deck`, which is a different list answering a different
+  question, and that is where the sentence had been read from.
+  **`capture.rs` spells its `decks` field list out by hand and there is no fence in the other
+  direction** — nothing asserts every column of a
+  synced table is on its spec — so the two names needed a deliberate edit rather than travelling
+  for free, and a column added to a synced table and not to that list is captured by nothing and
+  goes red nowhere.
+  **`DEFAULT 1` is load-bearing for the sync as well as for the no-backfill argument**, which
+  only reading `sync_engine::apply` settles: `updates` walks the **local** spec and `continue`s
+  past a field an old peer's op lacks, so the column is left as it was, and `creations` omits it
+  from the INSERT, so it falls to the DDL default and a deck built from an old peer's op arrives
+  with both marks on. A `NOT NULL` column with no default would have failed that INSERT instead,
+  and `insert_row`'s caller answers a failed insert with `ROLLBACK TO savepoint` and
+  `Outcome::Deferred` — the group would stall at that op for ever.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every

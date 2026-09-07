@@ -39,7 +39,7 @@ import { LAYER } from "@/lib/layers";
 import { DURATION, statusLine as statusLineMotion } from "@/lib/motion";
 import { matchesChord, matchesShortcut, shortcut } from "@/lib/shortcuts";
 import { useAppStore } from "@/lib/store";
-import { usePrefetchDeckSearchOpen } from "@/features/decks/useDeckSearchOpen";
+import { usePrefetchSearchOpen } from "@/features/search/useSearchOpen";
 import { useCardZoomPersistence } from "@/lib/useCardZoomPersistence";
 import { useListViewPersistence } from "@/lib/useListViewPersistence";
 import { useFlattenPersistence } from "@/lib/useFlattenPersistence";
@@ -48,6 +48,7 @@ import { useDeviceSyncInvalidation } from "@/lib/useDeviceSyncInvalidation";
 import { useDeviceSyncLive } from "@/lib/useDeviceSyncLive";
 import { useMarketplace, useMarketplaceProgress } from "@/lib/useMarketplace";
 import { useNarrowWindow } from "@/lib/useNarrowWindow";
+import { useMarkColorVars } from "@/lib/useMarkColors";
 import { useNavCollapsed } from "@/lib/useNavCollapsed";
 import { useNavLabels } from "@/lib/useNavLabels";
 import { useOracleTagProgress } from "@/lib/useOracleTagProgress";
@@ -299,13 +300,20 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // renders nothing: the two booleans go into the zustand store, where the collection and the
   // wishlist each read their own.
   useFlattenPersistence();
-  // The deck editor's search column, read here rather than where it is drawn — and that is a
-  // measurement rather than a preference for tidiness. Asked by the panel, the read queues behind
-  // `deck_get` on the read connection and lands ~700ms after the column has already been drawn
-  // the other way round, so a reader who had shut it watched it thrown open and yanked closed on
-  // every deck they opened. Asked here it resolves while they are still on the Search view. It
-  // renders nothing: the answer goes into the query cache, where `useDeckSearchOpen` reads it.
-  usePrefetchDeckSearchOpen();
+  // And once more for the colours the reader has given the card marks — one read at launch, from
+  // the component that is mounted whatever they are looking at. It renders nothing: the answer
+  // becomes four custom properties on `:root`, which is where every mark that wears one already
+  // reads it, so no view is handed a hex and no mark subscribes to anything.
+  useMarkColorVars();
+  // The three docked search columns — the deck editor's, the collection's and the wishlist's —
+  // read here rather than where any of them is drawn, and that is a measurement rather than a
+  // preference for tidiness. Asked by the panel, the read queues behind the page's own read on
+  // the read connection and lands ~700ms after the column has already been drawn the other way
+  // round, so a reader who had shut it watched it thrown open and yanked closed on every deck
+  // they opened. Asked here it resolves while they are still on the Search view. One prefetch
+  // for all three, because they share one `app_meta` row and one query key. It renders nothing:
+  // the answer goes into the query cache, where `useSearchOpen` reads it.
+  usePrefetchSearchOpen();
   // The one `oracle-tags:progress` subscription, for the same reason again. Unlike the two
   // above it hands back what it heard: the taxonomy has no `useMarketplace`-shaped module of
   // its own to read the event out of a cache entry, and the ribbon is its only consumer today.

@@ -51,7 +51,7 @@ import {
 } from "../cardControl";
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
-import { theoryMatchDelta } from "../theoryMatch";
+import { theoryMatchMark, type TheoryMark, type TheoryPlan } from "../theoryMatch";
 import { ruleBreak } from "../violations";
 import type { ValidationIssue } from "../validation/types";
 import { GroupHeader } from "./GroupHeader";
@@ -70,10 +70,11 @@ type Row =
       group: CardGroup;
       card: DeckCard;
       ruleBreakText: string | null;
-      /** What the deck's plan says about this row — `theoryMatch.ts`'s `theoryMatchDelta`.
+      /** What the deck's plan says about this row — `theoryMatch.ts`'s `theoryMatchMark`.
        *  Resolved into the row rather than looked up in the cell, so the memo below is the one
-       *  place the map is read. `null` is a card the plan does not ask for. */
-      theoryDelta: number | null;
+       *  place the plan is read. `null` is a card the plan does not ask for; otherwise the tier
+       *  it is in and the difference at that tier's own grain. */
+      theoryMark: TheoryMark | null;
     };
 
 /**
@@ -99,7 +100,7 @@ export function TableView({
   groups,
   marketplace,
   violations,
-  theoryMatches,
+  theoryPlan,
   onSelect,
   actions,
   selectedSlot,
@@ -111,10 +112,9 @@ export function TableView({
    *  the whole view, so a band and the rows under it cannot name two currencies. */
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
-  /** What the deck's plan says about each row — `theoryMatch.ts`'s map of slot → how far the
-   *  live list is from the planned count, handed in whole like `violations` beside it.
-   *  `undefined` for a deck with no plan. */
-  theoryMatches?: ReadonlyMap<string, number>;
+  /** The deck's plan — `theoryMatch.ts`'s two lookups and the deck's own two mark switches,
+   *  handed in whole like `violations` beside it. `undefined` for a deck with no plan. */
+  theoryPlan?: TheoryPlan;
   onSelect?: (card: DeckCard) => void;
   /**
    * What may be done to a card here — see {@link DeckCardActions}.
@@ -145,10 +145,10 @@ export function TableView({
           group,
           card,
           ruleBreakText: ruleBreak(violations?.get(card.cardId)),
-          theoryDelta: theoryMatchDelta(theoryMatches, card),
+          theoryMark: theoryMatchMark(theoryPlan, card),
         })),
       ]),
-    [groups, violations, theoryMatches],
+    [groups, violations, theoryPlan],
   );
 
   const columns = useMemo<TableColumn<Row>[]>(
@@ -229,10 +229,12 @@ export function TableView({
               {/* The plan's tick, and the `sr-only` twin the other three views cannot have:
                   a cell's text is really read, so this is the surface where the badge's word is
                   said rather than folded into `deckCardName`. */}
-              {row.theoryDelta !== null && (
+              {row.theoryMark !== null && (
                 <>
-                  <TheoryMatchBadge delta={row.theoryDelta} />
-                  <span className="sr-only">{theoryMatchLabel(row.theoryDelta)}</span>
+                  <TheoryMatchBadge tier={row.theoryMark.tier} delta={row.theoryMark.delta} />
+                  <span className="sr-only">
+                    {theoryMatchLabel(row.theoryMark.tier, row.theoryMark.delta)}
+                  </span>
                 </>
               )}
               {row.ruleBreakText !== null && (

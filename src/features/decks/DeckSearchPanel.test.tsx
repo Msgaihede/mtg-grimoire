@@ -24,12 +24,14 @@ const deckGet = vi.hoisted(() => vi.fn());
 const deckAddCard = vi.hoisted(() => vi.fn());
 const prefetchImages = vi.hoisted(() => vi.fn());
 // The disclosure is an `app_meta` row behind a query now, so the panel reads one on the way up
-// and writes one on every press. Answered `true`, which is the shipped default — a test that
-// wants the other state seeds the cache through `panel({ storedOpen: false })` rather than
-// re-pointing this, because that is the state a *stored* preference puts the panel in and a
-// resolved mock and a resolved cache entry are not the same moment.
-const deckSearchOpen = vi.hoisted(() => vi.fn());
-const setDeckSearchOpen = vi.hoisted(() => vi.fn());
+// and writes one on every press. The row is a *map* keyed by section since 2026-09-07 — the
+// collection and the wishlist grew the same column — so the read answers `{ deck: true }`, which
+// is the shipped default for this panel's own section. A test that wants the other state seeds the
+// cache through `panel({ storedOpen: false })` rather than re-pointing this, because that is the
+// state a *stored* preference puts the panel in and a resolved mock and a resolved cache entry are
+// not the same moment.
+const searchOpen = vi.hoisted(() => vi.fn());
+const setSearchOpen = vi.hoisted(() => vi.fn());
 /**
  * The collection tab's three reads and its one write — **and the panel opens on that tab**, so
  * these are asked for on every mount in this file rather than only by the tests that name them.
@@ -77,8 +79,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckGet,
     deckAddCard,
     prefetchImages,
-    deckSearchOpen,
-    setDeckSearchOpen,
+    searchOpen,
+    setSearchOpen,
     collectionList,
     collectionToDeck,
     collectionFolderList,
@@ -94,7 +96,7 @@ import {
   SEARCH_OVER_ATTR,
   type DeckSearchTab,
 } from "./DeckSearchPanel";
-import { DECK_SEARCH_OPEN_KEY } from "./useDeckSearchOpen";
+import { SEARCH_OPEN_KEY } from "@/features/search/useSearchOpen";
 import { useDeck } from "./useDeck";
 import { useAppStore } from "@/lib/store";
 
@@ -224,8 +226,8 @@ beforeEach(() => {
   deckGet.mockReset().mockResolvedValue(null);
   deckAddCard.mockReset().mockResolvedValue({ id: 7, quantity: 1, removed: false });
   prefetchImages.mockReset().mockResolvedValue(undefined);
-  deckSearchOpen.mockReset().mockResolvedValue(true);
-  setDeckSearchOpen.mockReset().mockResolvedValue(undefined);
+  searchOpen.mockReset().mockResolvedValue({ deck: true });
+  setSearchOpen.mockReset().mockResolvedValue(undefined);
   collectionList.mockReset().mockResolvedValue({ items: [OWNED_BOLT], total: 1 });
   // `deckCardId` is the `deck_cards` row the move landed on — always named by this command,
   // so a mock that omitted it would encode an answer the backend cannot give.
@@ -350,7 +352,7 @@ function panel({
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  if (storedOpen !== undefined) client.setQueryData(DECK_SEARCH_OPEN_KEY, storedOpen);
+  if (storedOpen !== undefined) client.setQueryData(SEARCH_OPEN_KEY, { deck: storedOpen });
   if (storedTab !== undefined) client.setQueryData(DECK_SEARCH_TAB_KEY, storedTab);
   let props: Props = {
     categories,
@@ -516,7 +518,8 @@ describe("DeckSearchPanel", () => {
    * outlives the deck they gave it on.
    *
    * Both directions, because they fail differently. The **write** is what the press produces —
-   * a boolean through `set_deck_search_open`, and asserting the argument is what would catch a
+   * a section and a boolean through `set_search_open`, and asserting the arguments is what would
+   * catch a
    * panel that remembered the drawn state rather than the choice. The **read** is a second panel
    * mounted over a cache the first one's press left behind, which is exactly what opening a
    * second deck is: the editor is keyed on the deck id, so the panel is thrown away and the query
@@ -528,7 +531,7 @@ describe("DeckSearchPanel", () => {
 
     await userEvent.click(screen.getByRole("button", { name: PANEL_TOGGLE }));
 
-    expect(setDeckSearchOpen).toHaveBeenCalledWith(false);
+    expect(setSearchOpen).toHaveBeenCalledWith("deck", false);
     // The strip is the tell that the body has gone, whichever tab was on: a searchbox would have
     // asked about the card search alone, which the panel no longer opens on.
     expect(screen.queryByRole("group", { name: "Search in" })).not.toBeInTheDocument();
@@ -544,7 +547,7 @@ describe("DeckSearchPanel", () => {
     );
 
     await userEvent.click(screen.getByRole("button", { name: PANEL_TOGGLE }));
-    expect(setDeckSearchOpen).toHaveBeenLastCalledWith(true);
+    expect(setSearchOpen).toHaveBeenLastCalledWith("deck", true);
   });
 
   /**

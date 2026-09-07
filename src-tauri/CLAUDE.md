@@ -116,7 +116,10 @@ both plus the frontend.
   every upgraded one, and a fresh worktree is a fresh install, so nothing else here can see it.
   The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
-  numbers from there (`USER_SCHEMA_VERSION` **34** since collection folders learned to lock,
+  numbers from there (`USER_SCHEMA_VERSION` **38** since the theory mark grew a second tier —
+  one rung above decks learning which tokens they make, which is one above a deck's group
+  holding only copies its live list claims at `(card_id, finish)`, itself one above a
+  condition learning to say nothing —
   `CORPUS_SCHEMA_VERSION` 1, deliberately
   incomparable). This line read **v25** while that was head, and
   [the ladder's history](../docs/reference/data-and-sync.md) is the story. (This line read
@@ -137,7 +140,68 @@ both plus the frontend.
   so it owes its `USER_SCHEMA_SQL` line and its `UNDO_V34`, where v32 owed neither. **v33 and v34
   landed the same day from two branches**, which is this list's own rule in action: take the next
   free number when you land, never reuse one, and never assume the number you wrote is the one
-  you ship.)
+  you ship. v35 widens `collection_entries.condition` to a sixth value, `NONE` — *not set* — and
+  makes it the column's `DEFAULT`, for
+  [issue #361](https://github.com/Msgaihede/mtg-grimoire/issues/361). **v36** (2026-09-07) sweeps
+  every `collection_folders` row with `kind = 'deck'`, moving what no live `deck_cards` row
+  claims at `(card_id, finish)` into `Recently removed` — the rung that brings a file converted
+  at v25 under the rule `owned_by_printing` now enforces at read time — and is the second rung on
+  either ladder that changes no shape at all, so it owes neither a `USER_SCHEMA_SQL` line nor an
+  `UNDO_V36`, where v34 and v35 each owed both; the rewind numbers have a gap at 36 exactly as
+  they do at 32. **It was written as v35 and renumbered on the way
+  in**, this list's own rule again, and it runs *after* v35 for a reason renumbering does not
+  settle by itself: v35 rebuilds `collection_entries`, and v36 reads and writes that table.
+  **v37 then landed the same day, and had to be renumbered twice getting in** — written as 35,
+  merged to 36, merged again to 37. It creates `deck_tokens`, the **thirteenth** synced table,
+  one row per token the reader has deviated on and grained on `DECK_TOKEN_GRAIN`, and adds
+  `decks.tokens_open`; it is a shape rung, so it owes both its `USER_SCHEMA_SQL` lines and its
+  `UNDO_V37`, for [issue #388](https://github.com/Msgaihede/mtg-grimoire/issues/388).
+  **v38** adds `decks.theory_mark_exact` and `decks.theory_mark_name`, `NOT NULL DEFAULT 1`
+  both. Which of the theory mark's two tiers a deck draws is an answer *about the deck*, so both
+  columns are on
+  `capture::TABLES`' `decks` spec beside `bracket`; **that spec spells its field list by hand and
+  has no fence in the other direction**, so a column added to a synced table and not to it is
+  captured by nothing and goes red nowhere.
+  **v35, v36, v37 and v38 all landed within days of each other from four branches; the token rung
+  was renumbered twice on its way in and the theory rung three times** — written as 35, moved to
+  36 when the sixth grade landed, to 37 when the deck-group sweep did, and to 38 when the token
+  rung did. So this is a property of the ladder under parallel work rather than of any one branch.
+  **What made every one of those collisions invisible is worth more than the numbers**: each
+  time, both branches wrote the *same* `USER_SCHEMA_VERSION`, so git reported no conflict on that
+  line at all and only the rungs underneath it collided. `grep USER_SCHEMA_VERSION
+  src-tauri/src/schema.rs` settles it in one command and nothing else does. It is the strongest
+  form of the rule above: **take the next free number at the moment you land, never at the moment
+  you start**, and never assume the number you wrote is the one you ship.)
+- **v35 is the user ladder's third table rebuild, and a CHECK is why.** SQLite cannot alter one,
+  so widening the grade list means building `collection_entries_v35`, copying every column
+  **including `id`**, dropping, renaming and replaying all five indexes as frozen literals — the
+  v8 `deck_cards` shape, after v29's `error_log` and v33's `deck_audit`. **It rewrites no existing
+  row**: a database full of `NM` stays that way, because nothing can tell which of those grades a
+  reader assessed and which the app chose for them. Two consequences the rebuild has that an
+  `ALTER TABLE` rung does not. **`ALTER TABLE … RENAME TO` quotes the stored name**, so
+  `collection_entries` joins `deck_cards`/`deck_labels`/`deck_audit`/`error_log` in wearing quotes
+  in `USER_SCHEMA_SQL`, and the old ALTER-artefact tail (`, folder_id INTEGER …, sync_uid TEXT);`)
+  becomes ordinary column lines — this is the first user rung to change that literal's *shape* for
+  a table rather than only adding to it, and
+  `the_user_schema_is_byte_identical_to_what_the_ladder_builds` is what says so. And **the
+  rebuild emits no sync ops**: `DROP TABLE` takes the three capture triggers with it,
+  `prepare_database` reinstalls them on the next line, and the copy lands in a table that has none
+  while it is being written.
+- **`UNDO_V35` maps rather than deletes, and it runs third — behind `UNDO_V38` and `UNDO_V37`, ahead of
+  everything else.** It read "and it runs first" for as long as v35 was head, which the theory
+  rung made false the same day; the chains themselves are `{UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} …`
+  — **there is no `UNDO_V36`, because v36 writes no shape** — and they were
+  right throughout, because they are code. The rewind carries an ungraded row
+  back as `'NM'` — precisely what the old `DEFAULT` would have recorded for the same press —
+  because no rewind on either ladder may lose one of the reader's cards. It can collide on the
+  grain where a printing is held at both `NONE` and `NM`, and the closing
+  `CREATE UNIQUE INDEX` is where that fails loudly rather than quietly; no fixture seeds such a
+  pair. **What is load-bearing about its position is the rung it must precede, not the place it
+  holds in the list**: `UNDO_V29` does
+  `ALTER TABLE collection_entries DROP COLUMN sync_uid`, and `DROP COLUMN` refuses a column an
+  index names — so `UNDO_V35` has to have put `idx_collection_entries_uid` back before
+  `UNDO_V29` takes it away. `UNDO_V38` sitting above it changes nothing about that: it drops two
+  `decks` columns and touches no index anywhere.
 - **v24 and v25 are one spec's rung split in two, and the split is deliberate.** v24 creates
   `collection_folders` in its **final** shape — `kind` and `deck_id` columns and both partial
   unique indexes included — and files nothing into it. **v25 inserts the single `removed` folder
@@ -153,7 +217,8 @@ both plus the frontend.
 - **The v25 conversion is in Rust and it clamps, and both are load-bearing.** It splits rows —
   one statement cannot create the placement and reduce the row it came from — and it takes
   `min(claim, row)`, because the old ledger could out-claim a row later stepped down and
-  `owned_by_oracle` hid that by clamping at *read* time. Reading a claim literally would invent
+  `owned_by_printing` (`owned_by_oracle` before 2026-09-07) hid that by clamping at *read* time.
+  Reading a claim literally would invent
   copies the reader does not own, permanently. Claims are converted **ascending by `id`**, which
   is first-claim-first-served: a claim was a reservation and could overlap, a placement is
   custody and cannot. And the placement **carries every provenance column** — condition, price,
@@ -472,17 +537,22 @@ shared_cell` walks both into two databases and compares them column by column.
   fence together.
   The walk itself is still `deck::release_group_copies`, and **`deck_to_collection` calls it
   directly** for its one row: that walk is the crate's one copy, and the cut is it plus the
-  `deck_cards` write, the history row and the `MoveOutcome`. Four rules `release_group_copies`
+  `deck_cards` write, the history row and the `MoveOutcome`. **Four rules** `release_group_copies`
   holds (absent group means "holds nothing", oldest row first, clamped at what the group holds,
-  `Recently removed` resolved only when there is something to file), and a fifth that was a bug
-  while it existed twice: **it
-  matches on the oracle card, exact printing and finish first and any other printing of the same
-  `cards.oracle_id` after**. `swap_printing` and `set_card_finish` rewrite a deck row's identity
-  and touch no collection table, and the v25 conversion files printings the deck does not list,
-  so an exact-only match strands copies under a deck that no longer lists them. It is
-  `owned_by_oracle`'s "a Bolt is a Bolt" read from the other end. `delete_category`'s **move** arm
-  releases nothing: those cards are still in this deck, one pile over. `deck::delete_deck` is the
-  fifth such site and files the whole group.
+  `Recently removed` resolved only when there is something to file) — **and, since 2026-09-07, a
+  fifth it no longer needs.** Its `ORDER BY CASE` used to match the exact `(card_id, finish)`
+  first and fall back to any other printing sharing the row's `cards.oracle_id`, because
+  `swap_printing` and `set_card_finish` rewrote a deck row's identity and touched no collection
+  table, and the v25 conversion files printings the deck does not list — so an exact-only match
+  used to strand copies under a deck that no longer listed them. **The fallback is a bug now
+  rather than a fix**: a deck may legitimately list both LEA Bolt and M10 Bolt, with the group
+  holding both, and cutting the LEA line short would give back M10 copies the M10 line still
+  claims — the same stranding bug read in the finish dimension too. What replaced it is
+  `deck::release_unclaimed_copies`, called from `swap_printing` and `set_card_finish` right after
+  each rewrites a row's identity, so nothing is stranded at the source any more and
+  `release_group_copies` goes back to matching the exact grain and nothing looser. `delete_category`'s
+  **move** arm releases nothing: those cards are still in this deck, one pile over.
+  `deck::delete_deck` is the fifth such site and files the whole group.
   **`import::commit_import`'s `replace` arm was the one bulk removal that did *not* release, and
   that was a bug rather than an exception** — issue #336, closed 2026-09-01. It ran
   `clear_variant`'s exact `DELETE FROM deck_cards WHERE deck_id = ?1 AND variant = ?2` with no
@@ -509,8 +579,12 @@ shared_cell` walks both into two databases and compares them column by column.
     write that could create a placement was allowed to satisfy the invariant by writing the
     `deck_cards` row itself, which made a filing gesture into a deck-building one. **The match is
     `deck::PLAYED_KEY` — `coalesce(c.oracle_id, dc.card_id)`, oracle first with the printing as the
-    fallback** — `release_group_copies`' rule reused rather than re-spelled, so another printing of
-    a card the deck plays is accepted and an orphaned `deck_cards` row is matched by its own id.
+    fallback.** It answers a different question from attribution — *does the deck play this card
+    at all*, never which copies count toward it — and until 2026-09-07 it was
+    `release_group_copies`'s own fallback rule reused rather than re-spelled; that rule left
+    `release_group_copies` the day the exact-grain change made it a bug there, so PLAYED_KEY is
+    the rule's only home now. Another printing of a card the deck plays is still accepted and an
+    orphaned `deck_cards` row is still matched by its own id.
     **Live only** (a plan holds no cards). **The fence sits after `touch_deck` and before the pile
     resolves**, because `Pile::Name` *writes*: asked later it would be a refusal that had already
     invented a category. `deck::played_keys` and `deck::decks_playing` are the two reads behind the
@@ -607,9 +681,25 @@ shared_cell` walks both into two databases and compares them column by column.
   by table CHECK (`quantity > 0`) — a wish for none of something is not a wish — so the two tables
   now agree where they used to be a deliberate asymmetry. Both still refuse a negative through the
   one `collection::valid_quantity`.
-- Finish is an **enum** (`nonfoil|foil|etched`), condition is one of `NM|LP|MP|HP|DMG`; both
+- Finish is an **enum** (`nonfoil|foil|etched`), condition is one of `NONE|NM|LP|MP|HP|DMG`; both
   are CHECK-constrained in SQL _and_ validated in Rust, and the imported string is kept in
   `condition_original`.
+- **`NONE` is *not set* — the grade that says nobody assessed the copy — and it is
+  `DEFAULT_CONDITION` since schema v35.** A write that names no grade records that none was
+  named, where it used to record `NM`. Three things follow and each has bitten something:
+  **a sentinel string, never a NULL**, because `condition` is `idx_collection_grain`'s third term
+  and SQLite counts two NULLs as distinct in a unique index — a nullable column would make every
+  ungraded add a *new row* rather than folding onto the one already there. **It sorts last**
+  (`COLLECTION_SORTS`' `CASE` runs `NM 0 … DMG 4, NONE 5`) so the scale stays a scale and the
+  ungraded pile lands at the end of it, while every picker lists it *first*, because there it is
+  the default rather than a grade — two orders, neither derived from the other. And **it stops at
+  the database**: `mirror/read.rs`'s `condition_of` maps it to `None` so an export writes an empty
+  Condition cell, which is also what makes the round trip close, since an empty cell is exactly
+  what the importer reads as "the file did not say". `CONDITION_NOT_SET` and `DEFAULT_CONDITION`
+  hold one string and are two ideas — the sentinel, and what an unnamed write records — so import
+  the one you mean.
+- **v35 did not touch existing rows.** A database full of `NM` stays full of `NM`, because
+  nothing can tell which of those grades a reader assessed and which the app chose for them.
 - **`schema::FINISHES` is the one finish vocabulary and is read by index, never respelled.**
   `sorting::finish_literals` quotes it for SQL, `marketplace_feed`'s `NONFOIL`/`FOIL`/`ETCHED`
   index it, and the three DDL `CHECK`s spell it out because a migration step is history —
@@ -864,7 +954,9 @@ with the arithmetic behind the 105-character code and the crate pins, is
   nobody removed it from, with no press anywhere that said the roster was changing. **The real fix
   is a wire change carrying public keys in the manifest** and is not built; until it is, a
   partial-view device declines rather than breaking the group.
-- **The manifest is deliberately not a thirteenth synced table.** A manifest that *is* the key
+- **The manifest is deliberately not a synced table** — it would be the fourteenth now, and this
+  line said *thirteenth* until `deck_tokens` took that number at user schema v37, which is the
+  argument for not counting in prose at all. A manifest that *is* the key
   distribution cannot disagree with it, where a synced `device_removals` table could arrive late,
   arrive out of order, or arrive at a device that cannot decrypt it — which is precisely the state
   a rotation puts every peer in.
@@ -955,10 +1047,14 @@ record, with every measurement, is
   landed, and there is no such setting any more**: `sync_relay_set_url` and `valid_relay_url` are
   deleted, `RelayStatus` no longer carries a `relayUrl`, and what the panel draws in its place is
   `sync_supporter_status`'s answer.
-- **Twelve tables sync and `schema::SYNCED_TABLES` is the census.** ⚠️ **This line said *eleven*
+- **Thirteen tables sync and `schema::SYNCED_TABLES` is the census.** ⚠️ **This line said *eleven*
   from schema v25 until 2026-08-31**, on the argument that the spec's twelfth was
   `deck_allocations`, which v25 dropped — true when written, and made wrong by v31 adding
-  `device_names` back to twelve without this page moving. `capture::TABLES` is held to that constant by a
+  `device_names` back to twelve without this page moving. **v37 makes it thirteen**: `deck_tokens`,
+  one row per token a reader has deviated on, and the first table on the census whose
+  `quantity` is a **field** rather than a counter — nullable, so there is no `NEW - OLD` to
+  carry, and last-write-wins is what a *setting* wants where two devices each sleeving a copy
+  means two copies. `capture::TABLES` is held to that constant by a
   test, and a second test asserts every column a capture spec names exists on its table — a
   misspelt column is not a compile error and not a runtime error either until the trigger fires,
   at which point it is a *write* that starts failing for the reader in a command that has nothing
@@ -1177,8 +1273,11 @@ Full detail, with the measurements and the traps behind each rule, is in
   `ON CONFLICT` targets instead. **A deck's money follows it**:
   `sorting::deck_card_price_expr` is two arms told apart by the column being NULL — the
   `nonfoil → foil → etched` chain when unsaid, that finish alone when said, with no fallback
-  either way. **Owned/missing needs no change**, and that is worth knowing rather than
-  rediscovering: it matches on oracle id and has always ignored finish, condition and language.
+  either way. **Owned/missing needed no change here and stopped being able to say that on
+  2026-09-07.** Through the day before it matched on oracle id alone and ignored finish (and
+  condition and language) entirely, so a foil deck row was answered by whatever copies of that
+  card the group held, foil or not. `owned_by_printing` matches `(card_id, finish)` now, so a
+  foil row wants a foil copy specifically — condition and language are still ignored.
 - **`attribute_owned` zeroes every `theory` row, explicitly and not by luck.** It was a fence
   around `deck_allocations` carrying no variant — a theory read walked the *live* deck's claims —
   and a group is not scoped to a variant either, so the conclusion is still drawn here rather
@@ -1268,21 +1367,32 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
   chooses no format. `deck_last_format` answers the stored string **verbatim or `None`** and
   checks it against `format_specs` not at all: which format a *dialog* starts on is a display
   decision, and TypeScript's `newDeckFormat` is where the fallback to Commander lives.
-- **Owned/missing is `sum(quantity)` over the deck's own group, matched by oracle id, and there
-  is no allocator** (schema v25). `deck::owned_by_oracle` joins `collection_entries` to
-  `collection_folders` on `f.deck_id = ?1` and groups by `cards.oracle_id`, so an Alpha Bolt in
-  the group answers an M10 row in the list; `attribute_owned` hands that map out along
-  `read_deck_cards`' own `ORDER BY`, never a caller's, so the number a row shows cannot depend on
-  how a view displayed the list. **There is no run list to keep**: nothing is derived, so no write
-  "reallocates" and none can forget to — the previous rule named seven writes and had already gone
-  stale once. What a deck owns changes only when a row moves in or out of its group, which is
-  `collection_alloc`'s two writes plus `delete_deck`. **The honest cost: owned/missing is now
-  exactly as accurate as the reader's filing.** The allocator guessed for them, sweeping every
-  matching collection row and reserving greedily; a copy now counts for a deck when it is in that
-  deck's group, and an unfiled collection reads as a deck full of red until the reader drags. In
-  exchange, two decks can no longer count one copy, a stored claim can no longer out-count the row
-  it claims, and **growing the collection is visible at the next read** rather than at the next
-  allocator run — the bug this file carried as known and open.
+- **Owned/missing is `sum(quantity)` over the deck's own group, matched by `(card_id, finish)`
+  since 2026-09-07, and there is no allocator** (schema v25). `deck::owned_by_printing` joins
+  `collection_entries` to `collection_folders` on `f.deck_id = ?1` and groups by `e.card_id,
+  e.finish` — the same grain `deck_pull::CANDIDATE_SQL` matches on, which is why a deck's count
+  and its pull dialog no longer disagree: an Alpha Bolt in the group used to answer an M10 row in
+  the list (`owned_by_oracle`'s reading, "a Bolt is a Bolt"), and a deck could read *N missing*
+  with nothing the pull could fill. Narrowing the count is what closed that, not widening the
+  pull. **`JOIN cards` went with the rename**: an orphaned row now counts, where the
+  oracle-grained version read it as `0`, because at the printing grain there is nothing to look
+  up. `attribute_owned` hands the map out along `read_deck_cards`' own `ORDER BY`, never a
+  caller's, so the number a row shows cannot depend on how a view displayed the list. **The group
+  is kept honest at the new grain by `deck::release_unclaimed_copies`**, called from
+  `swap_printing` and `set_card_finish` after each rewrites a row's identity, and by the v36
+  rung's one-time sweep of every existing file into the rule. **There is no run list to keep**:
+  nothing is derived, so no write "reallocates" and none can forget to — the previous rule named
+  seven writes and had already gone stale once. What a deck owns changes only when a row moves in
+  or out of its group, which is `collection_alloc`'s two writes, `delete_deck`, and now
+  `release_unclaimed_copies`'s two callers. **The honest cost: owned/missing is exactly as
+  accurate as the reader's filing, down to the exact printing and finish a line names.** The
+  allocator guessed for them, sweeping every matching collection row and reserving greedily; a
+  copy now counts for a deck only where it is in that deck's group **and** is the exact printing
+  and finish a `deck_cards` row names, and a collection filed under the wrong printing reads as
+  missing until the reader drags or swaps. In exchange, two decks can no longer count one copy, a
+  stored claim can no longer out-count the row it claims, and **growing the collection is visible
+  at the next read** rather than at the next allocator run — the bug this file carried as known
+  and open.
 - **Writing history is not a command.** `deck_audit::record(tx, …)` is called _inside the
   caller's already-open transaction_, which is what makes a rolled-back write leave no history.
   Its only IPC is the read, `deck_audit_list`, whose limit is `clamp(1, 500)` — **the low end is
@@ -1391,6 +1501,51 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
   order is load-bearing on the **redo** side: `Op::Labels` restores before `Op::Variant` inserts,
   because `deck_cards.label_id` is a real foreign key and `insert_cards` writes the restored rows'
   labels through `remap.label`.
+- **`deck_tokens.rs` is `card::meld_parts`' sibling and the one place a *missing* rule is the
+  rule** (schema v35, [issue #388](https://github.com/Msgaihede/mtg-grimoire/issues/388)). Same
+  inflate of `cards.raw`, same walk over `all_parts`, same *every failure is an empty vec* —
+  pointed at a different `component`, over the deck's own cards rather than over one opened card.
+  Three things bind it, and the third is the one to read twice:
+  - **The keep rule is a union and both halves are measured.** Keep an entry when
+    `component == "token"` **or** when the row it *resolves to* has `layout = 'emblem'`
+    (`TOKEN_COMPONENTS` and `EXTRA_LAYOUTS`). The component half alone misses **every** emblem —
+    `Elspeth, Sun's Champion` names hers as a `combo_piece` — and a layout allow-list alone drops
+    **78** real token relationships, whose targets are `flip` (75) or `reversible_card` (3). The
+    emblem half is asked of the resolved row and never of the entry, which is why this resolves
+    first and filters second.
+  - **Nothing is gated on `layout` before the blob is touched**, which is where it parts from
+    `meld_parts`: that one gates on `layout = 'meld'` and pays 72 rows of 117 621, and there is no
+    column here that predicts a token reference (they sit on 15 161 printings). The cost is
+    already bounded because only the open deck's cards are ever inflated — ~5 ms for a 100-card
+    pool — and **the corpus-wide index is the thing that must not be built**: a cold full scan is
+    6.5 s and would need a new ingest-filled column.
+  - ⚠️ **There is no self-exclusion by `name` here, and `meld_parts` must have one — the two are
+    opposites.** At `card.rs:635` a same-named `all_parts` entry **is the same card**, which is
+    why an id test does not do and a name test does. Here it is a token **of** that card: a
+    different oracle card wearing the card's name, because Embalm and Eternalize name the token
+    after the creature. The keep rule already excludes self on its own — a card's own printing
+    arrives as `combo_piece` resolving to a `normal` row, so it never passes the union — and the
+    name test would subtract nothing else. Measured over the 108 372 rows a deck can hold
+    (`legal_mask != 0`, non-token layouts) on the debug corpus, 2026-09-07: **154 same-name
+    entries pass the keep rule, across 55 distinct cards, all 154 targeting `layout = 'token'`
+    from a `normal` producer, and 0 of them share the producer's `id` *or* its `oracle_id`.**
+    The oracle-id zero is what carries it: a different printing id could still be the same card,
+    a different oracle id cannot. Corpus-wide and unrestricted there **are** 2 929 same-name kept
+    entries that do share the producer's oracle id, and every one has a producer layout of
+    `token`, `emblem`, `double_faced_token`, `flip` or `reversible_card` — all `legal_mask = 0`,
+    so never a `deck_cards` row. No fence is owed, and a page that did not say so would invite one.
+    Both halves are pinned: `an_embalm_token_sharing_its_makers_name_is_kept` and
+    `a_cards_own_printing_never_reaches_the_wall`.
+
+  The table stores **only deviations** — `DECK_TOKEN_GRAIN` is `deck_id, oracle_id`, deliberately
+  not `variant` and deliberately not `card_id`, and `state = 'auto'` with no printing and no
+  quantity is deleted rather than written because it carries nothing. **A stored zero is not that
+  case.** `decks.tokens_open` is the panel's disclosure, on the `decks` capture `Spec` beside
+  `separate_x_group`, the last **named** column of `DECK_SELECT` for `deck_row`'s positional
+  reason — which moved its `IMAGE_COL` from 21 to 22 — and on no history row and no
+  `deck_undo::DECK_FIELDS`. The four commands, the tie-break, the sync
+  registrations and every measurement:
+  [decks-storage.md](../docs/reference/decks-storage.md).
 
 ## Scryfall and the network
 
@@ -1695,10 +1850,10 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
 | [image-cache.md](../docs/reference/image-cache.md) | Cache layout, concurrency, placeholders, and the `/cover/` route as it was before 2026-08-31 — the encoder, the traversal fence and why the CSP never moved for it |
 | [search-faceting.md](../docs/reference/search-faceting.md) | `src/index/` — why the index is in memory, and the fail-open rule |
 | [in-app-updates.md](../docs/reference/in-app-updates.md) | `update.rs` — why the portable swap is hand-written |
-| [decks-storage.md](../docs/reference/decks-storage.md) | The deck tables, the card commands, how owned/missing is answered, the audit log, the decklist import |
+| [decks-storage.md](../docs/reference/decks-storage.md) | The deck tables, the card commands, how owned/missing is answered, the audit log, the decklist import, and the token resolver — the union keep rule, why there is no name test, and the v36 table |
 | [commander-brackets.md](../docs/reference/commander-brackets.md) | `combos.rs` and the v26 rung — the feed measured end to end, what is kept and what is skipped, the match query, and `decks.bracket` |
 | [wishlist-folders.md](../docs/reference/wishlist-folders.md) | The wishlist's cabinet (v23) — the four-term grain, the merge rule, the root-add duplicate |
 | [collection-folders.md](../docs/reference/collection-folders.md) | The collection's cabinet (v24–v25) — the eleventh grain term, the deck groups and `Recently removed`, the conversion that made them, what a zero quantity now costs |
-| [sync.md](../docs/reference/sync.md) | `sync_pair/`, `sync_engine/` and the user-schema rungs sync owns, v29 to v31 — the pairing protocol step by step and the six digits; then the twelve synced tables, how a row is named across devices, the three SQLite facts the capture triggers' shape follows from, §7.3's five rules against the test that proves each, the envelope measured, the relay's endpoints, and what is not built |
+| [sync.md](../docs/reference/sync.md) | `sync_pair/`, `sync_engine/` and the user-schema rungs sync owns, v29 to v31 — the pairing protocol step by step and the six digits; then the thirteen synced tables, how a row is named across devices, the three SQLite facts the capture triggers' shape follows from, §7.3's five rules against the test that proves each, the envelope measured, the relay's endpoints, and what is not built |
 | [web-target.md](../docs/reference/web-target.md) | The browser build — the module map, the OPFS pair, the measured browse and facet, and the first run's open memory failure |
 | [text-mirror.md](../docs/reference/text-mirror.md) | `mirror/` — the layout, the dirty map, why the pruner reads a manifest instead of guessing, what a pass costs measured, and the bugs still open |

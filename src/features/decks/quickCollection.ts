@@ -73,8 +73,9 @@ export function quickAddShort(card: DeckCard): number {
  *
  * **That third arm was not here for the length of one fan-out, and driving the shipped window is
  * what found it** (2026-09-03, debug build, real database). `attribute_owned` hands a switched-off
- * pile nothing out of the group — `category_active` is checked before the oracle total is spent —
- * so **every** row in one reads `0` owned however many copies sit in the deck's folder. Without
+ * pile nothing out of the group — `category_active` is checked before the row is allowed to draw
+ * on its `(card_id, finish)` pool, which since 2026-09-07 is the grain the whole count is kept at
+ * — so **every** row in one reads `0` owned however many copies sit in the deck's folder. Without
  * this arm {@link quickAddShort} read that `0` as a shortfall and the submenu offered
  * *Quick add 1 copy* on a Maybeboard line; the press was legal (the deck plays the card, so
  * `NOT_IN_DECK` passes), the copies were recorded, **and the row still read `0/1` afterwards** —

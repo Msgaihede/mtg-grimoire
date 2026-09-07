@@ -1,6 +1,7 @@
 import { type RefObject } from "react";
 import { useDndDropTarget } from "@/lib/dndTarget";
 import { composedDraggable, dragData, type DragPayload } from "@/features/decks/dnd";
+import { readSearchCardDrag, type SearchCardDrag } from "@/features/search/searchCardDrag";
 
 /**
  * The gesture that files a collection entry into one of the binder's own folders — the payload,
@@ -44,7 +45,12 @@ import { composedDraggable, dragData, type DragPayload } from "@/features/decks/
  * never heard of tiles goes on answering `null` for one rather than reading half of it — which is
  * the same property that lets `dnd.ts` stay blind to both.
  *
- * {@link readCollectionDrop} is what a target that takes either one asks, and {@link CollectionDrop}
+ * **A card off a *search* wall is a fourth key and a third `CollectionDrop` arm** — `searchCardDrag.ts`,
+ * added with the collection's own docked search column on 2026-09-07. That module carries the
+ * argument for its key; what it means here is that a folder card now takes a card the reader does
+ * **not** own, and the drop is an `collection_add` rather than a refile.
+ *
+ * {@link readCollectionDrop} is what a target that takes any of them asks, and {@link CollectionDrop}
  * is its discriminated answer. The union rather than the tile shape alone: a folder's answer about
  * one row is a different sentence from its answer about nine copies filed in five places, and
  * `kind` is what makes a `canDrop` say which it is looking at instead of inferring it from a
@@ -170,31 +176,47 @@ export function readCollectionTileDrag(data: Record<string, unknown>): Collectio
 }
 
 /**
- * What a collection drop target is holding: one row, or a whole tile's worth of them.
+ * What a collection drop target is holding: one row, a whole tile's worth of them, or **a card
+ * nobody owns yet**.
  *
  * The union rather than the tile shape alone — see the module comment: one row and one printing's
  * shelf are two different sentences, and `kind` is what makes a target's policy say which it is
  * answering about rather than infer it from `copies.length`.
+ *
+ * **`"new"` is the arm the sidebar added (2026-09-07), and it is a different *verb* rather than a
+ * third shape of the same one.** The other two are refiles — `collection_set_folder`, one row that
+ * already exists moving between drawers — and this one is an **add**, because the card is not in
+ * the collection at all. That difference is the whole reason it earns a `kind` rather than being
+ * folded into `"tile"` with an empty `copies`: every `canDrop` on this page asks *which folders is
+ * this leaving*, and the honest answer for a card the reader does not own is that the question
+ * does not apply. Adding it here reaches `useCollectionDropTarget`, `CollectionFolderCard`,
+ * `CollectionParentFolderCard` and `CollectionBreadcrumb`'s segments with no component edit at
+ * all, which is what the discriminated union was for.
  */
 export type CollectionDrop =
   | { kind: "entry"; entry: CollectionDrag }
-  | { kind: "tile"; tile: CollectionTileDrag };
+  | { kind: "tile"; tile: CollectionTileDrag }
+  | { kind: "new"; card: SearchCardDrag };
 
 /**
- * Either shape, or `null` for anything that is neither — the one reader every collection drop
- * target asks, so "what can be dropped on a folder" is answered in one place rather than per
- * target.
+ * Any of the three shapes, or `null` for anything that is none of them — the one reader every
+ * collection drop target asks, so "what can be dropped on a folder" is answered in one place
+ * rather than per target.
  *
- * The two marks are disjoint by construction — a row writes one key and a tile the other — so the
- * order below is a convention rather than a tie-break. Stated anyway, because a payload carrying
- * both would be a bug upstream and the entry is the narrower fact to act on: it moves one row,
- * where a tile moves every copy behind a printing.
+ * The three marks are disjoint by construction — a row writes one key, a tile another and a search
+ * tile a third — so the order below is a convention rather than a tie-break. Stated anyway,
+ * because a record carrying more than one would be a bug upstream and the order says which fact to
+ * act on: **an entry outranks a tile outranks a new card**, narrowest first. Only one of them can
+ * be true of a real gesture, and where two are, moving a copy the reader already has is the
+ * smaller claim than creating one they do not.
  */
 export function readCollectionDrop(data: Record<string, unknown>): CollectionDrop | null {
   const entry = readCollectionDrag(data);
   if (entry !== null) return { kind: "entry", entry };
   const tile = readCollectionTileDrag(data);
-  return tile === null ? null : { kind: "tile", tile };
+  if (tile !== null) return { kind: "tile", tile };
+  const card = readSearchCardDrag(data);
+  return card === null ? null : { kind: "new", card };
 }
 
 /**
@@ -266,10 +288,11 @@ export function collectionTileDraggable({
  * Where a collection drop can be let go, and whether it is armed to be — one hook answering
  * both, gated by one `canDrop`.
  *
- * **Either payload, read through {@link readCollectionDrop}**, and the hook has no opinion about
- * which: a row and a tile arm the same rings and run the same handler, and what differs between
- * them — the folder a single row is already in, against the folders nine copies are spread over —
- * is policy the page supplies. This file's job is to say which drags are this feature's at all.
+ * **Any of the three payloads, read through {@link readCollectionDrop}**, and the hook has no
+ * opinion about which: a row, a tile and a not-yet-owned card arm the same rings and run the same
+ * handler, and what differs between them — the folder a single row is already in, against the
+ * folders nine copies are spread over, against no folder at all — is policy the page supplies.
+ * This file's job is to say which drags are this feature's at all.
  *
  * **Not two hooks the way `deckDrag.ts` splits `useDeckDropTarget` from `useDeckDragging`**, and
  * `wishDrag.ts` states the reason in full: every folder-shaped target answers the same yes/no

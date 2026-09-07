@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
+import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID } from "@/components/tooltip/TooltipProvider";
 import { DEFAULT_SECTION_ZOOMS } from "@/lib/cardZoom";
 import { ipc } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
@@ -103,10 +104,25 @@ const meta = {
           "first, names what would go with the deck, and offers archiving in the same breath " +
           "({@link DeleteAsksFirst}); the archive control is a toggle whose other face is " +
           "Restore ({@link Archived}). `deck_delete` really deletes, by cascade.\n\n" +
+          "**The wall is narrowed and ordered from a row of its own under the heading** " +
+          "(2026-09-07) — a name box, a chip per format on the wall, the `Archived` disclosure " +
+          "and a `Sort decks` pair. {@link Ordered} and {@link Narrowed} are those two halves. " +
+          "The **sort** is remembered in `app_meta` across restarts and the **filter** " +
+          "deliberately is not: a gallery that opened already narrowed, with no memory of having " +
+          "asked for it, looks like a gallery that has lost decks. Nothing in the row touches " +
+          "the tree, the folder cards or the sidebar's counts — a filter narrows the wall you " +
+          "are looking at, and a tree that lost its branches would take away the way out.\n\n" +
+          "**The illustrator is on the picture rather than under the tile**, also 2026-09-07. " +
+          "Scryfall's guideline (on `docs/api`, *not* `docs/api/images`, which carries no artist " +
+          "rule at all any more) asks that the artist be identifiable in the same interface as " +
+          "an `art` crop — which is satisfied by the name being reachable, not by a permanent " +
+          "line, so it moved onto the crop as a tooltip and the tile lost a row of chrome. " +
+          "`DeckCoverPicker`'s `CoverPreview` keeps its visible credit: one large crop with " +
+          "nothing else on screen is a different question.\n\n" +
           "**A cover with no artist is not drawn, and it has no UI path** — which is why " +
-          "{@link NoCoverArtist} stages it through `deck_update` instead. The tile draws no " +
-          "credit line at all when `coverArtist` is null (`DecksPage.tsx:345-349`) — never the " +
-          'word "null", never a placeholder — and reaching that needs a deck whose ' +
+          "{@link NoCoverArtist} stages it through `deck_update` instead. The rule runs the " +
+          "other way round from the credit and is unchanged by the move: if the illustrator " +
+          "cannot be named, the crop cannot be shown. Reaching that needs a deck whose " +
           "`coverCardId` names a printing `cards` does not hold. Measured 2026-08-10: **0 of " +
           "the 43** rows of `.storybook/fake/cards.ts` has a null `artist`, no seed points a " +
           "cover at a missing id, and the one control that *sets* a cover offers no orphaned " +
@@ -144,8 +160,31 @@ export const Gallery: Story = {
     // count — 60 for a deck holding 77 cards over 18 rows, because a sideboard and a scratchpad
     // are not what "a 60-card deck" means.
     await expect(within(wall).getByText(/Modern ·/)).toHaveTextContent("Modern · 60 cards");
-    // Scryfall's image policy, per tile and only where there is a name to credit.
-    await expect(canvas.getByText("Art by Simon Dominic")).toBeInTheDocument();
+
+    // **Scryfall's image policy, per tile — and since 2026-09-07 it is on the picture rather
+    // than under it.** An `art` crop has no printed frame, so the illustrator has to be
+    // identifiable in the same interface; the guideline is satisfied by the name being *reachable*
+    // rather than by a permanent line, so it moved onto the crop it belongs to and the tile lost
+    // a row of chrome. Both halves are the claim: no line anywhere on the wall, and the name a
+    // hover away on the picture.
+    await expect(canvas.queryByText(/^Art by/)).toBeNull();
+    const cover = within(wall).getByText("Modern Goodstuff").closest("li")!.querySelector("img")!;
+    await userEvent.hover(cover);
+    // The real delay, waited out — `TOOLTIP_OPEN_MS` is a schedule rather than a transition, so
+    // `MotionConfig` does not turn it down and there is nothing to flush. `CardArt.stories.tsx`
+    // drives its chip's tooltip the same way.
+    await new Promise((resolve) => setTimeout(resolve, TOOLTIP_OPEN_MS + 50));
+    await expect(canvasElement.ownerDocument.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent(
+      "Art by Simon Dominic",
+    );
+
+    // The row under the heading, which is where a reader narrows and orders this wall. Named so
+    // that neither control can be confused with the deck editor's own `Filter this deck` and
+    // `Sort` — see `DecksPage.tsx`'s comments at both sites.
+    await expect(canvas.getByLabelText("Filter decks by name")).toHaveValue("");
+    await expect(canvas.getByRole("button", { name: "Sort decks" })).toHaveTextContent(
+      "Last updated",
+    );
 
     // Filed away, and therefore not on the wall at all — the disclosure is shut and its rows are
     // not merely hidden, they are unmounted.
@@ -173,11 +212,19 @@ export const Gallery: Story = {
  *
  * Its caption reads 22 cards, and pressing Archive on a live deck moves it here in front of the
  * reader rather than making it vanish: the disclosure stays open around the arrival.
+ *
+ * **The trigger moved into the filter row on 2026-09-07 and is still the same disclosure.** It is
+ * a chip among the format chips now — carrying `aria-expanded` rather than `aria-pressed`,
+ * because "the wall below is open" and "this filter is on" are two different sentences — and the
+ * wall it reveals did not move at all.
  */
 export const Archived: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await userEvent.click(await canvas.findByRole("button", { name: "Archived 1" }));
+    const chip = await canvas.findByRole("button", { name: "Archived 1" });
+    await expect(chip).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(chip);
+    await expect(chip).toHaveAttribute("aria-expanded", "true");
 
     const filed = canvas.getByRole("list", { name: "Archived decks" });
     await expect(within(filed).getByText("Old School 93/94")).toBeInTheDocument();
@@ -206,6 +253,129 @@ export const Archived: Story = {
     // the *only* alert question worth asking with the tree reporting a refused folder list
     // beside it, because that one is a failed **read** and is a `status` — see the note above.
     await expect(canvas.queryByRole("alert")).toBeNull();
+  },
+};
+
+/**
+ * The order the wall is in, and the two controls that decide it.
+ *
+ * **`Sort decks`, never a bare `Sort`.** The deck editor's toolbar already owns a `Sort` — that
+ * one orders the cards *in* a deck, this one orders the decks — and two controls with one name
+ * cannot be addressed unambiguously by a screen reader, by voice, or by a `getByRole` that starts
+ * throwing "found multiple". `FilterBar`'s `Sort results` made the same call for the same reason.
+ *
+ * **The rows are alphabetical by the words on them** (`src/lib/options.ts`): Bracket, Cards,
+ * Colors, Format, Last updated, Name. `DECK_SORT_OPTIONS` is written in an order that explains
+ * the sorts instead, and this is where the display decision is made.
+ *
+ * **The direction is one arrow turned over, never a second glyph swapped in.** A different element
+ * in the same slot unmounts and remounts, so the indicator teleports — and the whole of what the
+ * press means is that the order reversed. Picking a *key* also sets the direction, to whatever
+ * that key reads naturally (`NATURAL_DESC`): dates and counts from the top, names and formats and
+ * colours and brackets forwards. So `Name` opens at A, and this story presses the arrow to get to
+ * Z rather than finding itself there.
+ *
+ * The order is remembered in `app_meta` across restarts — the filter beside it deliberately is
+ * not — which is one round trip through the fake's `set_deck_sort` and nothing this story can see
+ * without a reload.
+ */
+export const Ordered: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const wall = await canvas.findByRole("list", { name: "Your decks" });
+    /** The wall as drawn, tile by tile. Read off `data-deck-id` because a tile's *accessible*
+     *  name now begins with its colour bar's label. */
+    const order = () =>
+      [...wall.querySelectorAll("[data-deck-id]")].map((el) => el.textContent ?? "");
+
+    // The default is `updated:desc`, which is the order `deck_list` already answers in — so a
+    // gallery nobody has pressed anything on is the gallery a reader already knows.
+    await expect(order()[0]).toContain("Modern Goodstuff");
+
+    await userEvent.click(canvas.getByRole("button", { name: "Sort decks" }));
+    await userEvent.click(canvas.getByRole("option", { name: "Name" }));
+
+    await waitFor(async () => {
+      await expect(order()[0]).toContain("Kenrith Two-Drops");
+    });
+
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Sort direction: ascending — press for descending" }),
+    );
+
+    await waitFor(async () => {
+      await expect(order()[0]).toContain("Modern Goodstuff");
+    });
+    // The button names the press rather than the state alone, so its name is the other half of
+    // what the turned arrow says.
+    await expect(
+      canvas.getByRole("button", { name: "Sort direction: descending — press for ascending" }),
+    ).toBeInTheDocument();
+  },
+};
+
+/**
+ * The wall, narrowed — by a name, and by a format.
+ *
+ * **The tree, the folder cards and the sidebar's counts are not narrowed with it**, and that is
+ * the rule rather than an omission: a filter narrows the wall you are looking at, and a tree that
+ * lost its branches would take away the way out of it. The heading says both numbers — `1 of 2
+ * decks` — so the whole is what reassures a reader that the other deck is still there and the
+ * share is what says the wall is short because they asked.
+ *
+ * **An empty selection of format chips is every deck, not none.** That is the one thing about a
+ * chip row that has to be got right; the bug shape is an `includes` with no empty check in front
+ * of it, which empties the wall the moment the row appears and reads as the gallery having lost
+ * every deck at once.
+ *
+ * **A wall emptied by a filter says so.** The page has three other empty states and every one of
+ * them is a sentence about a *drawer* — told one of those, a reader would go looking for decks
+ * that are exactly where they left them.
+ */
+export const Narrowed: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const wall = await canvas.findByRole("list", { name: "Your decks" });
+    const box = canvas.getByLabelText("Filter decks by name");
+
+    await userEvent.type(box, "kenrith");
+
+    await waitFor(async () => {
+      await expect(within(wall).queryByText("Modern Goodstuff")).toBeNull();
+    });
+    await expect(within(wall).getByText("Kenrith Two-Drops")).toBeInTheDocument();
+    await expect(canvas.getByText(/1 of 2 decks/)).toBeInTheDocument();
+    // The way out is untouched: every drawer is still on the wall and the tree still counts
+    // every deck the reader has.
+    await expect(
+      within(wall).getByRole("button", { name: "Constructed folder, 1 deck" }),
+    ).toBeVisible();
+    await expect(
+      within(canvas.getByRole("navigation", { name: "Folders" })).getByRole("button", {
+        name: "All decks, 3 decks",
+      }),
+    ).toBeVisible();
+
+    // Nothing matches, and the wall says which of the four empty states it is in.
+    await userEvent.clear(box);
+    await userEvent.type(box, "zzz");
+    await expect(await canvas.findByText("No decks match this filter")).toBeInTheDocument();
+
+    // The other control, and the same wall. The chip is named for the format and for how many
+    // decks it holds, which is what tells a reader whether pressing it is worth doing.
+    await userEvent.clear(box);
+    await userEvent.click(canvas.getByRole("button", { name: "Commander format, 1 deck" }));
+
+    await waitFor(async () => {
+      await expect(within(wall).queryByText("Modern Goodstuff")).toBeNull();
+    });
+    await expect(within(wall).getByText("Kenrith Two-Drops")).toBeInTheDocument();
+
+    await userEvent.click(canvas.getByRole("button", { name: "Commander format, 1 deck" }));
+
+    await waitFor(async () => {
+      await expect(within(wall).getByText("Modern Goodstuff")).toBeInTheDocument();
+    });
   },
 };
 
@@ -286,12 +456,17 @@ export const NoCoverArtist: Story = {
     const canvas = within(canvasElement);
     const wall = await canvas.findByRole("list", { name: "Your decks" });
 
-    const orphaned = within(wall)
-      .getByRole("button", { name: /^Modern Goodstuff/ })
-      .closest("li");
+    // **Addressed by the name in the tile, not by the button's accessible name.** A tile with
+    // pips draws `DeckColorBar` *inside* its button, and the bar is a `role="img"` whose label is
+    // the deck's colours — so the computed name is `White, Red Modern Goodstuff …` and a `^`
+    // anchor on the deck's name matches nothing. That is the tile's own decision and the right
+    // one; it simply means a wall of real decks is walked by its text.
+    const orphaned = within(wall).getByText("Modern Goodstuff").closest("li");
     await expect(orphaned).not.toBeNull();
     const tile = within(orphaned as HTMLElement);
-    // No credit, and no claim that there is nothing to credit: the line is absent, not blank.
+    // No credit line — there is none on any tile since 2026-09-07 — and no credit *anywhere* for
+    // this one, because there is no picture to hang one on. The two are one condition on one
+    // field, which is the whole point of the case below it.
     await expect(tile.queryByText(/^Art by/)).toBeNull();
     // **And the art is not drawn either, so the frame says "No cover".** An orphaned cover and
     // an absent one are deliberately one state: an `art` crop carries no printed frame, so the
@@ -300,12 +475,23 @@ export const NoCoverArtist: Story = {
     // ruling ("a cover with no artist is **not drawn**"); this tile is what it looks like.
     await expect(tile.getByText("No cover")).toBeInTheDocument();
 
-    // The neighbour, unaffected, on the same render: the rule is a fact about one cover.
-    const kept = within(wall)
-      .getByRole("button", { name: /^Kenrith Two-Drops/ })
-      .closest("li");
-    await expect(within(kept as HTMLElement).getByText("Art by Kieran Yanner")).toBeInTheDocument();
-    await expect(canvas.getAllByText(/^Art by/)).toHaveLength(1);
+    // The neighbour, unaffected, on the same render: the rule is a fact about one cover. Its crop
+    // is drawn and its painter is on it — which is the assertion that would go red if the policy
+    // had been "fixed" by hiding every picture rather than by moving the credit.
+    const kept = within(wall).getByText("Kenrith Two-Drops").closest("li") as HTMLElement;
+    const art = kept.querySelector("img");
+    await expect(art).not.toBeNull();
+    await userEvent.hover(art!);
+    await new Promise((resolve) => setTimeout(resolve, TOOLTIP_OPEN_MS + 50));
+    await expect(canvasElement.ownerDocument.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent(
+      "Art by Kieran Yanner",
+    );
+    // And still no line of text on either tile: the whole row of chrome is gone from the wall.
+    // **Scoped to the wall, not to the canvas**, because the hover above left a tooltip open and
+    // that panel's own text begins `Art by` — a canvas-wide query here asserts the credit is
+    // nowhere while the credit is on screen two lines up, which is the assertion contradicting
+    // the one before it.
+    await expect(within(wall).queryByText(/^Art by/)).toBeNull();
   },
 };
 
@@ -513,11 +699,22 @@ export const NewDeck: Story = {
     // Made in the format the dialog opened on, untouched by the reader: the caption is the
     // other end of the default, read off the row the write answered with. Scoped to the new
     // tile, because this world already holds a Commander deck and the caption is not unique.
-    const made = canvas.getByRole("button", { name: /^Sunday Cube/ });
-    await expect(within(made).getByText(/^Commander ·/)).toHaveTextContent("Commander · 0 cards");
-    // **No credit line**, because there is no artist to credit. Two on the wall, not three: the
-    // archived deck's tile is behind a shut disclosure and is not mounted at all.
-    await expect(canvas.getAllByText(/^Art by /)).toHaveLength(2);
+    const made = canvas.getByText("Sunday Cube").closest("li") as HTMLElement;
+    // **An empty Commander deck reads `Bracket ~2`, and that is the estimate working rather than
+    // a placeholder.** `BASE_FLOOR` is 2 — what a deck that flags nothing honestly reads as — and
+    // a deck with no cards flags nothing, so `estimateBracket` answers 2 over an empty list just
+    // as it does over a pile of Grizzly Bears. The tile prints it because **the editor's own
+    // `DeckBracket` button prints it**: that control is drawn on the same `commanderRule` fence,
+    // over the same empty `deck.cards`, and says `Bracket ~2` too. Hiding it here to spare a new
+    // deck a number would be the one thing this feature exists not to do — one deck answering the
+    // same question two ways on two screens.
+    await expect(within(made).getByText(/^Commander ·/)).toHaveTextContent(
+      "Commander · Bracket ~2 · 0 cards",
+    );
+    // **No credit line anywhere on the wall** — not because this deck has no artist, which was
+    // the old claim, but because the line itself is gone since 2026-09-07. The illustrator is the
+    // crop's tooltip now, and a deck with no cover has no crop to carry one.
+    await expect(canvas.queryByText(/^Art by /)).toBeNull();
   },
 };
 

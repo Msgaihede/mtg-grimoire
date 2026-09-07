@@ -5,6 +5,9 @@ import type { UserEvent } from "@testing-library/user-event";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
+// The constant and never the two letters: what a menu quick add records moved once already, and a
+// suite spelling the grade out would have gone green over the app that had stopped agreeing.
+import { MENU_CONDITION } from "@/lib/conditions";
 import type {
   CardDetail,
   CardSummary,
@@ -17,6 +20,7 @@ import type {
   FormatSpec,
   ImportMatch,
   SyncStatus,
+  TheorySlot,
 } from "@/lib/ipc";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import {
@@ -75,8 +79,8 @@ const listSets = vi.hoisted(() => vi.fn());
 // called straight out of a click handler, where `undefined` is a synchronous TypeError nothing
 // catches. `true` is the shipped default (issue #183), so the column is drawn open here exactly
 // as it is on a fresh install — which is what `openSearchPanel` below is idempotent about.
-const deckSearchOpen = vi.hoisted(() => vi.fn());
-const setDeckSearchOpen = vi.hoisted(() => vi.fn());
+const searchOpen = vi.hoisted(() => vi.fn());
+const setSearchOpen = vi.hoisted(() => vi.fn());
 // The five consulted overlays' own reads — categories, labels, history, the theory difference and
 // deck settings. Each is unmounted while closed, so these answer only for the tests that open
 // one — but the whole `ipc` object is replaced here, so a command left out is a `TypeError`
@@ -156,10 +160,22 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckSwapPrinting,
     deckSetCardFinish,
     deckSetViewState,
+    // **The Tokens & emblems band asks on every open, so every test in this file pays for it
+    // whether or not it looks at the band.** Answered with an empty list: the panel then draws
+    // its "nothing in this deck makes a token" sentence and, crucially, *no* `role="alert"`.
+    // Left off the mock entirely, the read rejects with `ipc.deckTokens is not a function`, the
+    // band draws its read-failure alert, and every `getByRole("alert")` in this file fails with
+    // "Found multiple elements" — eight of them did. The three writes are here for the same
+    // reason: a press that reached an undefined function would fail as a write refusal rather
+    // than as the missing double it is.
+    deckTokens: vi.fn().mockResolvedValue([]),
+    deckTokenSet: vi.fn().mockResolvedValue(undefined),
+    deckTokenClear: vi.fn().mockResolvedValue(undefined),
+    deckTokenAdd: vi.fn().mockResolvedValue(undefined),
     formatSpecs,
     searchCards,
-    deckSearchOpen,
-    setDeckSearchOpen,
+    searchOpen,
+    setSearchOpen,
     // The docked search panel's filter row asks for facet counts beside the page. Answered
     // **cold** — `ready: false`, every map empty — so nothing greys and every control keeps
     // its name.
@@ -237,6 +253,8 @@ const DECK: DeckRow = {
   folderId: null,
   notes: null,
   theoryEnabled: false,
+  theoryMarkExact: true,
+  theoryMarkName: true,
   // How the editor was last read. The defaults, so a test that says nothing about them opens on
   // Live, grouped by category, sorted alphabetically — and a test about the memory overrides the
   // one field it is about through `detail()`.
@@ -246,6 +264,7 @@ const DECK: DeckRow = {
   // Schema v13, and `0` is the column's own default: a deck counts an `{X}` spell at the mana
   // value Scryfall gives it until the reader says otherwise.
   separateXGroup: false,
+  tokensOpen: false,
   // Schema v16, and `0` is `AUTO_CATEGORY` — the column's own default and the state every deck
   // is born in: an add that names no pile is filed by what the card does. A test about the
   // setting overrides it through `detail()`, which is the *only* way to move it now — it was a
@@ -334,6 +353,23 @@ function bolt(overrides: Partial<DeckCard> = {}): DeckCard {
     ...overrides,
   });
 }
+
+/**
+ * One row of what `deck_theory_slots` answers, **typed**.
+ *
+ * `deckTheorySlots` is a bare `vi.fn()`, so nothing type-checks what it resolves with — a field
+ * added to `TheorySlot` therefore reaches these fixtures as a runtime throw in a `useMemo`
+ * rather than as a red build. That is not hypothetical: `nameKey` landed with the name tier on
+ * 2026-09-07 and three cases below threw on it, and only because the plan derivation reads it.
+ * Spelling the shape here is the fence.
+ */
+const slot = (row: DeckCard, quantity: number): TheorySlot => ({
+  key: theorySlot(row),
+  // Rust answers `cards.name` verbatim — the fold to a lookup key is `theoryNameKey`'s, on this
+  // side, so a fixture writes the name exactly as the card carries it.
+  nameKey: row.name,
+  quantity,
+});
 
 /** One search result, for the tests that drive the docked panel or the quick add. */
 function found(name: string): CardSummary {
@@ -739,8 +775,8 @@ beforeEach(() => {
   // second button by that name, and every test here addresses cards by name.
   searchCards.mockReset().mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
   listSets.mockReset().mockResolvedValue([]);
-  deckSearchOpen.mockReset().mockResolvedValue(true);
-  setDeckSearchOpen.mockReset().mockResolvedValue(undefined);
+  searchOpen.mockReset().mockResolvedValue({ deck: true });
+  setSearchOpen.mockReset().mockResolvedValue(undefined);
   deckCategoryList.mockReset().mockResolvedValue(CATEGORIES);
   deckLabelList.mockReset().mockResolvedValue([]);
   deckLabelAll.mockReset().mockResolvedValue([]);
@@ -3530,7 +3566,7 @@ describe("DeckEditor", () => {
    */
   it("takes the theory tick off every row when the reader switches to the plan", async () => {
     withPlan();
-    deckTheorySlots.mockResolvedValue([{ key: theorySlot(bolt()), quantity: 1 }]);
+    deckTheorySlots.mockResolvedValue([slot(bolt(), 1)]);
 
     await open();
 
@@ -3549,7 +3585,7 @@ describe("DeckEditor", () => {
    * **The count reaches the mark from the two reads the editor already makes**
    * ([issue #212](https://github.com/Msgaihede/mtg-grimoire/issues/212)).
    *
-   * `theoryMatchDelta`'s arithmetic is unit-tested and `CardStack` is tested against a map handed
+   * `theoryMatchMark`'s arithmetic is unit-tested and `CardStack` is tested against a plan handed
    * to it directly; neither says the editor *joins* the plan's quantities to the live list's. This
    * is that wiring — `deckTheorySlots`' `quantity` against `deck.cards`' own — and it is the half
    * that can be fully correct and reach nothing.
@@ -3560,7 +3596,7 @@ describe("DeckEditor", () => {
    */
   it("says how far the live count is from the plan on the card itself", async () => {
     withPlan();
-    deckTheorySlots.mockResolvedValue([{ key: theorySlot(bolt()), quantity: 2 }]);
+    deckTheorySlots.mockResolvedValue([slot(bolt(), 2)]);
 
     await open();
 
@@ -3569,10 +3605,49 @@ describe("DeckEditor", () => {
     );
     for (const mark of document.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)) {
       expect(mark).toHaveTextContent("+2");
+      // The tier as the attribute's own value, which is what the case below turns on: this deck
+      // is born with both switches on, so the printing the plan named draws the **exact** mark.
+      expect(mark.getAttribute(THEORY_MATCH_ATTR)).toBe("exact");
     }
     // …and in words, on the one thing a keyboard reader gets from the card.
     expect(screen.getByRole("button", { name: /^Lightning Bolt/ })).toHaveAccessibleName(
       expect.stringContaining("in the theory list · 2 more than planned"),
+    );
+  });
+
+  /**
+   * **The deck's two switches reach the mark**, and this is the wiring a green domain suite
+   * cannot see: `theoryMatch.ts` can be perfectly tested and `DeckEditor` still never pass
+   * `theoryMarkExact`/`theoryMarkName` into `theoryMatchPlan` — every deck would then draw the
+   * green *this is the printing you planned* whatever its reader had turned off, with every unit
+   * test in the tier's own suite still passing.
+   *
+   * The row is an **exact** match by construction — one printing, four planned against the four
+   * `withPlan` sleeves up — so nothing but the switch can make it the name tier: with
+   * `theoryMarkExact` off, `theoryMatchMark` re-resolves the row one tier down rather than
+   * silencing it, which is that function's own rule.
+   *
+   * **Matched on `THEORY_MATCH_ATTR`'s value and never on a colour.** The two tiers differ on
+   * screen by a custom property, and jsdom resolves no stylesheet — so a colour assertion here
+   * would pass against the exact mark just as happily and prove nothing at all.
+   */
+  it("passes the deck's mark switches to the plan", async () => {
+    withPlan({ theoryMarkExact: false, theoryMarkName: true });
+    deckTheorySlots.mockResolvedValue([slot(bolt(), 4)]);
+
+    await open();
+
+    await waitFor(() =>
+      expect(document.querySelectorAll(`[${THEORY_MATCH_ATTR}]`).length).toBeGreaterThan(0),
+    );
+    for (const mark of document.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)) {
+      expect(mark.getAttribute(THEORY_MATCH_ATTR)).toBe("name");
+    }
+    // And in words, which is the other half of the switch reaching the screen: the tier is drawn
+    // as a colour, so `deckCardName` is the only place a reader who cannot see one is told which
+    // of the two statements this mark is making.
+    expect(screen.getByRole("button", { name: /^Lightning Bolt/ })).toHaveAccessibleName(
+      expect.stringContaining("in the theory list · a different printing"),
     );
   });
 
@@ -3764,7 +3839,11 @@ describe("DeckEditor", () => {
     // own list in the cache beside the plan's — the second row the restore can read.
     await userEvent.click(screen.getByRole("button", { name: "Deck settings" }));
     await screen.findByText("Theory deck");
-    const theorySwitch = () => within(screen.getByRole("dialog")).getByRole("switch");
+    // Named, because a deck **with** a plan draws three switches in this dialog: the plan's own,
+    // and the two theory marks indented under it. A bare `getByRole("switch")` found one for as
+    // long as there was only one to find.
+    const theorySwitch = () =>
+      within(screen.getByRole("dialog")).getByRole("switch", { name: /Theory deck/ });
 
     deckUpdate.mockImplementation(async () => {
       deckRow = OFF;
@@ -3841,7 +3920,7 @@ describe("DeckEditor", () => {
           : detail(deckRow, [bolt({ quantity: 4 })]),
       ),
     );
-    deckTheorySlots.mockResolvedValue([{ key: theorySlot(bolt()), quantity: 2 }]);
+    deckTheorySlots.mockResolvedValue([slot(bolt(), 2)]);
 
     await open();
     await waitFor(() =>
@@ -3854,7 +3933,11 @@ describe("DeckEditor", () => {
       deckRow = { theoryEnabled: false, lastVariant: "live" };
       return { ...DECK, theoryEnabled: false };
     });
-    await userEvent.click(within(screen.getByRole("dialog")).getByRole("switch"));
+    // Named for the reason above: the two mark switches are drawn under this one while the deck
+    // keeps a plan, so the role alone no longer picks one control out.
+    await userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("switch", { name: /Theory deck/ }),
+    );
 
     await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { theoryEnabled: false }));
     await waitFor(() =>
@@ -5328,7 +5411,7 @@ describe("DeckEditor — the Collection submenu", () => {
         4,
         "c-Lightning Bolt",
         null,
-        "NM",
+        MENU_CONDITION,
         4,
         null,
       ),
@@ -5360,7 +5443,7 @@ describe("DeckEditor — the Collection submenu", () => {
         4,
         "c-Lightning Bolt",
         null,
-        "NM",
+        MENU_CONDITION,
         4,
         31,
       ),
@@ -5384,7 +5467,7 @@ describe("DeckEditor — the Collection submenu", () => {
         4,
         "c-Lightning Bolt",
         null,
-        "NM",
+        MENU_CONDITION,
         4,
         null,
       ),
@@ -5420,7 +5503,7 @@ describe("DeckEditor — the Collection submenu", () => {
         4,
         "c-Lightning Bolt",
         null,
-        "NM",
+        MENU_CONDITION,
         4,
         32,
       ),

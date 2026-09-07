@@ -291,12 +291,19 @@ describe("the seeds", () => {
 
   it("starter spans every finish and every condition, and keeps a row at zero", () => {
     const rows = seed("starter").collectionEntries;
-    expect(rows).toHaveLength(12);
+    expect(rows).toHaveLength(13);
     expect(new Set(rows.map((e) => e.finish))).toEqual(new Set(["nonfoil", "foil", "etched"]));
-    expect(new Set(rows.map((e) => e.condition))).toEqual(new Set(["NM", "LP", "MP", "HP", "DMG"]));
+    // **Six, and the sixth is the one no grade at all.** A seed that spanned only the five real
+    // grades would leave every surface drawing a not-set row — the table's `Finish · condition`
+    // cell, the Condition tray's own option, the sort's last place — with nothing to draw it
+    // against, and each of those would look right while being untested.
+    expect(new Set(rows.map((e) => e.condition))).toEqual(
+      new Set(["NONE", "NM", "LP", "MP", "HP", "DMG"]),
+    );
+    expect(rows.filter((e) => e.condition === "NONE")).toHaveLength(1);
     expect(rows.filter((e) => e.quantity === 0)).toHaveLength(1);
-    // 20 copies over 12 entries: the two numbers a summary shows separately.
-    expect(rows.reduce((n, e) => n + e.quantity, 0)).toBe(20);
+    // 21 copies over 13 entries: the two numbers a summary shows separately.
+    expect(rows.reduce((n, e) => n + e.quantity, 0)).toBe(21);
   });
 
   it("starter carries a pinned foil wish the nonfoil in the binder does not fill", () => {
@@ -438,9 +445,12 @@ describe("the seeds", () => {
 
   it("large's synthetic printings agree about the card and differ about the printing", () => {
     const db = seed("large");
-    // 52 real rows, then 650 oracle cards × 8 printings.
-    expect(db.cards).toHaveLength(52 + 5200);
-    const eight = db.cards.slice(52, 60);
+    // The real rows, then 650 oracle cards × 8 printings. **`CARDS.length` rather than the
+    // number**: the corpus grew by seven when the token and emblem printings landed, and a
+    // literal here made every `slice` below start one row short of the synthetic half —
+    // silently, since a slice out of range is an empty array rather than an error.
+    expect(db.cards).toHaveLength(CARDS.length + 5200);
+    const eight = db.cards.slice(CARDS.length, CARDS.length + 8);
     expect(new Set(eight.map((c) => c.oracleId)).size).toBe(1);
     expect(new Set(eight.map((c) => c.name)).size).toBe(1);
     expect(new Set(eight.map((c) => c.typeLine)).size).toBe(1);
@@ -448,13 +458,13 @@ describe("the seeds", () => {
     expect(new Set(eight.map((c) => c.collectorNumber)).size).toBe(8);
     // No synthetic card carries a `card_faces` array, so no face names disagree with the name
     // above them.
-    expect(db.cards.slice(52).every((c) => c.faces === "[]")).toBe(true);
+    expect(db.cards.slice(CARDS.length).every((c) => c.faces === "[]")).toBe(true);
     // Ids are unique across the whole corpus, real rows included.
     expect(new Set(db.cards.map((c) => c.id)).size).toBe(db.cards.length);
     // Every synthetic row is paper, so the count a *default* search makes — `paperOnly` is
     // omitted-means-true — is the one that clears the cap. Only the two digital rows of the
     // real corpus are outside it.
-    expect(db.cards.filter((c) => c.isPaper)).toHaveLength(5250);
+    expect(db.cards.filter((c) => c.isPaper)).toHaveLength(5257);
   });
 
   it("large's collection rows hold a finish their own printing is printed in", () => {
@@ -644,9 +654,17 @@ describe("a story can read the world it was given", () => {
    * What a deck owns is what sits in **its own group**, and the two seeded shapes are here in one
    * test because they are one rule read from both ends.
    *
-   * Deck 1's group holds two foil Counterspells and one damaged Ragavan; the deck lists four
-   * *nonfoil* of each, and reads owned 2 and 1 — **finish-blind and oracle-grained**, which is
-   * the half of the old allocator that survived it.
+   * Deck 1's group holds two **nonfoil** Counterspells and one damaged nonfoil Ragavan; the deck
+   * lists four nonfoil of each, and reads owned 2 and 1 — the exact `(card_id, finish)` match
+   * `attribute_owned` has made since 2026-09-07.
+   *
+   * **Both numbers are unchanged from the day the count was finish-blind and oracle-grained, and
+   * the seed is what moved**: those Counterspells were `foil` until 2026-09-07, and the pair
+   * answered a nonfoil line only because the old read was blind to the difference. Under the
+   * exact grain a foil row here would be a copy `release_unclaimed_copies` sweeps out of the
+   * group on sight, so `seeds.ts` was corrected rather than this expectation. Two numbers that
+   * survive a grain narrowing untouched are exactly the case a comment can go on describing the
+   * old world in — which is why this paragraph exists.
    *
    * Deck 2's group holds **one** card, the Sol Ring the deck builder's Collection Search needs
    * filed under a deck a story is not standing in — so its Sol Ring row reads 1 and every other

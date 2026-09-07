@@ -40,7 +40,7 @@ import {
 } from "../cardControl";
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
-import { theoryMatchDelta } from "../theoryMatch";
+import { theoryMatchMark, type TheoryMark, type TheoryPlan } from "../theoryMatch";
 import { ruleBreak } from "../violations";
 import type { ValidationIssue } from "../validation/types";
 import { packColumns, RAIL_ATTR, splitRail } from "./columns";
@@ -97,7 +97,7 @@ export function TextView({
   groups,
   marketplace,
   violations,
-  theoryMatches,
+  theoryPlan,
   onSelect,
   actions,
   selectedSlot,
@@ -110,10 +110,9 @@ export function TextView({
    *  no price — a decklist line is a quantity, a name and its marks. */
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
-  /** What the deck's plan says about each row — `theoryMatch.ts`'s map of slot → how far the
-   *  live list is from the planned count, handed down whole like `violations` beside it.
-   *  `undefined` for a deck with no plan. */
-  theoryMatches?: ReadonlyMap<string, number>;
+  /** The deck's plan — `theoryMatch.ts`'s two lookups and the deck's own two mark switches,
+   *  handed down whole like `violations` beside it. `undefined` for a deck with no plan. */
+  theoryPlan?: TheoryPlan;
   onSelect?: (card: DeckCard) => void;
   /** What may be done to a card here — see {@link DeckCardActions}. */
   actions?: DeckCardActions;
@@ -230,7 +229,7 @@ export function TextView({
                 group={group}
                 marketplace={marketplace}
                 violations={violations}
-                theoryMatches={theoryMatches}
+                theoryPlan={theoryPlan}
                 onSelect={onSelect}
                 actions={actions}
                 selectedSlot={selectedSlot}
@@ -275,7 +274,7 @@ export function TextView({
               group={group}
               marketplace={marketplace}
               violations={violations}
-              theoryMatches={theoryMatches}
+              theoryPlan={theoryPlan}
               onSelect={onSelect}
               actions={actions}
               selectedSlot={selectedSlot}
@@ -294,7 +293,7 @@ function TextGroup({
   group,
   marketplace,
   violations,
-  theoryMatches,
+  theoryPlan,
   onSelect,
   actions,
   selectedSlot,
@@ -303,10 +302,9 @@ function TextGroup({
   group: CardGroup;
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
-  /** What the deck's plan says about each row — `theoryMatch.ts`'s map of slot → how far the
-   *  live list is from the planned count, handed down whole like `violations` beside it.
-   *  `undefined` for a deck with no plan. */
-  theoryMatches?: ReadonlyMap<string, number>;
+  /** The deck's plan — `theoryMatch.ts`'s two lookups and the deck's own two mark switches,
+   *  handed down whole like `violations` beside it. `undefined` for a deck with no plan. */
+  theoryPlan?: TheoryPlan;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
   /** Handed through to the lines — see {@link TextView}'s own props. */
@@ -347,7 +345,7 @@ function TextGroup({
               key={card.id}
               card={card}
               ruleBreakText={ruleBreak(violations?.get(card.cardId))}
-              theoryDelta={theoryMatchDelta(theoryMatches, card)}
+              theoryMark={theoryMatchMark(theoryPlan, card)}
               onSelect={onSelect}
               actions={actions}
               selected={deckCardMarked(card, selectedSlot, actions)}
@@ -373,7 +371,7 @@ function TextGroup({
 function TextRow({
   card,
   ruleBreakText,
-  theoryDelta,
+  theoryMark,
   onSelect,
   actions,
   selected,
@@ -383,10 +381,11 @@ function TextRow({
   ruleBreakText: string | null;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
-  /** What the deck's plan says about this row — `theoryMatchDelta`, resolved by the group so a
-   *  line is handed an answer rather than a map to look itself up in. `null` is a card the plan
-   *  does not ask for, `0` the card it asks for exactly. */
-  theoryDelta: number | null;
+  /** What the deck's plan says about this row — `theoryMatchMark`, resolved by the group so a
+   *  line is handed an answer rather than a plan to look itself up in. `null` is a card the plan
+   *  does not ask for; otherwise the tier it is in and the difference at that tier's own grain,
+   *  where `0` is the card the plan asks for exactly. */
+  theoryMark: TheoryMark | null;
   /** This is the card the pane is open on. */
   selected: boolean;
   /** The nonce this line's last add was given, or `undefined`. The mark's `key`, so a second
@@ -424,7 +423,7 @@ function TextRow({
         type="button"
         // The stripe is the only mark this row has room for, so the name is where the words
         // are — `deckCardName` is the one definition, shared with the stack and the grid.
-        aria-label={deckCardName(card, ruleBreakText, theoryDelta)}
+        aria-label={deckCardName(card, ruleBreakText, theoryMark)}
         // `describes: false` — `deckCardName` already folds the rule-break sentence into the
         // accessible name above, so a default binding would describe it twice.
         {...tip(ruleBreakText ?? undefined, { describes: false })}
@@ -457,7 +456,9 @@ function TextRow({
         {/* Decoration, like the two beside it — this line is a button with an explicit
             `aria-label`, so the word is `deckCardName`'s. `TableView` is the one view that says
             it in text, because a cell is not swallowed by a label. */}
-        {theoryDelta !== null && <TheoryMatchBadge delta={theoryDelta} />}
+        {theoryMark !== null && (
+          <TheoryMatchBadge tier={theoryMark.tier} delta={theoryMark.delta} />
+        )}
         {card.labelName !== null && <LabelDot name={card.labelName} color={card.labelColor} />}
         <ManaText source={card.manaCost} className="shrink-0 text-[0.625rem]" />
       </button>

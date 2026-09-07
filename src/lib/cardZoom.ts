@@ -96,11 +96,15 @@ export const MAX_ZOOM: number = ZOOM_STEPS[ZOOM_STEPS.length - 1];
 /**
  * The card sections that zoom independently of one another.
  *
- * Five surfaces draw walls of cards, and they share the screen rather than taking turns on it:
- * the deck editor puts its docked card search column beside the deck itself, and the printings
- * modal opens over whichever wall is already up. One shared number made a gesture over the
- * search column resize the deck too — "how big are the cards I am browsing" and "how big is my
- * deck laid out" answered together, when the reader only asked one of them.
+ * Several surfaces draw walls of cards, and they share the screen rather than taking turns on it:
+ * the deck editor puts its docked card search column beside the deck itself, the collection and
+ * the wishlist each put one beside their folder wall, and the printings modal opens over whichever
+ * wall is already up. One shared number made a gesture over the search column resize the deck too
+ * — "how big are the cards I am browsing" and "how big is my deck laid out" answered together,
+ * when the reader only asked one of them.
+ *
+ * **The list is the census and it is deliberately not counted in this sentence.** It has grown
+ * four times, and a number written here is a fact about a *tree* rather than about the rule.
  *
  * `deck` is one key for **both** deck views. Stacks and Grid are two drawings of the same pile,
  * so switching between them must not resize the cards the reader just settled on.
@@ -126,7 +130,9 @@ export const ZOOM_SECTIONS = [
   "search",
   "tags",
   "collection",
+  "collectionSearch",
   "wishlist",
+  "wishlistSearch",
   "deckSearch",
   "deck",
   "deckGallery",
@@ -158,10 +164,19 @@ export const DEFAULT_SECTION_ZOOMS: Readonly<Record<ZoomSection, number>> = {
   // and a reader who sized the art up to read a picture was not resizing a search by name.
   tags: DEFAULT_ZOOM,
   collection: DEFAULT_ZOOM,
+  // The collection page's docked card search. Its own key rather than `collection`'s because the
+  // two walls are on screen **together** — a 206px column of printings beside the binder it files
+  // into — which is `deckSearch`'s case exactly: one number would make a ctrl+wheel over the
+  // sidebar resize the binder the reader is filing into.
+  collectionSearch: DEFAULT_ZOOM,
   // The shopping list's wall. Its own key rather than the collection's for the reason every
   // split on this list has: the two are read one after the other — what is wanted, then what
   // is owned — and a size settled on one is not an answer about the other.
   wishlist: DEFAULT_ZOOM,
+  // The wishlist page's docked card search, for `collectionSearch`'s reason one page over — and
+  // its own key rather than that one's because the two sidebars are read for different jobs
+  // (what to buy, against what to file) and neither is an answer about the other.
+  wishlistSearch: DEFAULT_ZOOM,
   deckSearch: DEFAULT_ZOOM,
   deck: DEFAULT_ZOOM,
   // The decks page's wall of tiles and folder cards. A whole deck rather than a card, so it is

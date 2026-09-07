@@ -112,12 +112,12 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     navCollapsed,
     setNavCollapsed,
     // And the deck editor's search column, read here at launch rather than where it is drawn —
-    // the shell mounts `usePrefetchDeckSearchOpen` so the answer is in the cache long before a
+    // the shell mounts `usePrefetchSearchOpen` so the answer is in the cache long before a
     // deck is opened. Nothing in this file draws a deck editor, so the value it answers is not
     // the point; being callable is, because a `queryFn` reaching `undefined` is a rejection this
     // shell's error boundary would have to survive for no reason.
-    deckSearchOpen: vi.fn().mockResolvedValue(true),
-    setDeckSearchOpen: vi.fn().mockResolvedValue(undefined),
+    searchOpen: vi.fn().mockResolvedValue({ deck: true }),
+    setSearchOpen: vi.fn().mockResolvedValue(undefined),
     searchCards: vi.fn(),
     // The filter row asks for facet counts beside the page. Answered **cold** — `ready:
     // false`, every map empty — so nothing greys and every control keeps its plain name.

@@ -665,6 +665,38 @@ function deckLine(p: Record<string, unknown>): AuditLine {
         detail: before === now ? null : `was ${name(before)}`,
       };
     }
+    // `decks.theory_mark_exact` and `decks.theory_mark_name` (schema v38) — which of the theory
+    // mark's two tiers this deck draws. The **third and fourth** multi-word field names in this
+    // switch, and `xGroup`'s paragraph applies to both word for word: the `default` arm below
+    // answers an unrecognised field with a sentence true of every deck edit, so a spelling that
+    // drifts from `deck.rs`'s reads as a bland line rather than as a failure. Both words are
+    // `deck.rs`'s, spelled once there and once here.
+    //
+    // **The reader's words, not the columns'.** The two switches are labelled *Matching
+    // printing* and *Different printing* in the deck's settings, so that is what the history
+    // says — a line reading "turned theory_mark_exact on" would be naming a column at somebody
+    // who pressed a switch with a name.
+    //
+    // **Two arms rather than one**, `record_deck_edit`'s own reason: the switches are
+    // independent and one Save can move both, so two rows is what happened and a single row
+    // saying "changed the theory marks" could be worded into neither decision.
+    //
+    // No `detail`, `xGroup`'s shape: a boolean's `from` is whatever its `to` is not, so "was
+    // off" under "turned it on" is a line of history spent saying nothing.
+    case "theoryMarkExact":
+      return {
+        text: flag(p.to)
+          ? "Started marking cards in the printing the plan names"
+          : "Stopped marking cards in the printing the plan names",
+        detail: null,
+      };
+    case "theoryMarkName":
+      return {
+        text: flag(p.to)
+          ? "Started marking cards in a different printing"
+          : "Stopped marking cards in a different printing",
+        detail: null,
+      };
     // A field this build has never heard of, written by a newer one — or by an older one,
     // since a database outlives the app that wrote it. A plain line with a date and a delta
     // beats a blank one, and beats a throw by a good deal more.

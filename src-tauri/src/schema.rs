@@ -308,9 +308,40 @@ pub const LEGACY_SINGLE_FILE_VERSION: i64 = 26;
 /// storage half of a word this app changed everywhere at once. 34 is one column on
 /// `collection_folders`, `locked` — the drawer a reader has set aside, so the app stops
 /// *offering* what is in it without ever stopping them reaching it; `NOT NULL DEFAULT 0`, so
-/// every folder that already exists is unlocked and the upgrade is invisible. The
+/// every folder that already exists is unlocked and the upgrade is invisible. 35 is the sixth
+/// grade: `collection_entries.condition` learns `'NONE'` and defaults to it, so a copy whose
+/// grade the reader never stated stops being recorded as the best one on the scale. SQLite has
+/// no `ALTER … CHECK`, so it is a **table rebuild** — the user ladder's third after v29's
+/// `error_log` and v33's `deck_audit` — and it deliberately rewrites no row: a database full of
+/// `'NM'` stays full of `'NM'`, because nothing here can tell which of those the reader meant
+/// and which the app chose for them. 36 is the second rung here that writes no shape: it sweeps
+/// every `kind = 'deck'` folder and files whatever no **live** `deck_cards` row claims at
+/// `(card_id, finish)` into `Recently removed`, which is the one-time pass that brings a file
+/// the v25 conversion filed by oracle id under the grain `deck::owned_by_printing` now counts
+/// at.
+/// 37 is the thirteenth synced table, `deck_tokens`, and one more column on `decks`: which
+/// tokens and emblems a deck brings is *derived* from its cards' `all_parts` on every open,
+/// so the table holds only the reader's deviations from that — a picked printing, a stepped
+/// quantity, a dismissal — and `tokens_open` is whether the area under the deck is expanded,
+/// which joins `last_variant` and its three neighbours as per-deck view state. 38 is two
+/// columns on `decks`, `theory_mark_exact` and `theory_mark_name` — which of the theory mark's
+/// two tiers this deck draws, now that a live row can be the printing the plan named *or* the
+/// same card in one it did not. **`NOT NULL DEFAULT 1` both**, which is the opposite choice to
+/// 34's and made for the same reason read the other way: the default is what the reader gets,
+/// and the state a reader wants here is both marks on.
+///
+/// **Both of the last two rungs were written as 35 and renumbered on the way in — the token
+/// rung twice, the theory rung three times.** The sixth grade took 35, the deck-group sweep
+/// took 36 and the token rung took 37, all while more than one branch was open, and the number
+/// belongs to whoever lands first — exactly as v34 was renumbered off v33 and as v12/v13/v14
+/// collided three ways in one day. **The sharpest thing either branch learned is that this
+/// constant is the one line git cannot help with**: each time, both sides read the *same*
+/// number here, so there was no conflict on it at all and only the rungs underneath collided.
+/// Three renumbers on one branch is the record, and it is the clearest argument the ladder has
+/// for taking the next free number at the moment you land rather than at the moment you start.
+/// The
 /// user's ladder can never restart, because its rungs describe rows nothing else can produce.
-pub const USER_SCHEMA_VERSION: i64 = 34;
+pub const USER_SCHEMA_VERSION: i64 = 38;
 
 /// `corpus.db`'s version, on a number line of its own.
 ///
@@ -357,6 +388,11 @@ pub const TABLES: &[(&str, Side)] = &[
     // One app-wide list keyed on `name_key` since v21 — no `deck_id`. `deck_tags` until v33,
     // which renamed the table with the word.
     ("deck_labels", Side::User),
+    // Only the reader's *deviations* from the tokens a deck derives (user schema v37) — a
+    // picked printing, a stepped quantity, a dismissal. Nothing rebuilds one: the derived list
+    // is the corpus's and comes back on its own, and what is here is exactly the part that
+    // does not.
+    ("deck_tokens", Side::User),
     ("deck_undo", Side::User),
     ("decks", Side::User),
     // A name is something a person typed, and nothing rebuilds it: no feed knows what the
@@ -436,12 +472,13 @@ pub fn side_of(table: &str) -> Option<Side> {
 
 /// The tables a pairing group keeps in step — spec §7.2, corrected against this file.
 ///
-/// **Twelve, and the spec named neither of the two moves that got it there.** The spec's list
+/// **Thirteen, and the spec named none of the three moves that got it there.** The spec's list
 /// names `deck_allocations`, which schema v25 dropped: which deck holds a card is now which
 /// folder its row sits in, so the work that table did is inside `collection_folders`, which is
-/// on this list. And `device_names` is user schema v31's, which the spec predates — the names
+/// on this list. `device_names` is user schema v31's, which the spec predates — the names
 /// of the devices in the group, while `sync_devices`, the roster holding their public keys,
-/// stays off this list for ever. A table that does not exist cannot be synced, and the count
+/// stays off this list for ever. And `deck_tokens` is v37's, which the spec predates by
+/// further still. A table that does not exist cannot be synced, and the count
 /// moved rather than the intent.
 ///
 /// **Sorted, and `sync_engine::capture::every_synced_table_is_on_the_census` holds it to the
@@ -456,7 +493,7 @@ pub fn side_of(table: &str) -> Option<Side> {
 /// hypothetical** — v31 is the rung that made it real, and the v29 rung needed no edit for it
 /// precisely because it was written this way. It is the same rule [`CARDS_COLUMNS`] states and
 /// every rung from v4 on repeats.
-pub const SYNCED_TABLES: [&str; 12] = [
+pub const SYNCED_TABLES: [&str; 13] = [
     "collection_entries",
     "collection_folders",
     "deck_audit",
@@ -464,6 +501,11 @@ pub const SYNCED_TABLES: [&str; 12] = [
     "deck_categories",
     "deck_folders",
     "deck_labels",
+    // The thirteenth (user schema v37). It syncs for `decks.last_group_by`'s reason and not
+    // `deck_cards`': what art a reader chose for their Treasures, and how many they want to
+    // bring, is a decision about the deck rather than a fact about cardboard — so it travels
+    // with the deck, and `quantity` travels as a *field* rather than as a counter.
+    "deck_tokens",
     "decks",
     // What each device in the group is called (user schema v31). The twelfth, and the one
     // that is here while `sync_devices` — the roster beside it, holding the public keys —
@@ -700,6 +742,25 @@ pub fn label_name_key(name: &str) -> String {
         .nfc()
         .collect()
 }
+
+/// The grain of [`crate::deck_tokens`]' overrides: one row per token per deck.
+///
+/// **`oracle_id` and not `card_id`**, because the row survives the reader changing which
+/// printing they want — the art choice *is* one of the things it stores. Every token, emblem
+/// and double-faced-token row in the corpus carries an `oracle_id` (0 missing of 3 245,
+/// measured 2026-09-07 on the debug corpus), so the column is safe as a grain in a way
+/// `card_id` would not be.
+///
+/// **Deliberately not grained on `variant`.** The derived list is per-variant because deck
+/// cards are; the override is not. Choosing the Treasure art for a deck and finding it
+/// reverted in the theory build would be a surprise with nothing to recommend it.
+///
+/// Held to `idx_deck_tokens_grain` two ways, unlike the two constants above it: by
+/// `every_plain_grain_constant_names_the_index_the_head_schema_carries`, which can read this
+/// one through `PRAGMA index_info` because it carries no `coalesce`, **and** by every
+/// `ON CONFLICT ({DECK_TOKEN_GRAIN})` in [`crate::deck_tokens`], which is a runtime error at
+/// the first write if it drifts.
+pub const DECK_TOKEN_GRAIN: &str = "deck_id, oracle_id";
 
 /// The two decks every deck secretly is: `live`, what is actually sleeved up and playable,
 /// and `theory`, what it is being built toward. CHECK-constrained on `deck_cards.variant`
@@ -2763,10 +2824,12 @@ pub fn migrate_single_file(conn: &Connection) -> rusqlite::Result<()> {
             let held = source.map(|(q, _)| q);
             let offered = source.map_or(0, |(_, t)| t);
             // **The clamp, and it is not optional.** The old ledger could out-claim a row that
-            // was later stepped down — nothing refused it, because `deck::owned_by_oracle`
-            // applied `min(a.quantity, e.quantity)` at *read* time and the stored overclaim
-            // never showed. Reading the claim literally here would invent copies the reader
-            // does not own, permanently and with nothing to compare against afterwards.
+            // was later stepped down — nothing refused it, because the owned/missing read of the
+            // day (`deck::owned_by_oracle`, which is `deck::owned_by_printing` since 2026-09-07
+            // and narrower still) applied `min(a.quantity, e.quantity)` at *read* time and the
+            // stored overclaim never showed. Reading the claim literally here would invent copies
+            // the reader does not own, permanently and with nothing to compare against
+            // afterwards.
             let take = held.unwrap_or(0).min(claimed);
             if take == 0 {
                 continue;
@@ -3288,13 +3351,14 @@ const COMBO_INDEXES_SQL: &str = "
 /// Public because `VACUUM` needs it. Anything that renumbers `cards`' rowids leaves this
 /// index pointing at the wrong rows, and the failure is silent — see
 /// [`crate::maintenance::convert_to_incremental`], which calls this unconditionally.
-/// The twenty-three user tables and their thirty-seven indexes, at [`USER_SCHEMA_VERSION`]'s
+/// The twenty-four user tables and their thirty-nine indexes, at [`USER_SCHEMA_VERSION`]'s
 /// shape, with `{schema}` where the file goes.
 ///
 /// **Copied verbatim out of a migrated database's own `sqlite_master`, not retyped from the
 /// rungs**, which is why it reads oddly in places: `decks` carries its later columns as one
-/// long `ALTER TABLE` tail, and `deck_cards`, `deck_labels` and `deck_audit` wear the quotes a
-/// `RENAME TO` left on their names. Every one of those artefacts is load-bearing here —
+/// long `ALTER TABLE` tail, and `deck_cards`, `deck_labels`, `deck_audit`, `error_log` and
+/// `collection_entries` wear the quotes a `RENAME TO` left on their names. Every one of those
+/// artefacts is load-bearing here —
 /// `the_user_schema_is_byte_identical_to_what_the_ladder_builds` compares this against the
 /// ladder's answer string for string, and a tidied-up transcription would be a shape that
 /// merely looks the same.
@@ -3308,6 +3372,16 @@ const COMBO_INDEXES_SQL: &str = "
 /// rungs that wrote them ([`globalise_tags`], the v8 step) are where the same words are frozen
 /// for the ordinary reason.
 ///
+/// **`collection_entries` wore an `ALTER TABLE` tail of its own until v35 took it off**, and
+/// the tail is gone from this literal because it is gone from the database. That rung rebuilds
+/// the table to widen a `CHECK`, and a rebuild writes a whole `CREATE TABLE` that SQLite then
+/// stores — so `folder_id` and `sync_uid` read as ordinary column lines now rather than as two
+/// clauses spliced onto the end of `updated_at`, and the name wears the rename's quotes. This
+/// is the one entry here that was *authored* rather than transcribed, and the fence is what
+/// makes that safe rather than a second source of truth: the test below compares this literal
+/// against what the v35 rung leaves in `sqlite_master`, byte for byte, so a comment reworded
+/// in one of the two places is a red build.
+///
 /// **A `{schema}.` prefix does not survive into `sqlite_master`** — measured: SQLite
 /// re-renders the name token and stores the rest of the statement verbatim, so
 /// `CREATE TABLE part.decks (…)` is stored as `CREATE TABLE decks (…)`. That is what
@@ -3318,7 +3392,7 @@ const COMBO_INDEXES_SQL: &str = "
 /// need every brace in both of them doubled — a hand transcription over a literal whose
 /// whole point is that nobody transcribed it.
 const USER_SCHEMA_SQL: &str = r#"
-CREATE TABLE {schema}.collection_entries (
+CREATE TABLE {schema}."collection_entries" (
                 id INTEGER PRIMARY KEY,
                 -- Soft reference. No REFERENCES clause, deliberately and permanently.
                 card_id TEXT NOT NULL,
@@ -3330,8 +3404,15 @@ CREATE TABLE {schema}.collection_entries (
                 -- Enum, never a boolean: `etched` is a third thing, and collapsing it is
                 -- the most common importer data-loss bug there is.
                 finish TEXT NOT NULL CHECK (finish IN ('nonfoil','foil','etched')),
-                condition TEXT NOT NULL DEFAULT 'NM'
-                    CHECK (condition IN ('NM','LP','MP','HP','DMG')),
+                -- Six grades, and the sixth is the absence of one. 'NONE' is where every
+                -- write that does not state a grade lands, and it is the DEFAULT because
+                -- the app has no business deciding a grade on the reader's behalf. A
+                -- sentinel and not a NULL: `condition` is the third term of the grain, two
+                -- NULLs in a UNIQUE index are distinct, and a nullable column would make
+                -- every ungraded add a brand-new row rather than folding onto the one
+                -- already there.
+                condition TEXT NOT NULL DEFAULT 'NONE'
+                    CHECK (condition IN ('NONE','NM','LP','MP','HP','DMG')),
                 -- What the import said before it was normalised. Kept because the
                 -- normalisation is lossy (EU 'GD' and NA 'MP' arrive as one grade) and the
                 -- user's own file is the only place the difference still exists.
@@ -3371,9 +3452,14 @@ CREATE TABLE {schema}.collection_entries (
                 -- somewhere this database cannot see. Never a reason to delete the row.
                 needs_review TEXT,
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL
-             , folder_id INTEGER
-                     REFERENCES collection_folders(id) ON DELETE SET NULL, sync_uid TEXT);
+                updated_at INTEGER NOT NULL,
+                -- The cabinet, and the grain's eleventh term. SET NULL and never CASCADE:
+                -- deleting a drawer has to surface the CARDS at the root, because a
+                -- collection row is a card that physically exists.
+                folder_id INTEGER
+                    REFERENCES collection_folders(id) ON DELETE SET NULL,
+                sync_uid TEXT
+             );
 
 CREATE TABLE {schema}.wishlist_entries (
                 id INTEGER PRIMARY KEY,
@@ -3433,7 +3519,7 @@ CREATE TABLE {schema}.decks (
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
              , folder_id INTEGER
-                REFERENCES deck_folders(id) ON DELETE SET NULL, notes TEXT, theory_enabled INTEGER NOT NULL DEFAULT 0, last_variant TEXT NOT NULL DEFAULT 'live', last_group_by TEXT NOT NULL DEFAULT 'category', last_sort_by TEXT NOT NULL DEFAULT 'alphabetical', separate_x_group INTEGER NOT NULL DEFAULT 0, default_category_id INTEGER NOT NULL DEFAULT 0, game_key TEXT NOT NULL DEFAULT 'any', bracket INTEGER NOT NULL DEFAULT 0, sync_uid TEXT);
+                REFERENCES deck_folders(id) ON DELETE SET NULL, notes TEXT, theory_enabled INTEGER NOT NULL DEFAULT 0, last_variant TEXT NOT NULL DEFAULT 'live', last_group_by TEXT NOT NULL DEFAULT 'category', last_sort_by TEXT NOT NULL DEFAULT 'alphabetical', separate_x_group INTEGER NOT NULL DEFAULT 0, default_category_id INTEGER NOT NULL DEFAULT 0, game_key TEXT NOT NULL DEFAULT 'any', bracket INTEGER NOT NULL DEFAULT 0, sync_uid TEXT, tokens_open INTEGER NOT NULL DEFAULT 0, theory_mark_exact INTEGER NOT NULL DEFAULT 1, theory_mark_name INTEGER NOT NULL DEFAULT 1);
 
 CREATE TABLE {schema}.app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
@@ -3698,6 +3784,24 @@ CREATE TABLE {schema}.device_names (
                  sync_uid TEXT
              ) WITHOUT ROWID;
 
+CREATE TABLE {schema}.deck_tokens (
+                 id INTEGER PRIMARY KEY,
+                 deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+                 -- The token's identity across every printing of it. Soft, like every other
+                 -- card reference in a user table.
+                 oracle_id TEXT NOT NULL,
+                 -- The printing the reader picked. NULL means whichever one the resolver
+                 -- names.
+                 card_id TEXT,
+                 -- NULL means the default, which is 1. Stored absent rather than as a 1, so
+                 -- that changing the default later moves every untouched token.
+                 quantity INTEGER,
+                 state TEXT NOT NULL DEFAULT 'auto'
+                     CHECK (state IN ('auto','hidden','manual')),
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL
+              , sync_uid TEXT);
+
 CREATE UNIQUE INDEX {schema}.idx_collection_grain ON collection_entries (
                  card_id, finish, condition, lang, altered, signed, proxy, misprint,
                  coalesce(serial_number, ''), coalesce(grading, ''), coalesce(folder_id, 0)
@@ -3791,9 +3895,13 @@ CREATE INDEX {schema}.idx_sync_ops_unpushed
 CREATE INDEX {schema}.idx_sync_ops_row ON sync_ops (tbl, uid);
 
 CREATE UNIQUE INDEX {schema}.idx_device_names_uid ON device_names (sync_uid);
+
+CREATE UNIQUE INDEX {schema}.idx_deck_tokens_grain ON deck_tokens (deck_id, oracle_id);
+
+CREATE UNIQUE INDEX {schema}.idx_deck_tokens_uid ON deck_tokens (sync_uid);
 "#;
 
-/// Create the twenty-three user tables and their indexes in `schema`, at
+/// Create the twenty-four user tables and their indexes in `schema`, at
 /// [`USER_SCHEMA_VERSION`]'s shape.
 ///
 /// **One function, two callers, and that is deliberate**: [`crate::split::extract_user_file`]
@@ -4864,6 +4972,496 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
         tx.commit()?;
     }
 
+    // v35: a condition that can say nothing.
+    //
+    // **A sixth grade joins the scale — `'NONE'` — and it becomes the DEFAULT.** `condition`
+    // was `NOT NULL DEFAULT 'NM'`, so a reader who did not know or did not care what grade a
+    // copy was had the app record Near Mint for them, which is the *best* grade on the scale.
+    // Every write that does not state a grade lands on `'NONE'` from here.
+    //
+    // **A sentinel string and not a NULL**, which is the one decision in this rung that is not
+    // about the CHECK. `condition` is the third term of [`COLLECTION_GRAIN`], a UNIQUE index,
+    // and SQLite treats two NULLs in a unique index as distinct — a nullable column would make
+    // every ungraded add a brand-new row instead of folding onto the one already there, and a
+    // reader pressing `+` four times would end with four rows of one copy. A string folds
+    // correctly and needs no special case in the fold, the reconcile or the sync.
+    //
+    // **A rebuild, because SQLite has no `ALTER … CHECK`** — v29's `error_log` and v33's
+    // `deck_audit` for the same reason, and the same five statements: build the new table,
+    // copy every column **including `id`** so no row is renamed, drop, rename, recreate the
+    // indexes. The `id`s matter more here than they did there: `collection_entries.id` is what
+    // `collection_update`, `collection_set_folder` and every `EntryPatch` in the crate name a
+    // row by, and a row that came out of this wearing a new number would be a copy the reader
+    // can no longer edit.
+    //
+    // **Not one existing row is rewritten, and that is deliberate rather than lazy.** A
+    // database full of `'NM'` stays full of `'NM'`: some of those the reader typed and some the
+    // old default chose for them, and nothing stored can tell the two apart. Guessing would
+    // throw away the ones they meant to keep.
+    //
+    // **The five indexes are frozen literals and never [`COLLECTION_GRAIN`]**, the v8
+    // `deck_cards` rebuild's rule stated one table over: that constant describes the table *at
+    // head*, and this step is history the day it ships. A later rung that widens the grain
+    // again would otherwise make this one build an index over a column that does not exist
+    // yet — a hard failure on a fresh install and invisible on every upgraded one.
+    //
+    // **`PRAGMA foreign_keys` is left exactly as it is**, the v8 comment's rule: it is a
+    // documented no-op inside a transaction and this runs in one. There is nothing to toggle,
+    // and nothing to protect either — `deck_allocations` went at v25, so at head no enforced
+    // foreign key points at `collection_entries` at all. Its own outbound key to
+    // `collection_folders` rides across in the new DDL.
+    //
+    // **The capture triggers go down with the table and come straight back.** `DROP TABLE`
+    // takes `sync_ins/upd/del_collection_entries` with it, and
+    // [`crate::sync_engine::capture::install`] — which `prepare_database` calls on the very
+    // next line, on every target — puts the current set back before anything can write. That
+    // ordering is also what makes the rebuild silent on the wire: the copy lands in a table
+    // with no triggers on it, so a migration emits no ops, which is right, because moving a
+    // reader's own rows between two shapes of one table is not an edit anybody made.
+    if v < 35 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "CREATE TABLE collection_entries_v35 (
+                id INTEGER PRIMARY KEY,
+                -- Soft reference. No REFERENCES clause, deliberately and permanently.
+                card_id TEXT NOT NULL,
+                -- Migration insurance: what the user actually owns, in the terms printed
+                -- on the card, still readable when the id stops resolving.
+                set_code TEXT NOT NULL,
+                collector_number TEXT NOT NULL,
+                lang TEXT NOT NULL DEFAULT 'en',
+                -- Enum, never a boolean: `etched` is a third thing, and collapsing it is
+                -- the most common importer data-loss bug there is.
+                finish TEXT NOT NULL CHECK (finish IN ('nonfoil','foil','etched')),
+                -- Six grades, and the sixth is the absence of one. 'NONE' is where every
+                -- write that does not state a grade lands, and it is the DEFAULT because
+                -- the app has no business deciding a grade on the reader's behalf. A
+                -- sentinel and not a NULL: `condition` is the third term of the grain, two
+                -- NULLs in a UNIQUE index are distinct, and a nullable column would make
+                -- every ungraded add a brand-new row rather than folding onto the one
+                -- already there.
+                condition TEXT NOT NULL DEFAULT 'NONE'
+                    CHECK (condition IN ('NONE','NM','LP','MP','HP','DMG')),
+                -- What the import said before it was normalised. Kept because the
+                -- normalisation is lossy (EU 'GD' and NA 'MP' arrive as one grade) and the
+                -- user's own file is the only place the difference still exists.
+                condition_original TEXT,
+                -- `>= 0`, not `> 0`, and the wishlist's `> 0` differs on purpose. A
+                -- stepper taken down to zero is a real state here: the row keeps its
+                -- condition, its price, its tags and its acquisition story while the user
+                -- owns none of that printing today. So every aggregate that reads this has
+                -- to decide *deliberately* whether a zero row counts as owned — and a
+                -- 'cards owned' figure that counts rows rather than quantity will be
+                -- wrong the first time somebody trades a playset away.
+                quantity INTEGER NOT NULL CHECK (quantity >= 0),
+                tradelist_quantity INTEGER NOT NULL DEFAULT 0
+                    CHECK (tradelist_quantity >= 0),
+                purchase_price REAL,
+                purchase_currency TEXT,
+                acquired_at TEXT,
+                -- No competitor stores this. It is one TEXT column and it is the answer to
+                -- 'where did I get this?', which is the question a collection is actually
+                -- asked years later.
+                acquisition_source TEXT,
+                -- 042/500. Not in Scryfall's data at all — user-supplied, and part of the
+                -- grain, because two serialized copies are two different objects.
+                serial_number TEXT,
+                altered INTEGER NOT NULL DEFAULT 0,
+                signed INTEGER NOT NULL DEFAULT 0,
+                proxy INTEGER NOT NULL DEFAULT 0,
+                misprint INTEGER NOT NULL DEFAULT 0,
+                -- {company, grade, cert}. JSON because the shape differs per grader
+                -- (CGC has two grades numbered 10; PSA has no 9.5) and a column per
+                -- grader is a migration per grader.
+                grading TEXT CHECK (grading IS NULL OR json_valid(grading)),
+                tags TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tags)),
+                notes TEXT,
+                -- NULL is the normal state. A sentence here means the row needs the user's
+                -- attention — the printing vanished from Scryfall, or a merge landed it
+                -- somewhere this database cannot see. Never a reason to delete the row.
+                needs_review TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                -- The cabinet, and the grain's eleventh term. SET NULL and never CASCADE:
+                -- deleting a drawer has to surface the CARDS at the root, because a
+                -- collection row is a card that physically exists.
+                folder_id INTEGER
+                    REFERENCES collection_folders(id) ON DELETE SET NULL,
+                sync_uid TEXT
+             );
+
+             -- Every column, `id` and `sync_uid` included, and no expression anywhere in the
+             -- list: a rebuild that widens a CHECK has nothing to convert, so a `CASE` here
+             -- would be this rung deciding something it has already said it will not decide.
+             INSERT INTO collection_entries_v35
+                 (id, card_id, set_code, collector_number, lang, finish, condition,
+                  condition_original, quantity, tradelist_quantity, purchase_price,
+                  purchase_currency, acquired_at, acquisition_source, serial_number,
+                  altered, signed, proxy, misprint, grading, tags, notes, needs_review,
+                  created_at, updated_at, folder_id, sync_uid)
+                 SELECT id, card_id, set_code, collector_number, lang, finish, condition,
+                        condition_original, quantity, tradelist_quantity, purchase_price,
+                        purchase_currency, acquired_at, acquisition_source, serial_number,
+                        altered, signed, proxy, misprint, grading, tags, notes, needs_review,
+                        created_at, updated_at, folder_id, sync_uid
+                   FROM collection_entries;
+
+             DROP TABLE collection_entries;
+             ALTER TABLE collection_entries_v35 RENAME TO collection_entries;
+
+             -- All five, frozen as literals — see this rung's doc, and the v8 `deck_cards`
+             -- rebuild it borrows the rule from. `DROP TABLE` took every one of them.
+             CREATE UNIQUE INDEX idx_collection_grain ON collection_entries (
+                 card_id, finish, condition, lang, altered, signed, proxy, misprint,
+                 coalesce(serial_number, ''), coalesce(grading, ''), coalesce(folder_id, 0)
+             );
+             CREATE INDEX idx_collection_card
+                ON collection_entries (card_id);
+             CREATE INDEX idx_collection_review
+                ON collection_entries (needs_review) WHERE needs_review IS NOT NULL;
+             CREATE INDEX idx_collection_folder
+                 ON collection_entries (folder_id);
+             CREATE UNIQUE INDEX idx_collection_entries_uid
+                 ON collection_entries (sync_uid);",
+        )?;
+        // Literal `35`, for the reason every step before it writes its own: this step is what
+        // *makes* a database version 35. `USER_SCHEMA_VERSION` would commit "fully migrated"
+        // before any step added after it had run.
+        tx.execute_batch("PRAGMA main.user_version = 35;")?;
+        tx.commit()?;
+    }
+
+    // v36: a deck's group holds only what its live list claims at `(card_id, finish)`.
+    //
+    // `deck::owned_by_printing` narrowed the count from the oracle card to the printing, so a
+    // deck now reads as short of the exact object its list names. The v25 conversion filed
+    // placements by matching the old allocator's claims **across** printings — its own doc says
+    // it "routinely files a printing the deck does not list" — so an upgraded file is full of
+    // copies the new count attributes to nothing and which `deck_pull::CANDIDATE_SQL` cannot
+    // offer back, because it excludes every `kind = 'deck'` folder including the deck's own.
+    // This is the one-time pass that brings those files under the rule.
+    //
+    // **They land in `Recently removed`, and that is chosen rather than convenient**: it is
+    // ranked second in `CANDIDATE_SQL`, after the root and before the reader's own folders, so
+    // the first press of `Import missing cards from collection…` offers every one of them back
+    // for the lines that genuinely match. A reader is left with a state they can act on.
+    //
+    // **Spelled out literally and calling no app code.** `'deck'`, `'removed'`, `'live'` and
+    // `'nonfoil'` are written out rather than read from `COLLECTION_FOLDER_KINDS`,
+    // `DECK_VARIANTS` and `FINISHES`, and the split below is this rung's own rather than
+    // `collection_folders::take_copies` or `deck::release_unclaimed_copies`. A migration step is
+    // history the day it ships: a constant that is reordered, or a helper whose rules change,
+    // would silently convert a v35 file differently next year. v25's rung inlines the same
+    // arithmetic for the same reason.
+    //
+    // **It writes no shape at all, so it owes no `USER_SCHEMA_SQL` line and no `UNDO_V37`** —
+    // v32's exemption, and the second time this ladder has earned it.
+    //
+    // **A missing `Recently removed` folder skips the move rather than failing the rung.** A
+    // rung that errors blocks startup, and a hand-edited file without that folder must open.
+    //
+    // **It was written as 35 and renumbered to 36 on the way in**, v34's own note one rung down
+    // and this ladder's rule rather than an accident worth hiding: the sixth grade took 35 while
+    // this branch was open, and the number belongs to whoever lands first. **Here the order is
+    // more than the rule, though** — v35 rebuilds `collection_entries`, and every statement below
+    // reads and writes that table, so this rung has to sit after it and not merely below it.
+    if v < 36 {
+        let tx = conn.unchecked_transaction()?;
+
+        // `None` skips the move and still stamps the version — a hand-edited file with no
+        // holding area must open, and a rung that errors blocks startup.
+        let removed: Option<i64> = tx
+            .query_row(
+                "SELECT id FROM collection_folders WHERE kind = 'removed'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+
+        if let Some(removed) = removed {
+            // Every copy in a deck group that its deck's **live** list does not name at
+            // `(card_id, finish)`, oldest row first.
+            //
+            // **`claimed` sums every live row, switched-off piles included.** Custody follows
+            // what the list *names*; `is_active` decides only what is counted. Reading it the
+            // other way would make this rung empty every reader's Maybeboard into the holding
+            // area on upgrade — the one way this can be destructive. `variant = 'live'` is the
+            // other half of the same sentence read the opposite way: a plan reserves nothing.
+            //
+            // The deck row's `NULL` finish is the collection row's `'nonfoil'`, resolved in SQL
+            // so both sides of the comparison are one spelling.
+            //
+            // **⚠️ The surplus is allocated oldest-row-first, so the OLDEST rows are the ones
+            // that leave — and getting this backwards is the one error here that costs nothing a
+            // total can see.** `deck::release_unclaimed_copies` walks the identity's rows
+            // `ORDER BY id` and *takes* from each in turn (`let take = row_held.min(surplus)`),
+            // which is spec §2.1's rule and `take_copies`' and `release_group_copies`'
+            // convention. Crediting the *claim* oldest-first instead is the exact mirror image:
+            // the same number of copies moves, no copy is lost or invented, and a **different
+            // physical card** leaves the deck. This rung is a one-shot that has to hand the
+            // reader the database the app itself would have produced — otherwise the first
+            // `swap_printing` after the upgrade evicts by a different rule than the upgrade did,
+            // for a reason no reader could ever see.
+            //
+            // So the three subqueries are `total_held`, `claimed` and `prior_held`, and the
+            // column is `max(0, (total_held - claimed) - prior_held)`: the group's whole surplus,
+            // less what the rows above this one have already given up. It is a **remaining
+            // surplus** and not yet a take — `row_held.min(surplus)` is the loop's own line
+            // below, one line for one line with the function this reproduces.
+            //
+            // Worked on a group of two rows of 2 against a line of 3: total surplus is 1, so the
+            // older row gives up `min(2, 1 - 0) = 1` and the newer gives up `min(2, 1 - 2) = 0`.
+            // The `max(0, …)` is what makes that second row a no-op rather than a negative.
+            //
+            // **The whole plan is collected before a single row moves**, which is what lets all
+            // three subqueries read `collection_entries` while the loop below writes to it: the
+            // arithmetic is answered against the file as the reader left it, once.
+            let plan: Vec<(i64, i64)> = {
+                let mut stmt = tx.prepare(
+                    "SELECT e.id,
+                            max(0, coalesce((
+                              SELECT sum(t.quantity) FROM collection_entries t
+                               WHERE t.folder_id = e.folder_id
+                                 AND t.card_id = e.card_id
+                                 AND t.finish = e.finish
+                            ), 0) - coalesce((
+                              SELECT sum(d.quantity) FROM deck_cards d
+                               WHERE d.deck_id = f.deck_id
+                                 AND d.variant = 'live'
+                                 AND d.card_id = e.card_id
+                                 AND coalesce(d.finish, 'nonfoil') = e.finish
+                            ), 0) - coalesce((
+                              SELECT sum(p.quantity) FROM collection_entries p
+                               WHERE p.folder_id = e.folder_id
+                                 AND p.card_id = e.card_id
+                                 AND p.finish = e.finish
+                                 AND p.id < e.id
+                            ), 0))
+                       FROM collection_entries e
+                       JOIN collection_folders f ON f.id = e.folder_id
+                      WHERE f.kind = 'deck'
+                      ORDER BY e.id",
+                )?;
+                let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+                rows.collect::<rusqlite::Result<Vec<_>>>()?
+            };
+
+            for (entry_id, surplus) in plan {
+                // The rows above this one in the same group have already given up everything
+                // that was over the line, so `0` here means this row is entirely claimed.
+                if surplus <= 0 {
+                    continue;
+                }
+                let (held, offered): (i64, i64) = tx.query_row(
+                    "SELECT quantity, tradelist_quantity FROM collection_entries WHERE id = ?1",
+                    params![entry_id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?;
+                // `release_unclaimed_copies`' `let take = row_held.min(surplus);`, one line for
+                // one line: a row gives up what is left of the surplus, capped at what it holds.
+                let take = surplus.min(held);
+                // **The trade list is split, never copied** — v25's rung's clamp, and its
+                // reason: carrying the number onto both halves would have the reader promising
+                // twice the copies they hold, and no CHECK ties the two columns. Each half is
+                // clamped to its own quantity a second time, which matters only for a
+                // hand-edited row that already held `tradelist > quantity`.
+                let moved_trade = offered.min(take);
+                let kept_trade = (offered - moved_trade).min(held - take);
+
+                // **The placement carries every grain column and every column that is the row's
+                // story** — v25's rung's insert, verbatim, for its reason: these are the same
+                // physical cards, bought on the same day for the same money, and a bare row
+                // would be the upgrade quietly deleting a history that took years to build.
+                // `ON CONFLICT` is the eleven-term grain `idx_collection_grain` builds, and the
+                // `DO UPDATE` sums the trade list beside the quantity because two rows that
+                // merge are one pile.
+                //
+                // **`sync_uid` is not on the column list, which is v25's answer to a question
+                // v25 could not be asked** — that rung predates the column entirely. It is the
+                // right answer here too, and it is `take_copies`' own: the placement lands with
+                // a NULL uid and `capture::insert_trigger` mints one unconditionally. The
+                // triggers are *persistent*, so on every machine that has launched before they
+                // are already in the file when this runs — the same fact the v32 rung's doc
+                // turns on — and `mint_missing_uids` covers the paths that are not a trigger.
+                // Naming the column here would be this rung naming a row the way the sync engine
+                // names it, in a second place. The `ON CONFLICT` path never inserts at all, so
+                // the surviving row keeps the uid it already had.
+                tx.execute(
+                    "INSERT INTO collection_entries
+                         (card_id, set_code, collector_number, lang, finish, condition,
+                          condition_original, quantity, tradelist_quantity, purchase_price,
+                          purchase_currency, acquired_at, acquisition_source, serial_number,
+                          altered, signed, proxy, misprint, grading, tags, notes, needs_review,
+                          folder_id, created_at, updated_at)
+                     SELECT card_id, set_code, collector_number, lang, finish, condition,
+                            condition_original, ?2, ?4, purchase_price,
+                            purchase_currency, acquired_at, acquisition_source, serial_number,
+                            altered, signed, proxy, misprint, grading, tags, notes, needs_review,
+                            ?3, created_at, unixepoch()
+                       FROM collection_entries WHERE id = ?1
+                     ON CONFLICT (card_id, finish, condition, lang, altered, signed, proxy,
+                                  misprint, coalesce(serial_number, ''), coalesce(grading, ''),
+                                  coalesce(folder_id, 0))
+                     DO UPDATE SET quantity = quantity + excluded.quantity,
+                                   tradelist_quantity = tradelist_quantity
+                                                        + excluded.tradelist_quantity,
+                                   updated_at = unixepoch()",
+                    params![entry_id, take, removed, moved_trade],
+                )?;
+                // The source loses exactly what left it, and is deleted at zero rather than
+                // left standing empty — v24's rule: with the folder in the grain, a row holding
+                // no copies is indistinguishable from one somebody filed and emptied.
+                tx.execute(
+                    "UPDATE collection_entries
+                        SET quantity = quantity - ?2, tradelist_quantity = ?3,
+                            updated_at = unixepoch()
+                      WHERE id = ?1",
+                    params![entry_id, take, kept_trade],
+                )?;
+                tx.execute(
+                    "DELETE FROM collection_entries WHERE id = ?1 AND quantity = 0",
+                    params![entry_id],
+                )?;
+            }
+        }
+
+        // Literal `36`, for the reason every step before it writes its own: this step is what
+        // *makes* a database version 36. `USER_SCHEMA_VERSION` would commit "fully migrated"
+        // before any step added after it had run.
+        tx.execute_batch("PRAGMA main.user_version = 36;")?;
+        tx.commit()?;
+    }
+
+    // v37: the tokens and emblems a deck brings, and whether the reader has that area open.
+    //
+    // **The table stores only *deviations*, which is why it is this small.** Which tokens a deck
+    // needs is derived on every open from the `all_parts` of the cards in its active categories —
+    // ~5 ms for a 100-card deck, measured 2026-09-07 — so a token nobody has touched has no row
+    // here at all. A stored list would need a reconciliation pass on every deck edit *and* would
+    // go stale when a Scryfall sync changed a card's `all_parts`, with nothing to notice.
+    //
+    // **`quantity` and `card_id` are NULLABLE and the NULL is the answer rather than a
+    // placeholder** — v24's third trap and v34's read the other way round. NULL means "whatever
+    // the resolver names", so changing the default printing rule, or the default quantity, moves
+    // every untouched token instead of leaving a table of frozen 1s. The row that carries neither
+    // and says `'auto'` is not representable: [`crate::deck_tokens`]' write path deletes it.
+    //
+    // **`state` gets a `CHECK` where `last_group_by` one table over deliberately does not**, and
+    // the difference is whose vocabulary it is: those three hold a *TypeScript* vocabulary this
+    // crate does not know, while these three words are the crate's own and every reader of them
+    // is a `match`. A fourth word is a new rung, which is the cost that buys the fence.
+    //
+    // **`sync_uid` is written on its own line before the close, transcribing what
+    // [`USER_SCHEMA_SQL`] would hold if this table had climbed v29 with the others.** It did not —
+    // it is born above that rung — so the column is in the `CREATE` rather than in an `ALTER`,
+    // and the line break is what keeps the two literals byte-identical for
+    // `the_user_schema_is_byte_identical_to_what_the_ladder_builds`.
+    //
+    // **`decks.tokens_open` is `ADD COLUMN` and never a rebuild**, v34's argument verbatim, and
+    // the ALTER splices its text onto the end of the one-line tail every column since v12 has
+    // landed on — after `sync_uid TEXT`, because that is the order the rungs ran in.
+    // [`USER_SCHEMA_SQL`] wears that exact shape.
+    //
+    // **No index on the flag**, [`UNDO_V20`]'s rule and v34's: it is read once per deck and
+    // interpreted, never searched on. The table's own two are a different question — the grain is
+    // what `ON CONFLICT` targets and the uid index is what every synced table owes.
+    if v < 37 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "CREATE TABLE deck_tokens (
+                 id INTEGER PRIMARY KEY,
+                 deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+                 -- The token's identity across every printing of it. Soft, like every other
+                 -- card reference in a user table.
+                 oracle_id TEXT NOT NULL,
+                 -- The printing the reader picked. NULL means whichever one the resolver
+                 -- names.
+                 card_id TEXT,
+                 -- NULL means the default, which is 1. Stored absent rather than as a 1, so
+                 -- that changing the default later moves every untouched token.
+                 quantity INTEGER,
+                 state TEXT NOT NULL DEFAULT 'auto'
+                     CHECK (state IN ('auto','hidden','manual')),
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL
+              , sync_uid TEXT);
+             CREATE UNIQUE INDEX idx_deck_tokens_grain ON deck_tokens (deck_id, oracle_id);
+             CREATE UNIQUE INDEX idx_deck_tokens_uid ON deck_tokens (sync_uid);
+             ALTER TABLE decks ADD COLUMN tokens_open INTEGER NOT NULL DEFAULT 0;",
+        )?;
+        // Literal `37`, for the reason every step before it writes its own: this step is what
+        // *makes* a database version 37. `USER_SCHEMA_VERSION` would commit "fully migrated"
+        // before any step added after it had run.
+        tx.execute_batch("PRAGMA main.user_version = 37;")?;
+        tx.commit()?;
+    }
+
+    // v38: the theory mark grew a second tier, and a deck can now be told which of the two it
+    // draws (2026-09-07). Green where a live row is the printing the plan named, blue where it
+    // is the same card in a printing it did not — and a reader who wants one, the other or
+    // neither says so per deck, because whether a substitute printing is worth a mark is a
+    // statement about how *this* deck is being built rather than about the app.
+    //
+    // **Both `NOT NULL DEFAULT 1`, and the default is the whole of the upgrade** — v34's line
+    // one rung down, with the answer the other way round for the same argument. Every deck that
+    // already exists draws both marks from the first launch on the new build, and there is no
+    // backfill because there is nothing for one to do. The alternative — defaulting the new
+    // tier off so nothing changes — leaves the headline half of the feature invisible until
+    // somebody finds a switch they have no reason to look for, and splits the reader's decks
+    // into two groups that behave differently with nothing on screen saying why.
+    //
+    // **Two columns rather than one three-valued one.** `none | exact | both` would have been
+    // one `ALTER` and would have made the two tiers a ladder: it can spell "blue only" as
+    // nothing at all, and blue without green is a real answer — a reader who cares that a card
+    // is *present* and not which printing it is. Two booleans are the four states the switches
+    // draw, one to one.
+    //
+    // **Per deck rather than per user**, `theory_enabled`'s own argument one column along, and
+    // `separate_x_group`'s and `bracket`'s after it: it is an answer about how this list is
+    // read, so two decks may disagree.
+    //
+    // **Appended at the end, which is what keeps `deck.rs`'s positional reads honest.** Every
+    // `r.get(n)` over `DECK_SELECT` is an index into this column order, and both new columns
+    // are `INTEGER` beside seven other `INTEGER`s on the row — a column inserted anywhere but
+    // last hands a bracket to a bool with nothing going red.
+    //
+    // **`decks` is in [`SYNCED_TABLES`] and both columns travel — but only because they were
+    // put on the capture spec by hand.** `sync_engine::capture`'s `Spec` for this table spells
+    // its field list out literally; `pragma_table_info` appears in that module only in a test
+    // asserting the hand-written names exist, and there is **no fence in the other direction**,
+    // so a column added here and nowhere else is captured by nothing and goes red nowhere. Both
+    // names are on that list, `bracket`'s precedent at v26: which tier a deck draws is an answer
+    // *about the deck*, made once by the reader, and two devices showing one deck's marks
+    // differently with nothing on screen explaining it is the failure that edit prevents. The
+    // mark's **colours** are deliberately not on it and never will be — a rendering choice
+    // belongs to the device that draws it, which is why the three `last_*` columns are absent
+    // too.
+    //
+    // **`DEFAULT 1` is load-bearing for the sync as well as for the no-backfill argument
+    // above**, and that is the half only reading `sync_engine::apply` settles. A device on the
+    // old rung sends an op naming neither column: `apply::updates` walks the **local** spec and
+    // `continue`s past a field the incoming op lacks, so the column is left exactly as it was;
+    // `apply::creations` omits it from the INSERT, so it falls to this DDL default and a deck
+    // built from an old peer's op arrives with both marks on — identical to a deck this device
+    // makes itself. A `NOT NULL` column with no default would instead have failed that INSERT,
+    // and `insert_row`'s caller answers a failed insert with `ROLLBACK TO savepoint` and
+    // `Outcome::Deferred`: the group would stall at that op for ever. Adding a field is the safe
+    // direction, which is what `capture`'s own `cover_image_path` note argues from the other
+    // end; removing one is the direction with no rule written down.
+    if v < 38 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "ALTER TABLE decks ADD COLUMN theory_mark_exact INTEGER NOT NULL DEFAULT 1;
+             ALTER TABLE decks ADD COLUMN theory_mark_name INTEGER NOT NULL DEFAULT 1;",
+        )?;
+        // Literal `38`, for the reason every step before it writes its own: this step is what
+        // *makes* a database version 38. **After both `ALTER`s and inside the same
+        // transaction** — a stamp between them would leave a launch that died in the middle at
+        // version 38 with one column, and the next launch would run no rung to add the other.
+        tx.execute_batch("PRAGMA main.user_version = 38;")?;
+        tx.commit()?;
+    }
+
     // **The clock, repaired on every launch at every version — and this is not belt-and-braces.**
     //
     // Every capture trigger ends `FROM sync_clock c, sync_identity i, sync_group g`. That is a
@@ -5606,8 +6204,8 @@ pub(crate) mod tests {
             )
             .unwrap();
         assert_eq!(
-            stray, 23,
-            "the user file holds the twenty-three and nothing else"
+            stray, 24,
+            "the user file holds the twenty-four and nothing else"
         );
     }
 
@@ -5754,8 +6352,8 @@ pub(crate) mod tests {
 
         assert_eq!(
             want.len(),
-            62,
-            "twenty-three tables, thirty-seven indexes, and the two `sqlite_autoindex` rows a \n             TEXT PRIMARY KEY brings with it — `sync_devices`, `sync_state`, \n             `sync_peers` and `device_names` are `WITHOUT ROWID`, so each one's TEXT primary key IS the \n             table and brings no index of its own"
+            65,
+            "twenty-four tables, thirty-nine indexes, and the two `sqlite_autoindex` rows a \n             TEXT PRIMARY KEY brings with it — `sync_devices`, `sync_state`, \n             `sync_peers` and `device_names` are `WITHOUT ROWID`, so each one's TEXT primary key IS the \n             table and brings no index of its own"
         );
         for (w, g) in want.iter().zip(got.iter()) {
             assert_eq!(w, g, "{} {} differs from the ladder's", g.0, g.1);
@@ -5829,7 +6427,7 @@ pub(crate) mod tests {
     /// The user side, spelled out. A table moving between the two files is a data migration,
     /// never a diff nobody noticed.
     #[test]
-    fn the_user_side_is_the_twenty_three_tables_no_feed_can_rebuild() {
+    fn the_user_side_is_the_twenty_four_tables_no_feed_can_rebuild() {
         let mut user: Vec<&str> = TABLES
             .iter()
             .filter(|(_, s)| *s == Side::User)
@@ -5848,6 +6446,7 @@ pub(crate) mod tests {
                 "deck_categories",
                 "deck_folders",
                 "deck_labels",
+                "deck_tokens",
                 "deck_undo",
                 "decks",
                 "device_names",
@@ -5973,15 +6572,152 @@ pub(crate) mod tests {
     /// `idx_device_names_uid` with it.
     const UNDO_V31: &str = "DROP TABLE IF EXISTS device_names;";
 
-    /// v34's set-aside marker, and the newest rewind on the user ladder.
+    /// v38's two theory-mark switches, and the newest rewind on the user ladder.
+    ///
+    /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one:
+    /// `ALTER TABLE decks ADD COLUMN` is not idempotent, so a fixture that kept either column
+    /// dies at `duplicate column name` on the way back up — a failure no real upgrade can
+    /// produce, and one that takes every unrelated test in the chain with it rather than only
+    /// the ones about the theory mark.
+    ///
+    /// **It runs first, before [`UNDO_V37`]**, for that constant's stated reason: a rewind
+    /// walks the ladder backwards, and this is now the top of it.
+    ///
+    /// **The two drops are in the opposite order to the rung's two `ADD COLUMN`s**, which is
+    /// the same sentence read one grain finer: `theory_mark_name` was appended last, so it is
+    /// the one that has to come off first for the stored table text to land back on exactly
+    /// what v37 left rather than on a re-ordered spelling of it.
+    ///
+    /// **No index needs a line of its own**, [`UNDO_V20`]'s rule: the rung creates none, and
+    /// `DROP COLUMN` would refuse a column an index named. The only table-level `CHECK` on
+    /// `decks` names `cover_kind`, which is the other thing `DROP COLUMN` refuses over.
+    const UNDO_V38: &str = "ALTER TABLE decks DROP COLUMN theory_mark_name;
+                            ALTER TABLE decks DROP COLUMN theory_mark_exact;";
+
+    /// v37's overrides table and the deck flag beside it — the rewind directly under
+    /// [`UNDO_V38`].
+    ///
+    /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one, and owed
+    /// twice: the rung is a bare `CREATE TABLE`, so a fixture that kept `deck_tokens` dies at
+    /// `table deck_tokens already exists` on the way back up, and it is a bare
+    /// `ALTER TABLE decks ADD COLUMN`, so one that kept `tokens_open` dies at
+    /// `duplicate column name`. Neither is a failure a real upgrade can produce, and either
+    /// takes every unrelated test in the chain with it.
+    ///
+    /// **It runs after [`UNDO_V38`] and before [`UNDO_V35`]**, a rewind walking the ladder
+    /// backwards. It was the top of it for part of one day.
+    ///
+    /// **Both indexes are spelled out where [`UNDO_V31`] needed none**, and the difference is
+    /// the second statement rather than a change of mind: `DROP TABLE` would take
+    /// `idx_deck_tokens_grain` and `idx_deck_tokens_uid` with it, but `DROP COLUMN` refuses a
+    /// column an index names, so the order below is table-indexes, table, column and the two
+    /// `DROP INDEX`es are the cheapest way to keep that order readable rather than load-bearing.
+    const UNDO_V37: &str = "DROP INDEX IF EXISTS idx_deck_tokens_uid;
+         DROP INDEX IF EXISTS idx_deck_tokens_grain;
+         DROP TABLE IF EXISTS deck_tokens;
+         ALTER TABLE decks DROP COLUMN tokens_open;";
+
+    /// v35's sixth grade, taken back off — the rewind directly under [`UNDO_V37`].
+    ///
+    /// Owed for [`UNDO_V14`]'s **quiet** reason rather than [`UNDO_V13`]'s loud one: the rung
+    /// is a rebuild, so a fixture that kept the widened CHECK would climb it again perfectly
+    /// happily while claiming to be a version that never had `'NONE'` — green, and lying about
+    /// what it tests. That is [`UNDO_V29`]'s `error_log` argument and [`UNDO_V33`]'s
+    /// `deck_audit` one, a third table over: a database below v35 that accepts an ungraded row
+    /// is not a database any reader has.
+    ///
+    /// **So it is a rebuild too, and it maps rather than deletes.** A stored `'NONE'` cannot
+    /// exist below v35 — the narrow CHECK refuses it — and the honest answer to what such a row
+    /// *was* on the way down is `'NM'`, because that is precisely what the old DEFAULT would
+    /// have recorded for the same press. Dropping the rows instead would make a rewind lose the
+    /// reader's cards, which no rewind on either ladder does. **The mapping can collide**: a
+    /// printing held at both `'NONE'` and `'NM'` folds onto one grain, and the
+    /// `CREATE UNIQUE INDEX` at the end is where that fails, loudly. No fixture seeds such a
+    /// pair — every caller rewinds a database [`create_user_schema`] built moments earlier, so
+    /// there is nothing to map at all — and this note is the fence for the one that does.
+    ///
+    /// **It runs after [`UNDO_V38`] and [`UNDO_V37`] and before [`UNDO_V34`]**, for that
+    /// constant's stated reason: a rewind walks the ladder backwards. It read "runs first, and
+    /// this is now the top of it" for as long as v35 was head, and three rungs have landed above
+    /// it since — v36 writes no shape and so owes no rewind, which is why the numbering has a gap
+    /// there rather than a missing line. The order matters here rather
+    /// than merely being tidy — [`UNDO_V29`] drops `collection_entries.sync_uid`, and a
+    /// `DROP COLUMN` refuses a column an index names, so this has to have put
+    /// `idx_collection_entries_uid` back before that constant takes it away again.
+    ///
+    /// **The five indexes are spelled out**, which is [`UNDO_V20`]'s rule read the other way:
+    /// `DROP TABLE` takes every one of them, so every one of them is owed a line.
+    const UNDO_V35: &str = "CREATE TABLE collection_entries_pre35 (
+             id INTEGER PRIMARY KEY,
+             card_id TEXT NOT NULL,
+             set_code TEXT NOT NULL,
+             collector_number TEXT NOT NULL,
+             lang TEXT NOT NULL DEFAULT 'en',
+             finish TEXT NOT NULL CHECK (finish IN ('nonfoil','foil','etched')),
+             condition TEXT NOT NULL DEFAULT 'NM'
+                 CHECK (condition IN ('NM','LP','MP','HP','DMG')),
+             condition_original TEXT,
+             quantity INTEGER NOT NULL CHECK (quantity >= 0),
+             tradelist_quantity INTEGER NOT NULL DEFAULT 0
+                 CHECK (tradelist_quantity >= 0),
+             purchase_price REAL,
+             purchase_currency TEXT,
+             acquired_at TEXT,
+             acquisition_source TEXT,
+             serial_number TEXT,
+             altered INTEGER NOT NULL DEFAULT 0,
+             signed INTEGER NOT NULL DEFAULT 0,
+             proxy INTEGER NOT NULL DEFAULT 0,
+             misprint INTEGER NOT NULL DEFAULT 0,
+             grading TEXT CHECK (grading IS NULL OR json_valid(grading)),
+             tags TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tags)),
+             notes TEXT,
+             needs_review TEXT,
+             created_at INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL,
+             folder_id INTEGER
+                 REFERENCES collection_folders(id) ON DELETE SET NULL,
+             sync_uid TEXT
+         );
+         INSERT INTO collection_entries_pre35
+             (id, card_id, set_code, collector_number, lang, finish, condition,
+              condition_original, quantity, tradelist_quantity, purchase_price,
+              purchase_currency, acquired_at, acquisition_source, serial_number,
+              altered, signed, proxy, misprint, grading, tags, notes, needs_review,
+              created_at, updated_at, folder_id, sync_uid)
+             SELECT id, card_id, set_code, collector_number, lang, finish,
+                    CASE WHEN condition = 'NONE' THEN 'NM' ELSE condition END,
+                    condition_original, quantity, tradelist_quantity, purchase_price,
+                    purchase_currency, acquired_at, acquisition_source, serial_number,
+                    altered, signed, proxy, misprint, grading, tags, notes, needs_review,
+                    created_at, updated_at, folder_id, sync_uid
+               FROM collection_entries;
+         DROP TABLE collection_entries;
+         ALTER TABLE collection_entries_pre35 RENAME TO collection_entries;
+         CREATE UNIQUE INDEX idx_collection_grain ON collection_entries (
+             card_id, finish, condition, lang, altered, signed, proxy, misprint,
+             coalesce(serial_number, ''), coalesce(grading, ''), coalesce(folder_id, 0)
+         );
+         CREATE INDEX idx_collection_card ON collection_entries (card_id);
+         CREATE INDEX idx_collection_review
+             ON collection_entries (needs_review) WHERE needs_review IS NOT NULL;
+         CREATE INDEX idx_collection_folder ON collection_entries (folder_id);
+         CREATE UNIQUE INDEX idx_collection_entries_uid
+             ON collection_entries (sync_uid);";
+
+    /// v34's set-aside marker.
     ///
     /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one:
     /// `ALTER TABLE collection_folders ADD COLUMN locked` is not idempotent, so a fixture that
     /// kept the column dies at `duplicate column name` on the way back up — a failure no real
     /// upgrade can produce, and one that takes every unrelated test in the chain with it.
     ///
-    /// **It runs first, before [`UNDO_V33`]**, for that constant's stated reason: a rewind
-    /// walks the ladder backwards, and this is now the top of it.
+    /// **It runs after [`UNDO_V38`], [`UNDO_V37`] and [`UNDO_V35`], and before [`UNDO_V33`]**,
+    /// for that constant's stated reason: a rewind walks the ladder backwards. It was the top of
+    /// the ladder until those three landed above it — **within days, from three branches**,
+    /// which is the ladder's own numbering rule in action rather than an accident: every chain
+    /// below now starts three rungs higher. There is no `UNDO_V36`, because v36 writes no
+    /// shape.
     ///
     /// **No index needs a line of its own**, [`UNDO_V20`]'s rule: the rung creates none, and
     /// `DROP COLUMN` would refuse a column an index named. The table-level `CHECK` names
@@ -5992,10 +6728,17 @@ pub(crate) mod tests {
 
     /// And v33's rename, back to the tag the label used to be.
     ///
-    /// **It runs first, before [`UNDO_V31`]**, for that constant's stated reason: a rewind walks
-    /// the ladder backwards. There is no `UNDO_V32` between them — v32 writes no shape at all,
-    /// which [`user_file_at_31`] explains — so this is the newest rewind on the user ladder and
-    /// every chain below starts with it.
+    /// **It runs before [`UNDO_V31`] and after [`UNDO_V34`]**, for that constant's stated
+    /// reason: a rewind walks the ladder backwards. There is no `UNDO_V32` between it and v31 —
+    /// v32 writes no shape at all, which [`user_file_at_31`] explains — so above it are
+    /// [`UNDO_V38`], [`UNDO_V35`] and [`UNDO_V34`], in that order, and every chain below spells
+    /// the four of them together.
+    ///
+    /// **It said "the newest rewind on the user ladder, and every chain below starts with it"
+    /// through two rungs that were above it**, which is this repo's prose-rot hazard on the one
+    /// page where the ordering *is* the correctness argument: a doc-comment edit routes to
+    /// neither CI job, so nothing went red either time. The chains themselves were always right
+    /// — they are code.
     ///
     /// **It is owed for [`UNDO_V13`]'s loud reason twice over.** `ALTER TABLE deck_tags RENAME
     /// TO deck_labels` on a database that already has `deck_labels` is `no such table`, and
@@ -6060,7 +6803,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
+            "{UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
              PRAGMA main.user_version = 28;"
         ))
         .unwrap();
@@ -6076,7 +6819,8 @@ pub(crate) mod tests {
     /// v31 database and a v32 one *are* the same schema and renumbering is the whole of the
     /// difference. There is no `UNDO_V32` for that reason and no fixture below owes it a line
     /// — [`UNDO_V33`] is the next rung above with a shape to take back, and this fixture wore
-    /// nothing but the stamp until it existed.
+    /// nothing but the stamp until it existed. [`UNDO_V34`] and [`UNDO_V35`] joined it in turn,
+    /// each for its own rung's reason, and the chain is spelled newest first.
     ///
     /// **[`UNDO_V33`] is the line it does owe**, and it was added the day v33 landed: this
     /// function said "head wearing the previous number" while head had moved a rung further,
@@ -6091,7 +6835,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 31;"
+            "{UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 31;"
         ))
         .unwrap();
         conn
@@ -6102,20 +6846,245 @@ pub(crate) mod tests {
     ///
     /// Rewound from head rather than written out a second time, [`user_file_at_27`]'s device:
     /// a hand-typed "v33" would be whatever somebody remembered, and the difference between
-    /// remembered and real is the whole of what this tests. One rewind does it, because v34
-    /// writes exactly one column.
+    /// remembered and real is the whole of what this tests. **Three rewinds do it, not one** —
+    /// [`UNDO_V38`], then [`UNDO_V35`], then [`UNDO_V34`] — and it read "one rewind, because
+    /// v34 writes exactly one column" until those two landed above it on the same day. The
+    /// chain is the whole ladder above 33 rather than the newest rung, which is the thing a
+    /// fixture like this quietly stops being when nobody adds the line.
     ///
     /// **It takes no `foreign_keys` parameter where [`user_file_at_32`] does**, and the
     /// asymmetry is the rungs rather than an oversight: v33 drops and rebuilds `deck_audit`,
     /// so a CASCADE either fires or does not and the pragma decides which. v34 is one
     /// `ADD COLUMN` against a table nothing references, which no setting of that pragma can
-    /// make behave two ways.
+    /// make behave two ways — and v35 rebuilds a table nothing references either, so its
+    /// `DROP TABLE`'s implicit `DELETE FROM` has no child anywhere to reach.
     fn user_file_at_33() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
-        conn.execute_batch(&format!("{UNDO_V34} PRAGMA main.user_version = 33;"))
+        conn.execute_batch(&format!(
+            "{UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} PRAGMA main.user_version = 33;"
+        ))
+        .unwrap();
+        conn
+    }
+
+    /// A user file at 34 — the shape every machine carries the day before a copy could decline
+    /// to name a grade, and the day before a deck knew which tokens it brings. It is the
+    /// population **both** the v35 and the v36 rungs are *for*.
+    ///
+    /// Rewound from head rather than written out a second time, [`user_file_at_33`]'s device
+    /// one rung up. **Three rewinds do it, and it was written with one**: v35 was the only rung
+    /// above 34 on the branch that added this, and v36, v37 and v38 have landed above it since.
+    /// [`UNDO_V38`] first, then [`UNDO_V37`], then [`UNDO_V35`] — newest rung, first undone —
+    /// with no `UNDO_V36` between the last two because v36 writes no shape.
+    ///
+    /// **It takes no `foreign_keys` parameter**, [`user_file_at_33`]'s reason, and the two
+    /// rungs reach it by different routes. v35 rebuilds `collection_entries`, which nothing in
+    /// the schema references, so the implicit `DELETE FROM` its `DROP TABLE` runs under
+    /// `foreign_keys=ON` has no child row anywhere to reach. v36 creates a table nothing
+    /// references and adds a column to one. Neither can behave two ways under that pragma. The
+    /// CASCADE `deck_tokens` *declares* is a different question, and
+    /// `v37_overrides_leave_with_the_deck_that_holds_them` turns the pragma on to ask it.
+    fn user_file_at_34() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        create_user_schema(&conn, "main").unwrap();
+        conn.execute_batch(&format!(
+            "{UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
+        ))
+        .unwrap();
+        conn
+    }
+
+    /// A user file at 37 — the shape every machine carries the day before the theory mark grew
+    /// a second tier, and the only population the v38 rung is *for*.
+    ///
+    /// Rewound from head rather than written out a second time, [`user_file_at_34`]'s device
+    /// one rung up. One rewind does it, because v38 is the only rung above 37 — and that
+    /// sentence is the one every fixture here has had corrected **three times** now, so read it
+    /// as owing a line to whoever writes rung 39 rather than as a fact.
+    ///
+    /// **It takes no `foreign_keys` parameter**, for the same reason the two below it do not:
+    /// v38 is two `ADD COLUMN`s against `decks`, and no setting of that pragma can make an
+    /// `ADD COLUMN` behave two ways.
+    fn user_file_at_37() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        create_user_schema(&conn, "main").unwrap();
+        conn.execute_batch(&format!("{UNDO_V38} PRAGMA main.user_version = 37;"))
             .unwrap();
         conn
+    }
+
+    /// The deck whose group carries every case the v36 rung has to tell apart.
+    const DECK_A: i64 = 1;
+    /// A second deck, present so the rung is shown reaching past the first one.
+    const DECK_B: i64 = 2;
+
+    /// A user file at 35 — the shape every machine carries the day before a deck's group is held
+    /// to the printing, and the only population the v36 rung is *for*.
+    ///
+    /// **Head rewound past v38 and v37, then stamped with 35** — [`user_file_at_31`]'s
+    /// construction one number line up, plus the two rewinds head has grown since. v36 writes
+    /// no shape at all; it *moves rows*, so a v35 database and a v36 one **are** the same schema
+    /// and renumbering is the whole of the difference between those two. There is no
+    /// `UNDO_V36` for that reason — the same exemption v32 has, and one v33, v34, v35, v37 and
+    /// v38 do not.
+    ///
+    /// **It was written as a v34 fixture and renumbered on the way in**, the same rule the rung
+    /// it serves was renumbered under: `main`'s sixth-grade rebuild took 35 while this branch was
+    /// open.
+    ///
+    /// **It read "head is a legitimate v35 shape — v36 writes none — so the construction did not
+    /// have to change, only the stamp", and v38 ended that.** Two `decks` columns above it mean
+    /// head is no longer a v35 shape, so this fixture rewinds [`UNDO_V38`] like every other one
+    /// on the ladder. Without it the climb meets its own `ALTER TABLE decks ADD COLUMN` over
+    /// columns `create_user_schema` had already built and dies at `duplicate column name` —
+    /// [`UNDO_V13`]'s loud failure, reaching a fixture that had been allowed to skip the rewind
+    /// only because the rung above it wrote nothing.
+    ///
+    /// What makes a test built on this a real upgrade and not a fresh install is what it seeds:
+    /// a deck group holding printings and finishes the deck's own live list does not name, which
+    /// is exactly what the v25 conversion left behind — its own doc records that it "replaced
+    /// matched candidates by oracle id, so the conversion routinely files a printing the deck
+    /// does not list".
+    fn user_file_at_36() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        create_user_schema(&conn, "main").unwrap();
+        // Both rewinds, because head is no longer a legitimate v35 shape twice over: the token
+        // rung adds `deck_tokens` and `decks.tokens_open`, so without `{UNDO_V37}` this fixture
+        // hands `migrate_user` a table that already exists and v37 dies at
+        // `table deck_tokens already exists`; the theory rung adds two `decks` columns, so
+        // without `{UNDO_V38}` v38 dies at `duplicate column name`. Newest first.
+        conn.execute_batch(&format!(
+            "{UNDO_V38} {UNDO_V37} PRAGMA main.user_version = 35;"
+        ))
+        .unwrap();
+        seed_v35_groups(&conn);
+        conn
+    }
+
+    /// The same file with `Recently removed` already holding a row at the exact grain the rung
+    /// is about to file another one at — the case `idx_collection_grain` would refuse.
+    ///
+    /// **`condition` is stated and not left to the DEFAULT**, which it was until v35 landed: the
+    /// grade is the grain's third term, the default moved from `'NM'` to `'NONE'`, and a row that
+    /// took the new default would sit at a *different* grain from the `'NM'` row the rung is
+    /// about to file — no conflict, no fold, and a test that quietly stopped testing the merge.
+    fn user_file_at_36_with_a_matching_removed_row() -> Connection {
+        let conn = user_file_at_36();
+        conn.execute_batch(
+            "INSERT INTO collection_entries
+                 (card_id, set_code, collector_number, lang, finish, condition, quantity,
+                  folder_id, created_at, updated_at)
+             VALUES ('bolt-m10', 'm10', '146', 'en', 'nonfoil', 'NM', 2, 10, 0, 0);",
+        )
+        .unwrap();
+        conn
+    }
+
+    /// Two decks, their groups, and one of every case the rung has to decide.
+    ///
+    /// The `collection_entries` ids ascend in the order they are written, which is what the
+    /// running-total half of the rung's SELECT walks: the two `mountain` rows are the pair that
+    /// proves the older row of a multi-row group is charged against the claim first. They differ
+    /// in `condition` because they must — `idx_collection_grain` is UNIQUE and two rows at one
+    /// `(card_id, finish)` in one folder can only exist by differing in one of the other nine
+    /// terms.
+    fn seed_v35_groups(conn: &Connection) {
+        conn.execute_batch(
+            "INSERT INTO decks (id, name, format_key, created_at, updated_at)
+                 VALUES (1, 'Burn', 'modern', 0, 0),
+                        (2, 'Islands', 'legacy', 0, 0);
+
+             INSERT INTO deck_categories (id, deck_id, name, kind, is_active, sort_order,
+                                          created_at, updated_at)
+                 VALUES (1, 1, 'Main deck', 'main', 1, 0, 0, 0),
+                        -- Switched off. Its rows still NAME cards, which is the whole of what
+                        -- the rung reads them for.
+                        (2, 1, 'Maybeboard', 'maybe', 0, 1, 0, 0),
+                        (3, 2, 'Main deck', 'main', 1, 0, 0, 0);
+
+             INSERT INTO collection_folders
+                 (id, parent_id, name, kind, deck_id, sort_order, created_at, updated_at)
+                 VALUES (10, NULL, 'Recently removed', 'removed', NULL, 0, 0, 0),
+                        (11, NULL, 'Burn', 'deck', 1, 0, 0, 0),
+                        (12, NULL, 'Islands', 'deck', 2, 0, 0, 0),
+                        (13, NULL, 'Trade pile', 'user', NULL, 0, 0, 0);
+
+             INSERT INTO deck_cards (id, deck_id, category_id, variant, card_id, set_code,
+                                     collector_number, lang, name, finish, quantity,
+                                     created_at, updated_at)
+                 VALUES
+                 -- Named at the exact grain, and matched copy for copy.
+                 (1, 1, 1, 'live', 'bolt-lea', 'lea', '161', 'en', 'Lightning Bolt',
+                  NULL, 2, 0, 0),
+                 -- Named 2 where the group holds one row of 4.
+                 (2, 1, 1, 'live', 'swamp', 'lea', '288', 'en', 'Swamp', NULL, 2, 0, 0),
+                 -- In the switched-off pile. Custody follows what the list names.
+                 (3, 1, 2, 'live', 'forest', 'lea', '294', 'en', 'Forest', NULL, 3, 0, 0),
+                 -- A plan reserves nothing, so this row claims nothing.
+                 (4, 1, 1, 'theory', 'plains', 'lea', '286', 'en', 'Plains', NULL, 2, 0, 0),
+                 -- Named 3 against two rows of 2.
+                 (5, 1, 1, 'live', 'mountain', 'lea', '292', 'en', 'Mountain', NULL, 3, 0, 0),
+                 -- The other deck lists the FOIL and its group holds the plain copy.
+                 (6, 2, 3, 'live', 'island', 'lea', '290', 'en', 'Island', 'foil', 1, 0, 0);
+
+             INSERT INTO collection_entries
+                 (id, card_id, set_code, collector_number, lang, finish, condition, quantity,
+                  tradelist_quantity, purchase_price, purchase_currency, acquired_at,
+                  acquisition_source, notes, tags, folder_id, created_at, updated_at)
+                 VALUES
+                 (100, 'bolt-lea', 'lea', '161', 'en', 'nonfoil', 'NM', 2, 0,
+                  NULL, NULL, NULL, NULL, NULL, '[]', 11, 0, 0),
+                 (101, 'bolt-m10', 'm10', '146', 'en', 'nonfoil', 'NM', 1, 0,
+                  NULL, NULL, NULL, NULL, NULL, '[]', 11, 0, 0),
+                 (102, 'bolt-lea', 'lea', '161', 'en', 'foil', 'NM', 1, 0,
+                  NULL, NULL, NULL, NULL, NULL, '[]', 11, 0, 0),
+                 -- The row with a story, so the split can be shown carrying it.
+                 (103, 'swamp', 'lea', '288', 'en', 'nonfoil', 'NM', 4, 3,
+                  1.5, 'USD', '2019-01-02', 'LGS', 'sleeved', '[\"cube\"]', 11, 0, 0),
+                 (104, 'forest', 'lea', '294', 'en', 'nonfoil', 'NM', 3, 0,
+                  NULL, NULL, NULL, NULL, NULL, '[]', 11, 0, 0),
+                 (105, 'plains', 'lea', '286', 'en', 'nonfoil', 'NM', 2, 0,
+                  NULL, NULL, NULL, NULL, NULL, '[]', 11, 0, 0),
+                 (106, 'mountain', 'lea', '292', 'en', 'nonfoil', 'NM', 2, 0,
+                  NULL, NULL, NULL, NULL, NULL, '[]', 11, 0, 0),
+                 (107, 'mountain', 'lea', '292', 'en', 'nonfoil', 'LP', 2, 0,
+                  NULL, NULL, NULL, NULL, NULL, '[]', 11, 0, 0),
+                 (108, 'island', 'lea', '290', 'en', 'nonfoil', 'NM', 1, 0,
+                  NULL, NULL, NULL, NULL, NULL, '[]', 12, 0, 0),
+                 -- Neither of the last two is in a deck group, and neither may move.
+                 (109, 'bolt-m10', 'm10', '146', 'en', 'nonfoil', 'NM', 5, 0,
+                  NULL, NULL, NULL, NULL, NULL, '[]', 13, 0, 0),
+                 (110, 'bolt-lea', 'lea', '161', 'en', 'nonfoil', 'NM', 1, 0,
+                  NULL, NULL, NULL, NULL, NULL, '[]', NULL, 0, 0);",
+        )
+        .unwrap();
+    }
+
+    /// How many copies of a printing sit in a deck's group.
+    fn in_group(conn: &Connection, deck_id: i64, card_id: &str, finish: &str) -> i64 {
+        conn.query_row(
+            "SELECT coalesce(sum(e.quantity), 0)
+               FROM collection_entries e
+               JOIN collection_folders f ON f.id = e.folder_id
+              WHERE f.deck_id = ?1 AND e.card_id = ?2 AND e.finish = ?3",
+            params![deck_id, card_id, finish],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// How many sit in the holding area.
+    fn in_removed(conn: &Connection, card_id: &str, finish: &str) -> i64 {
+        conn.query_row(
+            "SELECT coalesce(sum(e.quantity), 0)
+               FROM collection_entries e
+               JOIN collection_folders f ON f.id = e.folder_id
+              WHERE f.kind = 'removed' AND e.card_id = ?1 AND e.finish = ?2",
+            params![card_id, finish],
+            |r| r.get(0),
+        )
+        .unwrap()
     }
 
     /// A user file at 32 — the shape every machine carries the day before the deck tag becomes
@@ -6143,7 +7112,7 @@ pub(crate) mod tests {
         .unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 32;"
+            "{UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 32;"
         ))
         .unwrap();
         conn
@@ -6200,7 +7169,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} \
+            "{UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} \
              PRAGMA main.user_version = 27;"
         ))
         .unwrap();
@@ -6578,7 +7547,7 @@ pub(crate) mod tests {
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, USER_SCHEMA_VERSION);
-        assert_eq!(USER_SCHEMA_VERSION, 34);
+        assert_eq!(USER_SCHEMA_VERSION, 38);
     }
 
     /// **It is synced, and `sync_devices` still is not.** The whole point is that a NAME
@@ -6589,7 +7558,7 @@ pub(crate) mod tests {
         assert!(!SYNCED_TABLES.contains(&"sync_devices"));
         assert!(!SYNCED_TABLES.contains(&"sync_identity"));
         assert!(!SYNCED_TABLES.contains(&"sync_group"));
-        assert_eq!(SYNCED_TABLES.len(), 12);
+        assert_eq!(SYNCED_TABLES.len(), 13);
     }
 
     /// The table carries no key material. A column added here later that did would be a key
@@ -7125,6 +8094,1011 @@ pub(crate) mod tests {
         assert_eq!(names, 1, "a v33 file has everything v31 built");
     }
 
+    // ---- v37: the tokens and emblems a deck brings ---------------------------------
+
+    /// v37's table and the deck's flag exist on an UPGRADED file, the ladder is what put them
+    /// there, and the `state` vocabulary is closed by the schema rather than by convention.
+    ///
+    /// **The `CHECK` is the half a `pragma_table_info` probe would not catch.** A rung that
+    /// created the column with no constraint passes every shape check and then lets one bad
+    /// write — a typo in a command, an op from a device on a build that spells the word
+    /// differently — sit in the table for ever, read by a `match` with no arm for it. So the
+    /// refusal is asserted rather than the column.
+    #[test]
+    fn v37_adds_deck_tokens_and_the_deck_flag() {
+        let conn = user_file_at_36();
+
+        migrate_user(&conn).unwrap();
+
+        // The table exists with the grain the app writes against.
+        let grain: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'index'
+                  AND name = 'idx_deck_tokens_grain'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("idx_deck_tokens_grain is missing");
+        assert!(
+            grain.contains("deck_id"),
+            "grain must include deck_id: {grain}"
+        );
+        assert!(
+            grain.contains("oracle_id"),
+            "grain must include oracle_id: {grain}"
+        );
+
+        // The state vocabulary is closed by a CHECK, not by convention.
+        conn.execute_batch(
+            "INSERT INTO decks (id, name, format_key, cover_kind, archived, created_at,
+                                updated_at)
+             VALUES (900, 'T', 'casual', 'card_art', 0, 0, 0);",
+        )
+        .unwrap();
+        let bad = conn.execute(
+            "INSERT INTO deck_tokens (deck_id, oracle_id, state, created_at, updated_at)
+             VALUES (900, 'o-1', 'nonsense', 0, 0)",
+            [],
+        );
+        assert!(bad.is_err(), "the state CHECK must refuse an unknown word");
+        // And the three it does accept are accepted, so the assertion above is about the
+        // vocabulary rather than about the statement being malformed.
+        for (id, word) in [(1, "auto"), (2, "hidden"), (3, "manual")] {
+            conn.execute(
+                "INSERT INTO deck_tokens (id, deck_id, oracle_id, state, created_at, updated_at)
+                 VALUES (?1, 900, ?2, ?3, 0, 0)",
+                params![id, format!("o-{id}"), word],
+            )
+            .unwrap_or_else(|e| panic!("`{word}` must be a state the CHECK permits: {e}"));
+        }
+
+        // The deck carries the panel's open flag.
+        let open: i64 = conn
+            .query_row("SELECT tokens_open FROM decks WHERE id = 900", [], |r| {
+                r.get(0)
+            })
+            .expect("decks.tokens_open is missing");
+        assert_eq!(open, 0, "the area is collapsed by default");
+
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, USER_SCHEMA_VERSION);
+    }
+
+    /// A deck that existed **before** the rung reads collapsed too.
+    ///
+    /// [`v34_adds_the_locked_column`]'s argument and the same trap: a row inserted after
+    /// `migrate_user` takes its value from the table's shape either way and cannot tell a
+    /// backfilled 0 from a fresh one, so the deck is seeded first. A rung that wrote
+    /// `DEFAULT 1` would hand every reader who has ever made a deck an editor with an area
+    /// open under it that they never asked for, and nothing would go red.
+    #[test]
+    fn v37_leaves_a_deck_that_predates_it_collapsed() {
+        let conn = user_file_at_36();
+        conn.execute(
+            "INSERT INTO decks (id, name, format_key, created_at, updated_at)
+             VALUES (5, 'Old', 'commander', 0, 0)",
+            [],
+        )
+        .unwrap();
+
+        migrate_user(&conn).unwrap();
+
+        let open: i64 = conn
+            .query_row("SELECT tokens_open FROM decks WHERE id = 5", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(open, 0, "an existing deck must not come out expanded");
+    }
+
+    /// Deleting a deck takes its overrides with it.
+    ///
+    /// `deck_id … ON DELETE CASCADE` is the whole of why [`crate::reset::clear_decks`] needs no
+    /// line for this table, and the pragma is what decides whether that clause does anything —
+    /// [`crate::db::open_write`] runs the app with it on while most tests in this module run it
+    /// off, which is [`user_file_at_32`]'s argument read one rung up.
+    #[test]
+    fn v37_overrides_leave_with_the_deck_that_holds_them() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        create_user_schema(&conn, "main").unwrap();
+        conn.execute_batch(
+            "INSERT INTO decks (id, name, format_key, created_at, updated_at)
+                 VALUES (1, 'Krenko', 'commander', 0, 0);
+             INSERT INTO deck_tokens (deck_id, oracle_id, quantity, created_at, updated_at)
+                 VALUES (1, 'o-goblin', 4, 0, 0);
+             DELETE FROM decks WHERE id = 1;",
+        )
+        .unwrap();
+        let left: i64 = conn
+            .query_row("SELECT count(*) FROM deck_tokens", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 0, "the CASCADE must take the overrides");
+    }
+
+    /// The grain refuses a second row for one token in one deck.
+    ///
+    /// **Not grained on `variant`**, which is the half of [`DECK_TOKEN_GRAIN`] a test can
+    /// state: the derived list is per-variant because deck cards are, and the override is not.
+    #[test]
+    fn v37_refuses_a_duplicate_deck_and_oracle() {
+        let conn = memory_pair();
+        conn.execute_batch(
+            "INSERT INTO decks (id, name, format_key, created_at, updated_at)
+                 VALUES (1, 'Krenko', 'commander', 0, 0);
+             INSERT INTO deck_tokens (deck_id, oracle_id, quantity, created_at, updated_at)
+                 VALUES (1, 'o-goblin', 4, 0, 0);",
+        )
+        .unwrap();
+        let again = conn.execute(
+            "INSERT INTO deck_tokens (deck_id, oracle_id, card_id, created_at, updated_at)
+             VALUES (1, 'o-goblin', 'c-9', 0, 0)",
+            [],
+        );
+        assert!(
+            again.is_err(),
+            "idx_deck_tokens_grain must refuse a second row for one token"
+        );
+    }
+
+    /// The second pass has to be a no-op rather than `table already exists`.
+    ///
+    /// [`the_v34_rung_is_idempotent_over_an_already_upgraded_database`]'s job one rung up, and
+    /// this one owes it twice over: the rung is a bare `CREATE TABLE` *and* a bare
+    /// `ALTER TABLE … ADD COLUMN`, and SQLite offers an `IF NOT EXISTS` for neither of the two
+    /// halves that matter. The version guard is the only thing making a second launch
+    /// survivable.
+    #[test]
+    fn the_v37_rung_is_idempotent_over_an_already_upgraded_database() {
+        let conn = user_file_at_36();
+        migrate_user(&conn).unwrap();
+        migrate_user(&conn).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, USER_SCHEMA_VERSION);
+    }
+
+    /// The fixture is a real v35 file and not head wearing a v35 label.
+    ///
+    /// `the_v34_fixture_carries_none_of_v35`'s job one rung up, and without it every test above
+    /// is the failure this repo has shipped before: a [`user_file_at_36`] that forgot to rewind
+    /// would hand `migrate_user` a table that already exists, and the assertions would pass
+    /// while watching nothing happen. The other order is loud on its own — a fixture that kept
+    /// the table dies at `table deck_tokens already exists`, which is [`UNDO_V37`]'s whole
+    /// reason — but loud is not the same as checked.
+    #[test]
+    fn the_v36_fixture_carries_none_of_v37() {
+        let conn = user_file_at_36();
+
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 35);
+
+        let tokens: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master
+                  WHERE type = 'table' AND name = 'deck_tokens'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tokens, 0, "the v37 fixture already carries `deck_tokens`");
+
+        let flag = conn.query_row("SELECT tokens_open FROM decks LIMIT 1", [], |r| {
+            r.get::<_, i64>(0)
+        });
+        assert!(
+            flag.is_err(),
+            "the v37 fixture already carries `decks.tokens_open`"
+        );
+    }
+
+    /// The fixture is a real v34 file and not head wearing a v34 label.
+    ///
+    /// `the_v33_fixture_carries_none_of_v34`'s job one rung up, and it is the only thing that
+    /// makes the three tests below mean anything. v35's DDL is a rebuild, which is re-enterable
+    /// — [`UNDO_V14`]'s quiet failure exactly — so a fixture that forgot to rewind would hand
+    /// `migrate_user` a table that already accepts `'NONE'`, every assertion below would pass,
+    /// and none of them would have watched the rung do anything.
+    ///
+    /// The probe is the CHECK rather than `pragma_table_info`, because the CHECK is what the
+    /// rung changes: the column exists either way and its type and its NOT NULL do not move.
+    #[test]
+    fn the_v34_fixture_carries_none_of_v35() {
+        let conn = user_file_at_34();
+
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 34);
+        let err = conn
+            .execute(
+                "INSERT INTO collection_entries
+                    (card_id,set_code,collector_number,lang,finish,condition,quantity,
+                     created_at,updated_at)
+                 VALUES ('bolt','lea','161','en','nonfoil','NONE',1,0,0)",
+                [],
+            )
+            .expect_err("a v34 database must refuse the sentinel the rung above it introduces");
+        assert!(
+            matches!(&err, rusqlite::Error::SqliteFailure(e, _)
+                     if e.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_CHECK),
+            "refused, but not by the CHECK this fixture is about: {err}"
+        );
+
+        // And it is a real user file otherwise — a fixture that rewound too far would test the
+        // rung against a database no reader has. `locked` is v34's own column, so its presence
+        // is what says this file sits at that rung rather than below it.
+        let locked: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('collection_folders')
+                  WHERE name = 'locked'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(locked, 1, "a v34 file has what v34 built");
+    }
+
+    /// The rebuild carries every row across wearing the grade and the **id** it had.
+    ///
+    /// The ids are the half worth asserting. `collection_entries.id` is what
+    /// `collection_update`, `collection_set_folder` and every `EntryPatch` in the crate name a
+    /// row by, so a rebuild that let SQLite hand out fresh rowids would be an upgrade that
+    /// silently renamed every copy the reader owns — invisible until something tried to edit
+    /// one. They are chosen non-contiguous and not starting at 1, so a table that renumbered
+    /// from scratch could not accidentally agree.
+    ///
+    /// And the grades are not touched: a `'NM'` written before the rung stays `'NM'`. Some of
+    /// those the reader chose and some the old DEFAULT chose for them, and nothing stored can
+    /// tell the two apart — so the rung guesses at neither.
+    #[test]
+    fn the_v35_rung_keeps_every_grade_and_every_row_id() {
+        let conn = user_file_at_34();
+        conn.execute_batch(
+            "INSERT INTO collection_entries
+                (id,card_id,set_code,collector_number,lang,finish,condition,quantity,
+                 purchase_price,purchase_currency,created_at,updated_at)
+             VALUES (7,'bolt','lea','161','en','nonfoil','NM',2,4.5,'USD',0,0),
+                    (99,'shock','m21','159','en','foil','LP',1,NULL,NULL,0,0);",
+        )
+        .unwrap();
+
+        migrate_user(&conn).unwrap();
+
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, USER_SCHEMA_VERSION);
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, condition, quantity, coalesce(purchase_price, -1)
+                   FROM collection_entries ORDER BY id",
+            )
+            .unwrap();
+        let rows: Vec<(i64, String, i64, f64)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            rows,
+            vec![(7, "NM".to_owned(), 2, 4.5), (99, "LP".to_owned(), 1, -1.0)],
+            "the rebuild must carry every row across with its id, its grade and its price"
+        );
+
+        // And the thing the rung is *for*: the sentinel is storable now.
+        conn.execute(
+            "INSERT INTO collection_entries
+                (card_id,set_code,collector_number,lang,finish,condition,quantity,
+                 created_at,updated_at)
+             VALUES ('brainstorm','ice','61','en','nonfoil','NONE',1,0,0)",
+            [],
+        )
+        .expect("a v35 database stores a copy whose grade was never stated");
+
+        // It is the DEFAULT as well as a legal value, which is the half a CHECK alone would
+        // not answer: a write that says nothing about the grade must land on it.
+        conn.execute(
+            "INSERT INTO collection_entries
+                (card_id,set_code,collector_number,lang,finish,quantity,created_at,updated_at)
+             VALUES ('counterspell','lea','55','en','nonfoil',1,0,0)",
+            [],
+        )
+        .unwrap();
+        let unstated: String = conn
+            .query_row(
+                "SELECT condition FROM collection_entries WHERE card_id = 'counterspell'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            unstated, "NONE",
+            "a write that names no grade must not be recorded as the best one on the scale"
+        );
+    }
+
+    /// A filed row comes out of the rebuild still filed, and the grain still refuses a duplicate.
+    ///
+    /// `folder_id` is the eleventh term of `idx_collection_grain` and the rebuild drops that
+    /// index with the table. A step that carried the column but forgot the index would leave a
+    /// database where the reader's second `+` on one printing makes a second row — the failure
+    /// [`COLLECTION_GRAIN`]'s own doc is about, arriving through a migration instead of through
+    /// a missing `ON CONFLICT`. So this asserts both halves: the filing survives, and the index
+    /// that makes filing an *add* is back.
+    #[test]
+    fn the_v35_rebuild_keeps_a_rows_filing_and_its_grain() {
+        let conn = user_file_at_34();
+        conn.execute_batch(
+            "INSERT INTO collection_folders (id, name, kind, sort_order, created_at, updated_at)
+                 VALUES (3, 'Trade binder', 'user', 0, 0, 0);
+             INSERT INTO collection_entries
+                (id,card_id,set_code,collector_number,lang,finish,condition,quantity,
+                 folder_id,created_at,updated_at)
+             VALUES (5,'bolt','lea','161','en','nonfoil','MP',3,3,0,0);",
+        )
+        .unwrap();
+
+        migrate_user(&conn).unwrap();
+
+        let (id, folder, condition): (i64, i64, String) = conn
+            .query_row(
+                "SELECT id, folder_id, condition FROM collection_entries",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (id, folder, condition.as_str()),
+            (5, 3, "MP"),
+            "a filed copy must come out of the rebuild in the same drawer"
+        );
+
+        // The grain, rebuilt. The same printing in the same drawer at the same grade is one
+        // row, and it has to fail here rather than fold into a second copy nobody owns.
+        let err = conn
+            .execute(
+                "INSERT INTO collection_entries
+                    (card_id,set_code,collector_number,lang,finish,condition,quantity,
+                     folder_id,created_at,updated_at)
+                 VALUES ('bolt','lea','161','en','nonfoil','MP',1,3,0,0)",
+                [],
+            )
+            .expect_err("idx_collection_grain must survive the rebuild");
+        assert!(
+            matches!(&err, rusqlite::Error::SqliteFailure(e, _)
+                     if e.extended_code == rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE),
+            "refused, but not by the unique grain: {err}"
+        );
+        // ...and the same copy in *no* drawer is a different row, which is the eleventh term
+        // doing its job over the table the rebuild just wrote.
+        conn.execute(
+            "INSERT INTO collection_entries
+                (card_id,set_code,collector_number,lang,finish,condition,quantity,
+                 created_at,updated_at)
+             VALUES ('bolt','lea','161','en','nonfoil','MP',1,0,0)",
+            [],
+        )
+        .expect("the root is not the binder");
+
+        // The four indexes that are not the grain came back too. Counted from
+        // `sqlite_master` rather than probed one at a time: a rung that recreated three of
+        // five would answer every query in this test correctly and quietly cost a table scan.
+        let indexes: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM main.sqlite_master
+                  WHERE type = 'index' AND tbl_name = 'collection_entries'
+                    AND name LIKE 'idx_%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            indexes, 5,
+            "all five of the table's indexes are the rung's to replay"
+        );
+    }
+
+    /// The rewind's own mapping arm, which no fixture reaches.
+    ///
+    /// [`UNDO_V35`] carries an ungraded row back as `'NM'` — what the pre-v35 DEFAULT would
+    /// have recorded for the same press — rather than dropping it, because no rewind on either
+    /// ladder is allowed to lose one of the reader's cards. Every caller of that constant
+    /// rewinds a database [`create_user_schema`] built moments earlier and has nothing to map,
+    /// so the `CASE` would otherwise be a branch nothing on this ladder ever takes: written,
+    /// green, and wrong the first time somebody wound a real database back.
+    #[test]
+    fn the_v35_rewind_carries_an_ungraded_row_back_as_near_mint() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_user_schema(&conn, "main").unwrap();
+        conn.execute_batch(
+            "INSERT INTO collection_entries
+                (id,card_id,set_code,collector_number,lang,finish,condition,quantity,
+                 created_at,updated_at)
+             VALUES (4,'bolt','lea','161','en','nonfoil','NONE',1,0,0),
+                    (6,'shock','m21','159','en','foil','LP',1,0,0);",
+        )
+        .unwrap();
+
+        conn.execute_batch(&format!(
+            "{UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
+        ))
+        .unwrap();
+
+        let mut stmt = conn
+            .prepare("SELECT id, condition FROM collection_entries ORDER BY id")
+            .unwrap();
+        let rows: Vec<(i64, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            rows,
+            vec![(4, "NM".to_owned()), (6, "LP".to_owned())],
+            "the rewind maps the sentinel back and leaves every other grade alone"
+        );
+    }
+
+    /// The second pass has to be a no-op rather than `table collection_entries_v35 already
+    /// exists`.
+    ///
+    /// `the_v34_rung_is_idempotent_over_an_already_upgraded_database`'s job one rung up. A
+    /// rebuild is re-enterable where an `ADD COLUMN` is not, so what this actually guards is
+    /// the *stamp*: a rung whose `PRAGMA user_version` never landed would rebuild the reader's
+    /// whole collection table on every single launch, for ever, and nothing about that is
+    /// visible from the window.
+    #[test]
+    fn the_v35_rung_is_idempotent_over_an_already_upgraded_database() {
+        let conn = user_file_at_34();
+        conn.execute(
+            "INSERT INTO collection_entries
+                (id,card_id,set_code,collector_number,lang,finish,condition,quantity,
+                 created_at,updated_at)
+             VALUES (11,'bolt','lea','161','en','nonfoil','HP',1,0,0)",
+            [],
+        )
+        .unwrap();
+
+        migrate_user(&conn).unwrap();
+        migrate_user(&conn).unwrap();
+
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, USER_SCHEMA_VERSION);
+        let (rows, id, grade): (i64, i64, String) = conn
+            .query_row(
+                "SELECT count(*), max(id), max(condition) FROM collection_entries",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!((rows, id, grade.as_str()), (1, 11, "HP"));
+        // The scratch table must not be sitting there afterwards either — a rebuild that left
+        // it behind would fail its own second pass, and this is where that shows.
+        let scratch: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM main.sqlite_master
+                  WHERE name = 'collection_entries_v35'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(scratch, 0);
+    }
+
+    /// The whole of the rung in one pass: what the live list names at `(card_id, finish)` stays,
+    /// and everything else in the group goes to the holding area.
+    #[test]
+    fn the_v36_rung_evicts_what_the_list_does_not_name() {
+        let conn = user_file_at_36();
+        assert_eq!(
+            conn.query_row("PRAGMA main.user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            35,
+            "the fixture is a v35 file"
+        );
+
+        migrate_user(&conn).unwrap();
+
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        // The literal, for the reason the two tests below spell out. It is **head**, not this
+        // rung's own number — `migrate_user` climbs the whole ladder — so every rung that lands
+        // moves it.
+        assert_eq!(version, 38);
+        assert_eq!(
+            in_group(&conn, DECK_A, "bolt-lea", "nonfoil"),
+            2,
+            "named, kept"
+        );
+        assert_eq!(
+            in_group(&conn, DECK_A, "bolt-m10", "nonfoil"),
+            0,
+            "wrong printing, gone"
+        );
+        assert_eq!(
+            in_group(&conn, DECK_A, "bolt-lea", "foil"),
+            0,
+            "wrong finish, gone"
+        );
+        assert_eq!(in_removed(&conn, "bolt-m10", "nonfoil"), 1);
+        assert_eq!(in_removed(&conn, "bolt-lea", "foil"), 1);
+    }
+
+    /// A row of 4 against a line of 2 is **split**, never moved whole — the case
+    /// `idx_collection_grain` and the arithmetic both have to get right.
+    #[test]
+    fn the_v36_rung_splits_a_partly_claimed_row() {
+        let conn = user_file_at_36();
+        migrate_user(&conn).unwrap();
+        // The line names 2 and the group's single row held 4.
+        assert_eq!(in_group(&conn, DECK_A, "swamp", "nonfoil"), 2);
+        assert_eq!(in_removed(&conn, "swamp", "nonfoil"), 2);
+    }
+
+    /// Every deck, not the first one it finds.
+    #[test]
+    fn the_v36_rung_reaches_every_deck() {
+        let conn = user_file_at_36();
+        migrate_user(&conn).unwrap();
+        assert_eq!(in_group(&conn, DECK_B, "island", "nonfoil"), 0);
+        assert_eq!(in_removed(&conn, "island", "nonfoil"), 1);
+    }
+
+    /// `idx_collection_grain` is UNIQUE with `folder_id` in it, so a bare folder update would
+    /// hit the constraint. The rung merges.
+    #[test]
+    fn the_v36_rung_folds_into_a_row_recently_removed_already_holds() {
+        let conn = user_file_at_36_with_a_matching_removed_row();
+        migrate_user(&conn).unwrap();
+        assert_eq!(in_removed(&conn, "bolt-m10", "nonfoil"), 3);
+        let rows: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM collection_entries
+                  WHERE folder_id = 10 AND card_id = 'bolt-m10' AND finish = 'nonfoil'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 1, "two rows that merge are one pile");
+    }
+
+    /// **The one way this rung can be destructive, and the test that stands between.**
+    ///
+    /// `attribute_owned` hands an inactive pile no copies, so it is tempting to read its rows as
+    /// claiming nothing. Read that way this rung empties every reader's Maybeboard into the
+    /// holding area on upgrade — cardboard moved by a display switch. Custody follows what the
+    /// list *names*; `is_active` decides only what is *counted*.
+    #[test]
+    fn the_v36_rung_leaves_a_switched_off_pile_holding_its_cards() {
+        let conn = user_file_at_36();
+        migrate_user(&conn).unwrap();
+        assert_eq!(
+            in_group(&conn, DECK_A, "forest", "nonfoil"),
+            3,
+            "a switched-off pile still names its cards"
+        );
+        assert_eq!(in_removed(&conn, "forest", "nonfoil"), 0);
+    }
+
+    /// A plan reserves nothing, so a `theory` row claims nothing — `release_live_copies`' rule
+    /// and `attribute_owned`'s, read from the custody end.
+    #[test]
+    fn the_v36_rung_gives_a_theory_row_no_claim() {
+        let conn = user_file_at_36();
+        migrate_user(&conn).unwrap();
+        assert_eq!(in_group(&conn, DECK_A, "plains", "nonfoil"), 0);
+        assert_eq!(in_removed(&conn, "plains", "nonfoil"), 2);
+    }
+
+    /// **Which physical card leaves, not how many.** `deck::release_unclaimed_copies` takes the
+    /// surplus from the **oldest** row of an identity first, so the oldest copies are the ones
+    /// that go and the newest stay — spec §2.1's rule, and `take_copies`' and
+    /// `release_group_copies`' convention. This rung has to hand a reader the database the app
+    /// itself would have produced, and the mirror-image reading (credit the *claim* oldest-first,
+    /// so the oldest are kept) moves the same **number** of copies out of the group while moving
+    /// a different **card** — invisible to every total there is.
+    ///
+    /// So the two `mountain` rows differ in `condition`, and the assertion is on the condition of
+    /// what landed in the holding area rather than on arithmetic: two rows of 2 against a line of
+    /// 3 must file the **NM** copy, because it is the older row.
+    #[test]
+    fn the_v36_rung_takes_from_the_oldest_row_of_a_group_first() {
+        let conn = user_file_at_36();
+        migrate_user(&conn).unwrap();
+
+        // **First**, because it is the assertion this test exists for: the failure that matters
+        // here reads `["LP"]` against `["NM"]`, and a quantity assertion firing ahead of it would
+        // report the arithmetic and say nothing about the card.
+        let filed: Vec<String> = conn
+            .prepare(
+                "SELECT e.condition
+                   FROM collection_entries e
+                   JOIN collection_folders f ON f.id = e.folder_id
+                  WHERE f.kind = 'removed' AND e.card_id = 'mountain'
+                  ORDER BY e.condition",
+            )
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            filed,
+            vec!["NM".to_owned()],
+            "the OLDEST row's copy is the one filed, and only it"
+        );
+
+        let older: i64 = conn
+            .query_row(
+                "SELECT quantity FROM collection_entries WHERE id = 106",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(older, 1, "the older row gives up the copy over the line");
+        let newer: i64 = conn
+            .query_row(
+                "SELECT quantity FROM collection_entries WHERE id = 107",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(newer, 2, "the newer row keeps all of what it held");
+
+        assert_eq!(in_group(&conn, DECK_A, "mountain", "nonfoil"), 3);
+        assert_eq!(in_removed(&conn, "mountain", "nonfoil"), 1);
+    }
+
+    /// **The trade list is split and never copied** — v25's rung's clamp and its reason, which
+    /// this one has to spell for itself. And the placement carries the row's story with it: the
+    /// copies that left are the same physical cards, bought on the same day for the same money.
+    #[test]
+    fn the_v36_rung_splits_the_trade_list_and_carries_the_story() {
+        /// A struct rather than a seven-wide tuple, which `clippy::type_complexity` refuses.
+        struct Story {
+            trade: i64,
+            price: Option<f64>,
+            currency: Option<String>,
+            acquired: Option<String>,
+            source: Option<String>,
+            notes: Option<String>,
+            tags: String,
+        }
+
+        let conn = user_file_at_36();
+        migrate_user(&conn).unwrap();
+
+        let moved: Story = conn
+            .query_row(
+                "SELECT e.tradelist_quantity, e.purchase_price, e.purchase_currency,
+                        e.acquired_at, e.acquisition_source, e.notes, e.tags
+                   FROM collection_entries e
+                   JOIN collection_folders f ON f.id = e.folder_id
+                  WHERE f.kind = 'removed' AND e.card_id = 'swamp'",
+                [],
+                |r| {
+                    Ok(Story {
+                        trade: r.get(0)?,
+                        price: r.get(1)?,
+                        currency: r.get(2)?,
+                        acquired: r.get(3)?,
+                        source: r.get(4)?,
+                        notes: r.get(5)?,
+                        tags: r.get(6)?,
+                    })
+                },
+            )
+            .unwrap();
+        assert_eq!(moved.trade, 2, "min(offered, take)");
+        assert_eq!(moved.price, Some(1.5));
+        assert_eq!(moved.currency.as_deref(), Some("USD"));
+        assert_eq!(moved.acquired.as_deref(), Some("2019-01-02"));
+        assert_eq!(moved.source.as_deref(), Some("LGS"));
+        assert_eq!(moved.notes.as_deref(), Some("sleeved"));
+        assert_eq!(moved.tags, "[\"cube\"]");
+
+        let kept_trade: i64 = conn
+            .query_row(
+                "SELECT tradelist_quantity FROM collection_entries WHERE id = 103",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kept_trade, 1, "the remainder keeps what is left, not all 3");
+    }
+
+    /// The rung reads `kind = 'deck'` and nothing else, so a binder the reader filed by hand and
+    /// the root are both none of its business.
+    #[test]
+    fn the_v36_rung_touches_no_folder_that_is_not_a_deck_group() {
+        let conn = user_file_at_36();
+        migrate_user(&conn).unwrap();
+        let binder: i64 = conn
+            .query_row(
+                "SELECT quantity FROM collection_entries WHERE id = 109",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(binder, 5, "a user folder is not a deck group");
+        let root: i64 = conn
+            .query_row(
+                "SELECT quantity FROM collection_entries WHERE id = 110",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(root, 1, "and neither is the root");
+    }
+
+    /// Nothing leaves the database. Every copy the rung moves is a copy it also files, and both
+    /// clamps can only leave a total where it was.
+    #[test]
+    fn the_v36_rung_moves_copies_and_never_invents_or_loses_one() {
+        let conn = user_file_at_36();
+        let before: i64 = conn
+            .query_row("SELECT sum(quantity) FROM collection_entries", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let trade_before: i64 = conn
+            .query_row(
+                "SELECT sum(tradelist_quantity) FROM collection_entries",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        migrate_user(&conn).unwrap();
+
+        let after: i64 = conn
+            .query_row("SELECT sum(quantity) FROM collection_entries", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(after, before, "copies in, copies out");
+        let trade_after: i64 = conn
+            .query_row(
+                "SELECT sum(tradelist_quantity) FROM collection_entries",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(trade_after, trade_before, "and the promise is not doubled");
+        let over: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM collection_entries
+                  WHERE tradelist_quantity > quantity",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(over, 0, "no row promises more than it holds");
+    }
+
+    /// **A missing `Recently removed` folder skips the move rather than failing the rung.** A
+    /// rung that errors blocks startup, and a hand-edited file without that folder must open.
+    #[test]
+    fn the_v36_rung_stamps_a_file_with_no_holding_area_rather_than_refusing_it() {
+        let conn = user_file_at_36();
+        conn.execute_batch("DELETE FROM collection_folders WHERE kind = 'removed';")
+            .unwrap();
+
+        migrate_user(&conn).unwrap();
+
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        // The literal, not the constant: `== USER_SCHEMA_VERSION` stays green at every future
+        // head, so it would go on passing over a rung that never ran. **The price of that choice
+        // is this line**: it is head rather than this rung's own number, because `migrate_user`
+        // climbs the whole ladder, so **every rung that lands owes these three assertions an
+        // edit** — which is a cost the sentence above accepts rather than a defect. Paid three
+        // times now: 35 → 36, 36 → 37 for the token rung, 37 → 38 for the theory-mark rung.
+        assert_eq!(version, 38);
+        assert_eq!(
+            in_group(&conn, DECK_A, "bolt-m10", "nonfoil"),
+            1,
+            "with nowhere to file them the copies stay where they were"
+        );
+    }
+
+    /// The second pass is a no-op — and here that is arithmetic rather than a version guard,
+    /// because after the first pass every group holds exactly what its list names.
+    #[test]
+    fn the_v36_rung_is_idempotent_over_an_already_upgraded_database() {
+        let conn = user_file_at_36();
+        migrate_user(&conn).unwrap();
+        let removed = in_removed(&conn, "swamp", "nonfoil");
+        migrate_user(&conn).unwrap();
+        assert_eq!(in_group(&conn, DECK_A, "swamp", "nonfoil"), 2);
+        assert_eq!(in_removed(&conn, "swamp", "nonfoil"), removed);
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        // The literal, for the reason the test above spells out — head, which every rung moves.
+        assert_eq!(version, 38);
+    }
+
+    /// The fixture is a real v35 file and not head wearing a v35 label.
+    ///
+    /// The mirror of [`the_v34_fixture_carries_none_of_v35`], and it has to be read differently
+    /// because v36 writes no shape: there is no column to probe for. What says the file sits
+    /// **below** the rung is that the state the rung exists to clear is still there — a group
+    /// holding a printing its deck does not list. Without that half every assertion above is
+    /// vacuous.
+    ///
+    /// **The other half is that it sits below v36 and not below v35**, which is the question the
+    /// renumbering added: v35 — the rung immediately under it — writes shape, so both of v35's
+    /// and v34's own marks are probed: the CHECK that accepts `'NONE'`, and
+    /// `collection_folders.locked`.
+    ///
+    /// **This said "head plus a stamp is a legitimate v35 file only because v36 writes no
+    /// shape", and v38 ended that.** Two `decks` columns above v36 mean head is no longer a v35
+    /// shape at all, so [`user_file_at_35`] rewinds [`UNDO_V38`] like every other fixture here —
+    /// and the probes below are what still say the rewind stopped in the right place.
+    #[test]
+    fn the_v35_fixture_carries_none_of_v36() {
+        let conn = user_file_at_36();
+
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 35);
+        assert!(
+            in_group(&conn, DECK_A, "bolt-m10", "nonfoil") > 0,
+            "the unswept state the rung is for must be there before it runs"
+        );
+        assert_eq!(
+            in_removed(&conn, "bolt-m10", "nonfoil"),
+            0,
+            "and nothing may have been filed already"
+        );
+
+        conn.execute(
+            "INSERT INTO collection_entries
+                (card_id,set_code,collector_number,lang,finish,condition,quantity,
+                 created_at,updated_at)
+             VALUES ('probe','lea','161','en','nonfoil','NONE',1,0,0)",
+            [],
+        )
+        .expect("a v35 file accepts the sentinel the rung below this one introduced");
+        let locked: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('collection_folders')
+                  WHERE name = 'locked'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(locked, 1, "a v35 file has everything v34 built");
+    }
+
+    /// **v38's two columns, and the deck that already existed when the rung ran.**
+    ///
+    /// Both are `NOT NULL DEFAULT 1`, and that default *is* the migration: every deck on a
+    /// reader's disk draws both marks from the first launch on the new build, with no backfill
+    /// and no group of older decks behaving differently for ever for a reason nothing on screen
+    /// explains.
+    ///
+    /// **The deck is seeded before the climb rather than after it**, which is the whole of what
+    /// this test is for. A row inserted at head takes the column default through the *frozen*
+    /// [`USER_SCHEMA_SQL`] and would pass while the rung wrote `DEFAULT 0` — the one population
+    /// that cannot be faked, read from the same side
+    /// `migrate_the_real_database_to_v29` reads it: a fresh worktree is a fresh install, and a
+    /// fresh install never climbs a rung at all.
+    #[test]
+    fn v38_gives_every_deck_both_theory_marks() {
+        let conn = user_file_at_37();
+        conn.execute(
+            "INSERT INTO decks (id, name, format_key, created_at, updated_at)
+             VALUES (1, 'Burn', 'modern', 0, 0)",
+            [],
+        )
+        .unwrap();
+
+        migrate_user(&conn).unwrap();
+
+        assert_eq!(has_column(&conn, "decks", "theory_mark_exact"), 1);
+        assert_eq!(has_column(&conn, "decks", "theory_mark_name"), 1);
+        let (exact, named): (i64, i64) = conn
+            .query_row(
+                "SELECT theory_mark_exact, theory_mark_name FROM decks WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (exact, named),
+            (1, 1),
+            "a deck that existed before the rung wears both marks after it"
+        );
+
+        // And a deck made *after* the climb reads the same, which is the half a fresh install
+        // gets — the two populations must not disagree, and the fence that makes them agree is
+        // `the_user_schema_is_byte_identical_to_what_the_ladder_builds` rather than this line.
+        conn.execute(
+            "INSERT INTO decks (id, name, format_key, created_at, updated_at)
+             VALUES (2, 'Storm', 'modern', 0, 0)",
+            [],
+        )
+        .unwrap();
+        let (exact, named): (i64, i64) = conn
+            .query_row(
+                "SELECT theory_mark_exact, theory_mark_name FROM decks WHERE id = 2",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((exact, named), (1, 1), "a deck is born with both marks on");
+    }
+
+    /// The second pass has to be a no-op rather than `duplicate column name`.
+    ///
+    /// `the_v35_rung_is_idempotent_over_an_already_upgraded_database`'s job one rung up, and
+    /// this one has two bare `ALTER TABLE … ADD COLUMN`s behind the same single version guard:
+    /// SQLite offers no `IF NOT EXISTS` on either half of `ALTER TABLE`, so the stamp is the
+    /// only thing making a second launch survivable, and a rung that stamped between its two
+    /// statements rather than after both would die on the second launch with one column
+    /// already there.
+    #[test]
+    fn the_v38_rung_is_idempotent_over_an_already_upgraded_database() {
+        let conn = user_file_at_37();
+        migrate_user(&conn).unwrap();
+        migrate_user(&conn).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, USER_SCHEMA_VERSION);
+    }
+
+    /// The fixture is a real v37 file and not head wearing a v37 label.
+    ///
+    /// `the_v34_fixture_carries_none_of_v35`'s job one rung up. What it catches is the fixture
+    /// rewound in only one of its two halves: the columns really gone but the version left at
+    /// head would leave `migrate_user` no rung to run, and every test above would pass while
+    /// watching nothing happen. The other order is loud on its own — a fixture that kept either
+    /// column dies at `duplicate column name`, which is [`UNDO_V38`]'s whole reason.
+    #[test]
+    fn the_v37_fixture_carries_none_of_v38() {
+        let conn = user_file_at_37();
+
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 37);
+        assert_eq!(
+            has_column(&conn, "decks", "theory_mark_exact"),
+            0,
+            "theory_mark_exact must not exist before the rung that adds it"
+        );
+        assert_eq!(
+            has_column(&conn, "decks", "theory_mark_name"),
+            0,
+            "theory_mark_name must not exist before the rung that adds it"
+        );
+
+        // And it is a real user file otherwise — a fixture that rewound too far would test the
+        // rung against a database no reader has. `collection_folders.locked` is v34's own
+        // column, so its presence is what says this file sits *above* that rung rather than
+        // below it, and it is the rewind two lines away from being taken by mistake.
+        assert_eq!(
+            has_column(&conn, "collection_folders", "locked"),
+            1,
+            "a v37 file still has what v34 built"
+        );
+    }
+
     /// A v28 file walks up keeping every row it had, and twice is the same as once.
     #[test]
     fn migrating_a_v28_user_file_keeps_its_rows_and_is_idempotent() {
@@ -7174,9 +9148,15 @@ pub(crate) mod tests {
     ///
     /// Point `MTG_SPLIT_FIXTURE` at a **copy** of a real `mtg.db` — the escape hatch
     /// [`crate::split::tests::the_real_database_converts_with_every_row_intact`] already uses —
-    /// and this converts it, winds the user file back to 28 with [`UNDO_V33`], [`UNDO_V31`],
-    /// [`UNDO_V30`] and [`UNDO_V29`],
-    /// and climbs the rungs over the reader's own rows. **Winding back is the whole trick**:
+    /// and this converts it, winds the user file back to 28 with the whole rewind chain —
+    /// [`UNDO_V38`], [`UNDO_V37`], [`UNDO_V35`], [`UNDO_V34`], [`UNDO_V33`], [`UNDO_V31`],
+    /// [`UNDO_V30`] and [`UNDO_V29`], newest first, which is the chain the body spells and every
+    /// rung above 28 with a shape to take back (v32 and v36 write none) —
+    /// and climbs the rungs over the reader's own rows. **This list had lost its own top once
+    /// and nothing could go red for it**: the chain below is a `format!` and was always right,
+    /// while this enumeration is prose and the test is `#[ignore]`d, so no suite reads either.
+    /// Add the new constant here whenever one lands.
+    /// **Winding back is the whole trick**:
     /// `split::convert` stamps head, so a converted file never climbs anything and a test that
     /// only converted would prove nothing about the rung.
     ///
@@ -7208,7 +9188,7 @@ pub(crate) mod tests {
             })
             .collect();
         conn.execute_batch(&format!(
-            "{UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
+            "{UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
              PRAGMA main.user_version = 28;"
         ))
         .unwrap();
@@ -7397,12 +9377,13 @@ pub(crate) mod tests {
     ///
     /// Every grain index in the DDL is now a **literal**, because a migration step is history
     /// and must keep building the index it built the day it shipped. The price is that two
-    /// of the five grain constants — [`DECK_CATEGORY_GRAIN`] and
+    /// of the six grain constants — [`DECK_CATEGORY_GRAIN`] and
     /// [`DECK_LABEL_GRAIN`] — are read by no SQL at all any more, and a constant nothing reads
     /// is a constant that can drift from the index it claims to describe without anything
     /// saying so. [`COLLECTION_GRAIN`], [`WISHLIST_GRAIN`] and [`DECK_CARD_GRAIN`] are held
     /// to their indexes by their `ON CONFLICT` targets (the test above, and every deck-card
-    /// upsert); these three are held here.
+    /// upsert); the two above are held here, and [`DECK_TOKEN_GRAIN`] — v37's, and the sixth —
+    /// is the one held both ways.
     ///
     /// Read through `PRAGMA index_info` rather than by comparing DDL text, which is the whole
     /// point: it answers the *parsed* column list, so the literal in the migration is free to
@@ -7428,6 +9409,11 @@ pub(crate) mod tests {
         for (index, grain) in [
             ("idx_deck_categories_grain", DECK_CATEGORY_GRAIN),
             ("idx_deck_labels_grain", DECK_LABEL_GRAIN),
+            // **[`DECK_TOKEN_GRAIN`] is here as well as being an `ON CONFLICT` target**, where
+            // [`DECK_CARD_GRAIN`] can only be the second: it carries no `coalesce`, so
+            // `PRAGMA index_info` answers its columns by name and this check is available. A
+            // constant that can be fenced both ways is fenced both ways.
+            ("idx_deck_tokens_grain", DECK_TOKEN_GRAIN),
         ] {
             let mut stmt = conn
                 .prepare(&format!("PRAGMA index_info({index})"))
@@ -7864,10 +9850,20 @@ pub(crate) mod tests {
     /// The enums, enforced where they cannot be argued with. `finishes` is a strict enum
     /// upstream and the research doc names a boolean `foil` column as the single most
     /// common importer data-loss bug; a CHECK is what stops "Foil" or `1` ever landing.
+    ///
+    /// **It climbs [`migrate_user`] as well, which it did not have to until v35.** The grade
+    /// vocabulary is the user ladder's business now — v35 is where `'NONE'` joins it — so a
+    /// test that stopped at [`LEGACY_SINGLE_FILE_VERSION`] would be asking a v26 table what
+    /// head accepts, and would answer that the sentinel is refused.
+    ///
+    /// **`'none'` is in the refused list on purpose.** SQLite compares text case-sensitively,
+    /// the storage code is upper case everywhere in the crate, and a CHECK that had been
+    /// widened with the wrong spelling would look identical from every other angle.
     #[test]
     fn the_finish_and_condition_enums_are_enforced_by_the_database() {
         let conn = Connection::open_in_memory().unwrap();
         migrate_single_file(&conn).unwrap();
+        migrate_user(&conn).unwrap();
         // A different card every time, so that the *only* thing that can reject a row is
         // the value under test. Held on one `card_id` the accepted values would collide
         // with each other on the grain — `nonfoil`/`NM` is the first finish *and* the
@@ -7885,6 +9881,7 @@ pub(crate) mod tests {
         for (finish, condition, qty) in [
             ("Foil", "NM", 1),
             ("foil", "Near Mint", 1),
+            ("foil", "none", 1),
             ("foil", "NM", -1),
             ("", "NM", 1),
         ] {
@@ -7902,7 +9899,10 @@ pub(crate) mod tests {
         for finish in ["nonfoil", "foil", "etched"] {
             add(finish, "NM", 1).unwrap();
         }
-        for condition in ["NM", "LP", "MP", "HP", "DMG"] {
+        // Six, and `NONE` is one of them since v35: a copy whose grade the reader never
+        // stated is a state the column can hold rather than one it fakes with the best
+        // grade on the scale.
+        for condition in ["NONE", "NM", "LP", "MP", "HP", "DMG"] {
             add("nonfoil", condition, 1).unwrap();
         }
     }
@@ -12976,8 +14976,9 @@ pub(crate) mod tests {
     /// old ledger's own laxity requires.
     #[test]
     fn v25_clamps_a_claim_that_out_counts_the_row_it_claims() {
-        // The old ledger could out-claim a row later stepped down; `owned_by_oracle`'s
-        // `min(a.quantity, e.quantity)` papered over it. The conversion must not invent copies.
+        // The old ledger could out-claim a row later stepped down; the read-time
+        // `min(a.quantity, e.quantity)` in `owned_by_oracle` — `deck::owned_by_printing` since
+        // 2026-09-07 — papered over it. The conversion must not invent copies.
         let conn = Connection::open_in_memory().unwrap();
         schema_at_24(&conn);
         let deck = seed_deck(&conn, "Mono-Red");

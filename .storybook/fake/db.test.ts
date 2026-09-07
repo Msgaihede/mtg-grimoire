@@ -11,6 +11,8 @@ import {
   ART_TAGGED_PRINTINGS,
   ORACLE_TAGGED_NAMES,
   SUPPORTING_SINCE,
+  TOKEN_ORACLE,
+  TOKEN_PRINTING,
   allHandlers,
   applySupporterFault,
   artTagIllustrations,
@@ -82,6 +84,12 @@ const WHEN = 1786266000;
  * what `collection_add` does at write time, and the reason those three columns outlive the
  * printing. An id no card has leaves them at the caller's values, so an orphan is one
  * `cardId: "gone"` away.
+ *
+ * **`condition` defaults to the column's own `DEFAULT`, which schema v35 moved from `NM` to
+ * `NONE`** — and the pairing is what matters rather than either value: this helper and
+ * `validCondition` have to default to the *same* string, or a hand-made row here stops folding
+ * with an add that states no grade and a dozen fixtures whose subject is not conditions at all
+ * quietly split in two. They moved together. A test that wants a graded row still says so.
  */
 function entry(over: Partial<FakeEntry> = {}): FakeEntry {
   const card = CARDS.find((c) => c.id === (over.cardId ?? BOLT.id));
@@ -89,7 +97,7 @@ function entry(over: Partial<FakeEntry> = {}): FakeEntry {
     id: 1,
     cardId: BOLT.id,
     finish: "nonfoil",
-    condition: "NM",
+    condition: "NONE",
     quantity: 1,
     tradelistQuantity: 0,
     lang: card?.lang ?? "en",
@@ -487,10 +495,11 @@ describe("the paper filter", () => {
     const withDigital = readHandlers(db).search_cards({
       req: { paperOnly: false, limit: 200, offset: 0 },
     });
-    // 52 fixture rows, 2 of them `isPaper: false` (Black Lotus `vma`, A-Vivi Ornitier
-    // `fin`) — measured 2026-08-22 over `CARDS`.
-    expect(withDigital.items).toHaveLength(52);
-    expect(all.items).toHaveLength(50);
+    // 59 fixture rows, 2 of them `isPaper: false` (Black Lotus `vma`, A-Vivi Ornitier
+    // `fin`) — measured 2026-09-07 over `CARDS`. The seven token and emblem rows added with the
+    // deck editor's Tokens & emblems area are all paper, so they are on both sides of this.
+    expect(withDigital.items).toHaveLength(59);
+    expect(all.items).toHaveLength(57);
   });
 
   it("is off for the collection, which lists what the user owns", () => {
@@ -583,8 +592,11 @@ describe("the game changers", () => {
  * stop listing an art card its owner really owns, and nothing would say so.
  */
 describe("the playable filter", () => {
-  /** The three paper printings the mask reads as legal nowhere, named rather than counted so a
-   *  regenerated `cards.ts` fails here rather than one number out. */
+  /** The playable-card printings the mask reads as legal nowhere, named rather than counted so a
+   *  regenerated `cards.ts` fails here rather than one number out. **Not the whole unplayable
+   *  set any more**: the six token and emblem rows are `not_legal` in all 23 formats too, and
+   *  they are not named here because a token being unplayable is what a token *is* rather than
+   *  a branch of this filter. */
   const UNPLAYABLE = [
     "Prismatic Ending // Prismatic Ending",
     "Kozilek, Compleated",
@@ -611,9 +623,10 @@ describe("the playable filter", () => {
       expect(/"(legal|restricted)"/.test(card.legalities)).toBe(false);
     }
 
-    expect(seen({})).toHaveLength(50);
-    expect(seen({ playableOnly: false })).toHaveLength(50);
+    expect(seen({})).toHaveLength(57);
+    expect(seen({ playableOnly: false })).toHaveLength(57);
 
+    // 57 paper rows less eleven legal nowhere: the four named above and the seven tokens.
     const playable = seen({ playableOnly: true });
     expect(playable).toHaveLength(46);
     for (const name of UNPLAYABLE) expect(playable).not.toContain(name);
@@ -630,7 +643,7 @@ describe("the playable filter", () => {
  * read them that way would pass against a facet that greys the whole picker on the first
  * press, which is the bug this rule exists to not have.
  *
- * The counts are measured over `CARDS` (52 rows, 50 of them paper) rather than derived from
+ * The counts are measured over `CARDS` (59 rows, 57 of them paper) rather than derived from
  * the handler, for the reason every other block here is: a fixture that agreed with the code
  * would agree with a broken one.
  */
@@ -653,10 +666,11 @@ describe("facet counts", () => {
 
   it("sends every set code in the corpus, zeros included", () => {
     const f = facets(makeDb(), { text: "bolt" });
-    // 38 distinct codes over the 52 fixture rows; the four Bolt printings are in four of
-    // them, so 34 arrive as an explicit 0. `FacetResponse.sets` promises a key is never
-    // absent, which is what lets the picker grey a row instead of dropping it.
-    expect(Object.keys(f.sets)).toHaveLength(38);
+    // 44 distinct codes over the 59 fixture rows — the six token sets brought their own —
+    // and the four Bolt printings are in four of them, so 40 arrive as an explicit 0.
+    // `FacetResponse.sets` promises a key is never absent, which is what lets the picker grey
+    // a row instead of dropping it.
+    expect(Object.keys(f.sets)).toHaveLength(44);
     expect(f.sets.lea).toBe(1);
     expect(f.sets["2ed"]).toBe(0);
   });
@@ -672,25 +686,27 @@ describe("facet counts", () => {
 
   it("reports a colour as the result after toggling it, because colours broaden", () => {
     const none = facets(makeDb(), {});
-    expect(none.total).toBe(50);
-    // Subset semantics, so this is mono-R plus the colourless cards — a narrowing count.
-    expect(none.colors.R).toBe(16);
+    expect(none.total).toBe(57);
+    // Subset semantics, so this is mono-R plus the colourless cards — a narrowing count. The
+    // seven token and emblem rows are all `colors: ""`, so every colourless count here moved by
+    // exactly seven when they arrived.
+    expect(none.colors.R).toBe(23);
 
     const red = facets(makeDb(), { colors: "R" });
-    expect(red.total).toBe(16);
+    expect(red.total).toBe(23);
     // Pressing W with R on asks for "castable in RW", a superset — never a shrink.
-    expect(red.colors.W).toBe(30);
+    expect(red.colors.W).toBe(37);
     // Pressing R again clears the filter.
-    expect(red.colors.R).toBe(50);
+    expect(red.colors.R).toBe(57);
   });
 
   it("makes the colourless chip exclusive both ways, as `toggleColor` does", () => {
-    expect(facets(makeDb(), { colors: "R" }).colors.C).toBe(9);
+    expect(facets(makeDb(), { colors: "R" }).colors.C).toBe(16);
     const c = facets(makeDb(), { colors: "C" });
-    expect(c.total).toBe(9);
-    expect(c.colors.C).toBe(50);
+    expect(c.total).toBe(16);
+    expect(c.colors.C).toBe(57);
     // W/R replaces it rather than joining it: `"RC"` would silently mean plain `"R"`.
-    expect(c.colors.R).toBe(16);
+    expect(c.colors.R).toBe(23);
   });
 
   /**
@@ -703,10 +719,10 @@ describe("facet counts", () => {
     const off = facets(makeDb(), {});
     const on = facets(makeDb(), { playableOnly: true });
 
-    expect(off.total).toBe(50);
+    expect(off.total).toBe(57);
     expect(on.total).toBe(46);
-    // Chip 8 is open-ended and loses `Kozilek, Compleated` (cmc 10), the one of the four
-    // unplayable rows with a cost at all.
+    // Chip 8 is open-ended and loses `Kozilek, Compleated` (cmc 10), the one of the eleven
+    // unplayable rows with a cost at all — every token is mana value 0.
     expect(on.manaValues["8"]).toBe(off.manaValues["8"] - 1);
     for (const key of ["modern", "vintage", "commander", "pauper"]) {
       expect(on.formats[key]).toBe(off.formats[key]);
@@ -716,7 +732,7 @@ describe("facet counts", () => {
   it("counts a colour over the paper decision the request made, not over the default", () => {
     // The colour dimension is the one that re-runs a filter over its own base, so it is the
     // one that can put the paper default back on a base that asked for digital printings.
-    expect(facets(makeDb(), { paperOnly: false }).colors.R).toBe(17);
+    expect(facets(makeDb(), { paperOnly: false }).colors.R).toBe(24);
   });
 
   it("matches a mana chip exactly below 8 and as a range at 8", () => {
@@ -786,7 +802,7 @@ describe("facet counts", () => {
     const db = makeDb({ collectionEntries: [entry({ id: 1, cardId: BOLT.id })] });
     const f = facets(db, { owned: true });
     expect(f.total).toBe(1);
-    expect(f.owned).toEqual({ owned: 1, missing: 49 });
+    expect(f.owned).toEqual({ owned: 1, missing: 56 });
   });
 
   it("answers the number the search does, because both derive from one filter mirror", () => {
@@ -1369,12 +1385,19 @@ describe("ordering", () => {
           entry({ id: 2, finish: "foil", condition: "DMG" }),
           entry({ id: 3, finish: "foil", condition: "NM" }),
           entry({ id: 4, finish: "etched", condition: "NM" }),
+          // Schema v35's sixth value, inside the foils with the other two.
+          entry({ id: 5, finish: "foil", condition: "NONE" }),
         ],
       });
       // `etched < foil < nonfoil` is byte order over the finish itself; `NM` before `DMG`
       // inside the foils is the **rank**, and alphabetical order would answer the reverse.
-      expect(idsFor(db, [{ key: "finish", dir: "asc" }])).toEqual([4, 3, 2, 1]);
-      expect(idsFor(db, [{ key: "finish", dir: "desc" }])).toEqual([1, 2, 3, 4]);
+      //
+      // **`NONE` sits last of the three foils**, `collection::COLLECTION_SORTS`' `THEN 5`: a
+      // sorted column is the scale read *as* a scale, so the ungraded pile belongs at the end
+      // of it rather than in front of the Near Mints. The picker in `lib/conditions.ts` draws
+      // the same six the other way round, and neither order is derived from the other.
+      expect(idsFor(db, [{ key: "finish", dir: "asc" }])).toEqual([4, 3, 2, 5, 1]);
+      expect(idsFor(db, [{ key: "finish", dir: "desc" }])).toEqual([1, 5, 2, 3, 4]);
     });
 
     it("sorts `value` by the row total and `price` by one copy", () => {
@@ -2038,7 +2061,13 @@ describe("a card's per-finish prices", () => {
 });
 
 describe("what a deck owns", () => {
-  it("counts every printing of the oracle card in its group — a Bolt is a Bolt", () => {
+  /**
+   * **The narrowing's whole inversion.** Until 2026-09-07 this fixture read owned 4 — a Bolt was
+   * a Bolt, so the deck's own BOLT_2X2 line was credited both Bolts in the group. Now the group's
+   * *other* printing does not count toward it: only the three copies of the exact printing the
+   * row names do, and the row clamps at that even though it lists four.
+   */
+  it("counts only the exact printing in its group, not every printing of the oracle card", () => {
     const db = makeDeckDb({
       collectionEntries: [
         entry({ id: 1, cardId: BOLT.id, quantity: 1, folderId: groupId(1) }),
@@ -2047,10 +2076,54 @@ describe("what a deck owns", () => {
       decks: [deck({ id: 1 })],
       deckCards: [deckCard({ id: 1, cardId: BOLT_2X2.id, categoryKind: "main", quantity: 4 })],
     });
-    // Four owned off two printings: the deck lists one of them and holds both, and the read is
-    // oracle-grained. The old allocator preferred the exact printing and this has no preference
-    // to express — it is a sum over the folder.
-    expect(liveDeck(db)!.cards[0].ownedQuantity).toBe(4);
+    expect(liveDeck(db)!.cards[0].ownedQuantity).toBe(3);
+  });
+
+  it("does not count a different printing of the same card", () => {
+    // The narrowing's whole point: the group holds BOLT_B and the list names BOLT_A. The two
+    // share an oracle id, which is exactly what the old grain matched on.
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [deckCard({ cardId: BOLT_A.id, quantity: 4 })],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT_B.id, quantity: 4, folderId: groupId(1) }),
+      ],
+    });
+    expect(liveDeck(db)!.cards[0].ownedQuantity).toBe(0);
+  });
+
+  it("does not count a different finish of the same printing", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [deckCard({ cardId: BOLT_A.id, finish: "foil", quantity: 2 })],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT_A.id, finish: "nonfoil", quantity: 2, folderId: groupId(1) }),
+      ],
+    });
+    expect(liveDeck(db)!.cards[0].ownedQuantity).toBe(0);
+  });
+
+  it("counts the exact printing and finish", () => {
+    // A deck row's null finish is a collection row's "nonfoil" — the translation, in the fake.
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [deckCard({ cardId: BOLT_A.id, quantity: 4 })],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT_A.id, finish: "nonfoil", quantity: 3, folderId: groupId(1) }),
+      ],
+    });
+    expect(liveDeck(db)!.cards[0].ownedQuantity).toBe(3);
+  });
+
+  it("counts a foil line against foil copies", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [deckCard({ cardId: BOLT_A.id, finish: "foil", quantity: 2 })],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT_A.id, finish: "foil", quantity: 2, folderId: groupId(1) }),
+      ],
+    });
+    expect(liveDeck(db)!.cards[0].ownedQuantity).toBe(2);
   });
 
   it("gives the commander its copy before the main deck gets one", () => {
@@ -2342,8 +2415,9 @@ describe("the tables that are not tables", () => {
 
   it("derives the set list from the cards, counting paper printings only", () => {
     const sets = readHandlers(makeDb()).list_sets();
-    // 38 distinct set codes over the 52 fixture rows, measured 2026-08-22.
-    expect(sets).toHaveLength(38);
+    // 44 distinct set codes over the 59 fixture rows, measured 2026-09-07 — six of them are
+    // the token sets, which is what a corpus holding tokens really looks like.
+    expect(sets).toHaveLength(44);
     // `vma` holds one fixture row and it is digital, so the picker offers a 0 — the state
     // the real `list_sets` reaches through its `FILTER (WHERE is_paper = 1)`.
     expect(sets.find((s) => s.code === "vma")!.cardCount).toBe(0);
@@ -2353,7 +2427,7 @@ describe("the tables that are not tables", () => {
 
   it("reports the fixture's own card count and the faults the sync surfaces", () => {
     expect(readHandlers(makeDb()).sync_status()).toMatchObject({
-      cardCount: 52,
+      cardCount: 59,
       syncing: false,
       lastError: null,
       imageStoreFailures: 0,
@@ -2708,6 +2782,198 @@ describe("the collection grain", () => {
     expect(() => writeHandlers(db).collection_update({ id: 1, patch: { quantity: 1 } })).toThrow(
       /not there any more/,
     );
+  });
+});
+
+/**
+ * **A condition that says nothing** — schema v35's sixth value, and the fake's half of
+ * `collection::DEFAULT_CONDITION`.
+ *
+ * The whole of the change is in one function: {@link validCondition} answers `NONE` where it
+ * used to answer `NM`, and the three writes that can land a row without being told a grade —
+ * `collection_add`, `collection_import_commit` and `deck_quick_add_to_collection` — inherit it
+ * because none of them spells a default of its own. So these assert the *behaviour at each
+ * door* rather than the constant, which a single `expect(validCondition(undefined))` would have
+ * asserted about nothing a reader can press.
+ *
+ * **`NONE` is a value and not an absence, which is what the grain needs it to be.** A NULL
+ * would be distinct from itself in `idx_collection_grain` — SQLite counts two NULLs as
+ * different in a unique index — so four presses of `+` would leave four rows of one copy. The
+ * second test here is that rule from the outside: two ungraded adds are one row, and an
+ * ungraded row beside a Near Mint one is two.
+ */
+describe("a condition nobody stated", () => {
+  const add = (over: Partial<EntryInput> = {}): { entry: EntryInput } => ({
+    entry: { cardId: BOLT.id, finish: "nonfoil", quantity: 1, ...over },
+  });
+
+  it("lands an add that names no grade on NONE, and one that names a grade on the grade", () => {
+    const db = makeDb();
+    const w = writeHandlers(db);
+    w.collection_add(add({ quantity: 2 }));
+    w.collection_add(add({ finish: "foil", condition: "LP" }));
+    expect(db.collectionEntries.map((e) => e.condition)).toEqual(["NONE", "LP"]);
+    // The row still says *nothing* rather than saying `NM` on the reader's behalf: nobody can
+    // tell an app's guess from a grade somebody typed once both are spelled the same way.
+    expect(db.collectionEntries[0].conditionOriginal).toBeNull();
+  });
+
+  it("folds two ungraded adds together and keeps a graded row beside them", () => {
+    const db = makeDb();
+    const w = writeHandlers(db);
+    const first = w.collection_add(add({ quantity: 2 }));
+    const second = w.collection_add(add({ quantity: 3 }));
+    // One row, not two: the sentinel folds like any other value, which is the whole reason it
+    // is a string and not a NULL.
+    expect(second.id).toBe(first.id);
+    expect(second.quantity).toBe(5);
+
+    // And it is genuinely the third grain term rather than a value nothing distinguishes: a
+    // Near Mint copy of the same printing at the same finish is its own row.
+    const graded = w.collection_add(add({ condition: "NM" }));
+    expect(graded.id).not.toBe(first.id);
+    expect(db.collectionEntries.map((e) => [e.condition, e.quantity])).toEqual([
+      ["NONE", 5],
+      ["NM", 1],
+    ]);
+  });
+
+  it("lands an import line whose file said nothing on NONE too", () => {
+    const db = makeDb();
+    const items: CollectionImportItem[] = [
+      // A three-column file: name, set, quantity, and no Condition cell at all.
+      { cardId: BOLT.id, finish: "nonfoil", quantity: 2 },
+      { cardId: BOLT.id, finish: "foil", quantity: 1, condition: "HP" },
+    ];
+
+    writeHandlers(db).collection_import_commit({ items, mode: "add" });
+
+    expect(db.collectionEntries.map((e) => e.condition)).toEqual(["NONE", "HP"]);
+  });
+
+  /** `set` is `addEntry` with one clause changed, so it reaches the same door — asserted
+   *  because "one clause changed" is a claim about a function nobody re-reads. */
+  it("lands a silent set line on NONE as well", () => {
+    const db = makeDb();
+    writeHandlers(db).collection_import_commit({
+      items: [{ cardId: BOLT.id, finish: "nonfoil", quantity: 4 }],
+      mode: "set",
+    });
+    expect(db.collectionEntries.map((e) => [e.condition, e.quantity])).toEqual([["NONE", 4]]);
+  });
+
+  /**
+   * The refusal is still a refusal, and it names the six it will take. Spelled against the
+   * sentence rather than against `CONDITIONS`, so a list that lost a value would fail here
+   * instead of quietly agreeing with itself — `assertion must not read its own constant`.
+   */
+  it("still refuses a grade that is not one, and names all six", () => {
+    const db = makeDb();
+    expect(() => writeHandlers(db).collection_add(add({ condition: "MINT" as never }))).toThrow(
+      "`MINT` is not a condition. Use one of: NONE, NM, LP, MP, HP, DMG.",
+    );
+    expect(db.collectionEntries).toHaveLength(0);
+  });
+});
+
+/**
+ * **Editing a copy** — `collection::update_entry` through the one command that has had no
+ * caller in `src/` since it was written, and is about to get one.
+ *
+ * Two fields matter here and they fail in opposite directions. `condition` is a **grain** term,
+ * so writing `NONE` onto a graded row moves the row and can fold it onto an ungraded one already
+ * standing. `purchasePrice` is not, and its hole is `coalesce(?7, purchase_price)` — absent means
+ * *leave it*, and `EntryPatch` has no third state that means "make it null". A dialog that
+ * offered to empty the field would be a control that silently does nothing, so the gap is
+ * asserted here rather than left for a reader to find.
+ */
+describe("editing a copy's grade and what it cost", () => {
+  it("writes the two fields it was given and leaves every field it was not", () => {
+    const db = makeDb({
+      collectionEntries: [
+        entry({
+          id: 1,
+          condition: "NM",
+          quantity: 3,
+          purchasePrice: 12,
+          purchaseCurrency: "USD",
+          notes: "from the shop on the corner",
+          tags: '["cube"]',
+        }),
+      ],
+    });
+
+    const out = writeHandlers(db).collection_update({
+      id: 1,
+      patch: { condition: "NONE", purchasePrice: 4.5 },
+    });
+
+    expect(out).toEqual({ id: 1, quantity: 3, removed: false });
+    expect(db.collectionEntries[0]).toMatchObject({
+      condition: "NONE",
+      purchasePrice: 4.5,
+      // Absent is "leave it", eleven times over: a form that sends two fields must not blank
+      // the nine it never drew.
+      purchaseCurrency: "USD",
+      quantity: 3,
+      notes: "from the shop on the corner",
+      tags: '["cube"]',
+      finish: "nonfoil",
+    });
+  });
+
+  it("cannot clear a price, because absent is the only thing absent can mean", () => {
+    const db = makeDb({ collectionEntries: [entry({ id: 1, purchasePrice: 12 })] });
+
+    // Both spellings of "no price" a caller can produce, and neither empties the column.
+    writeHandlers(db).collection_update({ id: 1, patch: { purchasePrice: undefined } });
+    expect(db.collectionEntries[0].purchasePrice).toBe(12);
+    writeHandlers(db).collection_update({ id: 1, patch: { notes: "still paid for it" } });
+    expect(db.collectionEntries[0].purchasePrice).toBe(12);
+
+    // A **zero** is not an absence and is written like any other number — which is what stops
+    // `??` from being the wrong operator here. A reader who was given the card can say so.
+    writeHandlers(db).collection_update({ id: 1, patch: { purchasePrice: 0 } });
+    expect(db.collectionEntries[0].purchasePrice).toBe(0);
+  });
+
+  /**
+   * **Un-grading a row onto one that is already ungraded folds them**, which is
+   * {@link foldEntry} reached through the third grain term rather than through the finish.
+   *
+   * The patch's non-grain half lands on the source *before* the fold, so the price the reader
+   * typed in the same press is the one that survives — the survivor had none of its own, and
+   * `foldEntry`'s coalesce takes the folded row's.
+   */
+  it("folds an edit to NONE onto the ungraded row already standing there", () => {
+    const db = makeDb({
+      collectionEntries: [
+        entry({ id: 1, condition: "NM", quantity: 2 }),
+        entry({ id: 2, condition: "NONE", quantity: 1 }),
+      ],
+    });
+
+    const out = writeHandlers(db).collection_update({
+      id: 1,
+      patch: { condition: "NONE", purchasePrice: 7 },
+    });
+
+    expect(out).toEqual({ id: 2, quantity: 3, removed: false });
+    expect(db.collectionEntries).toHaveLength(1);
+    expect(db.collectionEntries[0]).toMatchObject({ id: 2, condition: "NONE", purchasePrice: 7 });
+  });
+
+  it("refuses a grade that is not one before it writes anything", () => {
+    const db = makeDb({ collectionEntries: [entry({ id: 1, condition: "NM", quantity: 2 })] });
+    expect(() =>
+      writeHandlers(db).collection_update({
+        id: 1,
+        patch: { condition: "NONE!" as never, quantity: 9 },
+      }),
+    ).toThrow(/is not a condition/);
+    // The quantity beside it did not land either: the validation is ahead of the write, which
+    // is `PATCH_SQL`'s `OR IGNORE` being narrowed in words before the statement runs.
+    expect(db.collectionEntries[0]).toMatchObject({ condition: "NM", quantity: 2 });
   });
 });
 
@@ -4172,9 +4438,14 @@ describe("the two reads a folder rule is answered from", () => {
    * workbench nobody can use.
    *
    * Deck 1 — `Modern Goodstuff`, the deck every editor story opens — plays **18** cards, and its
-   * Collection Search tab can still file five of the reader's twelve rows. The four it now
+   * Collection Search tab can still file six of the reader's thirteen rows. The four it now
    * refuses are the ones the deck genuinely does not play; `mh2 267` and `mh2 138` keep
    * answering `ALREADY_HERE`, which is the older refusal and still ahead of nothing.
+   *
+   * **`sta 105` appears twice in the filed list, and that is the schema v35 row** — the seed's
+   * ungraded etched Bolt, a second grade of a printing already here. A grade is not part of the
+   * question this fence asks, which is the useful thing for it to say: `collection_to_deck`
+   * moves a *row*, and two rows of one printing are two presses whatever either says about wear.
    *
    * **The one that matters is `c21 263`** — the Sol Ring in `Kenrith Two-Drops`, the seed's only
    * copy filed under a deck the reader is not standing in, and therefore the only row the
@@ -4182,7 +4453,7 @@ describe("the two reads a folder rule is answered from", () => {
    * press now refuses. No story's `play` presses it (`CrossDeckConfirm` stops at the question),
    * so nothing goes red — which is exactly why it is measured here instead.
    */
-  it("still lets the starter seed's deck file five of the reader's twelve rows", () => {
+  it("still lets the starter seed's deck file six of the reader's thirteen rows", () => {
     const db = seed("starter");
     const main = db.deckCategories.find((c) => c.deckId === 1 && c.kind === "main")!;
     // A fresh world per row: a filing that succeeds changes what the next one is asked about.
@@ -4212,6 +4483,8 @@ describe("the two reads a folder rule is answered from", () => {
       "sta 105",
       "fut 153",
       "mh2 259",
+      // The v35 row: the same printing as the third entry, at no grade at all.
+      "sta 105",
     ]);
     // Sol Ring twice — the cross-deck row and the reader's other printing of it — plus the two
     // cards deck 1 has simply never listed.
@@ -4653,15 +4926,17 @@ describe("moving copies across the deck boundary", () => {
   });
 
   /**
-   * **A cut reaches the copies when the list names another printing**, which is the state
-   * `deck_swap_printing` leaves behind — it rewrites the deck row's `cardId` and touches no
-   * collection table — and the state schema v25's conversion writes wholesale, because the old
-   * allocator matched candidates by **oracle id**. Matched on the exact printing alone the cut
-   * moves nothing: the deck card goes and the copies stay filed under a deck that no longer
-   * lists them. `deck::release_group_copies` matches the oracle card, which is
-   * `owned_by_oracle`'s "a Bolt is a Bolt" read from the other end.
+   * **Since 2026-09-07 a cut does not reach another printing**, which used to be the state
+   * `deck_swap_printing` left behind (it rewrites the deck row's `cardId` and touches no
+   * collection table) and the state schema v25's conversion wrote wholesale, because the old
+   * allocator matched candidates by **oracle id**. That fallback is a bug at the exact grain: a
+   * deck may legitimately list two printings of one card with the group holding both, and a cut
+   * on one line must not give back copies the other line still claims (spec §2.3). The row still
+   * leaves — a deck card with no backing copies just goes away — and the mismatched copies stay
+   * exactly where they were, a stranding `deck_swap_printing`/`deck_set_card_finish` now prevent
+   * at the source (§2.2) rather than one this command papers over.
    */
-  it("cuts through to another printing of the same card in the group", () => {
+  it("does not reach another printing of the same card in the group", () => {
     const db = boundary({
       collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 2, folderId: groupId(1) })],
       deckCards: [deckCard({ id: 1, cardId: BOLT_2X2.id, categoryKind: "main", quantity: 2 })],
@@ -4669,9 +4944,10 @@ describe("moving copies across the deck boundary", () => {
 
     const out = writeHandlers(db).deck_to_collection({ deckCardId: 1, quantity: 2 });
 
-    expect(out.quantity).toBe(2);
-    expect(copiesIn(db, REMOVED_FOLDER)).toBe(2);
-    expect(copiesIn(db, groupId(1))).toBe(0);
+    expect(out.quantity).toBe(0);
+    expect(copiesIn(db, REMOVED_FOLDER)).toBe(0);
+    expect(copiesIn(db, groupId(1))).toBe(2);
+    expect(db.deckCards).toHaveLength(0);
   });
 
   /**
@@ -5084,11 +5360,16 @@ describe("moving copies across the deck boundary", () => {
     });
 
     /**
-     * The oracle arm, in bulk. `deck_swap_printing` rewrites a deck row's identity and touches
-     * no collection table, so after "Use this printing" the group holds the *old* printing —
-     * matched exactly, a cleared pile would strand every copy behind it.
+     * **Since 2026-09-07 this is a stranding rather than a cure.** `release_group_copies` no
+     * longer reaches a sibling printing when a pile is cleared, for §2.3's reason: the fallback
+     * that used to cure this (a swap leaving the group holding the *old* printing) would also
+     * give back copies a deck's *other* line for the same oracle card still claims. The cure for
+     * the swap case is `deck_swap_printing`/`deck_set_card_finish`'s own sweep (§2.2, run before
+     * a category is ever cleared); what is left here is the residual §2.4 names — a mismatch this
+     * command does not create and does not cure, only the v35 migration rung or a later sweep
+     * does.
      */
-    it("reaches another printing of the same card when the pile is cleared", () => {
+    it("does not reach another printing of the same card when the pile is cleared", () => {
       const db = boundary({
         collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 2, folderId: groupId(1) })],
         deckCards: [deckCard({ id: 1, cardId: BOLT_2X2.id, categoryKind: "main", quantity: 2 })],
@@ -5100,8 +5381,8 @@ describe("moving copies across the deck boundary", () => {
         variant: "live",
       });
 
-      expect(copiesIn(db, groupId(1))).toBe(0);
-      expect(copiesIn(db, REMOVED_FOLDER)).toBe(2);
+      expect(copiesIn(db, groupId(1))).toBe(2);
+      expect(copiesIn(db, REMOVED_FOLDER)).toBe(0);
     });
   });
 });
@@ -5191,7 +5472,9 @@ describe("pulling owned copies into a deck", () => {
             folderId: null,
             folderName: null,
             folderKind: null,
-            condition: "NM",
+            // The fixture row's own value, which is {@link entry}'s default and therefore the
+            // column's: a candidate carries whatever grade the copy wears, `NONE` included.
+            condition: "NONE",
             lang: "en",
             altered: false,
             signed: false,
@@ -5307,10 +5590,11 @@ describe("pulling owned copies into a deck", () => {
 
   /**
    * **A different printing of the same oracle card is not a candidate, and neither is a different
-   * finish.** That is a deliberate narrowing rather than an oversight, and it is narrower than
-   * the app's own owned count: `ownedByOracle` keys on `oracle_id`, so a `2x2` Bolt filed in the
-   * group makes the `lea` line read as owned, while this fills only with the exact piece of
-   * cardboard the list names. Pin it rather than fixing it.
+   * finish.** Since 2026-09-07 that is the same grain the app's own owned count reads at, rather
+   * than a narrowing against it: before that date `ownedByOracle` kept on `oracle_id`, so a `2x2`
+   * Bolt filed in the group made the `lea` line read as owned while this still filled only the
+   * exact piece of cardboard the list names. Now the two ask the same question, and this read is
+   * the one that decided which grain won.
    *
    * The seed is one of each with the eligible copy **last**, so a handler matching on the oracle
    * card or ignoring the finish answers three candidates rather than one.
@@ -5653,10 +5937,10 @@ describe("quick-adding bought copies into a deck", () => {
 
   /**
    * **A different printing of the card the deck plays is not refused**, and that is the fence
-   * reading the oracle card rather than the printing \u2014 `deck::release_group_copies`' rule and
-   * `ownedByOracle`'s. It sits here rather than beside the refusal above because the two are one
-   * decision seen from both sides, and a handler comparing `card_id` strings passes the refusal
-   * test and fails this one.
+   * reading the oracle card rather than the printing \u2014 `deck::played_keys`' own reach, and
+   * unrelated to how much of it counts as owned since 2026-09-07's exact grain. It sits here
+   * rather than beside the refusal above because the two are one decision seen from both sides,
+   * and a handler comparing `card_id` strings passes the refusal test and fails this one.
    */
   it("lets a different printing of a card the deck plays through the fence", () => {
     const db = shortOfThree({
@@ -6396,6 +6680,166 @@ describe("the deck grain (deck, variant, category, card)", () => {
     expect(db.decks[0].updatedAt).toBe(100);
   });
 
+  /** Copies in one folder — spec §2.2's sweep tests need it and no test above them did. */
+  const copiesIn = (db: FakeDb, folderId: number | null) =>
+    db.collectionEntries
+      .filter((e) => e.folderId === folderId)
+      .reduce((n, e) => n + e.quantity, 0);
+
+  /**
+   * Copies of **one printing** in one folder, which the folded case needs and {@link copiesIn}
+   * cannot answer: where the group holds two printings, a folder total reads the same whether
+   * the sweep took the one the list stopped naming or took both.
+   */
+  const copiesOf = (db: FakeDb, folderId: number | null, cardId: string) =>
+    db.collectionEntries
+      .filter((e) => e.folderId === folderId && e.cardId === cardId)
+      .reduce((n, e) => n + e.quantity, 0);
+
+  /**
+   * **Spec §2.2, the plain case.** A swap touches no collection table, so the group would
+   * otherwise keep the old printing's copies filed under a deck that no longer lists them —
+   * exactly the stranding `release_group_copies`' oracle fallback used to paper over (§2.3) and
+   * this sweep now prevents at the source. The new line reads owned 0 until the reader files a
+   * copy of the printing it actually names.
+   */
+  it("sweeps the group's old-printing copies to Recently removed after a swap", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      collectionEntries: [entry({ id: 1, cardId: BOLT_A.id, quantity: 2, folderId: groupId(1) })],
+      deckCards: [deckCard({ id: 1, deckId: 1, cardId: BOLT_A.id, categoryKind: "main", quantity: 2 })],
+    });
+
+    writeHandlers(db).deck_swap_printing({
+      deckId: 1,
+      fromCardId: BOLT_A.id,
+      toCardId: BOLT_B.id,
+      ...MAIN,
+    });
+
+    expect(copiesIn(db, groupId(1))).toBe(0);
+    expect(copiesIn(db, REMOVED_FOLDER)).toBe(2);
+    expect(liveDeck(db)!.cards[0].ownedQuantity).toBe(0);
+  });
+
+  /**
+   * **Spec §2.2, the folded case** — the reason the sweep runs *after* the whole rewrite rather
+   * than as a targeted release before it. The swap here folds into a category that already
+   * plays BOLT_B, so a release keyed on "the row that used to be here" would have nothing left to
+   * reason about; reading the finished list against the group answers the plain case and this one
+   * with one query.
+   *
+   * **The group holds _both_ printings, and staging only the one that leaves is what made this
+   * test unable to fail** (corrected 2026-09-07). With BOLT_B's own copies absent, "evicts the
+   * printing that left" and "evicts everything in the group" produce the same two numbers, so a
+   * sweep that had thrown the surplus arithmetic away entirely would still have passed. The
+   * crate's `a_folded_swap_evicts_only_the_printing_that_left` files both from the start for
+   * exactly this reason, and this fixture is now its shape: BOLT_B's copy is claimed by the
+   * folded row and stays, BOLT_A's three are claimed by nothing and go.
+   */
+  it("sweeps correctly when the swap folds into a line the deck already has", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT_A.id, quantity: 3, folderId: groupId(1) }),
+        entry({ id: 2, cardId: BOLT_B.id, quantity: 1, folderId: groupId(1) }),
+      ],
+      deckCards: [
+        deckCard({ id: 1, deckId: 1, cardId: BOLT_A.id, categoryKind: "main", quantity: 2 }),
+        deckCard({ id: 2, deckId: 1, cardId: BOLT_B.id, categoryKind: "main", quantity: 1 }),
+      ],
+    });
+
+    const result = writeHandlers(db).deck_swap_printing({
+      deckId: 1,
+      fromCardId: BOLT_A.id,
+      toCardId: BOLT_B.id,
+      ...MAIN,
+    });
+
+    expect(result).toEqual({ folded: true, quantity: 3 });
+    // Per printing, not per folder: a folder total cannot tell "only BOLT_A left" from
+    // "everything left", which is the whole of what this fixture was changed to say.
+    expect(copiesOf(db, groupId(1), BOLT_A.id)).toBe(0);
+    expect(copiesOf(db, groupId(1), BOLT_B.id)).toBe(1);
+    expect(copiesOf(db, REMOVED_FOLDER, BOLT_A.id)).toBe(3);
+    expect(copiesOf(db, REMOVED_FOLDER, BOLT_B.id)).toBe(0);
+  });
+
+  /**
+   * **Spec §2.2 one axis over.** `deck_set_card_finish` also touches no collection table, so the
+   * group's old-finish copies would otherwise strand exactly as an old printing's would.
+   */
+  it("sweeps the group's old-finish copies to Recently removed after a finish change", () => {
+    // `BOLT_2X2`, not `BOLT`: LEA's Bolt is `finishes: ["nonfoil"]`, and this press needs a
+    // printing the app will actually let go foil.
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT_2X2.id, finish: "nonfoil", quantity: 2, folderId: groupId(1) }),
+      ],
+      deckCards: [
+        deckCard({ id: 1, deckId: 1, cardId: BOLT_2X2.id, categoryKind: "main", quantity: 2 }),
+      ],
+    });
+
+    writeHandlers(db).deck_set_card_finish({
+      deckId: 1,
+      cardId: BOLT_2X2.id,
+      categoryId: MAIN.categoryId,
+      variant: "live",
+      fromFinish: null,
+      toFinish: "foil",
+    });
+
+    expect(copiesIn(db, groupId(1))).toBe(0);
+    expect(copiesIn(db, REMOVED_FOLDER)).toBe(2);
+    expect(liveDeck(db)!.cards[0].ownedQuantity).toBe(0);
+  });
+
+  /**
+   * **The multi-row case none of the three sweep tests above exercises.** Two rows at one
+   * identity means the sweep has an order to get right — `releaseUnclaimedCopies`' `held` `Map`
+   * groups them, and grouping alone promises nothing about which comes out of the group's array
+   * first. A partial surplus (not the whole holding) is the only shape that makes a wrong order
+   * *visible*: taken newest-first, the newer row (id 2) would be the one swept and the older row
+   * (id 1) would be the one left standing, split.
+   */
+  it("takes the surplus oldest row first when two rows share one identity", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT_A.id, quantity: 3, folderId: groupId(1) }),
+        entry({ id: 2, cardId: BOLT_A.id, quantity: 2, folderId: groupId(1) }),
+      ],
+      deckCards: [
+        // Swapped away below, so this pile stops claiming BOLT_A.
+        deckCard({ id: 1, deckId: 1, cardId: BOLT_A.id, categoryKind: "main", quantity: 3 }),
+        // Left alone — BOLT_A is not fully unclaimed after the swap, so the surplus (3 of the
+        // group's 5) is partial rather than the whole holding.
+        deckCard({ id: 2, deckId: 1, cardId: BOLT_A.id, categoryKind: "side", quantity: 2 }),
+      ],
+    });
+
+    writeHandlers(db).deck_swap_printing({
+      deckId: 1,
+      fromCardId: BOLT_A.id,
+      toCardId: BOLT_B.id,
+      ...MAIN,
+    });
+
+    // The older row (id 1) is drawn down first and taken whole; the newer row (id 2) is left
+    // exactly where it was — the reverse of what array order or a newest-first sort would leave.
+    expect(db.collectionEntries.find((e) => e.id === 1)).toMatchObject({
+      folderId: REMOVED_FOLDER,
+      quantity: 3,
+    });
+    expect(db.collectionEntries.find((e) => e.id === 2)).toMatchObject({
+      folderId: groupId(1),
+      quantity: 2,
+    });
+  });
+
   it("moves every copy into the category the target holds, folding", () => {
     const db = makeDeckDb({
       decks: [deck({ id: 1 })],
@@ -7008,9 +7452,11 @@ describe("the decklist import", () => {
    * Collection page and unavailable to every other deck, which is exactly the stranding
    * `deck_clear` releases behind its identical delete.
    *
-   * The imported line names a **different printing of the same card**, which is the arm that
-   * hides it: {@link attributeOwned} matches on the oracle id, so a group nobody released hands
-   * the freshly imported row a copy the reader never filed and the deck reads as owning one.
+   * The imported line names a **different printing of the same card**, and since 2026-09-07 that
+   * is reason enough on its own: {@link attributeOwned} matches the exact printing and finish, so
+   * an unreleased group holding the old printing would answer the freshly imported row owned 0
+   * rather than lending it a copy nobody filed under it — a quieter failure than the old oracle
+   * grain's, but still a group the reader cannot see or use until this release runs.
    */
   it("files a replaced live list's copies into Recently removed", () => {
     const db = filed();
@@ -7373,6 +7819,15 @@ describe("the busy fault", () => {
       // `zoom`'s reason: a handler that validated before taking the lock would fail this loop by
       // answering `Ok` instead of BUSY.
       flattened: true,
+      // `set_mark_color`'s own key. It is the **fourth** write to take two arguments of its own,
+      // and the one collision it brings is `color` above — which belongs to the three label
+      // writes and is `"ember"`, a word this write would refuse. That is harmless for the reason
+      // every collision on this record is: `refuseIfBusy` is its first statement, so the colour
+      // is never looked at on this path. It is also the one place the usual "valid for `root`'s
+      // reason" argument cannot be made without breaking three other handlers, and it costs
+      // nothing — a handler that validated before taking the lock would fail this loop by
+      // answering "is not a colour this app can store" rather than `Ok`, which is the same red.
+      mark: "theoryExact",
       // `deck_set_view_state`'s, and empty is a real value for it: every field is optional and
       // absent means "leave it".
       viewState: {},
@@ -7423,6 +7878,20 @@ describe("the busy fault", () => {
       // its items before taking the lock would fail this loop by answering an outcome instead of
       // BUSY.
       items: [{ wishId: 1, fromCardId: BOLT.id, toCardId: BOLT_B.id }],
+      // The token writes' two keys that no write before them had. Neither is read on this path
+      // — `refuseIfBusy` is the first statement in all three — but both are named because
+      // `invoke` matches by name, which is this record's whole rule. `tokenState` and not
+      // `state`: the crate cannot call a parameter `state`, since that is the managed
+      // `tauri::State` every command takes, so `ipc.ts` folds `{ state }` onto this key.
+      //
+      // Valid values for `root`'s reason. `deck_token_set` would *refuse* a state word outside
+      // the column's CHECK, so `"auto"` is what keeps a handler that validated before taking the
+      // lock failing this loop by answering `Ok`-shaped nonsense instead of BUSY — and
+      // `oracleId` reaches a token in the fixture, so `deck_token_add`'s "not in the card
+      // database" cannot stand in for a refusal about a sync either. The `cardId` and `quantity`
+      // those three also take are already on this record, from the deck card writes.
+      oracleId: TOKEN_ORACLE.treasure,
+      tokenState: "auto",
     };
     // The five above excluded, this is every command that really takes the write lock —
     // re-counted 2026-08-12 **after a merge in which three branches had each added one**,
@@ -7505,6 +7974,16 @@ describe("the busy fault", () => {
     // for them than for their neighbours: a handler that forgot `refuseIfBusy` would have a
     // one-line body, and nothing else in the file would notice.
     //
+    // **The second of those two is called `set_search_open` since 2026-09-07 and the number did
+    // not move**, which is the one shape of change this comment had not yet recorded: the deck
+    // editor's boolean row became a map keyed by section when the collection and the wishlist grew
+    // the same column, so one handler left and one arrived in the same commit. A rename is a 1:1
+    // swap and a delta of zero — and it is still re-counted by running the sweep, because a
+    // rename landing beside somebody else's addition is exactly the merge the paragraphs below
+    // are about. It did gain the half-validation its old self had none of (a blank section is
+    // refused), which changes nothing here: every handler in this loop reaches `refuseIfBusy`
+    // before it looks at an argument.
+    //
     // The deck-driven collection then added `set_deck_driven_collection`, 53 → 54 — the
     // **third** of those one-line boolean writes and on exactly the same split — and its
     // removal took it back out again, 60 → 59. That is the one move recorded here that goes
@@ -7523,7 +8002,7 @@ describe("the busy fault", () => {
     // **That figure was 54 + 6, and this rung had been reconciled at a merge three times**
     // before the deck-driven write was deleted out of it again. The wishlist branch wrote
     // 52 → 58 against a tree holding `set_nav_collapsed` alone, then 53 → 59 once
-    // `set_deck_search_open` landed, and then 54 → 60 beside the deck-driven write. Each was
+    // the search column's own write landed, and then 54 → 60 beside the deck-driven write. Each was
     // right about the tree it was in and none predicted the merge — which is the whole of why
     // this file's own rule says never to add one branch's delta to another's total. Measured
     // again at 59 on 2026-08-23, with `set_deck_driven_collection` gone.
@@ -7677,7 +8156,33 @@ describe("the busy fault", () => {
     // record above. **Both read halves are absent from this table** — `deck_quick_add_wishes`
     // through `lock_db_read` and `wishlist_optimize_plan` through `db_read` — exactly as
     // `deck_pull_plan` is.
-    expect(names).toHaveLength(91);
+    //
+    // `set_deck_sort` (issue #387) is the ninth `app_meta` write and joins for the reason all
+    // eight do: the row is in the reader's own database, so the write takes the write connection
+    // and answers BUSY under a sync like every other. Its read half, `deck_sort`, is absent for
+    // `deck_pull_plan`'s reason — and the two *gallery* reads that shipped beside it,
+    // `deck_pip_costs` and `deck_bracket_reads`, are absent for the same one.
+    //
+    // Tokens and emblems then added **three**: `deck_token_set`, `deck_token_clear` and
+    // `deck_token_add` all take plain `sync::with_write` — not `with_write_owned`, which is only
+    // for the four writes that move copies across the collection boundary, and nothing here
+    // changes what the reader owns. The fourth handler that feature ships, `deck_tokens`, is a
+    // read on `lock_db_read` and is in `readHandlers`: the split every feature in this table is
+    // on.
+    //
+    // **The number is 95 because two branches each moved it on one day** — 91 → 92 for the sort,
+    // 91 → 94 for the tokens — and neither arithmetic was right once both had landed. It is
+    // re-counted by running the sweep, which is the trap the two paragraphs above are both about
+    // and which a merge is the likeliest way to meet.
+    //
+    // The theory marks' colours then added **one**, 95 → 96: `set_mark_color` is the tenth
+    // `app_meta` write and joins for the reason all nine do — the row is in the reader's own
+    // database, so the write takes the write connection and answers BUSY under a sync. Its read
+    // half (`mark_colors`, on `db_read`) is in `readHandlers` and not in this table at all, which
+    // is the split every preference before it is on. What is different about it is only what
+    // happens to that refusal afterwards: `TheoryMarksPanel` prints it, where the rail and the
+    // list layout swallow theirs. Re-counted by running the sweep.
+    expect(names).toHaveLength(96);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -8454,7 +8959,7 @@ describe("the whole command table", () => {
     const db = makeDb();
     expect(writeHandlers(db).sync_run()).toEqual({
       updated: false,
-      cardCount: 52,
+      cardCount: 59,
       updatedAt: null,
     });
     expect(() => writeHandlers(makeDb({ fault: "syncError" })).sync_run()).toThrow(/rate limited/);
@@ -8502,11 +9007,13 @@ describe("the Oracle tag taxonomy", () => {
    * The counts `.storybook/CLAUDE.md` quotes, measured here rather than asserted in prose — a
    * prose-only edit routes to neither CI job, and every count in that file has drifted at least
    * once. **Both numbers, because they are two facts**: the taxonomy is keyed by oracle card
-   * and a story renders printings, so 32 tagged cards cover 42 of the 52 rows. The ten left
-   * are both basic lands, Delver of Secrets, Tarmogoyf and Little Girl — deliberately untagged,
-   * so every `starter` deck holds cards on both sides of the type-line fallback — plus the five
-   * layout-zoo rows added for the orientation control, which are there to be *drawn* sideways
-   * rather than to be filed.
+   * and a story renders printings, so 32 tagged cards cover 42 of the 59 rows. Of the seventeen
+   * left, ten are both basic lands, Delver of Secrets, Tarmogoyf and Little Girl —
+   * deliberately untagged, so every `starter` deck holds cards on both sides of the type-line
+   * fallback — plus the five layout-zoo rows added for the orientation control, which are
+   * there to be *drawn* sideways rather than to be filed. **The other seven are the tokens and
+   * the emblem**, and those are untagged by the taxonomy rather than by a choice: Scryfall
+   * files oracle tags against oracle *cards*, and a Treasure is not one anybody plays.
    */
   it("covers 32 of the corpus's oracle cards and 42 of its printings", () => {
     const tagged = new Set(oracleTagCards(CARDS).map((r) => r.oracleId));
@@ -8517,7 +9024,7 @@ describe("the Oracle tag taxonomy", () => {
     // reprints of oracle cards this list already covers, so they widen the *printing* reach
     // without touching the 32 oracle cards — which is the distinction this test is for.
     expect(CARDS.filter((c) => tagged.has(c.oracleId))).toHaveLength(42);
-    expect(CARDS).toHaveLength(52);
+    expect(CARDS).toHaveLength(59);
   });
 
   /** Keyed by **oracle card**: all four Lightning Bolt printings share one set of rows, which
@@ -10334,5 +10841,326 @@ describe("the four clears", () => {
     expect(() => writeHandlers(db).collection_clear()).not.toThrow();
     expect(() => writeHandlers(db).wishlist_clear()).not.toThrow();
     expect(() => writeHandlers(db).decks_clear()).not.toThrow();
+  });
+});
+
+/**
+ * Tokens and emblems — **the one read here that derives its whole answer**, so these are about
+ * the walk rather than about the four rows the table holds.
+ *
+ * `deck_tokens` stores deviations only, and the list a deck needs is resolved from its cards on
+ * every call. That is the app's design and it is what makes any of this assertable: a fake that
+ * stored the list would agree with itself whatever the walk did.
+ */
+describe("deck tokens", () => {
+  const tokensOf = (db: FakeDb, deckId: number) =>
+    readHandlers(db).deck_tokens({ deckId, variant: "live" });
+
+  /**
+   * **The fence under `TOKEN_ORACLE`/`TOKEN_PRINTING`, and the reason those ids stopped being
+   * minted.** `cards.ts` is generated wholesale, so a refresh that dropped a token selection
+   * would leave both maps naming rows nothing has — which is exactly the state the `7…` block
+   * was in permanently: `card_printings` answered nothing and `@/lib/images` had no picture,
+   * so every tile drew the unknown-card placeholder and the art picker's grid was empty. That
+   * failure is silent in every story, so this is what notices.
+   */
+  it("resolves every token id against the generated corpus", () => {
+    const byId = new Map(CARDS.map((c) => [c.id, c]));
+
+    // Named per key and `"missing"` for an id nothing has, so a dropped selection says which
+    // one rather than failing as a bare `false`. The emblem's layout is the load-bearing entry:
+    // it is what says an emblem is an emblem, where its type line is the bare word `Emblem`.
+    expect(
+      Object.fromEntries(
+        Object.entries(TOKEN_PRINTING).map(([key, id]) => [key, byId.get(id)?.layout ?? "missing"]),
+      ),
+    ).toEqual({
+      treasureTafr: "token",
+      treasureThob: "token",
+      construct: "token",
+      wurmDeathtouch: "token",
+      wurmLifelink: "token",
+      okoEmblem: "emblem",
+    });
+
+    // And every oracle id is one of those printings', so a grain written against `TOKEN_ORACLE`
+    // and a printing written against `TOKEN_PRINTING` can never name different cards.
+    const printed = new Set(Object.values(TOKEN_PRINTING).map((id) => byId.get(id)!.oracleId));
+    expect(Object.values(TOKEN_ORACLE).filter((o) => !printed.has(o))).toEqual([]);
+  });
+
+  it("derives the list from the deck's cards and stores none of it", () => {
+    const db = seed("starter");
+
+    const rows = tokensOf(db, 1);
+
+    expect(rows.map((r) => r.name)).toEqual([
+      "Construct",
+      "Oko, Shadowmoor Scion Emblem",
+      "Treasure",
+      "Wurm",
+      "Wurm",
+    ]);
+    // Five rows out, and only the three the reader deviated on are in the table — which is the
+    // whole claim: nothing seeds the list.
+    expect(db.deckTokens.filter((t) => t.deckId === 1)).toHaveLength(3);
+    expect(rows.every((r) => r.derived)).toBe(true);
+  });
+
+  /**
+   * The `is_active = 0` rule, and the only way to see it: Ancient Tomb sits on deck 1's
+   * Maybeboard and names the older Treasure printing, so an implementation reading every
+   * category would show a third source **and** quietly move the default art.
+   */
+  it("takes no tokens from an inactive category", () => {
+    const db = seed("starter");
+
+    const treasure = tokensOf(db, 1).find((r) => r.name === "Treasure");
+
+    expect(treasure?.sources.map((s) => s.name).sort()).toEqual([
+      "Ragavan, Nimble Pilferer",
+      "Smuggler's Copter",
+    ]);
+    // Both printings are named once, so the tie-break picks — and it picks the newer one.
+    expect(treasure?.defaultCardId).toBe(TOKEN_PRINTING.treasureThob);
+  });
+
+  /** Switch that pile on and both halves move together, which is what proves the assertion above
+   *  is about `isActive` rather than about the edge being absent. */
+  it("shows the Maybeboard's token once the pile counts", () => {
+    const db = seed("starter");
+    const maybe = db.deckCategories.find((c) => c.deckId === 1 && !c.isActive);
+    writeHandlers(db).deck_category_set_active({ id: maybe!.id, isActive: true });
+
+    const treasure = tokensOf(db, 1).find((r) => r.name === "Treasure");
+
+    expect(treasure?.sources).toHaveLength(3);
+    // Two cards now name the older printing against one naming the newer, so the majority wins
+    // where the tie-break decided a moment ago.
+    expect(treasure?.defaultCardId).toBe(TOKEN_PRINTING.treasureTafr);
+  });
+
+  /**
+   * **Grouping is by `oracle_id` and never by name.** One card makes two tokens that share a
+   * name, a type line and a 3/3 and differ in one line of rules text — `Wurmcoil Engine`'s
+   * shape, and the case a panel keyed on names collapses into one tile.
+   */
+  it("keeps two same-named tokens apart", () => {
+    const wurms = tokensOf(seed("starter"), 1).filter((r) => r.name === "Wurm");
+
+    expect(wurms).toHaveLength(2);
+    expect(new Set(wurms.map((w) => w.oracleId)).size).toBe(2);
+    expect(wurms.map((w) => w.oracleText).sort()).toEqual(["Deathtouch", "Lifelink"]);
+    // Everything else a tile could tell them apart by is identical, which is why the row carries
+    // the rules text at all.
+    expect(wurms[0].power).toBe(wurms[1].power);
+    expect(wurms[0].colors).toBe(wurms[1].colors);
+  });
+
+  /**
+   * The override joins on, and **`0` is a value**. `starter` zeroes the Construct while leaving
+   * its art alone, which is the state `stored || 1` reads as untouched and draws as 1.
+   */
+  it("joins the stored override on, zero included", () => {
+    const rows = tokensOf(seed("starter"), 1);
+
+    expect(rows.find((r) => r.name === "Construct")).toMatchObject({
+      quantity: 0,
+      cardId: null,
+      state: "auto",
+    });
+    // The Treasure moved both halves; the emblem moved neither.
+    expect(rows.find((r) => r.name === "Treasure")).toMatchObject({
+      cardId: TOKEN_PRINTING.treasureTafr,
+      quantity: 4,
+    });
+    expect(rows.find((r) => r.layout === "emblem")).toMatchObject({
+      cardId: null,
+      quantity: null,
+      state: null,
+    });
+  });
+
+  /**
+   * **The picture is the printing the *tile* addresses, `cardId ?? defaultCardId`**, and the
+   * starter world is the fixture that can tell those two apart: deck 1 has picked the older
+   * Treasure while the resolver names the newer one, so a row taking the resolver's would draw
+   * the art the reader chose against. That failure reaches the web target and the phone alone —
+   * on the desktop `mtgimg://` corrects it off `printingId` — so nothing else here can see it.
+   *
+   * The URLs are read back off `CARDS` rather than written out: they are the fixture's own real
+   * Scryfall ones, and an assertion quoting them would pin a generated file's contents.
+   */
+  it("carries the picture of the printing the tile addresses", () => {
+    const byId = new Map(CARDS.map((c) => [c.id, c]));
+    const picture = (id: string) => ({
+      display: byId.get(id)!.normalUrl,
+      art: byId.get(id)!.artCropUrl,
+    });
+    const rows = tokensOf(seed("starter"), 1);
+
+    const treasure = rows.find((r) => r.name === "Treasure")!;
+    // Not vacuous: the two have to name different printings for the precedence to be visible.
+    expect(treasure.cardId).not.toBe(treasure.defaultCardId);
+    expect(treasure.imageUris).toEqual(picture(treasure.cardId!));
+
+    // And a token nobody picked art for is the resolver's printing.
+    const construct = rows.find((r) => r.name === "Construct")!;
+    expect(construct.cardId).toBeNull();
+    expect(construct.imageUris).toEqual(picture(construct.defaultCardId));
+  });
+
+  /** The `imageUrisMissing` fault is the whole corpus with both URL columns empty, so every
+   *  token answers `null` — the no-art frame, which is what a browser draws for such a row. */
+  it("answers no picture at all under the imageUrisMissing fault", () => {
+    const rows = tokensOf({ ...seed("starter"), fault: "imageUrisMissing" }, 1);
+
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.imageUris === null)).toBe(true);
+  });
+
+  /** A dismissal is still a derived row: whether `hidden` is *drawn* is `deckTokenViews`'
+   *  conclusion, not the backend's, so both Wurms come back and one of them says so. */
+  it("answers a dismissed token rather than dropping it", () => {
+    const wurms = tokensOf(seed("starter"), 1).filter((r) => r.name === "Wurm");
+
+    expect(wurms.filter((w) => w.state === "hidden")).toHaveLength(1);
+    expect(wurms.filter((w) => w.state === null)).toHaveLength(1);
+  });
+
+  /** A `manual` row the deck derives nothing for — deck 2 runs no Jace — comes back last, with
+   *  `derived: false` and no sources. */
+  it("appends a manual row nothing derives", () => {
+    const rows = tokensOf(seed("starter"), 2);
+
+    expect(rows.map((r) => r.name)).toEqual([
+      "Construct",
+      "Treasure",
+      "Oko, Shadowmoor Scion Emblem",
+    ]);
+    expect(rows[2]).toMatchObject({ derived: false, sources: [], state: "manual" });
+  });
+
+  /** A deck whose cards make nothing is an empty list and never an error — deck 3 runs four
+   *  cards and not one of them names a token. */
+  it("answers a deck that makes nothing with an empty list", () => {
+    expect(tokensOf(seed("starter"), 3)).toEqual([]);
+    // And so is a deck that is not there at all.
+    expect(tokensOf(seed("starter"), 999)).toEqual([]);
+  });
+
+  it("writes an override on the grain and reads it back", () => {
+    const db = seed("starter");
+    writeHandlers(db).deck_token_set({
+      deckId: 1,
+      oracleId: TOKEN_ORACLE.wurmDeathtouch,
+      cardId: null,
+      quantity: 2,
+      tokenState: null,
+    });
+
+    expect(tokensOf(db, 1).find((r) => r.oracleId === TOKEN_ORACLE.wurmDeathtouch)).toMatchObject({
+      quantity: 2,
+      state: "auto",
+    });
+    // One row per token per deck: a second write is an update, never a second row.
+    writeHandlers(db).deck_token_set({
+      deckId: 1,
+      oracleId: TOKEN_ORACLE.wurmDeathtouch,
+      cardId: null,
+      quantity: 3,
+      tokenState: null,
+    });
+    expect(db.deckTokens.filter((t) => t.oracleId === TOKEN_ORACLE.wurmDeathtouch)).toHaveLength(1);
+  });
+
+  /**
+   * **The empty override is not representable.** `auto` with no printing and no quantity is *no
+   * deviation*, and storing it would be a second spelling of a state the table already has —
+   * which a panel reading the wrong one would draw a reset control over.
+   */
+  it("deletes the row rather than storing an override that carries nothing", () => {
+    const db = seed("starter");
+    expect(db.deckTokens.filter((t) => t.deckId === 1)).toHaveLength(3);
+
+    writeHandlers(db).deck_token_set({
+      deckId: 1,
+      oracleId: TOKEN_ORACLE.treasure,
+      cardId: null,
+      quantity: null,
+      tokenState: "auto",
+    });
+
+    expect(db.deckTokens.filter((t) => t.deckId === 1)).toHaveLength(2);
+    expect(tokensOf(db, 1).find((r) => r.name === "Treasure")).toMatchObject({
+      cardId: null,
+      quantity: null,
+      state: null,
+      // Back to the resolver's answer, which is the point of there being no row.
+      defaultCardId: TOKEN_PRINTING.treasureThob,
+    });
+  });
+
+  /** `clear` is the same delete with a name on it, and a grain resolving to no row is a
+   *  **success**: the caller wanted no override and there is none. */
+  it("clears an override, and clearing one that is not there is not an error", () => {
+    const db = seed("starter");
+    writeHandlers(db).deck_token_clear({ deckId: 1, oracleId: TOKEN_ORACLE.construct });
+
+    expect(tokensOf(db, 1).find((r) => r.name === "Construct")?.quantity).toBeNull();
+    expect(() =>
+      writeHandlers(db).deck_token_clear({ deckId: 1, oracleId: TOKEN_ORACLE.construct }),
+    ).not.toThrow();
+  });
+
+  /** `add` names a **printing** and the oracle id is resolved from it — the one of the four that
+   *  does, because the reader picks out of a printings grid. */
+  it("adds a token by hand from a printing", () => {
+    const db = seed("starter");
+    writeHandlers(db).deck_token_add({ deckId: 3, cardId: TOKEN_PRINTING.wurmLifelink });
+
+    const rows = tokensOf(db, 3);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      oracleId: TOKEN_ORACLE.wurmLifelink,
+      name: "Wurm",
+      derived: false,
+      sources: [],
+      state: "manual",
+      cardId: TOKEN_PRINTING.wurmLifelink,
+      // Left absent rather than stored as 1: the default is TypeScript's conclusion.
+      quantity: null,
+    });
+  });
+
+  it("refuses an add naming a printing the card database does not have", () => {
+    expect(() =>
+      writeHandlers(seed("starter")).deck_token_add({ deckId: 1, cardId: BOLT.id }),
+    ).toThrow(/not in the card database/);
+  });
+
+  /** The state word is closed by a CHECK on the column, so a word outside it is refused here
+   *  rather than stored and drawn. */
+  it("refuses a state word the column's CHECK would", () => {
+    expect(() =>
+      writeHandlers(seed("starter")).deck_token_set({
+        deckId: 1,
+        oracleId: TOKEN_ORACLE.treasure,
+        cardId: null,
+        quantity: null,
+        tokenState: "nonsense" as never,
+      }),
+    ).toThrow(/is not a token state/);
+  });
+
+  /** `deck_tokens.deck_id` is `ON DELETE CASCADE` — and the list itself needed no deleting,
+   *  because it was never stored. */
+  it("takes a deck's overrides with the deck", () => {
+    const db = seed("starter");
+    writeHandlers(db).deck_delete({ id: 1 });
+
+    expect(db.deckTokens.filter((t) => t.deckId === 1)).toEqual([]);
+    // Deck 2's are untouched, which is what makes the sweep a filter and not a truncate.
+    expect(db.deckTokens.filter((t) => t.deckId === 2)).toHaveLength(1);
   });
 });

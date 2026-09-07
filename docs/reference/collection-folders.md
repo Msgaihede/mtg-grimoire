@@ -231,6 +231,53 @@ never interpolated into any of them — a probe compares a list of expressions o
 that many **bound values**, which is a different statement — so widening the constant cannot widen
 the probes, and nothing in either half goes red when they drift.
 
+### The add path has a folder default now, and the eleventh term is what makes that safe
+
+**Since 2026-09-07 the `+` on a card can file into the folder the reader is standing in**, and it
+is the grain above that turns that from a risk into an ordinary add. `EntryInput.folderId` has been
+on the wire since v24 and `useCardMenuDeps` has always passed it; `AddToCollectionButton` never did,
+which is why every `+` in the app filed at the root. It now takes optional `folderId`,
+`folderNodes`, `folderName` and `lockMode`, and the collection page's docked search column passes
+all four — so a reader filing a binder adds from the sidebar without leaving the folder, where
+before they left the page, filed at the root, came back and moved what they had just filed.
+
+**Read the eleventh term as the licence for this rather than as a constraint on it.** A default
+destination is only sane where a second destination is a second row: with `coalesce(folder_id, 0)`
+in the grain, adding a printing the reader already owns *elsewhere* writes a new row in the folder
+on screen and touches the old one not at all. Without the term the same press would land on the
+existing row and raise its quantity, so the copies filed last week would silently **move** into
+whatever folder happened to be open — a default that quietly undoes filing decisions, which is
+exactly the failure v24 was built to make impossible. The grain came first and the folder default
+is what it was for.
+
+**Three fences around it, each of which could have been the other way:**
+
+- **A flattened page defaults to the root.** Flatten means *show me everything*; the breadcrumb
+  reads `Collection · all folders`, there is no folder on screen to be standing in, and the page
+  passes `folderId: null` rather than whatever `useCollection` still holds underneath. The
+  collection ships flattened, so out of the box the sidebar behaves exactly as the `+` always has,
+  and the default starts working the moment a reader opens a folder.
+- **Absent and `null` are different on the wire**, and the page sends `null` explicitly. Absent
+  sends no `folderId` field at all — which is what `SearchPage` and the Tags page still do, and why
+  they were untouched by this — where `null` sends `folderId: null` and *names* the root as the
+  destination.
+- **Only `user` folders are offered.** The override picker is handed the page's own
+  `buildFolderTree(userFolders, [])`, the filtered tree that already existed: deck groups and
+  `Recently removed` are kinds the cabinet draws and nothing may be filed into by hand, and
+  `collection::add_entry` refuses a `deck` folder outright in any case.
+
+**A tile dropped on a folder card takes the same path**, and it answers `useSidebarDrops.ts`'s
+standing objection rather than dodging it. That file refuses to make the sidebar's Collection entry
+a drop target because *"`collection_add` carries a finish, a condition and a language that a drop
+cannot answer, and a drop that invented 'NM nonfoil' would write facts the reader never said"* —
+sound, and already answered elsewhere: the card menu's own add writes `MENU_CONDITION`, which is
+`CONDITION_NOT_SET`. **An add that names no grade records that nobody named one, which is a fact,
+where `NM` would be a guess dressed as one** — and since schema v35 `NONE` is the column's own
+default, so the drop is writing what the database would have written anyway. A drop here writes
+`MENU_CONDITION`, `quantity: 1` and the finish the printing actually exists in, onto a **named
+folder the reader pointed at**; the sidebar entry stays as it is, because that one would have to
+guess a destination as well as a grade.
+
 ## The merge rule: a write that lands on a taken grain merges
 
 `collection_set_folder` moves one row onto a grain another row may already hold — it changes the
@@ -509,13 +556,14 @@ goes red if somebody later "tidies" the exclusion into `collection_source`, and
 | `collection_source::owns_printing` / `copies_of_printing` / `copies_of_oracle` | The card search's owned pip and both owned badges. A graded card is a card you own; a search that stopped saying so would be the app lying about cardboard on the reader's shelf. **Unchanged in the fragments themselves** — the exclusion issue #349 added lives in the `Availability` a caller passes, so only a request naming a deck gets it, and `a_locked_folders_copies_are_still_owned` is the assertion that it stayed there. |
 | `index::CardIndex.owned`, through `collection_source::owned_rowids` | The Owned/Missing facet pair. Same reason, and it has to agree with the pip beside it or the greying contradicts the badge. |
 | `wishlist::OWNED_SQL` | How much of a wish is already filled. A locked copy fills a want — the reader has it, and buying a second is the mistake that figure exists to prevent. |
-| `deck::owned_by_oracle` | Structurally cannot see one of these folders at all — the paragraph below. |
+| `deck::owned_by_printing` | Structurally cannot see one of these folders at all — the paragraph below. |
 | `import::match_columns` / `MATCH_ORDER` | Which printing a pasted line resolves to. Ranking by owned copies is a guess about *which cardboard the reader means*, and a locked copy is still their cardboard. |
 | `collection_folders::folder_summary` | The per-folder tile. A locked folder's own tile must count its own contents, or the badge sits above a lie. |
 | `images::prewarm_keys` | Cache warming. Excluding would make the drawer slow to open, for nothing. |
 | `reconcile.rs` | Repoints rows onto new printings and never writes `folder_id`. A locked folder's card that Scryfall has renumbered still needs repointing — the lock is about *offering*, and upkeep is not an offer. |
 
-**`deck::owned_by_oracle` is the row that earns its own sentence, because it is the first question a
+**`deck::owned_by_printing` (`owned_by_oracle` before 2026-09-07) is the row that earns its own
+sentence, because it is the first question a
 reader of this page will ask.** It counts only rows filed in *that deck's own group* — `JOIN
 collection_folders f ON f.id = e.folder_id … WHERE f.deck_id = ?1` — and a locked folder is a
 `kind = 'user'` folder, so its copies have never been in any deck's group and have never counted
@@ -620,7 +668,8 @@ placement in the group and reduce the row the copies came out of, and the clamp 
 expressible over a table that same statement is writing to.
 
 **`min(claim, row)`, and the clamp is not optional.** The old ledger could out-claim a row that was
-later stepped down — nothing refused it, because `deck::owned_by_oracle` applied
+later stepped down — nothing refused it, because the deck's owned read (`owned_by_printing` now,
+`owned_by_oracle` before 2026-09-07) applied
 `min(a.quantity, e.quantity)` at *read* time and the stored overclaim never showed on screen.
 Reading the claim literally here would invent copies the reader does not own, permanently, with
 nothing left to compare against afterwards. The source can also be **gone** by the time its claim
@@ -723,15 +772,19 @@ bare drag is wrong — nothing was ever left dangling — but it made a **filing
 **deck-building gesture**, and the reader who pointed at a drawer got a card added to a deck they
 were not looking at.
 
-**The match is on the oracle card, and that is the same rule `release_group_copies` already
-holds** — `deck::PLAYED_KEY`, `coalesce(c.oracle_id, dc.card_id)` over
+**The match is on the oracle card** — `deck::PLAYED_KEY`, `coalesce(c.oracle_id, dc.card_id)` over
 `deck_cards dc LEFT JOIN cards c`. A deck that lists the Commander 2021 *Sol Ring* plays Sol Ring,
 so an Alpha copy in the reader's binder is a copy of something that deck plays; a printing-exact
 fence would refuse the filing for a reason nothing on screen could explain. **The printing is the
 fallback and not the other way round**: `cards.oracle_id` is nullable and a `deck_cards` row
 outlives its printing leaving the corpus, so an orphan is matched by its own id — and a fallback
 that reached for the printing *first* would silently make every match printing-exact, which is a
-rule that looks correct on the one card anybody tests it with.
+rule that looks correct on the one card anybody tests it with. **This answers a different question
+from attribution — does the deck play this card at all, never which copies count toward it — and
+until 2026-09-07 it was `release_group_copies`'s own fallback rule reused rather than re-spelled.**
+Owned/missing narrowed to the exact `(card_id, finish)` that day, which made the fallback a bug
+in `release_group_copies` rather than a fix — [decks-storage.md](decks-storage.md) carries the
+whole change — so PLAYED_KEY is the rule's only home now.
 
 **Live only.** A plan holds no cards (`THEORY_HOLDS_NOTHING`), so a card the deck merely *plans* to
 play is refused exactly as one it has never heard of is.
@@ -1052,19 +1105,39 @@ refusal; rows are taken **oldest first**; the take is **clamped** at what the gr
 holds, because a list and a group can legitimately disagree; and `Recently removed` is resolved
 only when there is something to file, so a hand-edited database still lets a pile be cleared.
 
-**It matches on the oracle card, not on the printing, and that was a stranding bug while the walk
-existed twice.** `deck_swap_printing` and `deck_set_card_finish` rewrite a `deck_cards` row's
-identity and touch no collection table, so after "Use this printing" the group goes on holding the
-*old* printing's row. Matched exactly, the release then found nothing: the deck card went away and
-the copies stayed filed under a deck that no longer listed them. Upgraded readers meet it without
-pressing anything, because the allocator v25 replaced matched candidates by oracle id and the
-conversion faithfully files a printing the deck does not list. The arms are the exact printing and
-finish **first**, then any other row in the group holding the same `cards.oracle_id` — which is
-`owned_by_oracle`'s "a Bolt is a Bolt" read from the other end, since a deck that *counts* an
-Alpha Bolt toward an M10 line has to be able to give that copy back. The ordering is what keeps
-every cut of a card nobody ever swapped exactly what it was. The join to `cards` is a `LEFT JOIN`
-so a row whose printing has left the corpus is still releasable by the exact arm, and a deck card
-that is itself an orphan degrades to exactly that arm.
+**It matched on the oracle card, not on the printing, until 2026-09-07 — the fix for a stranding
+that a different function now prevents at the source.** `deck_swap_printing` and
+`deck_set_card_finish` rewrite a `deck_cards` row's identity and touch no collection table, so
+after "Use this printing" the group used to go on holding the *old* printing's row. Matched
+exactly, the release then found nothing: the deck card went away and the copies stayed filed
+under a deck that no longer listed them. Upgraded readers met it without pressing anything,
+because the allocator v25 replaced matched candidates by oracle id and the conversion faithfully
+filed a printing the deck did not list. The old arms were the exact printing and finish **first**,
+then any other row in the group holding the same `cards.oracle_id` — `owned_by_oracle`'s "a Bolt
+is a Bolt" read from the other end, since a deck that *counted* an Alpha Bolt toward an M10 line
+had to be able to give that copy back.
+
+**The fallback is a bug now rather than a fix, because owned/missing stopped counting that way on
+the same day.** A deck may legitimately list both LEA Bolt and M10 Bolt, with the group holding
+both; cutting the LEA line short and falling back to the oracle match would give back M10 copies
+the M10 line still claims — the same stranding bug read in the finish dimension too, one arm
+over. `deck::release_unclaimed_copies(tx, deck_id, variant)` is what replaced the fallback:
+`swap_printing` and `set_card_finish` each call it, inside their own transaction, right after
+rewriting a row's identity — sweeping the group for whatever the new identity does not claim at
+`(card_id, finish)` and filing it into `Recently removed` before anything can strand. Reading the
+*finished* list against the group this way answers the plain case and a folded swap
+(`SwapResult.folded`) with one query, where a targeted release on the old identity alone would
+have to reason about the fold to get the quantity right. `release_group_copies` narrows back to
+the exact `(card_id, finish)` match and nothing looser, so the crate's one walk stops needing to
+reach for the oracle card at all — the ordering that used to keep every cut of a card nobody ever
+swapped exactly what it was now has nothing left to order. **The `LEFT JOIN cards` went with the
+fallbacks**: the backing query reads `collection_entries` alone, on `folder_id`, `card_id` and
+`finish`. The join was only ever there to hand the oracle arm an `oracle_id` to compare, and the
+`LEFT` so that a row whose printing has left the corpus still matched the exact arm while the
+oracle one degraded to `NULL`. With no arm asking for an oracle id there is nothing to join to,
+and an orphan is *more* releasable than before rather than less — the deck row and the collection
+row name the same `card_id`, so the match holds whether or not the corpus still knows the
+printing.
 
 Three scopes are decisions rather than details:
 
@@ -1100,6 +1173,53 @@ The split itself is `collection_folders::take_copies`, which is where a partial 
 a grain needs the source stepped down, refiled, and the remainder re-inserted behind it. It is the
 crate's one copy of that rule — `collection_alloc` carried a private twin until fan-in, and the
 note under "The two writes" says what happened to it.
+
+### The honesty rule, and what v36 did to bring every file under it
+
+> **A deck's group holds only copies its live list claims at `(card_id, finish)`.**
+
+That sentence is what owned/missing's 2026-09-07 grain narrowing (above and in
+[decks-storage.md](decks-storage.md)) and this section's sweep are both making true, and keeping
+true. **"Claims" means every live `deck_cards` row, switched-off piles included** —
+`attribute_owned` hands an inactive pile no copies, so it is tempting to read its rows as
+claiming nothing, but then flipping a category off would *evict that pile's cards from the
+deck*, turning a display switch into a press that moves cardboard. Custody follows what the list
+**names**; the switch only decides what is counted. `release_live_copies` already works this
+way — its query filters by `category_id` and never by `category_active` — so this is the file's
+existing rule rather than a new one.
+
+**Schema v36 is the one-time pass that brings every file made before 2026-09-07 under it.** The
+v25 conversion "replaced matched candidates by oracle id, so the conversion routinely files a
+printing the deck does not list" (above) — tolerable while the read counting a deck's copies was
+the same oracle-grain match the conversion made, and no longer tolerable once the read narrowed:
+every such file now has a group holding copies its list does not claim at the new grain. The rung
+sweeps every `collection_folders` row with `kind = 'deck'` and moves what no live `deck_cards`
+row claims into `Recently removed`, splitting a partly-claimed row rather than moving it whole —
+the same shape `take_copies` gives every other release in this file. **It carries its own SQL and
+its own arithmetic rather than calling `take_copies` or `release_unclaimed_copies`**, because a
+migration step is history the day it ships and app code it called would silently change what an
+old file is converted into the next time either function's logic moves — the v25 rung is the
+model, and it inlines `take_copies`' split with both clamps for the same reason. The folder kinds
+are spelled as the literals `'deck'` and `'removed'` rather than read through
+`COLLECTION_FOLDER_KINDS`, for the reason `COLLECTION_GRAIN` is never interpolated into a probe:
+a rung that read the constant would convert a v35 file differently the day the constant is
+reordered.
+
+**The copies land in `Recently removed` and not at the root, and where they land is
+load-bearing.** `Recently removed` is ranked **second** in `deck_pull::CANDIDATE_SQL`'s
+`ORDER BY CASE` — after the root, before the reader's own folders — so the first press of
+`Import missing cards from collection…` offers those very copies straight back for every line
+that genuinely matches them, and the lines that do not match are honestly missing. A reader who
+upgrades is not left holding a state they cannot act on, which is what makes the rung acceptable
+rather than merely correct. A missing `Recently removed` folder skips a deck's move rather than
+failing the whole rung — a rung that errors blocks startup, and a hand-edited file without that
+folder must still open.
+
+**The residual is the same one the read side carries.** A device on an older build can still
+push a `collection_entries.folder_id` that mismatches its own live list, and nothing runs this
+sweep on a sync — `release_unclaimed_copies` is idempotent and cheap, so the state is curable,
+but this design does not mechanise curing it. [decks-storage.md](decks-storage.md) names it as
+a known gap rather than a mechanism, and it is named here for the same reason.
 
 ## `delete_folder` re-files one row at a time
 
@@ -1732,6 +1852,18 @@ single row. `readCollectionDrop` is what a target that takes either asks, and `C
 its discriminated answer — the union rather than the tile alone, because a folder's answer about
 one row is a different sentence from its answer about nine copies filed in five places.
 
+**That union is what made the search sidebar's drop nearly free on 2026-09-07.** A third arm —
+`{ kind: "new"; card: SearchCardDrag }`, for a printing nobody owns yet, carrying
+`searchCardSource` — is one line on the type and one branch in `readCollectionDrop`, and it
+reached `useCollectionDropTarget`, `CollectionFolderCard`, `CollectionParentFolderCard` and
+`CollectionBreadcrumb`'s `Segment` with **no component edits at all**. The wishlist had no
+discriminator and had to grow one; the cost of that comparison is written up in
+[wishlist-folders.md](wishlist-folders.md). The precedence is stated rather than left to the marks:
+a record carrying both an entry mark and a search mark reads as **the entry**, because an existing
+copy being moved outranks a new one being added — only one of them can be true of a real drag, and
+the narrower fact is the one to act on. The three marks are disjoint by construction, so that order
+is a convention that no live drag can exercise.
+
 **A folder takes a tile when _any_ copy behind it could move, never only when all of them could.**
 A printing filed in two drawers with one of them this one is the ordinary case, and a folder that
 refused the whole tile for it would strand the copy that genuinely has somewhere to go. (The
@@ -2054,7 +2186,7 @@ build, not a description of this one.
 
 | Path | What is in it |
 | --- | --- |
-| `src-tauri/src/schema.rs` | The v24 and v25 steps, the v34 rung that adds `locked`, `COLLECTION_GRAIN`, `COLLECTION_FOLDER_KINDS`, `UNDO_V24`, `UNDO_V25`, `UNDO_V34`, `schema_at_23`, `v24_database`, and the whole-schema `ON DELETE` inventory |
+| `src-tauri/src/schema.rs` | The v24 and v25 steps, the v34 rung that adds `locked`, the v36 rung that sweeps every `kind = 'deck'` folder to the exact-grain rule, `COLLECTION_GRAIN`, `COLLECTION_FOLDER_KINDS`, `UNDO_V24`, `UNDO_V25`, `UNDO_V34`, `schema_at_23`, `v24_database`, and the whole-schema `ON DELETE` inventory |
 | `src-tauri/src/collection_folders.rs` | The folder commands, `set_entry_folder` and its two fences, `refile_entry`, `take_copies` (the split), `merge_entry`, `folder_summary`, `set_folder_locked`, `LOCKED_FOLDER_IDS` and `effectively_locked` (the lock's inheritance, spelled once), `FOLDER_NOT_YOURS`, `ENTRY_IN_A_DECK`, `FOLDER_IS_LOCKED` |
 | `src-tauri/src/collection_alloc.rs` | `collection_to_deck` and `deck_to_collection` — the pair that moves a row across the deck boundary and back — `take_from_deck_list`, `MoveOutcome`, the cut's history row and the argument for its missing undo step, and the seven refusal sentences |
 | `src-tauri/src/deck_pull.rs` | The third crossing (2026-09-03, issue #351): `deck_pull_plan` and `deck_pull_from_collection` — filling a hole the list already declares, writing no `deck_cards` row. Candidate eligibility, the pre-pick order, the all-or-nothing batch, and the `move` history row. Recorded in [decks-storage.md](decks-storage.md#the-pull-filling-a-hole-the-list-already-has) |
@@ -2062,7 +2194,7 @@ build, not a description of this one.
 | `src-tauri/src/collection.rs` | The grain's other ten terms, `set_quantity`'s zero-delete, `update_entry`'s merge, `fold_entry`, `EntryChange`, `ENTRY_FINISH`, `Allocation`, `CollectionQuery::exclude_locked` with `scope`'s term for it, and `add_entry_filed` with `DECK_WRITE_FOLDERS` — the private door that takes the folder fence as a parameter, and its two callers |
 | `src-tauri/src/deck_theory.rs` | `OWNED_SPARE_SQL` — "what can I build with", and the first ownership-shaped statement the lock changed, unconditionally |
 | `src-tauri/src/collection_source.rs` | The three fragments and `Availability` — the second thing the lock reaches, as a **scope a caller passes** rather than a statement: `ForDeck` is the deck builder's card search alone (issue #349) and drops another deck's group and every locked drawer, keeping the asking deck's own group |
-| `src-tauri/src/deck.rs` | `owned_by_oracle` and `attribute_owned` — owned/missing as a sum over the group — `delete_deck`, which re-files into `Recently removed`, and `release_group_copies`, the crate's one walk over a group's rows — oracle-matched, exact printing first — which `deck_to_collection` calls for its one row and `release_live_copies` loops for the four bulk sites (`clear_category`, `clear_variant`, `deck_meta::delete_category`'s cascade arm, `import::commit_import`'s `replace` arm), carrying the `live` fence for all of them |
+| `src-tauri/src/deck.rs` | `owned_by_printing` (`owned_by_oracle` before 2026-09-07) and `attribute_owned` — owned/missing as a sum over the group, keyed by `(card_id, finish)` since that day — `delete_deck`, which re-files into `Recently removed`, `release_unclaimed_copies` — the sweep `swap_printing` and `set_card_finish` each call after rewriting a row's identity — and `release_group_copies`, the crate's one walk over a group's rows — exact `(card_id, finish)` only since the oracle-grain fallback left it the same day — which `deck_to_collection` calls for its one row and `release_live_copies` loops for the four bulk sites (`clear_category`, `clear_variant`, `deck_meta::delete_category`'s cascade arm, `import::commit_import`'s `replace` arm), carrying the `live` fence for all of them |
 | `src-tauri/src/reset.rs` | `clear_collection` — entries, then folders |
 | `src-tauri/src/reconcile.rs` | `fold_into_existing`, which calls `fold_entry` as `merge_entry` does, and `collision_target`, the crate's other eleven-term probe |
 | `src/lib/folderTree.ts` | `buildFolderTree` and friends, shared with the deck gallery and the wishlist, and `lockedFolderIds` — the one function there that is this cabinet's alone |

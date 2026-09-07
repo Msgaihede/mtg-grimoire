@@ -1,11 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronLeft,
@@ -35,6 +28,7 @@ import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
 import { usePublishCardWalk } from "@/features/card/cardWalk";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
+import { useSearchOpen } from "@/features/search/useSearchOpen";
 import { FOCUS } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
 import {
@@ -55,6 +49,7 @@ import { useMarketplace } from "@/lib/useMarketplace";
 import { clearFieldOnEscape, useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useAppStore, type PaneDeckContext } from "@/lib/store";
 import { useCardSelection } from "@/lib/useCardSelection";
+import { useDockHeight } from "@/lib/useDockHeight";
 import { cn } from "@/lib/utils";
 import { newestWrite, writeFailure } from "@/lib/writes";
 import {
@@ -79,6 +74,7 @@ import { DeckNameField } from "./DeckNameField";
 import { DeckSearchPanel, MIN_PANEL_WIDTH_PX } from "./DeckSearchPanel";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
 import { DeckStats } from "./DeckStats";
+import { DeckTokensPanel } from "./DeckTokensPanel";
 import { useDeckUndo } from "./useDeckUndo";
 import { deckCardSlot, dropWrite, type DeckWrite, type DragPayload } from "./dnd";
 import { ExportDialog } from "@/features/transfer/export/ExportDialog";
@@ -1762,6 +1758,26 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   );
 
   /**
+   * Which way the reader last left the search column — **read here and handed down** since
+   * 2026-09-07, where the panel used to ask for itself.
+   *
+   * The hoist is what lets one `CardSearchPanel` serve three surfaces that each remember their own
+   * answer: the shell takes a boolean and a setter and knows nothing about where either came
+   * from, and this editor is the component that already hands the panel its mutation, its
+   * categories and its two measurements. `DeckSearchPanel` keeps a fallback for a panel mounted on
+   * its own — a story, or `DeckSearchPanel.test.tsx` — and the prop is what overrides it here.
+   *
+   * **`"deck"` is the section**, one entry of the `app_meta.search_open` map the collection's and
+   * the wishlist's columns share. It is the word `searchopen.rs`'s legacy bridge answers for, and
+   * the one section name that crate spells at all.
+   *
+   * **The press is what is stored, never {@link roomForPanel}.** A railing is a measurement about
+   * a narrow window and not a thing the reader asked for, so it reaches the drawn state and
+   * nothing else.
+   */
+  const { open: panelOpen, setOpen: setPanelOpen } = useSearchOpen("deck");
+
+  /**
    * Whether the panel may draw itself open, or has to fall back to its rail.
    *
    * `0` is "not measured yet" and reads as room: the first paint of a wide window should not
@@ -1829,68 +1845,19 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * bottom of it. Pinned instead, the search stays exactly where it was while the deck scrolls
    * past it, which is what the column is *for*.
    *
-   * `sticky top-0` is the pinning and CSS does all of it; the height is the part CSS cannot
-   * answer. `100%` of this row is the deck's height, and a viewport unit is wrong by the app
-   * chrome above the scroller — so the number is measured: the scroller's visible height, less
-   * however much of the desk row still sits below its top. Scrolled past, that term is zero and
-   * the panel is the full height of the window; at rest it is the window under the header, which
-   * is where the panel is drawn anyway. Both ends exact, and no second scrollbar in either.
+   * `sticky top-0` on the dock is the pinning and CSS does all of it; the height is the part CSS
+   * cannot answer, and {@link useDockHeight} is where the arithmetic for it lives — the
+   * scroller's visible height, less however much of the desk row still sits below its top.
    *
-   * `useLayoutEffect` rather than `useEffect`: the panel's wall is a `min-h-0 flex-1` child, so
-   * an unsized dock draws it at nothing, and after paint is one frame too late to avoid the
-   * reader seeing that. **jsdom has no layout engine and answers `0` to every one of these
-   * reads**, which is why a zero height is left unset rather than written — a `height: 0px` here
-   * would be a real collapse in the one environment that cannot see it.
-   *
-   * The rAF is coalescing, not animation: a scroll fires far more often than a frame, and the
-   * work is two `getBoundingClientRect`s. The observer covers a window resize and the card pane
-   * opening beside the editor; a scroll covers everything the reader does. The one gap is the
-   * refusal banner growing in above the desk, which moves the row's top without resizing either
-   * observed box — worth ~34px for the length of one animation, on a surface that has just
-   * refused a write.
+   * **It was forty lines here until the collection and the wishlist grew the same column**
+   * (2026-09-07), and the whole of what moving it cost is that the scroller is now *found* rather
+   * than named: this editor is an `overflow-y-auto` page of its own, while those two pages scroll
+   * in `AppShell`'s `main` several levels up. Nothing about this editor's arrangement changed —
+   * every measurement, the jsdom branch and the `requestAnimationFrame` that coalesces a scroll
+   * are the hook's doc, including the one gap it still has: a refusal banner growing in above the
+   * desk moves the row's top without resizing either observed box.
    */
-  useLayoutEffect(() => {
-    const page = editorRef.current;
-    if (!page) return;
-
-    let frame = 0;
-    const size = () => {
-      frame = 0;
-      const visible = page.clientHeight;
-      if (visible === 0) return;
-      // **Where the desk starts is what both boxes are measured from**, and it is read fresh
-      // rather than closed over: the deck may not have arrived yet, and a refused write may take
-      // it away again while the pane over it is still up.
-      const deskEl = deskRef.current;
-      const below = deskEl
-        ? deskEl.getBoundingClientRect().top - page.getBoundingClientRect().top
-        : 0;
-      const top = Math.max(0, below);
-      const height = Math.max(0, visible - top);
-      // The dock is inside the desk row and shares its left edge with the panel, so it needs
-      // only the height. **`top` is still measured and still used** — it is what the height is
-      // computed from — but nothing is placed at it any more: the card pane's frame was pinned
-      // to the top of the *page* and read that offset, and the card is a centred modal now.
-      if (dockRef.current) dockRef.current.style.height = `${height}px`;
-    };
-    const schedule = () => {
-      if (frame === 0) frame = requestAnimationFrame(size);
-    };
-
-    size();
-    page.addEventListener("scroll", schedule, { passive: true });
-    const observer = new ResizeObserver(schedule);
-    observer.observe(page);
-    // The desk only when it is drawn. Everything else this effect answers for — the window
-    // resizing, the page growing — reaches it through `page`, and `hasRow` re-runs the whole
-    // effect when the deck arrives or goes, which is what re-observes this.
-    if (deskRef.current) observer.observe(deskRef.current);
-    return () => {
-      if (frame !== 0) cancelAnimationFrame(frame);
-      page.removeEventListener("scroll", schedule);
-      observer.disconnect();
-    };
-  }, [hasRow]);
+  useDockHeight(dockRef, deskRef);
 
   // A refused write re-reads the deck, and the read is what decides what happened: every write
   // goes through `touch_deck`, which answers "That deck is not there any more" when the deck
@@ -3124,12 +3091,22 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // beside a tab strip and a `Compare` that had both correctly gone. Same fix as the tab's, on
   // the same line, because it is the same mistake one axis over — the gate belongs where the
   // question is asked.
-  const theoryMatches = useMemo(
+  // **`row !== null` is a narrowing rather than a third gate.** `theoryEnabled` is read off that
+  // row, so it is already false without one; what the test buys is the two switches below being
+  // reachable at the type level, which is the whole of how a per-deck mark reaches the screen.
+  const theoryPlan = useMemo(
     () =>
-      theoryEnabled && variant === "live"
-        ? theoryMatchPlan(planned.data, deck.cards)
+      theoryEnabled && variant === "live" && row !== null
+        ? theoryMatchPlan(planned.data, deck.cards, {
+            // The deck's own answer to *which of the two marks do I want drawn*, carried into the
+            // plan so `theoryMatchMark` needs no second argument at every call site in four views
+            // — `theoryMatch.ts`'s `TheoryMarkSwitches` says why it is two booleans and not one
+            // three-valued field.
+            exact: row.theoryMarkExact,
+            name: row.theoryMarkName,
+          })
         : undefined,
-    [planned.data, theoryEnabled, variant, deck.cards],
+    [planned.data, theoryEnabled, variant, deck.cards, row],
   );
 
   /**
@@ -3517,7 +3494,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     groups,
     marketplace,
     violations,
-    theoryMatches,
+    theoryPlan,
     onSelect: openCard,
     actions,
     // The two marks a card can carry here, in the four views that draw them. `landed` is this
@@ -4363,6 +4340,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               deckId={deckId}
               targetCategoryId={targetCategoryId}
               defaultFormat={searchFormatDefault}
+              open={panelOpen}
+              setOpen={setPanelOpen}
               cardMenu={panelCardMenu}
               cardMenuKey={panelCardMenuKey}
               roomy={roomForPanel}
@@ -4451,6 +4430,35 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             separateXGroup={separateX}
           />
         </section>
+      )}
+
+      {row && (
+        // What this deck puts on the table beside itself — the tokens and emblems its cards
+        // make, resolved out of each card's `all_parts` on every open and never stored.
+        //
+        // **After the stats band, which is the far side of a pair that may not be split.** The
+        // price strip is where the remove tray is drawn for the length of a drag, at `-top-3`
+        // over this column's own `gap-3`, so the strip and the deck above it stay adjacent; the
+        // stats band is already below that pair, and this is below the stats. Between the strip
+        // and the band it would put a wall of tokens between a card in the air and the one drop
+        // that takes it out.
+        //
+        // **A `section` and `shrink-0`** for the two reasons the band above spells out in full —
+        // a second complementary landmark answered `getByRole("complementary")` and broke five of
+        // `App.test.tsx`'s pane assertions, and `shrink-0` on the bands below the desk is the
+        // whole of why this editor scrolls. Both live on the panel's own root, so this mount
+        // cannot get either wrong.
+        //
+        // `tokensOpen` is the deck's own column (`decks.tokens_open`, schema v37) rather than
+        // editor state, for `separateXGroup`'s reason one control over: whether a reader wants
+        // the token wall in front of them is an answer about a *particular* deck, and a
+        // `useState` here would ask it again every time they opened one.
+        <DeckTokensPanel
+          deckId={deckId}
+          variant={variant}
+          open={row.tokensOpen}
+          onToggle={(next) => deck.update.mutate({ tokensOpen: next })}
+        />
       )}
 
       {/* The overlays, mounted **at the editor's top level and as siblings of the layout

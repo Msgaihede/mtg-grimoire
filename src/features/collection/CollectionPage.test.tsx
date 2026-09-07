@@ -17,6 +17,7 @@ import {
 import { readDragData } from "@/features/decks/dnd";
 import { folderDraggable, type FolderDrag } from "@/lib/folderDrag";
 import type {
+  CardSummary,
   CollectionFolder,
   CollectionQuery,
   CollectionRow,
@@ -28,7 +29,7 @@ import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
 import { MARKETPLACE_KEY } from "@/lib/useMarketplace";
 import { recordDrags, startPointerDrag } from "@/test-drag";
-import { openDropdown, pickOption } from "@/test-dropdown";
+import { pickOption } from "@/test-dropdown";
 import { stubNarrowWindow } from "@/test-viewport";
 import { DEFAULT_SECTION_ZOOMS } from "@/lib/cardZoom";
 import { PHONE_TILE_WIDTH } from "@/features/search/CardGrid";
@@ -38,6 +39,12 @@ const collectionList = vi.hoisted(() => vi.fn());
 const collectionSummary = vi.hoisted(() => vi.fn());
 const collectionSetQuantity = vi.hoisted(() => vi.fn());
 const collectionRemove = vi.hoisted(() => vi.fn());
+/**
+ * The row's own `Edit copy…`, and **this command's first caller anywhere in `src/`** — it has
+ * existed on both sides of the wire since the v1 rung with only `ipc.test.ts` exercising it, so
+ * an unmocked one here is a rejection about a missing Tauri runtime rather than a write.
+ */
+const collectionUpdate = vi.hoisted(() => vi.fn());
 // The set picker rides the filter row and asks for the set list on the way up.
 const listSets = vi.hoisted(() => vi.fn());
 // The wall pre-warms its own art in the background on the first load that has rows.
@@ -82,13 +89,42 @@ const collectionFolderDelete = vi.hoisted(() => vi.fn());
 /** Setting a drawer aside, and bringing it back — issue #365's one new write. */
 const collectionFolderSetLocked = vi.hoisted(() => vi.fn());
 const collectionSetFolder = vi.hoisted(() => vi.fn());
+/**
+ * The docked card-search column's own three commands.
+ *
+ * **Answered on every mount in this file rather than only by the tests that name them**, because
+ * the column opens *open* — `DEFAULT_SEARCH_OPEN.collection` is `true`, and a reader who has never
+ * pressed the disclosure gets a wall. An `ipc` mock is an object literal, so a command it does not
+ * carry is `undefined` and calling it is a synchronous `TypeError` fired from inside a hook on the
+ * way up, which no `.catch` in a `queryFn` can reach.
+ */
+const searchCards = vi.hoisted(() => vi.fn());
+const searchOpen = vi.hoisted(() => vi.fn());
+const setSearchOpen = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
+    searchCards,
+    searchOpen,
+    setSearchOpen,
+    // The panel's filter row asks for facet counts beside the page's. Answered **cold** —
+    // `ready: false`, every map empty — so nothing greys and every control keeps its name.
+    facetCards: vi.fn().mockResolvedValue({
+      colors: {},
+      manaValues: {},
+      manaX: 0,
+      formats: {},
+      sets: {},
+      rarities: {},
+      owned: { owned: 0, missing: 0 },
+      total: 0,
+      ready: false,
+    }),
     collectionList,
     collectionSummary,
     collectionSetQuantity,
     collectionRemove,
+    collectionUpdate,
     collectionAdd,
     wishlistAdd,
     listSets,
@@ -158,6 +194,46 @@ const BOLT: CollectionRow = {
   updatedAt: 1_800_000_000,
 };
 
+/**
+ * The one printing the sidebar's card search answers with — a `CardSummary`, which is a different
+ * object from the {@link BOLT} above it: that one is a `collection_entries` row the reader owns,
+ * this is a printing off the corpus that they may not.
+ *
+ * **A card the fixtures above do not hold**, deliberately: the sidebar's whole subject is a card
+ * that is *not* in the binder yet, and naming Bolt here would put two things called Lightning Bolt
+ * on one screen for every query in this file to be ambiguous about.
+ */
+const SEARCH_LOTUS: CardSummary = {
+  promoTypes: null,
+  id: "lotus",
+  name: "Black Lotus",
+  setCode: "lea",
+  setName: "Limited Edition Alpha",
+  collectorNumber: "232",
+  rarity: "rare",
+  typeLine: "Artifact",
+  manaCost: "{0}",
+  price: 12000,
+  layout: "normal",
+  oracleId: "o-lotus",
+  // Nonfoil only, which is what a drop writes: `searchCardDrag` **refuses** a finish this build
+  // does not know rather than normalising one, so the panel builds it from `parseFinishes`.
+  finishes: `["nonfoil"]`,
+  ownedQuantity: 0,
+  wishlisted: false,
+  printings: 1,
+  priceLow: 12000,
+  priceHigh: 12000,
+  gameChanger: false,
+};
+
+/** What `search_cards` answers. `totalIsCapped` false, so the caption is a plain count. */
+const searchPage = (items: CardSummary[]) => ({
+  items,
+  total: items.length,
+  totalIsCapped: false,
+});
+
 /** The one printing `import_resolve` answers with for the import test below — everything the
  *  collection's planner does not read filled in as nothing, `DeckEditor.test.tsx`'s own
  *  `SOL_RING` cut to what this file needs. */
@@ -203,10 +279,13 @@ const BURN: DeckRow = {
   folderId: null,
   notes: null,
   theoryEnabled: false,
+  theoryMarkExact: true,
+  theoryMarkName: true,
   lastVariant: "live",
   lastGroupBy: "category",
   lastSortBy: "alphabetical",
   separateXGroup: false,
+  tokensOpen: false,
   defaultCategoryId: 0,
   bracket: 0,
 };
@@ -356,7 +435,75 @@ const sweepCallsAt = (marketplace: string) =>
 // **A `button`, not a `combobox`.** The control became a `Dropdown` on 2026-08-26: the combobox
 // role belongs to a `searchable` dropdown's search box and this one has none, so the trigger is
 // a plain disclosure button whose content is the picked order.
-const sortSelect = () => screen.getByRole("button", { name: "Sort results" });
+const sortSelect = () => onPage(screen.getAllByRole("button", { name: "Sort results" }));
+
+/**
+ * The docked card-search column, or `null` where nothing drew one.
+ *
+ * `queryBy`, because two states have no panel: the railing a narrow row would cause (never
+ * reachable under jsdom, which measures every box as zero and therefore always reads as roomy),
+ * and a reader who has shut it.
+ */
+const searchColumn = () =>
+  screen.queryByRole("region", { name: "Add cards to your collection" });
+
+/**
+ * The one match that is **not** inside the sidebar — the page's own half of the screen.
+ *
+ * **Two `FilterBar`s are mounted together on this page since the sidebar landed**, and every
+ * control in the row carries the same name on both: `Show filters`, `Sort results`, the colour
+ * chips, the mana values. Only the search box differs, which is exactly what `FilterLabels` is
+ * for — so everything else needs saying which row it means, and the honest way to say it is
+ * *outside the panel* rather than by index. An index would pass today and answer about the
+ * sidebar the day the dock moved above the list.
+ *
+ * `getAllByRole` at every call site rather than `getBy`, because `getBy` throws on the ambiguity
+ * before this function can resolve it.
+ */
+function onPage(matches: readonly HTMLElement[]): HTMLElement {
+  const own = offPanel(matches);
+  if (own.length !== 1) {
+    throw new Error(`expected exactly one match outside the search panel, found ${own.length}`);
+  }
+  return own[0];
+}
+
+/**
+ * Everything in `matches` that is **not** inside the sidebar.
+ *
+ * {@link onPage}'s plural, for the sweeps that count rather than address: the panel draws a
+ * `CardGrid` of its own, so an owned badge, an as-of line, a drag source or a felt backing is
+ * whatever this page draws **plus** whatever the column beside it does. Every one of those counts
+ * was written before there was a second wall, and each is still asking about the first one.
+ */
+function offPanel<T extends Element>(matches: readonly T[] | ArrayLike<T>): T[] {
+  const panel = searchColumn();
+  return [...Array.from(matches)].filter((el) => panel === null || !panel.contains(el));
+}
+
+/**
+ * The page's own sort dropdown, opened.
+ *
+ * `openDropdown`/`pickOption` address their trigger **by name**, and both filter rows carry a
+ * `Sort results` — so the shared helpers cannot be used on this page any more. This is those two
+ * functions over {@link sortSelect}, and the `getByRole("listbox")` is theirs verbatim: the
+ * listbox is a plain conditional render, so it commits with the click and querying it here is a
+ * fail-fast rather than a wait.
+ */
+async function openPageSort(user: { click: (element: Element) => Promise<unknown> }): Promise<void> {
+  await user.click(sortSelect());
+  screen.getByRole("listbox");
+}
+
+/** Open the page's own sort dropdown and pick one row, by the label a reader sees. */
+async function pickPageSort(
+  user: { click: (element: Element) => Promise<unknown> },
+  option: string | RegExp,
+): Promise<void> {
+  await openPageSort(user);
+  await user.click(screen.getByRole("option", { name: option }));
+}
+
 /**
  * Open the filter tray, so a cell behind the Filters disclosure can be pressed.
  *
@@ -370,7 +517,7 @@ async function openTray(user: {
   // - this file uses each in different cases, and the two are not the same type.
   click: (element: Element) => Promise<unknown>;
 }): Promise<void> {
-  await user.click(screen.getByRole("button", { name: /^Show filters/ }));
+  await user.click(onPage(screen.getAllByRole("button", { name: /^Show filters/ })));
 }
 
 
@@ -417,10 +564,16 @@ function rightClick(element: HTMLElement): void {
  * match on a page with folders is a drawer. Filtering by the wall it sits in rather than by the
  * element's own shape, because both are `<li>`s and both are draggable — the difference is which
  * list they belong to.
+ *
+ * **And it stopped meaning it a second time when the sidebar landed**: that column's tiles are
+ * drag sources too, and every count below is about the reader's own copies. {@link offPanel} is
+ * the second filter, and it is the same argument one surface over.
  */
 const cardSources = (container: HTMLElement): HTMLElement[] =>
-  [...container.querySelectorAll<HTMLElement>(`[${DND_SOURCE_ATTR}]`)].filter(
-    (element) => element.closest('[aria-label="Folders"]') === null,
+  offPanel(
+    [...container.querySelectorAll<HTMLElement>(`[${DND_SOURCE_ATTR}]`)].filter(
+      (element) => element.closest('[aria-label="Folders"]') === null,
+    ),
   );
 
 /**
@@ -580,6 +733,10 @@ beforeEach(() => {
   collectionSummary.mockReset().mockResolvedValue(summary({ totalCards: 2, uniqueCards: 1 }));
   collectionSetQuantity.mockReset().mockResolvedValue({ id: 7, quantity: 3, removed: false });
   collectionRemove.mockReset().mockResolvedValue({ id: 7, quantity: 0, removed: true });
+  // The edited row, kept — `collection_update` is the one write in the module that leaves a row
+  // at a quantity of zero, and it answers the id it edited unless the edit folded the row onto a
+  // neighbour. Nothing on this page reads the answer beyond the fact that it resolved.
+  collectionUpdate.mockReset().mockResolvedValue({ id: 7, quantity: 2, removed: false });
   listSets.mockReset().mockResolvedValue([]);
   prewarmCollection.mockReset().mockResolvedValue(0);
   // TCGplayer unless a test says otherwise — the default, and what every `$` below asserts.
@@ -607,6 +764,15 @@ beforeEach(() => {
   // that the promise resolves rather than what is in it.
   collectionFolderSetLocked.mockReset().mockResolvedValue({ ...BINDER, locked: true });
   collectionSetFolder.mockReset().mockResolvedValue({ id: 7, quantity: 2, removed: false });
+  // One printing on the sidebar's wall, so every case has a tile to press or drag without saying
+  // so — and so the ones that are not about the sidebar meet the same page a reader does.
+  searchCards.mockReset().mockResolvedValue(searchPage([SEARCH_LOTUS]));
+  // The stored disclosure, answered rather than left to the default: a resolved command and a
+  // resolved default are the same picture here but not the same moment, and the map is what the
+  // shipped read returns. `{}` would say the same thing — a section the row is silent about falls
+  // back to `DEFAULT_SEARCH_OPEN` — and naming the section is what makes the fixture readable.
+  searchOpen.mockReset().mockResolvedValue({ collection: true });
+  setSearchOpen.mockReset().mockResolvedValue(undefined);
   useAppStore.setState({
     collectionView: "table",
     selectedCardId: null,
@@ -619,7 +785,11 @@ beforeEach(() => {
     // holding that tile's key — and the next case's wall rings it, because `CardGrid` draws one
     // gold ring for the pane's card *and* for every picked tile.
     cardSelection: null,
-    importDefaults: { condition: "NM", finish: null },
+    // The store's own opening state, which moved with this PR: an import line whose file is
+    // silent lands on `NONE` rather than on Near Mint. **A persisted `NM` is deliberately
+    // left alone** by that change — a reader who has one chose it, or lived with it — so
+    // this line is the fresh install rather than every reader.
+    importDefaults: { condition: "NONE", finish: null },
     // **Flatten lives in the store now, so it survives a `cleanup()` and leaks into the next
     // test unless something puts it back.** It did: the blocks below press the chip, and every
     // describe after them inherited whichever way the last press had left it — which is how the
@@ -1134,7 +1304,7 @@ describe("CollectionPage", () => {
     await openTray(userEvent);
     await userEvent.click(screen.getByRole("button", { name: "Etched" }));
     await userEvent.click(screen.getByRole("button", { name: /^LP/ }));
-    await pickOption(user, "Sort results", "Highest price");
+    await pickPageSort(user, "Highest price");
 
     await waitFor(() => {
       const q = lastQuery();
@@ -1198,7 +1368,7 @@ describe("CollectionPage", () => {
     await user.click(screen.getByRole("button", { name: /^Value/ }));
     await waitFor(() => expect(lastQuery().sort).toEqual([{ key: "value", dir: "desc" }]));
     expect(sortSelect()).toHaveTextContent("Custom…");
-    await openDropdown(user, "Sort results");
+    await openPageSort(user);
     expect(screen.getByRole("option", { name: "Custom…" })).toHaveAttribute(
       "aria-disabled",
       "true",
@@ -1327,7 +1497,7 @@ describe("CollectionPage", () => {
     // slot maps nonfoil to `null` — see the chip case above, which is the assertion that pins it.
     // This scope narrows past `CardArt`'s corner and nothing else; it never hid the badge.
     expect(
-      container.querySelectorAll('[class*="bg-bg/85"]:not([data-card-marks])'),
+      offPanel(container.querySelectorAll('[class*="bg-bg/85"]:not([data-card-marks])')),
     ).toHaveLength(2);
   });
 
@@ -1506,7 +1676,14 @@ describe("CollectionPage", () => {
       expect(collectionAdd).toHaveBeenCalledWith({
         cardId: "c1",
         finish: "nonfoil",
-        condition: "NM",
+        // **`NONE`, and this reverses what the four cases below asserted until this PR.**
+        // `MENU_CONDITION` was Near Mint — the one decision a menu made on the reader's
+        // behalf, stated in the app rather than left to the backend's default. With a sixth
+        // grade meaning *not set* there is nothing left for it to decide, so the quick-add
+        // records silence. Spelled as the literal rather than imported: an assertion that
+        // reads the same constant as the code under test cannot fail when that constant
+        // moves.
+        condition: "NONE",
         quantity: 1,
         folderId: null,
       }),
@@ -1561,13 +1738,13 @@ describe("CollectionPage", () => {
     wrap(<CollectionPage />);
 
     await screen.findByAltText("Lightning Bolt");
-    expect(screen.getAllByText(pricesAsOf(MARKETPLACES.tcgplayer))).toHaveLength(1);
+    expect(offPanel(screen.getAllByText(pricesAsOf(MARKETPLACES.tcgplayer)))).toHaveLength(1);
 
     await user.click(screen.getByRole("button", { name: "Table view" }));
 
     // The table says it in the Value column's header instead — as a tooltip and an accessible
     // name, not as text — so the grid's line goes with the grid.
-    expect(screen.queryByText(pricesAsOf(MARKETPLACES.tcgplayer))).toBeNull();
+    expect(offPanel(screen.queryAllByText(pricesAsOf(MARKETPLACES.tcgplayer)))).toEqual([]);
   });
 
   /* ---------------------------------------------------------------------------------------- *
@@ -2072,7 +2249,7 @@ describe("CollectionPage", () => {
     expect(await screen.findByText(/will be added to your collection/)).toBeInTheDocument();
     expect(
       within(dialog).getByRole("button", { name: "Condition when the file doesn't say" }),
-    ).toHaveTextContent("Near mint");
+    ).toHaveTextContent("Not set");
 
     // Scoped to the dialog: the page's own trigger is still on screen behind it and shares the
     // same accessible name.
@@ -2085,7 +2262,9 @@ describe("CollectionPage", () => {
             cardId: "sol-ring",
             quantity: 1,
             finish: "nonfoil",
-            condition: "NM",
+            // The dialog's own default, which is the store's: a pasted line says nothing
+            // about a grade, and `NONE` is now how the app records that it was not told.
+            condition: "NONE",
             conditionOriginal: undefined,
             purchasePrice: undefined,
             purchaseCurrency: undefined,
@@ -2267,7 +2446,14 @@ describe("the card menu", () => {
       expect(collectionAdd).toHaveBeenCalledWith({
         cardId: "c1",
         finish: "foil",
-        condition: "NM",
+        // **`NONE`, and this reverses what the four cases below asserted until this PR.**
+        // `MENU_CONDITION` was Near Mint — the one decision a menu made on the reader's
+        // behalf, stated in the app rather than left to the backend's default. With a sixth
+        // grade meaning *not set* there is nothing left for it to decide, so the quick-add
+        // records silence. Spelled as the literal rather than imported: an assertion that
+        // reads the same constant as the code under test cannot fail when that constant
+        // moves.
+        condition: "NONE",
         quantity: 1,
         // The root of the cabinet — a real destination, and what the menu names when the reader
         // has no folders for it to offer.
@@ -2508,7 +2694,14 @@ describe("the card menu", () => {
       expect(collectionAdd).toHaveBeenCalledWith({
         cardId: "c1",
         finish: "foil",
-        condition: "NM",
+        // **`NONE`, and this reverses what the four cases below asserted until this PR.**
+        // `MENU_CONDITION` was Near Mint — the one decision a menu made on the reader's
+        // behalf, stated in the app rather than left to the backend's default. With a sixth
+        // grade meaning *not set* there is nothing left for it to decide, so the quick-add
+        // records silence. Spelled as the literal rather than imported: an assertion that
+        // reads the same constant as the code under test cannot fail when that constant
+        // moves.
+        condition: "NONE",
         quantity: 1,
         // The root of the cabinet — a real destination, and what the menu names when the reader
         // has no folders for it to offer.
@@ -2573,13 +2766,71 @@ describe("the card menu", () => {
       expect(collectionAdd).toHaveBeenCalledWith({
         cardId: "c1",
         finish: "foil",
-        condition: "NM",
+        // **`NONE`, and this reverses what the four cases below asserted until this PR.**
+        // `MENU_CONDITION` was Near Mint — the one decision a menu made on the reader's
+        // behalf, stated in the app rather than left to the backend's default. With a sixth
+        // grade meaning *not set* there is nothing left for it to decide, so the quick-add
+        // records silence. Spelled as the literal rather than imported: an assertion that
+        // reads the same constant as the code under test cannot fail when that constant
+        // moves.
+        condition: "NONE",
         quantity: 1,
         // The root of the cabinet, as above: the finish is the tile's, the folder was never
         // the question.
         folderId: null,
       }),
     );
+  });
+
+  /**
+   * `Edit copy…` — the row that carries this page's half of `ipc.collectionUpdate`'s first
+   * caller, driven end to end: right-click a table row, open the dialog, change the grade, save.
+   *
+   * **A table row and never a tile**, which is the whole of the fence: a row *is* one
+   * `collection_entries` entry, and the wall's tile is the page's summary of a printing across
+   * however many entries it happens to hold. The pair of cases below is what says so — a menu
+   * built from the same page, over the same card, with and without the row.
+   */
+  describe("Edit copy…", () => {
+    it("opens the editor on the row's own copy and writes what changed", async () => {
+      const user = userEvent.setup();
+      wrap(<CollectionPage />);
+      rightClick(await screen.findByRole("row", { name: /Lightning Bolt/ }));
+      await screen.findByRole("menu");
+
+      await user.click(screen.getByRole("menuitem", { name: "Edit copy…" }));
+
+      // Seeded from the row the menu was opened on — `BOLT` is a foil Near Mint copy at the root
+      // with no purchase price recorded, so a dialog showing anything else is reading the wrong
+      // entry or none at all.
+      const dialog = await screen.findByRole("dialog", { name: "Edit copy" });
+      expect(within(dialog).getByText("LEA 161 · Foil · Collection")).toBeInTheDocument();
+      expect(within(dialog).getByRole("button", { name: "Condition" })).toHaveTextContent(
+        "Near mint",
+      );
+
+      await pickOption(user, "Condition", "Lightly played");
+      await user.click(within(dialog).getByRole("button", { name: "Save" }));
+
+      // `BOLT.id`, and only the field that moved.
+      await waitFor(() => expect(collectionUpdate).toHaveBeenCalledWith(7, { condition: "LP" }));
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    });
+
+    it("offers no editor on the wall, where a tile stands for the printing", async () => {
+      useAppStore.setState({ collectionView: "grid" });
+      wrap(<CollectionPage />);
+      rightClick(await screen.findByRole("button", { name: "Lightning Bolt" }));
+      await screen.findByRole("menu");
+
+      // Present on the row, absent here — and absent rather than greyed, because it is missing
+      // from every tile of this wall and therefore reads as a fact about the surface.
+      expect(screen.queryByRole("menuitem", { name: "Edit copy…" })).toBeNull();
+      // The neighbouring row that *can* express the several is unaffected: this fixture has no
+      // folders, so `Move to` is out for its own reason and the claim here is only about the
+      // menu still being the collection's.
+      expect(screen.getByRole("menuitem", { name: /Add to/ })).toBeInTheDocument();
+    });
   });
 });
 
@@ -3803,7 +4054,7 @@ describe("Flatten", () => {
     await user.type(screen.getByRole("searchbox", { name: "Search your collection" }), "bolt");
 
     await openTray(user);
-    await user.click(screen.getByRole("button", { name: /^Reset all/ }));
+    await user.click(onPage(screen.getAllByRole("button", { name: /^Reset all/ })));
 
     await waitFor(() =>
       expect(screen.getByRole("searchbox", { name: "Search your collection" })).toHaveValue(""),
@@ -4931,6 +5182,39 @@ describe("Escape walks out of a folder", () => {
   });
 
   /**
+   * **One press, one layer — with the copy editor open the floor gets nothing.**
+   *
+   * `Edit copy…` lives in this page's `Panel` union beside the three folder layers, and it is the
+   * one member that is **not** the page's own Escape rung's business: it is drawn as a `Dialog`,
+   * and every `Dialog` registers its own `"inner"` rung on its open flag. That rung listens in the
+   * capture phase and `preventDefault()`s, so the `"navigation"` rung below — which is bubble
+   * phase and returns early on `defaultPrevented` — never sees the press.
+   *
+   * What would go wrong without the split is not two closes: `captureStack` gives the press to
+   * whichever `"inner"` layer is on top, so it would still be one. It is the *focus* — the page's
+   * `dismiss` hands the caret back to {@link openerRef}, which only ever holds a folder card's
+   * `⋯`, and a copy editor raised from a context-menu row has no opener at all.
+   */
+  it("closes the copy editor and leaves the reader in the folder", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, FOILS]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await user.click(await screen.findByRole("button", { name: /^Trade binder folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(3));
+
+    rightClick(await screen.findByRole("row", { name: /Lightning Bolt/ }));
+    await screen.findByRole("menu");
+    await user.click(screen.getByRole("menuitem", { name: "Edit copy…" }));
+    await screen.findByRole("dialog", { name: "Edit copy" });
+
+    expect(escape()).toBe(false);
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    // Still in the drawer: the press was the dialog's, and the floor got nothing.
+    expect(lastQuery().folderId).toBe(3);
+  });
+
+  /**
    * **At the root the press is not this page's**, and `enabled` is the whole of that.
    *
    * A registered layer takes the press whether or not it has anywhere to go, so a rung left on at
@@ -5137,5 +5421,219 @@ describe("the collection wall's art", () => {
     const src = (await screen.findByAltText("Lightning Bolt")).getAttribute("src");
     expect(src).toContain("mtgimg");
     expect(src).not.toContain("scryfall.io");
+  });
+});
+
+/* -------------------------------------------------------------------------------------------- *
+ * The docked card search (design §4, §5, §8)
+ * -------------------------------------------------------------------------------------------- */
+
+/**
+ * The column beside the binder — **the path by which a card the reader does not own yet gets into
+ * the drawer they are standing in.**
+ *
+ * Everything here is about the *page's* half of the arrangement: the shell's three drawn states,
+ * the disclosure and the splitter are `CardSearchPanel.test.tsx`'s, and the popup's own behaviour
+ * is `AddToCollection.test.tsx`'s. What only this file can say is which folder reaches the wire,
+ * and that a drop on a folder card is an **add** rather than a refile.
+ */
+describe("the docked card search", () => {
+  /** The panel's tile for one card, as a drag source — the element `dragRecord` registered on. */
+  const panelTile = (name: string): HTMLElement =>
+    within(searchColumn()!)
+      .getByRole("button", { name })
+      .closest(`[${DND_SOURCE_ATTR}]`) as HTMLElement;
+
+  /** The `+` on the panel's tile, whose accessible name states where a press would file. */
+  const quickAdd = () =>
+    within(searchColumn()!).getByRole("button", { name: /^Add Black Lotus/ });
+
+  /** Press the `+`, then the popup's own Add. Two presses because they are two decisions: the
+   *  popup is where a reader says the finish, the grade and the price if they want to. */
+  async function addFromPanel(user: { click: (element: Element) => Promise<unknown> }) {
+    await user.click(quickAdd());
+    await user.click(await screen.findByRole("button", { name: "Add to collection" }));
+  }
+
+  it("draws a card search beside the binder", async () => {
+    wrap(<CollectionPage />);
+
+    // Named for the list it files into, which is what keeps it apart from the wishlist's — see
+    // the section label's own note.
+    const panel = await screen.findByRole("region", { name: "Add cards to your collection" });
+    // **Awaited, not read on the first frame.** `searchOpen` is mocked to `{ collection: true }` —
+    // a reader who had left the column open — and that answer arrives a round trip after the
+    // first paint, where `DEFAULT_SEARCH_OPEN.collection` (`false`) is what is drawn. Read
+    // synchronously this passed on the default and never once observed the stored value, which is
+    // exactly what it went red for when the default flipped on 2026-09-07.
+    expect(
+      await within(panel).findByRole("button", { name: "Collapse card search" }),
+    ).toHaveAttribute("aria-expanded", "true");
+    // And the wall is really the card search rather than a second drawing of the binder: this
+    // printing is in no fixture `collection_list` answers with.
+    expect(await within(panel).findByRole("button", { name: "Black Lotus" })).toBeInTheDocument();
+  });
+
+  /**
+   * **What a database nobody has expressed a preference in draws** — the other half of the case
+   * above, and the one the default actually decides.
+   *
+   * Railed since 2026-09-07, measured at seven window widths in the shipped window. This page
+   * already draws a `FilterBar` of its own, so opening open puts two filter rows on screen before
+   * the reader has asked for either; and below 544px the panel is an **overlay** rather than a
+   * rail — these pages have no docked card pane to suppress it — so the default would cover the
+   * binder outright on a small window. `useSearchOpen.ts` carries the whole reading. The rail is
+   * still the affordance, and the press is remembered per section forever after.
+   */
+  it("opens railed on a database that has never been asked", async () => {
+    searchOpen.mockResolvedValue({});
+
+    wrap(<CollectionPage />);
+
+    const panel = await screen.findByRole("region", { name: "Add cards to your collection" });
+    expect(
+      await within(panel).findByRole("button", { name: "Expand card search" }),
+    ).toHaveAttribute("aria-expanded", "false");
+    // **Nothing is mounted**, not merely hidden — which is what keeps `search_cards` off a page
+    // nobody searched from. `CardSearchPanel`'s three gates: `open` mounts, `shown` hides.
+    expect(within(panel).queryByRole("searchbox")).not.toBeInTheDocument();
+    expect(searchCards).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The two filter rows are separately addressable, and only the search box says which is
+   * which.** `FilterLabels` is the whole mechanism: one `idStem` shared would make the second
+   * row's `<label htmlFor>` name the first row's field, and one `search` name shared would leave
+   * a `getByLabelText` unable to tell the reader's binder from the corpus.
+   */
+  it("gives the two filter rows different names", async () => {
+    wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+
+    const mine = screen.getByRole("searchbox", { name: "Search your collection" });
+    const cards = screen.getByRole("searchbox", { name: "Search cards" });
+    expect(mine).not.toBe(cards);
+    // The panel's is the panel's, and the page's is not.
+    expect(searchColumn()!.contains(cards)).toBe(true);
+    expect(searchColumn()!.contains(mine)).toBe(false);
+    // And the `id`s they bind through are two, which is what the stem buys. Read off the
+    // elements rather than spelled, so a renamed stem is still one `id` per box.
+    expect(mine.id).not.toBe(cards.id);
+  });
+
+  /**
+   * The whole point of the column: a reader standing in a drawer files into that drawer.
+   *
+   * `folderId` is the eleventh term of the storage grain, so this is an add **into** a folder and
+   * never an add followed by a move.
+   */
+  it("adds from the search into the folder on screen", async () => {
+    useAppStore.setState({ collectionFlattened: false });
+    collectionFolderList.mockResolvedValue([BINDER]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+
+    await user.click(await screen.findByRole("button", { name: /^Trade binder folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(3));
+    // The drawer is in the button's name before the press, which is the only part of what
+    // pressing it does that a screenshot cannot show.
+    await waitFor(() =>
+      expect(quickAdd()).toHaveAccessibleName("Add Black Lotus (LEA 232) to Trade binder"),
+    );
+
+    await addFromPanel(user);
+
+    await waitFor(() =>
+      expect(collectionAdd).toHaveBeenCalledWith(
+        expect.objectContaining({ cardId: "lotus", folderId: 3 }),
+      ),
+    );
+  });
+
+  /**
+   * **`null`, on the wire, and never an absent field.** Both land the copy at the root and
+   * nothing on screen tells them apart — but absent means *this surface has never thought about
+   * folders*, which is the search page and the Tags wall, and a page with a cabinet on screen has
+   * chosen the root rather than said nothing.
+   */
+  it("adds at the root when no folder is open", async () => {
+    useAppStore.setState({ collectionFlattened: false });
+    collectionFolderList.mockResolvedValue([BINDER]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+
+    expect(quickAdd()).toHaveAccessibleName("Add Black Lotus (LEA 232) to Collection");
+    await addFromPanel(user);
+
+    await waitFor(() => expect(collectionAdd).toHaveBeenCalled());
+    const sent = collectionAdd.mock.calls[0][0] as Record<string, unknown>;
+    expect(sent).toHaveProperty("folderId", null);
+  });
+
+  /**
+   * **Flatten means "show me everything", so there is no folder on screen to be standing in.**
+   *
+   * `folderId` survives the press — it is where the reader was before they asked — so a page that
+   * handed it straight down would file into a drawer that is not drawn, under a breadcrumb
+   * reading `Collection · all folders`. The fixture opens the drawer *first* and then flattens,
+   * which is the only order that can tell this apart from a page with no folder open at all.
+   */
+  it("adds at the root while the cabinet is flattened", async () => {
+    useAppStore.setState({ collectionFlattened: false });
+    collectionFolderList.mockResolvedValue([BINDER]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+
+    await user.click(await screen.findByRole("button", { name: /^Trade binder folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(3));
+
+    await user.click(onPage(screen.getAllByRole("button", { name: "Flatten" })));
+    await waitFor(() => expect(lastQuery().folderId).toBeUndefined());
+    await waitFor(() =>
+      expect(quickAdd()).toHaveAccessibleName("Add Black Lotus (LEA 232) to Collection"),
+    );
+
+    await addFromPanel(user);
+
+    await waitFor(() => expect(collectionAdd).toHaveBeenCalled());
+    expect(collectionAdd.mock.calls[0][0]).toHaveProperty("folderId", null);
+  });
+
+  /**
+   * **A tile dropped on a folder card is an add, not a refile** — `collection_add` with the
+   * folder, never `collection_set_folder`, because there is no row to move.
+   *
+   * The grade is `CONDITION_NOT_SET` and the finish is the printing's own first, which is the
+   * answer to `useSidebarDrops.ts`' standing objection: nothing is invented. `quantity: 1`,
+   * because a drop is one copy and the `+` beside it is where a reader says more.
+   */
+  it("files a dropped card into the folder it was dropped on", async () => {
+    useAppStore.setState({ collectionFlattened: false });
+    collectionFolderList.mockResolvedValue([BINDER]);
+    wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+    await within(searchColumn()!).findByRole("button", { name: "Black Lotus" });
+
+    const folder = stand("Trade binder");
+    const tile = panelTile("Black Lotus");
+    const held = await holdCopy(tile, {
+      pressOn: within(searchColumn()!).getByRole("button", { name: "Black Lotus" }),
+    });
+    await held.over(folder);
+    await held.drop();
+
+    await waitFor(() =>
+      expect(collectionAdd).toHaveBeenCalledWith({
+        cardId: "lotus",
+        finish: "nonfoil",
+        condition: "NONE",
+        quantity: 1,
+        folderId: 3,
+      }),
+    );
+    // And the *other* write did not happen: a card nobody owns has no `collection_entries` row
+    // for `collection_set_folder` to address.
+    expect(collectionSetFolder).not.toHaveBeenCalled();
   });
 });

@@ -40,6 +40,13 @@ pub const COMMANDS: &[&str] = &[
     // Decks, read path. The write path is a separate PR: a read that answers the wrong rows
     // is visible on the page, and a write that lands wrong is not.
     "deck_list",
+    // The gallery's other two reads, added with the colour bar and the tile's bracket: the
+    // printed mana costs of every deck at once, and the bracket estimate's facts for the decks
+    // the page names. Unrouted they would cost the web build the two things this list is for —
+    // a wall of decks with no colours on it and no bracket in its captions, drawn beside a
+    // desktop that has both.
+    "deck_pip_costs",
+    "deck_bracket_reads",
     "deck_get",
     "deck_folder_list",
     "deck_category_list",
@@ -47,7 +54,6 @@ pub const COMMANDS: &[&str] = &[
     "deck_label_all",
     "format_specs_list",
     "deck_last_format",
-    "deck_search_open",
     "deck_audit_list",
     "deck_theory_slots",
     "deck_theory_diff",
@@ -56,6 +62,10 @@ pub const COMMANDS: &[&str] = &[
     // that play a given set. Reads, so they belong in this half and not in the one below.
     "deck_played_keys",
     "deck_ids_playing",
+    // The tokens and emblems a deck needs — a read like the twelve above it, and one that
+    // reaches nothing a browser lacks: it inflates `cards.raw` and walks `all_parts`, which is
+    // `card_meld_parts`' trick and compiles on every target for the same reason.
+    "deck_tokens",
     // Decks, write path. **Complete since 2026-08-31.** One name was permanently missing from
     // it — `deck_set_cover_image`, the eleventh on §6.3's desktop-only list, which wrote a file
     // into a covers directory and did not compile for wasm at all — and it is missing now
@@ -66,7 +76,6 @@ pub const COMMANDS: &[&str] = &[
     "deck_duplicate",
     "deck_set_folder",
     "deck_set_view_state",
-    "set_deck_search_open",
     "deck_missing_to_wishlist",
     "deck_add_card",
     "deck_set_card_quantity",
@@ -94,6 +103,12 @@ pub const COMMANDS: &[&str] = &[
     "deck_theory_missing_to_wishlist",
     "deck_undo_apply",
     "deck_redo_apply",
+    // The three token writes. Plain `sync::with_write` on the other side — nothing here moves a
+    // copy across the collection boundary, so none of them is one of the four that owe
+    // `with_write_owned`.
+    "deck_token_set",
+    "deck_token_clear",
+    "deck_token_add",
     // The Collection destination, and the pair that moves a row across the deck boundary.
     "collection_list",
     "collection_summary",
@@ -169,8 +184,25 @@ pub const COMMANDS: &[&str] = &[
     "set_card_zoom",
     "list_view",
     "set_list_view",
+    // **Both halves, and the write's `color` is the optional one.** A browser reader recolours a
+    // mark and resets it from the same panel, and Reset sends no colour at all — so the arm reads
+    // it with `optional` rather than `field`, or the reset is the one press that works on the
+    // desktop and refuses here.
+    "mark_colors",
+    "set_mark_color",
+    // **Both halves, the way `list_view` has both.** The read alone would open every browser
+    // session on the default order however the reader had left it, which is the setting not
+    // existing rather than the setting being read-only.
+    "deck_sort",
+    "set_deck_sort",
     "flatten_state",
     "set_flatten_state",
+    // **The three docked search columns' shared row**, and both halves for `deck_sort`'s reason.
+    // These two replaced `deck_search_open` / `set_deck_search_open`, which sat up in the deck
+    // cluster while the setting was the deck editor's alone; the map is the collection's and the
+    // wishlist's too, so the pair belongs here with the other view state.
+    "search_open",
+    "set_search_open",
     "error_log_list",
     "error_log_clear",
     "get_marketplace",
@@ -329,6 +361,27 @@ pub fn call(
             )
         }
 
+        // No arguments, like `deck_list` above it: the gallery draws every deck it has, so the
+        // colour bars are one read for the whole wall rather than one per tile.
+        "deck_pip_costs" => {
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::deck::pip_costs(&conn).map_err(RouteError::Failed)?,
+            )
+        }
+
+        // `deckIds`, not `deck_ids` — the wrapper's parameter as `invoke` spells it, which is
+        // the rule `the_deck_arms_read_the_camel_case_keys_the_page_sends` fences.
+        "deck_bracket_reads" => {
+            let deck_ids: Vec<i64> = field(command, args, "deckIds")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::deck::bracket_reads(&conn, &deck_ids).map_err(RouteError::Failed)?,
+            )
+        }
+
         "deck_get" => {
             let id: i64 = field(command, args, "id")?;
             let variant: String = field(command, args, "variant")?;
@@ -395,11 +448,6 @@ pub fn call(
         "deck_last_format" => {
             let conn = crate::sync::lock_db_read(state);
             encode(command, crate::deck::last_deck_format(&conn))
-        }
-
-        "deck_search_open" => {
-            let conn = crate::sync::lock_db_read(state);
-            encode(command, crate::deck::stored_deck_search_open(&conn))
         }
 
         "deck_audit_list" => {
@@ -541,15 +589,6 @@ pub fn call(
                     crate::deck::set_view_state(c, deck_id, &view_state)
                 })
                 .map_err(RouteError::Failed)?,
-            )
-        }
-
-        "set_deck_search_open" => {
-            let open: bool = field(command, args, "open")?;
-            encode(
-                command,
-                crate::sync::with_write(state, |c| crate::deck::store_deck_search_open(c, open))
-                    .map_err(RouteError::Failed)?,
             )
         }
 
@@ -771,7 +810,11 @@ pub fn call(
         }
 
         "deck_label_create" => {
-            let deck_id: i64 = field(command, args, "deckId")?;
+            // `optional`, not `field`: the Appearance panel in Settings sends no
+            // `deckId` at all, which is what the label write takes as "no deck to
+            // touch and no history to write" — the web mirror of Tauri filling a
+            // missing `Option` argument with `None`.
+            let deck_id: Option<i64> = optional(command, args, "deckId")?;
             let name: String = field(command, args, "name")?;
             let color: String = field(command, args, "color")?;
             encode(
@@ -784,7 +827,8 @@ pub fn call(
         }
 
         "deck_label_update" => {
-            let deck_id: i64 = field(command, args, "deckId")?;
+            // `optional` for `deck_label_create`'s reason, above.
+            let deck_id: Option<i64> = optional(command, args, "deckId")?;
             let id: i64 = field(command, args, "id")?;
             let name: String = field(command, args, "name")?;
             let color: String = field(command, args, "color")?;
@@ -798,7 +842,8 @@ pub fn call(
         }
 
         "deck_label_delete" => {
-            let deck_id: i64 = field(command, args, "deckId")?;
+            // `optional` for `deck_label_create`'s reason, above.
+            let deck_id: Option<i64> = optional(command, args, "deckId")?;
             let id: i64 = field(command, args, "id")?;
             encode(
                 command,
@@ -945,6 +990,74 @@ pub fn call(
                 command,
                 crate::sync::with_write(state, |c| {
                     crate::deck_undo::apply_reversal(c, deck_id, audit_id, false)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        // ── Tokens and emblems ──────────────────────────────────────────────────────
+        //
+        // The read follows `card_meld_parts` above: it inflates `cards.raw` and walks
+        // `all_parts`, which needs no filesystem, no network and no marketplace. Nothing in
+        // the answer is priced.
+        "deck_tokens" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let variant: String = field(command, args, "variant")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::deck_tokens::deck_token_rows(&conn, deck_id, &variant)
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        // **`tokenState` on the wire, `token_state` in Rust, `state` in the column.** The
+        // rename is the Tauri command's — `state` is already the managed `AppState` every
+        // command takes — and this arm has to spell the *wire* name, because that is what
+        // `src/lib/ipc.ts` sends on both targets. `optional` and not `field` for all three:
+        // the page sends `null` for a field it is not setting, and a null is an answer here
+        // rather than a missing argument.
+        "deck_token_set" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let oracle_id: String = field(command, args, "oracleId")?;
+            let card_id: Option<String> = optional(command, args, "cardId")?;
+            let quantity: Option<i64> = optional(command, args, "quantity")?;
+            let token_state: Option<String> = optional(command, args, "tokenState")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::deck_tokens::set_token_override(
+                        c,
+                        deck_id,
+                        &oracle_id,
+                        card_id.as_deref(),
+                        quantity,
+                        token_state.as_deref(),
+                    )
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_token_clear" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let oracle_id: String = field(command, args, "oracleId")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::deck_tokens::clear_token_override(c, deck_id, &oracle_id)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_token_add" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let card_id: String = field(command, args, "cardId")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::deck_tokens::add_token(c, deck_id, &card_id)
                 })
                 .map_err(RouteError::Failed)?,
             )
@@ -1694,6 +1807,46 @@ pub fn call(
             )
         }
 
+        // `listview`'s pair with the vocabulary moved out, and the read is infallible on this side
+        // too: a browser that cannot read the row draws every mark in the colour the stylesheet
+        // gives it rather than failing to draw the card.
+        "mark_colors" => {
+            let conn = crate::sync::lock_db_read(state);
+            encode(command, crate::markcolors::stored(&conn))
+        }
+
+        // **`color` is `optional` and not `field`, and that is the whole of this arm's care.**
+        // Reset sends no colour, which `field` would refuse as `missing \`color\`` — a Reset
+        // button that works on the desktop and answers an argument error in a browser.
+        "set_mark_color" => {
+            let mark: String = field(command, args, "mark")?;
+            let color: Option<String> = optional(command, args, "color")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::markcolors::store(c, &mark, color.as_deref())
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        // `listview`'s pair one setting over, and the read is infallible on this side too: a
+        // browser that cannot read the row opens the gallery on the default order rather than
+        // failing to draw it.
+        "deck_sort" => {
+            let conn = crate::sync::lock_db_read(state);
+            encode(command, crate::decksort::stored(&conn))
+        }
+
+        "set_deck_sort" => {
+            let sort: String = field(command, args, "sort")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::decksort::store(c, &sort))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
         "flatten_state" => {
             let conn = crate::sync::lock_db_read(state);
             encode(command, crate::flatten::stored(&conn))
@@ -1705,6 +1858,25 @@ pub fn call(
             encode(
                 command,
                 crate::sync::with_write(state, |c| crate::flatten::store(c, &section, flattened))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        // `flatten`'s pair over a different key, and infallible on this side for its reason: a
+        // browser that cannot read the row draws each search column the way the frontend's own
+        // default would have. The read also carries the `deck_search_open` bridge, so a session
+        // opened against a database an older build wrote keeps that column's last state.
+        "search_open" => {
+            let conn = crate::sync::lock_db_read(state);
+            encode(command, crate::searchopen::stored(&conn))
+        }
+
+        "set_search_open" => {
+            let section: String = field(command, args, "section")?;
+            let open: bool = field(command, args, "open")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::searchopen::store(c, &section, open))
                     .map_err(RouteError::Failed)?,
             )
         }
@@ -2057,6 +2229,85 @@ mod tests {
             out[0].get("formatKey").is_some(),
             "the DTO's camelCase names must survive the route"
         );
+    }
+
+    /// **The gallery's colour bars survive the route, camelCase keys and all.** The fixture's
+    /// four printings carry no `mana_cost` — the index does not read one — so one is given a
+    /// cost here, which is also what makes the assertion about *dropping* the other three real.
+    #[test]
+    fn deck_pip_costs_answers_the_colour_bar_through_the_route() {
+        let s = state("web-route-deck-pips");
+        let id = make_deck(&s, "Coloured");
+        {
+            let conn = crate::db::lock_blocking(&s.db);
+            conn.execute("UPDATE cards SET mana_cost = '{R}' WHERE id = '1'", [])
+                .unwrap();
+            let cat = crate::deck_meta::category_for_name(&conn, id, "Main deck").unwrap();
+            crate::deck::add_card(&conn, id, "1", Some(cat), None, "live", None, 3).unwrap();
+            // A second card with no printed cost, which must not reach the page at all.
+            crate::deck::add_card(&conn, id, "2", Some(cat), None, "live", None, 1).unwrap();
+        }
+
+        let out = call(&s, "deck_pip_costs", &json!({})).unwrap();
+        let decks = out.as_array().expect("deck_pip_costs answers an array");
+        assert_eq!(decks.len(), 1);
+        // camelCase, because `DeckPipCosts` is `rename_all = "camelCase"` and `src/lib/ipc.ts`
+        // reads these exact keys. A snake_case answer is a silent `undefined` on the page.
+        assert_eq!(decks[0]["deckId"], json!(id));
+        assert_eq!(decks[0]["costs"].as_array().unwrap().len(), 1);
+        assert_eq!(decks[0]["costs"][0]["cost"], json!("{R}"));
+        assert_eq!(decks[0]["costs"][0]["copies"], json!(3));
+    }
+
+    /// **`deckIds`, not `deck_ids`** — the arm reads the page's spelling, and the missing-key
+    /// case is asserted beside the working one because that is what a wrong spelling here would
+    /// look like on every real call.
+    #[test]
+    fn deck_bracket_reads_takes_its_ids_under_the_camel_case_key() {
+        let s = state("web-route-deck-brackets");
+        let id = make_deck(&s, "Bracketed");
+        {
+            let conn = crate::db::lock_blocking(&s.db);
+            let cat = crate::deck_meta::category_for_name(&conn, id, "Main deck").unwrap();
+            crate::deck::add_card(&conn, id, "1", Some(cat), None, "live", None, 1).unwrap();
+        }
+
+        let out = call(&s, "deck_bracket_reads", &json!({ "deckIds": [id] })).unwrap();
+        assert_eq!(out.as_array().unwrap().len(), 1);
+        assert_eq!(out[0]["deckId"], json!(id));
+        assert_eq!(out[0]["cards"][0]["name"], json!("Lightning Bolt"));
+        // The four fields beside the name, in the spelling the estimator reads them by.
+        assert_eq!(out[0]["cards"][0]["gameChanger"], json!(false));
+        assert_eq!(out[0]["cards"][0]["categoryActive"], json!(true));
+        assert!(out[0]["cards"][0].get("oracleText").is_some());
+        assert!(out[0]["cards"][0].get("faces").is_some());
+        // A database that has never fetched Commander Spellbook's file is a supported state.
+        assert_eq!(out[0]["combos"], json!([]));
+
+        let err = call(&s, "deck_bracket_reads", &json!({ "deck_ids": [id] })).unwrap_err();
+        assert!(matches!(&err, RouteError::Args { .. }), "got {err:?}");
+    }
+
+    /// **Both halves of the remembered order, the way `list_view` has both.** The read answers
+    /// the default on a database nobody has sorted — infallibly, so a browser that cannot read
+    /// the row still draws the gallery — and the write is what makes the setting exist at all.
+    #[test]
+    fn the_deck_sort_round_trips_through_the_route() {
+        let s = state("web-route-deck-sort");
+        assert_eq!(
+            call(&s, "deck_sort", &json!({})).unwrap(),
+            json!(crate::decksort::DEFAULT),
+            "a fresh database opens on the default order"
+        );
+
+        call(&s, "set_deck_sort", &json!({ "sort": "colors:asc" })).unwrap();
+        assert_eq!(
+            call(&s, "deck_sort", &json!({})).unwrap(),
+            json!("colors:asc")
+        );
+
+        let err = call(&s, "set_deck_sort", &json!({})).unwrap_err();
+        assert!(matches!(&err, RouteError::Args { .. }), "got {err:?}");
     }
 
     /// **The arms take `deckId`, not `deck_id`, and this is what says so.** `invoke` matches a
@@ -2574,9 +2825,18 @@ mod tests {
         // **130** — which neither side could have written and adding one branch's delta to the
         // other's total would have got to only by luck. `left` in the assertion message is
         // `COMMANDS.len()` as the build computed it; that is the answer.
+        //
+        // **It happened again immediately**, which is why the paragraph above is not a story
+        // about one afternoon: the deck-gallery branch (issue #387) and the tokens one
+        // (issue #388) each read 135 while they were open, and the merge answers **139**.
+        //
+        // **And a third time, which is now the expected shape rather than a surprise.** The
+        // theory-mark branch read **137** and the token branch **139** while both were open,
+        // and this merge answers **141** — again a number neither side wrote and neither
+        // side's delta added to the other's total would have reached.
         assert_eq!(
             COMMANDS.len(),
-            131,
+            141,
             "update this number when a command is added"
         );
     }

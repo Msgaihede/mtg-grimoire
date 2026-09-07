@@ -6,7 +6,8 @@ import { Dialog } from "@/components/Dialog";
 import { ClearDeck } from "./ClearDeck";
 import { DeckSettingsForm, folderPaths, type DeckSettingsValue } from "./DeckSettingsForm";
 import { RowAction } from "./metaRows";
-import { useDeck } from "./useDeck";
+import { PullFromCollectionDialog } from "./PullFromCollectionDialog";
+import { useDeck, usePullPlan } from "./useDeck";
 import { useDeckField } from "./useDeckField";
 import { useDeckFolders } from "./useDeckFolders";
 import { ANY_GAME, pickerFormats, useFormatSpecs } from "./useFormatSpecs";
@@ -148,6 +149,57 @@ function Settings({ deckId }: { deckId: number }) {
   const [confirming, setConfirming] = useState<DeckVariant | null>(null);
   const liveTrigger = useRef<HTMLButtonElement>(null);
   const theoryTrigger = useRef<HTMLButtonElement>(null);
+
+  /** Whether the pull is up, and the button it was opened from — which is where the caret goes
+   *  back to, since {@link PullFromCollectionDialog} takes one close callback and leaves that
+   *  half of the contract to whoever owns the trigger. */
+  const [importing, setImporting] = useState(false);
+  const importTrigger = useRef<HTMLButtonElement>(null);
+
+  /**
+   * What this deck is short of that the reader already owns — the read behind the import button
+   * and behind the dialog it opens.
+   *
+   * **The gate is the mount, and then the deck.** `DeckEditor` gates the same hook on its `Layer`
+   * being up because its editor is on screen for as long as the deck is open; `Settings` is passed
+   * to {@link Dialog} as an *element* and is therefore in the tree only while the dialog is, which
+   * is the same property this file already leans on for `deck_get`, the folder read and the format
+   * read. A second gate on {@link importing} would be wrong rather than merely redundant: the
+   * button's own **name** is a statement about the plan, so the plan has to have been asked for
+   * before the press rather than because of it.
+   *
+   * **`row !== null` is the rest of it, and it is the section's own `{row && …}` said one render
+   * earlier.** `useDeck` answers `null` both while `deck_get` is in flight and when it came back
+   * empty, and `deck_pull_plan` refuses a deck that is not there rather than answering `[]` — so
+   * without this a dialog opened on a deck another view has deleted, or one whose read was
+   * refused, spends the widest query on this screen on a question that can only be refused in
+   * turn. What it costs is that the two reads run in series rather than side by side, which is the
+   * right way round: this one is behind a button the reader has to be *shown* first, and the
+   * section it is drawn in does not exist until the same `row` arrives.
+   *
+   * The key is the deck's, under the `["decks"]` root, so this is the same cached answer the
+   * editor's own entrance draws — two entrances to one dialog can never show two plans for one
+   * deck, and the pull itself invalidates it.
+   */
+  const pullPlan = usePullPlan(deckId, row !== null);
+
+  /**
+   * **Nothing to import, as distinct from nothing known yet** — and the difference is what keeps
+   * the button live over a plan that has not answered.
+   *
+   * `PullFromCollectionDialog` has four states and words all four: reading, refused, an empty
+   * plan and rows to review. Greying this button on anything but the third would make two of
+   * those unreachable — most sharply the refusal, whose whole job is to tell the reader in the
+   * backend's own words why there is no list. So the button is greyed exactly when the read has
+   * come back and come back empty; while it is in flight or has failed, the press opens the
+   * dialog and the dialog says which.
+   *
+   * An empty plan is the ordinary answer rather than a fault, which is why it is worth saying in
+   * the name: a pull moves only the exact printing **and finish** the list names and never a copy
+   * another deck is already holding, so a deck reading *12 missing* can legitimately have nothing
+   * on the reader's desk that fills a hole.
+   */
+  const nothingToPull = pullPlan.data !== undefined && pullPlan.data.length === 0;
   /** Which trigger is owed the caret back, set by a cancel and cleared by the effect below. */
   const owedFocus = useRef<DeckVariant | null>(null);
 
@@ -295,6 +347,12 @@ function Settings({ deckId }: { deckId: number }) {
     // `format_key` neither here nor in Rust.
     if (patch.gameKey !== undefined) update({ gameKey: patch.gameKey });
     if (patch.theoryEnabled !== undefined) update({ theoryEnabled: patch.theoryEnabled });
+    // The two marks, relayed one field at a time for the reason there are two of them: blue
+    // without green is a real answer, so a write that carried both would make the pair a single
+    // three-valued control the columns deliberately are not. Unlike the switch above them
+    // neither moves a card — they are reading preferences, `separateXGroup`'s kind of write.
+    if (patch.theoryMarkExact !== undefined) update({ theoryMarkExact: patch.theoryMarkExact });
+    if (patch.theoryMarkName !== undefined) update({ theoryMarkName: patch.theoryMarkName });
     // A select, so it settles in one act and writes here. **`0` is a value and not an absence**,
     // which is why this needs no `deckSetFolder`-shaped escape below it: `AUTO_CATEGORY` is a
     // number the patch can carry, so "back to filing by what the card does" is an ordinary
@@ -347,6 +405,8 @@ function Settings({ deckId }: { deckId: number }) {
               description: description.value,
               notes: notes.value,
               theoryEnabled: row.theoryEnabled,
+              theoryMarkExact: row.theoryMarkExact,
+              theoryMarkName: row.theoryMarkName,
               folderId: row.folderId,
               defaultCategoryId: row.defaultCategoryId,
             }}
@@ -359,6 +419,10 @@ function Settings({ deckId }: { deckId: number }) {
             // draws the "Add cards to" row at all: the create dialog has no deck yet and passes
             // nothing.
             categories={deck.categories}
+            // This host has a deck row and an ordinary `deck_update` for both columns, so the two
+            // mark switches are answerable here — which the create dialog's is not. Drawn only
+            // where the deck also keeps a plan; the form owns that second half.
+            canSetTheoryMarks
             folders={{
               paths,
               unread: folders.query.isError ? ipcError(folders.query.error) : null,
@@ -381,6 +445,51 @@ function Settings({ deckId }: { deckId: number }) {
             }}
             idPrefix={id}
           />
+
+          {/* **The other direction from `Empty a list`, and it sits above it because it is the
+              constructive half.** A deck reads *N missing* and some of those copies are already
+              on the reader's desk; this is the press that files them into the deck's folder
+              without spending anything. It is the third entrance to
+              {@link PullFromCollectionDialog} — the stats band's button and a deck card's
+              `Collection ▸ Pull …` are the other two — and it earns its place here because the
+              other two live in the **editor**, and this dialog opens from the gallery as well.
+
+              **Mounted nested rather than handed up to `DeckEditor`'s `Layer` union**, which is
+              forced rather than chosen: this file has three hosts and two of them have no editor
+              and no layer to hand it to. `useDismissOnEscape`'s capture stack is innermost-last
+              by mount order and was built for a layer opened over an open dialog, so one Escape
+              closes the pull and the next closes this. `Dialog` is `fixed inset-0` and
+              unportalled, and the nested one is a *descendant* of this one's scrim, so it paints
+              above with no z-index of its own — this needs no `layer="stacked"`, which is for two
+              dialogs that are siblings.
+
+              **No `cardName`**, which is the whole of what makes this the deck-wide press: the
+              per-card entrance narrows the rows it hands over and passes a name so the subtitle
+              says so, and this one hands over the plan entire. */}
+          <div className="mt-5 border-t border-border pt-4">
+            <h3 className="text-xs">Fill this deck from your collection</h3>
+            <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">
+              Copies you already own move into this deck&rsquo;s folder. Nothing is added to the
+              list and nothing is bought.
+            </p>
+            {/* The small print states the one thing a reader standing here has not seen: this
+                writes no `deck_cards` row, so a 4-copy line the deck is 3 short of stays a
+                4-copy line. The pull's own footer says it too, and that footer is behind the
+                press. */}
+            <div className="mt-2.5">
+              {/* The reason travels in the *name* for the Clear buttons' reason below, and the
+                  words are the visible ones for the same one. */}
+              <RowAction
+                ref={importTrigger}
+                disabled={nothingToPull}
+                onClick={() => setImporting(true)}
+              >
+                {nothingToPull
+                  ? "Import missing cards from collection… (nothing to import)"
+                  : "Import missing cards from collection…"}
+              </RowAction>
+            </div>
+          </div>
 
           {/* **Emptying a whole list is drawn here because this is the deck's cheapest
               screen, and that is an argument rather than a placement.** The other candidate
@@ -469,6 +578,37 @@ function Settings({ deckId }: { deckId: number }) {
               Could not save that change — {bannerFailure}
             </p>
           )}
+
+          {/* **Fed rather than fetching**, exactly as `DeckEditor` feeds it: the read is the
+              hook above, so "what does a closed dialog cost" stays a question about one mount
+              rather than about `AnimatePresence`'s teardown. Loading and a refused read go down
+              as their own props because the dialog words all four of its states.
+
+              **The mutation goes down whole and narrowed by the dialog's own `PullWrite`** —
+              `deck.pullFromCollection`, which `useDeck` already mounts here for the clear's sake,
+              so there is one command with one set of invalidations behind all three entrances. Its
+              refusal is drawn *inside* that panel and is deliberately absent from
+              {@link bannerFailure}'s list: this dialog's banner is behind the pull's own scrim,
+              which is the delete confirmation's rule one surface over.
+
+              **Last in the block, and the caret goes back to the trigger.** `Dialog` splits
+              Escape and the ✕ from a press on the scrim, and this component folds the two into
+              one `onClose` because where the caret lands is the *opener's* half of the contract.
+              The trigger is drawn over rather than replaced — unlike the clear's, which the
+              question takes the place of — so it is in the tree on this very render and needs no
+              effect to reach it. */}
+          <PullFromCollectionDialog
+            open={importing}
+            deckName={row.name}
+            rows={pullPlan.data ?? null}
+            loading={pullPlan.isLoading}
+            readError={pullPlan.isError ? ipcError(pullPlan.error) : null}
+            pull={deck.pullFromCollection}
+            onClose={() => {
+              setImporting(false);
+              importTrigger.current?.focus();
+            }}
+          />
         </>
       )}
     </div>

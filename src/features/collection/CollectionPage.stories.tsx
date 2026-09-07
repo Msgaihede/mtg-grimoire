@@ -92,11 +92,17 @@ const meta = {
           "over the same filters** (`useCollection` keeps the summary on a key with no sort in " +
           "it), both answered by `db.ts`'s `collection_list` and `collection_summary`, and the " +
           "stepper writes through `collection_set_quantity`.\n\n" +
-          "**The `starter` seed is 12 entries holding 20 copies**, and the two numbers " +
+          "**The `starter` seed is 13 entries holding 21 copies**, and the two numbers " +
           "disagreeing is the whole grammar of this view: a row is a *thing owned* — a foil and " +
-          "a played nonfoil of one printing are two rows — and one of the twelve holds zero " +
-          'copies. Measured 2026-08-10 by calling `readHandlers(seed("starter")).' +
-          "collection_summary`: `totalCards: 20`, `uniqueCards: 12`, `entries: 12`.\n\n" +
+          "a played nonfoil of one printing are two rows — and one of the thirteen holds zero " +
+          'copies. Re-measured 2026-09-07 by calling `readHandlers(seed("starter")).' +
+          "collection_summary`: `totalCards: 21`, `uniqueCards: 12`, `entries: 13`.\n\n" +
+          "**`uniqueCards` did not move with the other two, and that is the seed's newest row " +
+          "saying what it is for**: a second `sta 105`, etched like the graded one above it and " +
+          "recorded at `NONE`, so the table draws `Etched · Near mint` beside a bare `Etched` and " +
+          "the Finish sort has a real not-set pair inside one finish. Same printing, so the " +
+          "*card* count is unchanged — and one tile on the wall rather than two, since a tile is " +
+          "a printing and a finish.\n\n" +
           "**Quantity 0 deletes the row, and this reverses what this page said until v24.** " +
           "{@link ZeroDeletesTheRow} is it, and carries the argument on both sides: the row's " +
           "condition, purchase price, tags and acquisition story go with it, which is exactly " +
@@ -108,16 +114,16 @@ const meta = {
           "fields at once and must not delete its own subject — and it is what the Folder " +
           "column's removal control exists for.\n\n" +
           "**The page opens flattened — every copy, wherever it is filed — and the root it is " +
-          "ignoring is five of those twelve.** The root asks `rootOnly` since the Flatten switch " +
+          "ignoring is six of those thirteen.** The root asks `rootOnly` since the Flatten switch " +
           "landed, where an absent `folderId` used to mean every folder; that narrowing is the " +
           "reason the switch defaults **on**, because since schema v25 every card in a deck sits " +
           "in that deck's group folder, and on the maintainer's own database 275 of 275 entries " +
           "are filed in one — an unflattened first launch there draws `Cards 0 · Unique 0` over " +
           "a full binder. So {@link Default} is the flattened list, and {@link TheCabinet} is " +
           "the one press that puts the filing back on screen: four rows in the reader's binders " +
-          "and three in two deck groups behind folder cards, five left at the root. The seed is " +
-          "what makes the difference visible: `collection_summary` still reads `totalCards: 20` " +
-          "over `entries: 12` when it is asked *nothing*, which is what the export dialog's " +
+          "and three in two deck groups behind folder cards, six left at the root. The seed is " +
+          "what makes the difference visible: `collection_summary` still reads `totalCards: 21` " +
+          "over `entries: 13` when it is asked *nothing*, which is what the export dialog's " +
           '"ignoring the filters and folders" offer reaches.\n\n' +
           "**One state has no story: a page-load failure.** The `busy` fault is honoured by " +
           "write handlers only — deliberately, because reads go through a second, read-only " +
@@ -143,7 +149,7 @@ type Story = StoryObj<typeof meta>;
  * **The list is every copy the reader owns, wherever it is filed — because that is what the page
  * opens on.** `collectionFlattened` starts `true`: the root was narrowed to mean "filed nowhere",
  * and since schema v25 every card in a deck sits in that deck's group, so the unflattened root is
- * a screen a reader with decks would meet empty. All twelve of the seed's entries are here,
+ * a screen a reader with decks would meet empty. All thirteen of the seed's entries are here,
  * including the Black Lotus in `Trade binder` and the three in two deck groups, each naming its
  * own drawer in the Folder column.
  *
@@ -172,10 +178,10 @@ export const Default: Story = {
     await expect(canvas.getByText("Black Lotus")).toBeInTheDocument();
     // What assistive tech is told the list is: every matching row plus the header
     // (`VirtualTable.tsx:181`), not the two dozen rows a virtualised table keeps in the DOM.
-    // The whole seed, so 12 entries plus the header.
+    // The whole seed, so 13 entries plus the header.
     await expect(canvas.getByRole("table", { name: "Your collection" })).toHaveAttribute(
       "aria-rowcount",
-      "13",
+      "14",
     );
     // And no cabinet: no drawers to open, no doors into the levels this list is ignoring.
     await expect(canvas.queryByRole("list", { name: "Folders" })).toBeNull();
@@ -201,7 +207,7 @@ export const Default: Story = {
  *
  * **And the list narrows, which is the half worth a story of its own.** `CollectionQuery.folderId`
  * absent used to mean "every folder"; it is `rootOnly` now, so the root is the copies filed
- * *nowhere* — five of the seed's twelve. The other seven are one folder card away: Black Lotus in
+ * *nowhere* — six of the seed's thirteen. The other seven are one folder card away: Black Lotus in
  * `Trade binder`, three more in two decks' groups. That reversal is the requested behaviour rather
  * than a regression, and it is exactly why {@link Default} opens with the switch on.
  *
@@ -217,12 +223,12 @@ export const TheCabinet: Story = {
 
     await userEvent.click(canvas.getByRole("button", { name: "Flatten" }));
 
-    // Five unfiled entries plus the header. The count is what says the root narrowed; a named
+    // Six unfiled entries plus the header. The count is what says the root narrowed; a named
     // row alone could not tell "filed away" from "scrolled past".
     await waitFor(async () => {
       await expect(canvas.getByRole("table", { name: "Your collection" })).toHaveAttribute(
         "aria-rowcount",
-        "6",
+        "7",
       );
     });
     await expect(canvas.queryByText("Black Lotus")).toBeNull();
@@ -238,7 +244,9 @@ export const TheCabinet: Story = {
 };
 
 /**
- * The same twelve entries as a wall of art — and **a drag source**, which reverses what this
+ * The same thirteen entries as **twelve** pieces of art — the seed's two `sta 105` rows are one
+ * printing in one finish, which is exactly the wall's grain — and **a drag source**, which
+ * reverses what this
  * story asserted until 2026-08-26.
  *
  * It used to pin the opposite, and the paragraph here argued it: spec §1's card surfaces were the
@@ -649,7 +657,7 @@ export const Large: Story = {
  *
  * `db.ts:1479`'s `BUSY` is `collection::BUSY` verbatim, raised by `refuseIfBusy` at the top of
  * every write handler and by no read handler — which is why the list underneath is untouched and
- * still counting twelve. The alert is a `role="alert"` of its own rather than a line folded into
+ * still counting thirteen. The alert is a `role="alert"` of its own rather than a line folded into
  * the status above it: that one describes the list, and this one describes something the reader
  * just did to it.
  *
@@ -732,5 +740,214 @@ export const ZeroDeletesTheRow: Story = {
     ).toBeNull();
     // No refusal: this is a successful write, not a tolerated failure.
     await expect(canvas.queryByRole("alert")).toBeNull();
+  },
+};
+
+/**
+ * **Correcting a copy from the row it is on** — the collection's own `Edit copy…`, and the app's
+ * first press that reaches `collection_update` at all.
+ *
+ * The row is the whole fence. A table row *is* one `collection_entries` entry, so there is a copy
+ * to be about; the wall's tile is the page's **summary** of a printing across however many entries
+ * it happens to hold, and a dialog editing "the grade" of three rows at once would be choosing a
+ * copy the reader never named. So the row offers the item and a tile does not — absent rather than
+ * greyed, because it is missing from every tile of that wall and therefore reads as a fact about
+ * the surface. {@link CardMode} is that surface; this is this one.
+ *
+ * **The dialog is seeded from the row it was opened on**, which is what the identity line under
+ * the heading is for: a reader with a Near Mint Bolt in two binders is told which drawer this
+ * question is about before they answer it.
+ *
+ * `Collection/Edit copy` is the dialog's own page, with the states this page cannot reach in one
+ * press — a copy nobody has graded, a price recorded in another currency, a grade this build
+ * cannot name.
+ */
+export const EditingACopy: Story = {
+  args: { view: "table", flatten: true },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // The proxy Black Lotus, filed in `Trade binder` — early in `COLLECTION_DEFAULT_ORDER`, so it
+    // is in the DOM under `stories.test.tsx`'s layout stub, and filed, so the identity line has a
+    // drawer to name rather than falling back to `Collection`.
+    const row = await canvas.findByRole("row", { name: /Black Lotus/ });
+
+    await userEvent.pointer({ keys: "[MouseRight]", target: row });
+    await canvas.findByRole("menu");
+    await userEvent.click(canvas.getByRole("menuitem", { name: "Edit copy…" }));
+
+    const dialog = await canvas.findByRole("dialog", { name: "Edit copy" });
+    // The copy, and the grade it is recorded at — read off the row rather than defaulted.
+    await expect(within(dialog).getByText("LEA 232 · Nonfoil · Trade binder")).toBeInTheDocument();
+    await expect(within(dialog).getByRole("button", { name: "Condition" })).toHaveTextContent(
+      "Near mint",
+    );
+    // Nothing has changed yet, so there is nothing to write — and the button says so before the
+    // press rather than after it.
+    await expect(within(dialog).getByRole("button", { name: "Save" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  },
+};
+
+/**
+ * The column that had to move to make room, and what it looks like when it is drawn beside the
+ * binder — **the path by which a card the reader does not own yet gets into the drawer they are
+ * standing in.**
+ *
+ * The panel is `features/search/CardSearchPanel` with `features/search/CardSearchBody` inside it,
+ * the same two the deck editor draws; what this page supplies is the destination. A press on a
+ * tile's `+` files into the folder on screen — the trigger says so before the press, which is the
+ * one part of what pressing it does that a screenshot cannot show — and a tile dragged onto a
+ * folder card files there too, as an `collection_add` rather than a refile.
+ *
+ * **Flatten is off here, which is the state the folder default is about.** The page ships
+ * flattened and files at the root while it is (there is no folder on screen to be standing in), so
+ * out of the box this behaves exactly as every `+` in the app already did.
+ *
+ * The two filter rows on screen are two `FilterBar`s over two different backends, told apart by
+ * their boxes alone: `Search your collection` narrows the reader's binder, `Search cards` narrows
+ * every printing Scryfall has published.
+ */
+export const WithSearch: Story = {
+  args: { view: "table", flatten: false },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const panel = await canvas.findByRole("region", { name: "Add cards to your collection" });
+
+    // **Railed at rest** — `DEFAULT_SEARCH_OPEN` rails the two lists' columns and opens only the
+    // deck's, because this page already draws a `FilterBar` of its own and below 544px the panel
+    // is an overlay rather than a rail. Measured at seven widths in the shipped window on
+    // 2026-09-07. The press is the reader's real entry point, so the play uses it.
+    await userEvent.click(within(panel).getByRole("button", { name: "Expand card search" }));
+    await expect(
+      await within(panel).findByRole("button", { name: "Collapse card search" }),
+    ).toHaveAttribute("aria-expanded", "true");
+
+    // The two boxes, and the whole of what tells them apart.
+    await expect(
+      canvas.getByRole("searchbox", { name: "Search your collection" }),
+    ).toBeInTheDocument();
+    const box = await within(panel).findByRole("searchbox", { name: "Search cards" });
+
+    // At the root the destination is the list's own name — never "no folder", which would
+    // describe the same drawer the breadcrumb calls Collection.
+    await userEvent.type(box, "Ancient Tomb");
+    await expect(
+      await within(panel).findByRole("button", { name: /^Add Ancient Tomb .* to Collection$/ }),
+    ).toBeInTheDocument();
+
+    // And in a drawer it is the drawer. `Binder` is the seed's own top-level folder.
+    await userEvent.click(canvas.getByRole("button", { name: /^Binder folder/ }));
+    await waitFor(async () => {
+      await expect(
+        within(panel).getByRole("button", { name: /^Add Ancient Tomb .* to Binder$/ }),
+      ).toBeInTheDocument();
+    });
+  },
+};
+
+/**
+ * The panel at the narrowest a reader can drag it to, on the page whose list is taking the width.
+ *
+ * `MIN_PANEL_WIDTH_PX` is **206**, measured from one 150px card and the chrome around it, and the
+ * page caps the drag at `min(⌊viewport / 2⌋, deskWidth − DESK_GAP − LIST_FLOOR)`. A **414px** row
+ * is that cap landing exactly on the floor: 414 − 16 − 192 = 206.
+ *
+ * The thing this width forbids is an **overhang**. A flex item cannot shrink below its own
+ * min-content, and this page scrolls inside `AppShell`'s `overflow-auto` `main` — so a control
+ * that will not fit puts a horizontal scrollbar across the whole window, which is the
+ * `ManaValueChips` failure `src/CLAUDE.md` records and the 1024px floor forbids.
+ *
+ * **Storybook is a real browser, so the play below reads it off the box rather than off a class.**
+ * Under `src/stories.test.tsx` every rectangle is zero and the same three assertions are `0 === 0`
+ * — true, and true of nothing. This story is where they mean something.
+ */
+export const Narrow: Story = {
+  args: { view: "grid", flatten: true },
+  decorators: [
+    // Inside the file's own 1032px box, because a story decorator is applied nearer the component
+    // than a meta one. `h-full` so the page still has a height to be `h-full` of.
+    (Story) => (
+      <div className="h-full w-[414px]">
+        <Story />
+      </div>
+    ),
+  ],
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const panel = await canvas.findByRole("region", { name: "Add cards to your collection" });
+    const toggle = within(panel).getByRole("button", { name: /card search$/ });
+
+    // Drawn beside the list rather than over it: 206 is the floor, not below it.
+    await expect(panel).not.toHaveAttribute("data-search-over");
+
+    // Railed at rest — see {@link WithSearch} — and this story measures the *open* panel at its
+    // floor. The disclosure is the same element across the press, so the row read off it is the
+    // same box either way.
+    await userEvent.click(toggle);
+
+    // Nothing overhangs — the panel, its title row, and its own filter row, which is the piece
+    // most likely to break at this width because it is the one with ten chips in it.
+    const row = toggle.parentElement!;
+    await expect(panel.scrollWidth).toBe(panel.clientWidth);
+    await expect(row.scrollWidth).toBe(row.clientWidth);
+    const filters = (await within(panel).findByRole("searchbox", { name: "Search cards" }))
+      .parentElement!;
+    await expect(filters.scrollWidth).toBe(filters.clientWidth);
+  },
+};
+
+/**
+ * The row that cannot hold both — **the panel drawn _over_ the list at the row's full width.**
+ *
+ * Below the floor there is no third column to squeeze; `roomForPanel` goes false and the page
+ * hands the panel the whole row as `overWidth`, so the search covers the binder instead of
+ * refusing to open. On a phone that is the difference between a sidebar that exists and one that
+ * is only ever a chevron that will not press.
+ *
+ * **There is no `Railed` story on this page, and that is arithmetic rather than an omission.**
+ * The deck editor rails because its own overlay is suppressed while the card pane is open; this
+ * page's card surface is a centred modal and takes width from nothing, so `panelOverWidth` is set
+ * for *every* row too narrow to dock — `roomy === false` and `over === undefined` cannot both be
+ * true here. The rail is `CardSearchPanel`'s own state and `DeckSearchPanel.stories`' `NoRoom` is
+ * where it is drawn.
+ *
+ * **The overlay itself is a browser-only fact.** `src/stories.test.tsx` stubs `ResizeObserver` to
+ * a no-op, so `deskWidth` never leaves 0 there and 0 reads as *unmeasured*, which is roomy — the
+ * play below therefore asserts what is true in both places, and the placement is what a reader
+ * (or a CDP pass) sees here.
+ */
+export const Overlaid: Story = {
+  args: { view: "grid", flatten: true },
+  decorators: [
+    // 380 − 16 − 192 = 172, which is under the 206 one card needs.
+    (Story) => (
+      <div className="h-full w-[380px]">
+        <Story />
+      </div>
+    ),
+  ],
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const panel = await canvas.findByRole("region", { name: "Add cards to your collection" });
+
+    // The disclosure never refuses on this page — there is always somewhere to draw the column,
+    // beside the list or over it — so it is pressable at every width rather than `aria-disabled`.
+    // It starts railed (see {@link WithSearch}), so the press is what this story is about: at a
+    // width the row cannot dock, the disclosure still opens rather than refusing.
+    //
+    // **The placement is deliberately not asserted here.** As the note above says, this runner
+    // stubs `ResizeObserver` to a no-op, so `deskWidth` never leaves 0 and 0 reads as roomy — the
+    // overlay is a browser-only fact and `data-search-over` is absent under the suite. What is
+    // true in both places is that the control opens and the list survives underneath.
+    const toggle = within(panel).getByRole("button", { name: /card search$/ });
+    await expect(toggle).not.toHaveAttribute("aria-disabled");
+    await userEvent.click(toggle);
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+
+    // And the list is still mounted underneath rather than replaced: an overlay covers the binder
+    // for as long as the reader wants the search, and one press gives it back.
+    await expect(canvas.getByRole("searchbox", { name: "Search your collection" })).toBeInTheDocument();
   },
 };

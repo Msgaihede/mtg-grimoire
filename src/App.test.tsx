@@ -50,8 +50,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // query and would merely fail, but a *press* calls the setter straight out of a click
     // handler, where `undefined` is a synchronous TypeError nothing catches. `true` is the
     // shipped default, so the column is drawn open exactly as a fresh install draws it.
-    deckSearchOpen: vi.fn().mockResolvedValue(true),
-    setDeckSearchOpen: vi.fn().mockResolvedValue(undefined),
+    searchOpen: vi.fn().mockResolvedValue({ deck: true }),
+    setSearchOpen: vi.fn().mockResolvedValue(undefined),
     // And the sidebar's own width, read once on the way up for the same reason. `false` is a
     // database nobody has collapsed the rail in, so every test here gets the six named entries
     // it has always queried by name.
@@ -250,18 +250,23 @@ const BURN: DeckRow = {
   archived: false,
   cardCount: 0,
   updatedAt: 1_800_000_000,
-  // The four v8 deck columns, the three v12 view-state ones and `separateXGroup` from v13.
-  // Every real row carries all eight, so the fixture does too.
+  // The v8 deck columns, the v12 view-state ones, `separateXGroup` from v13 and `tokensOpen`
+  // from v35 — the census is `DeckRow` itself rather than a count written here, which said
+  // "eight" through two later columns.
+  // Every real row carries all of them, so the fixture does too.
   coverKind: "card_art",
   folderId: null,
   notes: null,
   theoryEnabled: false,
+  theoryMarkExact: true,
+  theoryMarkName: true,
   // How the editor was last read. These three are the defaults — a deck nobody has pressed a
   // tab, a `Group by` or a `Sort` on.
   lastVariant: "live",
   lastGroupBy: "category",
   lastSortBy: "alphabetical",
   separateXGroup: false,
+  tokensOpen: false,
   defaultCategoryId: 0,
   bracket: 0,
 };
@@ -945,7 +950,7 @@ it("closes the card on Escape from inside the search table's add button", async 
   await userEvent.click(await screen.findByRole("row", { name: /Lightning Bolt/ }));
   expect(await screen.findByRole("dialog", { name: /lightning bolt/i })).toBeInTheDocument();
 
-  screen.getByRole("button", { name: /Add Lightning Bolt \(LEA 161\) to collection/ }).focus();
+  screen.getByRole("button", { name: /Add Lightning Bolt \(LEA 161\) to Collection/ }).focus();
   await userEvent.keyboard("{Escape}");
 
   await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());

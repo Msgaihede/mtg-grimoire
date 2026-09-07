@@ -46,14 +46,15 @@
 //!   arithmetic. It is not folded all the way to the oracle card, which the wishlist *does* fold
 //!   to, because a wish is filled by whichever copy turns up and a pull moves one specific
 //!   object.
-//! * **Candidates match the printing and the finish exactly, and that is a deliberate
-//!   narrowing.** The deck's own owned count is attributed at the **oracle** grain — a LEA Bolt
-//!   filed in the group makes an M10 line read as owned, `owned_by_oracle`'s "a Bolt is a Bolt" —
-//!   so this fills strictly *fewer* holes than the app itself would count. The trade bought here
-//!   is that nothing is ever pulled which is not the exact piece of cardboard the list names: a
-//!   reader who deliberately sleeves the Alpha printing does not find the M10 one in their deck
-//!   because a dialog decided they were the same card. The dialog says so; the shortfall it
-//!   cannot fill stays on screen with no candidates and is dropped from the plan.
+//! * **Candidates match the printing and the finish exactly, and since 2026-09-07 the deck's own
+//!   owned count asks the same question.** [`crate::deck::owned_by_printing`] attributes a deck's
+//!   holdings at `(card_id, finish)` — the grain [`CANDIDATE_SQL`] matches on — so a hole this
+//!   deck's count reports is a hole this dialog can see, and the trade the exactness used to cost
+//!   is gone: the count no longer credits an M10 line as owned because the group holds an Alpha
+//!   copy, only to have this dialog refuse the substitution and come up with nothing. What the
+//!   exactness still buys, now for free rather than at the count's expense, is unchanged: nothing
+//!   is ever pulled which is not the exact piece of cardboard the list names, so a reader who
+//!   deliberately sleeves the Alpha printing is never handed the M10 one instead.
 //! * **A row with no candidate is left out entirely**, so [`PullRow::candidates`] is never empty
 //!   and an empty plan is the ordinary answer rather than an error — the issue says in as many
 //!   words that not every card in a deck will have a collection option.
@@ -1024,10 +1025,11 @@ mod tests {
 
     #[test]
     fn another_printing_of_the_same_card_is_not_a_candidate() {
-        // The deliberate narrowing. The deck's own owned count is attributed at the oracle grain,
-        // so the app would happily *call* these copies this card — but a pull moves one specific
-        // object, and a reader who sleeved the Alpha printing does not find the M10 one in their
-        // deck because a dialog decided they were the same card.
+        // The deliberate narrowing, and since 2026-09-07 the deck's own owned count draws the
+        // same line: `owned_by_printing`'s grain is `(card_id, finish)`, so these M10 copies
+        // would not read as owned for a Bolt line either. A pull moves one specific object, and
+        // a reader who sleeved the Alpha printing still does not find the M10 one in their deck,
+        // because neither the count nor this dialog will call them the same card.
         let (conn, deck, cat) = fixture();
         seed_reprint(&conn, "bolt-m10", "bolt");
         add_deck_card(&conn, deck, cat, "bolt", 2, None);

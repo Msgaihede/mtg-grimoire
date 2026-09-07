@@ -463,7 +463,9 @@ was holding advances on its own, which is the stall above resolving itself. High
 the roster at that epoch**. A device that adopts *N+1* deletes every `sync_devices` row the
 manifest does not name.
 
-**That is deliberately not a thirteenth synced table.** A manifest that *is* the key distribution
+**That is deliberately not a synced table** — it would be the fourteenth now, and this line read
+*thirteenth* until `deck_tokens` took that number at user schema v37, which is the argument
+against writing a count into prose at all. A manifest that *is* the key distribution
 cannot disagree with it, where a synced `device_removals` table could arrive late, arrive out of
 order, or arrive at a device that cannot decrypt it — which is precisely the state a rotation puts
 every peer in.
@@ -844,15 +846,15 @@ Spec §7.2 (what syncs), §7.3 (conflict semantics), §7.4 (what the reader sees
 
 ---
 
-## What syncs: twelve tables, and the spec's twelfth still does not exist
+## What syncs: thirteen tables, and the spec's twelfth still does not exist
 
 `schema::SYNCED_TABLES`:
 
 `collection_entries` · `collection_folders` · `deck_audit` · `deck_cards` · `deck_categories` ·
-`deck_folders` · `deck_labels` · `decks` · `device_names` · `muted_tags` · `wishlist_entries` ·
-`wishlist_folders`
+`deck_folders` · `deck_labels` · `deck_tokens` · `decks` · `device_names` · `muted_tags` ·
+`wishlist_entries` · `wishlist_folders`
 
-**Twelve, and not for the reason the spec's own count would suggest.** The spec's list names
+**Thirteen, and not for the reason the spec's own count would suggest.** The spec's list names
 `deck_allocations`, which **schema v25 dropped** — which deck holds a card is now which folder
 its row sits in, so the work that table did is inside `collection_folders`, which is on the
 list. A table that does not exist cannot be synced, and that argument has not changed: it is
@@ -861,7 +863,33 @@ different table entirely — user schema **v31** added `device_names` (what each
 group is called), a table the spec predates and never named. Two tables have each been "the
 twelfth" at different times, and they are not the same table: the spec's was dropped and is
 gone for good, this tree's is real and the spec never spoke of it. The count moved twice; the
-intent behind the first move did not.
+intent behind the first move did not. **The thirteenth is `deck_tokens`, at user schema v37** —
+one row per token a deck's reader has deviated on, holding the art they picked, how many copies
+they want and whether the row is dismissed or hand-added.
+
+**`deck_tokens.quantity` travels as a `field` and not as a `counter`, and it is the first column
+on this census where the distinction had to be argued.** Mechanically the column is nullable, so
+there is no `NEW - OLD` to carry — `deck_cards.quantity` can be a counter precisely because it is
+`NOT NULL`. Semantically last-write-wins is what is wanted: `deck_cards.quantity` sums because two
+devices each sleeving a copy means two copies, but *how many Treasures I want to bring* is a
+**setting**, and two devices each setting it to 4 must mean 4 rather than 8. No counter also means
+no `Floor` in its `apply::Meta`. It carries a `Grain` restating `schema::DECK_TOKEN_GRAIN` —
+`deck_id` from `Source::Parent`, `oracle_id` from `Source::Field`, because a local deck id means
+nothing on the far device while an oracle id is Scryfall's — for `deck_labels`' reason: without it
+two devices that each picked an art for the same token in the same deck hold one row under two
+uids, and the far op is an insert that hits the unique index, rolls the group's savepoint back and
+defers itself for ever. `decks.tokens_open` joined the `decks` `Spec` in the same rung, beside
+`separate_x_group` and the three `last_*` view columns: it is per-deck view state, and a reader
+who opened that area on one device meant it about the deck rather than about the machine.
+
+**That rung is also what turned "nine registrations" into ten.** The tenth is
+`sync_engine/apply/tests.rs`' `every_unique_index_on_a_synced_table_has_been_decided_about`, which
+reads every UNIQUE index off a live `SYNCED_TABLES` and compares it against a written-down list,
+so it goes red on any new synced table that has a grain. It is easy to miss because it sits in a
+`tests.rs` rather than beside the other nine — the rung, its `USER_SCHEMA_SQL` lines, the
+`UNDO_V<N>`, `schema::TABLES`, `mirror::watch::surface_of`, the `sync_uid` column and index,
+`SYNCED_TABLES`, a `capture::Spec` and an `apply::Meta` — and because nothing at a registration
+site points at it.
 
 Two further corrections, both found by reading `schema.rs` rather than the spec:
 
@@ -882,6 +910,29 @@ Two further corrections, both found by reading `schema.rs` rather than the spec:
 device wrote a row; the group's ordering is the hybrid logical clock, and syncing a timestamp
 would put two answers to "when" in the database with nothing to say which one a reader is being
 shown.
+
+**`app_meta` is on no list either, and since 2026-09-07 that is a stated decision rather than a
+gap nobody had reached.** The theory mark shipped three things at once and they land on opposite
+sides of this census, which makes it the clearest statement of the rule the list embodies:
+
+- **The two per-deck switches travel.** `decks.theory_mark_exact` and `decks.theory_mark_name`
+  (user schema v38) are columns on `decks`, which is on the list above, and both were added to
+  its `capture::Spec` by hand — `bracket`'s precedent at v26. Which of the mark's two tiers a
+  deck draws is an answer *about the deck*, made once by the reader, and two devices showing one
+  deck's marks differently with nothing on screen explaining it is the failure that edit prevents.
+- **The labels travel.** `deck_labels` has been on the list since it was `deck_tags`, and the
+  Appearance panel that now edits them app-wide changes nothing about that.
+- **The colours do not.** They are one `mark_colors` row in `app_meta`, and **`app_meta` is not
+  in `SYNCED_TABLES`** — so there is no field for a spec to leave off and no registration that
+  was skipped. A rendering choice belongs to the device that draws it, which is what every other
+  preference in that table already says, and the panel tells the reader so on screen rather than
+  leaving them to discover it on a second device.
+
+**What that line separates is not "state" from "settings".** Per-deck *view* state travels:
+`last_variant`, `last_group_by`, `last_sort_by` and `tokens_open` are all on the `decks` spec, on
+the argument that a reader who opened that area on one device meant it about the deck rather than
+about the machine. The cut is **per-deck against per-device** — what a deck *is*, including how
+it is being read, against how this particular screen paints it.
 
 ### ⚠️ A table's NAME is on the wire, and v33 renamed one
 
@@ -967,10 +1018,10 @@ while every count still reads one.
 **A sparse update op cannot describe a grain and does not need to** — the row it edits is found
 by uid. An *insert* op carries every field, which is what makes the grain rule work at all.
 
-**The row handle in `apply` is the uid and never the rowid.** Ten of the twelve tables have an
+**The row handle in `apply` is the uid and never the rowid.** Eleven of the thirteen tables have an
 `INTEGER PRIMARY KEY`; two have none at all — `muted_tags` is `WITHOUT ROWID` on
 `(namespace, tag_id)` and `device_names` on `device_id` alone. Addressing by `sync_uid` is one
-spelling for all twelve.
+spelling for all thirteen.
 
 **Minting takes three sites, not one**, and only one of them is the ladder:
 
@@ -1778,7 +1829,7 @@ of the two ways it happens:
 
 | Object | What it is |
 | --- | --- |
-| `sync_uid TEXT` + `idx_<table>_uid` on all twelve synced tables | a name every device agrees on |
+| `sync_uid TEXT` + `idx_<table>_uid` on every synced table | a name every device agrees on. **Eleven** through this rung's `ALTER TABLE`s; each table added since carries the pair in its own `CREATE TABLE`, so the census is **thirteen** at v37 |
 | `device_names` (v31) | `device_id` → `name`, and nothing else. **The twelfth synced table**, so a rename reaches the group and a joiner stops reading "Paired device". `sync_devices` stays unsynced beside it, because it holds keys |
 | `needs_review TEXT` on `deck_folders`, `wishlist_folders`, `collection_folders` | §7.4's second surfaced outcome had nowhere to go |
 | `sync_ops` | the op log: `tbl`, `uid`, `kind`, `fields`, `counters`, `parents`, the stamp, `pushed_at` |

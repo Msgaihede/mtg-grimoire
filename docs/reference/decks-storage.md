@@ -131,12 +131,16 @@ preferred_finish`'s nullability one table over.
     foil — the reader moved a card, or chose a printing, not an object. `deck_set_card_finish` is
     the one command whose subject it is, and the only one that checks the target against
     `cards.finishes`.
-  - **Two things did not change and both look as though they should have.** `engine.ts` counts
-    copies by card **name** and sums across rows, so a foil row and a plain row are two copies of
-    one card; and owned/missing matches on **oracle id** and has always ignored finish, condition
-    and language, so a foil row is answered by whatever copies of that card the deck's group
-    holds. Making a foil deck row want a foil copy specifically is a different feature with its
-    own answer to "what happens when you own three regular and play one foil".
+  - **One thing did not change and one did, and the second looked as though it never would.**
+    `engine.ts` still counts copies by card **name** and sums across rows, so a foil row and a
+    plain row are two copies of one card. Owned/missing is the one that moved: through
+    2026-09-06 it matched on **oracle id** and ignored finish (and condition and language)
+    entirely, so a foil deck row was answered by whatever copies of that card the deck's group
+    held, foil or not — this page used to call making a foil row want a foil copy specifically
+    "a different feature with its own answer". `owned_by_printing` is that answer: it matches
+    `(card_id, finish)` since 2026-09-07, so a foil row now reads missing against a group
+    holding only the regular copy. Condition and language are still ignored — that much really
+    is unchanged.
 - **`is_active = 0` is the whole of what `maybe` used to mean.** An inactive category counts
   toward nothing — not size, not copies, not legality — and `attribute_owned` hands it no copies
   from the group. The Maybeboard is not a special case in five files any more; it is one seeded row with
@@ -151,9 +155,14 @@ preferred_finish`'s nullability one table over.
 - **Which totals a pile lands in: the switch decides whether it counts at all; the kind
   decides only whether it is played _beside_ the deck or _in_ it, and only `side` and
   `companion` are beside it** (CR 100.4a; EDH's companion is "effectively a 101st card"). So
-  `SIZE_KINDS` is `main`, `commander` **and `maybe`** — written in three places that must stay
+  `SIZE_KINDS` is `main`, `commander` **and `maybe`** — written in **four** places that must stay
   one rule: `engine.ts`'s constant, `deck.rs`'s `DECK_SELECT` subquery behind
-  `DeckRow.card_count`, and the Storybook fake's copy. Leaving `maybe` out is the incoherent
+  `DeckRow.card_count`, the Storybook fake's copy, and — since 2026-09-07 — `deck.rs`'s
+  `PIP_COSTS_SQL`, the deck tile's colour bar, which was copied off `DECK_SELECT` rather than
+  re-derived precisely because a bar counting a different pile than the number printed beside it
+  is a tile disagreeing with itself.
+  `the_colour_bar_reads_the_same_pile_the_gallery_count_does` is the fence on that fourth copy.
+  Leaving `maybe` out is the incoherent
   version, not the smaller one: an _active_ Maybeboard was then inside the format's card pool
   and inside the binder's reservations but outside the size, so a second Sol Ring in it raised
   a singleton error under a figure that still read 100.
@@ -162,7 +171,7 @@ preferred_finish`'s nullability one table over.
   which is worth saying plainly because it reads like a leftover. It used to be a fence around
   `deck_allocations` carrying no variant: a `theory` read walked the *live* deck's stored claims,
   and without the filter a plan was handed the copies the sleeved deck had reserved. A **group is
-  not scoped to a variant either**, so `owned_by_oracle` still answers the whole deck's copies;
+  not scoped to a variant either**, so `owned_by_printing` still answers the whole deck's copies;
   what changed is that the map is a fact about where cards *are* rather than a ledger of what was
   reserved. The conclusion is the same one, still drawn explicitly here rather than left to a
   table's shape, and still pinned by `the_allocator_claims_nothing_for_the_theory_variant`. The
@@ -280,6 +289,27 @@ preferred_finish`'s nullability one table over.
   what the deck **counts** without moving a single card. The rule the old note was making — that
   a rename and a reorder change what a pile is _called_ and nothing about what is in it — now
   covers every write in the module.
+- **Three of the label commands take an _optional_ deck since 2026-09-07, and what a deckless
+  write skips is the whole of the change.** `deck_label_create`, `deck_label_update` and
+  `deck_label_delete` each take `deck_id: Option<i64>`; `deck_label_all` never had one. **Tauri
+  fills a missing `Option` argument with `None`**, so the deck editor's existing calls, which send
+  a `deckId`, are unchanged and did not have to be found. The label itself was never a deck's —
+  `deck_labels` has had no `deck_id` since schema v21 — so the id was only ever there for the
+  *side effects*, and with no deck to name they are all three simply not written: **no
+  `deck::touch_deck`, no `deck_audit` row and no `deck_undo` step.** The write to
+  `deck_labels`, and the `deck_cards.label_id` clearing a delete does, are identical either way.
+  **The reason is that the alternative would be a false entry, not that it was cheaper.** A rename
+  made from Settings → Appearance → Labels reaches every deck wearing the label, so attributing
+  it to one deck would put an event in a history that did not happen there; naming all of them is
+  a feature nobody asked for, and a deck's history is per deck by construction. So the entry is
+  not written at all. **What that costs is the undo**, and it is real: such an edit is in no
+  deck's undo stack, so the editor's Ctrl+Z finds nothing to put back — which is why the panel's
+  delete confirmation says so in its own paragraph rather than leaving a reader to discover it by
+  pressing that chord in a deck. `deck_meta.rs`'s
+  `a_deckless_label_write_records_no_audit_and_no_undo` is the fence.
+  **A deck id that _is_ sent still means "where the reader was standing"** and never "what is
+  being changed": the change is app-wide in both cases, and the history is honest rather than
+  arbitrary because the *act* happened somewhere.
 - **`format_specs` is data, not code.** All 23 Scryfall legality keys plus `casual`/`limited`,
   seeded by `INSERT OR REPLACE` in the migration, with `restricted_semantic`
   (`max_one` | `banned_as_commander` — TRAP A, never inferred from the key), `commander_rule`,
@@ -321,7 +351,7 @@ preferred_finish`'s nullability one table over.
   so renaming a category does not answer a Cardmarket reader in dollars.
 - **Owned is where the copies sit, and there is no allocator** (schema v25). `deck_allocations`,
   `allocate_deck`, `allocate_every_deck`, `kind_rank`, `Candidate` and `decks.is_built` are all
-  deleted. What replaced them is one statement:
+  deleted. What replaced them at v25 was one statement grouped by oracle id:
 
   ```sql
   SELECT c.oracle_id, sum(e.quantity)
@@ -332,16 +362,37 @@ preferred_finish`'s nullability one table over.
    GROUP BY c.oracle_id
   ```
 
-  `deck::owned_by_oracle` — **`sum(quantity)` over the deck's own group, keyed by oracle id** —
-  and `attribute_owned` hands that map out along `read_deck_cards`' `ORDER BY`, which is the
-  read's order and never a caller's, so the number a row shows cannot depend on how a view chose
-  to display the list. **Matched by oracle id, not by printing**, so a Bolt is still a Bolt: an
-  Alpha copy in the group answers an M10 row in the list, which is what a reader means by "I have
-  that card". Two kinds of row are passed over rather than served last, and the shape is
-  unchanged from the allocator's day even though the reason for each has moved — a row in an
-  **inactive** category (a switched-off pile counts toward nothing anywhere, so letting it take
-  from the pool would move copies onto a scratchpad) and a row in the **theory** list (a plan
-  reserves nothing).
+  **That statement narrowed to the printing on 2026-09-07**, because the count it answered and
+  [the pull](#the-pull-filling-a-hole-the-list-already-has) that fills it were asking at
+  different grains: the count could read *N missing* while the pull, matching exactly, honestly
+  had nothing to offer for any of it — the disagreement [issue
+  #351](https://github.com/Msgaihede/mtg-grimoire/issues/351) actually reported. The fix narrowed
+  the count to meet the pull rather than widening the pull to meet the count:
+
+  ```sql
+  SELECT e.card_id, e.finish, sum(e.quantity)
+    FROM collection_entries e
+    JOIN collection_folders f ON f.id = e.folder_id
+   WHERE f.deck_id = ?1
+   GROUP BY e.card_id, e.finish
+  ```
+
+  `deck::owned_by_printing` (`owned_by_oracle` before that day) — **`sum(quantity)` over the
+  deck's own group, keyed by `(card_id, finish)`** — and `attribute_owned` hands that map out
+  along `read_deck_cards`' `ORDER BY`, which is the read's order and never a caller's, so the
+  number a row shows cannot depend on how a view chose to display the list. **Matched by printing
+  and finish, not by oracle id, so a Bolt is no longer just a Bolt**: an Alpha copy in the group
+  no longer answers an M10 row in the list, which reverses what this page said until 2026-09-07 —
+  a reader who wants that substitution still has it, one press at a time, through the Collection
+  Search tab. **`JOIN cards` is gone with the rename**, and that is a behaviour change worth
+  stating on its own rather than filing as an optimisation: an orphaned `collection_entries`
+  row — one whose `card_id` is no longer in `cards` — used to have no oracle id to group by and
+  read owned `0`; at the printing grain there is nothing to look up, the deck row and the
+  collection row name the same `card_id`, and the copy counts. Two kinds of row are passed over
+  rather than served last, unchanged in shape from the allocator's day even though the reason for
+  each has now moved twice — a row in an **inactive** category (a switched-off pile counts toward
+  nothing anywhere, so letting it take from the pool would move copies onto a scratchpad) and a
+  row in the **theory** list (a plan reserves nothing).
 
   **The cost is honest and worth stating: owned/missing is now exactly as accurate as the
   reader's filing.** The allocator guessed for them — it swept every collection row a deck's
@@ -349,7 +400,10 @@ preferred_finish`'s nullability one table over.
   whether or not the reader had ever sleeved it up. Now a copy counts for a deck when it is
   *in that deck's group*, and a reader who has not filed their cards sees a deck full of red.
   That is the trade the release makes: a number that is wrong in a way nobody can see, exchanged
-  for a number that is exactly the reader's own filing and can be corrected by dragging.
+  for a number that is exactly the reader's own filing and can be corrected by dragging. **And
+  since 2026-09-07 "the reader's own filing" is read down to the exact printing and finish
+  too**: a deck listing the Alpha Bolt with only an M10 copy on the shelf reads as missing until
+  the reader drags the right printing in or presses *Use this printing*.
 
   Three failure modes went with the allocator, and each was real:
 
@@ -366,14 +420,72 @@ preferred_finish`'s nullability one table over.
     which is now closed by there being nothing to re-run. A `sum()` over the group is current at
     every read.
 
+  **The group is kept honest at the new grain by a sweep, not by the read.**
+  `deck::release_unclaimed_copies(tx, deck_id, variant)` — 2026-09-07 — walks this deck's group
+  and moves every copy no **live** `deck_cards` row claims at `(card_id, finish)` into
+  `Recently removed`, through the same `collection_folders::take_copies` split every other
+  release in this crate uses: a partial take on a row the eleven-term grain would otherwise
+  collide on, never a bare `UPDATE`. "Claimed" means every **live** row, switched-off piles
+  included — `attribute_owned` hands an inactive pile no copies, but the switch decides what is
+  *counted*, not what is *claimed*, and reading it the other way would turn flipping a category
+  off into a press that evicts that pile's cards from the deck. `swap_printing` and
+  `set_card_finish` are the two callers, each running it **after** its own rewrite and inside the
+  same transaction — the only two commands that change a live row's identity while touching no
+  collection table, so before this sweep existed the group still held the *old* printing's
+  copies once the reader swapped away from it (`release_group_copies`'s own doc already recorded
+  the consequence: "after *Use this printing* the group still holds the *old* printing's row").
+  A sweep after the rewrite rather than a targeted release before it, because a swap can *fold*
+  into a line the deck already has — reading the finished list against the group answers both
+  the plain case and the folded one with one query, where a targeted release on the old identity
+  would have to reason about the fold to get the quantity right. A deck with no group holds
+  nothing rather than refusing, and a missing `Recently removed` folder is resolved only when
+  there is something to file — both `release_group_copies`' existing asymmetries, carried over so
+  the two functions behave alike.
+
+  **`release_group_copies` lost the oracle-grain fallback its `ORDER BY CASE` used to fall
+  through to, and keeping it would now be a bug rather than a fix.** That fallback matched the
+  exact `(card_id, finish)` first, then the same `card_id` at another finish, then any row in the
+  group sharing an `oracle_id` — the third arm existing to cure exactly the stranding
+  `release_unclaimed_copies` now prevents at the source. Under the exact grain it would raid a
+  sibling line instead: a deck may legitimately list both LEA Bolt and M10 Bolt, with the group
+  holding both, and cutting the LEA line short would give back M10 copies the M10 line still
+  claims — the second arm is the same bug in the finish dimension. So the query narrows to the
+  exact `(card_id, finish)` match and the `ORDER BY` reduces to `e.id`, and `swap_printing` and
+  `set_card_finish` are the ones that now keep the promise the fallback used to.
+
+  **Schema v36 runs the same sweep once, over every file that predates it.** The v25 conversion
+  "replaced matched candidates by oracle id, so the conversion routinely files a printing the
+  deck does not list" (`release_group_copies`'s own doc) — the `if v < 36` rung inlines
+  `release_unclaimed_copies`'s logic in its own SQL and arithmetic rather than calling the app
+  function (a migration step is history the day it ships, and app code it called would silently
+  change what an old file is converted into), and applies it to every `collection_folders` row
+  with `kind = 'deck'`. Where the copies land is load-bearing: `Recently removed` is ranked
+  **second** in [`deck_pull::CANDIDATE_SQL`](#the-pull-filling-a-hole-the-list-already-has)'s
+  `ORDER BY CASE`, after the root and before the reader's own folders, so the first press of
+  `Import missing cards from collection…` offers those very copies straight back for every line
+  that genuinely matches them, and the lines that do not match are honestly missing. A missing
+  `Recently removed` folder skips the rung's move rather than failing it, for `NO_REMOVED_FOLDER`'s
+  reason one level up: a hand-edited file without that folder must still open.
+
+  **The residual is named rather than mechanised.** A device running an older build can still
+  sync a `collection_entries.folder_id` that mismatches what its own live list claims —
+  `release_unclaimed_copies` is idempotent and cheap to re-run, so the state is curable, but
+  nothing in this design runs it on a sync. That is a known gap, written down here rather than
+  built around.
+
   **`collection_to_deck` refuses a card the deck's live list does not already play** since
   2026-09-03 — `collection_alloc::NOT_IN_DECK`, issue #358. Filing assigns copies to a list rather
   than joining a card to a deck, so the one write that could create a placement is no longer
   allowed to satisfy the invariant by writing the other half itself. **The match is
-  `deck::PLAYED_KEY`, `coalesce(c.oracle_id, dc.card_id)`** — the same oracle-first rule with the
-  same printing fallback that `release_group_copies` holds one function away, so an Alpha Bolt fills
-  a deck listing the M10 one and a `deck_cards` row whose printing has left the corpus is still
-  matched by its own id. **Live only**: a plan holds no cards, so a theory-only listing refuses.
+  `deck::PLAYED_KEY`, `coalesce(c.oracle_id, dc.card_id)`** — oracle-first with the printing as
+  the fallback, so an Alpha Bolt fills a deck listing the M10 one and a `deck_cards` row whose
+  printing has left the corpus is still matched by its own id. **This is a different question
+  from attribution and answers it on purpose**: PLAYED_KEY asks *does the deck play this card at
+  all*, never which copies count toward it, and until 2026-09-07 it was `release_group_copies`'s
+  own oracle-grain fallback rule reused rather than re-spelled. That rule left
+  `release_group_copies` the day the exact-grain change made it a bug there (above), so
+  PLAYED_KEY is the rule's only home now. **Live only**: a plan holds no cards, so a theory-only
+  listing refuses.
   Two thin reads over the same expression serve the surfaces that say it early —
   **`deck_played_keys(deckId)`**, every key a deck's live list plays, and
   **`deck_ids_playing(keys)`**, every deck that plays *every* key given (`GROUP BY … HAVING
@@ -395,8 +507,9 @@ preferred_finish`'s nullability one table over.
   `deck_meta::delete_category`'s cascade arm, `deck::clear_category`, `deck::clear_variant`,
   `import::commit_import`'s `replace` arm, and Settings' `reset::clear_decks`. The five that
   release *one card at a time* share `deck::release_group_copies`, the crate's one walk over a
-  group's rows, which matches on the oracle card with the exact printing first — the four bulk
-  ones reach it through `release_live_copies`, which asks the `live` question for all of them;
+  group's rows, which matches the exact `(card_id, finish)` and nothing looser since 2026-09-07
+  (it fell back to the oracle card before that day; see above) — the four bulk ones reach it
+  through `release_live_copies`, which asks the `live` question for all of them;
   the two that empty a whole folder — `delete_deck` and `clear_decks` — walk the sub-tree and
   re-file every row through `refile_entry`, the `delete_folder` rule reused. Everything else that
   changes the number is an ordinary
@@ -414,8 +527,9 @@ preferred_finish`'s nullability one table over.
   property the old run list was trying to give and could not.
 
   **The card search tab beside the deck answers the same question, and until 2026-09-03 it did
-  not** ([issue #349](https://github.com/Msgaihede/mtg-grimoire/issues/349)). `owned_by_oracle`
-  has been the deck's own group since v25, so the row's `2/4` was already right — but the `×N` a
+  not** ([issue #349](https://github.com/Msgaihede/mtg-grimoire/issues/349)). `owned_by_printing`
+  (`owned_by_oracle` before 2026-09-07) has scoped to the deck's own group since v25, so the
+  row's `2/4` was already right — but the `×N` a
   tile in the search column wears came from `collection_source::copies_of_oracle` with no scope at
   all, so a card whose whole playset was sleeved into other decks read `×4` in the one place the
   reader was deciding what to add. The **Collection** tab two components over had answered the
@@ -781,6 +895,55 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   tables the same v26 rung created); the floor they become — a floor rather than a bracket, and
   never 1 or 5 — is `src/features/decks/validation/bracket.ts`'s.
   [commander-brackets.md](commander-brackets.md) is the whole record.
+- **`decks.theory_mark_exact` and `decks.theory_mark_name` are which of the theory mark's two
+  tiers this deck draws, and both are on by default** (2026-09-07). `INTEGER NOT NULL DEFAULT 1`
+  each, **schema v38** — a Live row's mark now says either *this is the printing you planned* (the
+  **exact** tier, green) or *this is that card in a printing you did not name* (the **name** tier,
+  blue), and a deck may switch either off. `DEFAULT 1` is the whole of the upgrade: every deck
+  that already exists draws both marks from the first launch on the new build, so there is no
+  backfill because there is nothing for one to do, and no deck sits in a state its reader has to
+  discover. They ride `DeckPatch`, `DeckRow`, `DeckBefore` and `DECK_SELECT` as the four columns
+  above do, take the **last** two indexes in `deck_row` and the **next** two `?` holes at the end
+  of `update_deck`'s `SET` list — read both off the code, for the reason `separate_x_group`'s
+  bullet gives — and are deliberately **not on `DeckInput`**: they are a reading preference, and
+  a deck being born has not been read yet, so they take their DDL default like the columns beside
+  them. `DECK_SELECT` puts them last of the deck's own columns and `deck_row`'s
+  `IMAGE_COL` is one past `d.theory_mark_name`, which is that positional trap read one
+  grain finer: both are `INTEGER` among the row's other `INTEGER`s, so a column inserted anywhere
+  but last hands a bracket to a bool and nothing goes red — while `IMAGE_COL` left behind is
+  loud, because the image reads are `Option<String>` and rusqlite refuses an `INTEGER` there.
+  **Two columns rather than one three-valued one**, and the reason is expressive rather than
+  tidy: `none | exact | both` cannot spell blue *without* green, and blue without green is a real
+  answer — a reader who cares that a card is present and not which printing it is. It is also
+  why the two off states are not symmetric, which is entirely TypeScript's business: green off
+  **re-resolves an exact row as a name row**, blue with blue's number, while blue off silences a
+  name-only row and leaves green alone. **Rust stores two booleans and concludes nothing from
+  either** — `AUTO_CATEGORY`'s rule and `bracket`'s: which tier a row lands in, and what number
+  it carries, is `theoryMatchMark`'s.
+  **`duplicate_deck` carries both across** and `archived` still resets, the same line
+  `separate_x_group` and `bracket` sit on: what describes the deck comes over, what state the deck
+  is *in* does not. Both are on `deck_undo::DECK_FIELDS` for `bracket`'s reason — an ordinary
+  `deck_update` writes them and an ordinary history row records them — and **both, never one**:
+  one Save can move the pair, so a list carrying only the first restores half a press, which is
+  worse than restoring none of it because the drawer would still name the change it had not undone.
+  **The audit words are `"theoryMarkExact"` and `"theoryMarkName"`**, camelCase, the third and
+  fourth multi-word field names `record_deck_edit` writes after `"xGroup"` and `"defaultCategory"`
+  — so the same silent-drift rule applies, and **unlike `bracket` these two have `auditText.ts`
+  arms**, pinned by `auditText.test.ts`. Two arms rather than one, `record_deck_edit`'s own
+  reason: a reader who moved both switches in one Save made two decisions, and a single row saying
+  "changed the theory marks" could be worded into neither. The payload carries the **boolean** on
+  both sides and there is no `detail`, `xGroup`'s shape: a boolean's `from` is whatever its `to`
+  is not, so "was off" under "turned it on" is a line of history spent saying nothing.
+  **Both columns are on `capture::TABLES`' `decks` spec and travel to paired devices**, `bracket`'s
+  precedent at v26: which tier a deck draws is an answer *about the deck*, and two devices showing
+  one deck's marks differently with nothing on screen explaining it is the failure that edit
+  prevents. That spec spells its field list out by hand and **there is no fence in the other
+  direction** — nothing asserts that every column of a synced table is on its spec — so the two
+  names needed a deliberate edit rather than travelling for free. **The mark's _colours_ are
+  deliberately not on it, and that asymmetry is a decision**: see
+  [sync.md](sync.md), which holds the synced-tables list. The `DEFAULT 1` is load-bearing for the
+  sync as well as for the no-backfill argument, and [data-and-sync.md](data-and-sync.md) carries
+  that half.
 - **The six single-card commands, and what each takes** (the three bulk ones,
   `deck_import_commit`, `deck_category_clear` and `deck_clear`, have their own bullets below).\
   `deck_get(id, variant)`;
@@ -1513,15 +1676,20 @@ before anything moves.
   that reading. **This deck's own group is excluded by the same clause and has to be**: those
   copies are already counted in `owned_quantity`, so offering them would be offering to fill a
   hole with the thing already in it.
-- **The exact printing and the exact finish, which is narrower than the number it is filling.**
-  Owned/missing is attributed at the **oracle** grain — `owned_by_oracle`, "a Bolt is a Bolt" —
-  so an Alpha Bolt filed in the group makes an M10 line read as owned. The pull deliberately does
-  not do that. It fills strictly fewer holes than the app itself would count as fillable, and
-  what the trade buys is that nothing is ever moved that is not the exact piece of cardboard the
-  list names. **A reader who wants the substitution still has it**: the Collection Search tab
-  files any copy into any deck, one press at a time. The narrowing is a decision (2026-09-03,
-  the reader's own call) and not an oversight — it is pinned on both sides so that changing it
-  later is deliberate.
+- **The exact printing and the exact finish — and since 2026-09-07 that is also the grain
+  owned/missing counts at, not a narrower one.** Through 2026-09-06, owned/missing was attributed
+  at the **oracle** grain — `owned_by_oracle`, "a Bolt is a Bolt" — so an Alpha Bolt filed in the
+  group made an M10 line read as owned while the pull, matching exactly, could offer nothing for
+  it: a deck could read *N missing* with a dialog that honestly had no candidates for any of it.
+  `owned_by_printing` closed that by narrowing the **count** to `(card_id, finish)` — the same
+  pair `CANDIDATE_SQL` matches on — rather than by widening the
+  pull, so the two no longer disagree about what "owned" means. What survives unchanged is the one
+  sentence that was never about the grain: nothing is ever moved that is not the exact piece of
+  cardboard the list names, so an Alpha Bolt in the binder is never handed to an M10 line instead.
+  **A reader who wants the substitution still has it**: the Collection Search tab files any copy
+  into any deck, one press at a time. The exactness itself is a decision (2026-09-03, the reader's
+  own call) and not an oversight — it is pinned on both sides so that changing it later is
+  deliberate.
 
 **The shortfall folds to `(card_id, finish)` and never to the pile.** The same card short in two
 categories is one row for the sum, because what a reader is short of is cardboard and custody is
@@ -1754,3 +1922,488 @@ question for a live pass and not for this page.
 **Nothing in this section has been measured in the shipped window.** The pull's own live pass is
 the model for the one this owes: the two-press case above, a wish picker with several folders, and
 what the editor's banner says when the wish read fails.
+
+## The gallery's two second reads, and the order it opens in (2026-09-07, issue #387)
+
+The deck wall wanted two facts `deck_list` has never answered — **what colours a deck is** and
+**what bracket it reads as** — and the only card-shaped read in the feature was `deck_get`, which
+is the heaviest read here and is per deck. Forty tiles is forty of those. So two reads were added
+that answer the *whole gallery* in one round trip each, plus one `app_meta` row for the order.
+The plan is `docs/superpowers/plans/2026-09-07-deck-gallery-overview.md`; what the bar and the
+caption *look* like is [frontend-design.md](frontend-design.md), and what the estimate is allowed
+to conclude is [commander-brackets.md](commander-brackets.md).
+
+**All three figures below were taken on the dev database under `tauri dev` (a _debug_ build),
+2026-09-07: 4 decks, 611 `deck_cards` rows.** They are shape figures rather than timings — what
+crosses the wire for a gallery — and a reader's own database will differ by however much bigger
+it is.
+
+### `deck_pip_costs` — the colour bar's facts, and no parameters at all
+
+```
+PipCost      { cost: string; copies: number }
+DeckPipCosts { deckId: number; costs: PipCost[] }
+```
+
+**Every deck at once, and the read takes no arguments on purpose.** The gallery draws every deck
+it has, an archived one included behind the disclosure, and an archived deck's bar is the same
+fact as any other's — so there is nothing to narrow by and a per-deck read would be one query per
+tile on a page that is already one query. Measured: **90 rows** for the whole gallery, against
+611 `deck_cards` rows. That ratio is the entire argument for the read's existence, and it is what
+folding by cost string buys — a deck plays a handful of distinct costs and forty-odd cards at
+them.
+
+**`PIP_COSTS_SQL`'s `WHERE` clause is `DeckRow.card_count`'s, copied from `DECK_SELECT`'s
+correlated subquery rather than re-derived**: `variant = 'live'`, `cat.is_active = 1`, and
+`cat.kind IN ('main','commander','maybe')` — `SIZE_KINDS`, the three-place rule this page states
+further up. The bar is drawn under a caption that already says how many cards the deck has, so a
+bar counting a different pile than that number counts is **a tile disagreeing with itself**.
+`the_colour_bar_reads_the_same_pile_the_gallery_count_does` is what keeps the two literals
+honest, and it is written as a theory row, a switched-off category, a `side` pile and a
+`companion` pile each colouring nothing in turn.
+
+Three narrowings are worth naming because each is a decision rather than a filter:
+
+- **The `cards` join is _inner_, and it is the only inner join among this file's reads apart from
+  `deck_categories`.** Everywhere else a `LEFT JOIN cards` is discipline — an orphaned row is a
+  card the reader still owns and must still see. Here it would buy a NULL cost, which the next
+  two predicates drop anyway: `deck_cards` denormalizes the printing and the name, **never the
+  mana cost**, so a row whose printing has left `cards` has no *printed* cost to contribute and
+  nothing this read could invent for it.
+- **A NULL or empty cost is dropped rather than shipped.** Every land is one and a Commander deck
+  is a third lands, so shipping them would be ~35 rows per deck carrying no pip, for a bar that
+  would draw exactly the same.
+- **A deck with nothing to say is _absent_ from the answer rather than present and empty.** A
+  pile of basics, a deck whose every row has been orphaned, and a deck with no cards at all all
+  answer no entry — which is what a `GROUP BY` gives, and what the reading side is written for:
+  a deck it cannot find is a deck with no pips, and draws no bar.
+
+**Rust ships the cost strings and TypeScript counts the pips**, which is this crate's
+facts/conclusions boundary applied to a colour bar. What a `{W/U}` is worth to a bar is a display
+decision — it counts as one pip of *each* half, because the bar answers *what does this deck
+want* rather than what will be spent — and it is decided in `src/lib/mana.ts`'s `addPips`, over
+the one `{…}` `SYMBOL` tokeniser this app already has. `cost` is `cards.mana_cost` verbatim,
+including the one-string form a split or double-faced card carries (`"{3}{U} // {3}{R}"`), and
+`copies` is `sum(quantity)` and not a row count, so four Lightning Bolts across two printings are
+one entry reading four.
+
+The statement's `ORDER BY dc.deck_id, c.mana_cost` is the grouping's and not a contract about
+presentation: rows arrive deck by deck so the fold in `pip_costs` is a single pass with no
+`HashMap`, and by cost within a deck so two runs over one database cannot answer in two different
+orders. What order the *segments* are drawn in is `MANA_KEYS`', on the other side of the wire.
+
+### `deck_bracket_reads` — the estimate's facts, over a different pile on purpose
+
+```
+BracketCardRow  { name; gameChanger; oracleText; faces; categoryActive }
+DeckBracketRead { deckId: number; cards: BracketCardRow[]; combos: DeckCombo[] }
+```
+
+Measured: **397 distinct cards across 4 decks, 59 KB of oracle text**, for one gallery.
+
+**The pile is `variant = 'live'` and `cat.is_active = 1` in _every_ kind, and that is deliberately
+not the pip read's three.** A Commander deck has no sideboard, so a reader who has filed cards
+there has filed them somewhere the estimate still has to see — and this is the pile
+`DeckBracket.tsx` hands the estimator today. Two reads of one deck answering two different piles
+is the disagreement worth avoiding: the gallery and the editor have to reach the same bracket for
+the same deck.
+
+- **`SELECT DISTINCT`, because the estimator dedupes by name anyway.** A card in two piles, or a
+  foil row beside a regular one, is two `deck_cards` rows saying one thing about a bracket — and
+  this read ships oracle text for every deck on the page at once. The `ORDER BY` names all four
+  selected columns rather than the name alone, so two runs over one database cannot answer in two
+  different orders even where one name is carried by rows that differ.
+- **`dc.name`, not `c.name`** — the denormalized column `deck_card_select` reads at the same
+  position. The estimator dedupes on this string and so does the editor's panel, so a gallery
+  reading the live `cards` row would fold a renamed or re-worded printing differently from the
+  editor looking at the same deck. It is also the only name an orphaned row has at all.
+- **`LEFT JOIN cards`, this file's discipline unchanged** — the opposite call from the pip read
+  one section up, and for the reason that read gives: an orphan keeps its denormalized name and
+  contributes no text, which is the honest reading, because nothing is known about a card that is
+  not there. `game_changer` is read as `Option<bool>` and coalesced to **false**: the column is a
+  list membership, so "not on the list" and "no row to ask" are one answer, which is
+  `ImportMatch::game_changer`'s rule.
+- **`categoryActive` is always `true` on every row this read emits, and is carried anyway** — a
+  literal, since the `WHERE` has already pinned it. `estimateBracket` opens with
+  `cards.filter(c => c.categoryActive)` and takes the same shape the editor hands it out of a
+  fully loaded deck, where the flag really does vary. A row that omitted it would be a second
+  type for one function, and the day the filter changed the two callers would part company
+  silently.
+
+**`BRACKET_IDS_SQL` builds the combo matcher's id list over the _same_ pile**, which is
+`DeckBracket.tsx:117-121` written in SQL — and it has to be, because `estimateBracket` does not
+re-check the combos it is handed. A caller that matched over a switched-off pile's cards gets
+back a combo the deck does not really play, and nothing downstream can tell.
+
+Two contract details the caller depends on:
+
+- **The caller passes the deck ids, and that is a boundary rather than a convenience.** Which
+  formats have a command zone is a `format_specs.commander_rule` question TypeScript already
+  answers (`useFormatSpecs`), so a `WHERE fs.commander_rule …` here would be this crate drawing a
+  conclusion — and drawing it again, differently, the day a second format grew brackets. **An
+  empty request touches no database at all**, so a gallery with no Commander deck on it costs no
+  query.
+- **One entry per requested id, in request order** — `tags`' contract for its two per-card reads,
+  and for its reason: the caller holds a list and wants a lookup, so **a deck deleted since the
+  list was taken answers empty lists rather than going missing from a positional answer**.
+- **A deck listing more than `combos::MAX_CARD_IDS` distinct printings fails the whole call**,
+  with `combos::TOO_MANY_CARDS` — `match_combos`' own refusal, propagated rather than caught.
+  That is `combos_for_cards`' behaviour unchanged, and the alternative, a silently truncated id
+  list, would answer a *wrong* combo set that reads exactly like a right one. The bound is 1 000
+  distinct printings against a Commander deck's hundred.
+
+### `deck_sort` / `set_deck_sort` — one `app_meta` row, and a vocabulary Rust does not have
+
+`src-tauri/src/decksort.rs`, ported from `listview.rs` whole: one key, `deck_sort`, holding a
+single string like `"updated:desc"`, with `DEFAULT = "updated:desc"` — today's order exactly, so
+the release that added a sort control does not quietly re-sort a reader's wall. **No migration**:
+`app_meta` is schema v6's key/value table — the *application's*, deliberately not `sync_meta`,
+where a row the sync did not write makes every later timing claim a fiction — and this is a key
+in it.
+
+**The one place it narrows `listview.rs` is the whole of what is worth writing down.** That
+module checks the word it is given against `LAYOUTS`, because a wall is drawn one of two ways and
+this build knows both. **This one checks nothing but emptiness**, because the words are
+`src/features/decks/deckSort.ts`' — six keys and two directions today, three of which are
+computed on the TypeScript side and have no SQL counterpart to check against — and *a database
+outlives the app*. A key a later build stops offering, or one an earlier build has never heard
+of, has to degrade to the default **on the reading side**; refused at the write end it would be a
+reader whose sort silently would not save, on a build that had every reason to think it had. So
+the row is **stored and answered verbatim** and TypeScript's `parseDeckSort` is what degrades it.
+
+- **Reading can never fail.** A missing row, an unreadable one, and a row somebody emptied by
+  hand all answer `DEFAULT`, and `deck_sort` is therefore **infallible by signature** —
+  `card_zoom`'s contract, for its reason: a preference that cannot be read is not worth refusing
+  to draw a gallery over. It is `#[tauri::command(async)]` rather than a bare sync command,
+  `listview`'s call again, because a sync body runs inline on the IPC thread and this one takes
+  `db_read`'s mutex, which a search may hold for tens of milliseconds.
+- **Writing validates exactly one thing**: `store` refuses an empty string, which is
+  `listview::store`'s blank-section refusal and its reason — a blank is a bug in the caller
+  rather than an order, and stored it would be a row that reads back as "nothing stored" forever
+  while the write that made it reported success. Everything else is written as given, and
+  `BUSY` is the only other answer, which a first-run sync can spend whole minutes returning.
+- **A default here, not — as `listview::stored` has it — an absence.** That module answers a map
+  and lets a missing entry mean "the frontend's own default"; there is one setting here and one
+  string to answer with, so an `Option` would be an emptiness every caller had to spell the same
+  fallback for.
+- **Only the sort is remembered.** A filter is a thing a reader is doing right now, and a gallery
+  that opened already narrowed, with no memory of having asked for it, is a gallery that looks
+  like it has lost decks.
+
+### Routing and the command count
+
+All four commands are registered in `desktop.rs` and routed in `web/route.rs` — **including the
+write.** A read-only sort on the web build would be the setting *not existing* rather than being
+read-only, and the row is `app_meta` like every other preference the web target already keeps.
+`COMMANDS.len()`'s assertion moved by four, and the new figure was **read off the assertion's own
+failure rather than reached by arithmetic** — which is the only way that number has ever been got
+right, and the reason no count of commands is written on this page.
+
+## Tokens and emblems: derived on every open, deviations stored
+
+`deck_tokens.rs` and user schema **v37**,
+[issue #388](https://github.com/Msgaihede/mtg-grimoire/issues/388), landed 2026-09-07. Every
+figure below was measured that day against the debug corpus at
+`src-tauri/target/debug/data/corpus.db` (117 621 rows), in Node unless it says otherwise; the
+design's own record is
+[the spec](../superpowers/specs/2026-09-07-deck-token-management-design.md).
+
+A deck that plays `Smothering Tithe` needs a Treasure; one that plays `Elspeth, Sun's Champion`
+needs Soldiers **and** an emblem. Neither fact is in a column — Scryfall publishes it inside each
+printing's `all_parts` array, which this crate stores gzipped in `cards.raw` — so this module is
+`card::meld_parts`' sibling: the same inflate, the same parse, the same walk over `all_parts`, the
+same *every failure is an empty vec*, pointed at a different `component`. **Nothing is
+downloaded**: 2 988 `token`, 137 `emblem` and 120 `double_faced_token` rows are already local, and
+**2 520 of the 2 523 distinct token printings some card's `all_parts` names resolve to a local
+`cards` row — 99.9 %**.
+
+### The filter rule is a union, and getting it wrong is the way to ship something that looks right
+
+> Keep an `all_parts` entry when its **`component` is `"token"`**, **or** when the `cards` row it
+> **resolves to** has **`layout = 'emblem'`**.
+
+`deck_tokens::TOKEN_COMPONENTS` and `EXTRA_LAYOUTS` are the two halves, and **each one alone is
+measurably wrong**:
+
+- **`component == "token"` alone misses every emblem.** A full-corpus scan found exactly four
+  component values — `combo_piece` 148 216, `token` 16 377, `meld_part` 164, `meld_result` 81 —
+  and an emblem is not in the `token` half: `Elspeth, Sun's Champion` names hers as a
+  `combo_piece` carrying `type_line: "Emblem — Elspeth"`.
+- **A layout allow-list alone drops 78 real token relationships.** The layouts a
+  `component: "token"` entry resolves to are `token` 16 216, `double_faced_token` 79, **`flip`
+  75** and `reversible_card` 3, so gating the component half on layout is a silent subtraction of
+  those 78.
+
+The emblem half is tested against the row the entry **resolves to** and never against the entry
+itself, which is why the walk resolves first and decides second rather than filtering in one pass.
+An entry resolving to no local row is dropped rather than drawn as a hole — 3 printings in the
+whole corpus, and a token nobody can draw or pick art for is not a row worth having.
+
+### ⚠️ There is no self-exclusion rule, and that is where this parts company with `meld_parts`
+
+`card::meld_parts` **must** drop an entry whose `name` equals the producing card's own
+(`card.rs:635`), and this module deliberately does not. It is the single most likely thing in the
+feature for a future reader to "simplify" back into a bug.
+
+**The keep rule already excludes a card's own printing without being asked.** A card's self-entry
+arrives as `component: "combo_piece"` resolving to a row with the card's own layout — `normal`,
+never `token` or `emblem` — so it fails the union before any name is compared.
+
+What a name test would subtract instead is measured. Restricted to the **108 372** rows a deck can
+hold (`legal_mask != 0`, non-token layouts), counting the `all_parts` entries that pass the keep
+rule **and** carry the producing card's own name:
+
+| what was counted | answer |
+| --- | --- |
+| same-name entries passing the keep rule | **154** |
+| distinct producer names | **55** |
+| their target layouts | `token` 154, and nothing else |
+| their producer layouts | `normal` 154, and nothing else |
+| target `id` == producer `id` | **0** |
+| target `oracle_id` == producer `oracle_id` | **0** |
+
+**The last zero is the one that carries the argument.** A different *printing id* could still have
+been the same card under another printing — that is exactly the trap `meld_parts` documents at
+`card.rs:635`, and it is why the rule there is a name test and not an id test. A different *oracle
+id* cannot be. So not one of the 154 is the card itself; every one is a genuinely different oracle
+card wearing the producer's name, which is what an Embalm or Eternalize token is. They are
+`Timeless Dragon`, `Sacred Cat`, `Adorned Pouncer`, `Champion of Wits`, `Earthshaker Khenra`,
+`Temmet, Vizier of Naktamun`, `Manifold Mouse` and forty-eight more names, where the token *is* a
+copy of the card and wears its name by rule.
+
+**The two cases are opposites and one word hides it.** In `meld_parts` a same-named entry **is the
+same card**; here it is a token **of** that card, which is a different oracle card that happens to
+wear the card's name. So the rule that is correct one file over subtracts exactly those 55 cards'
+tokens here and subtracts nothing else. `an_embalm_token_sharing_its_makers_name_is_kept` and
+`a_cards_own_printing_never_reaches_the_wall` are the pair that hold both halves.
+
+**And the obvious objection, answered so nobody adds a fence for it.** Corpus-wide and
+*unrestricted*, there **are** 2 929 same-name kept entries that do share the producer's oracle id
+— but every one of them has a producer layout of `token` (2 780), `emblem` (136),
+`double_faced_token` (7), `flip` (5) or `reversible_card` (1), and the six non-obvious `flip` and
+`reversible_card` ones were checked by hand: all are double-sided *token* cards on a flip frame,
+all `legal_mask = 0`. So the only rows that can name themselves through the keep rule are tokens
+naming their own printing, and **those are never `deck_cards` rows**, because the search wall
+fences tokens behind `legal_mask != 0`. A deck that somehow listed a Spirit token and drew a
+Spirit on its token wall would be right rather than wrong. No extra fence is needed.
+
+### The grain is `(deck_id, oracle_id)`, and only deviations are written down
+
+```sql
+CREATE TABLE deck_tokens (
+    id INTEGER PRIMARY KEY,
+    deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+    oracle_id TEXT NOT NULL,
+    card_id TEXT,          -- the printing the reader picked; NULL is the resolver's
+    quantity INTEGER,      -- NULL is the default, which is 1
+    state TEXT NOT NULL DEFAULT 'auto'
+        CHECK (state IN ('auto','hidden','manual')),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  , sync_uid TEXT);
+CREATE UNIQUE INDEX idx_deck_tokens_grain ON deck_tokens (deck_id, oracle_id);
+CREATE UNIQUE INDEX idx_deck_tokens_uid ON deck_tokens (sync_uid);
+```
+
+- **`schema::DECK_TOKEN_GRAIN` is `"deck_id, oracle_id"`** and every `ON CONFLICT` interpolates
+  it: a conflict target that does not match the index verbatim is a runtime error at the first
+  write and not a compile error. It carries no `coalesce`, so unlike `COLLECTION_GRAIN`,
+  `WISHLIST_GRAIN` and `DECK_CARD_GRAIN` it can be read back through `PRAGMA index_info` —
+  `every_plain_grain_constant_names_the_index_the_head_schema_carries` is the second fence, and
+  the only one there was until the first `ON CONFLICT` interpolated the constant.
+- **`oracle_id` and not `card_id`**, because the row has to survive the reader changing which
+  printing they want: the art choice *is* one of the things it stores. Every token, emblem and
+  double-faced-token row in the corpus carries an `oracle_id` (**0 missing of 3 245**), which is
+  what makes the column safe as a grain in a way `card_id` would not be.
+- **Deliberately not grained on `variant`.** The derived list is per-variant because deck cards
+  are; the override is not. Choosing the Treasure art for a deck and finding it reverted in the
+  theory build would be a surprise with nothing to recommend it.
+- **The three states.** `auto` — the row exists only to carry a printing and/or a quantity for a
+  token the deck derives anyway. `hidden` — the reader dismissed it; still derived, deliberately
+  not drawn. `manual` — drawn whether or not anything derives it, which is both a token the reader
+  added by hand and what a derived token becomes when they want it kept after cutting the card
+  that made it. The vocabulary is spelled twice on purpose: the `CHECK` is the shape, and
+  `deck_tokens::TOKEN_STATES` is what lets an unknown word be a **sentence** (`BAD_STATE`) rather
+  than a constraint failure — `deck::set_folder`'s rule, and it applies because a command
+  parameter reaches this column.
+- **The empty row is not representable.** `state = 'auto'` with no `card_id` and no `quantity`
+  carries no information, so `set_token_override` **deletes** instead of writing it. That keeps
+  *the reader has not deviated* one state rather than two that have to be kept in agreement.
+  **A quantity of zero is not that case**: it is a token the reader deliberately zeroed, and the
+  row goes on carrying the art they picked.
+
+### `quantity` is a synced **field** and not a counter, on two grounds
+
+`deck_tokens` is the **thirteenth** synced table (`schema::SYNCED_TABLES`, user schema v37), and
+it is where this distinction is written out. Mechanically a counter carries `NEW - OLD` and this
+column is nullable, so there is no arithmetic to carry — `deck_cards.quantity` can be a counter
+precisely because it is `NOT NULL`. Semantically last-write-wins is what is wanted:
+`deck_cards.quantity` sums because two devices each sleeving a copy means two copies, but *how
+many Treasures I want to bring* is a **setting**, and two devices each setting it to 4 must mean 4
+rather than 8. No counter also means no `Floor` in `apply::META`.
+
+**A new synced table owes TEN registrations, not nine.** That list said nine until this rung was
+actually built. The tenth is `sync_engine/apply/tests.rs`'
+`every_unique_index_on_a_synced_table_has_been_decided_about`, which reads every UNIQUE index off
+a live `SYNCED_TABLES` and compares it against a written-down list, so it goes red on any new
+synced table that has a grain. It is easy to miss because it sits in a `tests.rs` rather than
+beside the other nine, and because nothing at a registration site points at it. The other nine:
+the `if v < N` rung at the **bottom** of `migrate_user` ending in its own **literal** number; the
+matching lines in `USER_SCHEMA_SQL`; an `UNDO_V<N>` for the rewind fixtures; `schema::TABLES` with
+`Side::User`; an arm in `mirror::watch::surface_of`; the `sync_uid` column and its unique index in
+**both** the rung and `USER_SCHEMA_SQL`; `schema::SYNCED_TABLES`; a `capture::Spec`; and an
+`apply::Meta`. The three array lengths (`SYNCED_TABLES`, `capture::TABLES`, `apply::META`) move
+together, and they are the one part of the list a compile error catches.
+
+Three notes on the sync half that are this table's own:
+
+- **`oracle_id` is on the `capture::Spec`'s field list even though it is half the grain**, which
+  is `muted_tags`' and `device_names`' reason: the far device has to be able to *build* the row,
+  and the grain `apply::META` restates is a way of recognising one that is already there.
+
+- **`apply::META`'s `order` is 12, appended rather than slotted in behind `decks`.** The rank is
+  only ever *sorted* by, through `baseline::build`'s `order_of`, so what it has to say is "after
+  the deck this row hangs off" — which any number above `decks`' 1 says. Renumbering the tail to
+  put it at 2 would move ten ranks to change nothing an emission can observe, and `baseline`'s
+  hard failure is on a *missing* rank rather than on a gap.
+- **The `Grain` takes `deck_id` from `Source::Parent` and `oracle_id` from `Source::Field`.** A
+  local deck id means nothing on the far device; an oracle id is Scryfall's and means the same
+  thing everywhere. Without the grain, two devices that each picked an art for the same token in
+  the same deck hold one row under two uids, and the far op is not a row to update but a row to
+  insert — which hits the unique index, rolls the group's savepoint back, and defers that op for
+  ever. `deck_labels`' reason, one table over.
+
+### The list is derived on every deck open, and that is cheaper than storing it
+
+`deck_tokens::deck_token_rows(conn, deck_id, variant)` inflates the `raw` blob of each **distinct**
+card in the deck's **active** categories and walks `all_parts`. Measured over a 100-card pool (the
+top 100 by `edhrec_rank`, denser than a real deck): 71 `all_parts` entries scanned, 10 kept, 9
+distinct tokens needed, **4.9 / 4.9 / 5.3 ms in Node** — and Rust beats that, because only the
+cards in the open deck are ever inflated.
+
+A *stored* list would need a reconciliation pass on every deck edit and would go stale the next
+time a Scryfall sync changed a card's `all_parts`, with nothing to notice. What is written down is
+only the reader's deviation.
+
+- **Active categories only** — `deck_categories.is_active = 1`. `is_active = 0` means *counts
+  toward nothing*, which is the whole of what the old `maybe` zone meant, so the **Maybeboard
+  makes no tokens**. The Sideboard and the Companion are active and do contribute, which is right:
+  you sleeve those.
+- **`CAST(raw AS BLOB)` is required, and this can never be done in SQL at all.** rusqlite will not
+  hand a TEXT-declared value out as `Vec<u8>`, and `json_extract` over a gzip member is a hard
+  `malformed JSON` error rather than a NULL.
+- **Nothing is gated on `layout` before the blob is touched**, which is the one place this parts
+  from `meld_parts`. That function gates on `layout = 'meld'` and turns a decompression on every
+  card the reader opens into one on 72 rows of 117 621. There is no such column here — token
+  references sit on 15 161 printings and nothing predicts them — and **the corpus-wide token index
+  is the thing that must not be built**: a cold full scan costs 6.5 s and it would have to be a new
+  ingest-filled column. The question is never asked corpus-wide, only of the deck in front of the
+  reader.
+- **Every failure is `Ok(vec![])` and never an `Err`**: an unknown deck, an unknown printing, a
+  `raw` that will not inflate or parse, a missing `all_parts`, an `all_parts` that is not an
+  array. A deck must not fail to open over an area most decks use lightly.
+
+### The default printing, and why the tie-break is the common path
+
+`defaultCardId` is the referenced printing the **most** of the deck's cards point at, ties broken
+by `released_at DESC, set_code ASC, collector_number ASC, id ASC` — the tail
+`card::list_printings` already orders by, so the art the resolver names is the art at the top of
+the picker the reader opens next. **Deterministic, or the same deck draws different art on two
+opens.**
+
+**The tie-break is not the rare fallback it looks like.** Different maker cards name different
+printings of the same token: across **40 Treasure makers, 12 distinct Treasure printings** were
+referenced, so a deck with two Treasure makers usually gives both a reference count of 1 and the
+tail is what actually chooses. `the_default_printing_is_stable_across_calls` and
+`the_most_referenced_printing_wins_before_the_tie_break` are the pair — the second asserts with
+the *older* printing referenced twice, so a rule that read only the tail would answer the newer
+one.
+
+`newest_printing` is that same tail written as SQL, for the hand-added tail of the answer, so a
+`manual` row and a derived one cannot disagree about which art is the default.
+
+### A token's name does not identify it
+
+**104 token and emblem names are carried by more than one `oracle_id`** — `Elemental` by 31,
+`Spirit` by 22, `Bird` and `Soldier` by 13 each, `Insect` 12, `Golem` 11 — and one card can make
+two of them: **`Wurmcoil Engine` makes two tokens both called `Wurm`**, both 3/3, both colourless
+artifacts, separated only by Deathtouch against Lifelink. So **grouping is by `oracle_id` and
+never by name**, and `DeckTokenRow` carries four fields no resolver needs — `power`, `toughness`,
+`colors`, `oracleText` — for the page to build a subtitle out of.
+
+All three of colours, size and text are needed, because each alone is insufficient: the corpus
+holds a colourless 1/1 Soldier with no text beside a white 1/1 Soldier with no text, which p/t and
+text together cannot separate. **`power` and `toughness` are strings and must never be parsed to
+numbers** — Scryfall writes `*`, `1+*` and `∞`, and there is a real `*`-over-`*` Elemental.
+`colors` is the concatenated-letter string `cards.colors` stores (`""`, `"W"`, `"BGRUW"`) and
+never a JSON array, which is what `DeckCard.colors` already is.
+
+Two tiles announcing one accessible name is a bug that has already shipped here once, on the
+collection wall, where a 2X2 and an LEA Lightning Bolt both announced *"Copies of Lightning
+Bolt"* — neither suite caught it, because both names were **correct** and merely not unique.
+
+### The four commands
+
+| command | what it does |
+| --- | --- |
+| `deck_tokens(deckId, variant)` | the derived list with the stored override joined on. Read-only connection on the blocking pool, `card_meld_parts`' shape. **No `marketplace`** — nothing in the answer is priced |
+| `deck_token_set(deckId, oracleId, cardId, quantity, tokenState)` | upsert on the grain, or **delete** when the result would carry nothing. A full replace and not a patch: the page composes the whole override and sends all three fields, `null` included |
+| `deck_token_clear(deckId, oracleId)` | back to the derived defaults; the row goes. A grain that resolves to no row is a **success** |
+| `deck_token_add(deckId, cardId)` | resolves `oracle_id` from the printing and writes `state = 'manual'` with that printing as the art. **An existing quantity survives** — adding is *put this on the wall with this art*, and a reader who had set four Treasures, dismissed them and added them back must not find the four silently gone |
+
+- **The wire key for the state word is `tokenState` and the Rust parameter is `token_state`**,
+  because `state` is already the managed `AppState` every command takes. `src/lib/ipc.ts` is the
+  one place on the other side that knows the rename; callers there pass `{ state }`, which is what
+  the column is called. `ipc.test.ts` pins all four argument sets — it is the only fence that
+  boundary has.
+- **Plain `sync::with_write` and never `with_write_owned`.** That one is for the four commands
+  that move copies across the collection/deck boundary; nothing here changes what the reader owns,
+  and the facet index's `owned` bitset has nothing to rebuild.
+- **Every refusal is a sentence.** `BAD_STATE` for a word outside `TOKEN_STATES`; `deck::GONE` for
+  a deck that is not there — `deck_tokens.deck_id` has an enforced foreign key and
+  `PRAGMA foreign_keys` is per-connection, so a deck deleted in another window is
+  `FOREIGN KEY constraint failed` on the app's connections and a silent orphan on one without the
+  pragma, and a sentence in Rust answers both; `NO_SUCH_PRINTING` for an `add` whose printing has
+  left the corpus, because that id arrives from a printings grid the reader was just looking at
+  and a press that reported success and stored nothing would be worse than a refusal.
+- **The art picker adds no Rust.** `card_printings`' predicate is `oracle_id = ?1 AND is_paper = 1`
+  (`card.rs:96`) with no `legal_mask` term at all, and every token row satisfies both. It needs no
+  `playableOnly: false` either — **that flag belongs to `search_cards`**, which is what
+  `DeckCoverPicker.tsx:148` passes it to, and reading the two as one command is how this picker
+  would come back empty for every token in the game.
+
+### `decks.tokens_open`, and the one thing it does not do
+
+v37's second half is `decks.tokens_open INTEGER NOT NULL DEFAULT 0` — whether the editor's
+**Tokens & emblems** area is expanded, per deck, beside `last_variant`, `last_group_by`,
+`last_sort_by` and `separate_x_group`. It is on the `decks` capture `Spec` with those three, so it
+travels the same way and for the same reason.
+
+It rides `DeckPatch` / `DeckRow` / `DECK_SELECT` and reaches `useDeck`'s `update` with no per-field
+arm anywhere, exactly as `separateXGroup` and `bracket` did. **`d.tokens_open` is the last
+*named* column of `DECK_SELECT` and `r.get(21)` the last positional read in `deck_row`**, which is
+not a style preference: that read is positional, and a column added anywhere but the end shifts
+every later index into a field of the same SQLite type, silently — which is how `finish` (TEXT)
+once landed in `needs_review` (TEXT).
+
+**And the named list has a tail after it, so a column added here owes a second edit.**
+`DECK_SELECT` interpolates `image_uri::front_face_selects` past the named columns, and `deck_row`'s
+`IMAGE_COL` is where they start — it read **21** until v36 and reads **22** now. Forgetting to move
+it is one of the few positional mistakes in this file that is *not* silent: the image reads are
+`Option<String>` and the column they would land on is an `INTEGER`, so rusqlite refuses the
+conversion rather than answering a plausible URL.
+
+**It writes no `deck_audit` row and no undo step, and it is not on `deck_undo::DECK_FIELDS`.**
+`record_deck_edit` names the fields a history row is worth writing for and this is not one of
+them — a disclosure triangle is not an edit to the deck — and with no history row `update_deck`
+files no step either. What it *does* do, unlike `deck_set_view_state`'s three columns, is **move
+`updated_at`**, because `update_deck` stamps that unconditionally: opening the token area lifts a
+deck to the top of a gallery sorted by most-recently-touched. Worth writing down rather than
+rediscovering, and cheap to change if it ever reads wrong.
+
+### A stale comment found on the way, and deliberately not fixed here
+
+`search.rs:1252` claims token-only and memorabilia sets have no rows in `cards` at all, "because
+`default_cards` holds nothing for them". **Measured false on 2026-09-07**: `set_type = 'token'`
+joins **2 950** card rows and `memorabilia` **5 847**. It is not this feature's to fix and nothing
+here depends on it being right; it is recorded so the next reader does not trust it.

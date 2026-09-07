@@ -2,17 +2,29 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { buildFolderTree, type FolderNode } from "@/lib/folderTree";
 import type { EntryInput, WishInput } from "@/lib/ipc";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { pickOption } from "@/test-dropdown";
 
 const collectionAdd = vi.fn();
 const wishlistAdd = vi.fn();
+const cardDetail = vi.fn();
 vi.mock("@/lib/ipc", async (original) => ({
   ...(await original<typeof import("@/lib/ipc")>()),
   ipc: {
     collectionAdd: (entry: EntryInput) => collectionAdd(entry),
     wishlistAdd: (wish: WishInput) => wishlistAdd(wish),
+    // The price hint's read. It is the *card modal's* query — same key, same command — which is
+    // why the popup pays nothing for a card the reader already had open; here it is the only
+    // caller, so every hint below is this mock's answer.
+    cardDetail: (id: string, marketplace: string) => cardDetail(id, marketplace),
+    // `useMarketplace`'s two reads, answered rather than left undefined. The hook falls back to
+    // the default marketplace on a failure, so the currency would be right either way — but a
+    // query that throws on every render of this popup is noise standing between this file and
+    // the next real failure it has to show.
+    getMarketplace: () => Promise.resolve("tcgplayer"),
+    marketplaceFeedStatus: () => Promise.resolve([]),
   },
 }));
 
@@ -31,6 +43,34 @@ const BOLT: AddTarget = {
 const written = { id: 7, quantity: 1, removed: false };
 
 /**
+ * Two drawers at the top level of a cabinet — the smallest tree that can tell "the folder it was
+ * given" from "the folder the reader picked instead" apart.
+ *
+ * Built through `buildFolderTree` rather than written out as `FolderNode` literals, because the
+ * `depth`/`count`/`children` fields are that function's arithmetic and a hand-written node is a
+ * fixture that can disagree with the shape every real caller passes.
+ */
+const NODES: readonly FolderNode[] = buildFolderTree(
+  [
+    { id: 7, parentId: null, name: "Rares", sortOrder: 1 },
+    { id: 8, parentId: null, name: "Commons", sortOrder: 2 },
+  ],
+  [],
+);
+
+/** The page's own naming of a destination — `null` is the root and has the list's own word. */
+const folderName = (id: number | null) =>
+  id === null ? "Collection" : (NODES.find((n) => n.folder.id === id)?.folder.name ?? null);
+
+/** The four props this component grew for the two sidebars. Every one optional. */
+interface FolderProps {
+  folderId?: number | null;
+  folderNodes?: readonly FolderNode[];
+  folderName?: (id: number | null) => string | null;
+  lockMode?: "collection" | "wishlist";
+}
+
+/**
  * The `"outer"` rung, mounted *first* exactly as the app mounts one: an outer layer has been
  * listening for Escape since before the popup inside it existed, which is the whole reason the
  * popup has to consume the press in the capture phase.
@@ -44,14 +84,14 @@ function Pane({ onDismiss }: { onDismiss: () => void }) {
   return null;
 }
 
-function wrap(target: AddTarget, paneClose?: () => void) {
+function wrap(target: AddTarget, paneClose?: () => void, props: FolderProps = {}) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   render(
     <QueryClientProvider client={client}>
       {paneClose && <Pane onDismiss={paneClose} />}
-      <AddToCollectionButton target={target} />
+      <AddToCollectionButton target={target} {...props} />
     </QueryClientProvider>,
   );
   return { client };
@@ -59,8 +99,8 @@ function wrap(target: AddTarget, paneClose?: () => void) {
 
 /** Open the popup the way a reader does — from the button, which is where Escape owes the
  *  caret back. */
-async function open(target: AddTarget = BOLT, paneClose?: () => void) {
-  const { client } = wrap(target, paneClose);
+async function open(target: AddTarget = BOLT, paneClose?: () => void, props: FolderProps = {}) {
+  const { client } = wrap(target, paneClose, props);
   const trigger = screen.getByRole("button", { name: new RegExp(`^Add ${target.name}`) });
   await userEvent.click(trigger);
   await screen.findByRole("dialog", { name: `Add ${target.name}` });
@@ -80,31 +120,163 @@ function pressEscape(): boolean {
 }
 
 const quantity = () => screen.getByRole("spinbutton", { name: "Quantity of Lightning Bolt" });
+const price = () => screen.getByRole("textbox", { name: "Purchase price" });
 
 beforeEach(() => {
   collectionAdd.mockReset().mockResolvedValue(written);
   wishlistAdd.mockReset().mockResolvedValue(written);
+  // **Priced by default, and that is load-bearing rather than convenient.** Half the tests below
+  // assert that nothing was sent; with no hint on screen they would pass over a popup that had
+  // nothing to send in the first place, which is a different claim. A visible `$2.50` the reader
+  // did not touch is the state those tests are really about.
+  cardDetail.mockReset().mockResolvedValue({
+    finishPrices: { nonfoil: 2.5, foil: 12, etched: null },
+  });
 });
 
 describe("AddToCollectionButton", () => {
   /**
-   * The quick half of quick-add: the commonest card in any collection is one unmarked,
-   * unfoiled copy, and recording it must cost one press after the popup is open.
+   * The quick half of quick-add: the commonest card in any collection is one unfoiled copy
+   * nobody has graded, and recording it must cost one press after the popup is open.
+   *
+   * **Two of those three answers are now "nothing".** The dropdown opens on the sentinel rather
+   * than on the top of the scale, and the price box is blank with the market figure beside it as
+   * a hint — so a reader who presses Add and nothing else has claimed neither a grade nor a
+   * price, which is the state most copies in a collection are really in.
    */
-  it("adds one nonfoil near-mint copy without being told anything else", async () => {
+  it("adds one nonfoil copy without claiming a grade or a price", async () => {
     await open();
+
+    expect(screen.getByRole("button", { name: "Condition" })).toHaveTextContent("Not set");
+    // The hint is on screen and the box is empty. Those are two different things, and this add
+    // is what keeps them different.
+    await waitFor(() => expect(price()).toHaveAttribute("placeholder", "$2.50"));
+    expect(price()).toHaveValue("");
 
     await userEvent.click(screen.getByRole("button", { name: "Add to collection" }));
 
     // Exactly these four fields: everything else on `EntryInput` has a serde default, and
     // sending a guess at a purchase price or a grading would be the popup inventing
-    // provenance the reader never claimed.
+    // provenance the reader never claimed. `purchase_price` is written through a `coalesce`,
+    // so an **absent** field is the only spelling of "leave it alone" — a `0` here would be a
+    // claim that the copy was free.
     expect(collectionAdd).toHaveBeenCalledWith({
       cardId: "c1",
       finish: "nonfoil",
-      condition: "NM",
+      condition: "NONE",
       quantity: 1,
     });
+  });
+
+  /**
+   * The hint is the current marketplace's price for **this printing at the finish that is
+   * pressed**, and it has to move with the chips.
+   *
+   * A price is looked up by finish and the two are routinely pounds apart, so a box still
+   * showing the nonfoil figure while Foil is selected is a lie about the row being written —
+   * and the one thing the reader would read it as is what this copy is worth.
+   */
+  it("hints at the price of the finish that is pressed, and follows the chips", async () => {
+    await open();
+
+    await waitFor(() => expect(price()).toHaveAttribute("placeholder", "$2.50"));
+
+    await userEvent.click(screen.getByRole("button", { name: "Foil" }));
+
+    expect(price()).toHaveAttribute("placeholder", "$12.00");
+    // Still a hint. Switching finish must not put a number in the box either.
+    expect(price()).toHaveValue("");
+  });
+
+  /**
+   * No hint at all where there is no price — never an em dash, and above all never a `0`.
+   *
+   * `formatPrice(null)` is `—`, which is right in a table cell and wrong in a box a reader is
+   * about to type in: an em dash sitting where their own number goes reads as a value. And a
+   * zero would be the popup suggesting the card was free.
+   */
+  it("shows no hint for a finish this marketplace does not price", async () => {
+    cardDetail.mockResolvedValue({ finishPrices: { nonfoil: 2.5, foil: null, etched: null } });
+    await open();
+
+    await waitFor(() => expect(price()).toHaveAttribute("placeholder", "$2.50"));
+
+    await userEvent.click(screen.getByRole("button", { name: "Foil" }));
+
+    expect(price()).not.toHaveAttribute("placeholder");
+  });
+
+  /** And none while the read is in flight, for the same reason: a box that fills in a moment
+   *  after it was opened is one a fast reader has already typed over. */
+  it("shows no hint until the read has answered", async () => {
+    cardDetail.mockReturnValue(new Promise(() => {}));
+    await open();
+
+    expect(price()).not.toHaveAttribute("placeholder");
+    expect(price()).toHaveValue("");
+  });
+
+  /**
+   * A price the reader typed, in the money the marketplace quotes.
+   *
+   * `purchaseCurrency` is upper-case because that is the spelling already in the column — the
+   * lower-case `usd` is a formatter's key, not a currency the collection stores. Nothing here
+   * converts: `purchase_price` is what was paid.
+   */
+  it("records what the reader paid, in the marketplace's own currency", async () => {
+    await open();
+
+    await userEvent.type(price(), "3.25");
+    await userEvent.click(screen.getByRole("button", { name: "Add to collection" }));
+
+    expect(collectionAdd).toHaveBeenCalledWith({
+      cardId: "c1",
+      finish: "nonfoil",
+      condition: "NONE",
+      quantity: 1,
+      purchasePrice: 3.25,
+      purchaseCurrency: "USD",
+    });
+  });
+
+  /**
+   * The hint is offered so it can be taken — **including the `$` it is written with.**
+   *
+   * `formatPrice` writes `$12.00`, and a reader retyping what they were just shown is the
+   * likeliest way this box is ever filled. A currency symbol reaching `Number` is a `NaN`, so
+   * without the strip the commonest input would be the one that silently records nothing.
+   */
+  it("takes the hint back as it was written, currency symbol and all", async () => {
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: "Foil" }));
+
+    await userEvent.type(price(), "$12.00");
+    await userEvent.click(screen.getByRole("button", { name: "Add to collection" }));
+
+    expect(collectionAdd).toHaveBeenCalledWith(
+      expect.objectContaining({ purchasePrice: 12, purchaseCurrency: "USD" }),
+    );
+  });
+
+  /**
+   * A box with nothing readable in it sends **neither** field, which is not the same as sending
+   * a zero or a null.
+   *
+   * Both are `coalesce(?, column)` on the Rust side, so an absent field is the only value that
+   * means "this add says nothing about a price". A half-typed word is the everyday case — a
+   * reader who started typing and thought better of it — and it has to land in the same place as
+   * an untouched box.
+   */
+  it("sends no price field at all when the box holds nothing readable", async () => {
+    await open();
+    await waitFor(() => expect(price()).toHaveAttribute("placeholder", "$2.50"));
+
+    await userEvent.type(price(), "later");
+    await userEvent.click(screen.getByRole("button", { name: "Add to collection" }));
+
+    const sent = collectionAdd.mock.calls[0][0] as EntryInput;
+    expect(sent).not.toHaveProperty("purchasePrice");
+    expect(sent).not.toHaveProperty("purchaseCurrency");
   });
 
   /**
@@ -191,8 +363,11 @@ describe("AddToCollectionButton", () => {
     await open();
 
     await userEvent.click(screen.getByRole("button", { name: "Wishlist" }));
-    // A wish has no condition: you cannot ask for a card you do not have to be played.
+    // A wish has no condition: you cannot ask for a card you do not have to be played. It has no
+    // purchase price for the same reason — nothing has been bought yet, and the wishlist table
+    // has no column to put one in.
     expect(screen.queryByRole("button", { name: "Condition" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: "Purchase price" })).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Add to wishlist" }));
 
@@ -255,6 +430,7 @@ describe("AddToCollectionButton", () => {
     await open();
 
     await userEvent.click(screen.getByRole("button", { name: "Foil" }));
+    await userEvent.type(price(), "9.99");
     await userEvent.click(
       screen.getByRole("button", { name: "Increase Quantity of Lightning Bolt" }),
     );
@@ -262,10 +438,11 @@ describe("AddToCollectionButton", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent(/database is busy/i);
     // Still open, and still holding the answers: a popup that closed on failure would make
-    // the reader pick the finish, the condition and the count again to find out whether the
-    // second attempt worked.
+    // the reader pick the finish, the condition, the price and the count again to find out
+    // whether the second attempt worked.
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Foil" })).toHaveAttribute("aria-pressed", "true");
+    expect(price()).toHaveValue("9.99");
     expect(quantity()).toHaveValue(2);
   });
 
@@ -296,9 +473,9 @@ describe("AddToCollectionButton", () => {
     // one copy out of date.
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection"] });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
-    // And every deck: the copy lands unfiled at the root, which is no deck's group — but the
-    // theory list's spare column counts exactly the copies that are in no group, so a copy
-    // added here is a copy some plan may now read as spare.
+    // And every deck: this popup files into user folders and the root, never into a deck's
+    // group — but the theory list's spare column counts exactly the copies that are in no
+    // group, so a copy added here is a copy some plan may now read as spare.
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
     // Refetched, not merely marked. It used to carry `refetchType: "none"` because the only
     // thing this write changed on a result row was a field no view drew; Task 12's badges
@@ -342,11 +519,11 @@ describe("AddToCollectionButton", () => {
   it("says where the open popup is adding to", async () => {
     const { trigger } = await open();
 
-    expect(trigger).toHaveAccessibleName("Add Lightning Bolt (LEA 161) to collection");
+    expect(trigger).toHaveAccessibleName("Add Lightning Bolt (LEA 161) to Collection");
 
     await userEvent.click(screen.getByRole("button", { name: "Wishlist" }));
 
-    expect(trigger).toHaveAccessibleName("Add Lightning Bolt (LEA 161) to wishlist");
+    expect(trigger).toHaveAccessibleName("Add Lightning Bolt (LEA 161) to Wishlist");
   });
 
 
@@ -360,5 +537,147 @@ describe("AddToCollectionButton", () => {
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Somewhere else" })).toHaveFocus();
+  });
+
+  /**
+   * **An absent `folderId` sends no field at all, which is not the same as sending `null`.**
+   *
+   * Both land the copy at the root, so nothing on screen tells them apart — but a surface that
+   * has never thought about folders (the search page, the Tags wall, the printings modal) has
+   * said nothing about where this goes, and an absent field is the only spelling of that. It is
+   * `purchasePrice`'s rule one field over, and it is what keeps this component's three older
+   * call sites byte-identical on the wire.
+   */
+  it("files at the root when it is given no folder", async () => {
+    await open();
+
+    await userEvent.click(screen.getByRole("button", { name: "Add to collection" }));
+
+    const sent = collectionAdd.mock.calls[0][0] as EntryInput;
+    expect(sent).not.toHaveProperty("folderId");
+  });
+
+  /**
+   * The whole point of the sidebar: a reader standing in a drawer files into that drawer.
+   *
+   * `folderId` is part of the row's **storage grain**, so this is an add into a folder and never
+   * an add followed by a move — filing the same printing into two drawers is two rows.
+   */
+  it("files into the folder it is given", async () => {
+    await open(BOLT, undefined, { folderId: 7, folderNodes: NODES, folderName });
+
+    await userEvent.click(screen.getByRole("button", { name: "Add to collection" }));
+
+    expect(collectionAdd).toHaveBeenCalledWith({
+      cardId: "c1",
+      finish: "nonfoil",
+      condition: "NONE",
+      quantity: 1,
+      folderId: 7,
+    });
+  });
+
+  /**
+   * The trigger's name says the destination, and a folder is a destination.
+   *
+   * `DeckSearchPanel`'s rule (`Add Ancient Tomb to Land`) applied: forty of these on a wall are
+   * forty different cards, and on a page with a cabinet open the *drawer* is half of what
+   * pressing one would do.
+   */
+  it("names the folder in the button's accessible name", async () => {
+    const { trigger } = await open(BOLT, undefined, { folderId: 7, folderName });
+
+    expect(trigger).toHaveAccessibleName("Add Lightning Bolt (LEA 161) to Rares");
+  });
+
+  /** At the root the destination is the *list*, in the list's own word — never "no folder",
+   *  which would describe the same drawer the breadcrumb calls Collection. */
+  it("names the list at the root", async () => {
+    const { trigger } = await open(BOLT, undefined, { folderId: null, folderName });
+
+    expect(trigger).toHaveAccessibleName(/to Collection$/);
+
+    await userEvent.click(screen.getByRole("button", { name: "Wishlist" }));
+
+    expect(trigger).toHaveAccessibleName(/to Wishlist$/);
+  });
+
+  /** The wishlist's folders are the same mechanism one table over — `WishInput.folderId` carries
+   *  the identical grain rule, so a wish files into a drawer the same way a copy does. */
+  it("sends a wish into the folder it is given", async () => {
+    await open(BOLT, undefined, { lockMode: "wishlist", folderId: 7, folderName });
+
+    await userEvent.click(screen.getByRole("button", { name: "Add to wishlist" }));
+
+    expect(wishlistAdd).toHaveBeenCalledWith({
+      cardId: "c1",
+      quantity: 1,
+      preferredFinish: "nonfoil",
+      folderId: 7,
+    });
+  });
+
+  /**
+   * The default is where the reader is standing, and the override is how they file one card
+   * somewhere else without leaving the drawer they are in.
+   *
+   * The destination list **replaces the panel's body in place** rather than opening a second
+   * popup: the app's Escape ladder is ordered by registration, so a nested layer would take the
+   * press meant for the panel and getting out of one add would cost two.
+   */
+  it("lets the reader send it somewhere else", async () => {
+    const { trigger } = await open(BOLT, undefined, {
+      folderId: 7,
+      folderNodes: NODES,
+      folderName,
+    });
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Change folder for Lightning Bolt" }),
+    );
+
+    const list = screen.getByRole("group", { name: "File Lightning Bolt in a folder" });
+    // One layer, not two: the list is drawn inside the popup that is already open.
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+
+    await userEvent.click(within(list).getByRole("button", { name: "Commons" }));
+
+    // The trigger renames itself, exactly as it does when the destination *list* changes.
+    expect(trigger).toHaveAccessibleName("Add Lightning Bolt (LEA 161) to Commons");
+
+    await userEvent.click(screen.getByRole("button", { name: "Add to collection" }));
+
+    expect(collectionAdd).toHaveBeenCalledWith(expect.objectContaining({ folderId: 8 }));
+  });
+
+  /** No tree, no picker. The three older call sites draw a card wall with no cabinet behind it,
+   *  so a folder control there would be a list of nowhere. */
+  it("draws no folder row without a tree", async () => {
+    await open(BOLT, undefined, { folderId: 7, folderName });
+
+    expect(
+      screen.queryByRole("button", { name: "Change folder for Lightning Bolt" }),
+    ).not.toBeInTheDocument();
+  });
+
+  /**
+   * A sidebar over the collection adds to the collection, and a chip pair offering the wishlist
+   * would be a control that changes which page the reader is looking at the results of.
+   */
+  it("hides the destination switch when it is locked", async () => {
+    await open(BOLT, undefined, { lockMode: "wishlist" });
+
+    expect(screen.queryByRole("group", { name: "Add to" })).not.toBeInTheDocument();
+    // Locked *to the wishlist*, not merely locked: the wishlist's own form is what is drawn.
+    expect(screen.getByRole("group", { name: "Which printing" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Condition" })).not.toBeInTheDocument();
+  });
+
+  /** And the lock cannot leak: every surface that passes none still gets both lists. */
+  it("keeps the switch when it is not", async () => {
+    await open();
+
+    const chips = within(screen.getByRole("group", { name: "Add to" })).getAllByRole("button");
+    expect(chips.map((c) => c.textContent)).toEqual(["Collection", "Wishlist"]);
   });
 });

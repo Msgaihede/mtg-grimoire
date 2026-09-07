@@ -12,10 +12,13 @@ vi.mock("@tauri-apps/api/event", () => ({ listen }));
 import collectionRs from "../../src-tauri/src/collection.rs?raw";
 import collectionFoldersRs from "../../src-tauri/src/collection_folders.rs?raw";
 import deckRs from "../../src-tauri/src/deck.rs?raw";
+import decksortRs from "../../src-tauri/src/decksort.rs?raw";
 import deckMetaRs from "../../src-tauri/src/deck_meta.rs?raw";
 import deckPullRs from "../../src-tauri/src/deck_pull.rs?raw";
 import deckQuickAddRs from "../../src-tauri/src/deck_quick_add.rs?raw";
 import deckTheoryRs from "../../src-tauri/src/deck_theory.rs?raw";
+import deckTokensRs from "../../src-tauri/src/deck_tokens.rs?raw";
+import markcolorsRs from "../../src-tauri/src/markcolors.rs?raw";
 import resetRs from "../../src-tauri/src/reset.rs?raw";
 import searchRs from "../../src-tauri/src/search.rs?raw";
 import syncCommandsRs from "../../src-tauri/src/sync_engine/commands.rs?raw";
@@ -23,17 +26,20 @@ import syncLiveRs from "../../src-tauri/src/sync_engine/live.rs?raw";
 import wishlistRs from "../../src-tauri/src/wishlist.rs?raw";
 import wishlistOptimizeRs from "../../src-tauri/src/wishlist_optimize.rs?raw";
 import ipcSource from "./ipc.ts?raw";
+import { CONDITIONS, CONDITION_NOT_SET } from "@/lib/conditions";
 import {
   AUTO_BRACKET,
   ipc,
   ipcError,
   type ArtTagProgressEvent,
   type ComboProgress,
+  type DeckTokenRow,
   type FeedProgressEvent,
   type OracleTagProgressEvent,
   type RelayOutcome,
   type SyncLiveEvent,
   type SyncProgressEvent,
+  type TheorySlot,
 } from "@/lib/ipc";
 
 beforeEach(() => {
@@ -421,6 +427,104 @@ describe("ipc argument names match the Rust command signatures", () => {
     invoke.mockResolvedValue("commander");
     await ipc.deckLastFormat();
     expect(invoke).toHaveBeenCalledWith("deck_last_format");
+  });
+
+  /**
+   * The gallery overview's two reads, and the pair that remembers the wall's order.
+   *
+   * **`set_deck_sort`'s parameter is the one this test exists for.** It is `sort` and not
+   * `value`, and there is nothing in either build that would say so: `invoke` fills a command's
+   * parameters **by name**, so a wrapper sending `{ value }` is a runtime rejection with a green
+   * TypeScript build on one side and a green `cargo test` on the other — the picker would look
+   * like it worked all session and open on the default order at the next launch, which is a bug
+   * report about *persistence* pointing at a spelling. The crate is read for the word rather
+   * than trusted, `deck_played_keys`' rule one test down.
+   *
+   * `deck_pip_costs` takes **no arguments at all**, which is the opposite trap and the one
+   * `prewarm_collection` shipped: a command that takes only the managed state is a
+   * deserialization error when an argument object arrives, not a type error. `deck_bracket_reads`
+   * is the only one of the four with a payload, and `deck_ids` reaches the wire camelCased —
+   * `deckIds` here and `deck_ids: Vec<i64>` there are one name and have to agree.
+   *
+   * The ids go in and come back **in request order** (`bracket_reads` pushes one entry per id
+   * rather than grouping), so a caller may zip the answer against what it sent; a re-ordering
+   * mirror would hand every deck its neighbour's bracket.
+   */
+  it("asks the gallery's overview reads and the remembered sort under the names the crate declares", async () => {
+    // Not `toContain` on the sources alone: a pass has to mean "the crate spells it", never
+    // "the crate was never read".
+    expect(deckRs.length).toBeGreaterThan(1_000);
+    expect(decksortRs.length).toBeGreaterThan(500);
+
+    invoke.mockResolvedValue([]);
+    await ipc.deckPipCosts();
+    expect(invoke).toHaveBeenCalledWith("deck_pip_costs");
+    expect(deckRs).toContain("pub async fn deck_pip_costs(");
+
+    await ipc.deckBracketReads([4, 2]);
+    expect(invoke).toHaveBeenCalledWith("deck_bracket_reads", { deckIds: [4, 2] });
+    expect(deckRs).toContain("pub async fn deck_bracket_reads(");
+    expect(deckRs).toContain("deck_ids: Vec<i64>");
+
+    invoke.mockResolvedValue("name:asc");
+    await ipc.deckSort();
+    expect(invoke).toHaveBeenCalledWith("deck_sort");
+    expect(decksortRs).toContain("pub fn deck_sort(");
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.setDeckSort("colors:asc");
+    expect(invoke).toHaveBeenCalledWith("set_deck_sort", { sort: "colors:asc" });
+    expect(decksortRs).toContain("sort: String,");
+  });
+
+  /**
+   * The mark colours — and the one `app_meta` write where a misspelled argument is **destructive
+   * rather than refused**.
+   *
+   * `set_mark_color(mark: String, color: Option<String>)`, and Tauri fills a missing `Option`
+   * argument with `None`. So the two halves fail in opposite directions: a wrapper that spelled
+   * `mark` wrong is a parameter Tauri cannot fill and a clean rejection, while one that spelled
+   * `color` wrong — `colour`, `value`, `hex` — is accepted, arrives as `None`, and `None` here
+   * **deletes the entry**. Every colour the reader picked would read back as unset at the next
+   * launch, with a green build on both sides and a write that reported success. That asymmetry is
+   * the whole reason this case exists, and it is why the crate is read for both words rather than
+   * trusted.
+   *
+   * `mark_colors` takes **no arguments at all** — `prewarm_collection`'s trap, where an argument
+   * object sent to a command that declares only the managed state is a deserialization error and
+   * not a type error.
+   */
+  it("sends both mark-colour commands under the names `markcolors.rs` declares", async () => {
+    // A pass must never be able to mean "the crate was never read".
+    expect(markcolorsRs.length).toBeGreaterThan(1_000);
+
+    const stored = { theoryExact: "#56bd78", theoryName: "#0e68ab" };
+    invoke.mockResolvedValue(stored);
+    const colors = await ipc.markColors();
+    expect(invoke).toHaveBeenCalledWith("mark_colors");
+    expect(colors).toEqual(stored);
+    expect(markcolorsRs).toContain("pub fn mark_colors(");
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.setMarkColor("theoryExact", "#56BD78");
+    // `mark` and `color`, not `key` and `value` — and the uppercase goes over the wire as typed,
+    // because the folding is the far end's (`to_ascii_lowercase`) and a mirror that folded here
+    // would be a second opinion about a rule the crate already owns.
+    expect(invoke).toHaveBeenCalledWith("set_mark_color", {
+      mark: "theoryExact",
+      color: "#56BD78",
+    });
+    expect(markcolorsRs).toContain("mark: String,");
+    expect(markcolorsRs).toContain("color: Option<String>,");
+
+    // **Reset**, and it is `null` on the wire rather than an omitted key. Both reach Rust as
+    // `None` and both clear the row, so this pins the mirror's *signature* — `string | null`,
+    // which is what lets the panel's Reset button say what it means — rather than a difference
+    // the backend can see.
+    await ipc.setMarkColor("theoryExact", null);
+    expect(invoke).toHaveBeenCalledWith("set_mark_color", { mark: "theoryExact", color: null });
+    // The clearing arm is the crate's, not an inference from the signature.
+    expect(markcolorsRs).toContain("colors.remove(mark);");
   });
 
   /**
@@ -969,6 +1073,44 @@ describe("ipc argument names match the Rust command signatures", () => {
       finish: null,
       labelId: null,
     });
+
+    // **Three of them take `deckId: number | null`, and `null` is Settings' Appearance panel.**
+    // The label was never the deck's — a label has been one app-wide row since v21, and the deck
+    // is only what the *side effects* need, its `updated_at` and its history row. So a call from
+    // a page with no deck open sends `null` and writes neither. `list` and `removeFromDeck` above
+    // are untouched, and have to be: those two really are about one deck's list.
+    invoke.mockResolvedValue({ id: 5 });
+    await ipc.deckLabelCreate(null, "Playtest", "moss");
+    expect(invoke).toHaveBeenCalledWith("deck_label_create", {
+      deckId: null,
+      name: "Playtest",
+      color: "moss",
+    });
+
+    await ipc.deckLabelUpdate(null, 5, "Playtesting", "ember");
+    expect(invoke).toHaveBeenCalledWith("deck_label_update", {
+      deckId: null,
+      id: 5,
+      name: "Playtesting",
+      color: "ember",
+    });
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.deckLabelDelete(null, 5);
+    expect(invoke).toHaveBeenCalledWith("deck_label_delete", { deckId: null, id: 5 });
+
+    // The crate is read for the optionality rather than trusted — three separate declarations, so
+    // a `deck_id: i64` surviving on any one of them is a runtime rejection from that one panel
+    // with nothing red in either build. Sliced per command rather than counted across the file:
+    // `deck_meta.rs` spells `deck_id: Option<i64>` on its plain helpers too, so a bare count of
+    // the whole source would pass on the helpers alone.
+    expect(deckMetaRs.length).toBeGreaterThan(1_000);
+    for (const command of ["deck_label_create", "deck_label_update", "deck_label_delete"]) {
+      const at = deckMetaRs.indexOf(`pub async fn ${command}(`);
+      expect(at, `\`${command}\` is not declared in deck_meta.rs`).toBeGreaterThan(-1);
+      const signature = deckMetaRs.slice(at, deckMetaRs.indexOf(")", at));
+      expect(signature, `\`${command}\` still requires a deck`).toContain("deck_id: Option<i64>");
+    }
   });
 
   /**
@@ -1117,6 +1259,10 @@ describe("ipc argument names match the Rust command signatures", () => {
    *
    * The two theory writes both answer a **count**, and they count different things:
    * `copyFromLive` answers rows written, `missingToWishlist` answers wishes touched.
+   *
+   * `deck_theory_slots` is the read the editor's tick is drawn from, and it takes the deck and
+   * **nothing else** — nothing in it is priced, so there is no `marketplace` beside the id as
+   * there is on the diff.
    */
   it("sends the history and theory commands under the names their commands declare", async () => {
     invoke.mockResolvedValue([]);
@@ -1130,6 +1276,30 @@ describe("ipc argument names match the Rust command signatures", () => {
       marketplace: "tcgplayer",
     });
 
+    /**
+     * **`nameKey` is nullable and the annotation is the assertion.** The `null` below only
+     * type-checks because {@link TheorySlot.nameKey} is `string | null`; a mirror that typed it
+     * `string` — which is what the field looks like on every card whose printing is still in the
+     * corpus — makes this line a build error, and would make `theoryNameKey` fold `undefined` on
+     * exactly the orphan rows the loose tier exists to survive. Nothing else in the build
+     * compares the two sides, so this and the crate line below are the whole fence.
+     */
+    const slots: TheorySlot[] = [
+      { key: "sol-ring-c21|", nameKey: "Sol Ring", quantity: 1 },
+      { key: "gone-from-corpus|foil", nameKey: null, quantity: 2 },
+    ];
+    invoke.mockResolvedValue(slots);
+    const read = await ipc.deckTheorySlots(4);
+    expect(invoke).toHaveBeenCalledWith("deck_theory_slots", { deckId: 4 });
+    // Read back rather than only called: the mirror hands the answer through untouched, so an
+    // orphan has to arrive as `null` and not as an absent key a consumer would read as
+    // `undefined`.
+    expect(read[0]?.nameKey).toBe("Sol Ring");
+    expect(read[1]?.nameKey).toBeNull();
+    // The crate is read for the shape rather than trusted — `deck_theory_diff`'s rule above.
+    expect(deckTheoryRs.length).toBeGreaterThan(1_000);
+    expect(deckTheoryRs).toContain("pub name_key: Option<String>,");
+
     invoke.mockResolvedValue(12);
     const copied = await ipc.deckTheoryCopyFromLive(4);
     expect(invoke).toHaveBeenCalledWith("deck_theory_copy_from_live", { deckId: 4 });
@@ -1141,6 +1311,97 @@ describe("ipc argument names match the Rust command signatures", () => {
     // one reads `live` and only `live`, and the two shopping lists are different questions.
     expect(invoke).toHaveBeenCalledWith("deck_theory_missing_to_wishlist", { deckId: 4 });
     expect(wishes).toBe(3);
+  });
+
+  /**
+   * The four token commands, and the one argument in this whole file that is **renamed on the
+   * wire**.
+   *
+   * `deck_token_set`'s state word cannot be spelled `state` in Rust: `state` is already the
+   * managed `tauri::State` every command takes, so the parameter is `token_state` and the key
+   * the payload carries is `tokenState`. That rename lives in exactly one place — this
+   * wrapper — and nothing type-checks it: callers on this side pass `{ state }` because that
+   * is what the column is called, and a mirror that forwarded the word unchanged would hand
+   * `deck_token_set` a field it declares no parameter for. Tauri drops it, the command reads
+   * `None`, and a dismissal silently becomes "no change" with no error anywhere.
+   *
+   * The other three are pinned for the ordinary reason. `deck_tokens` is a read scoped by
+   * `variant`, like every deck read beside it. `deck_token_clear` addresses the override by
+   * the grain (`deckId`, `oracleId`); `deck_token_add` addresses a **printing** (`deckId`,
+   * `cardId`) because a hand-added token is picked out of a printings grid and Rust resolves
+   * the oracle id from it. Those two ids are one word apart and interchangeable to a
+   * type checker, so the swap is a runtime no-op the suite would otherwise never see.
+   */
+  it("names the deck token command arguments the way Rust spells them", async () => {
+    const row: DeckTokenRow = {
+      oracleId: "o-1",
+      name: "Treasure",
+      typeLine: "Token Artifact — Treasure",
+      layout: "token",
+      // The four disambiguation fields, and a `null` in each is a real answer: an artifact
+      // token has no power or toughness and Treasure is colourless. They are typed here rather
+      // than left off, because 104 token names in the corpus name more than one `oracle_id`
+      // and a mirror that dropped these would draw them as one tile.
+      power: null,
+      toughness: null,
+      colors: "",
+      oracleText: "{T}, Sacrifice this artifact: Add one mana of any color.",
+      defaultCardId: "c-default",
+      sources: [{ cardId: "d-1", name: "Smothering Tithe" }],
+      derived: true,
+      cardId: null,
+      quantity: null,
+      state: null,
+    };
+    invoke.mockResolvedValue([row]);
+
+    // Read back rather than assumed: the DTO reaches this side already camelCased by serde and
+    // the wrapper transforms nothing, so a mirror that renamed or dropped a field here would
+    // be the only thing standing between the crate and every caller. The annotation above is
+    // half the assertion — a field this side spells differently is a compile error here and
+    // `undefined` everywhere else.
+    expect(await ipc.deckTokens(7, "live")).toEqual([row]);
+    expect(invoke).toHaveBeenCalledWith("deck_tokens", { deckId: 7, variant: "live" });
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.deckTokenSet(7, "o-1", { cardId: "c-9", quantity: 4, state: "auto" });
+    expect(invoke).toHaveBeenLastCalledWith("deck_token_set", {
+      deckId: 7,
+      oracleId: "o-1",
+      cardId: "c-9",
+      quantity: 4,
+      tokenState: "auto",
+    });
+
+    // All five keys travel on every call, the `null`s included — Tauri fills parameters by
+    // name and an absent one is a refusal rather than a default, which is the same rule
+    // `deck_add_card`'s two category keys are written to.
+    await ipc.deckTokenSet(7, "o-1", { quantity: 2 });
+    expect(invoke).toHaveBeenLastCalledWith("deck_token_set", {
+      deckId: 7,
+      oracleId: "o-1",
+      cardId: null,
+      quantity: 2,
+      tokenState: null,
+    });
+
+    // A quantity of **zero** is a number the reader chose, not an absent one: `?? null` and
+    // never `|| null`, or stepping a token down to nothing would travel as "leave it alone"
+    // and the tile would spring back to what it was.
+    await ipc.deckTokenSet(7, "o-1", { quantity: 0, state: "hidden" });
+    expect(invoke).toHaveBeenLastCalledWith("deck_token_set", {
+      deckId: 7,
+      oracleId: "o-1",
+      cardId: null,
+      quantity: 0,
+      tokenState: "hidden",
+    });
+
+    await ipc.deckTokenClear(7, "o-1");
+    expect(invoke).toHaveBeenLastCalledWith("deck_token_clear", { deckId: 7, oracleId: "o-1" });
+
+    await ipc.deckTokenAdd(7, "c-9");
+    expect(invoke).toHaveBeenLastCalledWith("deck_token_add", { deckId: 7, cardId: "c-9" });
   });
 
   /**
@@ -2472,6 +2733,17 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // not the deck's own; `TheoryDiffRow.image_uris` is the row's printing.
     ["DeckRow", deckRs, "DeckRow"],
     ["TheoryDiffRow", deckTheoryRs, "TheoryDiffRow"],
+    // **The first row here that is not about a picture**, and it earns its place on the same
+    // mechanism rather than the same symptom. Four of `DeckTokenRow`'s fields exist solely to
+    // tell two tokens apart — `power`, `toughness`, `colors`, `oracleText` — because a token's
+    // name does not identify it: 104 token/emblem names are shared by more than one `oracle_id`
+    // (debug corpus, 2026-09-07), and `Wurmcoil Engine` alone puts two tokens both called
+    // `Wurm 3/3` in one deck. A field dropped on either side of this mirror would not blank a
+    // tile the way a missing `image_uris` does; it would draw two tiles that look and announce
+    // the same, which is the collection wall's shipped bug again and which neither suite can
+    // see. `colors` typed as an array rather than the concatenated letters `cards.colors`
+    // actually stores would be caught here too, by name parity alone.
+    ["DeckTokenRow", deckTokensRs, "DeckTokenRow"],
   ];
 
   it.each(mirrors)(
@@ -2574,6 +2846,32 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     ["WishOptimizeApplyItem", wishlistOptimizeRs, "WishOptimizeApplyItem"],
     ["WishOptimizeResult", wishlistOptimizeRs, "WishOptimizeResult"],
     ["WishlistOptimizeOutcome", wishlistOptimizeRs, "WishlistOptimizeOutcome"],
+    // **The deck gallery's two reads, added with the feature** (2026-09-07, issue #387). Four
+    // rows because both are **nested** for `OptimizePrinting`'s reason: `PipCost` is the whole
+    // content of a `DeckPipCosts` and `BracketCardRow` the whole content of a
+    // `DeckBracketRead`, so a field renamed one level down leaves the outer struct agreeing
+    // field for field while every value inside it arrives `undefined`.
+    //
+    // **`BracketCardRow` is on this list and not on `mirrors` above, and it is the closest call
+    // either table has had.** It is card-shaped — a name, oracle text, the faces blob — so the
+    // obvious reading is that the card table is where it goes. It is not: that table's two extra
+    // rules are properties of a card *wall's* row rather than of a card, and this row satisfies
+    // neither. It carries no `image_uris`, because the bracket estimate draws no picture and a
+    // gallery-wide read that shipped one would be carrying an art URL per card of every deck for
+    // a number in a caption; and it is five fields against a floor of ten, which is the same
+    // fact said twice — it is `estimateBracket`'s input and nothing else.
+    //
+    // What a drift here costs is worth stating because none of it is loud. A renamed
+    // `game_changer` reads `undefined`, `=== true` takes the other branch, and every deck in the
+    // gallery quietly estimates one bracket too low. A renamed `oracle_text` or `faces` empties
+    // the mass-land-denial and extra-turn greps, which fire on *no* deck rather than on the
+    // wrong one. A renamed `cost` on `PipCost` gives `countPips(undefined)` — no pips, no bar,
+    // on every tile at once. Every one of those is a plausible-looking gallery with a green
+    // build behind it.
+    ["PipCost", deckRs, "PipCost"],
+    ["DeckPipCosts", deckRs, "DeckPipCosts"],
+    ["BracketCardRow", deckRs, "BracketCardRow"],
+    ["DeckBracketRead", deckRs, "DeckBracketRead"],
   ];
 
   it.each(plainMirrors)(
@@ -2612,5 +2910,76 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
       tsFields(ipcSource, "DeckPullRow"),
       "`DeckPullRow` (ipc.ts) has no `imageUris`",
     ).toContain("imageUris");
+  });
+});
+
+/**
+ * **The condition scale is a Rust↔TypeScript contract with no compiler behind it**, and it is
+ * the same shape of seam as the sync event names above: `collection.rs` refuses a grade it does
+ * not know *in words* (`valid_condition`), and `conditions.ts` is what fills every dropdown the
+ * reader picks from. Nothing else in the build makes the two agree.
+ *
+ * The two ways it breaks are not symmetrical, and both are silent on this side:
+ *
+ * * a grade in `CONDITIONS` here that Rust does not know is a menu row that always fails, with
+ *   the backend's sentence surfacing as a red line under a control that looked ordinary;
+ * * a grade Rust accepts that this list omits is a stored row this app cannot label, filter or
+ *   offer — which is exactly what an imported database or a synced device can hand it.
+ *
+ * So the crate is read for the list, the way `deck_played_keys` is read for its name above.
+ * Compared as **sets**, because the two orders are allowed to differ and are not the same
+ * question: Rust's is the order `COLLECTION_SORTS`' `CASE` ranks a column by, and this side's is
+ * the order a dropdown offers.
+ */
+describe("the condition scale agrees with the crate that enforces it", () => {
+  /** Not `toContain` on the source alone: a pass has to mean "the crate spells it", never
+   *  "the crate was never read". */
+  it("read collection.rs", () => {
+    expect(collectionRs.length).toBeGreaterThan(1_000);
+  });
+
+  /** `[\s\S]` rather than the `s` flag, and a lazy body: the array fits on one line today and
+   *  rustfmt is free to wrap it the day a seventh grade is added. */
+  const rustList = (): string[] => {
+    const m = /pub const CONDITIONS: \[&str; \d+\] = \[([\s\S]*?)\];/.exec(collectionRs);
+    expect(
+      m,
+      "`collection.rs` no longer declares `CONDITIONS` in a shape this test can read",
+    ).not.toBeNull();
+    return [...(m as RegExpExecArray)[1].matchAll(/"([^"]+)"/g)].map((g) => g[1]);
+  };
+
+  it("offers exactly the grades the backend accepts", () => {
+    expect([...rustList()].sort()).toEqual([...CONDITIONS].sort());
+  });
+
+  it("declares the same length on both sides", () => {
+    // The `N` in Rust's `[&str; N]` is a third statement of the same fact and can rot on its
+    // own. A *widened* array with a stale length does not compile; a narrowed one does not
+    // either — but the pair only stays honest while something reads the number, and this is the
+    // only thing that does.
+    const m = /pub const CONDITIONS: \[&str; (\d+)\]/.exec(collectionRs);
+    expect(m).not.toBeNull();
+    expect(Number((m as RegExpExecArray)[1])).toBe(CONDITIONS.length);
+  });
+
+  it("records the same grade for a write that names none", () => {
+    // What a write naming no grade stores, asked on both sides by unrelated code —
+    // `valid_condition`'s `unwrap_or` there, `MENU_CONDITION` and the add popup's opening value
+    // here. A disagreement draws one grade and stores another.
+    const m = /pub const DEFAULT_CONDITION: &str = "([^"]+)";/.exec(collectionRs);
+    expect(m, "`collection.rs` no longer declares `DEFAULT_CONDITION`").not.toBeNull();
+    expect((m as RegExpExecArray)[1]).toBe(CONDITION_NOT_SET);
+  });
+
+  it("agrees on the sentinel's spelling", () => {
+    // `CONDITION_NOT_SET` and `DEFAULT_CONDITION` hold one string and are not one idea: the
+    // sentinel is *the grade meaning nobody said*, the default is *what an unnamed write
+    // records*. Pinned separately so a later release that defaults to something else does not
+    // silently take the sentinel with it.
+    const m = /pub const CONDITION_NOT_SET: &str = "([^"]+)";/.exec(collectionRs);
+    expect(m, "`collection.rs` no longer declares `CONDITION_NOT_SET`").not.toBeNull();
+    expect((m as RegExpExecArray)[1]).toBe(CONDITION_NOT_SET);
+    expect(CONDITIONS).toContain(CONDITION_NOT_SET);
   });
 });

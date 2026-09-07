@@ -82,3 +82,31 @@ export type CardIdentity = Pick<
   | "colors" | "colorIdentity" | "legalities" | "power" | "toughness" | "layout"
   | "rarity" | "faces" | "gameChanger" | "everUncommon"
 >;
+
+/**
+ * The five fields `estimateBracket` reads, and **only** those five.
+ *
+ * `categoryActive` is the filter, `name` is what the deck is counted by, `gameChanger` is the
+ * synced column, and `oracleText` plus `faces` are the two greps' whole input. There is no
+ * sixth: the estimator never looks at a legality, a colour identity, a quantity or a category
+ * kind, which is why the bracket can be read from a card list that has none of them.
+ *
+ * **This is the narrowing {@link CardFacts} itself was refused**, and the paragraph on
+ * {@link CardIdentity} above says why it was refused: the engine really does read
+ * `categoryKind`, `categoryActive` and `quantity`, so narrowing the type every rule shares
+ * would be claiming a card in a deck is no more than a card. Nothing about that has changed.
+ * What changed is that a **second surface** now asks the bracket question — the deck gallery,
+ * where every tile wants a floor and `deck_get`'s forty-field row is the heaviest read in the
+ * feature. `deck_bracket_reads` ships these five per card for every deck at once (397 distinct
+ * cards and 59 KB of oracle text across the dev database's four decks), and a parameter typed
+ * `CardFacts` would have made that read illegal at the type level while being perfectly
+ * sufficient at the value level. So the narrowing earned its way in here rather than there: it
+ * is the shape of one function's appetite, not a claim about what a deck card is.
+ *
+ * `DeckCard` satisfies a `Pick` of itself, so the editor's existing call site passes a whole
+ * row and compiles unchanged — the same property that made {@link CardIdentity} free.
+ */
+export type BracketCardFacts = Pick<
+  CardFacts,
+  "categoryActive" | "name" | "gameChanger" | "oracleText" | "faces"
+>;

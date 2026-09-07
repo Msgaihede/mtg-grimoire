@@ -6,8 +6,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID, TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { readDragData } from "@/features/decks/dnd";
+import { MENU_CONDITION } from "@/lib/conditions";
 import { readWishDrag } from "./wishDrag";
 import type {
+  CardSummary,
   ImportMatch,
   WishlistFolder,
   WishlistFolderSummary,
@@ -50,6 +52,16 @@ const wishlistSetFolder = vi.hoisted(() => vi.fn());
 // the ticked rows reach the apply.
 const wishlistOptimizePlan = vi.hoisted(() => vi.fn());
 const wishlistOptimizeApply = vi.hoisted(() => vi.fn());
+// The docked search column (2026-09-07). `search_cards` is its wall, `facet_cards` and
+// `list_sets` are the filter row it draws, `prefetch_images` is what its tiles ask for, and the
+// `search_open` pair is the disclosure's memory. Every one of them is a real `invoke`, so an
+// unmocked member is a `TypeError` on a page that now mounts this column by default.
+const searchCards = vi.hoisted(() => vi.fn());
+const facetCards = vi.hoisted(() => vi.fn());
+const listSets = vi.hoisted(() => vi.fn());
+const prefetchImages = vi.hoisted(() => vi.fn());
+const searchOpen = vi.hoisted(() => vi.fn());
+const setSearchOpen = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -72,11 +84,18 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     wishlistSetFolder,
     wishlistOptimizePlan,
     wishlistOptimizeApply,
+    searchCards,
+    facetCards,
+    listSets,
+    prefetchImages,
+    searchOpen,
+    setSearchOpen,
   },
 }));
 
 import { WishlistPage } from "./WishlistPage";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
+import { SEARCH_OPEN_KEY } from "@/features/search/useSearchOpen";
 import { useAppStore } from "@/lib/store";
 
 /** The one printing `import_resolve` answers with for the import test below —
@@ -177,6 +196,36 @@ const FILED: WishRow = {
   quantity: 1,
   ownedQuantity: 0,
   unitPrice: 30,
+};
+
+/**
+ * What the **docked search column** finds — a `CardSummary`, which is a different object from the
+ * `WishRow`s above and is the whole distinction between the two walls this page now mounts.
+ *
+ * `finishes` is the JSON the column stores, because `parseFinishes` is what the tile's drag record
+ * and the `+` popup both read it through: an unparsed list would be a drag `readSearchCardDrag`
+ * refuses rather than one that lands somewhere wrong.
+ */
+const SEARCH_BOLT: CardSummary = {
+  promoTypes: null,
+  id: "c1",
+  name: "Lightning Bolt",
+  setCode: "lea",
+  setName: "Limited Edition Alpha",
+  collectorNumber: "161",
+  rarity: "common",
+  typeLine: "Instant",
+  manaCost: "{R}",
+  price: 400.5,
+  layout: "normal",
+  oracleId: "o-bolt",
+  finishes: `["nonfoil","foil"]`,
+  ownedQuantity: 1,
+  wishlisted: true,
+  printings: 1,
+  priceLow: 400.5,
+  priceHigh: 400.5,
+  gameChanger: false,
 };
 
 /**
@@ -282,8 +331,29 @@ const total = async (currency: "USD" | "EUR" = "USD") =>
  * the next visit and a missing invalidation is invisible. One test below opts into the app's own
  * number for exactly that reason.
  */
-function wrap(ui: ReactElement, { staleTime = 0 }: { staleTime?: number } = {}) {
+function wrap(
+  ui: ReactElement,
+  { staleTime = 0, searchOpen: panelOpen = false }: { staleTime?: number; searchOpen?: boolean } = {},
+) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime } } });
+  /**
+   * The docked search column, **shut unless a case asks for it** — and that is a deliberate
+   * inversion of the app's own default (`DEFAULT_SEARCH_OPEN.wishlist` is `true`).
+   *
+   * Two `FilterBar`s are mounted together when the column is open, and `FilterBar` names its own
+   * controls: the `Show filters` disclosure, the `Sort results` trigger and every tray chip carry
+   * the same accessible name in both rows. That is not a bug in either — a control means the same
+   * thing wherever it appears — but it makes an unscoped `getByRole` on this page ambiguous, and
+   * `test-dropdown.ts`'s helpers query `screen` and cannot be scoped from here.
+   *
+   * So the hundred cases about *the wishlist* run with the column railed, which is a state a
+   * reader reaches with one press, and the cases about *the column* seed it open and say so. It is
+   * `DeckSearchPanel.test.tsx`'s `panel({ storedOpen })` seam, reached from the page side.
+   *
+   * Seeded into the cache rather than through the `search_open` command, because `useSearchOpen`'s
+   * query is `staleTime: Infinity` — a seeded entry is the answer, with no round trip to race.
+   */
+  client.setQueryData(SEARCH_OPEN_KEY, { wishlist: panelOpen });
   return {
     client,
     ...render(
@@ -464,6 +534,23 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue({ moves: [], considered: 1, alreadyCheapest: 1, skipped: 0 });
   wishlistOptimizeApply.mockReset().mockResolvedValue({ results: [] });
+  searchCards.mockReset().mockResolvedValue({ items: [SEARCH_BOLT], total: 1, totalIsCapped: false });
+  // Answered **cold** — `ready: false`, every map empty — so nothing in the panel's filter row
+  // greys and every control keeps its name. `DeckSearchPanel.test.tsx`'s fixture.
+  facetCards.mockReset().mockResolvedValue({
+    colors: {},
+    manaValues: {},
+    manaX: 0,
+    formats: {},
+    sets: {},
+    owned: { owned: 0, missing: 0 },
+    total: 0,
+    ready: false,
+  });
+  listSets.mockReset().mockResolvedValue([]);
+  prefetchImages.mockReset().mockResolvedValue(undefined);
+  searchOpen.mockReset().mockResolvedValue({});
+  setSearchOpen.mockReset().mockResolvedValue(undefined);
   // The table, which is not this view's default — the wall is (`store.ts`). Everything in the
   // first block below is about the list view and says so by asking for it; `the wall` block at
   // the end switches to the grid, and one test there holds the default itself. The same
@@ -1395,7 +1482,9 @@ describe("the card menu", () => {
       expect(collectionAdd).toHaveBeenCalledWith({
         cardId: "c1",
         finish: "foil",
-        condition: "NM",
+        // The constant rather than the grade: a one-press add makes no decision about a copy's
+        // condition, and this suite must go red the day it starts making one again.
+        condition: MENU_CONDITION,
         quantity: 1,
         // The root, because this reader has no collection folders — which is also why
         // `Collection` above is a plain action rather than the folder submenu (v24).
@@ -3165,5 +3254,171 @@ describe("the price sweep", () => {
       await within(reopened).findByRole("button", { name: "Switch 1 wish" }),
     ).toBeInTheDocument();
     expect(within(reopened).queryByRole("button", { name: "Done" })).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The docked card search, and the one thing it exists for: **a card the reader wants gets onto the
+ * list from the page that shows the list.**
+ *
+ * This page's own empty state used to send them away in as many words — *"Add cards from search
+ * with the + on any row or tile."* — so what is asserted here is the destination rather than the
+ * search: where a press files, where a drop files, and that the two rows of filters on screen are
+ * separately addressable.
+ *
+ * `WishlistSearchPanel.test.tsx` is where the column is the subject; this block is where the
+ * **page** is, which is why every case here reads a folder id off the wire.
+ */
+describe("the search column", () => {
+  /** The panel's `<section>`, by the name only this one answers to. */
+  const panel = () => screen.getByRole("region", { name: "Add cards to your wishlist" });
+
+  /** The `+` on the search wall's one tile, whose name states the destination it would file into. */
+  const plus = (destination: string) =>
+    screen.findByRole("button", { name: `Add Lightning Bolt (LEA 161) to ${destination}` });
+
+  /** Press the `+` and then the popup's own Add — the two-step every quick add is. */
+  const add = async (destination: string) => {
+    await userEvent.click(await plus(destination));
+    await userEvent.click(await screen.findByRole("button", { name: "Add to wishlist" }));
+  };
+
+  beforeEach(() => {
+    wishlistFolderList.mockResolvedValue(FOLDERS);
+    wishlistFolderSummary.mockResolvedValue(SUMMARY);
+  });
+
+  /**
+   * **Railed is still drawn**, which is what makes this a statement about the page rather than
+   * about the disclosure: the `<section>` and its chevron are the same three nodes in all three
+   * states, and only the body mounts on the press.
+   */
+  it("draws a card search beside the list", async () => {
+    wrap(<WishlistPage />);
+    await screen.findByText("Lightning Bolt");
+
+    const column = panel();
+    expect(within(column).getByRole("button", { name: "Expand card search" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    // Nothing was searched, because nothing was opened.
+    expect(searchCards).not.toHaveBeenCalled();
+
+    // And the collection's panel is not this one — two sidebars answering to one name is one of
+    // them being found by accident.
+    expect(
+      screen.queryByRole("region", { name: "Add cards to your collection" }),
+    ).not.toBeInTheDocument();
+  });
+
+  /**
+   * The two `FilterBar`s this page mounts together, told apart by the one thing that differs: the
+   * box's own name. `FilterLabels.idStem` is the other half — two mounted rows sharing an `id`
+   * would make the second row's `<label htmlFor>` name the first row's field — and it is asserted
+   * here through the labels resolving at all, since a duplicate `id` is what breaks that.
+   */
+  it("gives the two filter rows different names", async () => {
+    wrap(<WishlistPage />, { searchOpen: true });
+    await screen.findByText("Lightning Bolt");
+
+    expect(screen.getByLabelText(/search your wishlist/i)).toBeInTheDocument();
+    expect(within(panel()).getByLabelText("Search cards")).toBeInTheDocument();
+    // Neither name reaches the other row.
+    expect(within(panel()).queryByLabelText(/search your wishlist/i)).toBeNull();
+  });
+
+  /** Nothing is open, so the destination is the root — and `null` goes on the wire as itself. */
+  it("adds at the root when no folder is open", async () => {
+    wrap(<WishlistPage />, { searchOpen: true });
+    await screen.findByText("Lightning Bolt");
+
+    await add("Wishlist");
+
+    expect(wishlistAdd).toHaveBeenCalledWith(
+      expect.objectContaining({ cardId: "c1", folderId: null }),
+    );
+  });
+
+  /** And the whole point of the column: the drawer on screen is where a press files. */
+  it("adds from the search into the folder on screen", async () => {
+    wrap(<WishlistPage />, { searchOpen: true });
+    await userEvent.click(await screen.findByRole("button", { name: /^Ordered folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(1));
+
+    await add("Ordered");
+
+    expect(wishlistAdd).toHaveBeenCalledWith(
+      expect.objectContaining({ cardId: "c1", folderId: 1 }),
+    );
+  });
+
+  /**
+   * **Flatten means the root** (spec §5.3): the breadcrumb reads `Wishlist · all folders` and
+   * there is no folder on screen to be standing in, so the folder the reader last opened is not a
+   * destination the page may still file into behind their back.
+   *
+   * Driven by opening a folder *first* and then flattening, because the state this is about is a
+   * `folderId` that is still set underneath — flattening from the root would pass whether the page
+   * read the flag or not.
+   */
+  it("adds at the root while the cabinet is flattened", async () => {
+    wrap(<WishlistPage />, { searchOpen: true });
+    await userEvent.click(await screen.findByRole("button", { name: /^Ordered folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(1));
+
+    await userEvent.click(screen.getByRole("button", { name: /^Flatten/ }));
+    await waitFor(() => expect(lastQuery().flatten).toBe(true));
+
+    await add("Wishlist");
+
+    expect(wishlistAdd).toHaveBeenCalledWith(
+      expect.objectContaining({ cardId: "c1", folderId: null }),
+    );
+  });
+
+  /**
+   * **A wish for the printing the tile is of, not for the card.** `oracleId` is what an "any
+   * printing" wish is keyed on, and that is a choice the `+` popup offers explicitly — so a press
+   * that never made it must put the `cardId` on the wire and nothing else.
+   */
+  it("wishes for the printing the tile is of", async () => {
+    wrap(<WishlistPage />, { searchOpen: true });
+    await screen.findByText("Lightning Bolt");
+
+    await add("Wishlist");
+
+    const sent = wishlistAdd.mock.calls[0][0] as Record<string, unknown>;
+    expect(sent.cardId).toBe("c1");
+    expect(sent).not.toHaveProperty("oracleId");
+    // The printing's first available finish, carried rather than guessed — a wish for the foil is
+    // not filled by the nonfoil.
+    expect(sent.preferredFinish).toBe("nonfoil");
+  });
+
+  /**
+   * The drag half, and the assertion that separates it from every other drop on this page: a card
+   * nobody has wished for has no row to re-file, so the write is `wishlist_add` and **never**
+   * `wishlist_set_folder`.
+   */
+  it("files a dropped card into the folder it was dropped on", async () => {
+    wrap(<WishlistPage />, { searchOpen: true });
+    await screen.findByText("Lightning Bolt");
+    // The panel's tile, which is a `[data-dnd-source]` like the page's own rows — told apart by
+    // the column it is in rather than by its shape.
+    const tile = await waitFor(() => {
+      const found = panel().querySelector<HTMLElement>(`[${DND_SOURCE_ATTR}]`);
+      if (!found) throw new Error("no search tile");
+      return found;
+    });
+
+    await wishOnto(tile, folderCard("Ordered"));
+
+    await waitFor(() =>
+      expect(wishlistAdd).toHaveBeenCalledWith(
+        expect.objectContaining({ cardId: "c1", quantity: 1, preferredFinish: "nonfoil", folderId: 1 }),
+      ),
+    );
+    expect(wishlistSetFolder).not.toHaveBeenCalled();
   });
 });

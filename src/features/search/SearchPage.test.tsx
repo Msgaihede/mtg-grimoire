@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import { TOOLTIP_OPEN_MS, TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { readDragData } from "@/features/decks/dnd";
+import { MENU_CONDITION } from "@/lib/conditions";
 import { WALL_CARD_VARIANT } from "@/lib/images";
 import type { CardSummary, SearchRequest, SearchResponse, SetSummary, WishInput } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
@@ -52,6 +53,22 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     prefetchImages,
     collectionAdd,
     wishlistAdd,
+    // **The two below are not decoration**, and they arrived with the popup rather than with this
+    // page: every row's and every tile's `+` opens `AddToCollectionButton`, and since that popup
+    // grew a purchase-price field it reads `cardDetail` for the per-finish price it offers as a
+    // **placeholder**, and `marketplaceFeedStatus` beside `getMarketplace` so `useMarketplace`
+    // knows whose money the hint is quoted in. Left off this object they are `undefined`, and
+    // calling `undefined()` inside a `queryFn` is an error react-query **swallows into a query
+    // state** — so the suite would stay green while two requests failed on every render, which is
+    // the shape of a mock that has quietly stopped describing the component under test.
+    //
+    // They answer the shape and nothing interesting. A `null` price is the honest default as well
+    // as the quiet one: no placeholder is drawn, so nothing in this file can come to depend on a
+    // figure it does not assert.
+    marketplaceFeedStatus: vi.fn().mockResolvedValue([]),
+    cardDetail: vi.fn().mockResolvedValue({
+      finishPrices: { nonfoil: null, foil: null, etched: null },
+    }),
     syncStatus: vi.fn(),
     syncRun: vi.fn(),
     onSyncProgress: vi.fn(),
@@ -1548,7 +1565,9 @@ describe("the card menu", () => {
       expect(collectionAdd).toHaveBeenCalledWith({
         cardId: "1",
         finish: "foil",
-        condition: "NM",
+        // The constant rather than the grade: a one-press add makes no decision about a copy's
+        // condition, and this suite must go red the day it starts making one again.
+        condition: MENU_CONDITION,
         quantity: 1,
         // The root: this reader has no collection folders, so the finish submenu asserted
         // above is the whole of the cascade and no folder was ever named (v24).

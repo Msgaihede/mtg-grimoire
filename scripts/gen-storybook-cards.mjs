@@ -14,9 +14,12 @@
 // collection nobody can regenerate; this opens with `readOnly: true` and issues nothing but
 // `SELECT`s. The generated `.ts` and this script are committed; the database never is.
 //
-// Under `tauri dev` the database is `src-tauri/target/debug/data/mtg.db` — the data folder
+// Under `tauri dev` the database is `src-tauri/target/debug/data/corpus.db` — the data folder
 // sits beside the *exe*, and under dev that exe is in `target/debug`. Override with
-// `MTG_DB` if a different copy is wanted.
+// `MTG_DB` if a different copy is wanted. **`corpus.db` and not `mtg.db`**: schema 27 split
+// the reader's own tables out of the rebuildable ones, so `cards` lives in the corpus half
+// and a folder still holding `mtg.db` is converted at the next launch. This line said
+// `mtg.db` until 2026-09-07, by which time the default path resolved to nothing at all.
 
 import { DatabaseSync } from "node:sqlite";
 import { gunzipSync } from "node:zlib";
@@ -25,7 +28,7 @@ import { resolve } from "node:path";
 import { format, resolveConfig } from "prettier";
 
 const repoRoot = resolve(import.meta.dirname, "..");
-const dbPath = process.env.MTG_DB ?? resolve(repoRoot, "src-tauri/target/debug/data/mtg.db");
+const dbPath = process.env.MTG_DB ?? resolve(repoRoot, "src-tauri/target/debug/data/corpus.db");
 const outPath = resolve(repoRoot, ".storybook/fake/cards.ts");
 
 /**
@@ -118,6 +121,22 @@ const SELECTIONS = [
   ["Swords to Plowshares", "sld", "713", "en", "**A trait on a nonfoil-only printing** — `serialized`, `[\"nonfoil\"]`. The half of the widened reading that reaches a card which draws no mark at all today: serialized cardboard is serialized in whatever finish you hold it."],
 
   ["A-Vivi Ornitier", "fin", "A-248", "en", "An Alchemy rebalance: `isPaper: false`, so the search's `paperOnly` default has a second thing to hide and the two are not one set's quirk. Also the second printing whose oracle card the printings list must therefore return nothing extra for."],
+
+  // --- Tokens and emblems, which are rows of `cards` like any other and are what the deck
+  // editor's "Tokens & emblems" area is made of. **Kept last on purpose**: every seed that
+  // walks `CARDS` by position — the price feeds' every-fourth rule, the `large` corpus's
+  // templates — keeps the answer it had before these arrived. They are legal in nothing,
+  // cost nothing, and are `is_paper: true`, which is the combination the 52 playable rows
+  // above cannot reach: 3 245 token, emblem and double-faced-token rows sit in the corpus
+  // (measured 2026-09-07, debug build, 117 630 rows) and a fixture with none of them left a
+  // token tile drawing the unknown-card placeholder and an art picker with an empty grid.
+  ["Treasure", "thob", "13", "en", "The Treasure every deck that makes one reaches for: `layout: \"token\"`, no power or toughness, colourless, an empty mana cost and `not_legal` in all 23 formats. Its oracle card has **97 paper printings over 70 distinct arts** (measured 2026-09-07), which is why the art picker is a scrolling grid and not a dropdown — no other row here answers a printings list that long."],
+  ["Wurm", "t2xm", "29", "en", "**A token's name does not identify it**, and this is half the proof: a 3/3 Deathtouch Wurm. 104 token and emblem names are carried by more than one `oracle_id` (measured 2026-09-07) — `Elemental` by 31, `Spirit` by 22 — and grouping a deck's tokens by name instead of by oracle id folds this row into the next one."],
+  ["Wurm", "t2xm", "30", "en", "The other half: the same set, the adjacent collector number, the same name, the same 3/3 colourless artifact body — **and `Lifelink` where the row above says `Deathtouch`**. `Wurmcoil Engine` puts both on one deck's wall, so the rules text is the only field a subtitle can tell them apart by, and a subtitle truncated to fit a tile folds them back together."],
+  ["Construct", "tmsc", "14", "en", "A 4/4 with rules text and a printed P/T — the ordinary creature token beside the Treasure's empty box, so a tile that assumes a token has no body has something to get wrong. Two paper printings against Treasure's 97, which is the short end of the same art picker and the case a grid has to look right at."],
+  ["Oko, Shadowmoor Scion Emblem", "tecl", "12", "en", "`layout: \"emblem\"`, with a null power and toughness and a type line of the bare word `Emblem`. **The row the token filter rule's second half exists to keep**: an emblem arrives in a card's `all_parts` as a `combo_piece`, never as a `token`, so a `component == \"token\"` filter drops every one of the corpus's 137 emblem rows — and the layout, not the type line, is what says this is one."],
+  ["Start Your Engines! // Max Speed", "plst", "TDFT-14", "en", "`layout: \"double_faced_token\"`, and **the only row in this corpus with no top-level `image_uris` at all**: all 120 double-faced-token rows carry their URLs on `card_faces[0]` and none carries them on the card (measured 2026-09-07, debug build). So this is the one fixture that exercises the face-first resolution `toFakeCard` does below — a generator that read only the top level would emit a null `artCropUrl` here and the workbench would draw a placeholder over art that exists."],
+  ["Treasure", "tafr", "15", "en", "**A second printing of the Treasure above**, and the only oracle card in this corpus with two *token* printings — which is what makes an art choice a thing at all rather than a control with one option. Distinct art (Dan Murayama Scott against Kamila Szutenberg) and, more to the point, a distinct `released_at`: 2021-07-23 against `thob` 13's 2026-08-14, so `card::list_printings`' `released_at DESC, set_code ASC, collector_number ASC, id ASC` has an unambiguous winner and `db.ts`'s tie-break fixture is two real rows rather than two invented ones. **Appended last on purpose**, like the token block above it: every seed that walks `CARDS` by position keeps the answer it had."],
 ];
 
 /**

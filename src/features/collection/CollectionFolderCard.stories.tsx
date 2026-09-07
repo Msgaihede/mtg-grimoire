@@ -150,17 +150,20 @@ const meta = {
     // arm — at rest here, and open in exactly one story below.
     rename: RESTING,
     onDropCard: fn(),
-    // The page's own answer, verbatim, for both shapes a collection drop can be: a folder takes
-    // any copy that is not already filed in it. A *tile* is takeable when **at least one** of the
-    // copies behind it is somewhere else — a printing with copies in three folders is a real thing
-    // to file, and refusing it because one copy is already here would leave the other two
-    // unreachable by the gesture. Stated once here rather than per story, because it is the rule
-    // rather than a property of one tile; only the two drag stories below ever put anything in the
-    // air to ask it.
+    // The page's own answer, verbatim, for all three shapes a collection drop can be: a folder
+    // takes any copy that is not already filed in it. A *tile* is takeable when **at least one**
+    // of the copies behind it is somewhere else — a printing with copies in three folders is a
+    // real thing to file, and refusing it because one copy is already here would leave the other
+    // two unreachable by the gesture. A card off the sidebar's search wall is takeable outright:
+    // nobody owns it yet, so there is no folder it could already be in. Stated once here rather
+    // than per story, because it is the rule rather than a property of one tile; only the two drag
+    // stories below ever put anything in the air to ask it.
     canDrop: (drop: CollectionDrop): boolean =>
       drop.kind === "entry"
         ? drop.entry.folderId !== BINDER.id
-        : drop.tile.copies.some((copy) => copy.folderId !== BINDER.id),
+        : drop.kind === "tile"
+          ? drop.tile.copies.some((copy) => copy.folderId !== BINDER.id)
+          : true,
     // The page's rule for the *other* drag, cut down to the one drawer this wall draws: a folder
     // takes a sibling at any of the three landings, and refuses the folder that **is** it — which
     // is `reorderedLevel`'s first line said in the workbench's terms. Everything else the page

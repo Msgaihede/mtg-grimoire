@@ -25,7 +25,7 @@ import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { FOCUS } from "@/lib/focus";
 import type { WishlistFolder } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
-import { useWishDropTarget, type WishDrag } from "./wishDrag";
+import { useWishDropTarget, type WishDrop } from "./wishDrag";
 
 /** The root's own segment. Not a folder, and deliberately not spelled twice: it is the one
  *  destination whose id is `null`, which is a real place rather than an absent one. */
@@ -44,8 +44,8 @@ export function WishlistBreadcrumb({
   onOpen: (folderId: number | null) => void;
   /** Asked per segment rather than once for the bar — a wish already filed at the root refuses
    *  the root and still accepts an ancestor, so only the page can answer, and only per place. */
-  canDrop: (drag: WishDrag, folderId: number | null) => boolean;
-  onDropWish: (drag: WishDrag, folderId: number | null) => void;
+  canDrop: (drop: WishDrop, folderId: number | null) => boolean;
+  onDropWish: (drop: WishDrop, folderId: number | null) => void;
 }) {
   if (flattened) {
     return (
@@ -109,14 +109,14 @@ function Segment({
   folderId: number | null;
   name: string;
   onOpen: (folderId: number | null) => void;
-  canDrop: (drag: WishDrag, folderId: number | null) => boolean;
-  onDropWish: (drag: WishDrag, folderId: number | null) => void;
+  canDrop: (drop: WishDrop, folderId: number | null) => boolean;
+  onDropWish: (drop: WishDrop, folderId: number | null) => void;
 }) {
   const ref = useRef<HTMLButtonElement>(null);
   const { armed, over } = useWishDropTarget({
     ref,
-    canDrop: (drag) => canDrop(drag, folderId),
-    onDrop: (drag) => onDropWish(drag, folderId),
+    canDrop: (drop) => canDrop(drop, folderId),
+    onDrop: (drop) => onDropWish(drop, folderId),
   });
 
   return (

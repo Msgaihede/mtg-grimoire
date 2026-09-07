@@ -1352,6 +1352,9 @@ fn every_unique_index_on_a_synced_table_has_been_decided_about() {
             "deck_categories.idx_deck_categories_kind",
             // `DECK_LABEL_GRAIN` — one app-wide list since v21.
             "deck_labels.idx_deck_labels_grain",
+            // `DECK_TOKEN_GRAIN` — one row per token per deck since v37, and deliberately not
+            // per variant.
+            "deck_tokens.idx_deck_tokens_grain",
             // **The second of the two that are not a `CREATE INDEX` at all.** `device_names`
             // is `WITHOUT ROWID` on `device_id` (user schema v31), so its primary key IS the
             // table and SQLite reports it here under a generated name. It is the table's
