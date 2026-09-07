@@ -82,6 +82,44 @@ An entry that resolves to no local row is dropped rather than shown as a hole. T
 printings in the whole corpus, and a token nobody can draw or pick art for is not a row worth
 rendering.
 
+### A token's name does not identify it
+
+Grouping is by `oracle_id` and must never be by name. **104 token/emblem names are shared by more
+than one `oracle_id`:**
+
+| name | distinct `oracle_id`s |
+| --- | --- |
+| Elemental | 31 |
+| Spirit | 22 |
+| Bird, Soldier | 13 each |
+| Insect | 12 |
+| Golem | 11 |
+
+And one card can make two of them: **`Wurmcoil Engine` makes two tokens both called `Wurm 3/3`**,
+under different oracle ids, separated only by Deathtouch and Lifelink. A deck holding it gets two
+rows that are correct, adjacent and — without more — indistinguishable.
+
+That is a real bug and not a hypothetical one. It shipped once on the collection wall, where a 2X2
+and an LEA Lightning Bolt both announced *"Copies of Lightning Bolt"*; neither suite caught it
+because both names were correct and merely not unique.
+
+**What separates them is power/toughness *and* colors *and* oracle text, and no two of the three
+suffice.** Sampled across the 8 distinct `Soldier` tokens and the 8 distinct `Elemental` tokens,
+those three fields together told 8 of 8 apart in both cases — but the corpus holds a colorless
+`1/1` Soldier with no text beside a white `1/1` Soldier with no text, which p/t and text together
+cannot separate, and it holds a `*/*` Elemental, so `power` and `toughness` are strings and must
+never be parsed to numbers. So `DeckTokenRow` carries `power`, `toughness`, `colors` and
+`oracleText`, the panel draws a subtitle built from all three, and the quantity stepper folds that
+subtitle into its accessible name.
+
+### The default printing's tie-break is the common path
+
+Different maker cards name different printings of the same token: across 40 Treasure makers, **12
+distinct Treasure printings** were referenced. A deck with two Treasure makers pointing at two
+printings gives both a reference count of 1, so the tie-break — `released_at DESC, set_code ASC,
+collector_number ASC, id ASC`, the tail `list_printings` already orders by — is what actually
+chooses the art, rather than being the rare fallback it looks like.
+
 ---
 
 ## 3. Cost, and why the list is derived rather than stored

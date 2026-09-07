@@ -304,6 +304,16 @@ pub struct DeckTokenRow {
     pub name: String,
     pub type_line: Option<String>,
     pub layout: String,
+    // The four disambiguation fields. **A token's name does not identify it.** Measured on the
+    // debug corpus 2026-09-07: 104 token/emblem names are shared by more than one `oracle_id` —
+    // "Elemental" by 31, "Spirit" by 22, "Soldier" by 13 — and `Wurmcoil Engine` alone makes two
+    // tokens both called `Wurm 3/3`, separated only by Deathtouch vs Lifelink. Power, toughness,
+    // colors and oracle text together told 8 of 8 apart in both sampled names, and two tiles
+    // announcing one accessible name is a bug that has already shipped once on the collection wall.
+    pub power: Option<String>,
+    pub toughness: Option<String>,
+    pub colors: Option<String>,
+    pub oracle_text: Option<String>,
     /// The printing the resolver names, deterministically. Never null for a derived row.
     pub default_card_id: String,
     /// The deck cards that make it. Empty for a `manual` row nothing derives.
@@ -352,6 +362,14 @@ fn a_card_in_an_inactive_category_contributes_nothing() {
 
 #[test]
 fn two_deck_cards_naming_one_token_collapse_and_keep_both_sources() {}
+
+#[test]
+fn one_card_making_two_same_named_tokens_yields_two_rows() {
+    // `Wurmcoil Engine` makes two tokens BOTH called `Wurm 3/3`, under different `oracle_id`s,
+    // separated only by Deathtouch vs Lifelink. Grouping is by `oracle_id` and never by name,
+    // so this must be two rows. Measured on the debug corpus 2026-09-07; 104 token/emblem
+    // names in total are shared by more than one `oracle_id`.
+}
 
 #[test]
 fn the_default_printing_is_stable_across_calls() {
@@ -420,8 +438,20 @@ Then `pub fn deck_token_rows(conn, deck_id, variant) -> Result<Vec<DeckTokenRow>
 1. Select the deck's distinct `(card_id, name)` from `deck_cards dc JOIN deck_categories cat ON cat.id = dc.category_id WHERE dc.deck_id = ?1 AND dc.variant = ?2 AND cat.is_active = 1`.
 2. For each, `SELECT name, CAST(raw AS BLOB) FROM cards WHERE id = ?` and inflate with `crate::card_row::raw_json`. **`CAST(raw AS BLOB)` is required** — rusqlite will not hand a TEXT-declared value out as `Vec<u8>`, and `json_extract` over a gzip member is a hard `malformed JSON` error rather than a NULL, so this must never be done in SQL.
 3. Parse, walk `all_parts`, and for each entry with an `id`, a `name` and a `component`: skip when `part_name == producing card's own name`; resolve the id against `cards`; keep when `TOKEN_COMPONENTS.contains(component)` **or** `EXTRA_LAYOUTS.contains(target.layout)`.
-4. Group by the target's `oracle_id`, accumulating `sources` and a per-printing reference count.
+   The resolution query must select every display column the wire shape needs, not just the
+   layout it filters on:
+   `SELECT id, oracle_id, name, type_line, layout, power, toughness, colors, oracle_text FROM cards WHERE id = ?`.
+4. Group by the target's **`oracle_id`, never by name.** `Wurmcoil Engine` makes two tokens both
+   called `Wurm 3/3` under different oracle ids, and 104 token/emblem names in total are shared by
+   more than one oracle id. Accumulate `sources` and a per-printing reference count.
 5. `default_card_id` = the referenced printing with the highest reference count, ties broken by `released_at DESC, set_code ASC, collector_number ASC, id ASC` — the same tail `card::list_printings` orders by. **Deterministic, or the same deck draws different art on two opens.**
+
+   **The tie-break is the common path, not a corner case.** Different maker cards name different
+   printings of the same token: across 40 Treasure makers, 12 distinct Treasure printings were
+   referenced (debug corpus, 2026-09-07). A deck with two Treasure makers pointing at two
+   printings gives both a reference count of 1, so the tie-break is what actually chooses. Test it
+   directly — build a deck with exactly two makers naming two different printings of one token and
+   assert which id comes back, twice.
 6. `LEFT JOIN deck_tokens` on `(deck_id, oracle_id)` for `card_id`, `quantity`, `state`.
 7. Append `state = 'manual'` rows the deck derives nothing for, with `derived: false`, resolving their display fields from `cards` by `oracle_id`.
 
@@ -626,12 +656,30 @@ export interface DeckTokenView {
   state: DeckTokenState;
   /** True when the reader has deviated — drives the "reset" affordance. */
   overridden: boolean;
+  /** The disambiguator. Null for an emblem. */
+  subtitle: string | null;
 }
 export function deckTokenViews(
   rows: readonly DeckTokenRow[],
   opts?: { showDismissed?: boolean },
 ): DeckTokenView[];
 export function isEmblem(row: { layout: string }): boolean;
+/**
+ * A one-line disambiguator, because **a token's name does not identify it**. 104 token/emblem
+ * names are shared by more than one `oracle_id` (debug corpus, 2026-09-07) — "Elemental" by 31,
+ * "Spirit" by 22, "Soldier" by 13 — and `Wurmcoil Engine` makes two tokens both called
+ * `Wurm 3/3`, separated only by Deathtouch vs Lifelink.
+ *
+ * **Colors, power/toughness and oracle text must all participate**, because each alone is
+ * insufficient: the corpus holds a colorless 1/1 Soldier with no text and a white 1/1 Soldier
+ * with no text, which p/t and text together cannot separate.
+ *
+ * `power`/`toughness` are strings and must not be parsed to numbers — Scryfall writes `*`,
+ * `1+*` and `∞`, and there is a real `*/*` Elemental.
+ */
+export function tokenSubtitle(
+  row: Pick<DeckTokenRow, "power" | "toughness" | "colors" | "oracleText" | "layout" | "typeLine">,
+): string | null;
 ```
 
 **This is where the logic that can break lives, so this is where the tests are.** The rules, from spec §5:
@@ -784,7 +832,14 @@ Expected: no errors in your file. IDE diagnostics lag subagent writes and merges
 
 A header button (`aria-expanded`, `aria-controls`) reading `Tokens & emblems` with the count; the body renders only when open. Body is a wall of tiles at the `GridView` scale — reuse `TILE_WIDTH = 150` from `views/GridView.tsx:69` by importing it, do not retype the number. Each tile: `<CardArt>` for `view.printingId`, the name, a `<QuantityStepper size="xs">`, and a press that opens the picker.
 
-**Accessible names must be unique and must not be broken by a CSS gap.** A label and a count in two flex children compute to `"Missing2"`; and two tiles that announce the same name are a real bug the suites cannot see (it shipped once on the collection wall). Give each stepper `label={`Quantity of ${view.name}`}` and make sure the name is unique within the panel — it is, because the list is deduped by `oracleId`.
+**Accessible names must be unique and must not be broken by a CSS gap.** A label and a count in two flex children compute to `"Missing2"`; and two tiles that announce the same name are a real bug the suites cannot see — it shipped once on the collection wall, where a 2X2 and an LEA Lightning Bolt both announced "Copies of Lightning Bolt". Both names were correct and merely not unique, which is why neither suite caught it.
+
+**Deduping by `oracleId` is not enough to make the name unique here.** 104 token/emblem names are shared by more than one `oracle_id` (debug corpus, 2026-09-07): "Elemental" by 31, "Spirit" by 22, "Soldier" by 13 — and `Wurmcoil Engine` alone puts two tokens both called `Wurm 3/3` in one deck. So:
+
+- Draw `view.subtitle` on every tile that has one, under the name.
+- Label the stepper with the subtitle folded in: ``label={view.subtitle ? `Quantity of ${view.name}, ${view.subtitle}` : `Quantity of ${view.name}`}``.
+
+Give the name and the subtitle their own element each, and do not rely on two flex children concatenating cleanly — a CSS `gap` between them makes the computed name run the words together.
 
 **Empty state:** when the deck derives nothing, the header says so and the body stays collapsed. Not an error, and not dependent on the Tagger datasets, the price feeds or the relay — this feature reads the corpus and nothing else.
 
