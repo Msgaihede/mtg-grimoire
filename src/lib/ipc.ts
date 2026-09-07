@@ -2917,7 +2917,7 @@ export interface DeckRow {
    * Whether this deck draws the **green** theory mark — the live row that is the printing the
    * plan named.
    *
-   * `decks.theory_mark_exact INTEGER NOT NULL DEFAULT 1`, schema v35. Per **deck**, which is
+   * `decks.theory_mark_exact INTEGER NOT NULL DEFAULT 1`, schema v36. Per **deck**, which is
    * {@link DeckRow.separateXGroup}'s argument below and {@link DeckRow.theoryEnabled}'s above:
    * whether a substitute printing is worth a mark is a statement about how *this* deck is being
    * built, so two decks may disagree and a duplicate must carry the answer across.

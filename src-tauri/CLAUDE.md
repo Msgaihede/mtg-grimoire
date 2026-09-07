@@ -163,15 +163,20 @@ both plus the frontend.
   rebuild emits no sync ops**: `DROP TABLE` takes the three capture triggers with it,
   `prepare_database` reinstalls them on the next line, and the copy lands in a table that has none
   while it is being written.
-- **`UNDO_V35` maps rather than deletes, and it runs first.** The rewind carries an ungraded row
+- **`UNDO_V35` maps rather than deletes, and it runs second — behind `UNDO_V36` and ahead of
+  everything else.** It read "and it runs first" for as long as v35 was head, which v36 made
+  false the same day; the chains themselves are `{UNDO_V36} {UNDO_V35} {UNDO_V34} …` and were
+  right throughout, because they are code. The rewind carries an ungraded row
   back as `'NM'` — precisely what the old `DEFAULT` would have recorded for the same press —
   because no rewind on either ladder may lose one of the reader's cards. It can collide on the
   grain where a printing is held at both `NONE` and `NM`, and the closing
   `CREATE UNIQUE INDEX` is where that fails loudly rather than quietly; no fixture seeds such a
-  pair. Its position is load-bearing beyond the usual walk-backwards rule: `UNDO_V29` does
+  pair. **What is load-bearing about its position is the rung it must precede, not the place it
+  holds in the list**: `UNDO_V29` does
   `ALTER TABLE collection_entries DROP COLUMN sync_uid`, and `DROP COLUMN` refuses a column an
   index names — so `UNDO_V35` has to have put `idx_collection_entries_uid` back before
-  `UNDO_V29` takes it away.
+  `UNDO_V29` takes it away. `UNDO_V36` sitting above it changes nothing about that: it drops two
+  `decks` columns and touches no index anywhere.
 - **v24 and v25 are one spec's rung split in two, and the split is deliberate.** v24 creates
   `collection_folders` in its **final** shape — `kind` and `deck_id` columns and both partial
   unique indexes included — and files nothing into it. **v25 inserts the single `removed` folder

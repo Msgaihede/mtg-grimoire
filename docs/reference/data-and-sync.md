@@ -684,16 +684,20 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `foreign_keys=ON` fires none either. Nothing points an enforced foreign key at
   `collection_entries` at head — `deck_allocations` went at v25 — so the `foreign_keys` pragma
   cannot make this rung behave two ways.
-  **`UNDO_V35` maps rather than deletes, and it runs first.** The rewind carries an ungraded row
+  **`UNDO_V35` maps rather than deletes, and it runs second** — behind `UNDO_V36` and ahead of
+  everything else. It read "and it runs first" for as long as v35 was head, which **v36 made false
+  the same day**; every chain is `{UNDO_V36} {UNDO_V35} {UNDO_V34} …` and was right throughout,
+  because a chain is code and this sentence is not. The rewind carries an ungraded row
   back as `'NM'`, which is precisely what the old `DEFAULT` would have recorded for the same
   press, because no rewind on either ladder may lose one of the reader's cards. It **can** collide
   on the grain where one printing is held at both `NONE` and `NM`, and the closing
   `CREATE UNIQUE INDEX` is where that fails loudly rather than quietly; no fixture seeds such a
-  pair. Its position at the head of every chain is load-bearing beyond the walk-backwards rule
-  every rewind follows: `UNDO_V29` does
+  pair. **What is load-bearing is the rung it must precede rather than the place it holds in the
+  list**: `UNDO_V29` does
   `ALTER TABLE collection_entries DROP COLUMN sync_uid`, and `DROP COLUMN` refuses a column an
   index names — so `UNDO_V35` has to have put `idx_collection_entries_uid` back before `UNDO_V29`
-  comes to take it away.
+  comes to take it away. `UNDO_V36` above it changes nothing there — it drops two `decks` columns
+  and names no index at all.
   **Two prose chains in `schema.rs` were already stale before this branch opened** and were
   corrected while the rung was being written: `UNDO_V33` still called itself "the newest rewind on
   the user ladder", which `UNDO_V34` had already made false, and
@@ -705,6 +709,35 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   against that device's narrower CHECK. That is true of every shape rung this repo has shipped —
   v34's `collection_folders.locked` has exactly the same property — and it is not v35's to fix;
   it is written down here so the next person meets it in a document rather than in a failure.
+  **v36 gives `decks` two columns, `theory_mark_exact` and `theory_mark_name`** — which of the
+  theory mark's two tiers a deck draws, now that a live row can be the printing the plan named
+  *or* the same card in one it did not. `NOT NULL DEFAULT 1` both, which is the whole of the
+  upgrade: every deck that already exists draws both marks from the first launch on the new
+  build, so there is no backfill because there is nothing for one to do. **Two columns rather
+  than one three-valued one**, because `none | exact | both` cannot spell blue *without* green,
+  and blue without green is a real answer — a reader who cares that a card is present and not
+  which printing it is. **Appended at the end**, which is what keeps `deck.rs`'s positional
+  `r.get(n)` reads honest: both are `INTEGER` beside seven other `INTEGER`s on that row, so a
+  column inserted anywhere but last hands a bracket to a bool with nothing going red.
+  **It was written as v35 and renumbered at the merge**, which is this ladder's rule working for
+  the third time — v12/v13/v14 collided three ways in one day, v33 and v34 twice, and v35 and v36
+  landed the same day from two branches. The number belongs to whoever lands first.
+  **Both columns are on the capture spec and travel**, `bracket`'s precedent at v26: which tier a
+  deck draws is an answer *about the deck*, and two devices showing one deck's marks differently
+  with nothing on screen explaining it is the failure that edit prevents. The mark's **colours**
+  are deliberately not on it — a rendering choice belongs to the device that draws it, which is
+  why the three `last_*` columns are absent too. **`capture.rs` spells its `decks` field list out
+  by hand and there is no fence in the other direction** — nothing asserts every column of a
+  synced table is on its spec — so the two names needed a deliberate edit rather than travelling
+  for free, and a column added to a synced table and not to that list is captured by nothing and
+  goes red nowhere.
+  **`DEFAULT 1` is load-bearing for the sync as well as for the no-backfill argument**, which
+  only reading `sync_engine::apply` settles: `updates` walks the **local** spec and `continue`s
+  past a field an old peer's op lacks, so the column is left as it was, and `creations` omits it
+  from the INSERT, so it falls to the DDL default and a deck built from an old peer's op arrives
+  with both marks on. A `NOT NULL` column with no default would have failed that INSERT instead,
+  and `insert_row`'s caller answers a failed insert with `ROLLBACK TO savepoint` and
+  `Outcome::Deferred` — the group would stall at that op for ever.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every

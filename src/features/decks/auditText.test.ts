@@ -646,7 +646,7 @@ describe("auditSentence", () => {
   });
 
   /**
-   * `decks.theory_mark_exact` and `decks.theory_mark_name` (schema v35) — the **third and
+   * `decks.theory_mark_exact` and `decks.theory_mark_name` (schema v36) — the **third and
    * fourth** multi-word field names the backend writes, and the X-split test's paragraph
    * applies to both: an unrecognised field is "Changed the deck", which is true of every deck
    * edit and therefore never fails, so only a test can hold the two spellings together.

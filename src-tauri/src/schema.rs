@@ -7932,7 +7932,6 @@ pub(crate) mod tests {
     /// head would leave `migrate_user` no rung to run, and every test above would pass while
     /// watching nothing happen. The other order is loud on its own — a fixture that kept either
     /// column dies at `duplicate column name`, which is [`UNDO_V36`]'s whole reason.
-
     #[test]
     fn the_v35_fixture_carries_none_of_v36() {
         let conn = user_file_at_35();
