@@ -116,7 +116,7 @@ both plus the frontend.
   every upgraded one, and a fresh worktree is a fresh install, so nothing else here can see it.
   The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
-  numbers from there (`USER_SCHEMA_VERSION` **35** since a deck's group started holding only
+  numbers from there (`USER_SCHEMA_VERSION` **36** since a deck's group started holding only
   copies its live list claims at `(card_id, finish)`, `CORPUS_SCHEMA_VERSION` 1, deliberately
   incomparable). This line read **v25** while that was head, and
   [the ladder's history](../docs/reference/data-and-sync.md) is the story. (This line read
@@ -137,11 +137,40 @@ both plus the frontend.
   so it owes its `USER_SCHEMA_SQL` line and its `UNDO_V34`, where v32 owed neither. **v33 and v34
   landed the same day from two branches**, which is this list's own rule in action: take the next
   free number when you land, never reuse one, and never assume the number you wrote is the one
-  you ship. **v35** (2026-09-07) sweeps every `collection_folders` row with `kind = 'deck'`,
-  moving what no live `deck_cards` row claims at `(card_id, finish)` into `Recently removed` —
-  the rung that brings a file converted at v25 under the rule `owned_by_printing` now enforces at
-  read time — and is the second rung on either ladder that changes no shape at all, so it owes
-  neither a `USER_SCHEMA_SQL` line nor an `UNDO_V35`, where v34 owed both.)
+  you ship. v35 widens `collection_entries.condition` to a sixth value, `NONE` — *not set* — and
+  makes it the column's `DEFAULT`, for
+  [issue #361](https://github.com/Msgaihede/mtg-grimoire/issues/361). **v36** (2026-09-07) sweeps
+  every `collection_folders` row with `kind = 'deck'`, moving what no live `deck_cards` row
+  claims at `(card_id, finish)` into `Recently removed` — the rung that brings a file converted
+  at v25 under the rule `owned_by_printing` now enforces at read time — and is the second rung on
+  either ladder that changes no shape at all, so it owes neither a `USER_SCHEMA_SQL` line nor an
+  `UNDO_V36`, where v34 and v35 each owed both. **It was written as v35 and renumbered on the way
+  in**, this list's own rule again, and it runs *after* v35 for a reason renumbering does not
+  settle by itself: v35 rebuilds `collection_entries`, and v36 reads and writes that table.)
+- **v35 is the user ladder's third table rebuild, and a CHECK is why.** SQLite cannot alter one,
+  so widening the grade list means building `collection_entries_v35`, copying every column
+  **including `id`**, dropping, renaming and replaying all five indexes as frozen literals — the
+  v8 `deck_cards` shape, after v29's `error_log` and v33's `deck_audit`. **It rewrites no existing
+  row**: a database full of `NM` stays that way, because nothing can tell which of those grades a
+  reader assessed and which the app chose for them. Two consequences the rebuild has that an
+  `ALTER TABLE` rung does not. **`ALTER TABLE … RENAME TO` quotes the stored name**, so
+  `collection_entries` joins `deck_cards`/`deck_labels`/`deck_audit`/`error_log` in wearing quotes
+  in `USER_SCHEMA_SQL`, and the old ALTER-artefact tail (`, folder_id INTEGER …, sync_uid TEXT);`)
+  becomes ordinary column lines — this is the first user rung to change that literal's *shape* for
+  a table rather than only adding to it, and
+  `the_user_schema_is_byte_identical_to_what_the_ladder_builds` is what says so. And **the
+  rebuild emits no sync ops**: `DROP TABLE` takes the three capture triggers with it,
+  `prepare_database` reinstalls them on the next line, and the copy lands in a table that has none
+  while it is being written.
+- **`UNDO_V35` maps rather than deletes, and it runs first.** The rewind carries an ungraded row
+  back as `'NM'` — precisely what the old `DEFAULT` would have recorded for the same press —
+  because no rewind on either ladder may lose one of the reader's cards. It can collide on the
+  grain where a printing is held at both `NONE` and `NM`, and the closing
+  `CREATE UNIQUE INDEX` is where that fails loudly rather than quietly; no fixture seeds such a
+  pair. Its position is load-bearing beyond the usual walk-backwards rule: `UNDO_V29` does
+  `ALTER TABLE collection_entries DROP COLUMN sync_uid`, and `DROP COLUMN` refuses a column an
+  index names — so `UNDO_V35` has to have put `idx_collection_entries_uid` back before
+  `UNDO_V29` takes it away.
 - **v24 and v25 are one spec's rung split in two, and the split is deliberate.** v24 creates
   `collection_folders` in its **final** shape — `kind` and `deck_id` columns and both partial
   unique indexes included — and files nothing into it. **v25 inserts the single `removed` folder
@@ -621,9 +650,25 @@ shared_cell` walks both into two databases and compares them column by column.
   by table CHECK (`quantity > 0`) — a wish for none of something is not a wish — so the two tables
   now agree where they used to be a deliberate asymmetry. Both still refuse a negative through the
   one `collection::valid_quantity`.
-- Finish is an **enum** (`nonfoil|foil|etched`), condition is one of `NM|LP|MP|HP|DMG`; both
+- Finish is an **enum** (`nonfoil|foil|etched`), condition is one of `NONE|NM|LP|MP|HP|DMG`; both
   are CHECK-constrained in SQL _and_ validated in Rust, and the imported string is kept in
   `condition_original`.
+- **`NONE` is *not set* — the grade that says nobody assessed the copy — and it is
+  `DEFAULT_CONDITION` since schema v35.** A write that names no grade records that none was
+  named, where it used to record `NM`. Three things follow and each has bitten something:
+  **a sentinel string, never a NULL**, because `condition` is `idx_collection_grain`'s third term
+  and SQLite counts two NULLs as distinct in a unique index — a nullable column would make every
+  ungraded add a *new row* rather than folding onto the one already there. **It sorts last**
+  (`COLLECTION_SORTS`' `CASE` runs `NM 0 … DMG 4, NONE 5`) so the scale stays a scale and the
+  ungraded pile lands at the end of it, while every picker lists it *first*, because there it is
+  the default rather than a grade — two orders, neither derived from the other. And **it stops at
+  the database**: `mirror/read.rs`'s `condition_of` maps it to `None` so an export writes an empty
+  Condition cell, which is also what makes the round trip close, since an empty cell is exactly
+  what the importer reads as "the file did not say". `CONDITION_NOT_SET` and `DEFAULT_CONDITION`
+  hold one string and are two ideas — the sentinel, and what an unnamed write records — so import
+  the one you mean.
+- **v35 did not touch existing rows.** A database full of `NM` stays full of `NM`, because
+  nothing can tell which of those grades a reader assessed and which the app chose for them.
 - **`schema::FINISHES` is the one finish vocabulary and is read by index, never respelled.**
   `sorting::finish_literals` quotes it for SQL, `marketplace_feed`'s `NONFOIL`/`FOIL`/`ETCHED`
   index it, and the three DDL `CHECK`s spell it out because a migration step is history —

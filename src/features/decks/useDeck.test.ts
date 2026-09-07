@@ -2,6 +2,7 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createElement, type ReactNode } from "react";
+import { MENU_CONDITION } from "@/lib/conditions";
 import type {
   DeckCard,
   DeckCategory,
@@ -1290,9 +1291,14 @@ describe("useDeck", () => {
 
   /**
    * **The quick add sends the row's own address and the app's one condition.** `finish` is the
-   * deck row's — `null` is the regular copy — and the condition is `MENU_CONDITION`, which is the
-   * `"NM"` every other menu add in this app records at. Both are read off the card rather than
+   * deck row's — `null` is the regular copy — and the condition is `MENU_CONDITION`, which is
+   * whatever every other menu add in this app records at. Both are read off the card rather than
    * assembled by the caller, so a foil row cannot be recorded as a regular copy.
+   *
+   * **Asserted against the imported constant and never against its current value.** It was `"NM"`
+   * until schema v35 gave the column a grade meaning "the reader did not say"; a test spelling
+   * the letters out would have gone green over a hook that had stopped agreeing with the one
+   * place that decision is written down, which is the whole reason the constant exists.
    *
    * The answer is read back, because it is what a sentence quotes: the backend answers what it
    * *wrote*, and a mirror typed `void` would throw away both counts.
@@ -1307,7 +1313,7 @@ describe("useDeck", () => {
       wishId: null,
     });
 
-    expect(deckQuickAddToCollection).toHaveBeenCalledWith(4, "p1", null, "NM", 2, null);
+    expect(deckQuickAddToCollection).toHaveBeenCalledWith(4, "p1", null, MENU_CONDITION, 2, null);
     expect(outcome).toEqual({ copies: 2, entryId: 44, wishCopies: 1 });
   });
 
@@ -1323,7 +1329,7 @@ describe("useDeck", () => {
       wishId: 7,
     });
 
-    expect(deckQuickAddToCollection).toHaveBeenCalledWith(4, "p1", "foil", "NM", 1, 7);
+    expect(deckQuickAddToCollection).toHaveBeenCalledWith(4, "p1", "foil", MENU_CONDITION, 1, 7);
   });
 
   /**

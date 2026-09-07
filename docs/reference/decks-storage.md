@@ -155,9 +155,14 @@ preferred_finish`'s nullability one table over.
 - **Which totals a pile lands in: the switch decides whether it counts at all; the kind
   decides only whether it is played _beside_ the deck or _in_ it, and only `side` and
   `companion` are beside it** (CR 100.4a; EDH's companion is "effectively a 101st card"). So
-  `SIZE_KINDS` is `main`, `commander` **and `maybe`** — written in three places that must stay
+  `SIZE_KINDS` is `main`, `commander` **and `maybe`** — written in **four** places that must stay
   one rule: `engine.ts`'s constant, `deck.rs`'s `DECK_SELECT` subquery behind
-  `DeckRow.card_count`, and the Storybook fake's copy. Leaving `maybe` out is the incoherent
+  `DeckRow.card_count`, the Storybook fake's copy, and — since 2026-09-07 — `deck.rs`'s
+  `PIP_COSTS_SQL`, the deck tile's colour bar, which was copied off `DECK_SELECT` rather than
+  re-derived precisely because a bar counting a different pile than the number printed beside it
+  is a tile disagreeing with itself.
+  `the_colour_bar_reads_the_same_pile_the_gallery_count_does` is the fence on that fourth copy.
+  Leaving `maybe` out is the incoherent
   version, not the smaller one: an _active_ Maybeboard was then inside the format's card pool
   and inside the binder's reservations but outside the size, so a second Sol Ring in it raised
   a singleton error under a figure that still read 100.
@@ -1847,3 +1852,179 @@ question for a live pass and not for this page.
 **Nothing in this section has been measured in the shipped window.** The pull's own live pass is
 the model for the one this owes: the two-press case above, a wish picker with several folders, and
 what the editor's banner says when the wish read fails.
+
+## The gallery's two second reads, and the order it opens in (2026-09-07, issue #387)
+
+The deck wall wanted two facts `deck_list` has never answered — **what colours a deck is** and
+**what bracket it reads as** — and the only card-shaped read in the feature was `deck_get`, which
+is the heaviest read here and is per deck. Forty tiles is forty of those. So two reads were added
+that answer the *whole gallery* in one round trip each, plus one `app_meta` row for the order.
+The plan is `docs/superpowers/plans/2026-09-07-deck-gallery-overview.md`; what the bar and the
+caption *look* like is [frontend-design.md](frontend-design.md), and what the estimate is allowed
+to conclude is [commander-brackets.md](commander-brackets.md).
+
+**All three figures below were taken on the dev database under `tauri dev` (a _debug_ build),
+2026-09-07: 4 decks, 611 `deck_cards` rows.** They are shape figures rather than timings — what
+crosses the wire for a gallery — and a reader's own database will differ by however much bigger
+it is.
+
+### `deck_pip_costs` — the colour bar's facts, and no parameters at all
+
+```
+PipCost      { cost: string; copies: number }
+DeckPipCosts { deckId: number; costs: PipCost[] }
+```
+
+**Every deck at once, and the read takes no arguments on purpose.** The gallery draws every deck
+it has, an archived one included behind the disclosure, and an archived deck's bar is the same
+fact as any other's — so there is nothing to narrow by and a per-deck read would be one query per
+tile on a page that is already one query. Measured: **90 rows** for the whole gallery, against
+611 `deck_cards` rows. That ratio is the entire argument for the read's existence, and it is what
+folding by cost string buys — a deck plays a handful of distinct costs and forty-odd cards at
+them.
+
+**`PIP_COSTS_SQL`'s `WHERE` clause is `DeckRow.card_count`'s, copied from `DECK_SELECT`'s
+correlated subquery rather than re-derived**: `variant = 'live'`, `cat.is_active = 1`, and
+`cat.kind IN ('main','commander','maybe')` — `SIZE_KINDS`, the three-place rule this page states
+further up. The bar is drawn under a caption that already says how many cards the deck has, so a
+bar counting a different pile than that number counts is **a tile disagreeing with itself**.
+`the_colour_bar_reads_the_same_pile_the_gallery_count_does` is what keeps the two literals
+honest, and it is written as a theory row, a switched-off category, a `side` pile and a
+`companion` pile each colouring nothing in turn.
+
+Three narrowings are worth naming because each is a decision rather than a filter:
+
+- **The `cards` join is _inner_, and it is the only inner join among this file's reads apart from
+  `deck_categories`.** Everywhere else a `LEFT JOIN cards` is discipline — an orphaned row is a
+  card the reader still owns and must still see. Here it would buy a NULL cost, which the next
+  two predicates drop anyway: `deck_cards` denormalizes the printing and the name, **never the
+  mana cost**, so a row whose printing has left `cards` has no *printed* cost to contribute and
+  nothing this read could invent for it.
+- **A NULL or empty cost is dropped rather than shipped.** Every land is one and a Commander deck
+  is a third lands, so shipping them would be ~35 rows per deck carrying no pip, for a bar that
+  would draw exactly the same.
+- **A deck with nothing to say is _absent_ from the answer rather than present and empty.** A
+  pile of basics, a deck whose every row has been orphaned, and a deck with no cards at all all
+  answer no entry — which is what a `GROUP BY` gives, and what the reading side is written for:
+  a deck it cannot find is a deck with no pips, and draws no bar.
+
+**Rust ships the cost strings and TypeScript counts the pips**, which is this crate's
+facts/conclusions boundary applied to a colour bar. What a `{W/U}` is worth to a bar is a display
+decision — it counts as one pip of *each* half, because the bar answers *what does this deck
+want* rather than what will be spent — and it is decided in `src/lib/mana.ts`'s `addPips`, over
+the one `{…}` `SYMBOL` tokeniser this app already has. `cost` is `cards.mana_cost` verbatim,
+including the one-string form a split or double-faced card carries (`"{3}{U} // {3}{R}"`), and
+`copies` is `sum(quantity)` and not a row count, so four Lightning Bolts across two printings are
+one entry reading four.
+
+The statement's `ORDER BY dc.deck_id, c.mana_cost` is the grouping's and not a contract about
+presentation: rows arrive deck by deck so the fold in `pip_costs` is a single pass with no
+`HashMap`, and by cost within a deck so two runs over one database cannot answer in two different
+orders. What order the *segments* are drawn in is `MANA_KEYS`', on the other side of the wire.
+
+### `deck_bracket_reads` — the estimate's facts, over a different pile on purpose
+
+```
+BracketCardRow  { name; gameChanger; oracleText; faces; categoryActive }
+DeckBracketRead { deckId: number; cards: BracketCardRow[]; combos: DeckCombo[] }
+```
+
+Measured: **397 distinct cards across 4 decks, 59 KB of oracle text**, for one gallery.
+
+**The pile is `variant = 'live'` and `cat.is_active = 1` in _every_ kind, and that is deliberately
+not the pip read's three.** A Commander deck has no sideboard, so a reader who has filed cards
+there has filed them somewhere the estimate still has to see — and this is the pile
+`DeckBracket.tsx` hands the estimator today. Two reads of one deck answering two different piles
+is the disagreement worth avoiding: the gallery and the editor have to reach the same bracket for
+the same deck.
+
+- **`SELECT DISTINCT`, because the estimator dedupes by name anyway.** A card in two piles, or a
+  foil row beside a regular one, is two `deck_cards` rows saying one thing about a bracket — and
+  this read ships oracle text for every deck on the page at once. The `ORDER BY` names all four
+  selected columns rather than the name alone, so two runs over one database cannot answer in two
+  different orders even where one name is carried by rows that differ.
+- **`dc.name`, not `c.name`** — the denormalized column `deck_card_select` reads at the same
+  position. The estimator dedupes on this string and so does the editor's panel, so a gallery
+  reading the live `cards` row would fold a renamed or re-worded printing differently from the
+  editor looking at the same deck. It is also the only name an orphaned row has at all.
+- **`LEFT JOIN cards`, this file's discipline unchanged** — the opposite call from the pip read
+  one section up, and for the reason that read gives: an orphan keeps its denormalized name and
+  contributes no text, which is the honest reading, because nothing is known about a card that is
+  not there. `game_changer` is read as `Option<bool>` and coalesced to **false**: the column is a
+  list membership, so "not on the list" and "no row to ask" are one answer, which is
+  `ImportMatch::game_changer`'s rule.
+- **`categoryActive` is always `true` on every row this read emits, and is carried anyway** — a
+  literal, since the `WHERE` has already pinned it. `estimateBracket` opens with
+  `cards.filter(c => c.categoryActive)` and takes the same shape the editor hands it out of a
+  fully loaded deck, where the flag really does vary. A row that omitted it would be a second
+  type for one function, and the day the filter changed the two callers would part company
+  silently.
+
+**`BRACKET_IDS_SQL` builds the combo matcher's id list over the _same_ pile**, which is
+`DeckBracket.tsx:117-121` written in SQL — and it has to be, because `estimateBracket` does not
+re-check the combos it is handed. A caller that matched over a switched-off pile's cards gets
+back a combo the deck does not really play, and nothing downstream can tell.
+
+Two contract details the caller depends on:
+
+- **The caller passes the deck ids, and that is a boundary rather than a convenience.** Which
+  formats have a command zone is a `format_specs.commander_rule` question TypeScript already
+  answers (`useFormatSpecs`), so a `WHERE fs.commander_rule …` here would be this crate drawing a
+  conclusion — and drawing it again, differently, the day a second format grew brackets. **An
+  empty request touches no database at all**, so a gallery with no Commander deck on it costs no
+  query.
+- **One entry per requested id, in request order** — `tags`' contract for its two per-card reads,
+  and for its reason: the caller holds a list and wants a lookup, so **a deck deleted since the
+  list was taken answers empty lists rather than going missing from a positional answer**.
+- **A deck listing more than `combos::MAX_CARD_IDS` distinct printings fails the whole call**,
+  with `combos::TOO_MANY_CARDS` — `match_combos`' own refusal, propagated rather than caught.
+  That is `combos_for_cards`' behaviour unchanged, and the alternative, a silently truncated id
+  list, would answer a *wrong* combo set that reads exactly like a right one. The bound is 1 000
+  distinct printings against a Commander deck's hundred.
+
+### `deck_sort` / `set_deck_sort` — one `app_meta` row, and a vocabulary Rust does not have
+
+`src-tauri/src/decksort.rs`, ported from `listview.rs` whole: one key, `deck_sort`, holding a
+single string like `"updated:desc"`, with `DEFAULT = "updated:desc"` — today's order exactly, so
+the release that added a sort control does not quietly re-sort a reader's wall. **No migration**:
+`app_meta` is schema v6's key/value table — the *application's*, deliberately not `sync_meta`,
+where a row the sync did not write makes every later timing claim a fiction — and this is a key
+in it.
+
+**The one place it narrows `listview.rs` is the whole of what is worth writing down.** That
+module checks the word it is given against `LAYOUTS`, because a wall is drawn one of two ways and
+this build knows both. **This one checks nothing but emptiness**, because the words are
+`src/features/decks/deckSort.ts`' — six keys and two directions today, three of which are
+computed on the TypeScript side and have no SQL counterpart to check against — and *a database
+outlives the app*. A key a later build stops offering, or one an earlier build has never heard
+of, has to degrade to the default **on the reading side**; refused at the write end it would be a
+reader whose sort silently would not save, on a build that had every reason to think it had. So
+the row is **stored and answered verbatim** and TypeScript's `parseDeckSort` is what degrades it.
+
+- **Reading can never fail.** A missing row, an unreadable one, and a row somebody emptied by
+  hand all answer `DEFAULT`, and `deck_sort` is therefore **infallible by signature** —
+  `card_zoom`'s contract, for its reason: a preference that cannot be read is not worth refusing
+  to draw a gallery over. It is `#[tauri::command(async)]` rather than a bare sync command,
+  `listview`'s call again, because a sync body runs inline on the IPC thread and this one takes
+  `db_read`'s mutex, which a search may hold for tens of milliseconds.
+- **Writing validates exactly one thing**: `store` refuses an empty string, which is
+  `listview::store`'s blank-section refusal and its reason — a blank is a bug in the caller
+  rather than an order, and stored it would be a row that reads back as "nothing stored" forever
+  while the write that made it reported success. Everything else is written as given, and
+  `BUSY` is the only other answer, which a first-run sync can spend whole minutes returning.
+- **A default here, not — as `listview::stored` has it — an absence.** That module answers a map
+  and lets a missing entry mean "the frontend's own default"; there is one setting here and one
+  string to answer with, so an `Option` would be an emptiness every caller had to spell the same
+  fallback for.
+- **Only the sort is remembered.** A filter is a thing a reader is doing right now, and a gallery
+  that opened already narrowed, with no memory of having asked for it, is a gallery that looks
+  like it has lost decks.
+
+### Routing and the command count
+
+All four commands are registered in `desktop.rs` and routed in `web/route.rs` — **including the
+write.** A read-only sort on the web build would be the setting *not existing* rather than being
+read-only, and the row is `app_meta` like every other preference the web target already keeps.
+`COMMANDS.len()`'s assertion moved by four, and the new figure was **read off the assertion's own
+failure rather than reached by arithmetic** — which is the only way that number has ever been got
+right, and the reason no count of commands is written on this page.

@@ -154,6 +154,100 @@ export function hasVariableCost(cost: string | null): boolean {
   return false;
 }
 
+/**
+ * One printed cost's coloured symbols, by colour — {@link MANA_KEYS}' six, every one present and
+ * every one a number.
+ *
+ * A `Record` rather than a `Map`, because the vocabulary is closed and the bar draws it in
+ * `MANA_KEYS` order: a colour with no pips is a `0` here and no segment on screen, which is a
+ * different fact from a colour the counter has never heard of.
+ */
+export type PipCounts = Record<ManaKey, number>;
+
+/**
+ * A count with nothing in it yet — six zeroes.
+ *
+ * **Written out rather than built from {@link MANA_KEYS}, and the literal is the fence.** A
+ * seventh key added to that tuple makes this line a type error, where an
+ * `Object.fromEntries(MANA_KEYS.map(…)) as PipCounts` would have satisfied the compiler with a
+ * record missing an entry — and a missing entry reads as `undefined + copies` and poisons the
+ * whole count with `NaN` the first time a card asks for that colour.
+ */
+export function emptyPips(): PipCounts {
+  return { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
+}
+
+/** The six keys a pip can be, as a set the tokeniser can ask about one half at a time. */
+const PIP_KEYS: ReadonlySet<string> = new Set<string>(MANA_KEYS);
+
+/** Is this brace-less half one of the six? A predicate rather than a bare `has` at the call
+ *  site, so the accumulator below can be indexed with no cast. */
+function isPipKey(token: string): token is ManaKey {
+  return PIP_KEYS.has(token);
+}
+
+/**
+ * Fold one printed cost into `into`, `copies` times.
+ *
+ * **Accumulating rather than answering, because the caller folds a whole gallery.** The deck
+ * overview counts every deck's pips at once, and `deck_pip_costs` hands it one `(cost, copies)`
+ * pair per distinct cost per deck — 90 rows for the dev database's four decks, measured
+ * 2026-09-07 — so a function that allocated a fresh record per pair would allocate ninety and
+ * throw eighty-nine away. {@link countPips} is this one *with* the allocation, for the
+ * single-cost question.
+ *
+ * The rules, and only one of them is a decision rather than a reading:
+ *
+ * * **A coloured symbol is one pip of its colour.** `{W}` is a W.
+ * * **A hybrid is one pip of _each_ half** — `{W/U}` is a W *and* a U, so a Boros Charm and a
+ *   `{R/W}` cost say the same thing about the deck holding them. It is a cost the reader may pay
+ *   either way, so neither half is truer than the other; the bar answers **what does this deck
+ *   want**, not what will be spent. Halving the pip, or picking the side the deck has more of,
+ *   would be this module inventing an answer the cardboard deliberately leaves open.
+ * * **A twobrid is its colour and a Phyrexian is its colour**: `{2/W}` is a W, `{W/P}` is a W,
+ *   `{W/U/P}` is a W and a U. Those are not three more rules — they fall out of the hybrid one,
+ *   because every half that names a colour counts and every half that does not is skipped, and
+ *   `2` and `P` are halves that do not.
+ * * **`{C}` is a pip**, and it is the colourless one. It is a demand for a real kind of mana,
+ *   which is exactly what separates it from the generic below.
+ * * **Generic is not a pip.** `{2}`, `{X}`, `{Y}`, `{Z}`, `{S}`, `{E}`, `{T}`, `{Q}` and
+ *   everything else these six keys do not name contribute nothing — the issue's own instruction
+ *   ("ignore general mana cost"), and the right one: generic mana says how *much* a card costs
+ *   and this is asking *what* it costs.
+ * * **A split or double-faced cost is one string** (`"{1}{R} // {1}{U}"`) and every symbol in it
+ *   counts, which is {@link hasVariableCost}'s reading of the same shape: a card that can be
+ *   cast either way wants both. The `//` between them is not a symbol, so the tokeniser walks
+ *   past it with nothing to do.
+ *
+ * `null` and `""` are both an empty count, exactly as they are for {@link hasVariableCost}: an
+ * empty cost is the **land** case — Scryfall gives a transform's back face `""` and
+ * `.storybook/fake/cards.ts` seeds `""` for lands — so it is a cost with no symbols rather than
+ * a cost nobody knows. A pile of nothing but basics therefore counts to six zeroes, which is
+ * what lets the bar draw *nothing* for it rather than a grey rule saying so.
+ *
+ * It goes through {@link SYMBOL} rather than a regex of its own, and that is
+ * {@link hasVariableCost}'s rule for its reason: a second, looser spelling of "what is a symbol"
+ * is exactly how the two drift.
+ */
+export function addPips(into: PipCounts, cost: string | null, copies: number): void {
+  if (!cost) return;
+  for (const match of cost.matchAll(SYMBOL)) {
+    // Uppercased for the reason `hasVariableCost` lowercases — nothing guarantees the case a
+    // cost arrives in — and split on `/` because that is the whole of what a hybrid, a twobrid
+    // or a Phyrexian token is: a list of halves, each of which either names a colour or does not.
+    for (const half of match[1].toUpperCase().split("/")) {
+      if (isPipKey(half)) into[half] += copies;
+    }
+  }
+}
+
+/** One cost's pips on their own — {@link addPips} into a fresh count, one copy of the card. */
+export function countPips(cost: string | null): PipCounts {
+  const counts = emptyPips();
+  addPips(counts, cost, 1);
+  return counts;
+}
+
 /** The classes that draw one brace-less token, or `null` if the font has no glyph for it. */
 function manaGlyphClass(token: string): string | null {
   const bare = token.toLowerCase().replace(/\//g, "");
