@@ -324,9 +324,36 @@ const TWO_PILES: CardGroup[] = buildGroups(
 const PLANNED_PRINTING: DeckCard = card({ name: "Sol Ring" });
 const OTHER_PRINTING: DeckCard = { ...card({ name: "Sol Ring" }), cardId: "c-Sol Ring-alt" };
 
+/**
+ * **A planned card in an _active_ command zone, which is the row this fixture existed without and
+ * the reason a real bug reached the shipped window.**
+ *
+ * `StackView` draws three runs — the command zone, the flow and the rail — and threads each one's
+ * props separately. `theoryPlan` reached the flow and the rail and **not** the command zone, so
+ * the commander and the companion were the only cards in a Commander deck that never said whether
+ * they matched the plan: the two cards the deck is *built around*. Every prop on that box is
+ * optional, so nothing in the type system had anything to say, and the tier sweep below could not
+ * see it because its deck had no command zone at all.
+ *
+ * Measured in the shipped window before the fix (`tauri dev`, debug build, a copy of the real
+ * database, deck "Bruna"): 73 live cards, **69** marks — 36 `exact`, 33 `name`. Of the four
+ * unmarked cards three were genuinely unplanned and the fourth was the commander, whose live and
+ * theory rows are the same `card_id` at the same finish, one copy each, in an active `commander`
+ * pile. Named after that card so the fixture and the report say the same thing.
+ *
+ * **The other two boxes are covered by construction rather than by a case each**: the rail's piles
+ * and the flow's go through the same `StackGroup`, and the flow is what every other tier
+ * assertion here already renders.
+ */
+const PLANNED_COMMANDER: DeckCard = card({
+  name: "Bruna, the Fading Light",
+  categoryKind: "commander",
+  typeLine: "Legendary Creature — Angel",
+});
+
 const TIER_GROUPS: CardGroup[] = buildGroups(
-  [PLANNED_PRINTING, OTHER_PRINTING],
-  [RAMP],
+  [PLANNED_COMMANDER, PLANNED_PRINTING, OTHER_PRINTING],
+  [COMMANDER, RAMP],
   "category",
   "alphabetical",
 );
@@ -349,8 +376,18 @@ const TIER_GROUPS: CardGroup[] = buildGroups(
  * built with the same function the code looks it up with agrees by construction.
  */
 const TIER_PLAN: TheoryPlan = {
-  exact: new Map([[`${PLANNED_PRINTING.cardId}|`, 0]]),
-  byName: new Map([["sol ring", 0]]),
+  exact: new Map([
+    [`${PLANNED_PRINTING.cardId}|`, 0],
+    [`${PLANNED_COMMANDER.cardId}|`, 0],
+  ]),
+  // The commander is in both grains, as a plan built by `theoryMatchPlan` would have it — so the
+  // assertion that it reads `exact` is a discrimination between the two tiers rather than between
+  // a mark and none, which is the stronger of the two claims and the one that catches a command
+  // zone quietly resolving one tier down.
+  byName: new Map([
+    ["sol ring", 0],
+    ["bruna, the fading light", 0],
+  ]),
   marks: { exact: true, name: true },
 };
 
@@ -458,13 +495,19 @@ describe.each(VIEWS)("$name", ({ render: renderView }) => {
    * and jsdom resolves no stylesheet, so reading one would pass against the wrong tier just as
    * happily. `THEORY_MATCH_ATTR` carries the tier as its value precisely to be this handle.
    *
-   * `violations: undefined` because {@link VIOLATIONS} bans Sol Ring and both rows here are one:
-   * two rule breaks would be drawn over the very corner this is about, for no gain.
+   * `violations: undefined` because {@link VIOLATIONS} bans Sol Ring and two of these rows are
+   * one: rule breaks drawn over the very corner this is about, for no gain.
+   *
+   * **{@link PLANNED_COMMANDER} is the third row and it is not decoration.** `StackView` draws
+   * its command zone through a call site of its own, so a fact threaded to the flow and the rail
+   * can miss it with nothing going red — which is exactly what happened, and what a deck with no
+   * command zone in it could never have caught.
    */
   it("says which tier each row is in, on the mark's own attribute", () => {
     setup({ groups: TIER_GROUPS, theoryPlan: TIER_PLAN, violations: undefined });
 
     expect(tiersBySlot()).toEqual({
+      [slotOf(PLANNED_COMMANDER)]: "exact",
       [slotOf(PLANNED_PRINTING)]: "exact",
       [slotOf(OTHER_PRINTING)]: "name",
     });

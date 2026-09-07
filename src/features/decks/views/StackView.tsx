@@ -722,6 +722,7 @@ export function StackView({
             groups={command}
             marketplace={marketplace}
             violations={violations}
+            theoryPlan={theoryPlan}
             onSelect={selectCard}
             actions={actions}
             selectedSlot={selectedSlot}
@@ -863,6 +864,7 @@ function CommandZone({
   groups,
   marketplace,
   violations,
+  theoryPlan,
   onSelect,
   actions,
   selectedSlot,
@@ -876,6 +878,21 @@ function CommandZone({
   groups: readonly CardGroup[];
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
+  /**
+   * The deck's plan, handed through exactly as {@link CommandZone.violations} above it is.
+   *
+   * **This box is the one place a per-card fact can go missing without a type saying so**, and it
+   * did: every prop here is optional, so a plan left out of the call site compiled, rendered, and
+   * drew a commander with no theory mark on it — the one card a Commander deck is *built around*
+   * being the only one that could not say whether it matched the plan. Found by driving the
+   * shipped window against real data (deck "Bruna", 73 live cards, 69 marks) and by nothing in
+   * the suite, because no fixture had put an **active** command zone against a plan.
+   *
+   * It is emphatically not {@link StackGroup.flowWidth}'s kind of absence. That prop is withheld
+   * here on purpose and says five things at once; this is a fact *about a card*, and a card in
+   * this box is a card in the deck like any other.
+   */
+  theoryPlan?: TheoryPlan;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
   /** Handed through to the piles — see {@link StackView}'s own props. */
@@ -923,6 +940,7 @@ function CommandZone({
           group={group}
           marketplace={marketplace}
           violations={violations}
+          theoryPlan={theoryPlan}
           onSelect={onSelect}
           actions={actions}
           selectedSlot={selectedSlot}
