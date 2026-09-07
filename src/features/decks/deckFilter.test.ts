@@ -28,6 +28,7 @@ function deck(over: Partial<DeckRow> & { name: string }): DeckRow {
     separateXGroup: false,
     defaultCategoryId: 0,
     bracket: 0,
+    tokensOpen: false,
     ...over,
   };
 }

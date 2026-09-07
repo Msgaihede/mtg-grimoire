@@ -63,6 +63,10 @@ pub const COMMANDS: &[&str] = &[
     // that play a given set. Reads, so they belong in this half and not in the one below.
     "deck_played_keys",
     "deck_ids_playing",
+    // The tokens and emblems a deck needs — a read like the twelve above it, and one that
+    // reaches nothing a browser lacks: it inflates `cards.raw` and walks `all_parts`, which is
+    // `card_meld_parts`' trick and compiles on every target for the same reason.
+    "deck_tokens",
     // Decks, write path. **Complete since 2026-08-31.** One name was permanently missing from
     // it — `deck_set_cover_image`, the eleventh on §6.3's desktop-only list, which wrote a file
     // into a covers directory and did not compile for wasm at all — and it is missing now
@@ -101,6 +105,12 @@ pub const COMMANDS: &[&str] = &[
     "deck_theory_missing_to_wishlist",
     "deck_undo_apply",
     "deck_redo_apply",
+    // The three token writes. Plain `sync::with_write` on the other side — nothing here moves a
+    // copy across the collection boundary, so none of them is one of the four that owe
+    // `with_write_owned`.
+    "deck_token_set",
+    "deck_token_clear",
+    "deck_token_add",
     // The Collection destination, and the pair that moves a row across the deck boundary.
     "collection_list",
     "collection_summary",
@@ -990,6 +1000,74 @@ pub fn call(
                 command,
                 crate::sync::with_write(state, |c| {
                     crate::deck_undo::apply_reversal(c, deck_id, audit_id, false)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        // ── Tokens and emblems ──────────────────────────────────────────────────────
+        //
+        // The read follows `card_meld_parts` above: it inflates `cards.raw` and walks
+        // `all_parts`, which needs no filesystem, no network and no marketplace. Nothing in
+        // the answer is priced.
+        "deck_tokens" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let variant: String = field(command, args, "variant")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::deck_tokens::deck_token_rows(&conn, deck_id, &variant)
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        // **`tokenState` on the wire, `token_state` in Rust, `state` in the column.** The
+        // rename is the Tauri command's — `state` is already the managed `AppState` every
+        // command takes — and this arm has to spell the *wire* name, because that is what
+        // `src/lib/ipc.ts` sends on both targets. `optional` and not `field` for all three:
+        // the page sends `null` for a field it is not setting, and a null is an answer here
+        // rather than a missing argument.
+        "deck_token_set" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let oracle_id: String = field(command, args, "oracleId")?;
+            let card_id: Option<String> = optional(command, args, "cardId")?;
+            let quantity: Option<i64> = optional(command, args, "quantity")?;
+            let token_state: Option<String> = optional(command, args, "tokenState")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::deck_tokens::set_token_override(
+                        c,
+                        deck_id,
+                        &oracle_id,
+                        card_id.as_deref(),
+                        quantity,
+                        token_state.as_deref(),
+                    )
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_token_clear" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let oracle_id: String = field(command, args, "oracleId")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::deck_tokens::clear_token_override(c, deck_id, &oracle_id)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_token_add" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let card_id: String = field(command, args, "cardId")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::deck_tokens::add_token(c, deck_id, &card_id)
                 })
                 .map_err(RouteError::Failed)?,
             )
@@ -2738,9 +2816,18 @@ mod tests {
         // **130** — which neither side could have written and adding one branch's delta to the
         // other's total would have got to only by luck. `left` in the assertion message is
         // `COMMANDS.len()` as the build computed it; that is the answer.
+        //
+        // **It happened again immediately**, which is why the paragraph above is not a story
+        // about one afternoon: the deck-gallery branch (issue #387) and the tokens one
+        // (issue #388) each read 135 while they were open, and the merge answers **139**.
+        //
+        // **And a third time, which is now the expected shape rather than a surprise.** The
+        // theory-mark branch read **137** and the token branch **139** while both were open,
+        // and this merge answers **141** — again a number neither side wrote and neither
+        // side's delta added to the other's total would have reached.
         assert_eq!(
             COMMANDS.len(),
-            137,
+            141,
             "update this number when a command is added"
         );
     }

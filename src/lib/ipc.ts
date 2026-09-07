@@ -2754,6 +2754,20 @@ export interface DeckPatch {
    */
   separateXGroup?: boolean;
   /**
+   * Whether the editor's **Tokens & emblems** area is expanded. See
+   * {@link DeckRow.tokensOpen} — a per-deck reading preference, so switching it writes one
+   * column and touches not one `deck_cards` row.
+   *
+   * **It rides this patch and not {@link ipc.deckSetViewState}**, which is the shape
+   * `separate_x_group` is in and not the one the three `last*` columns are in, even though this
+   * column sits beside all four. The two commands differ in what a write *costs*: this one moves
+   * `updated_at` and writes a history line, and that one deliberately does neither. So the choice
+   * is worth stating rather than inheriting — a disclosure a reader opens once and leaves open is
+   * a handful of audited writes over a deck's life, where the tab, the grouping and the sort are
+   * written on every press and would fill the history with how somebody was looking at the page.
+   */
+  tokensOpen?: boolean;
+  /**
    * Which of this deck's categories an add that names none lands in. See
    * {@link DeckRow.defaultCategoryId} — `0` is `AUTO_CATEGORY` and is a **value**, not an
    * absence: sending it puts the deck back on "by what the card does".
@@ -3041,6 +3055,24 @@ export interface DeckRow {
    * {@link ipc.deckUpdate} with the rename and the format.
    */
   separateXGroup: boolean;
+  /**
+   * Whether the editor's **Tokens & emblems** area is expanded — `decks.tokens_open INTEGER NOT
+   * NULL DEFAULT 0`, schema v35, and `false` on every deck that has never been opened, which is
+   * the state every existing deck is in.
+   *
+   * **Per deck rather than app-wide**, because whether a reader wants the token wall in front of
+   * them is an answer about a particular deck: a Commander list built on Treasure and Wurms
+   * wants it open, and the Modern deck that makes nothing at all cannot use it. A single setting
+   * would make them re-decide every time they changed deck.
+   *
+   * **Collapsed by default is the whole of what the column buys.** The area resolves its list on
+   * every deck open whether or not it is drawn, so this decides one thing: whether a reader who
+   * never sleeves tokens pays one header row for the feature or a wall of them.
+   *
+   * Read on the row as well as written through {@link DeckPatch}, for {@link theoryEnabled}'s
+   * reason — a setting the app can write and never see is a setting nothing can draw.
+   */
+  tokensOpen: boolean;
   /**
    * Which of this deck's categories an add that names no pile lands in — `decks.default_category_id`,
    * schema v16, and **`AUTO_CATEGORY` (`0`) for "let the card's own text decide"**.
@@ -3482,6 +3514,116 @@ export interface DeckDetail {
   /** Every label of the deck, alphabetically — the palette a row's mark is picked from, which
    *  exists whether or not any row is wearing it. */
   labels: DeckLabel[];
+}
+
+/**
+ * Whether a stored token row is a plain override, a dismissal, or a hand-added extra.
+ *
+ * The vocabulary is closed by a `CHECK` on the column rather than by convention, so this union
+ * is the whole of it: `auto` carries an art or a quantity for a token the deck derives anyway,
+ * `hidden` is one the reader dismissed and is still derived, and `manual` is drawn whether
+ * anything derives it or not — a token added by hand, and what a derived one becomes when the
+ * reader wants it kept after cutting the card that made it.
+ */
+export type DeckTokenState = "auto" | "hidden" | "manual";
+
+/**
+ * A deck card that makes a token — the answer to *why is this here*.
+ *
+ * A printing (`cardId`) rather than an oracle id, because that is what the deck holds and what
+ * a surface has to draw or scroll to.
+ */
+export interface TokenSource {
+  cardId: string;
+  name: string;
+}
+
+/**
+ * One token or emblem a deck needs, with the reader's stored override joined on.
+ *
+ * **The list is derived on every deck open and stored nowhere** — Rust inflates the `raw` blob
+ * of each distinct card in the deck's *active* categories and reads `all_parts`. So the first
+ * seven fields are facts about the corpus and the deck, and the last three are the only thing
+ * `deck_tokens` holds: `cardId`, `quantity` and `state` are all `null` together when the reader
+ * has never deviated, because the table stores deviations and nothing else.
+ *
+ * **The effective values are TypeScript's conclusion, not this row's**: `deckTokenViews` in
+ * `@/features/decks/deckTokens` resolves the printing (`cardId ?? defaultCardId`) and the
+ * quantity (`quantity ?? 1`), and this is the fact it draws them from. Read `quantity` with
+ * `??` and never `||` — a stored `0` is a token the reader deliberately zeroed while keeping
+ * the art they picked, which is information, and `||` reads it as absent.
+ *
+ * `defaultCardId` is never null for a derived row and is **deterministic**: the printing the
+ * most deck cards point at, ties broken by the same `released_at DESC, set_code ASC,
+ * collector_number ASC, id ASC` tail `card_printings` orders by. Without that, one deck draws
+ * different art on two opens.
+ */
+export interface DeckTokenRow {
+  /** The grain, with `deckId`. **The oracle card and not a printing**, so the row survives the
+   *  reader changing their mind about the art — the art choice *is* one of the things it
+   *  stores. */
+  oracleId: string;
+  name: string;
+  typeLine: string | null;
+  /** The resolved `cards` row's layout — `token`, `emblem` or `double_faced_token`. **This is
+   *  what says an emblem is an emblem**, not the type line: the layout is a column and the type
+   *  line is prose. */
+  layout: string;
+  /**
+   * The four disambiguation fields. **A token's name does not identify it**: 104 token/emblem
+   * names are shared by more than one `oracle_id` (measured 2026-09-07, debug corpus) —
+   * `Elemental` by 31, `Spirit` by 22, `Soldier` by 13 — and `Wurmcoil Engine` alone makes two
+   * tokens both called `Wurm 3/3`, separated only by Deathtouch against Lifelink. Without these
+   * the panel draws indistinguishable tiles carrying identical accessible names, which is the
+   * one bug a wall of tokens can have that neither suite can see.
+   *
+   * Power and toughness told 8 of 8 apart in both sampled names once colours and the oracle
+   * text were beside them, so all four travel rather than a chosen one.
+   *
+   * **`power` and `toughness` are strings and not numbers**: Scryfall writes `*`, `1+*` and `∞`,
+   * and a mirror that typed them numeric would read `NaN` for every such token.
+   */
+  power: string | null;
+  toughness: string | null;
+  /** The token's colours as **concatenated letters** — `"WU"`, not `["W","U"]` — which is
+   *  {@link DeckCard.colors}' form and for its reason: `card_row` stores the letters, so the
+   *  letters are what comes back, and `JSON.parse` throws on them. `""` is a colourless token,
+   *  which most of them are. */
+  colors: string | null;
+  /** The rules text, which is what separates two same-named, same-statted tokens — the pair
+   *  `Wurmcoil Engine` makes differ in this field and in nothing else a tile could draw. */
+  oracleText: string | null;
+  /** The printing the resolver names. Never null for a derived row. */
+  defaultCardId: string;
+  /** The deck cards that make it. **Empty for a `manual` row nothing derives** — which is the
+   *  state a token is in after the card that produced it was cut. */
+  sources: TokenSource[];
+  /** `false` for a `manual` row this deck's cards produce nothing for. */
+  derived: boolean;
+  /** The printing the reader picked; `null` means "whichever one the resolver names". */
+  cardId: string | null;
+  /** How many copies the reader wants; `null` means "the default", which is 1. Stored absent
+   *  rather than as a 1 so that changing the default later moves every untouched token. */
+  quantity: number | null;
+  state: DeckTokenState | null;
+  /**
+   * Where the **resolved printing's** picture is, per variant.
+   *
+   * The same field, with the same rules and for the same reason, as
+   * {@link CardSummary.imageUris}: the web build and the phone have no `mtgimg://` to ask, so a
+   * token tile draws `imageUris?.[WALL_CARD_VARIANT]` there or draws the no-art frame. On Tauri
+   * it is ignored and the local cache wins. Front face only, `Partial`, and **a missing entry
+   * means "no art"** — never a reason to build a URL of your own, because the backend has
+   * already refused a URI it cannot version or one from a host that does not serve card art.
+   *
+   * **The printing is `cardId ?? defaultCardId`'s**, resolved in Rust, so a reader who has
+   * picked art gets that art's picture and everybody else gets the resolver's — which is why
+   * `deckTokenViews` can fold it to one URL without going back for a second row.
+   *
+   * Mirrors `DeckTokenRow::image_uris` in `src-tauri/src/deck_tokens.rs`; `ipc.test.ts`'s
+   * field-name pin is the only fence.
+   */
+  imageUris?: Partial<Record<ImageVariant, string>> | null;
 }
 
 /**
@@ -5403,6 +5545,72 @@ export const ipc = {
    */
   deckGet: (id: number, variant: DeckVariant, marketplace: MarketplaceId) =>
     invoke<DeckDetail | null>("deck_get", { id, variant, marketplace }),
+  /**
+   * Every token and emblem the deck's cards make, with the reader's overrides joined on.
+   *
+   * **Derived on every call and stored nowhere** — the backend inflates the `raw` blob of each
+   * distinct card in the deck's *active* categories and reads `all_parts`, which is ~5 ms for a
+   * 100-card deck. A stored list would need reconciling on every deck edit *and* would go stale
+   * when a Scryfall sync changed a card's `all_parts`, with nothing to notice.
+   *
+   * `variant` scopes it the way it scopes every other deck read: the derived list is a fact
+   * about the cards in one of the deck's two lists. **The stored override is not scoped by it**
+   * — `deck_tokens` is grained on `(deckId, oracleId)` alone, so an art picked for a deck is
+   * the art in both lists, which is what a reader who picked it means.
+   *
+   * **`[]` is an answer three times over** and never a failure: a deck whose cards make
+   * nothing, a deck with no cards, and every failure shape behind the blob — an unknown id, a
+   * `raw` that will not inflate or parse, a missing or non-array `all_parts`. A deck must not
+   * fail to open over an area most decks use lightly.
+   */
+  deckTokens: (deckId: number, variant: DeckVariant) =>
+    invoke<DeckTokenRow[]>("deck_tokens", { deckId, variant }),
+  /**
+   * Write one token's override — the art, the count, or the dismissal.
+   *
+   * **The state word is renamed on the wire and this is the only place that knows it.** Rust
+   * cannot call the parameter `state`, because `state` is already the managed `tauri::State`
+   * every command takes, so it declares `token_state` and the payload key is `tokenState`.
+   * Callers on this side pass `{ state }`, which is what the column is called.
+   *
+   * **All three keys travel on every call, `null` included.** Tauri fills parameters by name
+   * and an absent one is a refusal rather than a default, so `undefined` is folded to `null`
+   * here — with `??` and never `||`, because a quantity of **0** is a token the reader
+   * deliberately zeroed while keeping the art they picked, and `||` would send it as "leave it
+   * alone".
+   *
+   * A write whose result would carry nothing — `state` back at `auto` with no `cardId` and no
+   * `quantity` — **deletes** the row rather than storing it. The empty override is not
+   * representable, which keeps "no deviation" one state rather than two that have to be kept
+   * in agreement.
+   */
+  deckTokenSet: (
+    deckId: number,
+    oracleId: string,
+    over: { cardId?: string | null; quantity?: number | null; state?: DeckTokenState | null },
+  ) =>
+    invoke<void>("deck_token_set", {
+      deckId,
+      oracleId,
+      cardId: over.cardId ?? null,
+      quantity: over.quantity ?? null,
+      tokenState: over.state ?? null,
+    }),
+  /** Back to the derived defaults: it **deletes** the override row. Not a `deckTokenSet` of
+   *  three nulls — that spelling is the same write, and this one says what the reader pressed.
+   *  A grain that resolves to no row is a success: the caller wanted no override. */
+  deckTokenClear: (deckId: number, oracleId: string) =>
+    invoke<void>("deck_token_clear", { deckId, oracleId }),
+  /**
+   * Add a token by hand — the one of the four that names a **printing** rather than the grain.
+   *
+   * The reader picks out of a printings grid, so a printing is what there is to send; Rust
+   * resolves its `oracleId` and writes `state: "manual"` with that printing as the `cardId`.
+   * A `manual` row is drawn whether or not the deck derives it, which is also what a derived
+   * token becomes when the reader keeps it after cutting the card that made it.
+   */
+  deckTokenAdd: (deckId: number, cardId: string) =>
+    invoke<void>("deck_token_add", { deckId, cardId }),
   /**
    * The format the last deck made on this install was given — or `null` where no deck has ever
    * been made.

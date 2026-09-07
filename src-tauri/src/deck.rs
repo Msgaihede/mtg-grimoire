@@ -431,6 +431,25 @@ pub struct DeckPatch {
     /// Per deck rather than per user, like [`Self::theory_enabled`]: it is a statement about how
     /// *this* list is read, so two decks may disagree and a duplicate must not.
     pub separate_x_group: Option<bool>,
+    /// Whether the editor's **Tokens & emblems** area is expanded — schema v37.
+    ///
+    /// **Storage only, on this side**, [`Self::separate_x_group`]'s rule: which tokens a deck
+    /// needs is [`crate::deck_tokens`]' answer and what to draw of them is TypeScript's; this is
+    /// one bit about whether the reader has the area open.
+    ///
+    /// **It rides this patch rather than [`DeckViewState`], even though the column sits beside
+    /// `last_variant`, `last_group_by` and `last_sort_by`.** The two commands differ in what a
+    /// write *costs*: [`update_deck`] moves `updated_at`, and [`set_view_state`] deliberately
+    /// does neither that nor a history row. A disclosure a reader opens once and leaves open is a
+    /// handful of writes over a deck's life, where the tab, the grouping and the sort move on
+    /// every press — which is exactly why those three are on the cheap command and this is not.
+    ///
+    /// **No arm in [`record_deck_edit`]**, which is the one place this is *not* like
+    /// `separate_x_group`. `auditText.ts` words a history row from its field name, and its
+    /// `default` arm answers an unrecognised field with *Changed the deck* — true of every deck
+    /// edit and therefore never wrong and never useful. A drawer line saying that, because
+    /// somebody opened a disclosure, is noise in a record read months later.
+    pub tokens_open: Option<bool>,
     /// Which of this deck's categories an add that names none lands in — the editor's "Add to"
     /// answer, asked in the deck's settings.
     ///
@@ -596,6 +615,21 @@ pub struct DeckRow {
     /// an answer about the deck that a copy of it inherits. `duplicate_deck` carries this and
     /// resets nothing, which is the difference stated as code.
     pub separate_x_group: bool,
+    /// Whether the editor's **Tokens & emblems** area is expanded — schema v37.
+    ///
+    /// Read here as well as written through [`DeckPatch`], for [`Self::theory_enabled`]'s reason:
+    /// a switch the app can set and never see is a switch nothing can draw. Every existing deck is
+    /// collapsed, which is the column's `DEFAULT 0` and also the right first impression — the
+    /// wall is a reference most decks reach for occasionally.
+    ///
+    /// **Per deck, and closer to [`Self::separate_x_group`] than to the three `last_*` fields it
+    /// sits beside in the table.** It is an answer about how *this* list is read rather than about
+    /// where the reader's cursor was, so it rides [`DeckPatch`] and not [`DeckViewState`] — see
+    /// [`DeckPatch::tokens_open`], where the trade is written out.
+    ///
+    /// **[`duplicate_deck`] deliberately does not carry it**, which is where it parts company with
+    /// `separate_x_group`: a copy starts collapsed, the way it starts on the Live tab.
+    pub tokens_open: bool,
     /// Which of this deck's categories an add that names none lands in — schema v16, and `0`
     /// for **Auto**, where the card's own text decides.
     ///
@@ -910,7 +944,7 @@ static DECK_SELECT: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
                          AND cat.kind IN ('main','commander','maybe')), 0),
             d.updated_at, d.folder_id, d.notes, d.theory_enabled,
             d.last_variant, d.last_group_by, d.last_sort_by, d.separate_x_group,
-            d.default_category_id, d.game_key, d.bracket,
+            d.default_category_id, d.game_key, d.bracket, d.tokens_open,
             d.theory_mark_exact, d.theory_mark_name,
             {images}
        FROM decks d
@@ -925,10 +959,13 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
     /// named column. Named rather than inlined for `deck_card_select`'s reason: the pairing
     /// arithmetic below is `front_face_map`'s and only the *offset* is this function's.
     ///
-    /// **It read `21` until schema v38 appended two columns**, which is the one number in this
-    /// function a new column can move without any read below it going wrong — and the reason it
-    /// is a named constant rather than a literal in the closure.
-    const IMAGE_COL: usize = 23;
+    /// **It moves with every column added to the end of the named list**, and it has moved
+    /// twice in a week: it read 21 until schema v37 put `tokens_open` there, and 22 until v38
+    /// appended the two theory marks. Forgetting to move it is not silent for `tokens_open`'s
+    /// kind of column — the image reads are `Option<String>` and an `INTEGER` beside them makes
+    /// rusqlite refuse the conversion rather than answer a plausible URL — but it *is* silent
+    /// the other way round, which is what the comment on the image read itself describes.
+    const IMAGE_COL: usize = 24;
     Ok(DeckRow {
         id: r.get(0)?,
         name: r.get(1)?,
@@ -978,18 +1015,25 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
         // to a bracket, with every field still holding a number SQLite is perfectly happy to
         // give back.
         bracket: r.get(20)?,
-        // 21 and 22, at the end of the list, for the reason written four comments up — and the
-        // fifth and sixth proofs of that rule, this pair the most dangerous yet. Both are
-        // `bool` over an `INTEGER` column, and so are `archived` at 8, `theory_enabled` at 13
-        // and `separate_x_group` at 17: a column inserted beside `theory_enabled`, **where it
-        // reads like it belongs and where these two fields are declared on the struct**, would
-        // have handed the theory switch to the theory mark and the mark to the X group, with
-        // every field still holding a `0` or a `1` that `bool` accepts without complaint. The
-        // declaration order and the read order are two different things, and only this one is
-        // load-bearing.
-        theory_mark_exact: r.get(21)?,
-        theory_mark_name: r.get(22)?,
-        // **From 23**, last of all, for the reason written five comments up — the
+        // 21, at the end of the named list, for the reason written five comments up — and the
+        // fifth proof of that rule. `tokens_open` is a bool over an INTEGER column, which is
+        // what `archived` at 8, `theory_enabled` at 13 and `separate_x_group` at 17 are: put
+        // beside any of them, where a disclosure's stored state reads like it belongs, it would
+        // have swapped a deck's archived flag for whether an area was open and neither field
+        // would have looked wrong.
+        tokens_open: r.get(21)?,
+        // 22 and 23, at the end of the list, for the reason written six comments up — and the
+        // sixth and seventh proofs of that rule, this pair the most dangerous yet. Both are
+        // `bool` over an `INTEGER` column, and so are `archived` at 8, `theory_enabled` at 13,
+        // `separate_x_group` at 17 and `tokens_open` on the line above: a column inserted beside
+        // `theory_enabled`, **where it reads like it belongs and where these two fields are
+        // declared on the struct**, would have handed the theory switch to the theory mark and
+        // the mark to the X group, with every field still holding a `0` or a `1` that `bool`
+        // accepts without complaint. The declaration order and the read order are two different
+        // things, and only this one is load-bearing.
+        theory_mark_exact: r.get(22)?,
+        theory_mark_name: r.get(23)?,
+        // **From 24**, last of all, for the reason written seven comments up — the
         // `crate::image_uri::FRONT_FACE_COLUMNS` expressions `front_face_selects` appended, in
         // the (top-level, face) pairs `front_face_map` folds back up, one pair per variant.
         //
@@ -1739,12 +1783,15 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 -- `patch.bracket`: `valid_bracket` ran above, and binding the raw field would
                 -- make the fence decorative on exactly the path it exists for.
                 bracket = coalesce(?14, bracket),
-                -- `?15` and `?16`, the next two numbers at the **end** of the list, which is
-                -- the rule the comment fourteen lines up states. **No validated binding
-                -- beside them**, unlike `bracket` above: a bool has two values and both are
-                -- answers, so there is no fence for a raw field to make decorative.
-                theory_mark_exact = coalesce(?15, theory_mark_exact),
-                theory_mark_name = coalesce(?16, theory_mark_name),
+                -- `?15`, the next number at the **end** of the list, which is the rule the
+                -- comment fourteen lines up states and the reason this is not `?11`'s neighbour
+                -- however much it reads like one.
+                tokens_open = coalesce(?15, tokens_open),
+                -- `?16` and `?17`, the next two at the **end** for the same reason. **No
+                -- validated binding beside them**, unlike `bracket` above: a bool has two values
+                -- and both are answers, so there is no fence for a raw field to make decorative.
+                theory_mark_exact = coalesce(?16, theory_mark_exact),
+                theory_mark_name = coalesce(?17, theory_mark_name),
                 updated_at = unixepoch()
               WHERE id = ?1",
             params![
@@ -1762,6 +1809,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 patch.default_category_id,
                 game_key,
                 bracket,
+                patch.tokens_open,
                 patch.theory_mark_exact,
                 patch.theory_mark_name,
             ],
@@ -9023,6 +9071,10 @@ mod tests {
             separate_x_group: true,
             default_category_id: 12,
             bracket: 3,
+            // `true` rather than the column's `DEFAULT 0`, fourth application of the rule the
+            // three comments in the expectation below state: `false` is what every deck carries
+            // and would read correct on a field that never left Rust.
+            tokens_open: true,
             // Two keys, both real URLs, because this is the one field on the row whose *shape*
             // crosses the boundary rather than a scalar: `Option<BTreeMap>` has to reach
             // TypeScript as an object of variant keys and not as a list or a bare string, and
@@ -9071,6 +9123,10 @@ mod tests {
                 // zero is [`AUTO_BRACKET`] and would be the answer whether or not the column
                 // reached the wire at all.
                 "bracket": 3,
+                // Schema v37, and `tokensOpen` rather than `tokens_open`: the panel reads this
+                // off the deck row to know whether to draw itself open, and a snake-cased key
+                // would be `undefined` at the call site with no type error anywhere.
+                "tokensOpen": true,
                 // The cover printing's picture, spelled out key by key: this is the deck
                 // gallery's only way to draw a cover on web and on the phone, and it is a map
                 // rather than a URL because `LIST_VARIANTS` decides what a row carries.

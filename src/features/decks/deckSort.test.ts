@@ -47,6 +47,7 @@ function deck(over: Partial<DeckRow> & { name: string }): DeckRow {
     separateXGroup: false,
     defaultCategoryId: 0,
     bracket: 0,
+    tokensOpen: false,
     ...over,
   };
 }
@@ -431,7 +432,7 @@ describe("parseDeckSort", () => {
 
   it("never throws, whatever it is handed", () => {
     expect(() => parseDeckSort("::::")).not.toThrow();
-    expect(() => parseDeckSort(" ")).not.toThrow();
+    expect(() => parseDeckSort("\u0000")).not.toThrow();
   });
 });
 

@@ -101,11 +101,11 @@ deliberately**: no screenshots are stored.
   `bracketMismatch` is `starter` plus a fifth deck the reader has told `Bracket 2` whose cards
   force the estimate's floor to 4. `starter` seeds the combo catalogue itself, exactly as it
   seeds the price feeds and both taxonomies — **seven combos, two of them live-verified against
-  Commander Spellbook on 2026-08-27 and five constructed**, because the 52-printing corpus can
-  make only two real ones and neither reaches the `R`/`P`/`C`/`E` letters the advisory has to
-  draw. `COMBO_FIXTURES` in `db.ts` says which is which, per row.
+  Commander Spellbook on 2026-08-27 and five constructed**, because the corpus's playable half
+  can make only two real ones and neither reaches the `R`/`P`/`C`/`E` letters the advisory has
+  to draw. `COMBO_FIXTURES` in `db.ts` says which is which, per row.
 - **`starter` seeds both tag taxonomies too**, derived from the corpus the same way. Oracle: **32
-  oracle cards, covering 42 of the 52 printings** (measured by `db.test.ts`, which fails rather
+  oracle cards, covering 42 of the 59 printings** (measured by `db.test.ts`, which fails rather
   than letting this line rot), closed over their ancestors as `oracle_tag_cards` stores them, so
   a deck story shows real piles rather than everything falling back to card type. Art: **eleven
   tagged printings over thirteen tags and four roots**, keyed on `illustration_id` because an art
@@ -117,7 +117,7 @@ deliberately**: no screenshots are stored.
   that answered only the matches would look right in Storybook and break every caller that
   matches by id.
 - **Every art tag in the fixture is true of the picture it is on**, which is why there is no
-  `dog` in it: nobody in these 52 printings is a dog, and a wall of cats filed under "Dog"
+  `dog` in it: nobody in these printings is a dog, and a wall of cats filed under "Dog"
   would teach a reader that the Tags page's whole subject is decorative. The crate's own fixture
   (`tags/query.rs`'s tests) is where the `dog`/`hound`/`bulldog` branch lives. What the seed does
   carry is the *shape* every story needs: a category with no direct taggings of its own
@@ -195,6 +195,22 @@ deliberately**: no screenshots are stored.
   accident: `fixtures.ts`'s `deckGroups` puts a second mana-value-3 card beside it, so switching
   the split on moves it **out of a bucket that survives** — a curve whose `3` column vanished
   with the card would leave a reader unable to tell a re-filing from a disappearance.
+- **The corpus carries tokens as of 2026-09-07, and they are ordinary rows of `cards`** —
+  **two Treasures**, a Construct, an emblem, a double-faced token and **two Wurms sharing a name**
+  (`t2xm 29` and `30`, Deathtouch against Lifelink), which is the fixture for the whole reason
+  a token tile draws a subtitle. They are legal in nothing, cost nothing and are paper, so
+  every count over the paper corpus moved by seven and the playable one did not move at all —
+  which is what the real `search.rs` does too, since nothing there filters a token out. The
+  double-faced one is the only row in the fixture with **no top-level `image_uris`**: all 120
+  such rows in the corpus carry them on `card_faces[0]` alone, so it is what pins the
+  generator's face-first resolution. **The two Treasures are one oracle card over two printings**
+  — `tafr 15` (2021-07-23) against `thob 13` (2026-08-14) — which is what makes an art *choice* a
+  thing at all and gives `card::list_printings`' `released_at DESC, set_code ASC, collector_number
+  ASC, id ASC` an unambiguous winner. **`db.ts`'s `TOKEN_ORACLE`/`TOKEN_PRINTING` name these rows**
+  and hand-write nothing about them; before they did, both maps minted ids in a `7…` block that
+  resolved in neither `cards` nor `@/lib/images`, so every token tile drew the unknown-card
+  placeholder and the art picker's grid was empty. `db.test.ts` fails if one of those ids stops
+  resolving.
 - **Art is synthetic by default**, with a Live toolbar switch, so a checkout with no network
   renders every story exactly as one with it. **No card image bytes are committed.**
 - **Searching `.storybook/fake/db.ts` works, and this line said the opposite for over a year of
