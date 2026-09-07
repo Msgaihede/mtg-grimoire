@@ -2292,7 +2292,7 @@ mod tests {
     fn an_import_uses_an_existing_label_and_ignores_the_file_s_colour() {
         let conn = seeded();
         let id = deck(&conn);
-        let mine = crate::deck_meta::create_label(&conn, id, "Keeper", "#d9b95c")
+        let mine = crate::deck_meta::create_label(&conn, Some(id), "Keeper", "#d9b95c")
             .unwrap()
             .id;
 
@@ -2366,7 +2366,7 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        let mine = crate::deck_meta::create_label(&conn, id, "Cut candidate", "#d3202a")
+        let mine = crate::deck_meta::create_label(&conn, Some(id), "Cut candidate", "#d3202a")
             .unwrap()
             .id;
         crate::deck_meta::set_card_label(&conn, id, "sol-c21", ramp, "live", None, Some(mine))

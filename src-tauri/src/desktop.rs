@@ -18,9 +18,9 @@ use crate::sync::AppState;
 use crate::{
     camera, card, collection, collection_alloc, collection_folders, combos, db, deck, deck_audit,
     deck_meta, deck_pull, deck_quick_add, deck_theory, deck_tokens, deck_undo, decksort, errors,
-    export, flatten, images, import, index, listview, marketplace, marketplace_feed, mirror, nav,
-    paths, reset, schema, scryfall, search, searchopen, sync, sync_engine, sync_pair, tags, update,
-    wishlist, wishlist_folders, wishlist_optimize, zoom,
+    export, flatten, images, import, index, listview, markcolors, marketplace, marketplace_feed,
+    mirror, nav, paths, reset, schema, scryfall, search, searchopen, sync, sync_engine, sync_pair,
+    tags, update, wishlist, wishlist_folders, wishlist_optimize, zoom,
 };
 // **Not in the list above, because this file compiles for Android too.** Its name says
 // `desktop`, but its gate is `cfg(not(target_family = "wasm"))` — desktop *and* mobile — while
@@ -494,6 +494,8 @@ pub fn run() {
             listview::set_list_view,
             searchopen::search_open,
             searchopen::set_search_open,
+            markcolors::mark_colors,
+            markcolors::set_mark_color,
             decksort::deck_sort,
             decksort::set_deck_sort,
             flatten::flatten_state,

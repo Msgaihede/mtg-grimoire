@@ -99,6 +99,13 @@ pub mod ingest;
 pub mod legalities;
 pub mod listview;
 pub mod maintenance;
+/// **A settings row wearing [`listview`]'s shape with the vocabulary moved one step out.**
+/// There the frontend owns which walls exist and this crate owns the two words a wall may be
+/// drawn in; here the frontend owns which *marks* exist and this crate owns only the shape a
+/// colour may have. One `app_meta` row, an infallible read and a write whose refusals are a
+/// blank key and anything that is not `#rrggbb` — no filesystem, no clock and no network, so it
+/// is on the every-target half of this map with its four siblings.
+pub mod markcolors;
 /// **The stored marketplace id is every target's; telling the mirror about a change is not.**
 /// `stored` and `store` are one settings row, and `deck_meta`'s readback quotes the first of
 /// them on every platform — so the module is here and `set_marketplace_now`, which calls

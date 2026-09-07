@@ -18,6 +18,7 @@ import deckPullRs from "../../src-tauri/src/deck_pull.rs?raw";
 import deckQuickAddRs from "../../src-tauri/src/deck_quick_add.rs?raw";
 import deckTheoryRs from "../../src-tauri/src/deck_theory.rs?raw";
 import deckTokensRs from "../../src-tauri/src/deck_tokens.rs?raw";
+import markcolorsRs from "../../src-tauri/src/markcolors.rs?raw";
 import resetRs from "../../src-tauri/src/reset.rs?raw";
 import searchRs from "../../src-tauri/src/search.rs?raw";
 import syncCommandsRs from "../../src-tauri/src/sync_engine/commands.rs?raw";
@@ -38,6 +39,7 @@ import {
   type RelayOutcome,
   type SyncLiveEvent,
   type SyncProgressEvent,
+  type TheorySlot,
 } from "@/lib/ipc";
 
 beforeEach(() => {
@@ -473,6 +475,56 @@ describe("ipc argument names match the Rust command signatures", () => {
     await ipc.setDeckSort("colors:asc");
     expect(invoke).toHaveBeenCalledWith("set_deck_sort", { sort: "colors:asc" });
     expect(decksortRs).toContain("sort: String,");
+  });
+
+  /**
+   * The mark colours — and the one `app_meta` write where a misspelled argument is **destructive
+   * rather than refused**.
+   *
+   * `set_mark_color(mark: String, color: Option<String>)`, and Tauri fills a missing `Option`
+   * argument with `None`. So the two halves fail in opposite directions: a wrapper that spelled
+   * `mark` wrong is a parameter Tauri cannot fill and a clean rejection, while one that spelled
+   * `color` wrong — `colour`, `value`, `hex` — is accepted, arrives as `None`, and `None` here
+   * **deletes the entry**. Every colour the reader picked would read back as unset at the next
+   * launch, with a green build on both sides and a write that reported success. That asymmetry is
+   * the whole reason this case exists, and it is why the crate is read for both words rather than
+   * trusted.
+   *
+   * `mark_colors` takes **no arguments at all** — `prewarm_collection`'s trap, where an argument
+   * object sent to a command that declares only the managed state is a deserialization error and
+   * not a type error.
+   */
+  it("sends both mark-colour commands under the names `markcolors.rs` declares", async () => {
+    // A pass must never be able to mean "the crate was never read".
+    expect(markcolorsRs.length).toBeGreaterThan(1_000);
+
+    const stored = { theoryExact: "#56bd78", theoryName: "#0e68ab" };
+    invoke.mockResolvedValue(stored);
+    const colors = await ipc.markColors();
+    expect(invoke).toHaveBeenCalledWith("mark_colors");
+    expect(colors).toEqual(stored);
+    expect(markcolorsRs).toContain("pub fn mark_colors(");
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.setMarkColor("theoryExact", "#56BD78");
+    // `mark` and `color`, not `key` and `value` — and the uppercase goes over the wire as typed,
+    // because the folding is the far end's (`to_ascii_lowercase`) and a mirror that folded here
+    // would be a second opinion about a rule the crate already owns.
+    expect(invoke).toHaveBeenCalledWith("set_mark_color", {
+      mark: "theoryExact",
+      color: "#56BD78",
+    });
+    expect(markcolorsRs).toContain("mark: String,");
+    expect(markcolorsRs).toContain("color: Option<String>,");
+
+    // **Reset**, and it is `null` on the wire rather than an omitted key. Both reach Rust as
+    // `None` and both clear the row, so this pins the mirror's *signature* — `string | null`,
+    // which is what lets the panel's Reset button say what it means — rather than a difference
+    // the backend can see.
+    await ipc.setMarkColor("theoryExact", null);
+    expect(invoke).toHaveBeenCalledWith("set_mark_color", { mark: "theoryExact", color: null });
+    // The clearing arm is the crate's, not an inference from the signature.
+    expect(markcolorsRs).toContain("colors.remove(mark);");
   });
 
   /**
@@ -1021,6 +1073,44 @@ describe("ipc argument names match the Rust command signatures", () => {
       finish: null,
       labelId: null,
     });
+
+    // **Three of them take `deckId: number | null`, and `null` is Settings' Appearance panel.**
+    // The label was never the deck's — a label has been one app-wide row since v21, and the deck
+    // is only what the *side effects* need, its `updated_at` and its history row. So a call from
+    // a page with no deck open sends `null` and writes neither. `list` and `removeFromDeck` above
+    // are untouched, and have to be: those two really are about one deck's list.
+    invoke.mockResolvedValue({ id: 5 });
+    await ipc.deckLabelCreate(null, "Playtest", "moss");
+    expect(invoke).toHaveBeenCalledWith("deck_label_create", {
+      deckId: null,
+      name: "Playtest",
+      color: "moss",
+    });
+
+    await ipc.deckLabelUpdate(null, 5, "Playtesting", "ember");
+    expect(invoke).toHaveBeenCalledWith("deck_label_update", {
+      deckId: null,
+      id: 5,
+      name: "Playtesting",
+      color: "ember",
+    });
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.deckLabelDelete(null, 5);
+    expect(invoke).toHaveBeenCalledWith("deck_label_delete", { deckId: null, id: 5 });
+
+    // The crate is read for the optionality rather than trusted — three separate declarations, so
+    // a `deck_id: i64` surviving on any one of them is a runtime rejection from that one panel
+    // with nothing red in either build. Sliced per command rather than counted across the file:
+    // `deck_meta.rs` spells `deck_id: Option<i64>` on its plain helpers too, so a bare count of
+    // the whole source would pass on the helpers alone.
+    expect(deckMetaRs.length).toBeGreaterThan(1_000);
+    for (const command of ["deck_label_create", "deck_label_update", "deck_label_delete"]) {
+      const at = deckMetaRs.indexOf(`pub async fn ${command}(`);
+      expect(at, `\`${command}\` is not declared in deck_meta.rs`).toBeGreaterThan(-1);
+      const signature = deckMetaRs.slice(at, deckMetaRs.indexOf(")", at));
+      expect(signature, `\`${command}\` still requires a deck`).toContain("deck_id: Option<i64>");
+    }
   });
 
   /**
@@ -1169,6 +1259,10 @@ describe("ipc argument names match the Rust command signatures", () => {
    *
    * The two theory writes both answer a **count**, and they count different things:
    * `copyFromLive` answers rows written, `missingToWishlist` answers wishes touched.
+   *
+   * `deck_theory_slots` is the read the editor's tick is drawn from, and it takes the deck and
+   * **nothing else** — nothing in it is priced, so there is no `marketplace` beside the id as
+   * there is on the diff.
    */
   it("sends the history and theory commands under the names their commands declare", async () => {
     invoke.mockResolvedValue([]);
@@ -1181,6 +1275,30 @@ describe("ipc argument names match the Rust command signatures", () => {
       deckId: 4,
       marketplace: "tcgplayer",
     });
+
+    /**
+     * **`nameKey` is nullable and the annotation is the assertion.** The `null` below only
+     * type-checks because {@link TheorySlot.nameKey} is `string | null`; a mirror that typed it
+     * `string` — which is what the field looks like on every card whose printing is still in the
+     * corpus — makes this line a build error, and would make `theoryNameKey` fold `undefined` on
+     * exactly the orphan rows the loose tier exists to survive. Nothing else in the build
+     * compares the two sides, so this and the crate line below are the whole fence.
+     */
+    const slots: TheorySlot[] = [
+      { key: "sol-ring-c21|", nameKey: "Sol Ring", quantity: 1 },
+      { key: "gone-from-corpus|foil", nameKey: null, quantity: 2 },
+    ];
+    invoke.mockResolvedValue(slots);
+    const read = await ipc.deckTheorySlots(4);
+    expect(invoke).toHaveBeenCalledWith("deck_theory_slots", { deckId: 4 });
+    // Read back rather than only called: the mirror hands the answer through untouched, so an
+    // orphan has to arrive as `null` and not as an absent key a consumer would read as
+    // `undefined`.
+    expect(read[0]?.nameKey).toBe("Sol Ring");
+    expect(read[1]?.nameKey).toBeNull();
+    // The crate is read for the shape rather than trusted — `deck_theory_diff`'s rule above.
+    expect(deckTheoryRs.length).toBeGreaterThan(1_000);
+    expect(deckTheoryRs).toContain("pub name_key: Option<String>,");
 
     invoke.mockResolvedValue(12);
     const copied = await ipc.deckTheoryCopyFromLive(4);

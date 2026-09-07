@@ -41,6 +41,11 @@ const VALUE: DeckSettingsValue = {
   description: "Twenty damage, quickly.",
   notes: "Sideboard plan lives in the Maybeboard.",
   theoryEnabled: false,
+  // Both marks on, which is what `decks.theory_mark_exact`/`_name` default to — so a deck that
+  // has never been asked about them is the fixture, and switching one off is what a test does
+  // deliberately rather than what it starts from.
+  theoryMarkExact: true,
+  theoryMarkName: true,
   folderId: null,
   defaultCategoryId: AUTO_CATEGORY,
 };
@@ -123,6 +128,10 @@ function Harness({
       // meaning here** — the create host, which has no deck yet and therefore draws no
       // "Add cards to" row at all. A default would make that case untestable.
       categories={"categories" in rest ? rest.categories : CATEGORIES}
+      // Defaulted to the **edit** host's answer, like `categories` above and for the same reason:
+      // absent is the create dialog, which is one case rather than the ordinary one. A test that
+      // wants that case passes `false` and says so.
+      canSetTheoryMarks={rest.canSetTheoryMarks ?? true}
       cover={rest.cover ?? COVER}
       idPrefix={rest.idPrefix ?? "s"}
     />
@@ -384,6 +393,95 @@ describe("DeckSettingsForm", () => {
     expect(onChange).toHaveBeenCalledWith({ theoryEnabled: true });
     expect(onCommit).not.toHaveBeenCalled();
     expect(screen.getByRole("switch", { name: "Theory deck Enabled" })).toBeChecked();
+  });
+
+  /**
+   * The two marks are drawn **under** the theory switch and only while it is on. A deck with no
+   * plan has nothing for either mark to compare against, so a control for them there would be a
+   * switch that changes nothing — and the reader would have no way to find that out.
+   *
+   * Driven through the switch above rather than through two renders, because the transition is
+   * the case: a reader turns the plan on and the two rows have to arrive under it.
+   */
+  it("offers both mark switches only when the theory list is on", async () => {
+    form();
+
+    expect(screen.queryByRole("switch", { name: /matching printing/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: /different printing/i })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("switch", { name: "Theory deck Disabled" }));
+
+    expect(screen.getByRole("switch", { name: /matching printing/i })).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: /different printing/i })).toBeInTheDocument();
+    expect(
+      screen.getByText("A green mark on a card that is the exact printing your plan names."),
+    ).toBeInTheDocument();
+    // The half a reader cannot see coming: switching the strict mark off does not leave the card
+    // unmarked, it draws the loose one instead. Unsaid, a reader who turns green off and still
+    // sees marks reads the control as broken.
+    expect(
+      screen.getByText(
+        "A blue mark on a card your plan asks for in a different printing. Turning the green one off draws this one instead.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * **The second gate, and it is a different question from the first.**
+   *
+   * `theoryEnabled` asks whether there is a plan to compare against; this asks whether the host
+   * can write the answer down. `CreateDeckDialog` cannot — `DeckInput` carries neither column and
+   * the schema's `DEFAULT 1` owns a new deck's answer — so a reader who switched the plan on
+   * inside "New deck" would otherwise get a pair of switches whose presses reach nothing.
+   * `defaultCategoryId`'s row is absent from that host for the same shape of reason.
+   */
+  it("draws neither mark switch for a host that cannot write them, plan or no plan", () => {
+    form({ value: { ...VALUE, theoryEnabled: true }, canSetTheoryMarks: false });
+
+    expect(screen.getByRole("switch", { name: "Theory deck Enabled" })).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: /matching printing/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: /different printing/i })).not.toBeInTheDocument();
+  });
+
+  /**
+   * Two switches, two columns — `theory_mark_exact` and `theory_mark_name` — and the whole
+   * reason there are two of them is that blue without green is a real answer. A row that
+   * reported its neighbour's field would collapse them into one three-valued control that
+   * cannot spell it.
+   */
+  it("reports each switch on its own", async () => {
+    const { onChange, onCommit } = form({ value: { ...VALUE, theoryEnabled: true } });
+
+    await userEvent.click(screen.getByRole("switch", { name: /different printing/i }));
+
+    expect(onChange).toHaveBeenCalledWith({ theoryMarkName: false });
+    expect(onChange).not.toHaveBeenCalledWith(
+      expect.objectContaining({ theoryMarkExact: expect.anything() }),
+    );
+    // A switch settles in one act, like the theory switch above it and the three dropdowns.
+    expect(onCommit).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("switch", { name: /matching printing/i }));
+
+    expect(onChange).toHaveBeenLastCalledWith({ theoryMarkExact: false });
+  });
+
+  /**
+   * The swatch carries the distinction the words *green* and *blue* only name — and it is the
+   * reader's **own** colour, because `useMarkColors` writes these two custom properties at the
+   * app root when they have chosen in Settings.
+   *
+   * The custom-property *name* is what is asserted: jsdom resolves no stylesheet, so a computed
+   * colour here would be the empty string whatever the mark is drawn in.
+   */
+  it("draws each mark's swatch in that mark's own colour", () => {
+    form({ value: { ...VALUE, theoryEnabled: true } });
+
+    // Addressed through the heading each switch is named by, which is load-bearing markup
+    // rather than a hook a test asked for: the swatch is that heading's first child.
+    const swatch = (id: string) => document.getElementById(id)?.firstElementChild as HTMLElement;
+    expect(swatch("s-theory-mark-exact").style.backgroundColor).toBe("var(--color-theory-exact)");
+    expect(swatch("s-theory-mark-name").style.backgroundColor).toBe("var(--color-theory-name)");
   });
 
   /** Filing, and the `""` that is a real answer rather than a placeholder. */

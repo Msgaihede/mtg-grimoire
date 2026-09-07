@@ -289,6 +289,27 @@ preferred_finish`'s nullability one table over.
   what the deck **counts** without moving a single card. The rule the old note was making — that
   a rename and a reorder change what a pile is _called_ and nothing about what is in it — now
   covers every write in the module.
+- **Three of the label commands take an _optional_ deck since 2026-09-07, and what a deckless
+  write skips is the whole of the change.** `deck_label_create`, `deck_label_update` and
+  `deck_label_delete` each take `deck_id: Option<i64>`; `deck_label_all` never had one. **Tauri
+  fills a missing `Option` argument with `None`**, so the deck editor's existing calls, which send
+  a `deckId`, are unchanged and did not have to be found. The label itself was never a deck's —
+  `deck_labels` has had no `deck_id` since schema v21 — so the id was only ever there for the
+  *side effects*, and with no deck to name they are all three simply not written: **no
+  `deck::touch_deck`, no `deck_audit` row and no `deck_undo` step.** The write to
+  `deck_labels`, and the `deck_cards.label_id` clearing a delete does, are identical either way.
+  **The reason is that the alternative would be a false entry, not that it was cheaper.** A rename
+  made from Settings → Appearance → Labels reaches every deck wearing the label, so attributing
+  it to one deck would put an event in a history that did not happen there; naming all of them is
+  a feature nobody asked for, and a deck's history is per deck by construction. So the entry is
+  not written at all. **What that costs is the undo**, and it is real: such an edit is in no
+  deck's undo stack, so the editor's Ctrl+Z finds nothing to put back — which is why the panel's
+  delete confirmation says so in its own paragraph rather than leaving a reader to discover it by
+  pressing that chord in a deck. `deck_meta.rs`'s
+  `a_deckless_label_write_records_no_audit_and_no_undo` is the fence.
+  **A deck id that _is_ sent still means "where the reader was standing"** and never "what is
+  being changed": the change is app-wide in both cases, and the history is honest rather than
+  arbitrary because the *act* happened somewhere.
 - **`format_specs` is data, not code.** All 23 Scryfall legality keys plus `casual`/`limited`,
   seeded by `INSERT OR REPLACE` in the migration, with `restricted_semantic`
   (`max_one` | `banned_as_commander` — TRAP A, never inferred from the key), `commander_rule`,
@@ -874,6 +895,55 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   tables the same v26 rung created); the floor they become — a floor rather than a bracket, and
   never 1 or 5 — is `src/features/decks/validation/bracket.ts`'s.
   [commander-brackets.md](commander-brackets.md) is the whole record.
+- **`decks.theory_mark_exact` and `decks.theory_mark_name` are which of the theory mark's two
+  tiers this deck draws, and both are on by default** (2026-09-07). `INTEGER NOT NULL DEFAULT 1`
+  each, **schema v38** — a Live row's mark now says either *this is the printing you planned* (the
+  **exact** tier, green) or *this is that card in a printing you did not name* (the **name** tier,
+  blue), and a deck may switch either off. `DEFAULT 1` is the whole of the upgrade: every deck
+  that already exists draws both marks from the first launch on the new build, so there is no
+  backfill because there is nothing for one to do, and no deck sits in a state its reader has to
+  discover. They ride `DeckPatch`, `DeckRow`, `DeckBefore` and `DECK_SELECT` as the four columns
+  above do, take the **last** two indexes in `deck_row` and the **next** two `?` holes at the end
+  of `update_deck`'s `SET` list — read both off the code, for the reason `separate_x_group`'s
+  bullet gives — and are deliberately **not on `DeckInput`**: they are a reading preference, and
+  a deck being born has not been read yet, so they take their DDL default like the columns beside
+  them. `DECK_SELECT` puts them last of the deck's own columns and `deck_row`'s
+  `IMAGE_COL` is one past `d.theory_mark_name`, which is that positional trap read one
+  grain finer: both are `INTEGER` among the row's other `INTEGER`s, so a column inserted anywhere
+  but last hands a bracket to a bool and nothing goes red — while `IMAGE_COL` left behind is
+  loud, because the image reads are `Option<String>` and rusqlite refuses an `INTEGER` there.
+  **Two columns rather than one three-valued one**, and the reason is expressive rather than
+  tidy: `none | exact | both` cannot spell blue *without* green, and blue without green is a real
+  answer — a reader who cares that a card is present and not which printing it is. It is also
+  why the two off states are not symmetric, which is entirely TypeScript's business: green off
+  **re-resolves an exact row as a name row**, blue with blue's number, while blue off silences a
+  name-only row and leaves green alone. **Rust stores two booleans and concludes nothing from
+  either** — `AUTO_CATEGORY`'s rule and `bracket`'s: which tier a row lands in, and what number
+  it carries, is `theoryMatchMark`'s.
+  **`duplicate_deck` carries both across** and `archived` still resets, the same line
+  `separate_x_group` and `bracket` sit on: what describes the deck comes over, what state the deck
+  is *in* does not. Both are on `deck_undo::DECK_FIELDS` for `bracket`'s reason — an ordinary
+  `deck_update` writes them and an ordinary history row records them — and **both, never one**:
+  one Save can move the pair, so a list carrying only the first restores half a press, which is
+  worse than restoring none of it because the drawer would still name the change it had not undone.
+  **The audit words are `"theoryMarkExact"` and `"theoryMarkName"`**, camelCase, the third and
+  fourth multi-word field names `record_deck_edit` writes after `"xGroup"` and `"defaultCategory"`
+  — so the same silent-drift rule applies, and **unlike `bracket` these two have `auditText.ts`
+  arms**, pinned by `auditText.test.ts`. Two arms rather than one, `record_deck_edit`'s own
+  reason: a reader who moved both switches in one Save made two decisions, and a single row saying
+  "changed the theory marks" could be worded into neither. The payload carries the **boolean** on
+  both sides and there is no `detail`, `xGroup`'s shape: a boolean's `from` is whatever its `to`
+  is not, so "was off" under "turned it on" is a line of history spent saying nothing.
+  **Both columns are on `capture::TABLES`' `decks` spec and travel to paired devices**, `bracket`'s
+  precedent at v26: which tier a deck draws is an answer *about the deck*, and two devices showing
+  one deck's marks differently with nothing on screen explaining it is the failure that edit
+  prevents. That spec spells its field list out by hand and **there is no fence in the other
+  direction** — nothing asserts that every column of a synced table is on its spec — so the two
+  names needed a deliberate edit rather than travelling for free. **The mark's _colours_ are
+  deliberately not on it, and that asymmetry is a decision**: see
+  [sync.md](sync.md), which holds the synced-tables list. The `DEFAULT 1` is load-bearing for the
+  sync as well as for the no-backfill argument, and [data-and-sync.md](data-and-sync.md) carries
+  that half.
 - **The six single-card commands, and what each takes** (the three bulk ones,
   `deck_import_commit`, `deck_category_clear` and `deck_clear`, have their own bullets below).\
   `deck_get(id, variant)`;

@@ -28,7 +28,24 @@
  * A colour this file cannot read at all — a token retired before the map, a truncated write — is
  * {@link DEFAULT_LABEL_COLOR} rather than nothing: a dot the reader cannot see is a label the
  * reader cannot find.
+ *
+ * **Four of those answers moved to `@/lib/hexColor` on 2026-09-07 and are re-exported below**,
+ * so every caller of this file is untouched and this suite is unaltered. The reason is a layering
+ * one and is written at that module: `useMarkColors` needs {@link labelFgCss} for a mark colour
+ * the reader picked in Settings, and `src/lib/` may not import from `src/features/`. What stayed
+ * is what is about a *label* rather than about a hex string — the six quick picks, their display
+ * names, and the field's uppercase spelling.
  */
+
+import { labelColorCss } from "@/lib/hexColor";
+
+export {
+  HEX,
+  labelColorCss,
+  labelFgCss,
+  LEGACY_TOKENS,
+  normalizeLabelColor,
+} from "@/lib/hexColor";
 
 /** One of the six the picker offers first. `hex` is `#rrggbb` lowercase, which is the shape
  *  everything stored goes in. */
@@ -60,87 +77,21 @@ export const LABEL_COLORS: readonly LabelColorChoice[] = [
   { hex: "#00733e", label: "Moss" },
 ];
 
-/** The default: what a new label's picker opens on, and what an unreadable stored colour draws
- *  as. */
+/**
+ * The default: what a new label's picker opens on, and what an unreadable stored colour draws
+ * as.
+ *
+ * The second half of that sentence is now spelled in two places — here, and as `FALLBACK_HEX` in
+ * `@/lib/hexColor`, which is where {@link labelColorCss} went and which may not import this array
+ * back. `labelColors.test.ts`' `labelColorCss(null) === DEFAULT_LABEL_COLOR.hex` is the fence
+ * that keeps the two the same colour.
+ */
 export const DEFAULT_LABEL_COLOR = LABEL_COLORS[0];
-
-/**
- * The six words `deck_labels.color` held until 2026-08-20, and the colours they drew.
- *
- * **A read path only.** Nothing writes a token any more — the picker writes hex, and a rename
- * sends back whatever the row already had — so this map exists to keep a database older than the
- * build from going grey, and for no other reason. It is frozen at six entries by definition: a
- * seventh token never existed to be stored.
- */
-export const LEGACY_TOKENS: Readonly<Record<string, string>> = {
-  gold: "#d9b95c",
-  bone: "#f8e7b9",
-  azure: "#0e68ab",
-  slate: "#c8c4bf",
-  ember: "#d3202a",
-  moss: "#00733e",
-};
-
-const HEX = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i;
-
-/**
- * A stored colour as `#rrggbb` lowercase, or `null` for one this build cannot read.
- *
- * Total over three shapes, because all three arrive: a hex with or without the `#` (the field
- * lets a reader type either), a three-digit shorthand (`#f00`, which a reader typing by hand
- * will try), and one of {@link LEGACY_TOKENS}. `null` is the honest answer for anything else, and
- * it is what lets the *field* refuse a half-typed colour while {@link labelColorCss} still draws
- * something.
- */
-export function normalizeLabelColor(raw: string | null | undefined): string | null {
-  if (raw == null) return null;
-  const trimmed = raw.trim();
-  const legacy = LEGACY_TOKENS[trimmed.toLowerCase()];
-  if (legacy) return legacy;
-  const match = HEX.exec(trimmed);
-  if (!match) return null;
-  const digits = match[1].toLowerCase();
-  // `#f00` and `#ff0000` are the same colour, and only one of them is a shape the rest of the
-  // app has to know about.
-  return digits.length === 3
-    ? `#${digits[0]}${digits[0]}${digits[1]}${digits[1]}${digits[2]}${digits[2]}`
-    : `#${digits}`;
-}
-
-/** One label's colour as CSS. Total: every string is answered, including `null` and a colour from
- *  a build this one has never seen. */
-export function labelColorCss(color: string | null): string {
-  return normalizeLabelColor(color) ?? DEFAULT_LABEL_COLOR.hex;
-}
 
 /** The six digits, uppercase, for the picker's hex field — where the `#` is drawn beside the box
  *  rather than typed into it. */
 export function labelColorHex(color: string | null): string {
   return labelColorCss(color).slice(1).toUpperCase();
-}
-
-/**
- * What is legible printed on {@link labelColorCss}'s answer.
- *
- * **Computed now, where it used to be a seventh column on each of six rows.** A label was an 8px
- * dot for as long as nothing was written on one, and a dot needs no foreground; the deck stack's
- * quantity tag is a *filled* mark in the label's own colour with the copy count printed on it, so
- * every colour has to answer what reads on it — and once the reader picks the colour, no table
- * can hold the answer in advance.
- *
- * The formula is the one whose numbers that retired table was built from: the sRGB channels
- * weighted 0.2126/0.7152/0.0722 **without** linearisation, which is what put `#f8e7b9` at 0.91
- * and `#0e68ab` at 0.35 in its own doc. At or above 0.55, the app's near-black; below it, the
- * app's text colour. Kept rather than swapped for WCAG relative luminance because the six
- * hand-made answers are the specification here — `labelColors.test.ts` asserts every one of them
- * unchanged, and a "more correct" curve that flips one of the six is a regression on a screen
- * somebody looked at.
- */
-export function labelFgCss(color: string | null): string {
-  const hex = labelColorCss(color);
-  const channel = (at: number) => parseInt(hex.slice(at, at + 2), 16) / 255;
-  const luma = 0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5);
-  return luma >= 0.55 ? "var(--color-accent-fg)" : "var(--color-text)";
 }
 
 /**

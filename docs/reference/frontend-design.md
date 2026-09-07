@@ -2003,7 +2003,10 @@ figure in it that came from a run of text is exposed and should be re-read befor
   a card usually is — and in the frame it read as an *extension of the Game Changer banner*: two
   gold marks in one 27px strip meaning two unrelated things. `--color-ok`, the green the format
   check draws its clean-deck `CircleCheck` in, is legible and says the one sentence a tick must
-  not ("nothing is wrong here"). The neutral count paint was no distinction at all — a grey chip
+  not ("nothing is wrong here"). **That third refusal is reversed since 2026-09-07** — green is
+  the *exact* tier now, and *this is the printing you planned* **is** that sentence; the
+  subsection at the foot of this section carries the reversal, and the other two refusals stand.
+  The neutral count paint was no distinction at all — a grey chip
   at each end of the strip. Azure is none of those. It **is** one of the six label colours, which is
   the accepted cost: the quantity tag at the other end draws a *number*, so the two are still told
   apart by content and position.
@@ -2168,6 +2171,79 @@ Before and after in one pass, backing the change out through `element.style`:
   and it was run at `--mark-scale` 1 only. The two ends of the zoom ladder were re-driven for #182
   and nothing here changes how any of these terms scale — `1ch` follows the font size, which is
   already scaled — but that is an argument rather than a reading.
+
+### The tiers, and the green this section had ruled out (2026-09-07)
+
+**This one is not a photograph, which is why it is not numbered with the seven above it.** It is
+a colour decision reversed by a change in what the mark *means*, and the pass that would settle it
+is owed — the foot of this subsection says what is unmeasured.
+
+The mark answers two questions now instead of one — **green** where a Live row is the exact
+printing the plan named, **blue** where it is that same card in a printing the plan did not name.
+The rule, the two per-deck switches and the arithmetic are in
+[`src/features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md). What belongs here is the
+**colour**, because the first bullet of this section ruled green out and that finding is now
+reversed. **It is left standing above rather than deleted**: it was right about what it was
+looking at, and knowing why it stopped applying is the whole of the argument.
+
+**Two of the three refusals stand word for word.** Gold still puts two gold marks in one 27px
+strip meaning two unrelated things, and still reads as an extension of the Game Changer banner.
+The neutral count paint is still no distinction at all — a grey chip at one end of the strip and
+a grey chip at the other.
+
+**The third was a finding about a different mark.** `--color-ok` was ruled out in these words:
+*it is this app's "nothing is wrong here" colour, which is the one reading a tick must not have.*
+That was true of a mark meaning **this card is in the plan** — a *fact*, not a verdict — and it
+held for exactly as long as the mark said only that. Green is now the **exact** tier, and *this is
+the printing you planned* **is** a "nothing is wrong here" verdict: it is the reading the mark
+should have rather than the one it must not. Azure keeps the looser tier, where the original
+argument still applies unchanged, because *this is that card in another printing* is a fact again
+rather than a verdict. One pass, one sentence, two marks — and the sentence went to the mark it
+was true of.
+
+**The default green is `#56bd78`, and it is `--color-ok` itself rather than a colour picked to
+look like it.** `src/index.css` defines `--color-ok: oklch(0.72 0.14 152)`; converted to sRGB that
+is `#56bd78`, and the conversion is **in gamut** — the linear components come out at
+`0.0931 / 0.5103 / 0.1870`, all inside `[0, 1]` — so the hex is the exact colour rather than one
+clamped to the nearest displayable point. Blue is `#0e68ab`, today's azure, unchanged. Both are
+**literal hexes** in the stylesheet rather than `var(--color-ok)` / `var(--color-pie-u)`, for
+`LABEL_COLORS`' reason: these are the values a colour picker opens on and a reader's own choice
+replaces, so they cannot be a reference to something the palette decides later.
+
+⚠️ **The duplication has no fence, and that is worth knowing precisely because the six labels
+do have one.** `labelColors.test.ts` reads `src/index.css` through Vite's `?raw` and holds
+`LABEL_COLORS` to the declarations it finds; nothing does that for these two. `MARK_COLOR_DEFAULTS`
+in `src/lib/useMarkColors.ts` spells `#56bd78` and `#0e68ab` a second time — an
+`<input type="color">` cannot take a `var()`, so the picker needs a literal to open on — and
+`useMarkColors.test.ts` asserts those same two literals, which pins the constant to itself. A
+palette edit that moved `--color-theory-exact` and left the constant alone would ship a picker
+opening on a colour the mark is not drawn in, with nothing red anywhere. One test in
+`labelColors.test.ts`' shape closes it; it is **owed rather than done** (2026-09-07), and this
+paragraph said the fence existed before it was checked.
+
+**Azure is one of the six label colours and the green is not**, which means the split's one
+accepted cost stayed on the tier that was already paying it. A card wearing an Azure label draws
+an azure `QuantityTag` at the *other* end of this strip; the two are still told apart by content
+and position, because one of them is a number. The exact tier pays nothing there at all.
+
+**The four separations still hold, and the colour is the one of them a reader can now defeat.**
+Place (this corner against the rule break's, which moved to the opposite one on 2026-08-20
+precisely so), colour, shape (a filled banner against a hairline box) and the card's own edge.
+Since 2026-09-07 both colours are the reader's — Settings → Appearance writes
+`--color-theory-exact` and `--color-theory-name` onto the app root — so nothing stops somebody
+choosing the destructive red for one of them. That is theirs to do and not this app's to prevent;
+the other three separations are structural and hold whatever is picked, which is exactly why there
+are four of them rather than one.
+
+**What has not been done is a photograph, and this section is the reason that matters.** Every
+sentence above is an argument. The tiers have been driven in jsdom and in Storybook and in neither
+of the two frames that have ever settled anything here: no `file://` page over the built
+stylesheet, no shipped WebView2 pass. Unmeasured, and each of them is the kind of thing this
+section was written by: green over real card art beside the gold banner; green and blue on one
+wall of tiles, where the question is whether two filled marks read as two statements or as noise;
+either colour at `--mark-scale` 0.5 and 1.75; and a custom colour a reader has picked against the
+`-fg` the luminance formula chose for it. #158 and #182 were both reported by a reader off one
+screenshot after a green suite; that is the standing record of what a green suite is worth here.
 
 ## The two marks a deck card carries: picked, and just landed
 
@@ -5025,12 +5101,16 @@ in those words. It has since been driven over CDP under `tauri dev` (debug build
 below are now measurements; where a number is still only arithmetic it says so at its own site,
 and the foot of this section records what the pass could not settle.
 
-### The shape: six entries over twelve panels
+### The shape: a rail of entries over a page of panels
 
 The page was one scroll of twelve panels, ordered by what a press costs. That ordering is a real
 rule and is still the rule *inside* a group, but an ordering only helps a reader who already knows
-what they are scrolling towards. It is now a left rail of six entries and a pane drawing only the
-selected entry's panels, with a search box above the rail that filters panels across every group.
+what they are scrolling towards. It is now a left rail of **seven** entries and a pane drawing only
+the selected entry's panels, with a search box above the rail that filters panels across every
+group. (Twelve was the panel count on 2026-09-03 and is not one now; `Object.keys(PANELS)` is the
+answer, and this page deliberately stops writing that number down — `nav.ts`' own module comment
+makes the same refusal for the same reason. The rail's own count is written in the build, on
+`GroupId`, so it is repeated here and nowhere else.)
 
 **`src/features/settings/nav.ts` is the whole of the decision and neither component that draws it
 decides anything.** `SettingsNav` draws the rail, `SettingsPage` draws the pane, and both of the
@@ -5043,13 +5123,21 @@ are decidable with no DOM in front of them.
 | Card data | `prices`, `combos` |
 | Sync — badge: the `Needs review` queue | `sync`, `review` |
 | Tags | `hidden-tags` |
+| Appearance | `theory-marks`, `labels` |
 | Storage and data | `data-folder`, `backup`, `cache`, `web-storage` (web build only), `danger` |
 | Errors — badge: the error count | `errors` |
 
 **Where two panels answer one question they share an entry**, and where a panel is the only answer
 to its own question it gets one to itself. `Prices` and `Combos` are both optional bulk feeds of
-card facts; `Needs review` is what sync asks *of* a reader. A rail as long as the page it indexes
-would be a second scroll rather than a way through the first, which is the whole argument for six.
+card facts; `Needs review` is what sync asks *of* a reader; `Theory marks` and `Labels` are both
+"what a mark on a card looks like", which is why **Appearance** is one entry and not two (added
+2026-09-07). A rail as long as the page it indexes would be a second scroll rather than a way
+through the first, and that is the whole argument — a new entry has to earn itself against it.
+
+**Labels sits under Appearance and emphatically not under Tags.** A *tag* in this app is one of
+Scryfall's two tagger datasets; a *label* is the deckbuilder's coloured per-card mark. The two
+words must never trade places, and a rail is the one surface where a reader would take a shared
+heading as a claim that they are the same thing.
 
 **`Clear data` has no entry of its own and sits at the foot of `Storage and data`.** The three
 clears empty the part of the app the data folder holds, so that is the question they answer — and
@@ -5065,8 +5153,8 @@ type-checks perfectly and costs the reader a rail entry that scrolls to nothing.
 drawn stems against `Object.keys(PANELS)`. Two things the sweep has to get right and a naive one
 would not: it **strips comments first**, because this repo keeps its reasoning in prose and the
 prose quotes markup freely, so a doc comment containing `<SettingsSection id="…">` would otherwise
-read as a thirteenth panel that nothing draws (proved by mutation — with the stripper disarmed, a
-tag quoted in one of `nav.ts`'s own comments turns the sweep red); and it **reports a tag carrying
+read as a panel that nothing draws (proved by mutation — with the stripper
+disarmed, a tag quoted in one of `nav.ts`'s own comments turns the sweep red); and it **reports a tag carrying
 no literal `id` by name** rather than skipping it, so a dynamic id makes the sweep fail loudly
 instead of quietly under-reporting. `BackupPanel` draws `id="backup"` at two sites — the folder
 variant and the archive variant — and those are one panel, which is why the sweep collects a set.
@@ -5197,8 +5285,10 @@ The wrapped full-width column this replaced would have been roughly **280px**. T
 right call and it is not the ~90px a sketch suggested; the footnote and the gap are what the sketch
 left out.
 
-**Also driven, and correct:** the six entries and their panel sets, `web-storage` absent on
-desktop, `aria-current` on exactly one entry at rest and on **none** while the box has words in it,
+**Also driven, and correct — but this pass is 2026-09-03's, and the rail had six entries that
+day.** **Appearance and its two panels landed on 2026-09-07 and have not been driven in the window
+at all**, so nothing below was measured about them. What the pass confirmed: the six entries and
+their panel sets, `web-storage` absent on desktop, `aria-current` on exactly one entry at rest and on **none** while the box has words in it,
 the query cleared and `main.scrollTop` back to 0 on a group press, `Escape` clearing the field, a
 cross-group search (`dropbox` typed while standing on Updates draws `backup-heading` and nothing
 else — a word that appears nowhere in that panel's own text, so it is the keyword registry

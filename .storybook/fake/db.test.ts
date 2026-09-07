@@ -7819,6 +7819,15 @@ describe("the busy fault", () => {
       // `zoom`'s reason: a handler that validated before taking the lock would fail this loop by
       // answering `Ok` instead of BUSY.
       flattened: true,
+      // `set_mark_color`'s own key. It is the **fourth** write to take two arguments of its own,
+      // and the one collision it brings is `color` above — which belongs to the three label
+      // writes and is `"ember"`, a word this write would refuse. That is harmless for the reason
+      // every collision on this record is: `refuseIfBusy` is its first statement, so the colour
+      // is never looked at on this path. It is also the one place the usual "valid for `root`'s
+      // reason" argument cannot be made without breaking three other handlers, and it costs
+      // nothing — a handler that validated before taking the lock would fail this loop by
+      // answering "is not a colour this app can store" rather than `Ok`, which is the same red.
+      mark: "theoryExact",
       // `deck_set_view_state`'s, and empty is a real value for it: every field is optional and
       // absent means "leave it".
       viewState: {},
@@ -8165,7 +8174,15 @@ describe("the busy fault", () => {
     // 91 → 94 for the tokens — and neither arithmetic was right once both had landed. It is
     // re-counted by running the sweep, which is the trap the two paragraphs above are both about
     // and which a merge is the likeliest way to meet.
-    expect(names).toHaveLength(95);
+    //
+    // The theory marks' colours then added **one**, 95 → 96: `set_mark_color` is the tenth
+    // `app_meta` write and joins for the reason all nine do — the row is in the reader's own
+    // database, so the write takes the write connection and answers BUSY under a sync. Its read
+    // half (`mark_colors`, on `db_read`) is in `readHandlers` and not in this table at all, which
+    // is the split every preference before it is on. What is different about it is only what
+    // happens to that refusal afterwards: `TheoryMarksPanel` prints it, where the rail and the
+    // list layout swallow theirs. Re-counted by running the sweep.
+    expect(names).toHaveLength(96);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,

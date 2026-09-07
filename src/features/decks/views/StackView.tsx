@@ -33,6 +33,7 @@ import { useCategoryDragSource, useCategoryReorderDrop } from "../categoryDrag";
 import { deckCardSlot, DECK_CARD_ATTR } from "../dnd";
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
+import type { TheoryPlan } from "../theoryMatch";
 import type { ValidationIssue } from "../validation/types";
 import { RAIL_ATTR, splitRail } from "./columns";
 import { GroupHeader } from "./GroupHeader";
@@ -345,7 +346,7 @@ export function StackView({
   groups,
   marketplace,
   violations,
-  theoryMatches,
+  theoryPlan,
   onSelect,
   actions,
   selectedSlot,
@@ -357,10 +358,9 @@ export function StackView({
    *  card's own unit price. One value for the whole view, so the two cannot disagree. */
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
-  /** What the deck's plan says about each row — `theoryMatch.ts`'s map of slot → how far the
-   *  live list is from the planned count, handed down whole like `violations` beside it.
-   *  `undefined` for a deck with no plan. */
-  theoryMatches?: ReadonlyMap<string, number>;
+  /** The deck's plan — `theoryMatch.ts`'s two lookups and the deck's own two mark switches,
+   *  handed down whole like `violations` beside it. `undefined` for a deck with no plan. */
+  theoryPlan?: TheoryPlan;
   onSelect?: (card: DeckCard) => void;
   /** What may be done to a card here, and where a dropped one lands. See
    *  {@link DeckCardActions}; omitted, this view is exactly what it always was. */
@@ -722,6 +722,7 @@ export function StackView({
             groups={command}
             marketplace={marketplace}
             violations={violations}
+            theoryPlan={theoryPlan}
             onSelect={selectCard}
             actions={actions}
             selectedSlot={selectedSlot}
@@ -736,7 +737,7 @@ export function StackView({
             group={group}
             marketplace={marketplace}
             violations={violations}
-            theoryMatches={theoryMatches}
+            theoryPlan={theoryPlan}
             onSelect={selectCard}
             actions={actions}
             selectedSlot={selectedSlot}
@@ -800,7 +801,7 @@ export function StackView({
               group={group}
               marketplace={marketplace}
               violations={violations}
-              theoryMatches={theoryMatches}
+              theoryPlan={theoryPlan}
               onSelect={selectCard}
               actions={actions}
               selectedSlot={selectedSlot}
@@ -863,6 +864,7 @@ function CommandZone({
   groups,
   marketplace,
   violations,
+  theoryPlan,
   onSelect,
   actions,
   selectedSlot,
@@ -876,6 +878,21 @@ function CommandZone({
   groups: readonly CardGroup[];
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
+  /**
+   * The deck's plan, handed through exactly as {@link CommandZone.violations} above it is.
+   *
+   * **This box is the one place a per-card fact can go missing without a type saying so**, and it
+   * did: every prop here is optional, so a plan left out of the call site compiled, rendered, and
+   * drew a commander with no theory mark on it — the one card a Commander deck is *built around*
+   * being the only one that could not say whether it matched the plan. Found by driving the
+   * shipped window against real data (deck "Bruna", 73 live cards, 69 marks) and by nothing in
+   * the suite, because no fixture had put an **active** command zone against a plan.
+   *
+   * It is emphatically not {@link StackGroup.flowWidth}'s kind of absence. That prop is withheld
+   * here on purpose and says five things at once; this is a fact *about a card*, and a card in
+   * this box is a card in the deck like any other.
+   */
+  theoryPlan?: TheoryPlan;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
   /** Handed through to the piles — see {@link StackView}'s own props. */
@@ -923,6 +940,7 @@ function CommandZone({
           group={group}
           marketplace={marketplace}
           violations={violations}
+          theoryPlan={theoryPlan}
           onSelect={onSelect}
           actions={actions}
           selectedSlot={selectedSlot}
@@ -945,7 +963,7 @@ function StackGroup({
   group,
   marketplace,
   violations,
-  theoryMatches,
+  theoryPlan,
   onSelect,
   actions,
   selectedSlot,
@@ -957,10 +975,9 @@ function StackGroup({
   group: CardGroup;
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
-  /** What the deck's plan says about each row — `theoryMatch.ts`'s map of slot → how far the
-   *  live list is from the planned count, handed down whole like `violations` beside it.
-   *  `undefined` for a deck with no plan. */
-  theoryMatches?: ReadonlyMap<string, number>;
+  /** The deck's plan — `theoryMatch.ts`'s two lookups and the deck's own two mark switches,
+   *  handed down whole like `violations` beside it. `undefined` for a deck with no plan. */
+  theoryPlan?: TheoryPlan;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
   /** Handed through to the stack — see {@link StackView}'s own props. */
@@ -1148,7 +1165,7 @@ function StackGroup({
             label={group.name}
             currency={marketplace.currency}
             violations={violations}
-            theoryMatches={theoryMatches}
+            theoryPlan={theoryPlan}
             onSelect={onSelect}
             actions={actions}
             selectedSlot={selectedSlot}

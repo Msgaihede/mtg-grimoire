@@ -51,6 +51,18 @@ function withoutComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/[^\n]*/g, "$1");
 }
 
+/**
+ * **There is no exemption list any more, and its deletion is the point of having had one.**
+ *
+ * `NOT_YET_DRAWN` held exactly `["labels"]` for as long as that panel was unwritten: `nav.ts`
+ * declared the id so the `Appearance` group could arrive on the rail whole — the mark colours and
+ * the label list are one question, and a group that held half of it for a release would be a rail
+ * entry that changed meaning under the reader. It was an **exact set** rather than a tolerance
+ * precisely so that the day `LabelsPanel.tsx` landed, the literal disagreed with the sweep and had
+ * to be removed. It landed, and it was. A tolerance that quietly widens is how a rail entry that
+ * scrolls to nothing survives, which is the failure the sweep below exists to catch.
+ */
+
 /** Every `SettingsSection` stem the shipped tree actually draws, and the tags that carry none. */
 function sweep(): { ids: Set<string>; dynamic: string[] } {
   const ids = new Set<string>();
@@ -81,7 +93,15 @@ function sweep(): { ids: Set<string>; dynamic: string[] } {
  * mistake this repo has made and paid for. Everything below that names an order or a membership
  * is a literal for that reason.
  */
-const RAIL: GroupId[] = ["updates", "carddata", "sync", "tags", "storage", "errors"];
+const RAIL: GroupId[] = [
+  "updates",
+  "carddata",
+  "sync",
+  "tags",
+  "appearance",
+  "storage",
+  "errors",
+];
 
 /** Which panels each rail entry holds, in the order the pane draws them, on a **web** build. */
 const UNDER: Record<GroupId, PanelId[]> = {
@@ -89,6 +109,7 @@ const UNDER: Record<GroupId, PanelId[]> = {
   carddata: ["prices", "combos"],
   sync: ["sync", "review"],
   tags: ["hidden-tags"],
+  appearance: ["theory-marks", "labels"],
   storage: ["data-folder", "backup", "cache", "web-storage", "danger"],
   errors: ["errors"],
 };
@@ -110,13 +131,15 @@ describe("the settings rail", () => {
     // under-report rather than go red. Fail on it by name instead.
     expect(dynamic).toEqual([]);
 
-    // Both sides are subjects: the shipped tree on one, the closed union on the other.
-    expect([...ids].sort()).toEqual(Object.keys(PANELS).sort());
+    // Both sides are subjects, and both are whole: the shipped tree on one, the closed union on
+    // the other, with nothing exempted from either. See the note above for what used to be.
+    const declared = Object.keys(PANELS) as PanelId[];
+    expect([...ids].sort()).toEqual(declared.sort());
   });
 
-  it("has six entries, in declaration order", () => {
+  it("has seven entries, in declaration order", () => {
     expect(GROUP_ORDER).toEqual(RAIL);
-    expect(GROUP_ORDER).toHaveLength(6);
+    expect(GROUP_ORDER).toHaveLength(7);
     // `GROUP_ORDER` is derived from `GROUPS`, so this is what would catch the two coming apart —
     // an entry with a label and no place in the rail, or the reverse.
     expect(Object.keys(GROUPS)).toEqual(RAIL);
@@ -144,6 +167,8 @@ describe("panelsOn", () => {
       "sync",
       "review",
       "hidden-tags",
+      "theory-marks",
+      "labels",
       "data-folder",
       "backup",
       "cache",
@@ -160,6 +185,8 @@ describe("panelsOn", () => {
       "sync",
       "review",
       "hidden-tags",
+      "theory-marks",
+      "labels",
       "data-folder",
       "backup",
       "cache",
@@ -262,6 +289,38 @@ describe("visiblePanels", () => {
 
   it("answers nothing rather than falling back to the group", () => {
     expect(visiblePanels("storage", "kubernetes", false)).toEqual([]);
+  });
+
+  /**
+   * Appearance is a rail entry of its own and **not** a section of Tags. A *tag* in this app is
+   * one of Scryfall's two tagger datasets; a *label* is the deckbuilder's coloured per-card mark.
+   * Filing the label list under Tags would put the two words on one rail entry, which is the one
+   * thing this repo's vocabulary rule forbids.
+   */
+  it("draws both appearance panels under their own group", () => {
+    expect(visiblePanels("appearance", "", false)).toEqual(["theory-marks", "labels"]);
+  });
+
+  /**
+   * The colours are reached by what a reader would type at them, which is a colour word and the
+   * mark's own look rather than the word this repo files it under — nobody searching for a green
+   * tick types "theory". Both spellings of *colour* are in the line for `matches`' own reason: a
+   * reader types the word they have, and one of the two would answer nothing at all.
+   */
+  it("finds the colours by the words a reader would type", () => {
+    for (const query of ["colour", "color", "green", "checkmark", "theory mark", "customize"]) {
+      expect(visiblePanels("updates", query, false)).toContain("theory-marks");
+    }
+  });
+
+  /**
+   * **The separation this group exists for, seen from the reader's side.** `label` has to reach
+   * the deckbuilder's coloured per-card mark and nothing under `Tags` — a search that answered
+   * `Hidden tags` here would be the app's two vocabularies collapsing in the one place a reader
+   * would actually notice, which is why the panel is not filed there.
+   */
+  it("finds the labels without finding the tag panels", () => {
+    expect(visiblePanels("updates", "label", false)).toEqual(["labels"]);
   });
 
   it("gates the browser panel on the build, with a query and without one", () => {

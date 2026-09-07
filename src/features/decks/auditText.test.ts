@@ -646,6 +646,58 @@ describe("auditSentence", () => {
   });
 
   /**
+   * `decks.theory_mark_exact` and `decks.theory_mark_name` (schema v38) — the **third and
+   * fourth** multi-word field names the backend writes, and the X-split test's paragraph
+   * applies to both: an unrecognised field is "Changed the deck", which is true of every deck
+   * edit and therefore never fails, so only a test can hold the two spellings together.
+   *
+   * **Deriving either word from its column gives the wrong answer**, `xGroup`'s own trap: the
+   * columns are `theory_mark_exact` and `theory_mark_name`, and the plausible-looking
+   * `theoryMark` — one key for both switches — is asserted below so that a regression to it is
+   * a failing test rather than a history line quietly saying less than it knows.
+   *
+   * **The sentences are the UI's words and not the columns'.** The switches read *Matching
+   * printing* and *Different printing*; a line naming `theory_mark_exact` at the reader would
+   * be the log describing a column at somebody who pressed a switch.
+   */
+  it("names both theory marks by the words `deck.rs` writes, and tells them apart", () => {
+    const deck = (payload: Record<string, unknown>) =>
+      auditSentence(entry("deck", payload, { cardId: null, cardName: null }));
+
+    expect(deck({ field: "theoryMarkExact", from: false, to: true })).toEqual({
+      text: "Started marking cards in the printing the plan names",
+      detail: null,
+    });
+    expect(deck({ field: "theoryMarkExact", from: true, to: false })).toEqual({
+      text: "Stopped marking cards in the printing the plan names",
+      detail: null,
+    });
+    expect(deck({ field: "theoryMarkName", from: false, to: true })).toEqual({
+      text: "Started marking cards in a different printing",
+      detail: null,
+    });
+    expect(deck({ field: "theoryMarkName", from: true, to: false })).toEqual({
+      text: "Stopped marking cards in a different printing",
+      detail: null,
+    });
+    // **The two must not share a sentence**, which is the half a test of one arm cannot show:
+    // the switches are independent and one Save moves both, so two rows land in the drawer
+    // together and a reader has to be able to tell which one they are reading.
+    expect(deck({ field: "theoryMarkExact", to: true }).text).not.toEqual(
+      deck({ field: "theoryMarkName", to: true }).text,
+    );
+    // The wrong-but-plausible spellings: one key for both switches, and the raw column name.
+    expect(deck({ field: "theoryMark", to: true })).toEqual({
+      text: "Changed the deck",
+      detail: null,
+    });
+    expect(deck({ field: "theory_mark_exact", to: true })).toEqual({
+      text: "Changed the deck",
+      detail: null,
+    });
+  });
+
+  /**
    * `decks.bracket` (schema v26), and **the arm that `0` would otherwise swallow**.
    *
    * Every other deck field in this switch is read through `text()`, which answers `null` for a

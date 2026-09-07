@@ -28,6 +28,15 @@
  *
  * ## What this file does not decide
  *
+ * **What it is a colour _of_.** Every control in here used to name itself "Label colour", which
+ * was true while a label was the only thing in the app a reader could recolour and became a
+ * vocabulary error the day it was not: Settings → Appearance recolours a **mark**, and a *label*,
+ * a *mark* and a *tag* are three different things this repo is explicit about never letting trade
+ * places. So the words are the caller's — {@link ColourSubject} — and every name below is built
+ * from that one string rather than written out, which is what stops a frame naming the group one
+ * thing and the hex field inside it another. It **defaults to `"Label colour"`**, so the deck
+ * dialog and the card modal are byte-identical and their suites did not move.
+ *
  * **When a colour is written.** Both frames are controlled, and the caller holds the value —
  * because the wheel fires continuously while the OS dialog is being dragged, and a row that wrote
  * on every one of those would be a `deck_label_update` per pixel of travel. The create form's
@@ -40,6 +49,44 @@ import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FOCUS } from "@/lib/focus";
 import { cn } from "@/lib/utils";
 import { normalizeLabelColor, LABEL_COLORS, labelColorCss, labelColorHex } from "./labelColors";
+
+/**
+ * What is being coloured, in the words a reader would hear — and the stem every control in the
+ * picker names itself from.
+ *
+ * **A noun phrase that already carries the word "colour"**, because it is the group's own
+ * accessible name and "Matching printing" alone would announce a group of colour controls as
+ * though it were the mark itself. The three derived names are {@link subjectNames}'.
+ *
+ * Sentence case, and the first word capitalised: "Label colour", "Matching printing colour".
+ */
+export type ColourSubject = string;
+
+/** What every caller got before there was anything but a label to colour, and what they still get
+ *  for passing nothing. */
+const DEFAULT_SUBJECT: ColourSubject = "Label colour";
+
+/**
+ * The three names one subject becomes.
+ *
+ * **Built rather than written out**, which is the whole of what the prop buys: a caller that had
+ * to pass four strings could pass three that agree and one that does not, and a picker whose hex
+ * field belongs to a different thing than the group around it is worse than one that says "label"
+ * everywhere.
+ *
+ * `choose` lowers the first character rather than the string, so `Choose label colour` survives
+ * character for character and a subject with a capital inside it — a set name, a format — keeps
+ * it. Every subject here is a common noun phrase, which is what makes that safe; a proper noun
+ * would need its own answer.
+ */
+function subjectNames(subject: ColourSubject) {
+  return {
+    group: subject,
+    wheel: `${subject} picker`,
+    hex: `${subject} hex`,
+    choose: `Choose ${subject.charAt(0).toLowerCase()}${subject.slice(1)}`,
+  };
+}
 
 /** A label's colour as a square of it. `aria-hidden`: the colour is never the only carrier of
  *  anything, and the label's name is always beside it. */
@@ -66,19 +113,30 @@ export function LabelColorButton({
   color,
   open,
   onToggle,
+  subject = DEFAULT_SUBJECT,
 }: {
   color: string;
   open: boolean;
   onToggle: () => void;
+  /**
+   * What this button opens a colour for — {@link ColourSubject}.
+   *
+   * **Two of these on one screen with the default between them is two buttons a screen reader
+   * cannot tell apart**, which is what a name written into the component rather than passed to it
+   * costs the second caller. There is one caller today and it names a label, so the default is
+   * what it always said.
+   */
+  subject?: ColourSubject;
 }): JSX.Element {
   const tip = useTooltip();
+  const name = subjectNames(subject).choose;
   return (
     <button
       type="button"
       onClick={onToggle}
       aria-expanded={open}
-      aria-label="Choose label colour"
-      {...tip("Choose label colour", { describes: false })}
+      aria-label={name}
+      {...tip(name, { describes: false })}
       className={cn(
         "inline-flex h-8 shrink-0 items-center gap-[0.4375rem] rounded-md border border-border",
         "bg-surface px-2.5 text-dim transition-colors duration-150",
@@ -98,17 +156,25 @@ export function LabelColorButton({
 export function LabelColorPanel({
   value,
   onChange,
+  subject = DEFAULT_SUBJECT,
 }: {
   value: string;
   onChange: (color: string) => void;
+  /** What this panel colours — {@link ColourSubject}. */
+  subject?: ColourSubject;
 }): JSX.Element {
   return (
     <div
       role="group"
-      aria-label="Label colour"
+      aria-label={subjectNames(subject).group}
       className="flex items-center gap-3 rounded-lg border border-border bg-surface px-3 py-2.5"
     >
-      <PickerControls value={value} onChange={onChange} wheel="size-[2.125rem]" />
+      <PickerControls
+        value={value}
+        onChange={onChange}
+        subject={subject}
+        wheel="size-[2.125rem]"
+      />
     </div>
   );
 }
@@ -126,18 +192,27 @@ export function LabelColorRow({
   value,
   onChange,
   onDone,
+  subject = DEFAULT_SUBJECT,
 }: {
   value: string;
   onChange: (color: string) => void;
   onDone: () => void;
+  /** What this row colours — {@link ColourSubject}. Settings → Appearance opens one of these per
+   *  mark, so the default would name both of them "Label colour" and neither of them honestly. */
+  subject?: ColourSubject;
 }): JSX.Element {
   return (
     <div
       role="group"
-      aria-label="Label colour"
+      aria-label={subjectNames(subject).group}
       className="mt-2 flex items-center gap-2.5 border-t border-border pt-2"
     >
-      <PickerControls value={value} onChange={onChange} wheel="size-[1.875rem]" />
+      <PickerControls
+        value={value}
+        onChange={onChange}
+        subject={subject}
+        wheel="size-[1.875rem]"
+      />
       <button
         type="button"
         onClick={onDone}
@@ -168,14 +243,19 @@ export function LabelColorRow({
 function PickerControls({
   value,
   onChange,
+  subject,
   wheel,
 }: {
   value: string;
   onChange: (color: string) => void;
+  /** **Required here and defaulted only at the two frames**, which is what stops a third frame
+   *  being written that forgets to thread it and silently names its controls after a label. */
+  subject: ColourSubject;
   wheel: string;
 }) {
   const [text, setText] = useState(() => labelColorHex(value));
   const tip = useTooltip();
+  const names = subjectNames(subject);
 
   /** A colour chosen by anything that is not the hex field: the field follows it. */
   const set = (color: string) => {
@@ -192,7 +272,7 @@ function PickerControls({
         type="color"
         value={value}
         onChange={(e) => set(e.target.value)}
-        aria-label="Label colour picker"
+        aria-label={names.wheel}
         className={cn(
           "shrink-0 cursor-pointer appearance-none border-0 bg-transparent p-0",
           "[&::-webkit-color-swatch-wrapper]:p-0",
@@ -202,7 +282,7 @@ function PickerControls({
           FOCUS,
         )}
       />
-      <HexField text={text} onText={setText} onColor={onChange} />
+      <HexField text={text} onText={setText} onColor={onChange} name={names.hex} />
       <div className="ml-auto flex shrink-0 gap-[0.3125rem]">
         {LABEL_COLORS.map((c) => (
           <button
@@ -239,10 +319,14 @@ function HexField({
   text,
   onText,
   onColor,
+  name,
 }: {
   text: string;
   onText: (text: string) => void;
   onColor: (color: string) => void;
+  /** The field's accessible name, composed from the picker's subject by `subjectNames` — never
+   *  written here, so the field and the group around it cannot come to belong to two things. */
+  name: string;
 }) {
   return (
     <label className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-border bg-bg px-2.5">
@@ -263,7 +347,7 @@ function HexField({
           const color = normalizeLabelColor(next);
           if (color) onColor(color);
         }}
-        aria-label="Label colour hex"
+        aria-label={name}
         maxLength={6}
         spellCheck={false}
         className={cn(

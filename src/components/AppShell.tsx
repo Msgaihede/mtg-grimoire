@@ -48,6 +48,7 @@ import { useDeviceSyncInvalidation } from "@/lib/useDeviceSyncInvalidation";
 import { useDeviceSyncLive } from "@/lib/useDeviceSyncLive";
 import { useMarketplace, useMarketplaceProgress } from "@/lib/useMarketplace";
 import { useNarrowWindow } from "@/lib/useNarrowWindow";
+import { useMarkColorVars } from "@/lib/useMarkColors";
 import { useNavCollapsed } from "@/lib/useNavCollapsed";
 import { useNavLabels } from "@/lib/useNavLabels";
 import { useOracleTagProgress } from "@/lib/useOracleTagProgress";
@@ -299,6 +300,11 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // renders nothing: the two booleans go into the zustand store, where the collection and the
   // wishlist each read their own.
   useFlattenPersistence();
+  // And once more for the colours the reader has given the card marks — one read at launch, from
+  // the component that is mounted whatever they are looking at. It renders nothing: the answer
+  // becomes four custom properties on `:root`, which is where every mark that wears one already
+  // reads it, so no view is handed a hex and no mark subscribes to anything.
+  useMarkColorVars();
   // The three docked search columns — the deck editor's, the collection's and the wishlist's —
   // read here rather than where any of them is drawn, and that is a measurement rather than a
   // preference for tidiness. Asked by the panel, the read queues behind the page's own read on
