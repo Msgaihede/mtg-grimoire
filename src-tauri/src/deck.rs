@@ -1468,6 +1468,8 @@ struct DeckBefore {
     separate_x_group: bool,
     default_category_id: i64,
     bracket: i64,
+    theory_mark_exact: bool,
+    theory_mark_name: bool,
 }
 
 /// What a `deck`/`cover` history row records as the cover: the card's id, and the word
@@ -1531,7 +1533,8 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
         .query_row(
             "SELECT name, format_key, description, cover_card_id, cover_kind,
                     archived, folder_id, notes, theory_enabled, separate_x_group,
-                    default_category_id, game_key, bracket
+                    default_category_id, game_key, bracket,
+                    theory_mark_exact, theory_mark_name
                FROM decks WHERE id = ?1",
             params![id],
             |r| {
@@ -1557,6 +1560,13 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                     // and `default_category_id` at 10 — six columns any one of which would take
                     // a bracket without complaint.
                     bracket: r.get(12)?,
+                    // 13 and 14, at the end, same rule — and the pair with the least standing
+                    // between it and a silent swap, `deck_row`'s note one screen up: both are
+                    // `bool` over `INTEGER`, and so are `archived` at 5, `theory_enabled` at 8
+                    // and `separate_x_group` at 9. A crossed pair here would not fail, it would
+                    // record a history row saying the reader turned the *other* mark on.
+                    theory_mark_exact: r.get(13)?,
+                    theory_mark_name: r.get(14)?,
                 })
             },
         )
@@ -1899,6 +1909,38 @@ fn record_deck_edit(
     // `xGroup` are compared the same way for the same reason.
     if let Some(to) = patch.bracket.filter(|b| *b != before.bracket) {
         field("bracket", json!(before.bracket), json!(to))?;
+    }
+    // `theoryMarkExact` and `theoryMarkName`, camelCase — `xGroup`'s rule, and these are the
+    // third and fourth multi-word keys in this function. The `default` arm of `auditText.ts`'s
+    // `deckLine` answers an unrecognised field with "Changed the deck", which is true of every
+    // deck edit and therefore never fails, so a spelling that drifts from that file's reads as a
+    // bland history line rather than as a failure. The word is spelled once on each side and
+    // pinned by `auditText.test.ts`.
+    //
+    // **Two arms rather than one**, which is the schema's own two-columns-not-one argument read
+    // at the history: a reader who turned the strict mark off and the loose one on in the same
+    // Save made two decisions, and one row saying "changed the theory marks" could not be worded
+    // into either of them. Two rows also make the drawer read the way every other pair of
+    // independent switches here does.
+    //
+    // Booleans on both sides and `json!` straight off `before`, `xGroup`'s shape exactly:
+    // there is no sentinel and no name to resolve, so nothing here needs `bracket`'s raw-payload
+    // care or `defaultCategory`'s lookup.
+    if let Some(to) = patch
+        .theory_mark_exact
+        .filter(|m| *m != before.theory_mark_exact)
+    {
+        field(
+            "theoryMarkExact",
+            json!(before.theory_mark_exact),
+            json!(to),
+        )?;
+    }
+    if let Some(to) = patch
+        .theory_mark_name
+        .filter(|m| *m != before.theory_mark_name)
+    {
+        field("theoryMarkName", json!(before.theory_mark_name), json!(to))?;
     }
     if let Some(to) = patch.folder_id.filter(|f| Some(*f) != before.folder_id) {
         last = Some(record_filed(tx, id, Some(to))?);
@@ -8537,6 +8579,118 @@ mod tests {
         assert_eq!(after.name, "Burn");
         assert_eq!(after.game_key, DEFAULT_GAME);
         assert_eq!(after.bracket, AUTO_BRACKET);
+    }
+
+    /// Each mark records its **own** history row, once per real change, and a patch that
+    /// re-sends the value a field already holds records nothing.
+    ///
+    /// `the_x_group_switch_round_trips_and_is_recorded_once`'s job for the pair, with the one
+    /// thing that test could not have: **both fields move in one Save**, which is how the deck
+    /// settings dialog actually sends them, and that press must land as **two** rows. One row
+    /// saying "changed the theory marks" could be worded into neither decision — which is
+    /// `auditText.ts`'s problem and the reason the keys are two.
+    ///
+    /// The keys are asserted as literal `theoryMarkExact` / `theoryMarkName` strings, `xGroup`'s
+    /// rule: `auditText.ts`'s `default` arm answers an unrecognised field with a sentence true
+    /// of every deck edit, so a spelling that drifts reads as a bland line and never fails.
+    #[test]
+    fn each_theory_mark_records_its_own_history_row_once() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+
+        // One Save moving both, which is two rows and not one.
+        update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                theory_mark_exact: Some(false),
+                theory_mark_name: Some(false),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        // A repeat of the same answer, which is no change and therefore no row.
+        update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                theory_mark_exact: Some(false),
+                theory_mark_name: Some(false),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        // And one field alone back on, which is one row naming only that field.
+        update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                theory_mark_name: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let words: Vec<serde_json::Value> = crate::deck_audit::list(&conn, deck.id, 20)
+            .unwrap()
+            .iter()
+            .filter(|r| r.kind == crate::deck_audit::DECK)
+            .map(|r| serde_json::from_str(&r.payload).unwrap())
+            .filter(|p: &serde_json::Value| {
+                p["field"] == "theoryMarkExact" || p["field"] == "theoryMarkName"
+            })
+            .collect();
+        assert_eq!(
+            words,
+            vec![
+                json!({ "field": "theoryMarkName", "from": false, "to": true }),
+                json!({ "field": "theoryMarkName", "from": true, "to": false }),
+                json!({ "field": "theoryMarkExact", "from": true, "to": false }),
+            ],
+            "newest first: one Save moving both is two rows, the repeat is none, \
+             and the single-field Save names only its own field"
+        );
+    }
+
+    /// Ctrl+Z puts both marks back, which is what putting them on
+    /// [`crate::deck_undo`]'s `DECK_FIELDS` buys.
+    ///
+    /// **Both moved in one press, and both come back.** A list carrying only the first would
+    /// restore half of one Save — worse than restoring none of it, because the drawer would
+    /// still name the change it had not undone.
+    #[test]
+    fn undo_puts_both_theory_marks_back() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                theory_mark_exact: Some(false),
+                theory_mark_name: Some(false),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let moved = read_deck(&conn, deck.id).unwrap().unwrap();
+        assert_eq!(
+            (moved.theory_mark_exact, moved.theory_mark_name),
+            (false, false)
+        );
+
+        // `apply_reversal` itself rather than a second implementation of the cursor walk, which
+        // is `deck_undo`'s own test helper's argument: this is the path Ctrl+Z takes.
+        let cursor = crate::deck_undo::next_undo(&conn, deck.id)
+            .unwrap()
+            .unwrap();
+        crate::deck_undo::apply_reversal(&conn, deck.id, cursor, true).unwrap();
+
+        let back = read_deck(&conn, deck.id).unwrap().unwrap();
+        assert_eq!(
+            (back.theory_mark_exact, back.theory_mark_name),
+            (true, true),
+            "one press moved both, so one Ctrl+Z has to move both back"
+        );
     }
 
     /// A copy inherits both marks, `separate_x_group`'s and `bracket`'s rule and not the three

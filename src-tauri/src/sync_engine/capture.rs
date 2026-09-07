@@ -300,6 +300,26 @@ pub const TABLES: [Spec; 12] = [
             "last_sort_by",
             "separate_x_group",
             "bracket",
+            // **Schema v35's two theory marks, and they travel for `bracket`'s reason** — which
+            // of the mark's two tiers a deck draws is an answer *about the deck*, made once by
+            // the reader, exactly like the bracket and the X group above it. Two devices showing
+            // one deck's marks differently, with nothing on screen saying why, is the failure
+            // this pair of lines exists to prevent.
+            //
+            // **The mark's colours are deliberately not here and never will be.** Green and blue
+            // are a rendering choice and belong to the device that draws them; what a *deck* is
+            // is what these two columns say. That is this spec's oldest distinction — the three
+            // `last_*` columns are absent for the same reason, and they are absent from
+            // `duplicate_deck` too.
+            //
+            // **Adding is the safe direction**, which is what `cover_image_path`'s note above
+            // says from the other end: `apply::updates` and `apply::creations` walk the *local*
+            // spec and ask the incoming op for each name, so a device on the old rung receiving
+            // one of these ops never reads a field it does not know, and a device on this rung
+            // receiving an old op finds the key absent and leaves the column alone. Removing a
+            // field is the direction with no rule written down; this is the other one.
+            "theory_mark_exact",
+            "theory_mark_name",
         ],
         counters: &[],
         parents: &[
@@ -980,6 +1000,55 @@ mod tests {
         assert!(
             fields.get("name").is_none(),
             "name did not change: {fields}"
+        );
+    }
+
+    /// **Both of schema v35's theory marks travel, and independently.**
+    ///
+    /// The whole reason they are on the spec: which of the mark's two tiers a deck draws is an
+    /// answer *about the deck*, made once by the reader, and two devices showing one deck's
+    /// marks differently with nothing on screen saying why is the failure the lines exist to
+    /// prevent. `every_column_a_spec_names_exists_on_its_table` says the names are real; this
+    /// says a change to one is actually captured.
+    ///
+    /// **One column moved and the other named nowhere**, which is the part a test writing both
+    /// at once could not show: per-field last-writer-wins means an op naming a field it did not
+    /// touch clobbers the far device's newer answer, and these two are the pair most likely to
+    /// be written as one because they are set from one dialog.
+    #[test]
+    fn both_theory_marks_travel_and_only_the_one_that_moved() {
+        let conn = db();
+        conn.execute(
+            "INSERT INTO decks (name, format_key, created_at, updated_at)
+             VALUES ('A', 'commander', unixepoch(), unixepoch())",
+            [],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM sync_ops", []).unwrap();
+        conn.execute("UPDATE decks SET theory_mark_exact = 0", [])
+            .unwrap();
+
+        let o = ops(&conn);
+        assert_eq!(o.len(), 1);
+        let fields: serde_json::Value = serde_json::from_str(&o[0].2).unwrap();
+        assert_eq!(fields["theory_mark_exact"], 0);
+        assert!(
+            fields.get("theory_mark_name").is_none(),
+            "the other mark did not change: {fields}"
+        );
+
+        // And the other one on its own, so neither line is carrying the other's weight — a spec
+        // naming one column twice would pass the half above.
+        conn.execute("DELETE FROM sync_ops", []).unwrap();
+        conn.execute("UPDATE decks SET theory_mark_name = 0", [])
+            .unwrap();
+        let o = ops(&conn);
+        assert_eq!(o.len(), 1);
+        let fields: serde_json::Value = serde_json::from_str(&o[0].2).unwrap();
+        assert_eq!(fields["theory_mark_name"], 0);
+        assert!(
+            fields.get("theory_mark_exact").is_none(),
+            "the other mark did not change: {fields}"
         );
     }
 
