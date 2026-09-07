@@ -484,6 +484,18 @@ deck_token_add(state, deck_id: i64, card_id: String) -> Result<(), String>
 
 Note the parameter named `state_word`: `state` is already the Tauri state argument. Keep the **wire** name `state` by adding `#[allow(non_snake_case)]`-free serde handling — the simplest correct move is to name the Rust parameter `token_state` and have the frontend send `tokenState`. Pick one, and make Task 3's `ipc.ts` match it exactly; say which in your report.
 
+- [ ] **Step 5b: Carry `tokens_open` onto `DeckRow` and the update command**
+
+Task 1 added the column; the panel needs to read and write it. Follow `separate_x_group` exactly — it is the same idea (per-deck view state that travels) and it is already wired end to end:
+
+- `deck.rs:563` — `pub separate_x_group: bool` on `DeckRow`. Add `pub tokens_open: bool` **after** it.
+- `deck.rs:433` — `pub separate_x_group: Option<bool>` on the update struct. Add `pub tokens_open: Option<bool>` and the matching arm in the update writer.
+- `deck.rs:877` — the `DECK_SELECT` column list. **Add `d.tokens_open` at the very END of the list, and `r.get(N)` at the end of the read.**
+
+**That last point is not a style preference.** `read_deck_row` is positional, and a column added anywhere but the end shifts every later index into a field of the same SQLite type, silently — this is exactly how `finish` (TEXT) once landed in `needs_review` (TEXT). Adding at the end is the only safe position.
+
+`deck.rs` is yours for this step — no sibling agent owns it. The TypeScript half (`DeckRow.tokensOpen` in `ipc.ts` and the `update` mutation in `useDeck.ts`) belongs to Task 6; do not touch those.
+
 - [ ] **Step 6: Register on both surfaces**
 
 `desktop.rs`'s `generate_handler!` — add the four. `generate_handler!` names a command after the **last path segment**, so `deck_tokens::deck_tokens` is the command `deck_tokens`.
@@ -938,14 +950,37 @@ Run: `npx tsc --noEmit -p tsconfig.json`
 
 **Files:**
 - Modify: `docs/reference/decks-storage.md` — the `deck_tokens` table, the grain, the filter rule, the four commands
-- Modify: `src-tauri/CLAUDE.md` — the resolver, beside `meld_parts`
+- Modify: `src-tauri/CLAUDE.md` — the resolver beside `meld_parts`, **and the schema version**
 - Modify: `src/features/decks/CLAUDE.md` — the panel, its placement constraints, the naming rule
+- Modify: `docs/reference/data-and-sync.md` — the ladder story
+
+**Two version statements are now wrong and neither routes to a CI job**, so nothing will go red on them (found by Task 1):
+
+- `src-tauri/CLAUDE.md` says "`USER_SCHEMA_VERSION` **34** since collection folders learned to lock" and its ladder narrative stops at v34. That file has a documented history of carrying a wrong version for several rungs — do not let it start another.
+- `docs/reference/data-and-sync.md` (~line 635) ends its ladder story at v34 and owes a v35 paragraph.
+
+**The registration count moved from nine to ten.** `sync_engine/apply/tests.rs`'s `every_unique_index_on_a_synced_table_has_been_decided_about` is the tenth, and it is easy to miss because it sits in a `tests.rs` rather than beside the other nine. Record it wherever the list of what a synced table owes is written down.
 
 **Read first:** the spec. Everything here is already argued there; this task moves the durable half into the docs that load with the code.
 
 - [ ] **Step 1: Write the three edits.** Carry the measurements with their date (2026-09-07) and the build (debug corpus, 117 621 rows). Carry **why** the filter rule is a union — that is the fact a future reader will otherwise "simplify" back into a bug.
 
 - [ ] **Step 2: Re-count anything you touched.** A prose-only edit routes to neither CI job, so nothing goes red when a document rots. If you change a list or a count, re-count it in the same edit. Better: do not write down a number a build already answers.
+
+- [ ] **Step 2b: Sweep the synced-table count — it moved 12 → 13.**
+
+`deck_tokens` joined `SYNCED_TABLES` at v35. These four say the old number and none of them routes to a CI job:
+
+| file | says |
+| --- | --- |
+| `docs/reference/data-and-sync.md:529` | "all twelve synced tables with a unique index each" |
+| `docs/reference/sync.md:1781` | "on all twelve synced tables" |
+| `docs/reference/web-target.md:1126` | "`app_meta` is not one of the twelve synced tables" |
+| `src/features/settings/SyncPanel.stories.tsx:722` | "the world's own **eleven** synced tables" |
+
+**`SyncPanel.stories.tsx` was already wrong before this branch** — it said eleven when the answer had been twelve since `device_names` landed. That is the rot this step exists to stop, and it is the argument for not writing the number down at all where a build can answer it.
+
+**Do NOT touch the dated files under `docs/superpowers/plans/` and `docs/superpowers/specs/`.** Those are historical records of what was true when written; "two of the twelve synced tables" in the 2026-08-31 live-sync spec is correct *as history* and correcting it would falsify the record. `.storybook/fake/db.ts` is already done by Task 7.
 
 - [ ] **Step 3: Note the stale comment.** `search.rs:1252` claims token-only and memorabilia sets have no `cards` rows. Measured false on 2026-09-07: `set_type = 'token'` joins 2 950 rows, `memorabilia` 5 847. Record it as known-stale; do not fix it here.
 
@@ -957,7 +992,9 @@ Run: `npx tsc --noEmit -p tsconfig.json`
 
 - [ ] Sweep for unowned files: grep every new symbol against the ownership table above. `git grep` skips untracked files, so use plain `grep` or `git status` — a wiring sweep mid-fan-out otherwise misses every new file.
 - [ ] Check for CRLF flips: `git diff --stat` should show no whole-file rewrites.
-- [ ] Reconcile the state-word argument name across Task 2 and Task 3.
+- [ ] Reconcile the state-word argument name across Task 2 and Task 3. Task 3 shipped the wire key **`tokenState`**, so Task 2's Rust parameter must be `token_state`.
+- [ ] Confirm Task 2 emits `colors` as a **concatenated letter string** (`"W"`, `"BGRUW"`, `""`) and not a JSON array — that is how `cards.colors` is stored and what `DeckCard.colors` already is — and `power`/`toughness` as **strings**, since a real token is `*/*`.
+- [ ] **Add `DeckTokenRow` to the struct-mirror table in `ipc.test.ts`.** Task 3 could not: the row needs `import deckTokensRs from "../../src-tauri/src/deck_tokens.rs?raw"`, and that file does not exist until Task 2 lands, so the import would red the whole suite. It is the strongest available fence on the DTO — `ipc.ts` is a hand-written mirror that nothing in the build type-checks against the crate, so a field added on one side and forgotten on the other is `undefined` at the call site with no type error anywhere. It catches a `colors` typed as an array and a missing `power` automatically.
 - [ ] `npm run verify` — **once, in the foreground, after fan-in.** Never two at once: concurrent runs fake ~18 Rust schema failures. Never pipe it to `tail` — the exit code through a pipe is `tail`'s 0 while tests fail.
 - [ ] `cd src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings` — `verify` runs neither.
 - [ ] Drive the real window over CDP and confirm the area, the stepper and the picker. Every UI task in Plans 2–3 found something the suite could not.

@@ -167,9 +167,10 @@ CREATE TABLE deck_tokens (
     -- double-faced-token row in the corpus has one (0 missing of 3 245), so this is safe as a
     -- grain in a way `card_id` would not be.
     oracle_id TEXT NOT NULL,
-    -- The printing the reader picked. NULL means "whichever one the resolver names".
+    -- The printing the reader picked. NULL means whichever one the resolver names.
+    -- (No double quotes in these comments: see the note under the registration list.)
     card_id TEXT,
-    -- NULL means "the default", which is 1. Stored absent rather than as a 1 so that changing
+    -- NULL means the default, which is 1. Stored absent rather than as a 1, so that changing
     -- the default later moves every untouched token.
     quantity INTEGER,
     state TEXT NOT NULL DEFAULT 'auto'
@@ -211,8 +212,9 @@ the `decks` capture `Spec` (`capture.rs:299`), so `tokens_open` joins them and t
 
 ### What a new synced table owes
 
-Nine registrations, and a rung that misses one of them is a fresh install quietly disagreeing with
-every upgraded one:
+**Ten registrations** — this said nine until the rung was actually built, and the tenth is number 10
+below. A rung that misses one of them is a fresh install quietly disagreeing with every upgraded
+one:
 
 1. An `if v < N` block at the **bottom** of `migrate_user`, ending with its own **literal**
    version number.
@@ -231,6 +233,21 @@ every upgraded one:
    absent: Absent::Null, soft: false }`, `append_only: false`.
 9. An `apply::Meta` with an `order` that puts it **after `decks`** (`decks` is 1), a `Grain`
    restating `DECK_TOKEN_GRAIN` as a predicate, and **`counters: &[]`**.
+10. **Three lines in `sync_engine/apply/tests.rs`.** `every_unique_index_on_a_synced_table_has_been_decided_about`
+    reads every UNIQUE index off a live `SYNCED_TABLES` and compares it against a written-down
+    list, so it goes red on any new synced table that has a grain. This one is easy to miss
+    because it is in a `tests.rs` rather than beside the other nine, and because nothing points
+    at it from the registration sites.
+
+Two further sweeps that are not registrations but fail the same way: `schema.rs`'s
+`every_plain_grain_constant_names_the_index_the_head_schema_carries` wants
+`("idx_deck_tokens_grain", DECK_TOKEN_GRAIN)` — the grain carries no `coalesce`, so
+`PRAGMA index_info` can check it, and until the first `ON CONFLICT` interpolates the constant
+this sweep is the only thing fencing it at all. And **the rung's DDL is a plain `"…"` Rust
+string, so its SQL comments cannot contain a double quote** — the two comments this document
+first wrote with quotes around *whichever one the resolver names* and *the default* are a
+compile error as written, and since the rung and `USER_SCHEMA_SQL` must be byte-identical, both
+copies lose them.
 
 **`quantity` is a field, not a counter, and that is deliberate on two grounds.** Mechanically, a
 counter carries `NEW - OLD` and this column is nullable, so there is no arithmetic to carry;
@@ -306,9 +323,14 @@ The whole domain layer, and where the tests live:
 
 ### No new Rust for the art picker
 
-`ipc.cardPrintings(oracleId, marketplace, limit)` already answers it. Pass `playableOnly: false`
-the way `DeckCoverPicker` does. Treasure returns 97 printings across 70 distinct arts, so the
-picker is a real dialog over a grid, not a dropdown.
+`ipc.cardPrintings(oracleId, marketplace, limit)` already answers it. Treasure returns 97 printings
+across 70 distinct arts, so the picker is a real dialog over a grid, not a dropdown.
+
+**It needs no `playableOnly: false`, and an earlier draft of this document was wrong to say so.**
+That flag is `searchCards`', which is what `DeckCoverPicker.tsx:148` passes it to; `card_printings`'
+predicate is `oracle_id = ?1 AND is_paper = 1` (`card.rs:96`) with no `legal_mask` term at all, so
+tokens are never filtered out of it in the first place. The mistake was worth making explicit
+because the symptom of "fixing" it later would be a compile error, not a wrong result.
 
 ---
 
