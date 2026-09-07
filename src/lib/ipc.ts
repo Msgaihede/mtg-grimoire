@@ -37,22 +37,23 @@
  * `PairingProgress`/`QrMatrix`/`PairedDevice`      — `src-tauri/src/sync_pair/pairing.rs`,
  *                                                  `.../identity.rs`, `.../invite.rs`
  *
- * **Eight settings carry no struct at all.** Each is one `app_meta` row: three answered as a
+ * **Nine settings carry no struct at all.** Each is one `app_meta` row: three answered as a
  * bare string — `getMarketplace`/`setMarketplace` (`src-tauri/src/marketplace.rs`),
  * `printingGroupBy`/`setPrintingGroupBy` (`src-tauri/src/card.rs`) and
- * `deckSort`/`setDeckSort` (`src-tauri/src/decksort.rs`) — three as a bare map,
+ * `deckSort`/`setDeckSort` (`src-tauri/src/decksort.rs`) — four as a bare map,
  * `cardZoom`/`setCardZoom` (`src-tauri/src/zoom.rs`), `listView`/`setListView`
- * (`src-tauri/src/listview.rs`) and `flattenState`/`setFlattenState`
- * (`src-tauri/src/flatten.rs`), and two as a
+ * (`src-tauri/src/listview.rs`), `flattenState`/`setFlattenState`
+ * (`src-tauri/src/flatten.rs`) and `markColors`/`setMarkColor`
+ * (`src-tauri/src/markcolors.rs`), and two as a
  * bare `boolean`: `navCollapsed`/`setNavCollapsed` (`src-tauri/src/nav.rs`) and
- * `deckSearchOpen`/`setDeckSearchOpen` (`src-tauri/src/deck.rs`). All eight are
+ * `deckSearchOpen`/`setDeckSearchOpen` (`src-tauri/src/deck.rs`). All nine are
  * the shape a stored preference has to have: the read falls back on its default for a row that
  * is missing *or* holds a value this build does not recognise, and only the *write* refuses.
  *
- * Six of them are therefore typed loosely here rather than as their unions: the narrowing
+ * Seven of them are therefore typed loosely here rather than as their unions: the narrowing
  * belongs to the module that owns the vocabulary (`@/lib/marketplace`,
  * `@/features/card/printings`, `@/lib/cardZoom`, `@/lib/store` for both of its two rows,
- * `@/features/decks/deckSort`), and a
+ * `@/features/decks/deckSort`, `@/lib/useMarkColors`), and a
  * row a newer build wrote
  * must reach this side as what it is. **The deck sort is the one where the *write* refuses
  * nothing either**, and it is the rule above meeting a vocabulary the backend does not have
@@ -66,12 +67,12 @@
  * side to decide. Both store `"1"`/`"0"` and read anything else as that default, so a hand-edit
  * or a spelling a future build invents is already collapsed before it reaches the wire.
  *
- * The zoom row, the list-layout row and the flatten row are the three of the seven whose *shape*
- * is a map, and the
- * difference is worth a sentence: none has a single default to fall back on, because there are
- * seven walls, four lists and two cabinets and each one has been touched or not. So the backend
- * answers only
- * what it has, and a section it says nothing about keeps the default the store was built with.
+ * The zoom row, the list-layout row, the flatten row and the mark-colour row are the four of the
+ * nine whose *shape* is a map, and the difference is worth a sentence: none has a single default
+ * to fall back on, because there are eight walls, four lists, two cabinets and a handful of marks,
+ * and each one has been touched or not. So the backend answers only what it has, and a section it
+ * says nothing about keeps the default the store was built with — which for the mark colours is
+ * the one `index.css` draws, a default this side does not hold as a value at all.
  * **The flatten row is the one where the keys are a vocabulary and the values are not** — which
  * is the two arguments above meeting in one row rather than a third kind of setting: *which*
  * pages file cards is `@/lib/store`'s to say, while a `bool` has no junk state for a later build
@@ -2286,14 +2287,44 @@ export interface DeckQuickAddOutcome {
  * One card the plan asks for — {@link ipc.deckTheorySlots}' row, and the whole input to the deck
  * editor's theory tick.
  *
- * The hand-written mirror of `deck_theory::TheorySlot`. Two fields and no third: every column
- * that is *not* here (the name, the set, the price, the pile) is one the mark would have to be
- * told to ignore.
+ * The hand-written mirror of `deck_theory::TheorySlot`. **Three fields since 2026-09-07, and the
+ * third is the name** — the mark grew a second tier and the loose one needs an identity that
+ * survives a different printing. What is still not here is every column the mark would have to be
+ * told to ignore: the set, the price, the pile.
+ *
+ * **This interface was declared twice in this file until 2026-09-07**, identically, and nothing
+ * went red: TypeScript *merges* two interfaces of one name rather than refusing them, so the
+ * duplicate cost the build nothing and the doc comment above it — which described
+ * {@link TheoryDiffRow}, not this — had drifted onto the wrong type. That is the hazard rather
+ * than the merge: a field added to one declaration lands on the merged type either way, so the
+ * comment a reader lands on need not be the one carrying the field, and the only thing merging
+ * refuses is the same member spelled with two different types.
  */
 export interface TheorySlot {
   /** `deck_theory.rs`'s own `group_key` — `` `${cardId}|${finish ?? ""}` ``.
    *  `features/decks/theoryMatch.ts` spells the same string for a **live** row and looks it up. */
   key: string;
+  /**
+   * The card's printed name, exactly as `cards.name` holds it — `null` for an orphan whose
+   * printing has left the corpus and which therefore cannot be matched by name at all.
+   *
+   * **The second grain, and the loose tier's whole input.** {@link TheorySlot.key} above answers
+   * *is this the printing I planned*; this answers *is this the card I planned*, which is the
+   * question a reader holding a different Forest is asking. A name rather than an `oracleId`
+   * because Scryfall omits that field on reversible cards — and an identity with a fallback
+   * chain is two rules for the two sides of a comparison to disagree about.
+   *
+   * **Unfolded, and that is deliberate.** SQLite's `lower()` is ASCII-only and this side's
+   * `toLowerCase()` is not, so a name folded in SQL and a live row folded in JS would spell two
+   * keys for `Lim-Dûl's Vault` and the mark would go dark on exactly the cards whose absence is
+   * hardest to notice. `theoryNameKey` in `features/decks/theoryMatch.ts` folds both sides, in
+   * one language, and is the only place the rule is written.
+   *
+   * **`string | null` and never `string`**: an orphan is a real row of a real plan, so a mirror
+   * that promised a name here would put `.toLowerCase()` on `undefined` in the one case the
+   * feature exists to survive.
+   */
+  nameKey: string | null;
   /** How many copies the plan asks for, summed across every active pile it filed them in. */
   quantity: number;
 }
@@ -2320,22 +2351,6 @@ export interface TheorySlot {
  *
  * **So neither `cardId` nor `finish` is unique on its own**: a list is keyed by the pair.
  */
-/**
- * One card the plan asks for — {@link ipc.deckTheorySlots}' row, and the whole input to the deck
- * editor's theory tick.
- *
- * The Rust mirror of `deck_theory::TheorySlot`. Two fields and no third: every column that is
- * *not* here (the name, the set, the price, the pile) is one the mark would have to be told to
- * ignore.
- */
-export interface TheorySlot {
-  /** `deck_theory.rs`'s own `group_key` — `` `${cardId}|${finish ?? ""}` ``.
-   *  `features/decks/theoryMatch.ts` spells the same string for a **live** row and looks it up. */
-  key: string;
-  /** How many copies the plan asks for, summed across every active pile it filed them in. */
-  quantity: number;
-}
-
 export interface TheoryDiffRow {
   /** The printing **the theory row names**, which is the printing the reader would be buying.
    *  When the same card is filed in two theory categories this is the first row's category.
@@ -2713,6 +2728,24 @@ export interface DeckPatch {
    * reader makes against it.
    */
   theoryEnabled?: boolean;
+  /**
+   * Whether this deck draws the **green** theory mark — the live row that is the printing the
+   * plan named. See {@link DeckRow.theoryMarkExact}, where the whole rule is written.
+   *
+   * `decks.theory_mark_exact`, schema v36, and a **reading** preference like
+   * {@link DeckPatch.separateXGroup} below: switching it writes one column and touches not one
+   * `deck_cards` row. Unlike {@link DeckPatch.theoryEnabled} above it moves nothing at all —
+   * every card stays in the list it was in, and only what is drawn over them changes.
+   *
+   * `coalesce(?n, column)` like every other key here, so absent means "leave it" and there is no
+   * third state to spell. A `boolean` has nothing to clear, so unlike
+   * {@link DeckPatch.folderId} that costs this field nothing.
+   */
+  theoryMarkExact?: boolean;
+  /** Whether this deck draws the **blue** theory mark — the same card in a printing the plan did
+   *  not name. See {@link DeckRow.theoryMarkName}, and {@link DeckPatch.theoryMarkExact} above
+   *  for why the two are separate fields here rather than one three-valued one. */
+  theoryMarkName?: boolean;
   /**
    * Gather this deck's `{X}` spells under a heading of their own instead of counting each at
    * the mana value Scryfall gives it. See {@link DeckRow.separateXGroup} — a **reading**
@@ -5556,20 +5589,34 @@ export const ipc = {
    *  theory list are treated as separate decks where labels are concerned. */
   deckLabelList: (deckId: number, variant: DeckVariant) =>
     invoke<DeckLabel[]>("deck_label_list", { deckId, variant }),
-  /** A new label, **app-wide**. `deckId` is where the reader was standing — it goes in the
-   *  history row and is not stored on the label. Refuses a name any label already holds; the
-   *  colour is `#rrggbb` and the backend checks only that it is non-empty — see
-   *  {@link LabelColor}. */
-  deckLabelCreate: (deckId: number, name: string, color: LabelColor) =>
+  /**
+   * A new label, **app-wide**. Refuses a name any label already holds; the colour is `#rrggbb`
+   * and the backend checks only that it is non-empty — see {@link LabelColor}.
+   *
+   * **`deckId` is nullable, and `null` is Settings' Appearance panel.** A label has been one
+   * app-wide row since v21, so the deck was never what is being written — it is only what the
+   * *side effects* need: the deck's `updated_at` and its entry in the history drawer. A call
+   * from a page with no deck open has no deck to name, so it makes the label and records no
+   * history and no undo step, which is the honest account of an edit that reaches every deck
+   * wearing it.
+   *
+   * **Every existing caller passes a number and is unchanged** — `number` widens into
+   * `number | null`, so this is the rare wire change with no call site to follow it.
+   */
+  deckLabelCreate: (deckId: number | null, name: string, color: LabelColor) =>
     invoke<GlobalLabel>("deck_label_create", { deckId, name, color }),
   /** Rename **and** recolour, **in every deck at once**: one command, both arguments required.
-   *  There is no patch shape here, so a caller changing one sends the other back unchanged. */
-  deckLabelUpdate: (deckId: number, id: number, name: string, color: LabelColor) =>
+   *  There is no patch shape here, so a caller changing one sends the other back unchanged.
+   *  `deckId` is nullable for {@link ipc.deckLabelCreate}'s reason — a rename made from Settings
+   *  names no deck and writes no history. */
+  deckLabelUpdate: (deckId: number | null, id: number, name: string, color: LabelColor) =>
     invoke<GlobalLabel>("deck_label_update", { deckId, id, name, color }),
   /** Delete a label **from the whole app**. It **unlabels its cards rather than deleting them**
    *  — `deck_cards.label_id` is `ON DELETE SET NULL` — in every deck wearing it, which is what
-   *  {@link GlobalLabel.deckCount} exists for a confirm dialog to say first. */
-  deckLabelDelete: (deckId: number, id: number) =>
+   *  {@link GlobalLabel.deckCount} exists for a confirm dialog to say first. `deckId` is
+   *  nullable for {@link ipc.deckLabelCreate}'s reason, and a deckless delete still un-labels
+   *  every card: what it costs is the history row, never the write. */
+  deckLabelDelete: (deckId: number | null, id: number) =>
     invoke<void>("deck_label_delete", { deckId, id }),
   /** Take a label off **this deck's cards in one list**, leaving the label itself alone —
    *  the row-level act the app-wide list needed and the per-deck one never did. Answers how
@@ -6223,7 +6270,9 @@ export const ipc = {
   /**
    * How large each wall of cards was last left drawn, as section name → multiplier.
    *
-   * The third `app_meta` setting and the only one whose shape is a map — see this file's header.
+   * The third `app_meta` setting and the **first** whose shape is a map — see this file's header,
+   * and {@link listView}, {@link flattenState} and {@link markColors}, each of which copies the
+   * contract below.
    * **A section is absent rather than defaulted**: the ladder's stops are this side's
    * (`@/lib/cardZoom`), so a missing entry means the reader has never zoomed that wall, and the
    * backend does not invent a number it does not own. A whole unreadable row answers `{}`.
@@ -6249,7 +6298,7 @@ export const ipc = {
    * they left it.
    *
    * The **fourth** `app_meta` setting and the first that is a bare `boolean` — see this file's
-   * header. It is also one of the two that need no narrowing on this side: the other three carry
+   * header. It is also one of the two that need no narrowing on this side: the other seven carry
    * a vocabulary a newer build could have widened, and `true`/`false` has none, so there is no
    * third state to fall back from. **The far end is infallible**: a missing row, a row holding
    * something that is not a boolean, and a row that cannot be read at all all answer `false` —
@@ -6325,6 +6374,48 @@ export const ipc = {
    */
   setFlattenState: (section: string, flattened: boolean) =>
     invoke<void>("set_flatten_state", { section, flattened }),
+  /**
+   * What colour the reader has each card mark drawn in, as mark name → `#rrggbb`.
+   *
+   * The **ninth** `app_meta` setting and the fourth whose shape is a map — see this file's
+   * header, and {@link listView} beside it, whose contract this copies whole. **A mark is absent
+   * rather than defaulted**: what an uncustomised mark is drawn in lives in `index.css`, so a
+   * missing entry means the reader has never chosen and the backend does not invent a colour the
+   * stylesheet owns. **Infallible by signature** — a whole unreadable row answers `{}`, and a
+   * single hand-edited entry costs that one mark its colour and leaves the others standing.
+   *
+   * `Record<string, string>` and not a keyed record, for {@link listView}'s reason on the key
+   * half: which marks are customisable is this side's vocabulary, so `isMarkColorKey` narrows it
+   * in `@/lib/useMarkColors`. The **values** are checked at the far end, which is where a hex has
+   * a shape worth refusing — the split `markcolors.rs` states as "the frontend owns which marks
+   * exist and this crate owns only the shape a colour may have".
+   *
+   * `app_meta` is not a synced table, so these colours are **this device's** — which is the
+   * whole family's rule and not this row's exception.
+   */
+  markColors: () => invoke<Record<string, string>>("mark_colors"),
+  /**
+   * Remember one mark's colour — or, with `null`, **forget it**, which is what Reset means.
+   *
+   * `null` rather than writing the default hex, deliberately: a reader who has never chosen and
+   * one who has reset must end in the same state, and a default written into the row would freeze
+   * today's palette into the database — the cost `features/decks/labelColors.ts` records for a
+   * stored label colour, paid for no reason.
+   *
+   * Two arguments where most of its neighbours take one, and Tauri matches by name: **`mark` and
+   * `color`**, not `key` and `value`. Rejects a blank mark and anything that is not `#rrggbb` —
+   * six digits and a hash, with no shorthand, because `markcolors.rs` expects
+   * `features/decks/labelColors.ts`' `normalizeLabelColor` to have expanded `#f00` on this side
+   * first. So `app_meta` cannot collect entries every later read would discard. Uppercase is
+   * accepted and stored folded, so one colour has one spelling in the row.
+   *
+   * **Unlike its neighbours a refusal here is worth surfacing.** {@link setNavCollapsed} and
+   * {@link setListView} swallow a BUSY because the reader cannot see what was lost until the next
+   * launch; here they are standing in front of a swatch, so the panel says the write did not land
+   * rather than leaving them to discover it at the next launch.
+   */
+  setMarkColor: (mark: string, color: string | null) =>
+    invoke<void>("set_mark_color", { mark, color }),
   /**
    * Whether the deck editor's card search column was last left open.
    *
