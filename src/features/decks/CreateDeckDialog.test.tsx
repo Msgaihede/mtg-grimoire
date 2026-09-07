@@ -318,6 +318,10 @@ describe("the create deck dialog", () => {
         coverCardId: "s-Shivan Dragon",
         folderId: 2,
         theoryEnabled: true,
+        // **An exact object, so every absence below is asserted too** — and the two theory marks
+        // are the absences that matter: the draft holds both `true`, `decks.theory_mark_exact`
+        // and `theory_mark_name` are `NOT NULL DEFAULT 1`, and a create that carried them would
+        // be a second opinion about a default the table already owns.
       }),
     );
     expect(deckCreate).toHaveBeenCalledTimes(1);

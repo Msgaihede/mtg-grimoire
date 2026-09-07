@@ -636,6 +636,36 @@ describe("DeckSettingsDialog", () => {
     await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { theoryEnabled: true }));
   });
 
+  /**
+   * The two marks, each relayed to its own column.
+   *
+   * They are two `deck_update` fields rather than one because blue without green is a real
+   * answer, so a relay that carried both — or that sent the wrong one — would collapse the pair
+   * into a three-valued control the columns are deliberately not.
+   */
+  it("relays each theory mark on its own", async () => {
+    deckGet.mockResolvedValue(withPlan());
+    open();
+    await loaded();
+
+    await userEvent.click(screen.getByRole("switch", { name: /Different printing/ }));
+    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { theoryMarkName: false }));
+
+    await userEvent.click(screen.getByRole("switch", { name: /Matching printing/ }));
+    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { theoryMarkExact: false }));
+  });
+
+  /** And a deck with no plan is offered neither, for the reason it is offered no theory clear:
+   *  there is no second list for either mark to compare a row against. */
+  it("draws no mark switches on a deck with no plan", async () => {
+    open();
+    await loaded();
+
+    expect(screen.getByRole("switch", { name: /Theory deck/ })).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: /Matching printing/ })).toBeNull();
+    expect(screen.queryByRole("switch", { name: /Different printing/ })).toBeNull();
+  });
+
   /** The format dropdown drives the same command, and sends a key rather than a display name. */
   it("re-formats the deck by key", async () => {
     open();

@@ -3839,7 +3839,11 @@ describe("DeckEditor", () => {
     // own list in the cache beside the plan's — the second row the restore can read.
     await userEvent.click(screen.getByRole("button", { name: "Deck settings" }));
     await screen.findByText("Theory deck");
-    const theorySwitch = () => within(screen.getByRole("dialog")).getByRole("switch");
+    // Named, because a deck **with** a plan draws three switches in this dialog: the plan's own,
+    // and the two theory marks indented under it. A bare `getByRole("switch")` found one for as
+    // long as there was only one to find.
+    const theorySwitch = () =>
+      within(screen.getByRole("dialog")).getByRole("switch", { name: /Theory deck/ });
 
     deckUpdate.mockImplementation(async () => {
       deckRow = OFF;
@@ -3929,7 +3933,11 @@ describe("DeckEditor", () => {
       deckRow = { theoryEnabled: false, lastVariant: "live" };
       return { ...DECK, theoryEnabled: false };
     });
-    await userEvent.click(within(screen.getByRole("dialog")).getByRole("switch"));
+    // Named for the reason above: the two mark switches are drawn under this one while the deck
+    // keeps a plan, so the role alone no longer picks one control out.
+    await userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("switch", { name: /Theory deck/ }),
+    );
 
     await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { theoryEnabled: false }));
     await waitFor(() =>

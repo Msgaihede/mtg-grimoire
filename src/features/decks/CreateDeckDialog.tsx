@@ -34,6 +34,18 @@ const BLANK: DeckSettingsValue = {
   description: "",
   notes: "",
   theoryEnabled: false,
+  // **Both marks on, and the create sends neither.** `decks.theory_mark_exact` and
+  // `theory_mark_name` are `NOT NULL DEFAULT 1`, so this pair is the schema's own answer written
+  // where the draft can read it — a `deck_create` that carried them would be a second opinion
+  // about a default the table already owns, and `DeckInput` deliberately has no field for either.
+  // The two rows are drawn only under a switched-on theory list, so a deck born the ordinary way
+  // never shows them at all. A reader who turns the plan on *here* does get them, and switching
+  // one off then would not reach the new deck — the honest fix for that is a field on
+  // `DeckInput`, not a second write after the INSERT, and it is not what this dialog is for:
+  // both marks are a *reading* preference, one press away in Deck settings on the deck that
+  // opens the moment Create is pressed.
+  theoryMarkExact: true,
+  theoryMarkName: true,
   folderId: null,
   // **The one field this dialog never asks about**, and the only honest answer it could give:
   // a deck being created has no categories — `deck_create` seeds the four zones in the same
