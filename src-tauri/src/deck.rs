@@ -1069,30 +1069,26 @@ pub(crate) struct Released {
 /// [`release_live_copies`] — the bulk form, and now the only route the presses that empty a
 /// whole pile or a whole list take — returns before it reads anything.
 ///
-/// # It matches on the **oracle card**, not on the printing, and that is the fix for a stranding
+/// # It matches the printing and the finish exactly, and the fallback that is gone
 ///
-/// The obvious query — this printing, this finish — is the one this function had, and it strands
-/// copies. `deck_swap_printing` and `set_card_finish` rewrite a `deck_cards` row's identity and
-/// touch no collection table, so after "Use this printing" the group still holds the *old*
-/// printing's row: an exact match then finds nothing, the deck card goes away and the copies
-/// stay filed under a deck that no longer lists them — invisible on the collection page, and
-/// unavailable to every other deck. **It is not hypothetical for an upgraded reader either**:
-/// the allocator schema v25 replaced matched candidates by oracle id, so the conversion
-/// routinely files a printing the deck does not list.
+/// This query had three arms until 2026-09-07: the exact `(card_id, finish)`, then any row in
+/// the group with the same `card_id`, then any row sharing an `oracle_id`. The two fallbacks
+/// existed to cure a stranding — `deck_swap_printing` and `set_card_finish` rewrite a row's
+/// identity and touch no collection table, so an exact match found nothing and the copies stayed
+/// filed under a deck that no longer listed them.
 ///
-/// So the arms are, in order: the **exact printing and finish** first, then any other row in
-/// this group holding the same `cards.oracle_id`. That is [`owned_by_oracle`]'s rule — "a Bolt
-/// is a Bolt", the behaviour this feature kept deliberately — read from the other end: a deck
-/// that *counts* an Alpha Bolt toward an M10 line has to be able to give that copy back. The
-/// ordering is what keeps the common case byte-for-byte what it was: where the group holds the
-/// very printing the list names, that is the row that leaves.
+/// [`release_unclaimed_copies`] cures that at the source now: both commands sweep the group as
+/// they finish, so a copy the list does not name is never in it to be stranded. And under the
+/// exact grain the fallbacks are a **bug** rather than a safety net — a deck may legitimately
+/// list LEA Bolt *and* M10 Bolt with the group holding both, and cutting the LEA line while its
+/// own rows come up short would give back M10 copies the M10 line still claims. The second arm
+/// is the same bug one axis over, in the finish.
 ///
-/// **`LEFT JOIN cards`, so an orphan is still releasable.** `cards` is dropped and recreated on
-/// every sync and a collection row's `card_id` is a soft reference; an INNER join would make a
-/// row whose printing has left the corpus unreleasable — including by the exact match, which
-/// needs no `cards` row at all. When the *deck's* card is the orphan the sub-select answers
-/// NULL, the oracle arm is NULL rather than true, and the query degrades to exactly the exact
-/// match it used to be.
+/// **The `LEFT JOIN cards` went with them, and an orphan is still releasable** — more so than
+/// before. It was there so that a row whose printing has left the corpus could still be found by
+/// the exact match while the oracle arm degraded to NULL; with no arm needing an oracle id there
+/// is nothing to join to at all, and the deck row and the collection row name the same
+/// `card_id`. [`owned_by_printing`]'s reasoning, one function over.
 ///
 /// **Rows are taken oldest first and there may be several**, [`crate::collection_alloc`]'s rule
 /// verbatim: one printing can sit in two categories of one deck while the group holds a single
@@ -1130,16 +1126,9 @@ pub(crate) fn release_group_copies(
     let entry_finish = finish.unwrap_or(crate::schema::FINISHES[0]);
     let backing: Vec<(i64, i64)> = tx
         .prepare(
-            "SELECT e.id, e.quantity
-               FROM collection_entries e
-               LEFT JOIN cards c ON c.id = e.card_id
-              WHERE e.folder_id = ?1
-                AND (e.card_id = ?2
-                     OR c.oracle_id = (SELECT oracle_id FROM cards WHERE id = ?2))
-              ORDER BY CASE WHEN e.card_id = ?2 AND e.finish = ?3 THEN 0
-                            WHEN e.card_id = ?2 THEN 1
-                            ELSE 2 END,
-                       e.id",
+            "SELECT id, quantity FROM collection_entries
+              WHERE folder_id = ?1 AND card_id = ?2 AND finish = ?3
+              ORDER BY id",
         )
         .and_then(|mut s| {
             s.query_map(params![group, card_id, entry_finish], |r| {
@@ -1268,6 +1257,136 @@ pub(crate) fn release_live_copies(
         .map_err(|e| e.to_string())?;
     for (card_id, finish, quantity) in held {
         release_group_copies(tx, deck_id, &card_id, finish.as_deref(), quantity)?;
+    }
+    Ok(())
+}
+
+/// Give back every copy this deck's group holds that its live list does not claim at
+/// `(card_id, finish)`.
+///
+/// **This is the function that makes the exact grain a rule rather than a report.**
+/// [`owned_by_printing`] narrowed the count to the printing the list names; on its own that
+/// leaves a hole, because two commands rewrite a live row's *identity* and touch no collection
+/// table — [`swap_printing`] and [`set_card_finish`]. After *Use this printing* the group still
+/// holds the old printing's row, which the new count attributes to nothing and which
+/// [`crate::deck_pull::CANDIDATE_SQL`] cannot offer back: it excludes every `kind = 'deck'`
+/// folder, this deck's own included. The reader would be looking at a line reading *4 missing*
+/// with its four copies filed under that very deck and no press anywhere that reaches them.
+///
+/// So the copies leave, for `Recently removed` — which `CANDIDATE_SQL` ranks **second**, after
+/// the root and before the reader's own folders. The state is not merely correct, it is one the
+/// next press of `Import missing cards from collection…` can act on.
+///
+/// **"Claimed" is every live `deck_cards` row, switched-off piles included**, and reading that
+/// the other way would be destructive. [`attribute_owned`] hands an inactive pile no copies, so
+/// it is tempting to treat its rows as claiming nothing — but then flipping a category off would
+/// evict that pile's cards from the deck, turning a display switch into a press that moves
+/// cardboard. Custody follows what the list **names**; the switch decides only what is counted.
+/// [`release_live_copies`] already works this way — it filters by `category_id` and never by
+/// `category_active`.
+///
+/// **A sweep rather than a targeted release, because a swap can fold.** `swap_printing` onto a
+/// printing the deck already lists merges two rows into one ([`SwapResult::folded`]), so the
+/// quantity a targeted [`release_group_copies`] would need is a function of the fold. Reading the
+/// finished list against the group answers the plain case and the folded one with one query.
+///
+/// **The `live` fence is here rather than in the callers**, [`release_live_copies`]' rule: a plan
+/// holds no cards ([`crate::collection_alloc::THEORY_HOLDS_NOTHING`]), so `theory` is a loop that
+/// never runs, and a rule written down twice is a rule one copy will not have.
+///
+/// A deck with no group holds nothing rather than refusing, and `Recently removed` is resolved
+/// only once there is something to file — both [`release_group_copies`]' asymmetries, so the two
+/// behave alike on a hand-edited database.
+///
+/// Called inside the caller's transaction, [`crate::deck_audit::record`]'s contract: a rolled-back
+/// swap must not have moved a card.
+pub(crate) fn release_unclaimed_copies(
+    tx: &Connection,
+    deck_id: i64,
+    variant: &str,
+) -> Result<(), String> {
+    if variant != LIVE {
+        return Ok(());
+    }
+    let Some(group) = deck_group(tx, deck_id)? else {
+        return Ok(());
+    };
+
+    // What the list names, at the grain custody is now kept at. The deck row's `NULL` finish is
+    // the collection row's `'nonfoil'`, resolved in SQL so the two sides of the comparison below
+    // are one spelling.
+    let nonfoil = crate::schema::FINISHES[0];
+    let claimed: HashMap<(String, String), i64> = tx
+        .prepare(
+            "SELECT card_id, coalesce(finish, ?3), sum(quantity)
+               FROM deck_cards
+              WHERE deck_id = ?1 AND variant = ?2
+              GROUP BY card_id, coalesce(finish, ?3)",
+        )
+        .and_then(|mut s| {
+            s.query_map(params![deck_id, LIVE, nonfoil], |r| {
+                Ok((
+                    (r.get::<_, String>(0)?, r.get::<_, String>(1)?),
+                    r.get::<_, i64>(2)?,
+                ))
+            })?
+            .collect()
+        })
+        .map_err(|e| e.to_string())?;
+
+    let held: Vec<(String, String, i64)> = tx
+        .prepare(
+            "SELECT card_id, finish, sum(quantity)
+               FROM collection_entries
+              WHERE folder_id = ?1
+              GROUP BY card_id, finish",
+        )
+        .and_then(|mut s| {
+            s.query_map(params![group], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+                .collect()
+        })
+        .map_err(|e| e.to_string())?;
+
+    for (card_id, finish, have) in held {
+        let want = claimed
+            .get(&(card_id.clone(), finish.clone()))
+            .copied()
+            .unwrap_or(0);
+        let mut surplus = have - want;
+        if surplus <= 0 {
+            continue;
+        }
+        // Resolved only when there is something to file — a hand-edited database missing the
+        // folder still opens, and a deck with nothing surplus never asks for it.
+        let removed = removed_group(tx)?
+            .ok_or_else(|| crate::collection_alloc::NO_REMOVED_FOLDER.to_owned())?;
+        // Oldest row first — `take_copies`' rule and `release_group_copies`'. `id` is the
+        // primary key, so the walk is total.
+        let rows: Vec<(i64, i64)> = tx
+            .prepare(
+                "SELECT id, quantity FROM collection_entries
+                  WHERE folder_id = ?1 AND card_id = ?2 AND finish = ?3
+                  ORDER BY id",
+            )
+            .and_then(|mut s| {
+                s.query_map(params![group, card_id, finish], |r| {
+                    Ok((r.get(0)?, r.get(1)?))
+                })?
+                .collect()
+            })
+            .map_err(|e| e.to_string())?;
+        for (id, row_held) in rows {
+            if surplus <= 0 {
+                break;
+            }
+            let take = row_held.min(surplus);
+            // **The move is `take_copies`' and is not written a second time** —
+            // `collection_alloc`'s first rule. It splits the row where the take is partial and
+            // folds the travelling half into whatever `Recently removed` already holds at that
+            // grain, which `idx_collection_grain` (UNIQUE, `folder_id` included) requires.
+            crate::collection_folders::take_copies(tx, id, take, Some(removed))?;
+            surplus -= take;
+        }
     }
     Ok(())
 }
@@ -2025,7 +2144,7 @@ const NO_MODE: &str = "A remembered view mode cannot be blank.";
 ///   [`crate::deck_audit`]'s one-row rule, listed there with the other six.
 /// * **It moves no collection row.** Nothing here changes what the deck lists, so nothing
 ///   changes what it holds — and since schema v25 there is no list of writes to join: what a
-///   deck owns is a sum over the rows filed in its group ([`owned_by_oracle`]), so nothing is
+///   deck owns is a sum over the rows filed in its group ([`owned_by_printing`]), so nothing is
 ///   derived and no write can forget to rebuild it. This bullet named "the allocator" and
 ///   pointed at a list in `src-tauri/CLAUDE.md` that the same rung deleted. What is left to
 ///   say is the narrower fact: reading a deck may not file a card into or out of its group,
@@ -3394,6 +3513,23 @@ pub struct SwapResult {
 ///
 /// One transaction, for the reason [`update_deck`]'s is one: mid-swap the copies are in
 /// neither row, or in both, and neither is a state a reader may see.
+///
+/// # It moves the reader's cardboard, and Ctrl+Z does not bring it back
+///
+/// [`release_unclaimed_copies`] runs before the commit, so a swap on a deck that was *holding*
+/// the old printing files those copies into `Recently removed`. That is the whole point — under
+/// [`owned_by_printing`]'s grain they would otherwise sit in this deck's own group claimed by
+/// nothing, and [`crate::deck_pull::CANDIDATE_SQL`] excludes every deck group, so no press
+/// anywhere could reach them.
+///
+/// **The undo step does not follow them.** [`crate::deck_undo`] restores `deck_cards` and touches
+/// no collection table, so undoing a swap puts the old printing back on the list and leaves its
+/// copies in the holding area — a line reading *missing* whose copies are one folder away.
+/// [`clear_category`] and [`clear_variant`] already work exactly this way and for the same
+/// reason, so this is the file's existing bargain rather than a new one: half an undo that
+/// silently re-filed cardboard would be worse than an undo that plainly did not. The way back is
+/// the same as theirs — `Import missing cards from collection…`, which `Recently removed` is
+/// ranked **second** in so that the very copies this just released are the ones offered first.
 pub fn swap_printing(
     conn: &Connection,
     deck_id: i64,
@@ -3514,6 +3650,13 @@ pub fn swap_printing(
     // contributed at least one copy: the landed total is strictly greater than what was moved
     // exactly when the insert folded. No second read needed to know it.
     let folded = landed > quantity;
+    // The line's identity changed and the group did not follow it, which is the hole the exact
+    // grain opens: `deck_cards` is rewritten here and no collection table is touched, so the old
+    // printing's copies would sit in this deck's group claimed by nothing — and
+    // `deck_pull::CANDIDATE_SQL` excludes every deck group, so no press could reach them. The
+    // sweep is a no-op on `theory` and on a deck holding exactly what it lists.
+    release_unclaimed_copies(&tx, deck_id, variant)?;
+
     // `delta` 0 and the **new** printing's id: the deck holds the same number of the same card
     // and a different printing of it, so the line the history draws is about the row that
     // exists now. `folded` rides along because a deck list that silently loses a line reads
@@ -3557,6 +3700,12 @@ pub fn swap_printing(
 /// Three refusals, each its own sentence: [`SAME_FINISH`] for a press that changes nothing,
 /// [`FINISH_NOT_SOLD`] for a finish the printing does not come in, and [`GONE`] for a row that
 /// is not in that pile.
+///
+/// **It moves the reader's cardboard and Ctrl+Z does not bring it back**, which is
+/// [`swap_printing`]'s section of that name in full and holds here for the same reason one axis
+/// over: [`release_unclaimed_copies`] runs before the commit, so setting a line to foil files the
+/// regular copies the deck was holding into `Recently removed`, and [`crate::deck_undo`] restores
+/// `deck_cards` alone. Read that section rather than a second copy of it.
 pub fn set_card_finish(
     conn: &Connection,
     deck_id: i64,
@@ -3659,6 +3808,13 @@ pub fn set_card_finish(
             (moved, false)
         }
     };
+
+    // The line's identity changed and the group did not follow it, which is the hole the exact
+    // grain opens: `deck_cards` is rewritten here and no collection table is touched, so the old
+    // finish's copies would sit in this deck's group claimed by nothing — and
+    // `deck_pull::CANDIDATE_SQL` excludes every deck group, so no press could reach them. The
+    // sweep is a no-op on `theory` and on a deck holding exactly what it lists.
+    release_unclaimed_copies(&tx, deck_id, variant)?;
 
     // `delta` 0 and the `swap` kind: the deck holds the same number of the same card, in a
     // different object. `folded` rides along for `swap_printing`'s reason — a deck list that
@@ -4006,7 +4162,7 @@ pub fn get_deck(
     };
     let mut cards = read_deck_cards(conn, id, variant, marketplace)?;
     fill_unknown_power_toughness(conn, &mut cards)?;
-    attribute_owned(&mut cards, &owned_by_oracle(conn, id)?);
+    attribute_owned(&mut cards, &owned_by_printing(conn, id)?);
     let categories = crate::deck_meta::list_categories(conn, id, variant, marketplace)?;
     let labels = crate::deck_meta::list_labels(conn, id, variant)?;
     Ok(Some(DeckDetail {
@@ -4203,7 +4359,7 @@ fn printed_power_toughness(json: &str) -> (Option<String>, Option<String>) {
     (pick("power"), pick("toughness"))
 }
 
-/// Copies this deck **holds**, per oracle card.
+/// Copies this deck **holds**, per printing **and finish**.
 ///
 /// Since schema v25 this is a question about where a collection row physically sits: a deck's
 /// group is one `collection_folders` row with `kind = 'deck'` and `deck_id` set, and every
@@ -4211,29 +4367,38 @@ fn printed_power_toughness(json: &str) -> (Option<String>, Option<String>) {
 /// more and nothing that can be out of date — the old `min(a.quantity, e.quantity)` existed
 /// because a *claim* could out-live the row it was made against, and custody cannot.
 ///
-/// **Grouped by oracle id, and that is deliberately not the printing.** A Bolt is a Bolt: the
-/// deck may list the Alpha printing while the copy in the box is the M10 one, and the old
-/// allocator matched across printings for exactly that reason. Keeping it is what makes a reader
-/// who let the allocator choose see the same answer after the upgrade as before it.
+/// **Grouped by `(card_id, finish)`, and that is deliberately not the oracle card.** It was the
+/// oracle card until 2026-09-07 — "a Bolt is a Bolt", carried over from the allocator, which
+/// matched across printings. What that bought was a deck that counted an M10 Bolt toward its LEA
+/// line; what it cost was a deck reading *12 missing* whose `deck_pull_plan` could honestly offer
+/// nothing, because [`crate::deck_pull::CANDIDATE_SQL`] matches the printing and the finish
+/// exactly. Two grains asking one question is a screen that contradicts the dialog it opens, so
+/// the count came down to meet the pull rather than the pull going up to meet the count.
 ///
-/// **`JOIN cards` is an INNER join**, for the reason it always was: an orphaned row names no
-/// oracle card, so it reads owned 0 until the reconciler or the next sync gives it its identity
-/// back. It is still listed and still flagged — [`crate::collection`]'s `FROM` discipline is
-/// about the rows a *list* shows, and this is a lookup rather than a list.
-fn owned_by_oracle(conn: &Connection, deck_id: i64) -> Result<HashMap<String, i64>, String> {
+/// **No `JOIN cards`, and its absence is a behaviour change rather than a tidy-up.** The oracle
+/// version needed an INNER join to learn a row's oracle id, so an orphaned printing — a row whose
+/// `card_id` is not in `cards` — was dropped from the map and read as owned 0 until the next
+/// sync gave it its identity back. At this grain there is nothing to look up: the deck row and
+/// the collection row name the same `card_id`, so the copy counts.
+fn owned_by_printing(
+    conn: &Connection,
+    deck_id: i64,
+) -> Result<HashMap<(String, String), i64>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT c.oracle_id, sum(e.quantity)
+            "SELECT e.card_id, e.finish, sum(e.quantity)
                FROM collection_entries e
                JOIN collection_folders f ON f.id = e.folder_id
-               JOIN cards c ON c.id = e.card_id
-              WHERE f.deck_id = ?1 AND c.oracle_id IS NOT NULL
-              GROUP BY c.oracle_id",
+              WHERE f.deck_id = ?1
+              GROUP BY e.card_id, e.finish",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(params![deck_id], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            Ok((
+                (r.get::<_, String>(0)?, r.get::<_, String>(1)?),
+                r.get::<_, i64>(2)?,
+            ))
         })
         .map_err(|e| e.to_string())?;
     rows.collect::<rusqlite::Result<HashMap<_, _>>>()
@@ -4260,28 +4425,41 @@ fn owned_by_oracle(conn: &Connection, deck_id: i64) -> Result<HashMap<String, i6
 /// lacked a variant column**, and that is worth saying plainly because it reads like a leftover.
 /// It used to be a fence around `deck_allocations` carrying no variant — a theory read walked
 /// the *live* deck's claims and would otherwise have handed a plan somebody else's copies. A
-/// group is not scoped to a variant either, so the map [`owned_by_oracle`] answers is still the
+/// group is not scoped to a variant either, so the map [`owned_by_printing`] answers is still the
 /// whole deck's; what has changed is that the map is now a fact about where cards *are* rather
 /// than a ledger of what was reserved. The conclusion is the same one and is still drawn here,
 /// explicitly, rather than left to a table's shape — pinned by
 /// `the_allocator_claims_nothing_for_the_theory_variant`.
-fn attribute_owned(rows: &mut [DeckCardRow], owned_by_oracle: &HashMap<String, i64>) {
-    let mut left = owned_by_oracle.clone();
+///
+/// **The key is `(card_id, finish)` since 2026-09-07 and was the oracle id before it** — see
+/// [`owned_by_printing`] for why the count came down to meet the pull. Nothing else about this
+/// walk moved: the same two rows are passed over for the same two reasons, and the pool is still
+/// a scarce thing handed out in the read's order, so one printing short in two piles still
+/// shares one pool. What changed is that a *different* printing of the same card now has a key
+/// of its own and takes from a pool of its own.
+fn attribute_owned(rows: &mut [DeckCardRow], owned: &HashMap<(String, String), i64>) {
+    let mut left = owned.clone();
     for row in rows.iter_mut() {
-        // **A plan reserves nothing.** A group holds what the deck physically has, whichever
+        // **A plan reserves nothing**, and a switched-off pile counts toward nothing anywhere in
+        // the app. Both zero the row rather than taking from the pool — the copies stay in `left`
+        // for the rows that are the deck. A group holds what the deck physically has, whichever
         // list the reader is looking at, so a theory read would otherwise hand a plan the very
-        // copies the sleeved deck is holding — which is why this test comes out of `claimed_for`
-        // and stands on its own rather than being folded in with the category one below.
-        if row.variant != LIVE {
+        // copies the sleeved deck is holding.
+        if row.variant != LIVE || !row.category_active {
             row.owned_quantity = 0;
             continue;
         }
-        let counted_for = row.category_active;
-        let Some(oracle) = row.oracle_id.clone().filter(|_| counted_for) else {
-            row.owned_quantity = 0;
-            continue;
-        };
-        let remaining = left.entry(oracle).or_insert(0);
+        // The deck row's `NULL` is the collection row's `'nonfoil'` — [`normalise_finish`]'s
+        // translation read the other way, and the same line [`release_group_copies`] already
+        // carries. The `oracle_id` guard this replaced is gone with the join that needed it: a
+        // deck row always has a `card_id`.
+        let key = (
+            row.card_id.clone(),
+            row.finish
+                .clone()
+                .unwrap_or_else(|| crate::schema::FINISHES[0].to_owned()),
+        );
+        let remaining = left.entry(key).or_insert(0);
         let take = (*remaining).min(row.quantity).max(0);
         *remaining -= take;
         row.owned_quantity = take;
@@ -4415,10 +4593,14 @@ pub fn list_format_specs(conn: &Connection) -> Result<Vec<FormatSpecRow>, String
 /// this card* — on the **oracle card**, falling back to the printing where `cards` has never
 /// heard of it.
 ///
-/// It is [`release_group_copies`]' rule read as a key rather than as a join condition, and
-/// [`owned_by_oracle`]'s "a Bolt is a Bolt" read from a third end: a deck that counts an Alpha
-/// Bolt toward an M10 line plays that card, so a reader filing the Alpha copies must not be told
-/// their own deck has never heard of it.
+/// **This is where "a Bolt is a Bolt" survives, and since 2026-09-07 it is the only place it
+/// does.** [`owned_by_printing`] and [`release_group_copies`] both narrowed to the exact
+/// `(card_id, finish)` that day; this key deliberately did not, because it answers a different
+/// question. *Does this deck play this card* is about the card, not about which cardboard is
+/// sleeved: a reader filing their Alpha copies into a deck that lists the M10 printing must not
+/// be told their own deck has never heard of it. What the deck then **counts** is the narrower
+/// question, and the two are allowed to differ — [`crate::collection_alloc::collection_to_deck`]
+/// accepts the filing and [`release_unclaimed_copies`] is what keeps the group honest afterwards.
 ///
 /// **The `coalesce` is the whole of the NULL trap and is why this is not two comparisons.**
 /// `cards.oracle_id` is NULLABLE, and a deck row's `card_id` is a *soft* reference to a table
@@ -5302,6 +5484,45 @@ mod tests {
         .unwrap()
     }
 
+    /// [`file_into_group`], in a named finish — the axis that helper does not carry, because
+    /// the sixty tests above it are about printings and the grain is now both.
+    fn file_finish_into_group(
+        conn: &Connection,
+        deck_id: i64,
+        card_id: &str,
+        finish: &str,
+        quantity: i64,
+    ) -> i64 {
+        let folder = group_of(conn, deck_id);
+        let entry = crate::collection::add_entry(
+            conn,
+            &crate::collection::EntryInput {
+                card_id: card_id.to_owned(),
+                finish: finish.to_owned(),
+                quantity,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .id;
+        crate::collection_folders::refile_entry(conn, entry, Some(folder))
+            .unwrap()
+            .id
+    }
+
+    /// [`folder_copies`] at the grain custody is now kept at. The finish-blind form stays: the
+    /// tests that use it are asking "how many of this card are in this place", which is still a
+    /// fair question and still its own.
+    fn folder_copies_of(conn: &Connection, folder: i64, card_id: &str, finish: &str) -> i64 {
+        conn.query_row(
+            "SELECT coalesce(sum(quantity), 0) FROM collection_entries
+              WHERE folder_id = ?1 AND card_id = ?2 AND finish = ?3",
+            params![folder, card_id, finish],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
     /// The one holding area `Recently removed`, by id.
     fn removed_group(conn: &Connection) -> i64 {
         conn.query_row(
@@ -5833,6 +6054,30 @@ mod tests {
 
         assert_eq!(clear_category(&conn, deck.id, main, LIVE).unwrap(), 4);
         assert_eq!(count(&conn, "collection_entries"), 0);
+    }
+
+    /// A deck may legitimately list two printings of one card with the group holding both. The
+    /// old third arm matched on `oracle_id`, so cutting the LEA line while its own copies were
+    /// absent gave back an M10 copy the M10 line still claims — the bug the fallback becomes
+    /// once [`release_unclaimed_copies`] cures the stranding it was written for.
+    #[test]
+    fn a_release_never_reaches_a_sibling_printing() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-lea", main, 1);
+        add(&conn, deck.id, "bolt-m10", main, 1);
+        file_into_group(&conn, deck.id, "bolt-m10", 1);
+
+        let released = release_group_copies(&conn, deck.id, "bolt-lea", None, 1).unwrap();
+
+        assert_eq!(released.moved, 0);
+        assert_eq!(
+            folder_copies(&conn, group_of(&conn, deck.id), "bolt-m10"),
+            1
+        );
+        assert_eq!(folder_copies(&conn, removed_group(&conn), "bolt-m10"), 0);
     }
 
     /// A whole-list clear empties **every pile of one list**, and the two things it must not reach are
@@ -6423,8 +6668,10 @@ mod tests {
         let scratch = kind_of(&conn, deck.id, "maybe");
         add(&conn, deck.id, "bolt-lea", main, 3);
         // The group holds the **Alpha** copies and the deck is about to run the M10 printing.
-        // A Bolt is a Bolt: what the deck holds is matched on oracle id, so the swap below
-        // changes which printing is *listed* and nothing about what is owned.
+        // Until 2026-09-07 that was a swap which changed nothing about what the deck owned —
+        // "a Bolt is a Bolt". At the exact grain the LEA copies fill no M10 line, so the deck
+        // reads short and `release_unclaimed_copies` puts them back on the reader's desk.
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
         file_into_group(&conn, deck.id, "bolt-lea", 3);
         stop_the_clock(&conn, deck.id);
 
@@ -6458,8 +6705,13 @@ mod tests {
         );
         assert_eq!(
             owned_of(&conn, deck.id, "bolt-m10", main),
+            0,
+            "the Alpha copies answer no M10 line — the deck lists a printing it does not hold"
+        );
+        assert_eq!(
+            folder_copies(&conn, removed_group(&conn), "bolt-lea"),
             3,
-            "and the Alpha copies in the group still answer for the M10 row"
+            "and they are on the reader's desk rather than stranded in this deck's own group"
         );
 
         // Any category, an inactive one included — choosing a printing is exactly what a
@@ -6518,6 +6770,61 @@ mod tests {
                 ("bolt-m10".to_owned(), main, 5),
             ],
         );
+    }
+
+    /// **The live defect the exact grain would otherwise open.** *Use this printing* rewrites the
+    /// row's identity and touches no collection table, so without the sweep the LEA copies would
+    /// sit in this deck's own group claimed by nothing — and `deck_pull::CANDIDATE_SQL` excludes
+    /// every deck group, so no press anywhere could reach them.
+    #[test]
+    fn use_this_printing_sends_the_old_printings_copies_back() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-lea", main, 4);
+        file_into_group(&conn, deck.id, "bolt-lea", 4);
+
+        swap_printing(&conn, deck.id, "bolt-lea", "bolt-m10", main, LIVE, None).unwrap();
+
+        assert_eq!(
+            folder_copies(&conn, group_of(&conn, deck.id), "bolt-lea"),
+            0
+        );
+        assert_eq!(folder_copies(&conn, removed_group(&conn), "bolt-lea"), 4);
+        assert_eq!(
+            owned_of(&conn, deck.id, "bolt-m10", main),
+            0,
+            "the deck now lists a printing it does not hold, and says so"
+        );
+    }
+
+    /// Swapping onto a printing the deck already lists merges the two rows
+    /// ([`SwapResult::folded`]). The M10 copies are still claimed by the merged line; only the
+    /// LEA ones are surplus — which is why the sweep reads the finished list rather than
+    /// releasing a quantity worked out from the swap.
+    #[test]
+    fn a_folded_swap_evicts_only_the_printing_that_left() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-lea", main, 4);
+        add(&conn, deck.id, "bolt-m10", main, 2);
+        file_into_group(&conn, deck.id, "bolt-lea", 4);
+        file_into_group(&conn, deck.id, "bolt-m10", 2);
+
+        let result =
+            swap_printing(&conn, deck.id, "bolt-lea", "bolt-m10", main, LIVE, None).unwrap();
+        assert!(
+            result.folded,
+            "the fixture is the folded case or this proves nothing"
+        );
+
+        let group = group_of(&conn, deck.id);
+        assert_eq!(folder_copies(&conn, group, "bolt-m10"), 2);
+        assert_eq!(folder_copies(&conn, group, "bolt-lea"), 0);
+        assert_eq!(folder_copies(&conn, removed_group(&conn), "bolt-lea"), 4);
     }
 
     /// Swapping a printing to itself is not an edit: the pane hides the action on the row the
@@ -6847,7 +7154,7 @@ mod tests {
              a row of them would invent cards the reader does not own"
         );
         assert!(
-            owned_by_oracle(&conn, copy.id).unwrap().is_empty(),
+            owned_by_printing(&conn, copy.id).unwrap().is_empty(),
             "so the copy is a draft, which is what `is_built` used to say"
         );
 
@@ -8250,7 +8557,9 @@ mod tests {
             "a copy holds nothing"
         );
         assert_eq!(
-            owned_by_oracle(&conn, deck.id).unwrap().get("o1"),
+            owned_by_printing(&conn, deck.id)
+                .unwrap()
+                .get(&("bolt-lea".to_owned(), "nonfoil".to_owned())),
             Some(&4),
             "and the original still holds everything it held"
         );
@@ -8276,7 +8585,12 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(owned_by_oracle(&conn, deck.id).unwrap().get("o1"), Some(&4));
+        assert_eq!(
+            owned_by_printing(&conn, deck.id)
+                .unwrap()
+                .get(&("bolt-lea".to_owned(), "nonfoil".to_owned())),
+            Some(&4)
+        );
     }
 
     /// **The cover survives a duplicate, and it survives as a card id.**
@@ -9401,26 +9715,91 @@ mod tests {
         assert_eq!(plain.default_category_id, AUTO_CATEGORY);
     }
 
-    /// **A Bolt is a Bolt.** The deck lists the Alpha printing and its own group holds the M10
-    /// one, and it still reads owned: matching by **oracle id** is what the allocator did
-    /// across printings, and keeping it is why a reader who let the allocator choose sees the
-    /// same answer after v25 as before it.
+    /// **The whole point of the narrowing.** The group holds an M10 Bolt and the list names the
+    /// LEA one, so the deck is honestly short of the card it actually lists — and
+    /// `deck_pull_plan` can now offer to fill exactly the hole the editor draws, which is the
+    /// disagreement this replaced.
+    ///
+    /// This stood as `a_deck_owns_what_its_own_group_holds_across_printings` until 2026-09-07
+    /// and asserted the opposite, on the allocator's "a Bolt is a Bolt". It is the same fixture
+    /// with the answer inverted, kept here rather than deleted so the change is a line in the
+    /// suite rather than a test that quietly went missing.
     #[test]
-    fn a_deck_owns_what_its_own_group_holds_across_printings() {
+    fn a_different_printing_of_the_same_card_is_not_owned() {
         let conn = seeded();
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
         let main = main_of(&conn, deck.id);
-        add(&conn, deck.id, "bolt-lea", main, 1);
-        file_into_group(&conn, deck.id, "bolt-m10", 1);
+        add(&conn, deck.id, "bolt-lea", main, 4);
+        file_into_group(&conn, deck.id, "bolt-m10", 4);
 
-        let owned = owned_by_oracle(&conn, deck.id).unwrap();
-
-        assert_eq!(owned.get("o1"), Some(&1));
         assert_eq!(
             owned_of(&conn, deck.id, "bolt-lea", main),
-            1,
-            "and the editor reads it through the same map"
+            0,
+            "an M10 copy fills no LEA line — the pull cannot move it, so the count must not \
+             claim it"
         );
+        assert_eq!(
+            owned_by_printing(&conn, deck.id)
+                .unwrap()
+                .get(&("bolt-m10".to_owned(), "nonfoil".to_owned())),
+            Some(&4),
+            "the map still says where the copies are; it is the key that no longer matches"
+        );
+    }
+
+    /// The same rule one axis over. `bolt-m10` is the printing `seeded()` sells in both.
+    #[test]
+    fn a_different_finish_of_the_same_printing_is_not_owned() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add_foil(&conn, deck.id, "bolt-m10", main, 2);
+        file_into_group(&conn, deck.id, "bolt-m10", 2);
+
+        assert_eq!(owned_of(&conn, deck.id, "bolt-m10", main), 0);
+    }
+
+    /// And the case that must keep working: the deck row's `NULL` finish is the collection
+    /// row's `'nonfoil'`, which is the whole of the translation between the two tables.
+    #[test]
+    fn the_exact_printing_and_finish_is_owned() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-lea", main, 4);
+        file_into_group(&conn, deck.id, "bolt-lea", 3);
+
+        assert_eq!(owned_of(&conn, deck.id, "bolt-lea", main), 3);
+    }
+
+    /// A foil line filled by foil copies — the other half of the translation, and the one a
+    /// `coalesce` written the wrong way round would break silently.
+    #[test]
+    fn a_foil_line_is_filled_by_foil_copies() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add_foil(&conn, deck.id, "bolt-m10", main, 2);
+        file_finish_into_group(&conn, deck.id, "bolt-m10", "foil", 2);
+
+        assert_eq!(owned_of(&conn, deck.id, "bolt-m10", main), 2);
+    }
+
+    /// **An orphaned printing now counts, where it used to read 0.** `owned_by_oracle` needed an
+    /// INNER `JOIN cards` to learn a row's oracle id, so a row whose printing had left the
+    /// database was dropped from the map until the next sync gave it its identity back. At this
+    /// grain there is nothing to look up.
+    #[test]
+    fn an_orphaned_printing_now_counts() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-jp", main, 1);
+        file_into_group(&conn, deck.id, "bolt-jp", 1);
+        conn.execute("DELETE FROM cards WHERE id = 'bolt-jp'", [])
+            .unwrap();
+
+        assert_eq!(owned_of(&conn, deck.id, "bolt-jp", main), 1);
     }
 
     /// Custody, not a claim: a copy sitting in **another** deck's group is that deck's, and no
@@ -9434,26 +9813,65 @@ mod tests {
         add(&conn, a.id, "bolt-lea", main_of(&conn, a.id), 1);
         file_into_group(&conn, b.id, "bolt-lea", 1);
 
-        assert!(owned_by_oracle(&conn, a.id).unwrap().is_empty());
+        assert!(owned_by_printing(&conn, a.id).unwrap().is_empty());
     }
 
     /// **The copies in the group are the deck's, and the binder is not decremented to say so** —
     /// because there is nothing left to decrement. The rows *are* in the deck: they carry its
     /// folder id and the collection's own reads exclude them, which is the whole of spec §6's
-    /// non-destructive model restated as custody. Two entries of two printings of one oracle
-    /// card, and the read sums both.
+    /// non-destructive model restated as custody.
+    ///
+    /// **The `sum(e.quantity)` in [`owned_by_printing`] is what this is for, and it takes two
+    /// rows at one grain key to exercise it.** The fixture was two *printings* until 2026-09-07,
+    /// which summed under the oracle grain and does not under this one — each printing answers
+    /// its own line now, so a re-point that merely gave the M10 row a deck line of its own would
+    /// have left the sum unexercised and the test's name claiming otherwise. So the pair that
+    /// sums is two rows of the **same** `(card_id, finish)` differing only in `condition`: the
+    /// grain's third term, which the map deliberately does not carry, so a played copy and a
+    /// beaten one are two `collection_entries` rows and one number to the deck. The M10 row
+    /// stays as the other half of the story — a second printing that does **not** join the sum.
     #[test]
     fn a_deck_reads_owned_from_every_row_in_its_group() {
         let conn = seeded();
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
         let main = main_of(&conn, deck.id);
         add(&conn, deck.id, "bolt-lea", main, 4);
-        let lea = file_into_group(&conn, deck.id, "bolt-lea", 2);
+        add(&conn, deck.id, "bolt-m10", main, 1);
+        let nm = file_into_group(&conn, deck.id, "bolt-lea", 2);
+        // Spelled out rather than through [`file_into_group`], because `condition` is the one
+        // axis that helper cannot vary and it is the whole point of this fixture: same printing,
+        // same finish, a second row only because the cardboard is in a different state.
+        let lp = crate::collection::add_entry(
+            &conn,
+            &crate::collection::EntryInput {
+                card_id: "bolt-lea".to_owned(),
+                finish: "nonfoil".to_owned(),
+                condition: Some("LP".to_owned()),
+                quantity: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .id;
+        let lp = crate::collection_folders::refile_entry(&conn, lp, Some(group_of(&conn, deck.id)))
+            .unwrap()
+            .id;
         let m10 = file_into_group(&conn, deck.id, "bolt-m10", 1);
+        assert_ne!(nm, lp, "two rows, or this test sums nothing");
 
         let detail = get_deck(&conn, deck.id, LIVE, ANY_MARKET).unwrap().unwrap();
         let row = card_row(&detail, "bolt-lea", main);
-        assert_eq!((row.quantity, row.owned_quantity), (4, 3), "3 of 4");
+        assert_eq!(
+            (row.quantity, row.owned_quantity),
+            (4, 3),
+            "3 of 4 — the NM row and the LP row are one line's copies"
+        );
+        let row = card_row(&detail, "bolt-m10", main);
+        assert_eq!(
+            (row.quantity, row.owned_quantity),
+            (1, 1),
+            "and the other printing answers its own line and joins no sum"
+        );
 
         let held: Vec<(i64, i64)> = conn
             .prepare("SELECT id, quantity FROM collection_entries ORDER BY id")
@@ -9464,8 +9882,64 @@ mod tests {
             .unwrap();
         assert_eq!(
             held,
-            vec![(lea, 2), (m10, 1)],
+            vec![(nm, 2), (lp, 1), (m10, 1)],
             "and the rows are untouched — filing a card is not spending it"
+        );
+    }
+
+    /// **Rule 3: the pool is scarce, shared, and handed out in the read's order.** One printing
+    /// in two piles of one live list is two rows drawing on one set of copies — the group holds
+    /// three and the two lines want four between them — so the question is not only *how many*
+    /// but *which row gets them*, and the answer must be a property of the read rather than of
+    /// however a view chose to display the list. It is [`read_deck_cards`]' `ORDER BY
+    /// cat.sort_order, cat.id, dc.name, dc.id`, and `deck_meta::create_category` stamps
+    /// `max(sort_order) + 1`, so the pile made **first** is served first.
+    ///
+    /// Spec §5 named this case and nothing tested it. It was merely true before 2026-09-07 and it
+    /// is load-bearing now: at the exact grain a printing short in two piles is the shape the
+    /// pull dialog has to agree with line by line, so a walk that handed the copies out in some
+    /// other order would draw two rows that add up correctly and are individually wrong.
+    ///
+    /// **The asserted split is 2/1 rather than all-or-nothing on purpose**: a reversed walk
+    /// answers 1/2, which totals the same three copies and would pass any assertion written on
+    /// the sum.
+    #[test]
+    fn one_printing_in_two_piles_shares_one_pool_in_read_order() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let first = crate::deck_meta::create_category(&conn, deck.id, "Burn spells")
+            .unwrap()
+            .id;
+        let second = crate::deck_meta::create_category(&conn, deck.id, "Flex slots")
+            .unwrap()
+            .id;
+        add(&conn, deck.id, "bolt-lea", first, 2);
+        add(&conn, deck.id, "bolt-lea", second, 2);
+        file_into_group(&conn, deck.id, "bolt-lea", 3);
+
+        let detail = get_deck(&conn, deck.id, LIVE, ANY_MARKET).unwrap().unwrap();
+        let at = |category_id: i64| {
+            detail
+                .cards
+                .iter()
+                .position(|r| r.card_id == "bolt-lea" && r.category_id == category_id)
+                .unwrap()
+        };
+        assert!(
+            at(first) < at(second),
+            "the fixture must put `Burn spells` first in the READ or this proves nothing about \
+             order — `create_category` stamps the next `sort_order`, so the pile made first is"
+        );
+
+        assert_eq!(
+            card_row(&detail, "bolt-lea", first).owned_quantity,
+            2,
+            "the pile the read reaches first takes what it can from the pool"
+        );
+        assert_eq!(
+            card_row(&detail, "bolt-lea", second).owned_quantity,
+            1,
+            "and the pile behind it gets the one copy left, not two of its own"
         );
     }
 
@@ -9585,6 +10059,179 @@ mod tests {
             count(&conn, "collection_entries"),
             0,
             "and the row went with the copies"
+        );
+    }
+
+    /// The state the exact grain creates and this function exists to prevent: a printing sitting
+    /// in the group that the list does not name. It leaves for `Recently removed`, which
+    /// `CANDIDATE_SQL` ranks **second** — so the next press of the import offers it back.
+    #[test]
+    fn the_sweep_evicts_a_printing_the_list_does_not_name() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-lea", main, 4);
+        file_into_group(&conn, deck.id, "bolt-m10", 2);
+
+        release_unclaimed_copies(&conn, deck.id, LIVE).unwrap();
+
+        let group = group_of(&conn, deck.id);
+        assert_eq!(folder_copies(&conn, group, "bolt-m10"), 0);
+        assert_eq!(folder_copies(&conn, removed_group(&conn), "bolt-m10"), 2);
+    }
+
+    /// A row of 4 against a line of 2 is 2 claimed and 2 surplus. `idx_collection_grain` is
+    /// UNIQUE with `folder_id` in it, so this cannot be a folder swap: the row is split.
+    #[test]
+    fn the_sweep_splits_a_partly_claimed_row() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-lea", main, 2);
+        file_into_group(&conn, deck.id, "bolt-lea", 4);
+
+        release_unclaimed_copies(&conn, deck.id, LIVE).unwrap();
+
+        assert_eq!(
+            folder_copies(&conn, group_of(&conn, deck.id), "bolt-lea"),
+            2
+        );
+        assert_eq!(folder_copies(&conn, removed_group(&conn), "bolt-lea"), 2);
+    }
+
+    /// The finish axis, which the printing test above cannot reach: the list names the foil and
+    /// the group holds the regular copy.
+    #[test]
+    fn the_sweep_evicts_a_finish_the_list_does_not_name() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add_foil(&conn, deck.id, "bolt-m10", main, 2);
+        file_into_group(&conn, deck.id, "bolt-m10", 2);
+
+        release_unclaimed_copies(&conn, deck.id, LIVE).unwrap();
+
+        let group = group_of(&conn, deck.id);
+        assert_eq!(folder_copies_of(&conn, group, "bolt-m10", "nonfoil"), 0);
+        assert_eq!(
+            folder_copies_of(&conn, removed_group(&conn), "bolt-m10", "nonfoil"),
+            2
+        );
+    }
+
+    /// **Custody follows what the list NAMES; the switch decides only what is counted.** A sweep
+    /// that read an inactive pile as claiming nothing would turn a display toggle into a press
+    /// that moves cardboard out of the reader's deck — the one way this function can be
+    /// destructive, so it is pinned here rather than left to the reviewer.
+    #[test]
+    fn the_sweep_spares_a_switched_off_pile() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let side = kind_of(&conn, deck.id, "side");
+        add(&conn, deck.id, "bolt-lea", side, 3);
+        file_into_group(&conn, deck.id, "bolt-lea", 3);
+        crate::deck_meta::set_category_active(&conn, side, false).unwrap();
+        assert_eq!(
+            owned_of(&conn, deck.id, "bolt-lea", side),
+            0,
+            "the fixture is the switched-off case or this proves nothing"
+        );
+
+        release_unclaimed_copies(&conn, deck.id, LIVE).unwrap();
+
+        assert_eq!(
+            folder_copies(&conn, group_of(&conn, deck.id), "bolt-lea"),
+            3,
+            "a switched-off pile still names its cards, so the deck still holds them"
+        );
+    }
+
+    /// A plan holds no cards, so `theory` is a loop that never runs — `release_live_copies`'
+    /// shape, and the reason the guard is inside this function rather than in its two callers.
+    #[test]
+    fn the_sweep_is_a_loop_that_never_runs_for_theory() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-lea", main, 1);
+        file_into_group(&conn, deck.id, "bolt-m10", 1);
+
+        release_unclaimed_copies(&conn, deck.id, THEORY).unwrap();
+
+        assert_eq!(
+            folder_copies(&conn, group_of(&conn, deck.id), "bolt-m10"),
+            1
+        );
+    }
+
+    /// **The sweep is scoped to one group, and the second deck here is deliberately in the wrong
+    /// state.** `theirs` holds an M10 Bolt its list does not name — exactly what this function
+    /// evicts — and sweeping `mine` must not touch it. The scope is a single `folder_id` in the
+    /// `held` query rather than a `deck_id` join, so widening it is a one-word mistake, and a
+    /// sweep that reached across decks would file another deck's cards onto the reader's desk
+    /// from a press they made somewhere else entirely.
+    ///
+    /// Custody is per group, [`another_decks_group_is_not_this_decks_owned`]'s rule read from the
+    /// writing end: a copy in another deck's group is that deck's, and this one may neither count
+    /// it nor move it.
+    #[test]
+    fn the_sweep_leaves_another_decks_group_alone() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let mine = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let theirs = create_deck(&conn, &input("Angels", "modern")).unwrap();
+        add(&conn, mine.id, "bolt-lea", main_of(&conn, mine.id), 1);
+        file_into_group(&conn, mine.id, "bolt-lea", 1);
+        file_into_group(&conn, theirs.id, "bolt-m10", 2);
+
+        release_unclaimed_copies(&conn, mine.id, LIVE).unwrap();
+
+        assert_eq!(
+            folder_copies(&conn, group_of(&conn, theirs.id), "bolt-m10"),
+            2,
+            "another deck's group is not this sweep's business, however wrong it looks"
+        );
+    }
+
+    /// A deck with no group holds nothing rather than refusing — [`release_group_copies`]'
+    /// asymmetry, carried over so the two behave alike on a hand-edited database.
+    /// [`create_deck`] always makes a group, so the only way to reach this state is to delete
+    /// the row.
+    #[test]
+    fn a_deck_with_no_group_is_swept_without_refusing() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-lea", main, 1);
+        let stray = own(&conn, "bolt-m10", 2);
+        conn.execute(
+            "DELETE FROM collection_folders WHERE deck_id = ?1",
+            params![deck.id],
+        )
+        .unwrap();
+
+        release_unclaimed_copies(&conn, deck.id, LIVE).expect("a missing group is not a refusal");
+
+        assert_eq!(
+            folder_copies(&conn, removed_group(&conn), "bolt-m10"),
+            0,
+            "nothing moved: a deck with no group holds nothing to sweep"
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT quantity FROM collection_entries WHERE id = ?1",
+                params![stray],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            2,
+            "and the reader's own row at the root is nobody's surplus"
         );
     }
 
@@ -9819,6 +10466,27 @@ mod tests {
         assert_eq!(
             live_rows(&conn, deck.id),
             vec![(Some("foil".to_owned()), 2)]
+        );
+    }
+
+    /// The same hole one axis over. `bolt-m10` is the printing `seeded()` sells in both finishes,
+    /// so [`FINISH_NOT_SOLD`] does not refuse this.
+    #[test]
+    fn changing_a_rows_finish_sends_the_old_finishs_copies_back() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-m10", main, 2);
+        file_into_group(&conn, deck.id, "bolt-m10", 2);
+
+        set_card_finish(&conn, deck.id, "bolt-m10", main, LIVE, None, Some("foil")).unwrap();
+
+        let group = group_of(&conn, deck.id);
+        assert_eq!(folder_copies_of(&conn, group, "bolt-m10", "nonfoil"), 0);
+        assert_eq!(
+            folder_copies_of(&conn, removed_group(&conn), "bolt-m10", "nonfoil"),
+            2
         );
     }
 
@@ -11002,9 +11670,10 @@ mod tests {
 
     #[test]
     fn a_deck_that_lists_one_printing_plays_every_other_one() {
-        // "A Bolt is a Bolt", `owned_by_oracle`'s rule and `release_group_copies`', read from
-        // the filing end: a deck listing the Alpha Bolt plays the M10 copies in the binder, and
-        // a fence matching the exact printing would refuse a reader their own cards.
+        // "A Bolt is a Bolt", read from the filing end: a deck listing the Alpha Bolt plays the
+        // M10 copies in the binder, and a fence matching the exact printing would refuse a reader
+        // their own cards. This was `owned_by_oracle`'s rule and `release_group_copies`' too
+        // until 2026-09-07; both narrowed to the printing that day and `PLAYED_KEY` did not.
         let conn = seeded();
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap().id;
         let main = main_of(&conn, deck);

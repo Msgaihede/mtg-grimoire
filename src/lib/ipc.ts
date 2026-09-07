@@ -393,8 +393,9 @@ export interface CardSummary {
    * One of **four** fields in this file with this name, and only one of the other three asks
    * the same question. {@link WishRow.ownedQuantity} is counted against one wish and *is*
    * finish-aware, so a foil wish is not satisfied by the nonfoil in the binder;
-   * {@link DeckCard.ownedQuantity} is neither — it is the copies one deck's allocator
-   * *secured*, oracle-grained and clamped to what the entries still hold. The fourth,
+   * {@link DeckCard.ownedQuantity} is neither — it is what one deck's own collection group
+   * physically holds, matched to the row's exact `(card_id, finish)` since 2026-09-07 rather
+   * than to the oracle card. The fourth,
    * {@link ImportMatch.ownedQuantity}, **is** this number: every copy of one printing,
    * finish-blind, asked per decklist line instead of per search row. Read each against its own
    * row.
@@ -3336,22 +3337,28 @@ export interface DeckCard {
    */
   unitPrice: number | null;
   /**
-   * Copies of this oracle card **this deck physically holds**, attributed to this row in the
-   * read's own order.
+   * Copies of this exact printing and finish **this deck physically holds**, attributed to
+   * this row in the read's own order.
    *
    * **A sum over the rows filed in the deck's own collection group, and no longer a claim.**
    * Schema v25 deleted `deck_allocations` and the allocator with it: a card is in a deck
-   * because its `collection_entries` row sits in that deck's `kind = 'deck'` folder, so this
-   * is `owned_by_oracle` — `sum(quantity)` per `cards.oracle_id` over that one folder — spent
-   * down the rows by `attribute_owned`. There is nothing to clamp any more and nothing that
-   * can be out of date, which is what the old `min(claim, row)` existed for.
+   * because its `collection_entries` row sits in that deck's `kind = 'deck'` folder. **Since
+   * 2026-09-07 the match is the printing, not the oracle card**: this is `owned_by_printing` —
+   * `sum(quantity)` per `(card_id, finish)` over that one folder — spent down the rows by
+   * `attribute_owned`. There is nothing to clamp any more and nothing that can be out of date,
+   * which is what the old `min(claim, row)` existed for.
+   *
+   * **An orphaned printing counts now, where the oracle-grained version read it as 0.** A
+   * `collection_entries` row whose `card_id` is not in `cards` has no oracle id to be grouped
+   * by, so the old map dropped it; at the printing grain there is nothing to look up — the
+   * group's row and this deck's row name the same `card_id` — so the copy counts.
    *
    * The only one of this file's four `ownedQuantity` fields that is about **custody** rather
    * than about the reader's shelves as a whole: {@link CardSummary.ownedQuantity} is every
    * copy of one printing, {@link ImportMatch.ownedQuantity} is that same count taken per
    * decklist line, {@link WishRow.ownedQuantity} is the copies that fill one wish, and this
-   * one is what is in *this box* — oracle-grained (a Bolt is a Bolt), finish-blind,
-   * condition-blind.
+   * one is what is in *this box* — printing-grained (`(card_id, finish)`, not the oracle card
+   * — no more "a Bolt is a Bolt" here), finish-**aware**, still condition-blind.
    *
    * Three things it will not do, all by design:
    *

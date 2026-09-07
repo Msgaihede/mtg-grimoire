@@ -503,13 +503,18 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   answers the question the switch was asking — the decks *are* where the cards are now.
 - **The single-file ladder is frozen at v26**, and `schema::LEGACY_SINGLE_FILE_VERSION` is the
   answer; schema 27 splits the file in two and the halves number themselves separately
-  (`USER_SCHEMA_VERSION` **33** on the reader's file, `CORPUS_SCHEMA_VERSION` 1 on the
-  rebuildable one). This line read **v18** for two
+  (`USER_SCHEMA_VERSION` on the reader's file — this page stops spelling out which number two
+  sentences from here, and says why — `CORPUS_SCHEMA_VERSION` 1 on the rebuildable one). This
+  line read **v18** for two
   whole rungs, because a prose-only edit routes to neither CI job and nothing goes red when a
   ladder entry rots. **It then read 30 for two more**, through v31 and v32, and so did
   `src-tauri/CLAUDE.md`'s copy of the same pair — the identical failure, twice over, on the one
   number in this file that a single `grep USER_SCHEMA_VERSION src-tauri/src/schema.rs` answers.
-  Read it off the constant; v30 and v31 have no paragraph of their own below, and
+  **It then read 33 for three more after that**, through v34, v35 and v36 — this time in this file
+  alone, since `src-tauri/CLAUDE.md`'s own copy stayed only one rung behind, at 34, until this
+  pass corrected both. Three drifts now on the one number a `grep` settles, which is why this
+  page stops writing one down here at all rather than opening a fourth. Read it off the
+  constant; v30 and v31 have no paragraph of their own below, and
   `USER_SCHEMA_VERSION`'s own doc comment is where every rung from 27 to head is described in
   one place, one sentence each.
   **v28 is the first rung above the split, and it is what turned `migrate_user` from a version
@@ -720,6 +725,37 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   0 bytes. A single probe at that moment reads exactly like a rung that never ran. Wait for the
   window to draw, then probe; and note that a read-only `node:sqlite` open **creates the `-shm`
   file itself**, so a fresh `-shm` timestamp is not evidence the app has touched anything.
+  **v36 is the only rung on either ladder that moves the reader's physical card records between
+  folders, and everything worth carrying about it follows from that one fact.** Every other rung
+  changes shape, renames, or backfills a column with a computed value; this one, landed
+  2026-09-07, sweeps every `collection_folders` row with `kind = 'deck'` and moves whatever copy
+  no **live** `deck_cards` row claims at `(card_id, finish)` into `Recently removed` — the
+  one-time pass that brings a file the v25 conversion filed by matching the old allocator's
+  claims **across** printings under the exact-printing rule `deck::owned_by_printing` now reads
+  by (`owned_by_oracle` before that day). **They land in `Recently removed` and not at the
+  root, and that is chosen rather than convenient**: it is ranked second in `deck_pull.rs`'s
+  `CANDIDATE_SQL`, after the root and before the reader's own folders, so the first press of the
+  new `Import missing cards from collection…` button offers every one of them straight back for
+  the lines that genuinely match, and the lines that do not match are honestly missing.
+  **"Claimed" counts a switched-off pile's rows too** — reading it the other way would empty a
+  reader's Maybeboard into the holding area on the first launch after the upgrade, which is the
+  one way this rung could have been destructive rather than merely correct; `variant = 'live'` is
+  the same sentence's other half, since a plan reserves nothing. **A missing `Recently removed`
+  folder skips the move rather than failing the rung** — a rung that errors blocks startup, and a
+  hand-edited file without that folder must still open. **It adds no DDL, so
+  `the_user_schema_is_byte_identical_to_what_the_ladder_builds` is untouched by it** — the second
+  rung on either ladder to earn that exemption, where v34 and v35 just above it each owed a
+  `USER_SCHEMA_SQL` line and a rewind of their own, and v32 was the first.
+  **It was written as v35 and renumbered on the way in**, the same rule v34 above records: the
+  sixth grade took 35 while this branch was open, and the number belongs to whoever lands first.
+  **Order on the ladder is not cosmetic either** — v35 rebuilds `collection_entries` and this
+  rung reads and writes that table, so it has to run after it.
+  `deck::release_unclaimed_copies`
+  — called from `swap_printing` and `set_card_finish` after each rewrites a row's identity —
+  keeps the same rule true on every write from here on; this rung is only what brings a file made
+  before that day under it once.
+  [collection-folders.md](collection-folders.md) and
+  [decks-storage.md](decks-storage.md) carry the whole change.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every
