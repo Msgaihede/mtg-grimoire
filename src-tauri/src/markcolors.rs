@@ -217,8 +217,45 @@ mod tests {
         );
     }
 
+    /// **The delete arm's half of the rule above**, and the reason it is worth a test of its own
+    /// even though it passes for free today: both arms of [`store`] mutate the one map
+    /// [`stored_object`] loaded, so preserving a sibling is currently a property of the shape
+    /// rather than of the `None` branch. But the *reason* a Reset is safe is exactly that
+    /// read-modify-write, and an edit that gave `None` a write path of its own — the obvious one
+    /// being to write a fresh map, since a delete "has nothing to keep" — would empty the row of
+    /// every mark this build does not know while every other test here stayed green. Written past
+    /// `store` for its sibling's reason: this build cannot produce a third key.
+    #[test]
+    fn a_delete_keeps_every_other_entry() {
+        let conn = db();
+        crate::app_meta::set_app_meta(&conn, K_MARK_COLORS, r##"{"ruleBreak":"#d3202a"}"##)
+            .unwrap();
+        store(&conn, "theoryName", Some("#ff0000")).unwrap();
+        store(&conn, "theoryName", None).unwrap();
+
+        let raw = crate::app_meta::get_app_meta(&conn, K_MARK_COLORS).unwrap();
+        let map: Map<String, Value> = serde_json::from_str(&raw).unwrap();
+        assert_eq!(
+            map.get("ruleBreak").and_then(Value::as_str),
+            Some("#d3202a"),
+            "a Reset must not empty the row of a mark this build does not know"
+        );
+        assert!(
+            !stored(&conn).contains_key("theoryName"),
+            "the mark that was reset must be gone"
+        );
+    }
+
     /// A row this build cannot make sense of costs the reader their colours and nothing else.
     /// Every one of these is what a hand-edit or a different build left behind.
+    ///
+    /// **The assertion is `is_empty` rather than `!contains_key("theoryExact")`, and that is the
+    /// load-bearing part of this test rather than a tidier spelling.** The last case's key is
+    /// `""`, so a `theoryExact` assertion holds over it whether or not [`stored`]'s
+    /// `!mark.is_empty()` filter exists — the whole entry it is there to drop is named something
+    /// else. Measured: with the `contains_key` form, deleting that filter left all eight tests
+    /// green. Every one of these rows must read as *nothing stored at all*, which is both the
+    /// stronger claim and the one each case was written to make, so the loop asserts that.
     #[test]
     fn an_unreadable_row_customises_nothing_rather_than_failing() {
         let conn = db();
@@ -236,7 +273,7 @@ mod tests {
         ] {
             crate::app_meta::set_app_meta(&conn, K_MARK_COLORS, junk).unwrap();
             assert!(
-                !stored(&conn).contains_key("theoryExact"),
+                stored(&conn).is_empty(),
                 "`{junk}` must read as nothing stored, not as a colour and not as a failure"
             );
         }
