@@ -93,7 +93,7 @@ const WISHLIST_ONLY: Dirty = Dirty {
 /// update hook per connection.
 pub fn surface_of(table: &str) -> Option<Dirty> {
     match table {
-        // **`deck_tokens` is an over-approximation and joins them anyway** (user schema v35).
+        // **`deck_tokens` is an over-approximation and joins them anyway** (user schema v36).
         // No mirrored file names a token today — the seven formats have no section for one,
         // which `docs/superpowers/specs/2026-09-07-deck-token-management-design.md` §8 puts out
         // of scope deliberately — so a write here costs one pass that renders identical bytes.

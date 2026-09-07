@@ -371,7 +371,7 @@ pub const TABLES: &[(&str, Side)] = &[
     // One app-wide list keyed on `name_key` since v21 — no `deck_id`. `deck_tags` until v33,
     // which renamed the table with the word.
     ("deck_labels", Side::User),
-    // Only the reader's *deviations* from the tokens a deck derives (user schema v35) — a
+    // Only the reader's *deviations* from the tokens a deck derives (user schema v36) — a
     // picked printing, a stepped quantity, a dismissal. Nothing rebuilds one: the derived list
     // is the corpus's and comes back on its own, and what is here is exactly the part that
     // does not.
@@ -460,7 +460,7 @@ pub fn side_of(table: &str) -> Option<Side> {
 /// folder its row sits in, so the work that table did is inside `collection_folders`, which is
 /// on this list. `device_names` is user schema v31's, which the spec predates — the names
 /// of the devices in the group, while `sync_devices`, the roster holding their public keys,
-/// stays off this list for ever. And `deck_tokens` is v35's, which the spec predates by
+/// stays off this list for ever. And `deck_tokens` is v36's, which the spec predates by
 /// further still. A table that does not exist cannot be synced, and the count
 /// moved rather than the intent.
 ///
@@ -484,7 +484,7 @@ pub const SYNCED_TABLES: [&str; 13] = [
     "deck_categories",
     "deck_folders",
     "deck_labels",
-    // The thirteenth (user schema v35). It syncs for `decks.last_group_by`'s reason and not
+    // The thirteenth (user schema v36). It syncs for `decks.last_group_by`'s reason and not
     // `deck_cards`': what art a reader chose for their Treasures, and how many they want to
     // bring, is a decision about the deck rather than a fact about cardboard — so it travels
     // with the deck, and `quantity` travels as a *field* rather than as a counter.
@@ -7784,14 +7784,14 @@ pub(crate) mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(tokens, 0, "the v35 fixture already carries `deck_tokens`");
+        assert_eq!(tokens, 0, "the v36 fixture already carries `deck_tokens`");
 
         let flag = conn.query_row("SELECT tokens_open FROM decks LIMIT 1", [], |r| {
             r.get::<_, i64>(0)
         });
         assert!(
             flag.is_err(),
-            "the v35 fixture already carries `decks.tokens_open`"
+            "the v36 fixture already carries `decks.tokens_open`"
         );
     }
 
@@ -8371,7 +8371,7 @@ pub(crate) mod tests {
     /// is a constant that can drift from the index it claims to describe without anything
     /// saying so. [`COLLECTION_GRAIN`], [`WISHLIST_GRAIN`] and [`DECK_CARD_GRAIN`] are held
     /// to their indexes by their `ON CONFLICT` targets (the test above, and every deck-card
-    /// upsert); the two above are held here, and [`DECK_TOKEN_GRAIN`] — v35's, and the sixth —
+    /// upsert); the two above are held here, and [`DECK_TOKEN_GRAIN`] — v36's, and the sixth —
     /// is the one held both ways.
     ///
     /// Read through `PRAGMA index_info` rather than by comparing DDL text, which is the whole

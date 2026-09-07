@@ -431,7 +431,7 @@ pub struct DeckPatch {
     /// Per deck rather than per user, like [`Self::theory_enabled`]: it is a statement about how
     /// *this* list is read, so two decks may disagree and a duplicate must not.
     pub separate_x_group: Option<bool>,
-    /// Whether the editor's **Tokens & emblems** area is expanded — schema v35.
+    /// Whether the editor's **Tokens & emblems** area is expanded — schema v36.
     ///
     /// **Storage only, on this side**, [`Self::separate_x_group`]'s rule: which tokens a deck
     /// needs is [`crate::deck_tokens`]' answer and what to draw of them is TypeScript's; this is
@@ -580,7 +580,7 @@ pub struct DeckRow {
     /// an answer about the deck that a copy of it inherits. `duplicate_deck` carries this and
     /// resets nothing, which is the difference stated as code.
     pub separate_x_group: bool,
-    /// Whether the editor's **Tokens & emblems** area is expanded — schema v35.
+    /// Whether the editor's **Tokens & emblems** area is expanded — schema v36.
     ///
     /// Read here as well as written through [`DeckPatch`], for [`Self::theory_enabled`]'s reason:
     /// a switch the app can set and never see is a switch nothing can draw. Every existing deck is
@@ -924,7 +924,7 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
     /// arithmetic below is `front_face_map`'s and only the *offset* is this function's.
     ///
     /// **It moves with every column added to the end of the named list**, and it read 21 until
-    /// schema v35 put `tokens_open` there. Forgetting to move it is not silent: the image reads
+    /// schema v36 put `tokens_open` there. Forgetting to move it is not silent: the image reads
     /// are `Option<String>` and the column they would land on is an `INTEGER`, so rusqlite
     /// refuses the conversion rather than answering a plausible URL.
     const IMAGE_COL: usize = 22;
@@ -8690,7 +8690,7 @@ mod tests {
                 // zero is [`AUTO_BRACKET`] and would be the answer whether or not the column
                 // reached the wire at all.
                 "bracket": 3,
-                // Schema v35, and `tokensOpen` rather than `tokens_open`: the panel reads this
+                // Schema v36, and `tokensOpen` rather than `tokens_open`: the panel reads this
                 // off the deck row to know whether to draw itself open, and a snake-cased key
                 // would be `undefined` at the call site with no type error anywhere.
                 "tokensOpen": true,

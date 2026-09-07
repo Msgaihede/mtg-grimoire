@@ -893,7 +893,7 @@ with the arithmetic behind the 105-character code and the crate pins, is
   is a wire change carrying public keys in the manifest** and is not built; until it is, a
   partial-view device declines rather than breaking the group.
 - **The manifest is deliberately not a synced table** — it would be the fourteenth now, and this
-  line said *thirteenth* until `deck_tokens` took that number at user schema v35, which is the
+  line said *thirteenth* until `deck_tokens` took that number at user schema v36, which is the
   argument for not counting in prose at all. A manifest that *is* the key
   distribution cannot disagree with it, where a synced `device_removals` table could arrive late,
   arrive out of order, or arrive at a device that cannot decrypt it — which is precisely the state
@@ -988,7 +988,7 @@ record, with every measurement, is
 - **Thirteen tables sync and `schema::SYNCED_TABLES` is the census.** ⚠️ **This line said *eleven*
   from schema v25 until 2026-08-31**, on the argument that the spec's twelfth was
   `deck_allocations`, which v25 dropped — true when written, and made wrong by v31 adding
-  `device_names` back to twelve without this page moving. **v35 makes it thirteen**: `deck_tokens`,
+  `device_names` back to twelve without this page moving. **v36 makes it thirteen**: `deck_tokens`,
   one row per token a reader has deviated on, and the first table on the census whose
   `quantity` is a **field** rather than a counter — nullable, so there is no `NEW - OLD` to
   carry, and last-write-wins is what a *setting* wants where two devices each sleeving a copy
@@ -1774,7 +1774,7 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
 | [image-cache.md](../docs/reference/image-cache.md) | Cache layout, concurrency, placeholders, and the `/cover/` route as it was before 2026-08-31 — the encoder, the traversal fence and why the CSP never moved for it |
 | [search-faceting.md](../docs/reference/search-faceting.md) | `src/index/` — why the index is in memory, and the fail-open rule |
 | [in-app-updates.md](../docs/reference/in-app-updates.md) | `update.rs` — why the portable swap is hand-written |
-| [decks-storage.md](../docs/reference/decks-storage.md) | The deck tables, the card commands, how owned/missing is answered, the audit log, the decklist import, and the token resolver — the union keep rule, why there is no name test, and the v35 table |
+| [decks-storage.md](../docs/reference/decks-storage.md) | The deck tables, the card commands, how owned/missing is answered, the audit log, the decklist import, and the token resolver — the union keep rule, why there is no name test, and the v36 table |
 | [commander-brackets.md](../docs/reference/commander-brackets.md) | `combos.rs` and the v26 rung — the feed measured end to end, what is kept and what is skipped, the match query, and `decks.bracket` |
 | [wishlist-folders.md](../docs/reference/wishlist-folders.md) | The wishlist's cabinet (v23) — the four-term grain, the merge rule, the root-add duplicate |
 | [collection-folders.md](../docs/reference/collection-folders.md) | The collection's cabinet (v24–v25) — the eleventh grain term, the deck groups and `Recently removed`, the conversion that made them, what a zero quantity now costs |

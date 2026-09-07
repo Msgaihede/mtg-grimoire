@@ -323,7 +323,7 @@ pub const TABLES: [Spec; 13] = [
             "last_group_by",
             "last_sort_by",
             "separate_x_group",
-            // Whether the Tokens & emblems area under this deck is expanded (user schema v35).
+            // Whether the Tokens & emblems area under this deck is expanded (user schema v36).
             // It joins the three above it rather than staying local for their reason: it is
             // per-deck view state, and a reader who opened that area on one device meant it
             // about the deck rather than about the machine.

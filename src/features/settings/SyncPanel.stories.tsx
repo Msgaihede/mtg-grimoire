@@ -724,7 +724,7 @@ export const OneRoundTrip: Story = {
  *
  * **The number of those tables used to be in this sentence and has been taken out.** It said
  * *eleven* and was already wrong before it was noticed — `device_names` had made the answer twelve
- * at user schema v31 — and `deck_tokens` made it thirteen at v35. A count is a fact about a tree,
+ * at user schema v31 — and `deck_tokens` made it thirteen at v36. A count is a fact about a tree,
  * every open branch has a different one, and `schema::SYNCED_TABLES` answers this one in a grep.
  * A story comment is exactly the wrong place to keep a copy: a prose-only edit routes to neither
  * CI job, so nothing here would ever have gone red for it.

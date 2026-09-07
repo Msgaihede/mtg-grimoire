@@ -498,7 +498,7 @@ export interface FakeDeck {
    */
   separateXGroup?: boolean;
   /**
-   * `decks.tokens_open` (schema v35): whether the editor's **Tokens & emblems** area is
+   * `decks.tokens_open` (schema v36): whether the editor's **Tokens & emblems** area is
    * expanded.
    *
    * **Optional for {@link separateXGroup}'s reason, and this is the fifth column on that
@@ -737,7 +737,7 @@ export interface FakeDeckCard {
 }
 
 /**
- * One row of `deck_tokens` (user schema v35). Grain `(deckId, oracleId)`
+ * One row of `deck_tokens` (user schema v36). Grain `(deckId, oracleId)`
  * (`schema::DECK_TOKEN_GRAIN`), and the reader's **deviation** — never the list itself.
  *
  * **The list of tokens a deck needs is derived and stored nowhere**: Rust reads `all_parts` off
@@ -14841,7 +14841,7 @@ export function writeHandlers(db: FakeDb) {
      * (`schema::SYNCED_TABLES`), not figures invented for the sentence, and `deck_audit` is
      * counted a second time on its own because that is the half the panel names separately.
      * **The sum below is the list and there is no number in this sentence**, deliberately: it
-     * said "eleven synced tables" until `deck_tokens` joined the census at user schema v35, and
+     * said "eleven synced tables" until `deck_tokens` joined the census at user schema v36, and
      * a count in prose routes to neither CI job.
      */
     sync_now: (): RelayOutcome | null => {

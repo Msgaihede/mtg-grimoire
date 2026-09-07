@@ -531,7 +531,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   unique index to **the eleven tables that were on the census then** — this line said "all twelve"
   until 2026-09-07 and was wrong in both directions, since the rung's own `ALTER TABLE`s are
   eleven (spelled out below) and the census is **thirteen** now: `device_names` joined
-  at v31 and `deck_tokens` at v35, and each carries the column in its own `CREATE TABLE` rather
+  at v31 and `deck_tokens` at v36, and each carries the column in its own `CREATE TABLE` rather
   than through this rung. It also adds `needs_review` to the three folder tables,
   the op log (`sync_ops`, `sync_clock`, `sync_state`, `sync_peers`), and it **rebuilds
   `error_log`** so `source` can be `'relay'` — that vocabulary is inside a `CHECK` and SQLite

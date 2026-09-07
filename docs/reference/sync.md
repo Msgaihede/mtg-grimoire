@@ -464,7 +464,7 @@ the roster at that epoch**. A device that adopts *N+1* deletes every `sync_devic
 manifest does not name.
 
 **That is deliberately not a synced table** — it would be the fourteenth now, and this line read
-*thirteenth* until `deck_tokens` took that number at user schema v35, which is the argument
+*thirteenth* until `deck_tokens` took that number at user schema v36, which is the argument
 against writing a count into prose at all. A manifest that *is* the key distribution
 cannot disagree with it, where a synced `device_removals` table could arrive late, arrive out of
 order, or arrive at a device that cannot decrypt it — which is precisely the state a rotation puts
@@ -863,7 +863,7 @@ different table entirely — user schema **v31** added `device_names` (what each
 group is called), a table the spec predates and never named. Two tables have each been "the
 twelfth" at different times, and they are not the same table: the spec's was dropped and is
 gone for good, this tree's is real and the spec never spoke of it. The count moved twice; the
-intent behind the first move did not. **The thirteenth is `deck_tokens`, at user schema v35** —
+intent behind the first move did not. **The thirteenth is `deck_tokens`, at user schema v36** —
 one row per token a deck's reader has deviated on, holding the art they picked, how many copies
 they want and whether the row is dismissed or hand-added.
 
@@ -1806,7 +1806,7 @@ of the two ways it happens:
 
 | Object | What it is |
 | --- | --- |
-| `sync_uid TEXT` + `idx_<table>_uid` on every synced table | a name every device agrees on. **Eleven** through this rung's `ALTER TABLE`s; each table added since carries the pair in its own `CREATE TABLE`, so the census is **thirteen** at v35 |
+| `sync_uid TEXT` + `idx_<table>_uid` on every synced table | a name every device agrees on. **Eleven** through this rung's `ALTER TABLE`s; each table added since carries the pair in its own `CREATE TABLE`, so the census is **thirteen** at v36 |
 | `device_names` (v31) | `device_id` → `name`, and nothing else. **The twelfth synced table**, so a rename reaches the group and a joiner stops reading "Paired device". `sync_devices` stays unsynced beside it, because it holds keys |
 | `needs_review TEXT` on `deck_folders`, `wishlist_folders`, `collection_folders` | §7.4's second surfaced outcome had nowhere to go |
 | `sync_ops` | the op log: `tbl`, `uid`, `kind`, `fields`, `counters`, `parents`, the stamp, `pushed_at` |
