@@ -88,12 +88,12 @@ export const NothingWrong: Story = { args: { violations: undefined } };
  * same azure and the same corner as the tick the other two wear. The tick is the card that
  * matches; a number is the card that does not.
  *
- * `theoryMatches` is `undefined` in every other story in this file, which is what a deck with the
+ * `theoryPlan` is `undefined` in every other story in this file, which is what a deck with the
  * theory list switched off looks like and what the **Theory** tab itself looks like: no plan to
  * compare against, so no marks.
  */
 export const TheoryMatches: Story = {
-  args: { theoryMatches: deckTheoryMatches() },
+  args: { theoryPlan: deckTheoryMatches() },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     // Four marked cards, and **two of the four are numbers rather than ticks** (issue #212): the

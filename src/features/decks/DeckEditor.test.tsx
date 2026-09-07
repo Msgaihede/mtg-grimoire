@@ -20,6 +20,7 @@ import type {
   FormatSpec,
   ImportMatch,
   SyncStatus,
+  TheorySlot,
 } from "@/lib/ipc";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import {
@@ -352,6 +353,23 @@ function bolt(overrides: Partial<DeckCard> = {}): DeckCard {
     ...overrides,
   });
 }
+
+/**
+ * One row of what `deck_theory_slots` answers, **typed**.
+ *
+ * `deckTheorySlots` is a bare `vi.fn()`, so nothing type-checks what it resolves with — a field
+ * added to `TheorySlot` therefore reaches these fixtures as a runtime throw in a `useMemo`
+ * rather than as a red build. That is not hypothetical: `nameKey` landed with the name tier on
+ * 2026-09-07 and three cases below threw on it, and only because the plan derivation reads it.
+ * Spelling the shape here is the fence.
+ */
+const slot = (row: DeckCard, quantity: number): TheorySlot => ({
+  key: theorySlot(row),
+  // Rust answers `cards.name` verbatim — the fold to a lookup key is `theoryNameKey`'s, on this
+  // side, so a fixture writes the name exactly as the card carries it.
+  nameKey: row.name,
+  quantity,
+});
 
 /** One search result, for the tests that drive the docked panel or the quick add. */
 function found(name: string): CardSummary {
@@ -3548,7 +3566,7 @@ describe("DeckEditor", () => {
    */
   it("takes the theory tick off every row when the reader switches to the plan", async () => {
     withPlan();
-    deckTheorySlots.mockResolvedValue([{ key: theorySlot(bolt()), quantity: 1 }]);
+    deckTheorySlots.mockResolvedValue([slot(bolt(), 1)]);
 
     await open();
 
@@ -3567,7 +3585,7 @@ describe("DeckEditor", () => {
    * **The count reaches the mark from the two reads the editor already makes**
    * ([issue #212](https://github.com/Msgaihede/mtg-grimoire/issues/212)).
    *
-   * `theoryMatchDelta`'s arithmetic is unit-tested and `CardStack` is tested against a map handed
+   * `theoryMatchMark`'s arithmetic is unit-tested and `CardStack` is tested against a plan handed
    * to it directly; neither says the editor *joins* the plan's quantities to the live list's. This
    * is that wiring — `deckTheorySlots`' `quantity` against `deck.cards`' own — and it is the half
    * that can be fully correct and reach nothing.
@@ -3578,7 +3596,7 @@ describe("DeckEditor", () => {
    */
   it("says how far the live count is from the plan on the card itself", async () => {
     withPlan();
-    deckTheorySlots.mockResolvedValue([{ key: theorySlot(bolt()), quantity: 2 }]);
+    deckTheorySlots.mockResolvedValue([slot(bolt(), 2)]);
 
     await open();
 
@@ -3587,10 +3605,49 @@ describe("DeckEditor", () => {
     );
     for (const mark of document.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)) {
       expect(mark).toHaveTextContent("+2");
+      // The tier as the attribute's own value, which is what the case below turns on: this deck
+      // is born with both switches on, so the printing the plan named draws the **exact** mark.
+      expect(mark.getAttribute(THEORY_MATCH_ATTR)).toBe("exact");
     }
     // …and in words, on the one thing a keyboard reader gets from the card.
     expect(screen.getByRole("button", { name: /^Lightning Bolt/ })).toHaveAccessibleName(
       expect.stringContaining("in the theory list · 2 more than planned"),
+    );
+  });
+
+  /**
+   * **The deck's two switches reach the mark**, and this is the wiring a green domain suite
+   * cannot see: `theoryMatch.ts` can be perfectly tested and `DeckEditor` still never pass
+   * `theoryMarkExact`/`theoryMarkName` into `theoryMatchPlan` — every deck would then draw the
+   * green *this is the printing you planned* whatever its reader had turned off, with every unit
+   * test in the tier's own suite still passing.
+   *
+   * The row is an **exact** match by construction — one printing, four planned against the four
+   * `withPlan` sleeves up — so nothing but the switch can make it the name tier: with
+   * `theoryMarkExact` off, `theoryMatchMark` re-resolves the row one tier down rather than
+   * silencing it, which is that function's own rule.
+   *
+   * **Matched on `THEORY_MATCH_ATTR`'s value and never on a colour.** The two tiers differ on
+   * screen by a custom property, and jsdom resolves no stylesheet — so a colour assertion here
+   * would pass against the exact mark just as happily and prove nothing at all.
+   */
+  it("passes the deck's mark switches to the plan", async () => {
+    withPlan({ theoryMarkExact: false, theoryMarkName: true });
+    deckTheorySlots.mockResolvedValue([slot(bolt(), 4)]);
+
+    await open();
+
+    await waitFor(() =>
+      expect(document.querySelectorAll(`[${THEORY_MATCH_ATTR}]`).length).toBeGreaterThan(0),
+    );
+    for (const mark of document.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)) {
+      expect(mark.getAttribute(THEORY_MATCH_ATTR)).toBe("name");
+    }
+    // And in words, which is the other half of the switch reaching the screen: the tier is drawn
+    // as a colour, so `deckCardName` is the only place a reader who cannot see one is told which
+    // of the two statements this mark is making.
+    expect(screen.getByRole("button", { name: /^Lightning Bolt/ })).toHaveAccessibleName(
+      expect.stringContaining("in the theory list · a different printing"),
     );
   });
 
@@ -3859,7 +3916,7 @@ describe("DeckEditor", () => {
           : detail(deckRow, [bolt({ quantity: 4 })]),
       ),
     );
-    deckTheorySlots.mockResolvedValue([{ key: theorySlot(bolt()), quantity: 2 }]);
+    deckTheorySlots.mockResolvedValue([slot(bolt(), 2)]);
 
     await open();
     await waitFor(() =>

@@ -3125,12 +3125,22 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // beside a tab strip and a `Compare` that had both correctly gone. Same fix as the tab's, on
   // the same line, because it is the same mistake one axis over — the gate belongs where the
   // question is asked.
-  const theoryMatches = useMemo(
+  // **`row !== null` is a narrowing rather than a third gate.** `theoryEnabled` is read off that
+  // row, so it is already false without one; what the test buys is the two switches below being
+  // reachable at the type level, which is the whole of how a per-deck mark reaches the screen.
+  const theoryPlan = useMemo(
     () =>
-      theoryEnabled && variant === "live"
-        ? theoryMatchPlan(planned.data, deck.cards)
+      theoryEnabled && variant === "live" && row !== null
+        ? theoryMatchPlan(planned.data, deck.cards, {
+            // The deck's own answer to *which of the two marks do I want drawn*, carried into the
+            // plan so `theoryMatchMark` needs no second argument at every call site in four views
+            // — `theoryMatch.ts`'s `TheoryMarkSwitches` says why it is two booleans and not one
+            // three-valued field.
+            exact: row.theoryMarkExact,
+            name: row.theoryMarkName,
+          })
         : undefined,
-    [planned.data, theoryEnabled, variant, deck.cards],
+    [planned.data, theoryEnabled, variant, deck.cards, row],
   );
 
   /**
@@ -3518,7 +3528,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     groups,
     marketplace,
     violations,
-    theoryMatches,
+    theoryPlan,
     onSelect: openCard,
     actions,
     // The two marks a card can carry here, in the four views that draw them. `landed` is this

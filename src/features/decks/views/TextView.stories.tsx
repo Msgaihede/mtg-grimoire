@@ -256,7 +256,7 @@ export const ByManaValue: Story = { args: { groups: deckGroups("manaValue", "man
  * already is, and a 12px one would out-shout the name it sits next to.
  */
 export const TheoryMatches: Story = {
-  args: { theoryMatches: deckTheoryMatches() },
+  args: { theoryPlan: deckTheoryMatches() },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     // Four marked cards, and **two of the four are numbers rather than ticks** (issue #212): the
