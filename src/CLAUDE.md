@@ -169,9 +169,18 @@ Every one of these has its measurement and its story in
   `pointer-events`/Escape/no-op-provider traps carried into the new API:
   [frontend-design.md](../docs/reference/frontend-design.md).
 - **An `art` crop has no printed frame, so wherever one is shown the illustrator must be
-  credited** (Scryfall's image policy). A `grid`/`thumb`/`display` image carries the printed
-  credit itself and needs nothing. Never distort, blur, recolour or watermark a card image, and
-  never crop off a printed credit.
+  identifiable — _or_ the same interface must show a full card image somewhere.** Scryfall's
+  guidelines, on **`https://scryfall.com/docs/api`** and *not* on `docs/api/images`, which
+  carries no artist rule at all (checked live 2026-09-07). **The second arm is the one this repo
+  documented late**, and it is why deleting a per-picture credit *line* can be legitimate: the
+  rule asks that a reader be able to identify the artist **somehow**, not that a line of type sit
+  under every crop. A `grid`/`thumb`/`display` image carries the printed credit itself and needs
+  nothing — that is the second arm met by construction; a surface drawing only `art` crops has to
+  take the first, and a **tooltip on the picture** is how the deck gallery does since 2026-09-07.
+  Never distort, blur, recolour or watermark a card image, and never crop off a printed credit.
+  Wizards' Fan Content Policy requires no artist credit at all, so every credit rule here is
+  Scryfall's — the full quotation, the neighbouring guidelines and what non-compliance costs:
+  [frontend-design.md](../docs/reference/frontend-design.md).
 - **Z-indexes come from `LAYER` in `src/lib/layers.ts`** and nowhere else; `src/lib/layers.test.ts`
   sweeps `src/` to keep it that way. The ladder is
   `raised 10 < header 20 < popup 30 < dragTray 40 < overlay 45 < overlayStacked 46 <

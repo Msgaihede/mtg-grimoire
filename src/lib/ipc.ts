@@ -19,7 +19,8 @@
  * `MoveOutcome`                                  — `src-tauri/src/collection_alloc.rs`
  * `WishInput`/`WishlistQuery`/`WishRow`/`WishlistPage` — `src-tauri/src/wishlist.rs`
  * `DeckInput`/`DeckPatch`/`DeckViewState`/`DeckRow`/`DeckCardRow`/`DeckDetail`/
- * `FormatSpecRow`                                — `src-tauri/src/deck.rs`
+ * `FormatSpecRow`/`PipCost`/`DeckPipCosts`/
+ * `BracketCardRow`/`DeckBracketRead`              — `src-tauri/src/deck.rs`
  * `CardFilters`, flattened into both list queries — `src-tauri/src/filters.rs`
  * `MarketplaceFeedStatus`                        — `src-tauri/src/marketplace_feed.rs`
  * `CardTags`/`PrintingTags`                     — `src-tauri/src/tags/oracle.rs`
@@ -36,22 +37,27 @@
  * `PairingProgress`/`QrMatrix`/`PairedDevice`      — `src-tauri/src/sync_pair/pairing.rs`,
  *                                                  `.../identity.rs`, `.../invite.rs`
  *
- * **Seven settings carry no struct at all.** Each is one `app_meta` row: two answered as a bare
- * string — `getMarketplace`/`setMarketplace` (`src-tauri/src/marketplace.rs`) and
- * `printingGroupBy`/`setPrintingGroupBy` (`src-tauri/src/card.rs`) — three as a bare map,
+ * **Eight settings carry no struct at all.** Each is one `app_meta` row: three answered as a
+ * bare string — `getMarketplace`/`setMarketplace` (`src-tauri/src/marketplace.rs`),
+ * `printingGroupBy`/`setPrintingGroupBy` (`src-tauri/src/card.rs`) and
+ * `deckSort`/`setDeckSort` (`src-tauri/src/decksort.rs`) — three as a bare map,
  * `cardZoom`/`setCardZoom` (`src-tauri/src/zoom.rs`), `listView`/`setListView`
  * (`src-tauri/src/listview.rs`) and `flattenState`/`setFlattenState`
  * (`src-tauri/src/flatten.rs`), and two as a
  * bare `boolean`: `navCollapsed`/`setNavCollapsed` (`src-tauri/src/nav.rs`) and
- * `deckSearchOpen`/`setDeckSearchOpen` (`src-tauri/src/deck.rs`). All seven are
+ * `deckSearchOpen`/`setDeckSearchOpen` (`src-tauri/src/deck.rs`). All eight are
  * the shape a stored preference has to have: the read falls back on its default for a row that
  * is missing *or* holds a value this build does not recognise, and only the *write* refuses.
  *
- * Five of them are therefore typed loosely here rather than as their unions: the narrowing
+ * Six of them are therefore typed loosely here rather than as their unions: the narrowing
  * belongs to the module that owns the vocabulary (`@/lib/marketplace`,
- * `@/features/card/printings`, `@/lib/cardZoom`, `@/lib/store` for both of its two rows), and a
+ * `@/features/card/printings`, `@/lib/cardZoom`, `@/lib/store` for both of its two rows,
+ * `@/features/decks/deckSort`), and a
  * row a newer build wrote
- * must reach this side as what it is. **The two booleans are the ones with no narrowing to do**, and that is
+ * must reach this side as what it is. **The deck sort is the one where the *write* refuses
+ * nothing either**, and it is the rule above meeting a vocabulary the backend does not have
+ * rather than an exception to it: three of the six sort keys are computed on this side, so
+ * `deck_sort.rs` has no list to check a word against — see {@link ipc.setDeckSort}. **The two booleans are the ones with no narrowing to do**, and that is
  * the same argument arriving at nothing rather than an exception to it: a boolean has no
  * vocabulary for a later build to have widened, so there is no third state a row could come back
  * in. Each far end folds a missing row, a junk row and an unreadable one alike into its own
@@ -3015,6 +3021,139 @@ export interface DeckRow {
 }
 
 /**
+ * One distinct printed cost in one deck, and how many copies are paying it.
+ *
+ * **A cost *string*, not a counted pip, and that is the Rust/TypeScript boundary rather than a
+ * shortcut.** What a `{W/U}` is worth to a colour bar is a display decision — a hybrid is one
+ * pip of each half here because the bar answers *what does this deck want*, and a build that
+ * decided otherwise would be changing a picture rather than a fact — so the counting lives in
+ * `@/lib/mana`'s `countPips`, over the one `{…}` tokeniser this app already has. Rust supplies
+ * the facts; TypeScript draws the conclusions, and a cost string is the fact.
+ *
+ * It is also the cheaper wire. The costs in a deck repeat heavily (every basic is the same
+ * empty cost, every Sol Ring the same `{1}`), so folding by the string before it crosses turns a
+ * row per card into a row per *distinct* cost: 90 rows for the whole of the dev database's four
+ * decks, measured 2026-09-07.
+ */
+export interface PipCost {
+  /**
+   * The printed cost as `cards.mana_cost` holds it — `"{1}{R}"`, `"{2/W}"`, and for a split or
+   * double-faced card the whole one-string form `"{1}{R} // {1}{U}"`, which `countPips` reads
+   * end to end.
+   *
+   * **Never null and never empty**: a cost with no symbols in it is a **land**, it can
+   * contribute no pip, and there is no reason to ship one row per basic. An **orphaned** deck
+   * row is absent for a second reason — the read joins `cards` inwards, so a printing that has
+   * left the corpus has no cost to report and contributes nothing rather than a blank.
+   */
+  cost: string;
+  /** How many copies of cards printing this cost the deck's pile holds, summed — the weight the
+   *  bar gives it. `deck_cards.quantity`, not a row count, so four Lightning Bolts are four red
+   *  pips rather than one. */
+  copies: number;
+}
+
+/**
+ * Every deck's colour bar, in one read — {@link ipc.deckPipCosts}' per-deck entry.
+ *
+ * The pile is `DeckRow.cardCount`'s exactly: the **live** variant, in **active** categories of
+ * kind `main`, `commander` or `maybe`. So the bar and the card count on the tile beside it are
+ * two readings of one list, and a deck the reader has left on **Theory** shows its plan in the
+ * editor and its live list here — the tile is a fact about the deck, the editor a fact about
+ * what is on screen.
+ *
+ * **A deck with nothing to say is absent from the answer rather than present and empty**, which
+ * is what a `GROUP BY` gives and what the caller must be written for: an all-lands pile and a
+ * deck that has never been filled read alike, and both draw no bar at all rather than an empty
+ * rule.
+ */
+export interface DeckPipCosts {
+  deckId: number;
+  /** Folded by cost string with the copies summed, so a cost appears once. Order is the
+   *  backend's and nothing downstream may depend on it — the bar sums the whole list before it
+   *  draws anything. */
+  costs: PipCost[];
+}
+
+/**
+ * One card of a deck, as the bracket estimator needs it and no wider.
+ *
+ * `estimateBracket` (`features/decks/validation/bracket.ts`) reads exactly five fields off a
+ * card and takes the combos as a second argument, so this shape is the *whole* of its input —
+ * which is what makes a gallery-wide bracket affordable at all. The alternative is `deck_get`
+ * per deck, the heaviest read in the feature, for a number that fits in a caption.
+ */
+export interface BracketCardRow {
+  /**
+   * What the estimator dedupes on and what it *names* — a game changer, a mass-land-denial card
+   * or an extra-turn card is disclosed to the reader by this string, because a reader who
+   * disagrees with the estimate has to be able to see which card caused it.
+   *
+   * **`deck_cards.name`, the row's own denormalized column, and not `cards.name`** — the same
+   * one {@link DeckCard.name} carries. Two reasons, and the second is why it matters here: it is
+   * the only name an *orphaned* row has at all, and the editor's own panel dedupes on that same
+   * column, so a gallery reading the live `cards` row would fold a re-worded printing
+   * differently from the editor looking at the same deck.
+   */
+  name: string;
+  /**
+   * `cards.game_changer` — the Commander Format Panel's own list, delivered by a sync and
+   * hardcoded nowhere on this side.
+   *
+   * **A plain `boolean` where {@link DeckCard.gameChanger} is nullable**, because the read
+   * coalesces: a `deck_cards` row whose printing has left the corpus knows nothing about itself,
+   * and "nothing known" and "not a game changer" are the same answer to the only question asked
+   * of this field. The estimator tests `=== true` either way.
+   */
+  gameChanger: boolean;
+  /** The front face's rules text, which the mass-land-denial and extra-turn greps read. `null`
+   *  for an orphaned row, exactly as {@link DeckCard.oracleText} is. */
+  oracleText: string | null;
+  /** `cards.faces`, the raw JSON array — the *back* faces' rules text, which the same two greps
+   *  read after parsing it. A card whose extra turn is printed on face two is still an
+   *  extra-turn card. `null` for a single-faced card and for an orphan alike. */
+  faces: string | null;
+  /**
+   * Whether the pile this row sits in is switched on — and it is **always `true`** on these
+   * rows, because the read filters `cat.is_active = 1` before they cross.
+   *
+   * Carried all the same, because {@link BracketCardRow} is what `estimateBracket`'s
+   * `BracketCardFacts` asks for and that type's first act is to filter on this field. A row
+   * that omitted it would be a *different* type, needing a second shape and an adapter between
+   * them, in exchange for one boolean per card.
+   */
+  categoryActive: boolean;
+}
+
+/**
+ * One deck's whole bracket input — {@link ipc.deckBracketReads}' per-deck entry.
+ *
+ * The pile is **wider than {@link DeckPipCosts}'** and deliberately so: `variant = 'live'` and
+ * `cat.is_active = 1`, in **every** category kind. That is what `DeckBracket` hands the
+ * estimator today, filtered the same way, and the same ids it hands `combos_for_cards` — a
+ * sideboard card is still a card the bracket rules see. (Commander has no sideboard, so a reader
+ * who has filed cards there has filed them somewhere the estimate still has to look.)
+ *
+ * **One entry per requested id, in request order**, which is the half {@link DeckPipCosts} does
+ * *not* share: that read is a `GROUP BY` and omits a deck with nothing to say, this one was
+ * asked about particular decks and answers about each of them. An id with no deck behind it
+ * answers an empty read rather than being dropped — a caller zipping the answer against the ids
+ * it sent must not have the two come apart.
+ */
+export interface DeckBracketRead {
+  deckId: number;
+  /** `DISTINCT` over the pile, so a card in two piles of one deck is one row — which changes
+   *  nothing, because the estimator dedupes by name anyway, and costs a deck's worth of
+   *  duplicate oracle text on the wire. */
+  cards: BracketCardRow[];
+  /** Every combo the deck fully contains, already matched against the same cards — the fourth
+   *  signal, and the one no amount of reading a card's own text could find. Empty on a database
+   *  that has never fetched Commander Spellbook's file, which is a supported state: the estimate
+   *  reads three signals instead of four. See {@link DeckCombo} and {@link ipc.combosForCards}. */
+  combos: DeckCombo[];
+}
+
+/**
  * How a deck is being read, as the editor asks for it to be remembered: the tab, the grouping
  * and the sort.
  *
@@ -5141,6 +5280,42 @@ export const ipc = {
   /** The gallery: every deck, archived last, most recently touched first. */
   deckList: () => invoke<DeckRow[]>("deck_list"),
   /**
+   * Every deck's printed mana costs at once — the colour bar's facts, and the whole of them.
+   *
+   * **No argument, because the gallery draws every tile at once.** A per-deck read would be one
+   * round trip per tile for a bar 4px high, which is the shape `deck_get` already has and the
+   * reason this is not that command: `deck_get` prices every row and rolls up every category,
+   * and none of it is a colour.
+   *
+   * **Cost strings rather than counted pips** — see {@link PipCost}, where the whole argument
+   * is. In one sentence: what a `{W/U}` is worth to a bar is a display decision, so it belongs
+   * on this side with the rest of them, and `@/lib/mana`'s `countPips` is where it is made.
+   *
+   * The pile is {@link DeckRow.cardCount}'s: the **live** variant, active `main|commander|maybe`
+   * categories. So the bar and the count beside it can never disagree, and a deck left on Theory
+   * reads its plan in the editor and its live list on the tile — see {@link DeckPipCosts}.
+   */
+  deckPipCosts: () => invoke<DeckPipCosts[]>("deck_pip_costs"),
+  /**
+   * The bracket estimate's facts, for the decks the caller names.
+   *
+   * **It takes deck ids rather than filtering to Commander in SQL, and that is the boundary
+   * again.** Which formats have a command zone is `format_specs.commanderRule` — a TypeScript
+   * question, asked through `useFormatSpecs` — so a `WHERE format_key = 'commander'` in the
+   * backend would be a second opinion about a table this side is already reading, and it would
+   * be wrong the day a format with a command zone is seeded. The caller decides which decks have
+   * a bracket to estimate and asks about those.
+   *
+   * It is also what keeps the read proportional: 397 distinct cards and 59 KB of oracle text
+   * across the dev database's four decks (measured 2026-09-07), and the gallery asks only about
+   * the tiles that will draw a number.
+   *
+   * Every field `estimateBracket` reads and nothing else — see {@link BracketCardRow} for the
+   * five, and {@link DeckBracketRead} for the pile, which is wider than the colour bar's.
+   */
+  deckBracketReads: (deckIds: number[]) =>
+    invoke<DeckBracketRead[]>("deck_bracket_reads", { deckIds }),
+  /**
    * One deck and everything in it, or `null` when no deck has that id — a gallery that has
    * not refreshed since another view deleted it asks for a deck that is not there.
    *
@@ -6134,6 +6309,54 @@ export const ipc = {
    * launch's starting state and nothing this session.
    */
   setDeckSearchOpen: (open: boolean) => invoke<void>("set_deck_search_open", { open }),
+  /**
+   * How the deck gallery was last ordered — one `app_meta` row holding `"<key>:<direction>"`,
+   * e.g. `"updated:desc"`.
+   *
+   * The **eighth** `app_meta` setting and the third answered as a bare string — see this file's
+   * header. **Its value is opaque to Rust on purpose, and that is the strongest version of
+   * {@link printingGroupBy}'s split rather than an exception to it**: the sort keys are
+   * `features/decks/deckSort.ts`' vocabulary — `updated`, `name`, `colors`, `bracket`, `cards`,
+   * `format` — and three of those six are *computed on this side* (a deck's colours come from
+   * `deck_pip_costs` through `countPips`, its bracket from `estimateBracket`), so there is no
+   * list in the backend to check a word against and inventing one would be a second opinion
+   * about a table the webview owns.
+   *
+   * So the narrowing is entirely this side's, and it has to be: a database outlives the app, and
+   * a key a *future* build stops offering must degrade to the default rather than leaving the
+   * gallery ordered by something nothing can draw. The backend answers its default
+   * (`decksort::DEFAULT`, `"updated:desc"` — the same words `deckSort.ts` spells, because the two
+   * halves cannot share a constant across a wire) for a row that is missing, unreadable **or
+   * blank**, and hands anything else back verbatim. So a key a newer build wrote reaches this
+   * side as itself, and a word *this* build does not know becomes the default order here.
+   *
+   * **Only the sort is remembered, and no filter is.** A filter is a thing a reader is doing
+   * right now; a gallery that opened already narrowed, with no memory of having asked for it, is
+   * a gallery that looks like it has lost decks.
+   */
+  deckSort: () => invoke<string>("deck_sort"),
+  /**
+   * Remember the gallery's order.
+   *
+   * **One refusal and it is a blank**, where {@link setPrintingGroupBy} refuses every word it
+   * does not know. That is not leniency: the value has a vocabulary and the *backend does not
+   * have it*, so any wider refusal could only be the backend guessing about a list this side
+   * owns. A blank is refusable without a vocabulary — it is an order in nobody's — and it is
+   * the one value the read discards, so storing it would be a write that reported success and
+   * read back as the default for ever. Everything else survives the round trip, which is what
+   * makes the *read* the thing that protects the reader: an unrecognised key degrades to the
+   * default order here and costs them their ordering, never the gallery.
+   *
+   * **The argument is `sort`, not `value`** — `invoke` fills parameters by name and
+   * `decksort::set_deck_sort` calls its one parameter `sort`, so a mismatch is a rejection at
+   * run time with nothing red in either build. `ipc.test.ts` pins it, which is what that half
+   * of the mirror is for.
+   *
+   * Answers `collection::BUSY` under a running sync like every other write, and the caller
+   * deliberately does not put the picker back when it does — {@link setNavCollapsed}'s trade,
+   * for its reason: a refusal costs the next launch's starting order and nothing this session.
+   */
+  setDeckSort: (sort: string) => invoke<void>("set_deck_sort", { sort }),
   /**
    * Download one marketplace's price feed and rewrite its rows. Answers the feed's state
    * afterwards.

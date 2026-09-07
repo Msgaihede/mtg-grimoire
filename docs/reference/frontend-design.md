@@ -195,16 +195,63 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   independently, by keying its whole `Preview` on the printing — that file was deleted with the
   docked card pane on 2026-09-03.
 - **An `art` crop has no printed frame, so wherever one is shown the illustrator must be
-  credited.** Scryfall's image policy, quoted in full at
-  `docs/superpowers/plans/2026-08-04-02-images-card-browsing.md:55`: use the art crop and the
-  artist's name must appear elsewhere in the same interface. A `grid`/`thumb`/`display` image
-  carries the printed credit itself and needs nothing; the 626×457 `art` variant does not.
-  This has been ruled on twice and is written here because four surfaces cite it as living
+  identifiable — and the rule has _two_ arms, only one of which this page had ever written
+  down.** Corrected **2026-09-07**, against both pages fetched live that day.
+  **Where it lives, first, because the obvious page is the wrong one.** The rule is on
+  **`https://scryfall.com/docs/api`**, in the list introduced by *"When using images from
+  Scryfall, you must adhere to the following guidelines"*. It is **not** on
+  `https://scryfall.com/docs/api/images` — which is where anybody looking for an *image* rule
+  goes first, and where a swept 2026-09-07 check found no file in this repo had actually sent
+  them, because until then no file named a URL at all. The Card Imagery page carries no artist
+  rule at all —
+  the word "artist" does not appear on it — and is now a table of image variants and their
+  statuses, which is precisely and only what
+  [the Scryfall research](../superpowers/research/2026-08-04-scryfall-api.md) cites it for.
+  (That table is also where the `art` row reads *"Replaces `art_crop`"*, so the guideline's
+  `art_crop` and the variant this app actually stores are the same picture under two names —
+  `art`, 626 × 457, WEBP.) Verbatim, the two lines that bind:
+
+  > When using the art_crop, list the artist name and copyright elsewhere in the same interface
+  > presenting the art crop, or use the full card image elsewhere in the same interface.
+  >
+  > Users should be able to identify the artist and source of the image somehow.
+
+  **The `or` is the arm this page never carried, and it is the whole of what changed.** An
+  interface complies by naming the artist **or** by showing the full card image somewhere in it,
+  and the sentence under it says what both arms are for: a reader must be able to identify the
+  artist *somehow*. So a permanent credit **line** under every picture was never the requirement
+  — it was one way of meeting it — and taking one off a surface is a legitimate move rather than
+  a violation, for exactly as long as the artist stays reachable there.
+  `docs/superpowers/plans/2026-08-04-02-images-card-browsing.md:55` has quoted both arms since
+  the beginning; the paraphrase on *this* page kept the first and dropped the second, and since
+  this is the page four surfaces cite, a design decision has read as a fixed requirement ever
+  since.
+  **The neighbouring guidelines are unchanged and still binding**: never cover, crop or clip off
+  the copyright or artist name; never distort, skew or stretch; never blur, sharpen, desaturate
+  or colour-shift; never add watermarks; never imply the images belong to another game. The page
+  ends by naming what non-compliance costs — *"Repeated mishandling or misrepresentation of data
+  or images in your project may result in Scryfall restricting or blocking your API access."*
+  **Wizards' Fan Content Policy requires no artist credit whatsoever**, which was checked the
+  same day (`https://company.wizards.com/en/legal/fancontentpolicy`) and is worth writing down
+  because the answer surprises: what it requires is the disclaimer notice, and that Wizards' own
+  logos and trademarks inside artwork are not removed. **Every artist-credit rule in this app is
+  Scryfall's**, so Scryfall's `docs/api` is the one page to re-read when one is questioned, and a
+  reader who goes looking in the fan-content policy will find nothing and conclude the wrong
+  thing.
+  A `grid`/`thumb`/`display` image carries the printed credit itself and needs nothing — which is
+  the second arm, met by construction — and the 626×457 `art` variant does not, which is why
+  every surface drawing one owes an answer. It has been ruled on three times (2026-08-11,
+  2026-08-31, 2026-09-07) and is written here because four surfaces cite it as living
   here. One consequence holds everywhere a **cover** is drawn — the gallery's deck tiles, its
-  folder strips and `DeckCoverPicker`'s `CoverPreview`, all three of which print the
-  artist: **a card cover whose artist is unknown is not drawn at all** (`DeckRow.coverArtist`
-  is `null` when `cards` has no row for that printing; the orphan heals on the next sync rather
-  than being shown uncredited).
+  folder strips and `DeckCoverPicker`'s `CoverPreview`: **a card cover whose artist is unknown is
+  not drawn at all** (`DeckRow.coverArtist` is `null` when `cards` has no row for that printing;
+  the orphan heals on the next sync rather than being shown uncredited).
+  **That guard survived 2026-09-07 unchanged, and reading it as a rule about the _line_ is the
+  mistake to avoid.** The deck tile's and the folder card's credit lines were deleted that day
+  and the illustrator moved onto the pictures as a tooltip, so the name is still shown and
+  `hasCover`/`coverUrl` still mean exactly what they said: a crop is drawn only where this app
+  can say who painted it. `CoverPreview` keeps a visible credit rather than a tooltip, because it
+  is one large crop with nothing else on screen to compete with a line of type.
   **There were two, and the second went with the custom cover on 2026-08-31.** It read: *a
   custom cover carries no artist and needs none*, because the rule is Scryfall's and a user's own
   file is not Scryfall's — which was also why a folder strip dropped custom covers rather than
@@ -5374,3 +5421,156 @@ browser rather than the new attribute. It was checked rather than assumed: both 
 reachable case — the divergence is only *when* the answer is applied, and that guard runs on a
 `focus` event, which is the one moment they cannot differ. Rewriting it would have destabilised a
 well-tested subsystem for no behaviour change.
+
+## The deck gallery gained a colour bar and a filter row (2026-09-07, issue #387)
+
+The wall said four things about a deck — its art, its name, what format it is, how big it is —
+and one thing about its illustrator. The two facts a reader actually browses a wall of decks by,
+**what colours it is** and **what bracket it is**, were reachable only by opening it. Both are on
+the tile now, the credit line came off it in the same pass (the art-crop bullet above carries the
+policy reading that made that legitimate), and the wall gained a way to be narrowed and ordered.
+
+`docs/superpowers/plans/2026-09-07-deck-gallery-overview.md` is the design.
+[decks-storage.md](decks-storage.md) has the two reads behind the bar and the bracket;
+[commander-brackets.md](commander-brackets.md) has what the gallery's estimate can and cannot
+see. This section is the drawing.
+
+### The bar: five pixels, six tokens, and two silences
+
+`DeckColorBar` sits **inside the tile's `<button>`**, between the crop and the name, which is the
+order the tile is drawn in and the order an eye reads it — art, colours, name, caption. Being
+inside the button is also what puts its accessible name into the button's own, in that same
+position.
+
+- **Height 5px at 100%, `margin-top` 4px, both written as
+  `calc(<rem> * var(--mark-scale, 1))`** — the arrangement the tile's other four sizes already
+  use, and `cardZoom.ts`'s reason for it: the variable is set once on the tile's root and every
+  mark inside inherits it, so nothing is threaded down. 5px is between Tailwind's `h-1` and
+  `h-1.5`, which is why it is spelled as a number rather than as a utility: **4px is lost against
+  the rounded edge of the crop above it** and **6px starts to read as a band competing with the
+  deck's name** rather than as a rule belonging to the picture. The 4px above the bar is half the
+  8px below it for the same reason — the bar is a fact about the cards, drawn as part of the
+  picture, so it hugs the art and leaves the name its own air.
+- **The fills are `--color-pie-w/u/b/r/g/c` and nothing else.** These are the same deeps
+  `DeckStats`' identity pips draw with (`PIP_COLOR` plus its `COLORLESS`), keyed over all six of
+  `MANA_KEYS` rather than the five of the mana *line*. **A colour in this app is a `--color-*`
+  custom property and nothing invents one**, so the bar and the same deck's identity pie are two
+  drawings of one fact and could not come apart without somebody editing `index.css`. The table
+  is a `Record` with `var(…)` spelled out per key, **never a class built from the key**: Tailwind
+  scans source text for whole class names, so an interpolated `bg-pie-${key}` emits no rule at
+  all and the bar would draw six transparent segments with nothing going red.
+- **Segments are in `MANA_KEYS` order — WUBRG then colourless — and sized as a percentage of the
+  deck's total pips**, so the bar is correct at every width the zoom ladder produces without
+  anything measuring a box. `overflow-hidden` and `rounded-full` on the parent are what make the
+  pill's ends belong to the *bar* rather than to the first and last colour.
+- **A colour with no pips draws no element, not a zero-width one.** The two are the same pixels
+  and they are not the same DOM: a zero-width `<span>` is something a test can find, a
+  `querySelectorAll` counts and a later `:first-child` rule can style, standing for a colour that
+  is not in the deck.
+- **`null` and an all-zero record both draw nothing at all.** `null` is the read still out; all
+  zeroes is a pile of lands, or of nothing but generic costs. An empty grey rule says "this deck
+  has no colours" in the same vocabulary a full bar uses to say what they are, and a reader
+  cannot tell that from a rendering fault or from a bar still loading. The tile simply sits 9px
+  shorter, which is what every tile looked like before this component existed — the same argument
+  the theory badge and the caption's `Any` row already make about a mark that would sit on nearly
+  every deck.
+
+**`role="img"`, and the accessible name is the colours and nothing else** — `White, Green`, in
+printed order, which is how a player says a deck's colours out loud. The arithmetic goes in the
+tooltip (`White 11, Green 8`), one vocabulary at two depths rather than two ways of saying one
+thing. The tooltip is bound `describes: false`, and that is a fact about where the element sits
+rather than a preference: the span is not focusable and lives inside a button whose name is
+computed from its contents, so an `aria-describedby` wired here would be announced to nobody.
+(Note the trap this repo has recorded — a `describes: false` tooltip carries no `role="tooltip"`,
+so probing for that role finds nothing on a tooltip that is working.)
+
+**The test handle is an attribute, `data-deck-color`, and it carries the colour key as its
+value.** `FolderDropLine`'s `FOLDER_DROP_LINE_ATTR` and `DropIndicator`'s `DROP_LINE_ATTR` are
+the shape it borrows, and the value is load-bearing rather than convenient: jsdom applies no
+stylesheet, so a class assertion would be a check on source text, and **which** colour a segment
+is drawn for is the fact under test — a segment in the wrong place is the bar telling a reader
+their mono-blue deck is green.
+
+### The caption gained a fourth segment, and it still truncates
+
+`{format} [· {game}] [· {bracket}] · {n} cards` — `Commander · Bracket ~3 · 100 cards`. The
+bracket obeys the caption's existing rule from the other end: drawn only where there *is* one,
+which is a format with a command zone whose number has arrived. A `null` covers both "this deck
+cannot have a bracket" and "nothing has answered yet", and the caption treats them alike, because
+a placeholder for the second would be a segment appearing a beat after the wall does.
+
+**The truncation in a narrow column is the existing behaviour and is correct.** A fourth segment
+makes it likelier, and the answer is neither a shorter format name nor a wider tile: the caption
+is the tile's least important line, it truncates from the end, and the deck's name above it is
+what a reader is scanning.
+
+### The filter row: five controls, and one of them is not a filter
+
+Beneath the heading row, wrapping, reading left to right as one sentence about the wall below it:
+everything that decides **which** decks are on it, then — past an `ml-auto` — the pair that
+decides **what order** they are in. That is the division `FilterBar` draws with a hairline on its
+own row, borrowed without the hairline, because a divider is the one item in a wrapping row that
+can end up alone on a line saying nothing.
+
+- **`flex-wrap` is not optional.** The wall's column is `flex-1` beside the 208px folder rail, so
+  at the app's own 1024px floor the row has far less width than its contents. The source's
+  `~548px` was arithmetic off the shipped widths when it was written; **it has since been driven
+  and is the measured figure** — 2026-09-07, `npm run tauri dev`, a debug build at 1024 × 700
+  against the real corpus, three decks on the wall: the row's column read **548px** exactly, the
+  row itself laid out on **one** line at `y = 192` (the heading row above it at `y = 140`), the
+  name box `x = 456, w = 352`, the `Sort decks` trigger `x = 823, w = 126` and the direction
+  arrow `x = 953, w = 36` — a right edge of **989** inside the column's **1004**. And the thing
+  the wrap exists to prevent was absent: `documentElement.scrollWidth` **1024** against a
+  `clientWidth` of **1024**, so no horizontal scrollbar at the floor. A flex item cannot shrink below its own min-content,
+  and the column is `overflow-y-auto`, which computes `overflow-x` to `auto` — so an unwrapped
+  row would hang out of the column and turn into a horizontal scrollbar across the whole gallery.
+  Wrapping makes the row's min-content one control.
+- **The name box is `FILTER_FIELD` and never `FILTER_CONTROL`.** The chips dip 3% under a press
+  and a box the reader types into must not, or the native ✕ of an `<input type="search">` slides
+  out from under the pointer clearing it and the box bounces without emptying — issue #179, whose
+  whole measurement lives on the constant. It is labelled **`Filter decks by name`** and never a
+  bare `Filter`: the deck editor already owns a box called *Filter this deck*, and two controls
+  with one name cannot be addressed unambiguously by a screen reader, by voice, or by a
+  `getByLabelText`. Escape empties it while there is something in it and falls through when there
+  is not, which is load-bearing on this view rather than a courtesy — the gallery binds Escape at
+  the `"navigation"` rung to walk one folder up, so without the guard one press in a filled box
+  would clear the filter *and* take the reader out of the drawer they were narrowing.
+- **The format chips are faceted, and drawn only where there is more than one.** A chip for a
+  format no deck on the wall is in is a control whose only possible outcome is an empty wall; a
+  *lone* chip can do exactly two things, leave the wall as it is or empty it, so it is a control
+  whose only effect is the bad one. The count rides `title`, which `ToggleChip` makes both the
+  tooltip and the accessible name, so a chip reads *"Modern, 3 decks"* while still beginning with
+  the word printed on it (WCAG 2.5.3) — the search's Owned chip's arrangement.
+- **The `Archived` chip replaces the disclosure's own button and is still a disclosure.** It
+  carries `aria-expanded`, not `aria-pressed`, which is why it is built out of the chip family's
+  recipes instead of being a `ToggleChip`: "this filter is on" and "the thing below is open" are
+  two different sentences, and a reader told the wrong one goes looking for a wall that is not
+  there. It keeps its turning chevron for the same reason — every other chip in the row narrows,
+  this one *reveals*. The second wall stays exactly where it was, a `<ul aria-label="Archived
+  decks">` under the first. The chip is gated on whether the drawer holds filed decks **at all**
+  rather than on how many survive the filter, so it cannot vanish out from under a reader
+  narrowing the wall — `features/search/facets.ts`' rule, that an option which disappears reads
+  as a control that broke — while the number *on* it counts the tiles actually behind it.
+- **`Sort decks`, and never shortened to `Sort`.** The deck editor's toolbar already has a
+  `Sort`, and it sorts the cards *in* a deck. `FilterBar.tsx:928-944` writes that argument out in
+  full about `Sort results`; this is the same call. The picker is **never gold**: accent on a
+  picker means "this is not where the control opens", which is a state a *filter* can be in — a
+  wall is always in some order, so a gold sort picker would claim a filter is on about the one
+  control in the row that is not one. Picking a key also sets its direction from `NATURAL_DESC`
+  rather than carrying the previous key's over, which would open `Name` at Z.
+- **One arrow, turned half a turn — never `ArrowDown` swapped in for `ArrowUp`.**
+  `SortableHeader.tsx:51-55`'s rule and `FilterBar.tsx:975`'s reason: a different element in the
+  same slot is unmounted and remounted, so the indicator *teleports*, and the whole of what the
+  press means is that the order reversed. `initial={false}`, so a wall that opens descending —
+  which is the default — draws its arrow already turned rather than spinning on first paint.
+  `rotate` is a transform prop, so `MotionConfig reducedMotion="user"` reaches it and no
+  `useReducedMotion` opt-out is owed ([motion.md](motion.md) — that trap is about the
+  *non*-positional properties, and this animates none). The `flex` on the animated span is
+  load-bearing rather than decoration: a bare `<span>` is a non-replaced inline box, a transform
+  does not apply to one at all, and the rotation would silently do nothing.
+
+**The sort is remembered across restarts and the filter is not**, which is the one thing about
+this row that is a product decision rather than a drawing one. An order is how a reader likes to
+read their gallery and it is visible in the toolbar the moment they open it; a filter is a thing
+they are doing *right now*, and a gallery that opened already narrowed, with no memory of having
+asked for it, is a gallery that looks like it has lost decks.
