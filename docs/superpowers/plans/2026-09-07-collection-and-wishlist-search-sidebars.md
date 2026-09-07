@@ -336,6 +336,36 @@ export function useDockHeight(
 - Modify: `src/lib/ipc.ts`
 - Modify: `src/components/AppShell.tsx`
 - Modify: `.storybook/fake/db.ts`, `.storybook/fake/db.test.ts`
+- Modify: `src/features/decks/DeckSearchPanel.tsx`, `src/features/decks/DeckSearchPanel.test.tsx`, `src/features/decks/DeckEditor.tsx` — **added after Task 4 reported**, see below
+
+### What Task 4 left you, and why
+
+Task 4's brief told it to hoist `open`/`setOpen` out of `DeckSearchPanel` entirely. **That was
+impossible and it correctly refused.** `DeckSearchPanel.test.tsx` seeds `DECK_SEARCH_OPEN_KEY` into
+the query cache through its own `panel({ storedOpen })` helper, asserts `setDeckSearchOpen` was
+called, and never passes `open`/`setOpen`; the ten stories do not either. Task 4 owned neither file
+and was told that editing a test was a signal to stop and report — so it made `open`/`setOpen`
+**optional props with a `?? useDeckSearchOpen()` fallback**, and `DeckEditor` now reads the hook and
+passes the pair down. The hoist's purpose holds; the fallback is the seam.
+
+**Deleting `useDeckSearchOpen.ts` therefore breaks three things, and they are yours to fix:**
+
+1. `DeckSearchPanel.tsx`'s fallback line — point it at `useSearchOpen("deck")`.
+2. `DeckSearchPanel.test.tsx`'s `import { DECK_SEARCH_OPEN_KEY } from "./useDeckSearchOpen"` and
+   its two `setDeckSearchOpen` assertions. **This test edit is unavoidable and legitimate** — it is
+   the one place the suite names the storage rather than the behaviour. Change the key and the
+   command name; change nothing about what the cases assert.
+3. `DeckEditor.tsx`'s call.
+
+Everything else in that suite must stay untouched and green.
+
+**Two more corrections Task 4 found, which apply to you:**
+
+- **`npx vitest run src/stories.test.tsx -t "Decks/SearchPanel"` selects nothing and exits 0.**
+  `stories.test.tsx` names its `describe` after the *file path*, not the story title. The working
+  filter is `-t "DeckSearchPanel"`. A filter that matches nothing is a green run that proves
+  nothing — check the reported test count, never just the exit code.
+- `DeckSearchPanel.test.tsx` has **50** cases, not the 51 this plan said twice.
 
 **Interfaces:**
 - Consumes: Task 1's `search_open` / `set_search_open` commands; Task 4's hoisting of `open`/`setOpen` into `DeckEditor`.
@@ -391,6 +421,40 @@ it("does not disturb another section", …)
 ---
 
 # Wave 3 — two tasks, dispatched together
+
+## What Wave 1 actually built (read before Task 6 or 7)
+
+Task 3 shipped `AddToCollectionButton` with this signature, which differs from the Interfaces block
+written above it in two ways that will bite you:
+
+```ts
+folderId?: number | null;
+folderNodes?: readonly FolderNode[];          // from "@/lib/folderTree"
+folderName?: (id: number | null) => string | null;   // `| null`, so CollectionPage's
+                                                     // existing folderNameOf fits with no wrapper
+lockMode?: "collection" | "wishlist";
+```
+
+**Absent `folderId` and `folderId: null` are different on the wire.** Absent sends no `folderId`
+field at all; `null` sends `folderId: null`. So **pass `folderId={null}` explicitly** at the root
+and while the page is flattened — passing `undefined` produces a payload with no key, and the
+"adds at the root" test will fail against it.
+
+Names to match in tests: the trigger is `Add {name} ({SET} {num}) to {destination}` where the
+destination is the folder's name or `Collection` / `Wishlist` — **capitalised**, which changed from
+the old lowercase `to collection`. The override control is `Change folder…`
+(`aria-label="Change folder for {card}"`), the inline list is a `role="group"` named
+`File {card} in a folder`, and the back control is `Back`.
+
+Task 2 shipped:
+
+```ts
+import { readSearchCardDrag, searchCardDragData, type SearchCardDrag } from "@/features/search/searchCardDrag";
+// SearchCardDrag = { cardId: string; name: string; finish: Finish; oracleId: string | null }
+```
+
+`finish` is **refused rather than normalised** if it is not a finish this build knows — so build it
+from `parseFinishes(card.finishes)[0] ?? "nonfoil"` and never hand it a bare string.
 
 ## Task 6: The collection's sidebar
 
@@ -549,7 +613,9 @@ ipc.wishlistAdd({ cardId, quantity: 1, preferredFinish: finish, folderId })
 
 ## Task 8: The documentation
 
-**Files:** `docs/reference/collection-folders.md`, `wishlist-folders.md`, `frontend-design.md`, `data-and-sync.md`, `web-target.md`, `src/CLAUDE.md`, `src/features/decks/CLAUDE.md`
+**Files:** `docs/reference/collection-folders.md`, `wishlist-folders.md`, `frontend-design.md`, `data-and-sync.md`, `web-target.md`, `src/CLAUDE.md`, `src/features/decks/CLAUDE.md`, `src-tauri/src/update.rs`
+
+- [ ] **Step 0: One stale doc Task 1 found and left.** `src-tauri/src/update.rs:337`'s `app_meta` re-export doc lists the modules that keep state in that table and says *"`deck` keeps the search column's state in it"*. That stopped being true when Task 1 moved the row to `searchopen`. It reads as history, but a sweep for "who keeps what in `app_meta`" now finds a wrong answer there — so either date the sentence or correct it, and do not simply delete the list.
 
 - [ ] **Step 1: `collection-folders.md` and `wishlist-folders.md`** — one paragraph each: the add path now has a folder default, and the grain argument (an add into a second folder is a second row, never a move) is what makes that safe.
 - [ ] **Step 2: `frontend-design.md`** — the shared panel, its three surfaces, and `LIST_FLOOR` as Task 9 measured it. Name the build (debug or release) and the window size in any figure.

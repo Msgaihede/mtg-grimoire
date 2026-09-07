@@ -1320,21 +1320,30 @@ export interface FakeDb {
    */
   navCollapsed: boolean;
   /**
-   * `app_meta.deck_search_open` — whether the deck editor's card search column was last left
-   * open.
+   * `app_meta.search_open` — whether each of the app's docked card-search columns was last left
+   * open, as section name → open.
    *
-   * The sixth row of the same key/value table and the **second** of the two booleans, landing
-   * the same day as {@link FakeDb.navCollapsed} above. Every word of that field's argument
-   * applies here unchanged — `deck_search_open` is infallible at the far end too, folding a
-   * missing row, a hand-edited one and an unreadable one alike into its default — so it is a
-   * plain `boolean` for the same reason and not by imitation.
+   * The sixth row of the same key/value table and the **fourth** whose value is an object, so it
+   * is {@link FakeDb.flattenState}'s field with a different key: the keys are whatever some build
+   * wrote (`Record<string, boolean>` and not `Record<SearchSection, boolean>`, because a page this
+   * build has no column on is a state a story wants) and the values have no junk state at all, a
+   * `bool` off the IPC boundary being one of two things.
    *
-   * What differs is only which way the default points, and the two are worth reading together:
-   * a reader who has never touched either control gets the nav rail **expanded** and this column
-   * **open**. Both are "the app as it comes"; neither is a `false` that happens to be the
-   * language's default.
+   * **It replaced a plain `boolean` called `deckSearchOpen`**, which was the deck editor's column
+   * and only that one; the collection and the wishlist grew the same column on 2026-09-07 and
+   * three rows for one fact became one row keyed by section. What is worth reading across the
+   * change is that the *default* did not move with it: a reader who has never touched any of these
+   * controls gets every column **open**, which is now `DEFAULT_SEARCH_OPEN`'s to say rather than
+   * this field's — and that is exactly why `{}` is the seed.
+   *
+   * `{}` for "nothing stored", and it carries what it carries for {@link FakeDb.flattenState}: an
+   * absent key is the only way a story can stand in a disclosure nobody has pressed, which for
+   * this row is every column of a fresh install.
+   *
+   * **The read drops only what it cannot key and the write refuses only that** — see
+   * {@link readHandlers.search_open} and {@link writeHandlers.set_search_open}.
    */
-  deckSearchOpen: boolean;
+  searchOpen: Record<string, boolean>;
   /**
    * `app_meta.deck_sort` — how the deck gallery was last ordered, as `"<key>:<direction>"`.
    *
@@ -1998,10 +2007,12 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // `null` to stand in — see {@link FakeDb.navCollapsed}. Every story that says nothing about
     // the sidebar is standing in the expanded shell.
     navCollapsed: false,
-    // The sixth, on the same footing and pointing the other way: `deck_search_open` answers
-    // `true` for an editor nobody has told, so every deck story that says nothing about the
-    // search column is standing in the column the app ships open.
-    deckSearchOpen: true,
+    // The sixth, and empty for `flattenState`'s reason a second time — the difference being that
+    // here the three defaults agree rather than differ. `search_open` answers only what it holds,
+    // so an absent section is a disclosure nobody has pressed and the frontend's own
+    // `DEFAULT_SEARCH_OPEN` draws it: every column open, which is what the app ships. A story that
+    // wants one railed passes that one section and leaves the others out.
+    searchOpen: {},
     // The gallery's order, and a `null` rather than a value again: `deck_sort` answers
     // `updated:desc` for a wall nobody has re-ordered, so every deck story that says nothing
     // about the picker is standing in the order the app ships — most recently touched first,
@@ -7875,20 +7886,28 @@ export function readHandlers(db: FakeDb) {
     nav_collapsed: (): boolean => db.navCollapsed,
 
     /**
-     * `deck::deck_search_open` — whether the editor's search column was last left open.
+     * `searchopen::search_open` — every docked card-search column's remembered disclosure.
      *
-     * The sixth `app_meta` setting and the **second** with nothing to decide, for every one of
-     * the reasons `nav_collapsed` above gives: the Rust folds a missing row, a hand-edited one
-     * and an unreadable one into its default before the value crosses the IPC boundary, so the
-     * stored boolean is the answer.
+     * The sixth `app_meta` setting and the **fourth** whose value is an object, so this is
+     * {@link readHandlers.flatten_state} with a different key and the same one-line filter: the
+     * blank key and nothing else, because `search_open` stores a `bool` and the frontend reads a
+     * `bool`, leaving no third state to drop. The **section** name is unfiltered for that
+     * handler's reason too — which pages have a search column is TypeScript's vocabulary, and
+     * `useSearchOpen`'s narrowing on the frontend is what the split exists for.
      *
-     * Its first frame matters for the same reason and one of its own: this column is 384px of
-     * the desk, so a story seeded shut that opened wide and snapped closed would not merely
-     * flicker — it would re-pack the deck beside it on the way past.
+     * **The crate's legacy `deck_search_open` bridge has no counterpart here, deliberately.**
+     * `searchopen::stored` falls back to that old row when the map carries no `deck` entry, which
+     * is a fact about a *database written by an older build* — a state a fake with no rows and no
+     * history cannot be in, and one no story wants to stand in.
+     *
+     * Its first frame matters more than most: a column is 384px of the desk, so a story seeded
+     * shut that opened wide and snapped closed would not merely flicker — it would re-pack the
+     * page beside it on the way past.
      *
      * A read, so it answers through a sync like every other one here — the write below does not.
      */
-    deck_search_open: (): boolean => db.deckSearchOpen,
+    search_open: (): Record<string, boolean> =>
+      Object.fromEntries(Object.entries(db.searchOpen).filter(([section]) => section !== "")),
 
     /**
      * `decksort::deck_sort` — how the deck gallery was last ordered, or the default.
@@ -13969,23 +13988,30 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
-     * `deck::set_deck_search_open` — remember whether the search column is open.
+     * `searchopen::set_search_open` — remember whether one docked search column is open.
      *
-     * The **second** write here with nothing but `busy` to refuse, and the paragraph above is
-     * the whole argument: a `boolean` off the IPC boundary has no junk state for a validation
-     * to catch, so adding one would invent a refusal the backend does not make.
+     * {@link writeHandlers.set_flatten_state}'s handler with a different key, down to which half
+     * of the validation survives: the **blank section is refused** and the value is not, a `bool`
+     * off the IPC boundary having no junk state for Tauri's deserializer to have let through. That
+     * asymmetry is argued in full at {@link writeHandlers.set_nav_collapsed}; this is the second
+     * place it lands inside a map.
      *
-     * The row it writes holds `"1"`/`"0"` rather than a JSON boolean — `deck::store_deck_search_open`
-     * — and that is invisible from here on purpose: the fake stores the answered `boolean`,
-     * because the string is a storage detail with no state a story could stand in. Which
-     * spellings the Rust reads back is `deck.rs`'s own test, where the row really is text.
+     * The **section** is unchecked past being non-empty, deliberately — which pages have a search
+     * column is TypeScript's vocabulary and `searchopen.rs` knows only the one word `deck`, and
+     * only for a legacy row it reads and never writes. Only the named section is touched, so the
+     * column on the page beside it keeps its own answer.
      *
-     * It honours `busy` like every other ordinary write here — `deck.rs` takes the write
-     * connection through `sync::with_write`.
+     * **`false` writes an entry rather than removing one**: a reader who rails a column and then
+     * opens it again has made a second choice, not withdrawn the first, and every default here is
+     * `true`, so that second choice is the only thing that can beat it.
+     *
+     * It honours `busy` like every other ordinary write — `searchopen.rs` takes the write
+     * connection through `sync::with_write`, and the lock comes first.
      */
-    set_deck_search_open: (args: { open: boolean }): void => {
+    set_search_open: (args: { section: string; open: boolean }): void => {
       refuseIfBusy(db);
-      db.deckSearchOpen = args.open;
+      if (args.section === "") throw refuse("A search section cannot be blank.");
+      db.searchOpen = { ...db.searchOpen, [args.section]: args.open };
     },
 
     /**

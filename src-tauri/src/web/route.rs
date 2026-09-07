@@ -54,7 +54,6 @@ pub const COMMANDS: &[&str] = &[
     "deck_label_all",
     "format_specs_list",
     "deck_last_format",
-    "deck_search_open",
     "deck_audit_list",
     "deck_theory_slots",
     "deck_theory_diff",
@@ -77,7 +76,6 @@ pub const COMMANDS: &[&str] = &[
     "deck_duplicate",
     "deck_set_folder",
     "deck_set_view_state",
-    "set_deck_search_open",
     "deck_missing_to_wishlist",
     "deck_add_card",
     "deck_set_card_quantity",
@@ -193,6 +191,12 @@ pub const COMMANDS: &[&str] = &[
     "set_deck_sort",
     "flatten_state",
     "set_flatten_state",
+    // **The three docked search columns' shared row**, and both halves for `deck_sort`'s reason.
+    // These two replaced `deck_search_open` / `set_deck_search_open`, which sat up in the deck
+    // cluster while the setting was the deck editor's alone; the map is the collection's and the
+    // wishlist's too, so the pair belongs here with the other view state.
+    "search_open",
+    "set_search_open",
     "error_log_list",
     "error_log_clear",
     "get_marketplace",
@@ -440,11 +444,6 @@ pub fn call(
             encode(command, crate::deck::last_deck_format(&conn))
         }
 
-        "deck_search_open" => {
-            let conn = crate::sync::lock_db_read(state);
-            encode(command, crate::deck::stored_deck_search_open(&conn))
-        }
-
         "deck_audit_list" => {
             let deck_id: i64 = field(command, args, "deckId")?;
             let limit: i64 = field(command, args, "limit")?;
@@ -584,15 +583,6 @@ pub fn call(
                     crate::deck::set_view_state(c, deck_id, &view_state)
                 })
                 .map_err(RouteError::Failed)?,
-            )
-        }
-
-        "set_deck_search_open" => {
-            let open: bool = field(command, args, "open")?;
-            encode(
-                command,
-                crate::sync::with_write(state, |c| crate::deck::store_deck_search_open(c, open))
-                    .map_err(RouteError::Failed)?,
             )
         }
 
@@ -1833,6 +1823,25 @@ pub fn call(
             encode(
                 command,
                 crate::sync::with_write(state, |c| crate::flatten::store(c, &section, flattened))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        // `flatten`'s pair over a different key, and infallible on this side for its reason: a
+        // browser that cannot read the row draws each search column the way the frontend's own
+        // default would have. The read also carries the `deck_search_open` bridge, so a session
+        // opened against a database an older build wrote keeps that column's last state.
+        "search_open" => {
+            let conn = crate::sync::lock_db_read(state);
+            encode(command, crate::searchopen::stored(&conn))
+        }
+
+        "set_search_open" => {
+            let section: String = field(command, args, "section")?;
+            let open: bool = field(command, args, "open")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::searchopen::store(c, &section, open))
                     .map_err(RouteError::Failed)?,
             )
         }

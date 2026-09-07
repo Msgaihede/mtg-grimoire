@@ -85,11 +85,13 @@ pub mod filters;
 /// one predicate over a string — no filesystem, no protocol handler, nothing a browser
 /// lacks. `search.rs` puts a card's URL on a result row from here, and `images` composes
 /// the same three pieces into a cached fetch.
-/// **The four view-state modules, moved here on 2026-08-30.** `flatten`, `listview`, `nav` and
-/// `zoom` each keep one setting in `app_meta` and answer it back - two commands apiece and no
-/// filesystem, no `tokio` and no `reqwest` between them. They were on the other side only
-/// because [`app_meta`] used to live inside the portable updater; PR 10a moved the store and
-/// this moves the four modules that lean on it hardest.
+/// **The five view-state modules, four of them moved here on 2026-08-30.** `flatten`,
+/// `listview`, `nav`, `searchopen` and `zoom` each keep one setting in `app_meta` and answer it
+/// back - two commands apiece and no filesystem, no `tokio` and no `reqwest` between them. The
+/// first four were on the other side only because [`app_meta`] used to live inside the portable
+/// updater; PR 10a moved the store and this moves the modules that lean on it hardest.
+/// [`searchopen`] was born here, on 2026-09-07, when `deck.rs`'s one boolean row became a map
+/// three docked search columns share.
 pub mod flatten;
 pub mod image_uri;
 pub mod index;
@@ -122,6 +124,7 @@ pub mod nav;
 pub mod reset;
 pub mod schema;
 pub mod search;
+pub mod searchopen;
 pub mod slug;
 pub mod sorting;
 /// **Compiles for wasm and can never succeed there**, which is cheaper than gating it and is

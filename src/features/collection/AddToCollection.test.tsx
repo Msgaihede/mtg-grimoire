@@ -2,6 +2,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { buildFolderTree, type FolderNode } from "@/lib/folderTree";
 import type { EntryInput, WishInput } from "@/lib/ipc";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { pickOption } from "@/test-dropdown";
@@ -42,6 +43,34 @@ const BOLT: AddTarget = {
 const written = { id: 7, quantity: 1, removed: false };
 
 /**
+ * Two drawers at the top level of a cabinet — the smallest tree that can tell "the folder it was
+ * given" from "the folder the reader picked instead" apart.
+ *
+ * Built through `buildFolderTree` rather than written out as `FolderNode` literals, because the
+ * `depth`/`count`/`children` fields are that function's arithmetic and a hand-written node is a
+ * fixture that can disagree with the shape every real caller passes.
+ */
+const NODES: readonly FolderNode[] = buildFolderTree(
+  [
+    { id: 7, parentId: null, name: "Rares", sortOrder: 1 },
+    { id: 8, parentId: null, name: "Commons", sortOrder: 2 },
+  ],
+  [],
+);
+
+/** The page's own naming of a destination — `null` is the root and has the list's own word. */
+const folderName = (id: number | null) =>
+  id === null ? "Collection" : (NODES.find((n) => n.folder.id === id)?.folder.name ?? null);
+
+/** The four props this component grew for the two sidebars. Every one optional. */
+interface FolderProps {
+  folderId?: number | null;
+  folderNodes?: readonly FolderNode[];
+  folderName?: (id: number | null) => string | null;
+  lockMode?: "collection" | "wishlist";
+}
+
+/**
  * The `"outer"` rung, mounted *first* exactly as the app mounts one: an outer layer has been
  * listening for Escape since before the popup inside it existed, which is the whole reason the
  * popup has to consume the press in the capture phase.
@@ -55,14 +84,14 @@ function Pane({ onDismiss }: { onDismiss: () => void }) {
   return null;
 }
 
-function wrap(target: AddTarget, paneClose?: () => void) {
+function wrap(target: AddTarget, paneClose?: () => void, props: FolderProps = {}) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   render(
     <QueryClientProvider client={client}>
       {paneClose && <Pane onDismiss={paneClose} />}
-      <AddToCollectionButton target={target} />
+      <AddToCollectionButton target={target} {...props} />
     </QueryClientProvider>,
   );
   return { client };
@@ -70,8 +99,8 @@ function wrap(target: AddTarget, paneClose?: () => void) {
 
 /** Open the popup the way a reader does — from the button, which is where Escape owes the
  *  caret back. */
-async function open(target: AddTarget = BOLT, paneClose?: () => void) {
-  const { client } = wrap(target, paneClose);
+async function open(target: AddTarget = BOLT, paneClose?: () => void, props: FolderProps = {}) {
+  const { client } = wrap(target, paneClose, props);
   const trigger = screen.getByRole("button", { name: new RegExp(`^Add ${target.name}`) });
   await userEvent.click(trigger);
   await screen.findByRole("dialog", { name: `Add ${target.name}` });
@@ -444,9 +473,9 @@ describe("AddToCollectionButton", () => {
     // one copy out of date.
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection"] });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
-    // And every deck: the copy lands unfiled at the root, which is no deck's group — but the
-    // theory list's spare column counts exactly the copies that are in no group, so a copy
-    // added here is a copy some plan may now read as spare.
+    // And every deck: this popup files into user folders and the root, never into a deck's
+    // group — but the theory list's spare column counts exactly the copies that are in no
+    // group, so a copy added here is a copy some plan may now read as spare.
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
     // Refetched, not merely marked. It used to carry `refetchType: "none"` because the only
     // thing this write changed on a result row was a field no view drew; Task 12's badges
@@ -490,11 +519,11 @@ describe("AddToCollectionButton", () => {
   it("says where the open popup is adding to", async () => {
     const { trigger } = await open();
 
-    expect(trigger).toHaveAccessibleName("Add Lightning Bolt (LEA 161) to collection");
+    expect(trigger).toHaveAccessibleName("Add Lightning Bolt (LEA 161) to Collection");
 
     await userEvent.click(screen.getByRole("button", { name: "Wishlist" }));
 
-    expect(trigger).toHaveAccessibleName("Add Lightning Bolt (LEA 161) to wishlist");
+    expect(trigger).toHaveAccessibleName("Add Lightning Bolt (LEA 161) to Wishlist");
   });
 
 
@@ -508,5 +537,147 @@ describe("AddToCollectionButton", () => {
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Somewhere else" })).toHaveFocus();
+  });
+
+  /**
+   * **An absent `folderId` sends no field at all, which is not the same as sending `null`.**
+   *
+   * Both land the copy at the root, so nothing on screen tells them apart — but a surface that
+   * has never thought about folders (the search page, the Tags wall, the printings modal) has
+   * said nothing about where this goes, and an absent field is the only spelling of that. It is
+   * `purchasePrice`'s rule one field over, and it is what keeps this component's three older
+   * call sites byte-identical on the wire.
+   */
+  it("files at the root when it is given no folder", async () => {
+    await open();
+
+    await userEvent.click(screen.getByRole("button", { name: "Add to collection" }));
+
+    const sent = collectionAdd.mock.calls[0][0] as EntryInput;
+    expect(sent).not.toHaveProperty("folderId");
+  });
+
+  /**
+   * The whole point of the sidebar: a reader standing in a drawer files into that drawer.
+   *
+   * `folderId` is part of the row's **storage grain**, so this is an add into a folder and never
+   * an add followed by a move — filing the same printing into two drawers is two rows.
+   */
+  it("files into the folder it is given", async () => {
+    await open(BOLT, undefined, { folderId: 7, folderNodes: NODES, folderName });
+
+    await userEvent.click(screen.getByRole("button", { name: "Add to collection" }));
+
+    expect(collectionAdd).toHaveBeenCalledWith({
+      cardId: "c1",
+      finish: "nonfoil",
+      condition: "NONE",
+      quantity: 1,
+      folderId: 7,
+    });
+  });
+
+  /**
+   * The trigger's name says the destination, and a folder is a destination.
+   *
+   * `DeckSearchPanel`'s rule (`Add Ancient Tomb to Land`) applied: forty of these on a wall are
+   * forty different cards, and on a page with a cabinet open the *drawer* is half of what
+   * pressing one would do.
+   */
+  it("names the folder in the button's accessible name", async () => {
+    const { trigger } = await open(BOLT, undefined, { folderId: 7, folderName });
+
+    expect(trigger).toHaveAccessibleName("Add Lightning Bolt (LEA 161) to Rares");
+  });
+
+  /** At the root the destination is the *list*, in the list's own word — never "no folder",
+   *  which would describe the same drawer the breadcrumb calls Collection. */
+  it("names the list at the root", async () => {
+    const { trigger } = await open(BOLT, undefined, { folderId: null, folderName });
+
+    expect(trigger).toHaveAccessibleName(/to Collection$/);
+
+    await userEvent.click(screen.getByRole("button", { name: "Wishlist" }));
+
+    expect(trigger).toHaveAccessibleName(/to Wishlist$/);
+  });
+
+  /** The wishlist's folders are the same mechanism one table over — `WishInput.folderId` carries
+   *  the identical grain rule, so a wish files into a drawer the same way a copy does. */
+  it("sends a wish into the folder it is given", async () => {
+    await open(BOLT, undefined, { lockMode: "wishlist", folderId: 7, folderName });
+
+    await userEvent.click(screen.getByRole("button", { name: "Add to wishlist" }));
+
+    expect(wishlistAdd).toHaveBeenCalledWith({
+      cardId: "c1",
+      quantity: 1,
+      preferredFinish: "nonfoil",
+      folderId: 7,
+    });
+  });
+
+  /**
+   * The default is where the reader is standing, and the override is how they file one card
+   * somewhere else without leaving the drawer they are in.
+   *
+   * The destination list **replaces the panel's body in place** rather than opening a second
+   * popup: the app's Escape ladder is ordered by registration, so a nested layer would take the
+   * press meant for the panel and getting out of one add would cost two.
+   */
+  it("lets the reader send it somewhere else", async () => {
+    const { trigger } = await open(BOLT, undefined, {
+      folderId: 7,
+      folderNodes: NODES,
+      folderName,
+    });
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Change folder for Lightning Bolt" }),
+    );
+
+    const list = screen.getByRole("group", { name: "File Lightning Bolt in a folder" });
+    // One layer, not two: the list is drawn inside the popup that is already open.
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+
+    await userEvent.click(within(list).getByRole("button", { name: "Commons" }));
+
+    // The trigger renames itself, exactly as it does when the destination *list* changes.
+    expect(trigger).toHaveAccessibleName("Add Lightning Bolt (LEA 161) to Commons");
+
+    await userEvent.click(screen.getByRole("button", { name: "Add to collection" }));
+
+    expect(collectionAdd).toHaveBeenCalledWith(expect.objectContaining({ folderId: 8 }));
+  });
+
+  /** No tree, no picker. The three older call sites draw a card wall with no cabinet behind it,
+   *  so a folder control there would be a list of nowhere. */
+  it("draws no folder row without a tree", async () => {
+    await open(BOLT, undefined, { folderId: 7, folderName });
+
+    expect(
+      screen.queryByRole("button", { name: "Change folder for Lightning Bolt" }),
+    ).not.toBeInTheDocument();
+  });
+
+  /**
+   * A sidebar over the collection adds to the collection, and a chip pair offering the wishlist
+   * would be a control that changes which page the reader is looking at the results of.
+   */
+  it("hides the destination switch when it is locked", async () => {
+    await open(BOLT, undefined, { lockMode: "wishlist" });
+
+    expect(screen.queryByRole("group", { name: "Add to" })).not.toBeInTheDocument();
+    // Locked *to the wishlist*, not merely locked: the wishlist's own form is what is drawn.
+    expect(screen.getByRole("group", { name: "Which printing" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Condition" })).not.toBeInTheDocument();
+  });
+
+  /** And the lock cannot leak: every surface that passes none still gets both lists. */
+  it("keeps the switch when it is not", async () => {
+    await open();
+
+    const chips = within(screen.getByRole("group", { name: "Add to" })).getAllByRole("button");
+    expect(chips.map((c) => c.textContent)).toEqual(["Collection", "Wishlist"]);
   });
 });

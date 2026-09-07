@@ -19,8 +19,8 @@ use crate::{
     camera, card, collection, collection_alloc, collection_folders, combos, db, deck, deck_audit,
     deck_meta, deck_pull, deck_quick_add, deck_theory, deck_tokens, deck_undo, decksort, errors,
     export, flatten, images, import, index, listview, marketplace, marketplace_feed, mirror, nav,
-    paths, reset, schema, scryfall, search, sync, sync_engine, sync_pair, tags, update, wishlist,
-    wishlist_folders, wishlist_optimize, zoom,
+    paths, reset, schema, scryfall, search, searchopen, sync, sync_engine, sync_pair, tags, update,
+    wishlist, wishlist_folders, wishlist_optimize, zoom,
 };
 // **Not in the list above, because this file compiles for Android too.** Its name says
 // `desktop`, but its gate is `cfg(not(target_family = "wasm"))` — desktop *and* mobile — while
@@ -436,8 +436,6 @@ pub fn run() {
             deck::deck_played_keys,
             deck::deck_ids_playing,
             deck::deck_last_format,
-            deck::deck_search_open,
-            deck::set_deck_search_open,
             deck::deck_add_card,
             deck::deck_set_card_quantity,
             deck::deck_category_clear,
@@ -494,6 +492,8 @@ pub fn run() {
             nav::set_nav_collapsed,
             listview::list_view,
             listview::set_list_view,
+            searchopen::search_open,
+            searchopen::set_search_open,
             decksort::deck_sort,
             decksort::set_deck_sort,
             flatten::flatten_state,

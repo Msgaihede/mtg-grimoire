@@ -114,7 +114,7 @@ move a stored preference and change nothing visible.
 
 `DeckSearchPanel` keeps its tab strip, `CollectionSearchTab`, `categories`/`targetCategoryId`/
 `AUTO_CATEGORY`/`autoCategoryFor`, `deck_add_card`, the landed glow, `availableForDeck`, and
-`defaultFormat` seeding from the open deck's format. None of it moves and none of its 51 tests
+`defaultFormat` seeding from the open deck's format. None of it moves and none of its 50 tests
 change — they are the proof the extraction was faithful.
 
 ## 4. Layout
@@ -351,7 +351,7 @@ anywhere `readersOwnLevel(to)` allows — and the drop branches to an **add** ra
 
 ## 9. Testing
 
-**The refactor's proof is that nothing changes.** `DeckSearchPanel.test.tsx`'s 51 cases and
+**The refactor's proof is that nothing changes.** `DeckSearchPanel.test.tsx`'s 50 cases and
 `DeckSearchPanel.stories.tsx`'s 10 stories are not rewritten; if the extraction is faithful they
 stay green untouched, and any edit to one of them is a signal that behaviour moved.
 

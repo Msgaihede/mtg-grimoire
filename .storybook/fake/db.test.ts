@@ -7965,6 +7965,16 @@ describe("the busy fault", () => {
     // for them than for their neighbours: a handler that forgot `refuseIfBusy` would have a
     // one-line body, and nothing else in the file would notice.
     //
+    // **The second of those two is called `set_search_open` since 2026-09-07 and the number did
+    // not move**, which is the one shape of change this comment had not yet recorded: the deck
+    // editor's boolean row became a map keyed by section when the collection and the wishlist grew
+    // the same column, so one handler left and one arrived in the same commit. A rename is a 1:1
+    // swap and a delta of zero — and it is still re-counted by running the sweep, because a
+    // rename landing beside somebody else's addition is exactly the merge the paragraphs below
+    // are about. It did gain the half-validation its old self had none of (a blank section is
+    // refused), which changes nothing here: every handler in this loop reaches `refuseIfBusy`
+    // before it looks at an argument.
+    //
     // The deck-driven collection then added `set_deck_driven_collection`, 53 → 54 — the
     // **third** of those one-line boolean writes and on exactly the same split — and its
     // removal took it back out again, 60 → 59. That is the one move recorded here that goes
@@ -7983,7 +7993,7 @@ describe("the busy fault", () => {
     // **That figure was 54 + 6, and this rung had been reconciled at a merge three times**
     // before the deck-driven write was deleted out of it again. The wishlist branch wrote
     // 52 → 58 against a tree holding `set_nav_collapsed` alone, then 53 → 59 once
-    // `set_deck_search_open` landed, and then 54 → 60 beside the deck-driven write. Each was
+    // the search column's own write landed, and then 54 → 60 beside the deck-driven write. Each was
     // right about the tree it was in and none predicted the merge — which is the whole of why
     // this file's own rule says never to add one branch's delta to another's total. Measured
     // again at 59 on 2026-08-23, with `set_deck_driven_collection` gone.

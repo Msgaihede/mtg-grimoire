@@ -40,41 +40,52 @@
  * **Eight settings carry no struct at all.** Each is one `app_meta` row: three answered as a
  * bare string — `getMarketplace`/`setMarketplace` (`src-tauri/src/marketplace.rs`),
  * `printingGroupBy`/`setPrintingGroupBy` (`src-tauri/src/card.rs`) and
- * `deckSort`/`setDeckSort` (`src-tauri/src/decksort.rs`) — three as a bare map,
+ * `deckSort`/`setDeckSort` (`src-tauri/src/decksort.rs`) — four as a bare map,
  * `cardZoom`/`setCardZoom` (`src-tauri/src/zoom.rs`), `listView`/`setListView`
- * (`src-tauri/src/listview.rs`) and `flattenState`/`setFlattenState`
- * (`src-tauri/src/flatten.rs`), and two as a
- * bare `boolean`: `navCollapsed`/`setNavCollapsed` (`src-tauri/src/nav.rs`) and
- * `deckSearchOpen`/`setDeckSearchOpen` (`src-tauri/src/deck.rs`). All eight are
+ * (`src-tauri/src/listview.rs`), `flattenState`/`setFlattenState`
+ * (`src-tauri/src/flatten.rs`) and `searchOpen`/`setSearchOpen`
+ * (`src-tauri/src/searchopen.rs`), and one as a
+ * bare `boolean`: `navCollapsed`/`setNavCollapsed` (`src-tauri/src/nav.rs`). All eight are
  * the shape a stored preference has to have: the read falls back on its default for a row that
  * is missing *or* holds a value this build does not recognise, and only the *write* refuses.
  *
- * Six of them are therefore typed loosely here rather than as their unions: the narrowing
+ * Seven of them are therefore typed loosely here rather than as their unions: the narrowing
  * belongs to the module that owns the vocabulary (`@/lib/marketplace`,
  * `@/features/card/printings`, `@/lib/cardZoom`, `@/lib/store` for both of its two rows,
- * `@/features/decks/deckSort`), and a
+ * `@/features/decks/deckSort`, `@/features/search/useSearchOpen`), and a
  * row a newer build wrote
  * must reach this side as what it is. **The deck sort is the one where the *write* refuses
  * nothing either**, and it is the rule above meeting a vocabulary the backend does not have
  * rather than an exception to it: three of the six sort keys are computed on this side, so
- * `deck_sort.rs` has no list to check a word against — see {@link ipc.setDeckSort}. **The two booleans are the ones with no narrowing to do**, and that is
+ * `deck_sort.rs` has no list to check a word against — see {@link ipc.setDeckSort}. **The one bare boolean left is the one with no narrowing to do**, and that is
  * the same argument arriving at nothing rather than an exception to it: a boolean has no
  * vocabulary for a later build to have widened, so there is no third state a row could come back
- * in. Each far end folds a missing row, a junk row and an unreadable one alike into its own
- * default — `false` for the nav rail, which is expanded, and `true` for the deck editor's search
- * column, which is open — and `boolean` here is the whole of the type, with nothing left for this
- * side to decide. Both store `"1"`/`"0"` and read anything else as that default, so a hand-edit
+ * in. Its far end folds a missing row, a junk row and an unreadable one alike into one
+ * default — `false` for the nav rail, which is expanded — and `boolean` here is the whole of the
+ * type, with nothing left for this
+ * side to decide. It stores `"1"`/`"0"` and reads anything else as that default, so a hand-edit
  * or a spelling a future build invents is already collapsed before it reaches the wire.
  *
- * The zoom row, the list-layout row and the flatten row are the three of the seven whose *shape*
+ * **There were two of those booleans until 2026-09-07**, and where the second one went says more
+ * about the split above than either paragraph does. `deckSearchOpen` was one row for one
+ * column; the collection and the wishlist growing the same docked search would have made it
+ * three rows, six commands, three query keys and three prefetches for one fact. It is
+ * {@link ipc.searchOpen} now, a map keyed by section — so the setting moved out of the boolean
+ * paragraph and into the map one without a word of either argument changing.
+ *
+ * The zoom row, the list-layout row, the flatten row and the search-column row are the four of
+ * the eight whose *shape*
  * is a map, and the
  * difference is worth a sentence: none has a single default to fall back on, because there are
- * seven walls, four lists and two cabinets and each one has been touched or not. So the backend
+ * seven walls, four lists, two cabinets and three search columns and each one has been touched
+ * or not. So the backend
  * answers only
  * what it has, and a section it says nothing about keeps the default the store was built with.
- * **The flatten row is the one where the keys are a vocabulary and the values are not** — which
+ * **The flatten row and the search-column row are the two where the keys are a vocabulary and
+ * the values are not** — which
  * is the two arguments above meeting in one row rather than a third kind of setting: *which*
- * pages file cards is `@/lib/store`'s to say, while a `bool` has no junk state for a later build
+ * pages file cards is `@/lib/store`'s to say and *which* pages carry a search column is
+ * `@/features/search/useSearchOpen`'s, while a `bool` has no junk state for a later build
  * to have widened. So `isFlattenSection` narrows the key, and the only thing `hydrateFlatten`
  * asks of the value is that it really is a boolean — which is a check on the *wire*, not on a
  * vocabulary: this file's `boolean` is a claim about what the far end sends, and a row that has
@@ -6508,22 +6519,45 @@ export const ipc = {
   setFlattenState: (section: string, flattened: boolean) =>
     invoke<void>("set_flatten_state", { section, flattened }),
   /**
-   * Whether the deck editor's card search column was last left open.
+   * Whether each of the app's docked card-search columns was last left open, as section name →
+   * open.
    *
-   * The **fifth** `app_meta` setting and the second bare `boolean`, arriving on the same day as
-   * {@link navCollapsed} above and answering the same way — see this file's header. Its default
-   * is the other one's mirror image and both are the state the reader has never asked about:
-   * `true`, the column open, which is issue #183's reversal of a disclosure that used to open
-   * shut. `true` again for a row holding anything but the `"1"`/`"0"` the backend writes.
+   * The **fifth** `app_meta` setting — it stands exactly where `deckSearchOpen` stood, having
+   * replaced it on 2026-09-07 — and the **fourth** whose shape is a map. See this file's header,
+   * and {@link flattenState} beside it, whose contract this copies whole down to the value type.
+   * **A section is absent rather than defaulted**: which pages have a search column at all is
+   * this side's (`@/features/search/useSearchOpen`), so a missing entry means the reader has
+   * never touched that disclosure and the backend does not invent a preference it does not own.
+   * **Infallible by signature** — a whole unreadable row answers `{}`, which is every column
+   * drawn the way `DEFAULT_SEARCH_OPEN` says.
+   *
+   * **What it replaced was a bare `boolean` for the deck editor alone**, and the swap is the
+   * header's paragraph in one line: one row, one command pair and one query key now answer for
+   * three columns. The deck's old `deck_search_open` row is carried across by `searchopen.rs`'s
+   * *read* rather than by a schema rung, so nothing on this side has ever heard of it.
+   *
+   * `Record<string, boolean>` and not `Record<SearchSection, boolean>`, for {@link listView}'s
+   * reason on the key half only: the keys are whatever some build of this app wrote, so
+   * `useSearchOpen` narrows them. The **values** have no vocabulary to narrow, which is why the
+   * type says `boolean` — and that hook still checks it, because the word is a promise about
+   * the far end rather than a fact about the row.
    */
-  deckSearchOpen: () => invoke<boolean>("deck_search_open"),
+  searchOpen: () => invoke<Record<string, boolean>>("search_open"),
   /**
-   * Remember the answer. Nothing to refuse — a `bool` cannot carry a value the row could not
-   * hold — so unlike {@link setPrintingGroupBy} this one's only failure is the BUSY every write
-   * command takes while a sync holds the write connection, which costs the reader the next
-   * launch's starting state and nothing this session.
+   * Remember one column's disclosure, leaving the other entries in the row alone.
+   *
+   * Two arguments where some of its neighbours take one, and Tauri matches by name. Rejects a
+   * blank section and nothing else: a `bool` off the IPC boundary has no junk state for a
+   * validation to catch, so unlike {@link setListView} there is no word to refuse —
+   * {@link setFlattenState}'s asymmetry exactly, on a row whose *keys* also belong to this side.
+   *
+   * Answers `collection::BUSY` under a running sync, like every other write, and the caller
+   * deliberately does not put the column back when it does — {@link setNavCollapsed}'s trade,
+   * for its reason: a refusal costs the reader nothing they can see this session and only the
+   * next launch's starting state for that column.
    */
-  setDeckSearchOpen: (open: boolean) => invoke<void>("set_deck_search_open", { open }),
+  setSearchOpen: (section: string, open: boolean) =>
+    invoke<void>("set_search_open", { section, open }),
   /**
    * How the deck gallery was last ordered — one `app_meta` row holding `"<key>:<direction>"`,
    * e.g. `"updated:desc"`.

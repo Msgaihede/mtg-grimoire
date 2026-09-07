@@ -2,6 +2,7 @@ import { useCallback, useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 import { parseFinishes } from "@/lib/finish";
+import { buildFolderTree } from "@/lib/folderTree";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { openDropdown } from "@/test-dropdown";
 import { printing } from "../../../.storybook/fake/fixtures";
@@ -31,6 +32,38 @@ function target(setCode: string, collectorNumber: string): AddTarget {
     oracleId: row.oracleId,
     finishes: parseFinishes(row.finishes),
   };
+}
+
+/**
+ * A cabinet with two drawers at its top level, and a sub-drawer under one of them.
+ *
+ * Written here rather than taken from the fake's world because these stories are about the
+ * *component's* props: the panel's caller hands it a `FolderNode[]` and a way to name one, and
+ * nothing in this file mounts a collection page to derive them from. Built through
+ * `buildFolderTree` all the same — `depth`, `count` and `children` are that function's
+ * arithmetic, and a hand-written node is a fixture that can disagree with every real caller.
+ */
+const FOLDERS = buildFolderTree(
+  [
+    { id: 1, parentId: null, name: "Rares", sortOrder: 1 },
+    { id: 2, parentId: 1, name: "Reserved list", sortOrder: 1 },
+    { id: 3, parentId: null, name: "Commons", sortOrder: 2 },
+  ],
+  [],
+);
+
+/** The page's own naming of a destination. `null` is the root, in the list's own word. */
+function folderNameOf(id: number | null): string | null {
+  if (id === null) return "Collection";
+  const walk = (nodes: typeof FOLDERS): string | null => {
+    for (const node of nodes) {
+      if (node.folder.id === id) return node.folder.name;
+      const found = walk(node.children);
+      if (found !== null) return found;
+    }
+    return null;
+  };
+  return walk(FOLDERS);
 }
 
 /**
@@ -115,7 +148,7 @@ const meta = {
           "not a state a keyboard has. That is the *caller's* half: `REVEAL_ON_HOVER` is a class " +
           "the surface passes in, so every story below draws the trigger plainly.\n\n" +
           "**The trigger is named for the card, the printing and the destination** — `Add " +
-          "Lightning Bolt (2X2 117) to collection` — never “Add”. Forty of these in a printings " +
+          "Lightning Bolt (2X2 117) to Collection` — never “Add”. Forty of these in a printings " +
           "list are forty different cards, and the destination is whatever the popup was last " +
           "set to: `mode` lives on the trigger and outlives a close (`AddToCollection.tsx:76-78`), " +
           "which is the right answer for a reader working down a list adding wishes.\n\n" +
@@ -133,6 +166,14 @@ const meta = {
           "outside click deliberately does not. {@link EscapeClosesThePopupNotTheLayerBehindIt} and " +
           "{@link ClickingAwayClosesIt} are those two, and `App.test.tsx` owns the full-stack " +
           "version over the *set filter* rather than this popup.\n\n" +
+          "**Four optional props turn it into a sidebar's `+`, and every one of them is absent " +
+          "on the three surfaces above.** `folderId` is the drawer the reader is standing in " +
+          "and is where a press files; `folderNodes` and `folderName` draw the Folder row that " +
+          "sends one card somewhere else; `lockMode` pins the destination list and hides the " +
+          "switch. **Absent is not `null`** — `null` is a page with a cabinet on screen saying " +
+          "*the root*, absent is a surface that has never thought about folders, and only the " +
+          "first sends a `folderId` field at all. {@link WithFolder} and {@link Locked} are the " +
+          "two halves.\n\n" +
           "**One state has no story: the wishlist's “Any printing” refusal.** The control is " +
           "disabled when `target.oracleId` is null (`AddToCollection.tsx:353`) — disabled rather " +
           "than hidden, because a choice that silently disappears is one the reader has no " +
@@ -163,7 +204,7 @@ export const Closed: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const trigger = canvas.getByRole("button", {
-      name: "Add Lightning Bolt (2X2 117) to collection",
+      name: "Add Lightning Bolt (2X2 117) to Collection",
     });
     await expect(trigger).toHaveAttribute("aria-haspopup", "dialog");
     await expect(trigger).toHaveAttribute("aria-expanded", "false");
@@ -192,7 +233,7 @@ export const Open: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const trigger = canvas.getByRole("button", {
-      name: "Add Lightning Bolt (2X2 117) to collection",
+      name: "Add Lightning Bolt (2X2 117) to Collection",
     });
     await userEvent.click(trigger);
 
@@ -251,7 +292,7 @@ export const PurchasePrice: Story = {
     const user = userEvent.setup();
     const canvas = within(canvasElement);
     await user.click(
-      canvas.getByRole("button", { name: "Add Lightning Bolt (2X2 117) to collection" }),
+      canvas.getByRole("button", { name: "Add Lightning Bolt (2X2 117) to Collection" }),
     );
 
     const popup = canvas.getByRole("dialog", { name: "Add Lightning Bolt" });
@@ -300,7 +341,7 @@ export const AllThreeFinishes: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await userEvent.click(
-      canvas.getByRole("button", { name: "Add Lightning Bolt (STA 105) to collection" }),
+      canvas.getByRole("button", { name: "Add Lightning Bolt (STA 105) to Collection" }),
     );
 
     const finishes = canvas.getByRole("group", { name: "Finish" });
@@ -340,7 +381,7 @@ export const FoilOnlyPrinting: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await userEvent.click(
-      canvas.getByRole("button", { name: "Add Sol Ring (SLD 913) to collection" }),
+      canvas.getByRole("button", { name: "Add Sol Ring (SLD 913) to Collection" }),
     );
 
     const finishes = canvas.getByRole("group", { name: "Finish" });
@@ -385,7 +426,7 @@ export const Conditions: Story = {
     const user = userEvent.setup();
     const canvas = within(canvasElement);
     await user.click(
-      canvas.getByRole("button", { name: "Add Lightning Bolt (2X2 117) to collection" }),
+      canvas.getByRole("button", { name: "Add Lightning Bolt (2X2 117) to Collection" }),
     );
 
     const popup = canvas.getByRole("dialog", { name: "Add Lightning Bolt" });
@@ -429,7 +470,7 @@ export const Conditions: Story = {
  * pressing it again would do.
  *
  * `mode` lives on the trigger rather than in the popup (`AddToCollection.tsx:76-78`): a control
- * reading "…to collection" over an open wishlist form is wrong about itself, and the choice
+ * reading "…to Collection" over an open wishlist form is wrong about itself, and the choice
  * outlives a close so a reader working down a printings list adding wishes is not asked again on
  * every row.
  *
@@ -446,7 +487,7 @@ export const WishlistMode: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await userEvent.click(
-      canvas.getByRole("button", { name: "Add Lightning Bolt (2X2 117) to collection" }),
+      canvas.getByRole("button", { name: "Add Lightning Bolt (2X2 117) to Collection" }),
     );
 
     const popup = canvas.getByRole("dialog", { name: "Add Lightning Bolt" });
@@ -454,7 +495,7 @@ export const WishlistMode: Story = {
 
     // The trigger now says where a press would go.
     await expect(
-      canvas.getByRole("button", { name: "Add Lightning Bolt (2X2 117) to wishlist" }),
+      canvas.getByRole("button", { name: "Add Lightning Bolt (2X2 117) to Wishlist" }),
     ).toBeInTheDocument();
     // No grade to record on a card nobody owns yet, and no price either — nothing has been
     // bought, and the wishlist table has no column to put one in.
@@ -494,7 +535,7 @@ export const Busy: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await userEvent.click(
-      canvas.getByRole("button", { name: "Add Lightning Bolt (2X2 117) to collection" }),
+      canvas.getByRole("button", { name: "Add Lightning Bolt (2X2 117) to Collection" }),
     );
 
     const popup = canvas.getByRole("dialog", { name: "Add Lightning Bolt" });
@@ -544,7 +585,7 @@ export const EscapeClosesThePopupNotTheLayerBehindIt: Story = {
     const canvas = within(canvasElement);
     const layer = await canvas.findByRole("complementary", { name: "Card details" });
     const trigger = await within(layer).findByRole("button", {
-      name: "Add Lightning Bolt (2X2 117) to collection",
+      name: "Add Lightning Bolt (2X2 117) to Collection",
     });
     await userEvent.click(trigger);
     await expect(within(layer).getByRole("dialog", { name: "Add Lightning Bolt" })).toHaveFocus();
@@ -575,7 +616,7 @@ export const ClickingAwayClosesIt: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const trigger = canvas.getByRole("button", {
-      name: "Add Lightning Bolt (2X2 117) to collection",
+      name: "Add Lightning Bolt (2X2 117) to Collection",
     });
     await userEvent.click(trigger);
     await expect(canvas.getByRole("dialog", { name: "Add Lightning Bolt" })).toHaveFocus();
@@ -589,5 +630,121 @@ export const ClickingAwayClosesIt: Story = {
     });
     await expect(trigger).toHaveAttribute("aria-expanded", "false");
     await expect(trigger).not.toHaveFocus();
+  },
+};
+
+/**
+ * **The press files into the drawer the reader is standing in** — and the trigger says so.
+ *
+ * This is the whole of what the collection's and the wishlist's search sidebars needed. A reader
+ * filing a binder used to leave the binder, search, file at the root, come back and move what
+ * they had just filed; the page hands this popup its own `folderId` and the copy lands where
+ * they already were. `folderId` is part of the row's **storage grain**, so this is an add into a
+ * folder and never an add followed by a move: filing the same printing into two drawers is two
+ * rows.
+ *
+ * **Absent and `null` are two different things on the wire.** `null` is a page with a cabinet on
+ * screen saying *the root*; absent is a surface that has never thought about folders at all —
+ * every other story in this file — and it sends no `folderId` field. That is `purchasePrice`'s
+ * rule one field over, and it is what keeps the search page, the Tags wall and the printings
+ * modal byte-identical while this component grows a cabinet.
+ *
+ * **The override swaps the panel's body in place rather than opening a second popup.** An
+ * `AnchoredPopup` inside an `AnchoredPopup` is two Escape rungs and two focus boundaries for one
+ * decision, and the app's ladder is ordered by *registration* — so the nested layer would take
+ * the press the reader meant for the panel and getting out of one add would cost two.
+ * `MoveToFolder` is asked for its `inline` shape by name, which carries the role with the box:
+ * inline the list is a `group`, so the popup stays the one dialog in the tree.
+ *
+ * The picked drawer is the trigger's name too, exactly as the destination *list* is. What it
+ * deliberately does not do is outlive the page moving: the default is where the reader is
+ * standing, so walking into another drawer throws an override away.
+ */
+export const WithFolder: Story = {
+  args: { folderId: 1, folderNodes: FOLDERS, folderName: folderNameOf },
+  play: async ({ canvasElement }) => {
+    const user = userEvent.setup();
+    const canvas = within(canvasElement);
+    const trigger = canvas.getByRole("button", {
+      name: "Add Lightning Bolt (2X2 117) to Rares",
+    });
+    await user.click(trigger);
+
+    const popup = canvas.getByRole("dialog", { name: "Add Lightning Bolt" });
+    await expect(within(popup).getByText("Folder")).toBeInTheDocument();
+
+    await user.click(
+      within(popup).getByRole("button", { name: "Change folder for Lightning Bolt" }),
+    );
+
+    const list = within(popup).getByRole("group", { name: "File Lightning Bolt in a folder" });
+    // One layer, not two — the destination list is drawn *into* the popup that is already open.
+    await expect(canvas.getAllByRole("dialog")).toHaveLength(1);
+    // The root row is the list's own word, never "All decks" and never "No folder"; the tree is
+    // indented under it, and the drawer the popup is already filing into is offered inert.
+    await expect(
+      within(list)
+        .getAllByRole("button")
+        .map((b) => b.textContent?.replace("Here now", "")),
+    ).toEqual(["Collection", "Rares", "Reserved list", "Commons"]);
+    await expect(within(list).getByRole("button", { name: /^Rares/ })).toBeDisabled();
+
+    await user.click(within(list).getByRole("button", { name: "Reserved list" }));
+
+    // Back on the main pane, with the new destination in both places that state one.
+    await expect(
+      canvas.getByRole("button", { name: "Add Lightning Bolt (2X2 117) to Reserved list" }),
+    ).toBeInTheDocument();
+    await expect(within(popup).getByText("Reserved list")).toBeInTheDocument();
+
+    await user.click(within(popup).getByRole("button", { name: "Add to collection" }));
+    await waitFor(async () => {
+      await expect(within(popup).getByRole("status")).toHaveTextContent(
+        "Added 1 × Lightning Bolt to your collection.",
+      );
+    });
+  },
+};
+
+/**
+ * **A sidebar over the wishlist adds to the wishlist**, and the switch is gone.
+ *
+ * `lockMode` pins the destination list and hides the `Collection` / `Wishlist` pair — not greyed,
+ * *absent*, because there is nothing here for a reason to explain: the popup is drawn beside the
+ * list it fills, so a chip pair offering the other one would be a control that changes which page
+ * the results the reader is looking at belong to. It would also offer the wrong cabinet, since
+ * the tree handed down belongs to the locked list.
+ *
+ * Everything else the wishlist's arm does is unchanged, which is the second half of what this
+ * story pins: no grade and no purchase price on a card nobody owns yet, and **This printing /
+ * Any printing** in their place.
+ *
+ * The trigger names the pinned list like any other destination — `mode` still says what pressing
+ * it would do, it simply cannot be changed from in here.
+ */
+export const Locked: Story = {
+  args: { lockMode: "wishlist" },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const trigger = canvas.getByRole("button", {
+      name: "Add Lightning Bolt (2X2 117) to Wishlist",
+    });
+    await userEvent.click(trigger);
+
+    const popup = canvas.getByRole("dialog", { name: "Add Lightning Bolt" });
+    await expect(within(popup).queryByRole("group", { name: "Add to" })).toBeNull();
+    await expect(within(popup).queryByRole("button", { name: "Collection" })).toBeNull();
+
+    // Locked *to the wishlist*, not merely locked: the wishlist's own form is what is drawn.
+    await expect(within(popup).getByRole("group", { name: "Which printing" })).toBeInTheDocument();
+    await expect(within(popup).queryByRole("button", { name: "Condition" })).toBeNull();
+    await expect(within(popup).queryByRole("textbox", { name: "Purchase price" })).toBeNull();
+
+    await userEvent.click(within(popup).getByRole("button", { name: "Add to wishlist" }));
+    await waitFor(async () => {
+      await expect(within(popup).getByRole("status")).toHaveTextContent(
+        "Added 1 × Lightning Bolt to your wishlist.",
+      );
+    });
   },
 };
