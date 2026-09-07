@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { EXPORT_FORMATS, formatExport, omittedCount } from "./format";
+import {
+  dropsInactive,
+  EXPORT_FORMATS,
+  formatExport,
+  inactiveCopies,
+  isActivePile,
+  omittedCount,
+} from "./format";
 import { defaultFields } from "../fields";
 import { transferCard } from "../fixtures";
 import type { TransferCard } from "../TransferCard";
@@ -280,6 +287,129 @@ describe("formatExport", () => {
       formatExport(cards, "moxfield", defaultFields("moxfield", "deck")),
     );
     expect(moxfield.lines.map((l) => [l.section, l.excluded])).toEqual([["maybeboard", false]]);
+  });
+});
+
+/**
+ * The switched-off pile, asked about from **outside** the writer — issue #390's half of this
+ * file.
+ *
+ * `formatExport` is unchanged by that issue and this section is why: the reader's own
+ * `Include inactive categories` box is a **row filter applied in the dialog**, exactly as the
+ * Arena one is, so the writer keeps its `(cards, format, fields) => string` shape, the golden
+ * corpus needs no new bytes and `src-tauri/src/transfer/` needs no new port. What the dialog
+ * needed instead was three answers this file already knew privately — is this format going to
+ * decide for itself, is this row in a switched-off pile, and how many copies are — and the whole
+ * of the change is that each is now a named export with a test under it.
+ *
+ * **The three are tested here rather than through the dialog because they are the part that can
+ * be wrong quietly.** A checkbox drawn in the wrong place is visible; a count that describes a
+ * different file than the one Copy puts on the clipboard is not.
+ */
+describe("the switched-off pile, from outside the writer", () => {
+  /**
+   * Exactly two formats answer this for themselves, and the pair is asserted **by name** rather
+   * than by a count — `decklists.test.ts`'s `READABLE` pin, one directory over, for the same
+   * reason. A format leaving or joining `ACTIVE_ONLY` is a decision about what a reader's file
+   * contains, so it should arrive as a red build naming the format rather than as `3` where `2`
+   * used to be, which reads as arithmetic and gets updated without being read.
+   *
+   * The consequence the dialog turns on: these two are the formats where the box is **not
+   * drawn**. Arena and MTGO have no maybeboard, so writing one produces an illegal import at the
+   * other end, and no preference may turn that back on — a checkbox that cannot move the file is
+   * furniture.
+   */
+  it("names arena and mtgo as the formats that answer for themselves", () => {
+    expect(EXPORT_FORMATS.filter(dropsInactive)).toEqual(["mtgo", "arena"]);
+  });
+
+  /**
+   * `isActivePile` is `categoryActive !== false`, and the arm worth writing a test for is the
+   * **`null`** one.
+   *
+   * `null` is not a third answer to "is this pile switched on" — it is a row from a surface that
+   * has no piles at all, where the question was never asked. **`categoryActive === true` is the
+   * spelling that looks equivalent and is not**, and the two are indistinguishable on the only
+   * surface anybody would think to check: every deck row carries a real boolean, so both answer
+   * identically on all of them.
+   *
+   * Where they differ is a collection or a wishlist, and the reader gets there without touching
+   * a checkbox at all — `written` filters by this same predicate for Arena and MTGO, whatever
+   * anybody asked, so the wrong spelling makes an Arena export of a collection the empty string
+   * with every row silently gone. The last assertion here is that path rather than the
+   * predicate, because it is the one that ships.
+   */
+  it("counts a pile-less row as active, because nothing there was ever switched off", () => {
+    const pileless = card({ categoryName: null, categoryKind: null, categoryActive: null });
+    expect(isActivePile(card({ categoryActive: true }))).toBe(true);
+    expect(isActivePile(card({ categoryActive: false }))).toBe(false);
+    expect(isActivePile(pileless)).toBe(true);
+    expect(formatExport([pileless], "arena", defaultFields("arena", "collection"))).toBe(
+      "1 Sol Ring (LTC) 285\n",
+    );
+  });
+
+  /**
+   * **Copies, never rows.** Six basic lands on one cut row are six cards that will not be in the
+   * file, and "1 card" would be a true statement about the array and a false one about the deck
+   * — which is the sentence the reader is actually owed, since they are about to paste this
+   * somewhere and count it.
+   *
+   * Two rows carrying eight copies, so the two implementations answer different numbers: a
+   * `reduce` over `quantity` says 8 and a `filter(...).length` says 2. A one-copy fixture would
+   * pass under both, which is how this rule gets tidied away.
+   */
+  it("counts copies rather than rows", () => {
+    const cards = [
+      card({ name: "Forest", quantity: 6, categoryName: "Cuts", categoryActive: false }),
+      card({ name: "Mox Amber", quantity: 2, categoryName: "Cuts", categoryActive: false }),
+    ];
+    expect(inactiveCopies(cards)).toBe(8);
+  });
+
+  it("answers zero over a list with nothing switched off", () => {
+    expect(inactiveCopies([BOLT, PATHWAY, card({ quantity: 4 })])).toBe(0);
+  });
+
+  /** And zero over a surface that has no piles — the `null` arm above read at list scale. A
+   *  collection export can never hold anything back this way, which is the same fact
+   *  `SURFACE_HAS_PILES` states one file up and the reason the box is not drawn there. */
+  it("answers zero over rows from a surface with no piles", () => {
+    const rows = [
+      card({ quantity: 4, categoryName: null, categoryKind: null, categoryActive: null }),
+      card({ quantity: 9, categoryName: null, categoryKind: null, categoryActive: null }),
+    ];
+    expect(inactiveCopies(rows)).toBe(0);
+  });
+
+  /**
+   * **`omittedCount` is `inactiveCopies` behind the `dropsInactive` gate, and that lifting is
+   * the entire reason `inactiveCopies` is a function at all.**
+   *
+   * The dialog computes its own held-back count from `inactiveCopies` behind the *complementary*
+   * half of the same gate — the reader's box is offered only where the format has not already
+   * decided — so the two numbers are one piece of arithmetic read through two fences. Written
+   * twice they could drift, and the failure would be a line under the format radios that
+   * describes a different file from the one Copy puts on the clipboard: silent, plausible, and
+   * wrong in exactly the direction a reader would not check.
+   *
+   * The expectation is spelled with the format **names** and a literal 8 rather than with
+   * `dropsInactive` and `inactiveCopies` themselves. Reading the implementation's own two
+   * expressions back at it would make this pass over any pair of broken halves that happened to
+   * agree; the test above pins which formats those names are.
+   */
+  it("is inactiveCopies behind the dropsInactive gate, so the two cannot drift", () => {
+    const cards = [
+      card({ name: "Forest", quantity: 6, categoryName: "Cuts", categoryActive: false }),
+      card({ name: "Mox Amber", quantity: 2, categoryName: "Cuts", categoryActive: false }),
+      card({ name: "Sol Ring", quantity: 1 }),
+    ];
+    expect(inactiveCopies(cards)).toBe(8);
+    for (const format of EXPORT_FORMATS) {
+      expect(omittedCount(cards, format), format).toBe(
+        format === "arena" || format === "mtgo" ? 8 : 0,
+      );
+    }
   });
 });
 
