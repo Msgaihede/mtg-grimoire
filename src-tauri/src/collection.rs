@@ -22,13 +22,46 @@ use std::collections::BTreeMap;
 #[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
-/// The NA condition scale, in descending order. The EU scale (`M/NM/EX/GD/LP/PL/PO`) is
-/// normalised into this one at the edge — see `src/lib/conditions.ts` — and the string it
-/// arrived as is kept in `condition_original`.
-pub const CONDITIONS: [&str; 5] = ["NM", "LP", "MP", "HP", "DMG"];
+/// The NA condition scale, in descending order, with the **not-set sentinel in front of it**.
+/// The EU scale (`M/NM/EX/GD/LP/PL/PO`) is normalised into this one at the edge — see
+/// `src/lib/conditions.ts` — and the string it arrived as is kept in `condition_original`.
+///
+/// `NONE` leads the list because it is the *default* rather than a grade, and every dropdown
+/// built from this array opens on its first entry. It is deliberately not where it **sorts**:
+/// [`COLLECTION_SORTS`]' `finish` key ranks it last, after `DMG`, so the scale stays a scale and
+/// the ungraded pile lands at the end of it. A list that is neither alphabetical nor its own sort
+/// order is worth the sentence it costs to say why.
+pub const CONDITIONS: [&str; 6] = ["NONE", "NM", "LP", "MP", "HP", "DMG"];
 
-/// What a card is assumed to be when nobody says otherwise.
-pub const DEFAULT_CONDITION: &str = "NM";
+/// What a write records when nobody says otherwise — and it is no longer a guess.
+///
+/// This was `NM` until 2026-09-07, which meant an add stating no grade recorded the **best**
+/// grade on the scale: the app answering a question about a physical card on the reader's behalf,
+/// in their favour, with nothing on the row to say that it had. `NONE` is the answer that says
+/// nothing, so an unmarked card is no longer *assumed* to be anything.
+///
+/// **Existing rows keep the grade they have.** A database full of `NM` stays full of `NM`,
+/// because nothing can tell which of those the reader meant and which the app chose for them —
+/// the v35 rung in `schema.rs` rebuilds the table for the widened `CHECK` and touches no value.
+pub const DEFAULT_CONDITION: &str = "NONE";
+
+/// The stored grade that means *the reader did not say*, for the code that means the sentinel
+/// rather than the default.
+///
+/// The same string as [`DEFAULT_CONDITION`] and not the same idea. That one is what a **write**
+/// lands on when its caller is silent; this one is what a **read** has to recognise on the way
+/// back out — the export mapping turns it into an empty Condition cell, which is what lets a
+/// not-set copy round-trip through a file format that has no word for one. Two constants because
+/// the two come apart the day a default stops being the sentinel, and a bare `"NONE"` spelled at
+/// a call site would belong to neither.
+///
+/// **A sentinel and not NULL**, which is the question this column keeps being asked.
+/// `condition` is the third term of `idx_collection_grain`, and SQLite treats two NULLs in a
+/// unique index as distinct — so a nullable column would make every ungraded add a brand-new row
+/// instead of folding onto the one already there, and a reader pressing `+` four times would end
+/// with four rows of one copy. A string folds correctly and needs no special case in
+/// [`fold_entry`], in `reconcile` or in the sync.
+pub const CONDITION_NOT_SET: &str = "NONE";
 
 /// What an *adjustment* says when the row it names is not there — an edit that could not be
 /// applied, unlike a delete that finds nothing (see [`remove_entry`]).
@@ -286,6 +319,14 @@ fn valid_tags(tags: &str) -> Result<(), String> {
         })
 }
 
+/// The grade a write is about to store, refused in words unless it is one of [`CONDITIONS`].
+///
+/// **An absent one is [`DEFAULT_CONDITION`], which since 2026-09-07 is the sentinel rather than a
+/// grade** — so what comes back out of here is no longer guaranteed to be a state a physical card
+/// can be in. That is the point, and no caller minds: all three ([`add_entry_filed`],
+/// [`set_entry`] and [`update_entry`]) hand the result straight to a bound parameter, and the
+/// column's `CHECK` takes `NONE` from schema v35 on. Nothing here ranks it, prints it or compares
+/// it to another grade.
 fn valid_condition(condition: Option<&str>) -> Result<&str, String> {
     let c = condition.unwrap_or(DEFAULT_CONDITION);
     CONDITIONS.contains(&c).then_some(c).ok_or_else(|| {
@@ -1429,14 +1470,20 @@ pub struct CollectionRow {
     /// What state the copy is in — `e.condition`, straight off the entry, and always one of
     /// [`CONDITIONS`].
     ///
-    /// **Not `Option`, because the column is `TEXT NOT NULL DEFAULT 'NM'`** (`schema.rs`) and no
-    /// write in the crate can leave it unset: `valid_condition` turns an absent one into
-    /// `DEFAULT_CONDITION` before either insert, and no patch can clear it. It was `Option` for
-    /// three releases as a fence around the wire, which cost every reader of the row a branch
-    /// that could not be reached and a `null` the export layer had to decide about. The reader
-    /// who never stated a grade is not represented by a missing `condition`; they are
-    /// represented by `condition_original` being `None`, which is the column that records what a
-    /// file actually said.
+    /// **Not `Option`, because the column is `TEXT NOT NULL DEFAULT 'NONE'`** (`schema.rs`, from
+    /// the v35 rung) and no write in the crate can leave it unset: [`valid_condition`] turns an
+    /// absent one into [`DEFAULT_CONDITION`] before either insert, and no patch can clear it. It
+    /// was `Option` for three releases as a fence around the wire, which cost every reader of the
+    /// row a branch that could not be reached and a `null` the export layer had to decide about.
+    ///
+    /// **A reader who never stated a grade reads [`CONDITION_NOT_SET`] here**, and that is the
+    /// change of 2026-09-07 rather than a restatement. This paragraph used to point at
+    /// `condition_original` being `None` as the record of an unstated grade — which was always a
+    /// different question and is now not an answer at all. That column records what a *file*
+    /// said, so it is `None` for every copy added by hand, graded or not, and it was `None` on
+    /// exactly the `NM` rows the app had graded on the reader's behalf. The grade itself carries
+    /// the fact now, and a surface that draws this field has a third case to draw: the finish
+    /// alone, never `NONE` and never an em dash beside it.
     pub condition: String,
     pub quantity: i64,
     pub tradelist_quantity: i64,
@@ -1743,7 +1790,12 @@ fn push_in_list(
 /// expensive card"; it has no header and stays reachable from the select.
 ///
 /// `finish` ranks the condition rather than spelling it: `DMG` before `LP` is alphabetical
-/// order, not grade order.
+/// order, not grade order. **`NONE` is spelled out at 5 even though the `ELSE 5` beside it would
+/// catch it anyway** — it is a stored value now rather than one that cannot happen, and an `ELSE`
+/// that happens to be right is not a rule; the next grade appended to [`CONDITIONS`] would land on
+/// it silently. It ranks **last**, because a pile nobody has graded belongs at the end of a scale
+/// it is not on. The dropdowns put it **first**, where it is the default rather than a grade, and
+/// the two orders disagreeing on purpose is why both are written down.
 ///
 /// `value` and `price` are not here — they are the two keys whose SQL depends on the reader's
 /// marketplace, so they live in [`COLLECTION_PRICE_SORTS`] and are appended by
@@ -1762,9 +1814,11 @@ const COLLECTION_SORTS: &[crate::sorting::SortColumn] = &[
     crate::sorting::SortColumn {
         key: "finish",
         asc: "e.finish ASC, CASE e.condition WHEN 'NM' THEN 0 WHEN 'LP' THEN 1 \
-              WHEN 'MP' THEN 2 WHEN 'HP' THEN 3 WHEN 'DMG' THEN 4 ELSE 5 END ASC",
+              WHEN 'MP' THEN 2 WHEN 'HP' THEN 3 WHEN 'DMG' THEN 4 WHEN 'NONE' THEN 5 \
+              ELSE 5 END ASC",
         desc: "e.finish DESC, CASE e.condition WHEN 'NM' THEN 0 WHEN 'LP' THEN 1 \
-               WHEN 'MP' THEN 2 WHEN 'HP' THEN 3 WHEN 'DMG' THEN 4 ELSE 5 END DESC",
+               WHEN 'MP' THEN 2 WHEN 'HP' THEN 3 WHEN 'DMG' THEN 4 WHEN 'NONE' THEN 5 \
+               ELSE 5 END DESC",
     },
     crate::sorting::SortColumn {
         key: "quantity",
@@ -3049,6 +3103,92 @@ mod tests {
         assert!(bad_condition.contains("NM"), "{bad_condition}");
     }
 
+    /// **An add that states no grade records that nobody stated one**, which reverses the rule
+    /// this table shipped with. `condition` defaulted to `NM` until 2026-09-07, so every quick
+    /// add and every silent import line asserted the *best* grade on the scale on the reader's
+    /// behalf — and left nothing on the row to say the app had answered rather than the reader.
+    ///
+    /// The stored value is compared against the **literal** `"NONE"` and never against
+    /// [`DEFAULT_CONDITION`]: an assertion that reads its own constant passes whatever that
+    /// constant happens to say, `"NM"` included, which is precisely the value this test exists
+    /// to rule out. The one constant-to-constant line is a different claim — that the sentinel a
+    /// *read* recognises is the value a silent *write* leaves behind, which is the whole reason
+    /// [`CONDITION_NOT_SET`] may be spelled at a call site and `"NONE"` may not.
+    #[test]
+    fn an_add_that_states_no_condition_records_not_set() {
+        let conn = seeded();
+        let change = add_entry(&conn, &input("bolt-lea", "nonfoil", 3)).unwrap();
+
+        let condition: String = conn
+            .query_row(
+                "SELECT condition FROM collection_entries WHERE id = ?1",
+                [change.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(condition, "NONE");
+        assert_eq!(
+            CONDITION_NOT_SET, condition,
+            "the sentinel a read recognises is the value a silent write stores"
+        );
+    }
+
+    /// [`valid_condition`] is the fence all three writes share, and the sentinel has to pass it:
+    /// `NONE` is a value the column stores from schema v35 on, not a spelling to refuse.
+    ///
+    /// The second line is the one worth having. `valid_condition(None)` is what an add with no
+    /// grade goes through, and what it answers is bound straight into the insert — so this is
+    /// the same fact as the test above, read one layer down where a fixture cannot stand in
+    /// for it.
+    #[test]
+    fn the_not_set_sentinel_passes_the_condition_fence() {
+        assert_eq!(valid_condition(Some(CONDITION_NOT_SET)), Ok("NONE"));
+        assert_eq!(valid_condition(None), Ok("NONE"));
+        assert!(
+            valid_condition(Some("none")).is_err(),
+            "exact, like every other grade: `src/lib/conditions.ts` is where a reader's spelling \
+             becomes a storage code, and this fence is what makes that the only door"
+        );
+    }
+
+    /// **A copy the reader has not graded is not a Near Mint copy**, and the grain is where that
+    /// stops being a matter of opinion: `condition` is its third term, so the two rows can no
+    /// more merge than an `LP` and an `HP` one could.
+    ///
+    /// The second half is the half that argues for a sentinel string rather than a NULL. SQLite
+    /// treats two NULLs in a unique index as **distinct**, so a nullable column would have made
+    /// every ungraded add a brand-new row — four presses of `+`, four rows of one card. `NONE`
+    /// folds like any other value, which is what the last two assertions are for.
+    #[test]
+    fn a_not_set_row_and_a_near_mint_row_of_one_printing_are_two_rows() {
+        let conn = seeded();
+        let ungraded = add_entry(&conn, &input("bolt-lea", "nonfoil", 1)).unwrap();
+        add_entry(
+            &conn,
+            &EntryInput {
+                condition: Some("NM".into()),
+                ..input("bolt-lea", "nonfoil", 1)
+            },
+        )
+        .unwrap();
+
+        let rows: i64 = conn
+            .query_row("SELECT count(*) FROM collection_entries", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            rows, 2,
+            "the sentinel is a grain term like every other grade"
+        );
+
+        let again = add_entry(&conn, &input("bolt-lea", "nonfoil", 1)).unwrap();
+        assert_eq!(again.id, ungraded.id, "a second ungraded add folds");
+        assert_eq!(again.quantity, 2);
+        let rows: i64 = conn
+            .query_row("SELECT count(*) FROM collection_entries", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 2);
+    }
+
     /// An id with no card behind it is a bug in the caller, not a card nobody has heard
     /// of: every add starts from a printing the user is looking at.
     #[test]
@@ -3462,7 +3602,7 @@ mod tests {
         let input: EntryInput =
             serde_json::from_str(r#"{"cardId":"bolt-lea","finish":"foil","quantity":2}"#).unwrap();
         assert_eq!(input.card_id, "bolt-lea");
-        assert_eq!(input.condition, None, "absent means the default, NM");
+        assert_eq!(input.condition, None, "absent means the default, NONE");
         assert!(!input.altered && !input.signed && !input.proxy && !input.misprint);
 
         let conn = seeded();
@@ -3830,6 +3970,49 @@ mod tests {
         assert_eq!(s.unpriced, 2);
     }
 
+    /// **The ungraded pile sorts to the end of the scale, and the dropdowns open on it — the two
+    /// orders disagree on purpose.** [`CONDITIONS`] leads with `NONE` because it is the default a
+    /// `<select>` opens on; this sort ends with it because a card nobody has graded is not the
+    /// worst-conditioned card in the binder, it is a card that is not on the scale at all.
+    ///
+    /// The rows are added worst-first, so a sort that did nothing would fail rather than pass by
+    /// accident on insertion order. And the assertion is the whole list rather than `NONE`'s
+    /// position alone: the `CASE` is one expression, and a rung mis-numbered anywhere in it
+    /// reorders two grades a reader *did* state.
+    #[test]
+    fn the_finish_sort_puts_the_ungraded_pile_after_dmg() {
+        let conn = seeded();
+        for c in ["DMG", "NONE", "HP", "MP", "LP", "NM"] {
+            add_entry(
+                &conn,
+                &EntryInput {
+                    condition: Some(c.to_owned()),
+                    ..input("bolt-lea", "nonfoil", 1)
+                },
+            )
+            .unwrap();
+        }
+
+        let graded = |dir: &str| -> Vec<String> {
+            list_entries(
+                &conn,
+                &CollectionQuery {
+                    sort: Some(vec![term("finish", dir)]),
+                    limit: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|r| r.condition)
+            .collect()
+        };
+
+        assert_eq!(graded("asc"), ["NM", "LP", "MP", "HP", "DMG", "NONE"]);
+        assert_eq!(graded("desc"), ["NONE", "DMG", "HP", "MP", "LP", "NM"]);
+    }
+
     /// Collector numbers are TEXT and ~9% of them are not numeric. A plain string sort puts
     /// `100` before `2`; this is the sort a printed binder is in.
     #[test]
@@ -4064,7 +4247,20 @@ mod tests {
     #[test]
     fn an_edit_onto_a_taken_grain_merges_instead_of_refusing() {
         let conn = seeded();
-        let a = add_entry(&conn, &input("bolt-lea", "nonfoil", 2)).unwrap();
+        // **Stated, and it has to be.** This read `add_entry(&input(…))` and patched the other
+        // row to `"NM"`, which worked only because `"NM"` was what an *unstated* grade became —
+        // an assertion resting on `DEFAULT_CONDITION` without ever naming it. Schema v35 moved
+        // that default to `CONDITION_NOT_SET`, the patch stopped landing on the row it was aimed
+        // at, and the merge this test is about simply did not happen. Neither grade here is the
+        // default, so neither may arrive by way of one.
+        let a = add_entry(
+            &conn,
+            &EntryInput {
+                condition: Some("NM".into()),
+                ..input("bolt-lea", "nonfoil", 2)
+            },
+        )
+        .unwrap();
         let b = add_entry(
             &conn,
             &EntryInput {

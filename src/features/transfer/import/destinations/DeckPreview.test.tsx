@@ -25,6 +25,7 @@ import type {
   ImportResolveRow,
   SyncStatus,
 } from "@/lib/ipc";
+import { CONDITION_NOT_SET } from "@/lib/conditions";
 import { spec } from "@/features/decks/validation/fixtures";
 
 const deckImportCommit = vi.hoisted(() => vi.fn());
@@ -295,18 +296,25 @@ describe("Add cards to collection", () => {
     expect(items).toHaveLength(2);
     // The four flags are `false` rather than absent and the condition is the reader's standing
     // default: a file that says nothing about a copy still lands as a plain unmarked one, which
-    // is the grain the collection's own `ON CONFLICT` folds on.
+    // is the grain the collection's own `ON CONFLICT` folds on. **That default is the sentinel
+    // since schema v35** — a decklist carries no Condition column, so ticking this box records
+    // that nobody graded these copies rather than writing the best grade on the scale onto every
+    // one of them.
     expect(items[0]).toMatchObject({
       cardId: "sol-ring",
       quantity: 2,
       finish: "nonfoil",
-      condition: "NM",
+      condition: CONDITION_NOT_SET,
       altered: false,
       signed: false,
       proxy: false,
       misprint: false,
     });
-    expect(items[1]).toMatchObject({ cardId: "lightning-bolt", quantity: 1, condition: "NM" });
+    expect(items[1]).toMatchObject({
+      cardId: "lightning-bolt",
+      quantity: 1,
+      condition: CONDITION_NOT_SET,
+    });
   });
 
   /** And the copies say what the reader owns rather than what the deck holds: the count under

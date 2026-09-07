@@ -4,11 +4,17 @@
  *
  * **Two facts a text list cannot carry, said before the reader commits.** A file's own row can
  * override either — `planCollectionImport` reads `extra.condition` and `line.finish` first and
- * only falls back to these — but most lines say nothing about either, and a hundred rows of
- * silent `NM`/regular is a hundred things to correct by hand afterwards if the reader meant
+ * only falls back to these — but most lines say nothing about either, and a hundred rows filed
+ * on a silent guess is a hundred things to correct by hand afterwards if the reader meant
  * something else. The two dropdowns are the store's `importDefaults`, shared with the wishlist's
- * finish alone: a reader who has just told this dialog "assume Near Mint, foil" is answering a
- * question about their box, not about this screen.
+ * finish alone: a reader who has just told this dialog "assume nothing about the grade, and
+ * foil" is answering a question about their box, not about this screen.
+ *
+ * **The Condition dropdown opens on "Not set" since schema v35, which is the one option in it
+ * that is not a grade.** It is still a question worth asking — a reader importing a box they
+ * graded on the way in answers `NM` once instead of correcting three hundred rows — but the
+ * answer it opens on now records that the file said nothing, rather than putting the best grade
+ * on the scale on every ungraded line.
  */
 import { useMemo, useState, type JSX } from "react";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
@@ -74,7 +80,9 @@ export function CollectionPreview({
 
   // Exempt from `sortOptions`: a condition grade's order *is* the information — Near Mint
   // to Damaged is a scale, not an alphabet (`src/CLAUDE.md`'s exemption rule) — so `CONDITIONS`'
-  // own order is drawn unchanged.
+  // own order is drawn unchanged. That includes `NONE` in front of the scale rather than inside
+  // it: it is the absence of a grade and the row this dropdown opens on, and `conditions.ts`
+  // argues both halves at the constant itself.
   const conditionOptions: readonly DropdownOption[] = CONDITIONS.map((c) => ({
     value: c,
     label: CONDITION_LABEL[c],
@@ -155,7 +163,7 @@ export function CollectionPreview({
 
         {/* The collection's own third warning, beside the two `ImportProblems` already draws —
             a grade the file named that this app cannot read fell back to the default above
-            rather than being silently accepted as Near Mint. Only the collection reads
+            rather than being filed as though the file had named none. Only the collection reads
             conditions, so this has no wishlist equivalent. */}
         {plan.unknownConditions.length > 0 && (
           <ProblemList

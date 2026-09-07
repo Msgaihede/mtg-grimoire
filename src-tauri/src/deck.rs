@@ -2482,6 +2482,263 @@ pub fn list_decks(conn: &Connection) -> Result<Vec<DeckRow>, String> {
         .map_err(|e| e.to_string())
 }
 
+/// Every printed mana cost one deck plays, folded by cost string.
+///
+/// Serialised `camelCase` to the shape `src/lib/ipc.ts` mirrors by hand, as every DTO here is.
+///
+/// **A deck with nothing to say is absent rather than empty.** A pile of basics, a deck whose
+/// every row has been orphaned by a sync, a deck with no cards at all — all three answer no
+/// entry, and the reading side treats a deck it cannot find as a deck with no pips. Shipping an
+/// empty `costs` array for each of them would be one object per deck saying nothing.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DeckPipCosts {
+    pub deck_id: i64,
+    pub costs: Vec<PipCost>,
+}
+
+/// One printed mana cost, and how many copies of it the deck plays.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PipCost {
+    /// `cards.mana_cost` **verbatim** — `"{1}{R}"`, and `"{3}{U} // {3}{R}"` for a split card,
+    /// which is one string carrying two costs. Rust supplies the string and nothing else;
+    /// which of its symbols are pips, and how a hybrid half is counted, is `src/lib/mana.ts`'s
+    /// — this crate's facts/conclusions boundary applied to a colour bar.
+    pub cost: String,
+    /// The copies summed over every row that shares the cost, so one deck listing four
+    /// printings of Lightning Bolt is one entry reading four.
+    pub copies: i64,
+}
+
+/// The colour bar's facts, for **every** deck in one statement.
+///
+/// **The `WHERE` clause is [`DeckRow::card_count`]'s, copied from `DECK_SELECT`'s correlated
+/// subquery rather than re-derived**, and that is the whole of the definition: the bar is drawn
+/// under a tile whose caption already says how many cards the deck has, so a bar counting a
+/// different pile than that number counts is a tile disagreeing with itself. `'live'` is spelled
+/// out for `DECK_SELECT`'s reason — this is a `const` and there is nothing to interpolate with —
+/// and `the_colour_bar_reads_the_same_pile_the_gallery_count_does` is what keeps the two literals
+/// honest.
+///
+/// **The `cards` join is inner, and it is the only inner join in this file's reads apart from
+/// `deck_categories`.** Everywhere else a `LEFT JOIN cards` is discipline — an orphaned row is a
+/// card the reader still owns and must still see. Here it would buy a NULL cost, which the next
+/// two predicates drop anyway: `deck_cards` denormalizes the printing and the name, never the
+/// mana cost, so a row whose printing has left `cards` has no *printed* cost to contribute and
+/// nothing this read could invent for it.
+///
+/// **A NULL or empty cost is dropped rather than shipped.** Every land is one, and a Commander
+/// deck is a third lands: shipping them would be ~35 rows per deck carrying no pip, for a bar
+/// that would draw exactly the same.
+const PIP_COSTS_SQL: &str = "
+SELECT dc.deck_id, c.mana_cost, sum(dc.quantity)
+  FROM deck_cards dc
+  JOIN deck_categories cat ON cat.id = dc.category_id
+  JOIN cards c ON c.id = dc.card_id
+ WHERE dc.variant = 'live'
+   AND cat.is_active = 1
+   AND cat.kind IN ('main','commander','maybe')
+   AND c.mana_cost IS NOT NULL
+   AND c.mana_cost <> ''
+ GROUP BY dc.deck_id, c.mana_cost
+ ORDER BY dc.deck_id, c.mana_cost";
+
+/// What every deck is made of, in mana costs — one round trip for the whole gallery.
+///
+/// **No parameters, deliberately.** The gallery draws every deck it has at once and a bar under
+/// each, so a per-deck read would be one query per tile on a wall that is already one query; and
+/// there is nothing to narrow by, because an archived deck is drawn too (behind the disclosure)
+/// and its bar is the same fact as any other's. Measured on the dev database — 4 decks, 611
+/// `deck_cards` rows — this answers **90 rows** for the whole page.
+///
+/// The `ORDER BY` is the grouping's, not a contract about presentation: rows arrive deck by deck
+/// so the fold below is a single pass, and by cost within a deck so two runs over one database
+/// cannot answer in two different orders. What order the *segments* are drawn in is
+/// `MANA_KEYS`', on the other side of the wire.
+pub fn pip_costs(conn: &Connection) -> Result<Vec<DeckPipCosts>, String> {
+    let mut stmt = conn.prepare(PIP_COSTS_SQL).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
+        })
+        .map_err(|e| e.to_string())?;
+
+    // A fold rather than a `HashMap`, because the statement already delivers the rows grouped:
+    // a deck's entries are contiguous, so the only state needed is whether this row belongs to
+    // the deck at the end of the list.
+    let mut out: Vec<DeckPipCosts> = Vec::new();
+    for row in rows {
+        let (deck_id, cost, copies) = row.map_err(|e| e.to_string())?;
+        match out.last_mut() {
+            Some(last) if last.deck_id == deck_id => last.costs.push(PipCost { cost, copies }),
+            _ => out.push(DeckPipCosts {
+                deck_id,
+                costs: vec![PipCost { cost, copies }],
+            }),
+        }
+    }
+    Ok(out)
+}
+
+/// One card of a deck as the bracket estimator reads it — **five fields, and there is no sixth.**
+///
+/// `src/features/decks/validation/bracket.ts` is the whole of the audience: `estimateBracket`
+/// filters on [`Self::category_active`], dedupes on [`Self::name`], counts
+/// [`Self::game_changer`], and its `textOf` reads [`Self::oracle_text`] and [`Self::faces`]. That
+/// is every field it touches, so this row is its input exactly and not a narrowed [`DeckCardRow`]
+/// — which carries thirty-odd columns, a price expression and four image URLs per card, none of
+/// which a bracket estimate has any use for.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BracketCardRow {
+    /// **`deck_cards.name`, not `cards.name`** — the denormalized column
+    /// [`deck_card_select`] reads at the same position. The estimator dedupes on this string
+    /// and so does the editor's panel, so a gallery reading the live `cards` row would fold a
+    /// renamed or re-worded printing differently from the editor looking at the same deck. It is
+    /// also the only name an orphaned row has at all.
+    pub name: String,
+    /// `cards.game_changer`, with a NULL read as **false**: the column is a list membership, so
+    /// "not on the list" and "no row to ask" are one answer here —
+    /// [`crate::import::ImportMatch::game_changer`]'s rule, and the estimator's own comment says
+    /// a card it knows nothing about must not be counted in either direction.
+    pub game_changer: bool,
+    pub oracle_text: Option<String>,
+    /// `cards.faces`, a JSON array, **carried as its raw string**: the estimator's `textOf`
+    /// parses it and treats a blob it cannot read as no faces at all, which is a rule about a
+    /// bracket estimate never being the thing that breaks a deck screen and therefore a rule
+    /// that has to live where the estimate does.
+    pub faces: Option<String>,
+    /// **Always `true` on every row this read emits**, and carried anyway.
+    ///
+    /// The pile below is already `cat.is_active = 1`, so there is nothing else it could be. It
+    /// is on the row because `estimateBracket` opens with `cards.filter(c => c.categoryActive)`
+    /// and takes `CardFacts`, the same shape the editor hands it out of a deck it has fully
+    /// loaded — where the flag really does vary. A row that omitted it would be a second type
+    /// for one function, and the day the filter changed the two callers would part company
+    /// silently.
+    pub category_active: bool,
+}
+
+/// Everything the Commander bracket estimate is made of, for one deck.
+///
+/// Serialised `camelCase`, as every DTO here is.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DeckBracketRead {
+    pub deck_id: i64,
+    pub cards: Vec<BracketCardRow>,
+    /// The fourth signal, and the one no amount of reading a card's own text can find: a
+    /// two-card infinite is a fact about an *interaction*. **A database that has never fetched
+    /// Commander Spellbook's file answers `[]`**, which the crate documents as a supported state
+    /// rather than an error — the estimate is then made from three signals instead of four.
+    pub combos: Vec<crate::combos::DeckCombo>,
+}
+
+/// The pile the bracket is read over: **live rows in an active category, every kind.**
+///
+/// Deliberately *not* [`PIP_COSTS_SQL`]'s three kinds. A sideboard is inside a Commander deck's
+/// bracket — the format has no sideboard, so a reader who has filed cards there has filed them
+/// somewhere the estimate still has to see — and this is what `DeckBracket.tsx` hands the
+/// estimator today, which filters `categoryActive` and nothing else. Two reads of one deck
+/// answering two different piles is the disagreement worth avoiding; the gallery and the editor
+/// have to reach the same bracket for the same deck.
+///
+/// **`SELECT DISTINCT`, because the estimator dedupes by name anyway.** A card in two piles, or
+/// as a foil row beside a regular one, is two `deck_cards` rows saying one thing about a bracket
+/// — and this read ships oracle text for every deck on the page at once (measured on the dev
+/// database: 397 distinct cards across 4 decks, 59 KB of text). The `ORDER BY` names all four
+/// selected columns rather than the name alone, so two runs over one database cannot answer in
+/// two different orders even where a name is carried by rows that differ.
+///
+/// `LEFT JOIN cards` is this file's discipline unchanged: an orphaned row keeps its
+/// denormalized name and contributes no text, which is the honest reading — nothing is known
+/// about a card that is not there.
+const BRACKET_CARDS_SQL: &str = "
+SELECT DISTINCT dc.name, c.game_changer, c.oracle_text, c.faces
+  FROM deck_cards dc
+  JOIN deck_categories cat ON cat.id = dc.category_id
+  LEFT JOIN cards c ON c.id = dc.card_id
+ WHERE dc.deck_id = ?1 AND dc.variant = 'live' AND cat.is_active = 1
+ ORDER BY dc.name, c.game_changer, c.oracle_text, c.faces";
+
+/// The printings the combo matcher is asked about — **the same pile [`BRACKET_CARDS_SQL`]
+/// reads**, deduped, which is `DeckBracket.tsx:117-121` in SQL.
+///
+/// The two have to be one pile: `estimateBracket`'s own doc says the combos handed to it are not
+/// re-checked, so a caller that matched over a switched-off pile's cards gets back a combo the
+/// deck does not really play and nothing downstream can tell.
+const BRACKET_IDS_SQL: &str = "
+SELECT DISTINCT dc.card_id
+  FROM deck_cards dc
+  JOIN deck_categories cat ON cat.id = dc.category_id
+ WHERE dc.deck_id = ?1 AND dc.variant = 'live' AND cat.is_active = 1
+ ORDER BY dc.card_id";
+
+/// Everything the bracket estimate needs, for the decks the caller names.
+///
+/// **The caller passes the ids, and that is the boundary rather than a convenience.** Which
+/// formats have a command zone is a `format_specs.commander_rule` question TypeScript already
+/// answers (`useFormatSpecs`), so a `WHERE fs.commander_rule …` here would be this crate drawing
+/// a conclusion — and it would have to draw it again, differently, the day a second format grew
+/// brackets. The gallery asks about the decks it means to draw a bracket under.
+///
+/// **One entry per requested id, in request order**, [`crate::tags`]'s contract for its two
+/// per-card reads and for its reason: the caller holds a list and wants a lookup, and a deck
+/// that has been deleted since the list was taken answers empty lists rather than going missing
+/// from a positional answer. An empty request answers an empty list without touching the
+/// database.
+///
+/// **A deck listing more than [`crate::combos::MAX_CARD_IDS`] distinct printings fails the whole
+/// read**, with [`crate::combos::TOO_MANY_CARDS`] — [`crate::combos::match_combos`]'s own
+/// refusal, propagated rather than caught. That is `combos_for_cards`' behaviour unchanged, and
+/// the alternative — a silently truncated id list — would answer a *wrong* combo set that reads
+/// exactly like a right one. The bound is 1 000 distinct printings against a Commander deck's
+/// hundred.
+pub fn bracket_reads(conn: &Connection, deck_ids: &[i64]) -> Result<Vec<DeckBracketRead>, String> {
+    if deck_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut cards_stmt = conn.prepare(BRACKET_CARDS_SQL).map_err(|e| e.to_string())?;
+    let mut ids_stmt = conn.prepare(BRACKET_IDS_SQL).map_err(|e| e.to_string())?;
+
+    let mut out = Vec::with_capacity(deck_ids.len());
+    for &deck_id in deck_ids {
+        let cards: Vec<BracketCardRow> = cards_stmt
+            .query_map(params![deck_id], |r| {
+                Ok(BracketCardRow {
+                    name: r.get(0)?,
+                    // `Option<bool>` and then `false`, for the reason on the field itself: the
+                    // column is nullable and the LEFT JOIN can leave it absent besides.
+                    game_changer: r.get::<_, Option<bool>>(1)?.unwrap_or(false),
+                    oracle_text: r.get(2)?,
+                    faces: r.get(3)?,
+                    // A literal rather than `cat.is_active`, which the `WHERE` has already
+                    // pinned to 1. See the field's own doc for why it is carried at all.
+                    category_active: true,
+                })
+            })
+            .and_then(|rows| rows.collect())
+            .map_err(|e| e.to_string())?;
+
+        let card_ids: Vec<String> = ids_stmt
+            .query_map(params![deck_id], |r| r.get::<_, String>(0))
+            .and_then(|rows| rows.collect())
+            .map_err(|e| e.to_string())?;
+
+        out.push(DeckBracketRead {
+            deck_id,
+            cards,
+            combos: crate::combos::match_combos(conn, &card_ids)?,
+        });
+    }
+    Ok(out)
+}
+
 /// Add copies to a category, folding on the grain — the drag-in and the click-to-add write.
 ///
 /// **Either `category_id` or `category_name`**, and at least one ([`NO_CATEGORY`]). An
@@ -4507,6 +4764,38 @@ pub async fn deck_list(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<Dec
     tauri::async_runtime::spawn_blocking(move || list_decks(&crate::sync::lock_db_read(&state)))
         .await
         .map_err(|e| format!("the deck list could not be read: {e}"))?
+}
+
+/// Every deck's printed mana costs, for the gallery's colour bars. **Read-only** connection,
+/// blocking pool, and no arguments — see [`pip_costs`] for why the whole wall is one read.
+#[cfg(not(target_family = "wasm"))]
+#[tauri::command]
+pub async fn deck_pip_costs(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<Vec<DeckPipCosts>, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || pip_costs(&crate::sync::lock_db_read(&state)))
+        .await
+        .map_err(|e| format!("the deck colours could not be read: {e}"))?
+}
+
+/// Everything the Commander bracket estimate is made of, for the decks named. **Read-only**
+/// connection, blocking pool.
+///
+/// `deck_ids` reaches the wire as `deckIds`, which `web::route`'s arm and `src/lib/ipc.ts` both
+/// spell that way — `invoke` matches a command's parameters by name, so the two have to agree.
+#[cfg(not(target_family = "wasm"))]
+#[tauri::command]
+pub async fn deck_bracket_reads(
+    state: tauri::State<'_, Arc<AppState>>,
+    deck_ids: Vec<i64>,
+) -> Result<Vec<DeckBracketRead>, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        bracket_reads(&crate::sync::lock_db_read(&state), &deck_ids)
+    })
+    .await
+    .map_err(|e| format!("the deck brackets could not be read: {e}"))?
 }
 
 /// One deck, one variant's cards, every category and label, every fact the validator needs.
@@ -6967,6 +7256,397 @@ mod tests {
             1,
         );
         assert_eq!(read_deck(&conn, deck.id).unwrap().unwrap().card_count, 7);
+    }
+
+    // ── The gallery's two second reads ──────────────────────────────────────────────────
+    //
+    // [`pip_costs`] and [`bracket_reads`], which the deck tile's colour bar and its bracket
+    // caption are drawn from. They read two *different* piles on purpose — the bar counts what
+    // the tile's card count counts, and the bracket counts every active category — so the tests
+    // below assert each against its own definition rather than against the other's.
+
+    /// One deck's colour bar, or `None` if that deck said nothing at all.
+    fn bar(conn: &Connection, deck_id: i64) -> Option<Vec<(String, i64)>> {
+        pip_costs(conn).unwrap().into_iter().find_map(|d| {
+            (d.deck_id == deck_id)
+                .then(|| d.costs.into_iter().map(|c| (c.cost, c.copies)).collect())
+        })
+    }
+
+    /// **A cost is a string and the bar is drawn from copies, so two printings of one card are
+    /// one entry with a bigger number.** The fold is the whole reason this read is 90 rows for
+    /// a four-deck gallery rather than one row per `deck_cards` row: a deck plays a handful of
+    /// distinct costs and forty-odd cards at them.
+    #[test]
+    fn the_colour_bar_folds_a_cost_and_sums_its_copies() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        // Two printings of one oracle card, in two rows, at one printed cost.
+        add(&conn, deck.id, "bolt-lea", main, 4);
+        add(&conn, deck.id, "bolt-jp", main, 3);
+        add(&conn, deck.id, "serra-lea", main, 2);
+
+        assert_eq!(
+            bar(&conn, deck.id).unwrap(),
+            vec![
+                ("{3}{W}{W}".to_owned(), 2),
+                ("{R}".to_owned(), 7),
+                //  ^ the two Bolt printings folded, and their copies summed — not two entries
+                //    of 4 and 3, and not one entry of 4.
+            ],
+            "one entry per printed cost, ordered by the cost string"
+        );
+    }
+
+    /// **The bar counts the pile the tile's own caption counts, and the three exclusions are
+    /// [`DeckRow::card_count`]'s verbatim.** A bar that disagreed with the number printed next
+    /// to it is a tile arguing with itself, so this is
+    /// `the_gallery_count_reads_only_live_rows_in_active_categories` and
+    /// `an_active_maybeboard_is_part_of_the_deck_and_an_inactive_one_is_not` asked one read
+    /// over — a theory row, a switched-off category and a `side` pile, each in turn.
+    #[test]
+    fn the_colour_bar_reads_the_same_pile_the_gallery_count_does() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-lea", main, 4);
+
+        // A plan is not a deck: the theory list is counted on no tile and coloured on none.
+        add_card(
+            &conn,
+            deck.id,
+            "serra-lea",
+            Some(main),
+            None,
+            THEORY,
+            None,
+            40,
+        )
+        .unwrap();
+        // Played *beside* the deck rather than in it — the two kinds `SIZE_KINDS` leaves out.
+        add(
+            &conn,
+            deck.id,
+            "serra-8ed",
+            kind_of(&conn, deck.id, "side"),
+            15,
+        );
+        add(
+            &conn,
+            deck.id,
+            "serra-lea",
+            kind_of(&conn, deck.id, "companion"),
+            1,
+        );
+        assert_eq!(
+            bar(&conn, deck.id).unwrap(),
+            vec![("{R}".to_owned(), 4)],
+            "a theory row, a sideboard and a companion colour nothing"
+        );
+
+        // An active Maybeboard *is* part of the deck, and is coloured like any other pile.
+        let scratch = kind_of(&conn, deck.id, "maybe");
+        add(&conn, deck.id, "serra-lea", scratch, 2);
+        assert_eq!(
+            bar(&conn, deck.id).unwrap(),
+            vec![("{R}".to_owned(), 4)],
+            "the Maybeboard is seeded off, so it colours nothing"
+        );
+        crate::deck_meta::set_category_active(&conn, scratch, true).unwrap();
+        assert_eq!(
+            bar(&conn, deck.id).unwrap(),
+            vec![("{3}{W}{W}".to_owned(), 2), ("{R}".to_owned(), 4)],
+            "switched on, it is a pile played in the deck and it colours the bar"
+        );
+
+        // And the switch decides whether a pile counts at all, kind or no kind.
+        crate::deck_meta::set_category_active(&conn, main, false).unwrap();
+        assert_eq!(
+            bar(&conn, deck.id).unwrap(),
+            vec![("{3}{W}{W}".to_owned(), 2)],
+            "a `main` category switched off colours nothing either"
+        );
+    }
+
+    /// **A land contributes no pip, and neither does a row whose printing has left the corpus.**
+    /// Scryfall publishes `""` for a land's `mana_cost` and this database holds NULL wherever
+    /// the cell was never filled, so both spellings are dropped — and a deck that has nothing
+    /// but those is absent from the answer entirely rather than present with an empty list. The
+    /// reading side treats a deck it cannot find as a deck with no pips, which is what an
+    /// all-lands pile has to say.
+    #[test]
+    fn a_cost_that_is_null_or_empty_draws_no_pip() {
+        let conn = seeded();
+        conn.execute_batch(
+            r#"INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                    rarity,mana_cost,cmc,type_line,raw)
+               VALUES
+                 ('forest-lea','o3','Forest','lea','297','en','normal','common','',0.0,
+                  'Basic Land — Forest','{}'),
+                 ('nocost','o4','No Cost At All','lea','1','en','normal','common',NULL,0.0,
+                  'Artifact','{}');"#,
+        )
+        .unwrap();
+        let lands = create_deck(&conn, &input("All Lands", "modern")).unwrap();
+        let main = main_of(&conn, lands.id);
+        add(&conn, lands.id, "forest-lea", main, 30);
+        add(&conn, lands.id, "nocost", main, 5);
+
+        assert_eq!(
+            bar(&conn, lands.id),
+            None,
+            "a deck with nothing to say is absent, not an empty list"
+        );
+
+        // One card with a cost, and the two silent rows stay silent beside it.
+        add(&conn, lands.id, "bolt-lea", main, 1);
+        assert_eq!(bar(&conn, lands.id).unwrap(), vec![("{R}".to_owned(), 1)]);
+    }
+
+    /// A gallery of decks is one read, and the decks in it come back one after another rather
+    /// than interleaved — which is what lets [`pip_costs`] fold in a single pass with no map.
+    #[test]
+    fn every_deck_is_one_entry_in_the_colour_bar_read() {
+        let conn = seeded();
+        let burn = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let angels = create_deck(&conn, &input("Angels", "modern")).unwrap();
+        add(&conn, burn.id, "bolt-lea", main_of(&conn, burn.id), 4);
+        add(&conn, angels.id, "serra-lea", main_of(&conn, angels.id), 2);
+
+        let all = pip_costs(&conn).unwrap();
+        assert_eq!(
+            all.iter().map(|d| d.deck_id).collect::<Vec<_>>(),
+            vec![burn.id, angels.id],
+            "one entry per deck that has something to say, and no deck twice"
+        );
+    }
+
+    /// **The five fields, each read off the column the estimator's own reader wants** — and the
+    /// orphan is the reason `name` is `deck_cards.name`: its printing has left `cards`, so
+    /// `c.name` would be NULL and this read would fail rather than answer a row the editor
+    /// still draws. `game_changer` is `false` for the same row for the same reason: nothing is
+    /// known about a card that is not there, and a NULL must not be counted in either direction.
+    #[test]
+    fn the_bracket_read_carries_the_five_fields_the_estimator_reads() {
+        let conn = seeded();
+        conn.execute_batch(
+            r#"INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                    rarity,mana_cost,cmc,type_line,oracle_text,faces,game_changer,raw)
+               VALUES
+                 ('rhystic','o3','Rhystic Study','pcy','45','en','normal','common','{2}{U}',3.0,
+                  'Enchantment',
+                  'Whenever an opponent casts a spell, you may draw a card unless that player pays {1}.',
+                  NULL,1,'{}'),
+                 ('valki','o4','Valki, God of Lies','khm','113','en','modal_dfc','mythic',
+                  '{1}{B}',2.0,'Legendary Creature — God',NULL,
+                  '[{"oracle_text":"When Valki enters the battlefield, each opponent reveals their hand."}]',
+                  0,'{}'),
+                 ('ghost','o5','Ghost Printing','lea','999','en','normal','common','{G}',1.0,
+                  'Creature — Spirit','Boo.',NULL,1,'{}');"#,
+        )
+        .unwrap();
+        let deck = create_deck(&conn, &input("Stax", "commander")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "rhystic", main, 1);
+        add(&conn, deck.id, "valki", main, 1);
+        add(&conn, deck.id, "ghost", main, 1);
+        // The printing leaves the corpus the way a sync takes one: the deck row stays, with its
+        // denormalized name and nothing else.
+        conn.execute("DELETE FROM cards WHERE id = 'ghost'", [])
+            .unwrap();
+
+        let read = &bracket_reads(&conn, &[deck.id]).unwrap()[0];
+        assert_eq!(read.deck_id, deck.id);
+        let of = |name: &str| {
+            read.cards
+                .iter()
+                .find(|c| c.name == name)
+                .unwrap_or_else(|| panic!("no `{name}` in the bracket read"))
+                .clone()
+        };
+
+        let rhystic = of("Rhystic Study");
+        assert!(
+            rhystic.game_changer,
+            "the column says 1, so the field says true"
+        );
+        assert!(rhystic
+            .oracle_text
+            .as_deref()
+            .is_some_and(|t| t.contains("unless that player pays")));
+        assert_eq!(rhystic.faces, None);
+        assert!(
+            rhystic.category_active,
+            "the pile is `is_active = 1` by construction"
+        );
+
+        let valki = of("Valki, God of Lies");
+        assert_eq!(
+            valki.oracle_text, None,
+            "a modal card's text is on its faces"
+        );
+        assert!(
+            valki
+                .faces
+                .as_deref()
+                .is_some_and(|f| f.contains("reveals their hand")),
+            "`faces` is carried as its raw JSON for the estimator's own parser"
+        );
+        assert!(!valki.game_changer);
+
+        let ghost = of("Ghost Printing");
+        assert_eq!(
+            ghost.oracle_text, None,
+            "an orphaned row knows nothing about itself"
+        );
+        assert_eq!(ghost.faces, None);
+        assert!(
+            !ghost.game_changer,
+            "a NULL `game_changer` is `false`, never `true` and never a failure"
+        );
+    }
+
+    /// **Every kind, and only the active ones** — deliberately *not* the colour bar's three
+    /// kinds. A Commander deck has no sideboard, so cards a reader has filed in one are still
+    /// inside the bracket; the switch is the only thing that takes a pile out, which is exactly
+    /// what `DeckBracket.tsx` hands the estimator today. Two reads of one deck answering two
+    /// different piles is the gallery and the editor disagreeing about the same deck.
+    #[test]
+    fn the_bracket_read_keeps_every_kind_and_drops_a_switched_off_one() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Stax", "commander")).unwrap();
+        let main = main_of(&conn, deck.id);
+        let side = kind_of(&conn, deck.id, "side");
+        let scratch = kind_of(&conn, deck.id, "maybe");
+        add(&conn, deck.id, "bolt-lea", main, 1);
+        add(&conn, deck.id, "serra-lea", side, 1);
+        add(&conn, deck.id, "serra-8ed", scratch, 1);
+        // A plan is not a deck here either.
+        add_card(
+            &conn,
+            deck.id,
+            "bolt-m10",
+            Some(main),
+            None,
+            THEORY,
+            None,
+            4,
+        )
+        .unwrap();
+
+        let names = |conn: &Connection| {
+            let mut n: Vec<String> = bracket_reads(conn, &[deck.id]).unwrap()[0]
+                .cards
+                .iter()
+                .map(|c| c.name.clone())
+                .collect();
+            n.sort();
+            n
+        };
+        assert_eq!(
+            names(&conn),
+            vec!["Lightning Bolt".to_owned(), "Serra Angel".to_owned()],
+            "the sideboard counts and the seeded-off Maybeboard does not — and the two Serra \
+             rows are one card to an estimator that dedupes by name"
+        );
+
+        crate::deck_meta::set_category_active(&conn, side, false).unwrap();
+        assert_eq!(
+            names(&conn),
+            vec!["Lightning Bolt".to_owned()],
+            "switched off, the sideboard's cards are out of the estimate"
+        );
+    }
+
+    /// **A database that has never fetched Commander Spellbook's file estimates from three
+    /// signals instead of four**, which the crate documents as a supported state rather than an
+    /// error — so the empty list here is the answer and not a gap.
+    #[test]
+    fn the_bracket_read_answers_no_combos_when_the_feed_has_never_been_fetched() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Stax", "commander")).unwrap();
+        add(&conn, deck.id, "bolt-lea", main_of(&conn, deck.id), 1);
+
+        let read = &bracket_reads(&conn, &[deck.id]).unwrap()[0];
+        assert!(
+            read.combos.is_empty(),
+            "no rows to match against is not a failure"
+        );
+        assert_eq!(
+            read.cards.len(),
+            1,
+            "and the other three signals still arrive"
+        );
+    }
+
+    /// **The fourth signal, and that it is read over the same pile the cards are.**
+    /// `estimateBracket`'s own doc says the combos handed to it are not re-checked, so a match
+    /// made over a switched-off pile's printings would put a combo on a tile for a deck that
+    /// does not play it — with nothing downstream able to tell.
+    #[test]
+    fn the_bracket_read_matches_combos_over_the_same_active_pile() {
+        let conn = seeded();
+        conn.execute_batch(
+            "INSERT INTO combos (id,bracket_tag,card_count,template_count,identity,produces,
+                                 popularity)
+             VALUES ('c-1','R',2,0,'WR','Infinite damage',77);
+             INSERT INTO combo_cards (combo_id,oracle_id,name,quantity,must_be_commander)
+             VALUES ('c-1','o1','Lightning Bolt',1,0),('c-1','o2','Serra Angel',1,0);",
+        )
+        .unwrap();
+        let deck = create_deck(&conn, &input("Stax", "commander")).unwrap();
+        let main = main_of(&conn, deck.id);
+        let scratch = kind_of(&conn, deck.id, "maybe");
+        add(&conn, deck.id, "bolt-lea", main, 1);
+        add(&conn, deck.id, "serra-lea", scratch, 1);
+
+        // The Maybeboard is seeded off, so the deck holds one of the combo's two cards.
+        assert!(
+            bracket_reads(&conn, &[deck.id]).unwrap()[0]
+                .combos
+                .is_empty(),
+            "a combo the deck holds half of is not a combo the deck has"
+        );
+
+        crate::deck_meta::set_category_active(&conn, scratch, true).unwrap();
+        let combos = &bracket_reads(&conn, &[deck.id]).unwrap()[0].combos;
+        assert_eq!(combos.len(), 1, "both halves are in an active pile now");
+        assert_eq!(combos[0].id, "c-1");
+        assert_eq!(combos[0].bracket_tag, "R");
+        assert_eq!(combos[0].template_count, 0);
+    }
+
+    /// **One entry per requested id, in request order**, `tags`' contract for its two per-card
+    /// reads and for its reason: the caller holds a list of decks and wants a lookup, so a deck
+    /// deleted since that list was taken answers empty lists rather than shifting every entry
+    /// after it by one. An empty request answers an empty list.
+    #[test]
+    fn the_bracket_read_answers_one_entry_per_requested_deck_in_order() {
+        let conn = seeded();
+        let burn = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let angels = create_deck(&conn, &input("Angels", "modern")).unwrap();
+        add(&conn, burn.id, "bolt-lea", main_of(&conn, burn.id), 4);
+        add(&conn, angels.id, "serra-lea", main_of(&conn, angels.id), 2);
+        let gone = angels.id + 1000;
+
+        let out = bracket_reads(&conn, &[angels.id, gone, burn.id]).unwrap();
+        assert_eq!(
+            out.iter().map(|d| d.deck_id).collect::<Vec<_>>(),
+            vec![angels.id, gone, burn.id],
+            "the caller's order, not the table's"
+        );
+        assert_eq!(out[0].cards.len(), 1);
+        assert!(
+            out[1].cards.is_empty() && out[1].combos.is_empty(),
+            "a deck that is not there is empty lists, not a missing entry and not an error"
+        );
+        assert_eq!(out[2].cards.len(), 1);
+
+        assert!(
+            bracket_reads(&conn, &[]).unwrap().is_empty(),
+            "and nothing asked for is nothing answered"
+        );
     }
 
     #[test]

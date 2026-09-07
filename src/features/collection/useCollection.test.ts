@@ -2,6 +2,9 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createElement, type ReactNode } from "react";
+// The sentinel by its name and never as `"NONE"`, which in this file would also sit two letters
+// from the local `NONE` — the no-filters fixture, and a different idea entirely.
+import { CONDITION_NOT_SET } from "@/lib/conditions";
 import type { CollectionPage, CollectionQuery } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
 
@@ -232,6 +235,41 @@ describe("useCollection", () => {
     act(() => result.current.toggleManaX());
 
     expect(result.current.queryKeyString).toBe(key);
+  });
+
+  /**
+   * **"Which copies have I never graded?" is a filter, and it costs nothing to be one.**
+   *
+   * The grade the sixth chip stands for is a stored value like the other five — the `NONE`
+   * sentinel, not a `NULL` and not an absent row — so the filter arrives for free the moment
+   * `CONDITIONS` grows: this hook narrows the reader's picks *through* that list rather than
+   * validating against it, which is also what canonicalises the payload. The order asserted here
+   * is `CONDITIONS`' own, so the ungraded pile leads the list on the wire the same way it leads
+   * the chips; picking the two the other way round has to be the same request, or every chip row
+   * would be a cache miss waiting to happen.
+   *
+   * The literal is deliberately the imported constant. A test spelling `"NONE"` would go on
+   * passing against a hook that had stopped agreeing with the vocabulary it filters through.
+   */
+  it("asks for the copies whose grade was never stated", async () => {
+    const { result } = renderHook(() => useCollection(), { wrapper });
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+
+    act(() => result.current.toggleCondition(CONDITION_NOT_SET));
+    await waitFor(() => expect(lastQuery().conditions).toEqual([CONDITION_NOT_SET]));
+
+    act(() => result.current.toggleCondition("LP"));
+    await waitFor(() => expect(lastQuery().conditions).toEqual([CONDITION_NOT_SET, "LP"]));
+    const both = result.current.queryKeyString;
+
+    act(() => {
+      result.current.toggleCondition("LP");
+      result.current.toggleCondition(CONDITION_NOT_SET);
+      result.current.toggleCondition("LP");
+      result.current.toggleCondition(CONDITION_NOT_SET);
+    });
+
+    expect(result.current.queryKeyString).toBe(both);
   });
 
   /**

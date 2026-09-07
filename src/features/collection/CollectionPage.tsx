@@ -67,6 +67,7 @@ import {
 } from "./CollectionFolderCard";
 import { CollectionSummaryHeader } from "./CollectionSummary";
 import { CollectionTable } from "./CollectionTable";
+import { EditCopy, type EditCopyTarget } from "./EditCopy";
 import {
   collectionTileDragData,
   type CollectionCopy,
@@ -112,12 +113,20 @@ const ROOT_TARGET = 0;
  * the gallery's, which asks about the folder the reader is *standing in* — this question is always
  * asked about a folder **card**, one level down from where the reader is, and there is nothing
  * else on the page holding which one.
+ *
+ * **`editCopy` is the first member that is not about the cabinet**, and it is in here rather than
+ * beside it as a fifth boolean for the union's own argument: a half-typed folder name under an
+ * open copy editor is not a state this view draws either, and one value is one thing to reason
+ * about. What it is *not* is a second Escape rung — that layer is a `Dialog`, and every `Dialog`
+ * registers its own `"inner"` rung on its open flag. See {@link CollectionPage.openPanel}, which
+ * is where the folder half of this union parts company with this member.
  */
 type Panel =
   | { kind: "newFolder"; parentId: number | null }
   | { kind: "renameFolder"; folderId: number }
   | { kind: "moveFolder"; folderId: number }
   | { kind: "deleteFolder"; folderId: number }
+  | { kind: "editCopy"; entryId: number }
   | null;
 
 /**
@@ -1081,19 +1090,77 @@ export function CollectionPage() {
     [rows],
   );
 
+  /**
+   * The other question a row's menu can raise — `Edit copy…`, which is a grade and a price rather
+   * than a destination.
+   *
+   * **The id and nothing else**, which is `cardMenu.tsx`'s side of the same division: the menu
+   * knows a `collection_entries` id, this page is the one holding the list that id names, and the
+   * row is looked up where the dialog is drawn ({@link editing}) rather than snapshotted here. A
+   * copy the list has lost between the right-click and the press is then a dialog that does not
+   * open, which is the honest answer — the copy is gone and so is the question.
+   *
+   * **No {@link openerRef}, and it is not an omission.** {@link open} exists to remember the
+   * folder card whose `⋯` raised a layer so the caret can go back to it; a `MenuAction.onSelect`
+   * has no element behind it and the menu's panel has already closed by the time this runs, so
+   * there is nothing to remember. The copy picker beside it sets its state the same bare way.
+   */
+  const editCopy = useCallback((entryId: number) => {
+    setPanel({ kind: "editCopy", entryId });
+  }, []);
+
+  /**
+   * The copy the editor is about, as {@link EditCopy} needs it — or `null`, which is what closed
+   * means to that dialog.
+   *
+   * **Looked up in the rows on screen rather than fetched**, which is {@link pickCopies}' rule for
+   * the card's name one paragraph up: the menu was built from this very list, so the row is in
+   * hand and a second read would be a round trip for a record already rendered.
+   *
+   * **A row the list no longer carries closes the question**, and that is the honest answer rather
+   * than a defensive one: the id came off a menu built moments ago, so a miss means another window
+   * removed the copy or the reader's own filter moved past it — either way there is nothing left
+   * to edit, and a dialog drawn over a blank would ask about a copy that is not there.
+   */
+  const editing = useMemo<EditCopyTarget | null>(() => {
+    if (panel?.kind !== "editCopy") return null;
+    const row = rows.find((r) => r.id === panel.entryId);
+    if (row === undefined) return null;
+    return {
+      entryId: row.id,
+      // The orphan fallback every adapter on this page uses: a printing `cards` has forgotten
+      // still has the set and number the entry recorded.
+      cardName: row.name ?? `${row.setCode.toUpperCase()} ${row.collectorNumber}`,
+      setCode: row.setCode,
+      collectorNumber: row.collectorNumber,
+      // Both raw, and narrowed by the dialog rather than here: they are TEXT with a CHECK, and
+      // the surface that *draws* a word this build cannot name is the one that has to decide what
+      // to draw instead.
+      finish: row.finish,
+      condition: row.condition,
+      purchasePrice: row.purchasePrice,
+      purchaseCurrency: row.purchaseCurrency,
+      folderName: row.folderName,
+    };
+  }, [panel, rows]);
+
   const { menu, menuKey, menuClick } = useContextMenu();
   const { deps: baseMenuDeps, error: menuFailure } = useCardMenuDeps();
   /**
-   * The app-wide deps plus the one write only this page can offer.
+   * The app-wide deps plus the two writes only this page can offer.
    *
    * `pickCopies` is here rather than in `useCardMenuDeps` because it is a fact about *this
    * surface's targets*: a wall tile stands for several `collection_entries` rows, and no other
    * surface in the app draws a target that does. Every other page leaves it out and `moveItem`
    * files directly, exactly as it always has.
+   *
+   * `editCopy` is here for the near-opposite reason and lands in the same place: it needs a target
+   * that names **one** row the reader pointed at, which in this app is the collection table's row
+   * and nothing else — so the hook would be publishing a dep for a surface that cannot use it.
    */
   const menuDeps = useMemo<CardMenuDeps>(
-    () => ({ ...baseMenuDeps, pickCopies }),
-    [baseMenuDeps, pickCopies],
+    () => ({ ...baseMenuDeps, pickCopies, editCopy }),
+    [baseMenuDeps, pickCopies, editCopy],
   );
   /** One row's handler. The item list is a **thunk** inside `menu`, so a list of a thousand
    *  pays for nothing until a reader actually right-clicks one of them. */
@@ -1308,8 +1375,22 @@ export function CollectionPage() {
    * level it was opened for. Nothing else in the page can produce that state, because
    * {@link openNewFolder} always opens with the level the reader is standing in.
    */
+  /**
+   * The **folder** members of {@link Panel}, which is what everything below this line is about.
+   *
+   * `editCopy` is drawn from the collection's rows rather than from its cabinet, so neither of
+   * the two rules under this heading applies to it and both would be wrong if they did: its
+   * trigger is a card's context-menu row, which survives Flatten (there are *more* rows with the
+   * filing ignored, not fewer), and it has no level for the clause below to compare against. It is
+   * also not the page's Escape rung's business — a `Dialog` registers its own — so letting it
+   * arm this one would be a second `"inner"` layer for one press, whose `dismiss` would hand the
+   * caret to whichever folder card's `⋯` {@link openerRef} happens to be holding.
+   */
+  const folderPanel = panel === null || panel.kind === "editCopy" ? null : panel;
   const openPanel =
-    flatten || (panel?.kind === "newFolder" && panel.parentId !== folderId) ? null : panel;
+    flatten || (folderPanel?.kind === "newFolder" && folderPanel.parentId !== folderId)
+      ? null
+      : folderPanel;
 
   // Focus first, then close: the opener is still mounted at this point, and an element that
   // unmounts with the caret on it drops focus to `<body>` — after which the next Tab restarts from
@@ -3001,6 +3082,27 @@ export function CollectionPage() {
           />
         )}
       </Dialog>
+
+      {/* One copy's grade and what was paid for it — the row's own `Edit copy…`, and
+          `ipc.collectionUpdate`'s first caller in the app.
+
+          **`close` on both exits rather than `dismiss` on one.** Every other layer this page
+          raises has an element to hand the caret back to — a folder card's `⋯`, `New folder`'s
+          tile — and {@link openerRef} is holding it. A context-menu row is not an element by the
+          time its handler runs, so `dismiss` here would focus whichever folder control the reader
+          last used, which is worse than the landing `Dialog` gives up on its own.
+
+          The dialog is keyed by nothing and needs to be: {@link editing} is `null` between two
+          openings, so `Dialog` unmounts the body and every answer in it. */}
+      <EditCopy
+        target={editing}
+        // The selected marketplace's money, and **only** as the fallback for a copy that carries
+        // no currency of its own — the stored price never converts and never moves with this
+        // setting. `EditCopy.currencyOf` is where that rule is enforced.
+        currency={marketplace.currency}
+        onDismiss={close}
+        onClose={close}
+      />
 
       {/* Mounted unconditionally, the same shape every other dialog in this app is — `Dialog`
           itself renders nothing while closed, and staying in the tree is what lets its scrim

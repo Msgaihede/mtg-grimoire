@@ -116,7 +116,8 @@ both plus the frontend.
   every upgraded one, and a fresh worktree is a fresh install, so nothing else here can see it.
   The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
-  numbers from there (`USER_SCHEMA_VERSION` **35** since decks learned which tokens they make,
+  numbers from there (`USER_SCHEMA_VERSION` **36** since decks learned which tokens they make,
+  which is one rung above a condition learning to say nothing,
   `CORPUS_SCHEMA_VERSION` 1, deliberately
   incomparable). This line read **v25** while that was head, and
   [the ladder's history](../docs/reference/data-and-sync.md) is the story. (This line read
@@ -137,13 +138,18 @@ both plus the frontend.
   so it owes its `USER_SCHEMA_SQL` line and its `UNDO_V34`, where v32 owed neither. **v33 and v34
   landed the same day from two branches**, which is this list's own rule in action: take the next
   free number when you land, never reuse one, and never assume the number you wrote is the one
-  you ship. **And it went on reading 34 while v35 was head**, which is this same failure once
-  more — the number is not worth counting the failures of, only worth reading off the constant.
-  v35 creates `deck_tokens` — the **thirteenth** synced table, one row per token the reader has
-  deviated on, grained on `DECK_TOKEN_GRAIN` — and adds `decks.tokens_open`, so it is a shape rung
-  and owes both its `USER_SCHEMA_SQL` lines and its `UNDO_V35`.
-  `grep USER_SCHEMA_VERSION src-tauri/src/schema.rs` settles it in one command and nothing else
-  does.)
+  you ship. **v35 and v36 are that rule firing again, on one day, from two branches** — and
+  this time the collision was invisible in the one place anybody looks: both branches wrote
+  `USER_SCHEMA_VERSION = 35`, so **git reported no conflict on that line at all** and only the
+  two rungs underneath it collided. v35 widens `collection_entries.condition` to a sixth
+  value, `NONE` — *not set* — and makes it the column's `DEFAULT`, for
+  [issue #361](https://github.com/Msgaihede/mtg-grimoire/issues/361). v36 creates
+  `deck_tokens` — the **thirteenth** synced table, one row per token the reader has deviated
+  on, grained on `DECK_TOKEN_GRAIN` — and adds `decks.tokens_open`, so it is a shape rung and
+  owes both its `USER_SCHEMA_SQL` lines and its `UNDO_V36`, for
+  [issue #388](https://github.com/Msgaihede/mtg-grimoire/issues/388).
+  `grep USER_SCHEMA_VERSION src-tauri/src/schema.rs` settles it in one command and nothing
+  else does.)
 - **v24 and v25 are one spec's rung split in two, and the split is deliberate.** v24 creates
   `collection_folders` in its **final** shape — `kind` and `deck_id` columns and both partial
   unique indexes included — and files nothing into it. **v25 inserts the single `removed` folder
@@ -613,9 +619,25 @@ shared_cell` walks both into two databases and compares them column by column.
   by table CHECK (`quantity > 0`) — a wish for none of something is not a wish — so the two tables
   now agree where they used to be a deliberate asymmetry. Both still refuse a negative through the
   one `collection::valid_quantity`.
-- Finish is an **enum** (`nonfoil|foil|etched`), condition is one of `NM|LP|MP|HP|DMG`; both
+- Finish is an **enum** (`nonfoil|foil|etched`), condition is one of `NONE|NM|LP|MP|HP|DMG`; both
   are CHECK-constrained in SQL _and_ validated in Rust, and the imported string is kept in
   `condition_original`.
+- **`NONE` is *not set* — the grade that says nobody assessed the copy — and it is
+  `DEFAULT_CONDITION` since schema v35.** A write that names no grade records that none was
+  named, where it used to record `NM`. Three things follow and each has bitten something:
+  **a sentinel string, never a NULL**, because `condition` is `idx_collection_grain`'s third term
+  and SQLite counts two NULLs as distinct in a unique index — a nullable column would make every
+  ungraded add a *new row* rather than folding onto the one already there. **It sorts last**
+  (`COLLECTION_SORTS`' `CASE` runs `NM 0 … DMG 4, NONE 5`) so the scale stays a scale and the
+  ungraded pile lands at the end of it, while every picker lists it *first*, because there it is
+  the default rather than a grade — two orders, neither derived from the other. And **it stops at
+  the database**: `mirror/read.rs`'s `condition_of` maps it to `None` so an export writes an empty
+  Condition cell, which is also what makes the round trip close, since an empty cell is exactly
+  what the importer reads as "the file did not say". `CONDITION_NOT_SET` and `DEFAULT_CONDITION`
+  hold one string and are two ideas — the sentinel, and what an unnamed write records — so import
+  the one you mean.
+- **v35 did not touch existing rows.** A database full of `NM` stays full of `NM`, because
+  nothing can tell which of those grades a reader assessed and which the app chose for them.
 - **`schema::FINISHES` is the one finish vocabulary and is read by index, never respelled.**
   `sorting::finish_literals` quotes it for SQL, `marketplace_feed`'s `NONFOIL`/`FOIL`/`ETCHED`
   index it, and the three DDL `CHECK`s spell it out because a migration step is history —

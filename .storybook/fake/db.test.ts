@@ -84,6 +84,12 @@ const WHEN = 1786266000;
  * what `collection_add` does at write time, and the reason those three columns outlive the
  * printing. An id no card has leaves them at the caller's values, so an orphan is one
  * `cardId: "gone"` away.
+ *
+ * **`condition` defaults to the column's own `DEFAULT`, which schema v35 moved from `NM` to
+ * `NONE`** — and the pairing is what matters rather than either value: this helper and
+ * `validCondition` have to default to the *same* string, or a hand-made row here stops folding
+ * with an add that states no grade and a dozen fixtures whose subject is not conditions at all
+ * quietly split in two. They moved together. A test that wants a graded row still says so.
  */
 function entry(over: Partial<FakeEntry> = {}): FakeEntry {
   const card = CARDS.find((c) => c.id === (over.cardId ?? BOLT.id));
@@ -91,7 +97,7 @@ function entry(over: Partial<FakeEntry> = {}): FakeEntry {
     id: 1,
     cardId: BOLT.id,
     finish: "nonfoil",
-    condition: "NM",
+    condition: "NONE",
     quantity: 1,
     tradelistQuantity: 0,
     lang: card?.lang ?? "en",
@@ -1379,12 +1385,19 @@ describe("ordering", () => {
           entry({ id: 2, finish: "foil", condition: "DMG" }),
           entry({ id: 3, finish: "foil", condition: "NM" }),
           entry({ id: 4, finish: "etched", condition: "NM" }),
+          // Schema v35's sixth value, inside the foils with the other two.
+          entry({ id: 5, finish: "foil", condition: "NONE" }),
         ],
       });
       // `etched < foil < nonfoil` is byte order over the finish itself; `NM` before `DMG`
       // inside the foils is the **rank**, and alphabetical order would answer the reverse.
-      expect(idsFor(db, [{ key: "finish", dir: "asc" }])).toEqual([4, 3, 2, 1]);
-      expect(idsFor(db, [{ key: "finish", dir: "desc" }])).toEqual([1, 2, 3, 4]);
+      //
+      // **`NONE` sits last of the three foils**, `collection::COLLECTION_SORTS`' `THEN 5`: a
+      // sorted column is the scale read *as* a scale, so the ungraded pile belongs at the end
+      // of it rather than in front of the Near Mints. The picker in `lib/conditions.ts` draws
+      // the same six the other way round, and neither order is derived from the other.
+      expect(idsFor(db, [{ key: "finish", dir: "asc" }])).toEqual([4, 3, 2, 5, 1]);
+      expect(idsFor(db, [{ key: "finish", dir: "desc" }])).toEqual([1, 5, 2, 3, 4]);
     });
 
     it("sorts `value` by the row total and `price` by one copy", () => {
@@ -2719,6 +2732,198 @@ describe("the collection grain", () => {
     expect(() => writeHandlers(db).collection_update({ id: 1, patch: { quantity: 1 } })).toThrow(
       /not there any more/,
     );
+  });
+});
+
+/**
+ * **A condition that says nothing** — schema v35's sixth value, and the fake's half of
+ * `collection::DEFAULT_CONDITION`.
+ *
+ * The whole of the change is in one function: {@link validCondition} answers `NONE` where it
+ * used to answer `NM`, and the three writes that can land a row without being told a grade —
+ * `collection_add`, `collection_import_commit` and `deck_quick_add_to_collection` — inherit it
+ * because none of them spells a default of its own. So these assert the *behaviour at each
+ * door* rather than the constant, which a single `expect(validCondition(undefined))` would have
+ * asserted about nothing a reader can press.
+ *
+ * **`NONE` is a value and not an absence, which is what the grain needs it to be.** A NULL
+ * would be distinct from itself in `idx_collection_grain` — SQLite counts two NULLs as
+ * different in a unique index — so four presses of `+` would leave four rows of one copy. The
+ * second test here is that rule from the outside: two ungraded adds are one row, and an
+ * ungraded row beside a Near Mint one is two.
+ */
+describe("a condition nobody stated", () => {
+  const add = (over: Partial<EntryInput> = {}): { entry: EntryInput } => ({
+    entry: { cardId: BOLT.id, finish: "nonfoil", quantity: 1, ...over },
+  });
+
+  it("lands an add that names no grade on NONE, and one that names a grade on the grade", () => {
+    const db = makeDb();
+    const w = writeHandlers(db);
+    w.collection_add(add({ quantity: 2 }));
+    w.collection_add(add({ finish: "foil", condition: "LP" }));
+    expect(db.collectionEntries.map((e) => e.condition)).toEqual(["NONE", "LP"]);
+    // The row still says *nothing* rather than saying `NM` on the reader's behalf: nobody can
+    // tell an app's guess from a grade somebody typed once both are spelled the same way.
+    expect(db.collectionEntries[0].conditionOriginal).toBeNull();
+  });
+
+  it("folds two ungraded adds together and keeps a graded row beside them", () => {
+    const db = makeDb();
+    const w = writeHandlers(db);
+    const first = w.collection_add(add({ quantity: 2 }));
+    const second = w.collection_add(add({ quantity: 3 }));
+    // One row, not two: the sentinel folds like any other value, which is the whole reason it
+    // is a string and not a NULL.
+    expect(second.id).toBe(first.id);
+    expect(second.quantity).toBe(5);
+
+    // And it is genuinely the third grain term rather than a value nothing distinguishes: a
+    // Near Mint copy of the same printing at the same finish is its own row.
+    const graded = w.collection_add(add({ condition: "NM" }));
+    expect(graded.id).not.toBe(first.id);
+    expect(db.collectionEntries.map((e) => [e.condition, e.quantity])).toEqual([
+      ["NONE", 5],
+      ["NM", 1],
+    ]);
+  });
+
+  it("lands an import line whose file said nothing on NONE too", () => {
+    const db = makeDb();
+    const items: CollectionImportItem[] = [
+      // A three-column file: name, set, quantity, and no Condition cell at all.
+      { cardId: BOLT.id, finish: "nonfoil", quantity: 2 },
+      { cardId: BOLT.id, finish: "foil", quantity: 1, condition: "HP" },
+    ];
+
+    writeHandlers(db).collection_import_commit({ items, mode: "add" });
+
+    expect(db.collectionEntries.map((e) => e.condition)).toEqual(["NONE", "HP"]);
+  });
+
+  /** `set` is `addEntry` with one clause changed, so it reaches the same door — asserted
+   *  because "one clause changed" is a claim about a function nobody re-reads. */
+  it("lands a silent set line on NONE as well", () => {
+    const db = makeDb();
+    writeHandlers(db).collection_import_commit({
+      items: [{ cardId: BOLT.id, finish: "nonfoil", quantity: 4 }],
+      mode: "set",
+    });
+    expect(db.collectionEntries.map((e) => [e.condition, e.quantity])).toEqual([["NONE", 4]]);
+  });
+
+  /**
+   * The refusal is still a refusal, and it names the six it will take. Spelled against the
+   * sentence rather than against `CONDITIONS`, so a list that lost a value would fail here
+   * instead of quietly agreeing with itself — `assertion must not read its own constant`.
+   */
+  it("still refuses a grade that is not one, and names all six", () => {
+    const db = makeDb();
+    expect(() => writeHandlers(db).collection_add(add({ condition: "MINT" as never }))).toThrow(
+      "`MINT` is not a condition. Use one of: NONE, NM, LP, MP, HP, DMG.",
+    );
+    expect(db.collectionEntries).toHaveLength(0);
+  });
+});
+
+/**
+ * **Editing a copy** — `collection::update_entry` through the one command that has had no
+ * caller in `src/` since it was written, and is about to get one.
+ *
+ * Two fields matter here and they fail in opposite directions. `condition` is a **grain** term,
+ * so writing `NONE` onto a graded row moves the row and can fold it onto an ungraded one already
+ * standing. `purchasePrice` is not, and its hole is `coalesce(?7, purchase_price)` — absent means
+ * *leave it*, and `EntryPatch` has no third state that means "make it null". A dialog that
+ * offered to empty the field would be a control that silently does nothing, so the gap is
+ * asserted here rather than left for a reader to find.
+ */
+describe("editing a copy's grade and what it cost", () => {
+  it("writes the two fields it was given and leaves every field it was not", () => {
+    const db = makeDb({
+      collectionEntries: [
+        entry({
+          id: 1,
+          condition: "NM",
+          quantity: 3,
+          purchasePrice: 12,
+          purchaseCurrency: "USD",
+          notes: "from the shop on the corner",
+          tags: '["cube"]',
+        }),
+      ],
+    });
+
+    const out = writeHandlers(db).collection_update({
+      id: 1,
+      patch: { condition: "NONE", purchasePrice: 4.5 },
+    });
+
+    expect(out).toEqual({ id: 1, quantity: 3, removed: false });
+    expect(db.collectionEntries[0]).toMatchObject({
+      condition: "NONE",
+      purchasePrice: 4.5,
+      // Absent is "leave it", eleven times over: a form that sends two fields must not blank
+      // the nine it never drew.
+      purchaseCurrency: "USD",
+      quantity: 3,
+      notes: "from the shop on the corner",
+      tags: '["cube"]',
+      finish: "nonfoil",
+    });
+  });
+
+  it("cannot clear a price, because absent is the only thing absent can mean", () => {
+    const db = makeDb({ collectionEntries: [entry({ id: 1, purchasePrice: 12 })] });
+
+    // Both spellings of "no price" a caller can produce, and neither empties the column.
+    writeHandlers(db).collection_update({ id: 1, patch: { purchasePrice: undefined } });
+    expect(db.collectionEntries[0].purchasePrice).toBe(12);
+    writeHandlers(db).collection_update({ id: 1, patch: { notes: "still paid for it" } });
+    expect(db.collectionEntries[0].purchasePrice).toBe(12);
+
+    // A **zero** is not an absence and is written like any other number — which is what stops
+    // `??` from being the wrong operator here. A reader who was given the card can say so.
+    writeHandlers(db).collection_update({ id: 1, patch: { purchasePrice: 0 } });
+    expect(db.collectionEntries[0].purchasePrice).toBe(0);
+  });
+
+  /**
+   * **Un-grading a row onto one that is already ungraded folds them**, which is
+   * {@link foldEntry} reached through the third grain term rather than through the finish.
+   *
+   * The patch's non-grain half lands on the source *before* the fold, so the price the reader
+   * typed in the same press is the one that survives — the survivor had none of its own, and
+   * `foldEntry`'s coalesce takes the folded row's.
+   */
+  it("folds an edit to NONE onto the ungraded row already standing there", () => {
+    const db = makeDb({
+      collectionEntries: [
+        entry({ id: 1, condition: "NM", quantity: 2 }),
+        entry({ id: 2, condition: "NONE", quantity: 1 }),
+      ],
+    });
+
+    const out = writeHandlers(db).collection_update({
+      id: 1,
+      patch: { condition: "NONE", purchasePrice: 7 },
+    });
+
+    expect(out).toEqual({ id: 2, quantity: 3, removed: false });
+    expect(db.collectionEntries).toHaveLength(1);
+    expect(db.collectionEntries[0]).toMatchObject({ id: 2, condition: "NONE", purchasePrice: 7 });
+  });
+
+  it("refuses a grade that is not one before it writes anything", () => {
+    const db = makeDb({ collectionEntries: [entry({ id: 1, condition: "NM", quantity: 2 })] });
+    expect(() =>
+      writeHandlers(db).collection_update({
+        id: 1,
+        patch: { condition: "NONE!" as never, quantity: 9 },
+      }),
+    ).toThrow(/is not a condition/);
+    // The quantity beside it did not land either: the validation is ahead of the write, which
+    // is `PATCH_SQL`'s `OR IGNORE` being narrowed in words before the statement runs.
+    expect(db.collectionEntries[0]).toMatchObject({ condition: "NM", quantity: 2 });
   });
 });
 
@@ -4183,9 +4388,14 @@ describe("the two reads a folder rule is answered from", () => {
    * workbench nobody can use.
    *
    * Deck 1 — `Modern Goodstuff`, the deck every editor story opens — plays **18** cards, and its
-   * Collection Search tab can still file five of the reader's twelve rows. The four it now
+   * Collection Search tab can still file six of the reader's thirteen rows. The four it now
    * refuses are the ones the deck genuinely does not play; `mh2 267` and `mh2 138` keep
    * answering `ALREADY_HERE`, which is the older refusal and still ahead of nothing.
+   *
+   * **`sta 105` appears twice in the filed list, and that is the schema v35 row** — the seed's
+   * ungraded etched Bolt, a second grade of a printing already here. A grade is not part of the
+   * question this fence asks, which is the useful thing for it to say: `collection_to_deck`
+   * moves a *row*, and two rows of one printing are two presses whatever either says about wear.
    *
    * **The one that matters is `c21 263`** — the Sol Ring in `Kenrith Two-Drops`, the seed's only
    * copy filed under a deck the reader is not standing in, and therefore the only row the
@@ -4193,7 +4403,7 @@ describe("the two reads a folder rule is answered from", () => {
    * press now refuses. No story's `play` presses it (`CrossDeckConfirm` stops at the question),
    * so nothing goes red — which is exactly why it is measured here instead.
    */
-  it("still lets the starter seed's deck file five of the reader's twelve rows", () => {
+  it("still lets the starter seed's deck file six of the reader's thirteen rows", () => {
     const db = seed("starter");
     const main = db.deckCategories.find((c) => c.deckId === 1 && c.kind === "main")!;
     // A fresh world per row: a filing that succeeds changes what the next one is asked about.
@@ -4223,6 +4433,8 @@ describe("the two reads a folder rule is answered from", () => {
       "sta 105",
       "fut 153",
       "mh2 259",
+      // The v35 row: the same printing as the third entry, at no grade at all.
+      "sta 105",
     ]);
     // Sol Ring twice — the cross-deck row and the reader's other printing of it — plus the two
     // cards deck 1 has simply never listed.
@@ -5202,7 +5414,9 @@ describe("pulling owned copies into a deck", () => {
             folderId: null,
             folderName: null,
             folderKind: null,
-            condition: "NM",
+            // The fixture row's own value, which is {@link entry}'s default and therefore the
+            // column's: a candidate carries whatever grade the copy wears, `NONE` included.
+            condition: "NONE",
             lang: "en",
             altered: false,
             signed: false,
@@ -7703,14 +7917,24 @@ describe("the busy fault", () => {
     // through `lock_db_read` and `wishlist_optimize_plan` through `db_read` — exactly as
     // `deck_pull_plan` is.
     //
-    // Tokens and emblems then added **three**, 91 → 94: `deck_token_set`, `deck_token_clear` and
+    // `set_deck_sort` (issue #387) is the ninth `app_meta` write and joins for the reason all
+    // eight do: the row is in the reader's own database, so the write takes the write connection
+    // and answers BUSY under a sync like every other. Its read half, `deck_sort`, is absent for
+    // `deck_pull_plan`'s reason — and the two *gallery* reads that shipped beside it,
+    // `deck_pip_costs` and `deck_bracket_reads`, are absent for the same one.
+    //
+    // Tokens and emblems then added **three**: `deck_token_set`, `deck_token_clear` and
     // `deck_token_add` all take plain `sync::with_write` — not `with_write_owned`, which is only
     // for the four writes that move copies across the collection boundary, and nothing here
-    // changes what the reader owns. The fourth handler the feature ships, `deck_tokens`, is a
+    // changes what the reader owns. The fourth handler that feature ships, `deck_tokens`, is a
     // read on `lock_db_read` and is in `readHandlers`: the split every feature in this table is
-    // on. Re-counted by running the sweep, not by adding three on paper — which is the trap the
-    // two paragraphs above are both about.
-    expect(names).toHaveLength(94);
+    // on.
+    //
+    // **The number is 95 because two branches each moved it on one day** — 91 → 92 for the sort,
+    // 91 → 94 for the tokens — and neither arithmetic was right once both had landed. It is
+    // re-counted by running the sweep, which is the trap the two paragraphs above are both about
+    // and which a merge is the likeliest way to meet.
+    expect(names).toHaveLength(95);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,

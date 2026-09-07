@@ -17,9 +17,9 @@
 use crate::sync::AppState;
 use crate::{
     camera, card, collection, collection_alloc, collection_folders, combos, db, deck, deck_audit,
-    deck_meta, deck_pull, deck_quick_add, deck_theory, deck_tokens, deck_undo, errors, export,
-    flatten, images, import, index, listview, marketplace, marketplace_feed, mirror, nav, paths,
-    reset, schema, scryfall, search, sync, sync_engine, sync_pair, tags, update, wishlist,
+    deck_meta, deck_pull, deck_quick_add, deck_theory, deck_tokens, deck_undo, decksort, errors,
+    export, flatten, images, import, index, listview, marketplace, marketplace_feed, mirror, nav,
+    paths, reset, schema, scryfall, search, sync, sync_engine, sync_pair, tags, update, wishlist,
     wishlist_folders, wishlist_optimize, zoom,
 };
 // **Not in the list above, because this file compiles for Android too.** Its name says
@@ -423,6 +423,12 @@ pub fn run() {
             deck::deck_set_folder,
             deck::deck_set_view_state,
             deck::deck_list,
+            // The gallery's two second reads — the colour bar's mana costs for every deck at
+            // once, and the bracket estimate's facts for the decks the page names. Both are
+            // reads and take `db_read`, so they sit with `deck_list` rather than with the card
+            // writes below.
+            deck::deck_pip_costs,
+            deck::deck_bracket_reads,
             deck::deck_get,
             // The two reads a folder rule is answered from: what one deck's live list plays,
             // and which decks play a given set of cards. Both are reads and take `db_read`,
@@ -488,6 +494,8 @@ pub fn run() {
             nav::set_nav_collapsed,
             listview::list_view,
             listview::set_list_view,
+            decksort::deck_sort,
+            decksort::set_deck_sort,
             flatten::flatten_state,
             flatten::set_flatten_state,
             marketplace_feed::marketplace_feed_refresh,

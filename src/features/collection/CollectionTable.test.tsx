@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { TooltipContext, type TooltipApi } from "@/components/tooltip/useTooltip";
+import { CONDITION_LABEL, CONDITION_NOT_SET } from "@/lib/conditions";
 import type { CollectionRow } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { CollectionTable } from "./CollectionTable";
@@ -287,11 +288,7 @@ describe("CollectionTable", () => {
   });
 
   /**
-   * **Both halves and the separator, always.** `collection_entries.condition` is
-   * `TEXT NOT NULL DEFAULT 'NM'` and {@link CollectionRow.condition} is non-nullable to match, so
-   * the "grade never stated" arm this cell and `copyLabel` used to carry could not be reached —
-   * a row with no grade is not a state the backend can build. The test that pinned that arm
-   * asserted a `condition: null` the DTO no longer admits.
+   * **Both halves and the separator, for a row whose grade the reader stated.**
    *
    * The grade is abbreviated in the cell and expanded in `sr-only` text beside it, so the two
    * spellings are both asserted here: `NM` is what a reader sees and `Near mint` is what is
@@ -305,6 +302,55 @@ describe("CollectionTable", () => {
     expect(screen.getByText("(Near mint)")).toBeInTheDocument();
     expect(
       screen.getByRole("spinbutton", { name: "Quantity of Lightning Bolt (Nonfoil, NM)" }),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * **The other arm, which is new rather than newly tested.** Both halves used to be
+   * unconditional and the comment above them said why: `collection_entries.condition` is
+   * `TEXT NOT NULL` and {@link CollectionRow.condition} is non-nullable to match, so a row
+   * carrying no grade was not a state the backend could build. Schema v35 moved the column's
+   * *default* onto the `NONE` sentinel, and an add that states no grade — the popup opened and
+   * left alone, either menu's one press, an import line whose file is silent — lands on it. It is
+   * the commonest row in a collection nobody has graded by hand.
+   *
+   * Three absences and one presence, because each of the three is a different way of drawing the
+   * sentinel by accident: the storage token itself, the separator with nothing after it, and the
+   * `<abbr>`/`sr-only` pair expanding a grade to a word the reader never chose. What is left is
+   * the finish, on its own.
+   */
+  it("prints the finish alone for a copy whose grade was never stated", () => {
+    renderTable([{ ...ROW, condition: CONDITION_NOT_SET }]);
+
+    expect(screen.getByText("Nonfoil")).toBeInTheDocument();
+    expect(screen.queryByText("Nonfoil ·")).not.toBeInTheDocument();
+    expect(screen.queryByText(CONDITION_NOT_SET)).not.toBeInTheDocument();
+    expect(screen.queryByText(`(${CONDITION_LABEL.NONE})`)).not.toBeInTheDocument();
+    expect(document.querySelector("abbr")).toBeNull();
+  });
+
+  /**
+   * `copyLabel`'s half of the same rule, and the half a screen reader hears.
+   *
+   * Every control on this row is named for the copy it acts on, so the sentinel reaches two
+   * accessible names rather than one cell. `Lightning Bolt (Nonfoil, NONE)` would say a storage
+   * token out loud and `Lightning Bolt (Nonfoil, )` would trail a comma into nothing — the
+   * parenthesis carries the finish and stops.
+   *
+   * At **zero copies**, because that is the only row that draws both controls at once: removal is
+   * offered on an emptied row and nowhere else (see the case above), and one row is what keeps the
+   * two names unambiguous — two rows of one card would collide in every `getByRole` name query.
+   */
+  it("names a control on an ungraded row by its finish alone", () => {
+    renderTable([{ ...ROW, condition: CONDITION_NOT_SET, quantity: 0 }]);
+
+    expect(
+      screen.getByRole("spinbutton", { name: "Quantity of Lightning Bolt (Nonfoil)" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: "Remove Lightning Bolt (Nonfoil) from your collection",
+      }),
     ).toBeInTheDocument();
   });
 

@@ -291,12 +291,19 @@ describe("the seeds", () => {
 
   it("starter spans every finish and every condition, and keeps a row at zero", () => {
     const rows = seed("starter").collectionEntries;
-    expect(rows).toHaveLength(12);
+    expect(rows).toHaveLength(13);
     expect(new Set(rows.map((e) => e.finish))).toEqual(new Set(["nonfoil", "foil", "etched"]));
-    expect(new Set(rows.map((e) => e.condition))).toEqual(new Set(["NM", "LP", "MP", "HP", "DMG"]));
+    // **Six, and the sixth is the one no grade at all.** A seed that spanned only the five real
+    // grades would leave every surface drawing a not-set row — the table's `Finish · condition`
+    // cell, the Condition tray's own option, the sort's last place — with nothing to draw it
+    // against, and each of those would look right while being untested.
+    expect(new Set(rows.map((e) => e.condition))).toEqual(
+      new Set(["NONE", "NM", "LP", "MP", "HP", "DMG"]),
+    );
+    expect(rows.filter((e) => e.condition === "NONE")).toHaveLength(1);
     expect(rows.filter((e) => e.quantity === 0)).toHaveLength(1);
-    // 20 copies over 12 entries: the two numbers a summary shows separately.
-    expect(rows.reduce((n, e) => n + e.quantity, 0)).toBe(20);
+    // 21 copies over 13 entries: the two numbers a summary shows separately.
+    expect(rows.reduce((n, e) => n + e.quantity, 0)).toBe(21);
   });
 
   it("starter carries a pinned foil wish the nonfoil in the binder does not fill", () => {

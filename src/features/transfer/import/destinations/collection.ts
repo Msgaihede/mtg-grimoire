@@ -33,7 +33,7 @@ export interface CollectionOptions {
  * the deck's own planner already draws. `normalizeCondition`'s own doc says why this cannot be
  * silent: *"`matched: false` is not an error — it is what an import preview shows as a warning
  * row"* — dropping the flag here would be the one destination that reads conditions at all
- * quietly filing every unreadable grade as if the reader had chosen the app's own NM default.
+ * quietly filing every unreadable grade as though the file had named no grade to begin with.
  */
 export interface UnknownCondition {
   lineNumber: number;
@@ -85,13 +85,23 @@ export function planCollectionImport(
     // what `conditionOriginal` is for — and it answers `original: null` for silence, where
     // `CollectionImportItem`'s optional fields answer `undefined`, so the `?? undefined` below
     // is the one seam between the two.
+    //
+    // **A blank cell is the dialog's answer, not the function's, and the two agree by accident
+    // rather than by construction.** `normalizeCondition("")` answers `NONE` with
+    // `matched: true`, so if a blank ever reached it the *function's* fallback would win and
+    // `options.condition` would be skipped — but one never does: `parseCsvGrid` trims every cell
+    // and only puts a non-empty one into `extra`, so silence arrives here as `undefined` and
+    // takes the `null` branch below. Since schema v35 both roads end at `NONE` when the reader
+    // has not touched the dropdown, which is exactly why this is worth writing down: the
+    // difference is invisible today and is one edit to `parse.ts` away from being visible again.
+    // **The dropdown wins.**
     const said = line.extra.condition;
     const normalized = said === undefined ? null : normalizeCondition(said);
     // `matched: false` is a grade this app does not recognise — flagged for the reader rather
-    // than silently taking `normalizeCondition`'s own NM fallback, which is the *best* grade on
-    // the scale and the one answer least likely to be what the file meant. An unreadable grade
-    // is treated the same as silence and falls back to the reader's own chosen default: "the
-    // condition when the file doesn't say" is exactly what an unreadable one amounts to.
+    // than filed as though the file had said nothing. An unreadable grade then falls back to the
+    // reader's own chosen default, the same as silence does: "the condition when the file
+    // doesn't say" is exactly what an unreadable one amounts to, and a reader who set that
+    // dropdown to `LP` meant it for these lines too.
     if (normalized !== null && !normalized.matched) {
       unknownConditions.push({
         lineNumber: line.lineNumber,

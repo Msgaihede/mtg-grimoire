@@ -653,14 +653,87 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   **It was written as v33 and renumbered on the way in**, which is the ladder's own rule
   working rather than an accident worth hiding: the rung above took 33 while this branch was
   open, and the number belongs to whoever lands first.
-  **v35 gives a deck the tokens it makes, and it is the first rung since v31 to add a table to the
+  **v35 widens `collection_entries.condition` to a sixth value and makes it the column's
+  `DEFAULT`.** `NONE` is *not set* — the grade that says nobody assessed the copy — landed
+  2026-09-07 for [issue #361](https://github.com/Msgaihede/mtg-grimoire/issues/361), and it is a
+  shape rung, so it owes the `USER_SCHEMA_SQL` line and the `UNDO_V35` that v34 owed before it.
+  **It is a table rebuild, and a CHECK is the whole reason**: SQLite cannot alter one, so the
+  rung builds `collection_entries_v35`, copies all 27 columns **including `id`**, drops, renames
+  and replays all five indexes as frozen literals — the v8 `deck_cards` shape, and the user
+  ladder's third rebuild after v29's `error_log` and v33's `deck_audit`.
+  **A sentinel string rather than a nullable column, and the grain is why.** `condition` is
+  `idx_collection_grain`'s third term and SQLite counts two NULLs as **distinct** in a unique
+  index, so a nullable one would make every ungraded add a brand-new row rather than folding onto
+  the row already there — a reader pressing `+` four times would end with four rows of one copy.
+  Reproduced against real SQLite while the rung was being written: four ungraded adds under a
+  nullable column give four rows, under the sentinel one. It costs the fold, the reconcile and the
+  sync no special case at all, and it sorts **last** (`COLLECTION_SORTS` runs `NM 0 … DMG 4,
+  NONE 5`) while every picker lists it **first** — two orders, neither derived from the other,
+  because a sorted column is the scale read as a scale and a dropdown is a default read first.
+  **No existing row is rewritten.** A database full of `NM` stays full of `NM`: nothing can tell
+  which of those grades a reader assessed and which the app chose for them before this rung
+  existed.
+  **It is the first user rung to change `USER_SCHEMA_SQL`'s *shape* for a table rather than only
+  adding to it**, and both halves were forced by
+  `the_user_schema_is_byte_identical_to_what_the_ladder_builds` rather than chosen.
+  `ALTER TABLE … RENAME TO` **quotes the stored name** (measured on SQLite 3.53.0), so
+  `collection_entries` joins `deck_cards`/`deck_labels`/`deck_audit`/`error_log` in wearing quotes
+  there; and the rebuild erases the ALTER artefact tail that v24 and v28 left behind
+  (`… updated_at INTEGER NOT NULL\n, folder_id INTEGER …, sync_uid TEXT);`), which becomes
+  ordinary column lines. `IF NOT EXISTS` is stripped from stored SQL, which is why the head
+  literal's index text has never carried it and the rung's does not either — the `DROP TABLE`
+  takes all five indexes, so there is nothing to guard against.
+  **The rebuild emits no sync ops**, which is the answer to the obvious worry about a table that
+  is dropped and refilled: `DROP TABLE` takes `sync_ins/upd/del_collection_entries` with it,
+  `prepare_database` calls `capture::install` on the very next line, and the copy lands in a table
+  that has no triggers on it while it is being written. SQLite's implicit `DELETE FROM` under
+  `foreign_keys=ON` fires none either. Nothing points an enforced foreign key at
+  `collection_entries` at head — `deck_allocations` went at v25 — so the `foreign_keys` pragma
+  cannot make this rung behave two ways.
+  **`UNDO_V35` maps rather than deletes, and it runs first.** The rewind carries an ungraded row
+  back as `'NM'`, which is precisely what the old `DEFAULT` would have recorded for the same
+  press, because no rewind on either ladder may lose one of the reader's cards. It **can** collide
+  on the grain where one printing is held at both `NONE` and `NM`, and the closing
+  `CREATE UNIQUE INDEX` is where that fails loudly rather than quietly; no fixture seeds such a
+  pair. Its position at the head of every chain is load-bearing beyond the walk-backwards rule
+  every rewind follows: `UNDO_V29` does
+  `ALTER TABLE collection_entries DROP COLUMN sync_uid`, and `DROP COLUMN` refuses a column an
+  index names — so `UNDO_V35` has to have put `idx_collection_entries_uid` back before `UNDO_V29`
+  comes to take it away.
+  **Two prose chains in `schema.rs` were already stale before this branch opened** and were
+  corrected while the rung was being written: `UNDO_V33` still called itself "the newest rewind on
+  the user ladder", which `UNDO_V34` had already made false, and
+  `migrate_the_real_database_to_v29` enumerated `UNDO_V33/31/30/29` with `UNDO_V34` missing.
+  Neither could go red — a prose-only edit routes to neither CI job — which is this file's own
+  recurring lesson arriving inside the crate rather than in a document.
+  **On the wire this is a version boundary of the quiet kind.** Nothing gates sync on
+  `USER_SCHEMA_VERSION`, so a v35 device pushing a `NONE` row at a device still on v34 lands
+  against that device's narrower CHECK. That is true of every shape rung this repo has shipped —
+  v34's `collection_folders.locked` has exactly the same property — and it is not v35's to fix;
+  it is written down here so the next person meets it in a document rather than in a failure.
+  **Driven on a real v34 database, 2026-09-07, debug `tauri dev`** — a copy of the main
+  checkout's own `user.db`, because a worktree is a fresh install and can never show an upgrade
+  bug. Before: `user_version` **34**, **275** rows over **330** copies, every one of them `NM`,
+  no `purchase_price` anywhere, ids **1–275**, the five-value CHECK. After the app opened it
+  once: `user_version` **35**, the CHECK reading `('NONE','NM','LP','MP','HP','DMG')`, and
+  **all 275 rows still `NM`** at the same ids with all five indexes back. That is the whole of
+  what the rung promises — a widened constraint and nothing rewritten — measured rather than
+  argued. The rebuild is fast enough not to be worth a figure: the window was up and drawing the
+  collection within the ordinary start-up.
+  **The one trap in taking that measurement is reading too early.** Probed 8 s after
+  `mtg-grimoire.exe` appeared in the process list, the file still said **34** — the process
+  exists well before `prepare_database` has opened the user half, and `user.db-wal` was still
+  0 bytes. A single probe at that moment reads exactly like a rung that never ran. Wait for the
+  window to draw, then probe; and note that a read-only `node:sqlite` open **creates the `-shm`
+  file itself**, so a fresh `-shm` timestamp is not evidence the app has touched anything.
+  **v36 gives a deck the tokens it makes, and it is the first rung since v31 to add a table to the
   sync census.** Landed 2026-09-07 for
   [issue #388](https://github.com/Msgaihede/mtg-grimoire/issues/388). One `CREATE TABLE`, two
   indexes and one `ALTER TABLE`: `deck_tokens` (`id`, `deck_id` CASCADEing off `decks`, `oracle_id`, a nullable
   `card_id` and `quantity`, a `state` CHECKed to `auto | hidden | manual`, the two timestamps and
   `sync_uid`), `idx_deck_tokens_grain` on `schema::DECK_TOKEN_GRAIN`, `idx_deck_tokens_uid`, and
   `ALTER TABLE decks ADD COLUMN tokens_open INTEGER NOT NULL DEFAULT 0`. A shape rung, so it owes
-  its `USER_SCHEMA_SQL` lines and its `UNDO_V35` — and the undo has to take **all four** things
+  its `USER_SCHEMA_SQL` lines and its `UNDO_V36` — and the undo has to take **all four** things
   back, because `CREATE TABLE` without `IF NOT EXISTS` and `ADD COLUMN` are both non-idempotent
   and every fixture below replays over it.
   Four things about it are worth carrying.

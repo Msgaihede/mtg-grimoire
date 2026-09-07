@@ -103,6 +103,7 @@ import { SPECS } from "@/features/decks/validation/fixtures";
 import { IMAGE_VARIANTS, type ImageVariant } from "@/lib/images";
 import type {
   BackupZip,
+  BracketCardRow,
   CardDetail,
   CacheCleared,
   CardFace,
@@ -125,10 +126,12 @@ import type {
   DeckAuditEntry,
   DeckAuditKind,
   ErrorEntry,
+  DeckBracketRead,
   DeckCard,
   DeckCategory,
   DeckCombo,
   DeckCoverKind,
+  DeckPipCosts,
   DeckFinish,
   DeckFolder,
   DeckGame,
@@ -239,7 +242,22 @@ export interface FakeEntry {
   id: number;
   cardId: string;
   finish: "nonfoil" | "foil" | "etched";
-  condition: "NM" | "LP" | "MP" | "HP" | "DMG";
+  /**
+   * The grade, or **`NONE` for nobody said** — schema v35's sixth value, and the column's
+   * `DEFAULT` since it landed. Spelled in the CHECK's own order.
+   *
+   * **A sentinel string rather than a NULL**, and the reason is `idx_collection_grain`:
+   * `condition` is that unique index's third term and SQLite counts two NULLs as distinct in
+   * one, so a nullable column would make every ungraded add a brand-new row instead of folding
+   * onto the one already there — a reader pressing `+` four times would end with four rows of
+   * one copy. A sentinel folds like any other value and costs {@link collectionGrain}, the
+   * reconcile and the sync no special case at all.
+   *
+   * **Existing rows keep the grade they have.** The v35 rebuild changes the CHECK and the
+   * DEFAULT and touches no value, because nobody can tell which `NM` the reader meant and
+   * which the app chose for them — so a seeded world's explicit grades are as real as they were.
+   */
+  condition: "NONE" | "NM" | "LP" | "MP" | "HP" | "DMG";
   quantity: number;
   tradelistQuantity: number;
   /** Denormalised from `cards` at write time, and the identity a row keeps when its
@@ -1316,6 +1334,26 @@ export interface FakeDb {
    */
   deckSearchOpen: boolean;
   /**
+   * `app_meta.deck_sort` — how the deck gallery was last ordered, as `"<key>:<direction>"`.
+   *
+   * A **stored string** and `null` for the row not being there, which is
+   * {@link FakeDb.printingGroupBy}'s shape — but only half of its reasons, and the other half is
+   * what this field is worth reading for. The first state is the same: a fresh install has never
+   * written the row. The second is not "a word *this* build cannot place" but a word **no build
+   * of the backend can place at all** — the sort keys are `features/decks/deckSort.ts`', three of
+   * the six are computed on the frontend (a deck's colours out of `deck_pip_costs`, its bracket
+   * out of `estimateBracket`), and so `decksort.rs` has no list to check one against. It stores
+   * anything non-blank and answers it verbatim.
+   *
+   * So a story can seed a key this build has retired and watch the gallery fall back to its
+   * default order — a state a narrowed field would have put out of reach, and the one the
+   * frontend's narrowing exists for. See {@link readHandlers.deck_sort} and
+   * {@link writeHandlers.set_deck_sort}: the read falls back on a *blank* alone and the write
+   * refuses only that, which is the narrowest version of this table's read-shrugs/write-refuses
+   * split.
+   */
+  deckSort: string | null;
+  /**
    * `marketplace_prices` — the table that made a third and fourth marketplace possible.
    *
    * Keyed `(marketplace, cardId, finish)` and **not** a column on `cards`, for the schema's own
@@ -1962,6 +2000,12 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // `true` for an editor nobody has told, so every deck story that says nothing about the
     // search column is standing in the column the app ships open.
     deckSearchOpen: true,
+    // The gallery's order, and a `null` rather than a value again: `deck_sort` answers
+    // `updated:desc` for a wall nobody has re-ordered, so every deck story that says nothing
+    // about the picker is standing in the order the app ships — most recently touched first,
+    // which is what `deck_list` already sorts by and what the gallery drew before there was a
+    // picker at all.
+    deckSort: null,
     // Empty here and filled by a seed, exactly as the card corpus is: a downloaded feed is a
     // table with rows in it, and "no rows" is the honest state of an install that has never
     // chosen Card Kingdom. `starterSeed` fills both from the corpus.
@@ -2037,6 +2081,20 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
  */
 function cmp(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * {@link cmp} over a nullable column, with **NULL first** — SQLite's ordering for an ascending
+ * `ORDER BY`, and the opposite of what a `??` to the empty string would give (`""` sorts before
+ * every real value too, so the two agree by accident until a column holds one).
+ *
+ * Used by the reads whose `ORDER BY` names a `LEFT JOIN`ed column, where a row with nothing
+ * behind it is a state the store really produces.
+ */
+function nullsFirst(a: string | null, b: string | null): number {
+  if (a === null) return b === null ? 0 : -1;
+  if (b === null) return 1;
+  return cmp(a, b);
 }
 
 function parseJson(text: string | null): unknown {
@@ -3853,9 +3911,17 @@ function rarityRank(rarity: string | null): number {
  * `collection::COLLECTION_SORTS`' condition `CASE`: grade order, because `DMG` before `LP`
  * is alphabetical order and not what anybody means by condition.
  *
- * Its `ELSE 5` has no counterpart here and needs none — `collection_entries.condition` is
- * `NOT NULL` with a `CHECK` over exactly these five (`schema.rs`), which is the statement
- * `FakeEntry["condition"]` makes in the type system.
+ * **`NONE` is ranked `5` and sorts last, which is the opposite end from where a picker draws
+ * it** (`lib/conditions.ts`'s `CONDITIONS` leads with it). The two orders are not in conflict
+ * and neither is derived from the other: a sorted column is the scale being read *as* a scale,
+ * so the ungraded pile belongs at the end of it rather than in front of the Near Mints, while a
+ * dropdown opens on its default. One list, two orders.
+ *
+ * The crate's `CASE` carries an `ELSE 5` beside the spelled `WHEN 'NONE' THEN 5`, and the
+ * duplication is deliberate there — an `ELSE` that happens to be right is not a rule. Here it
+ * has no counterpart and needs none: `collection_entries.condition` is `NOT NULL` with a
+ * `CHECK` over exactly these six (`schema.rs`), which is the statement `FakeEntry["condition"]`
+ * makes in the type system.
  */
 const CONDITION_RANK: Record<FakeEntry["condition"], number> = {
   NM: 0,
@@ -3863,6 +3929,7 @@ const CONDITION_RANK: Record<FakeEntry["condition"], number> = {
   MP: 2,
   HP: 3,
   DMG: 4,
+  NONE: 5,
 };
 
 /* ------------------------------------------------------------------ card filters ------ */
@@ -4521,9 +4588,14 @@ function ownsPrinting(db: FakeDb, cardId: string, forDeck?: number): boolean {
 
 /** `collection::FINISHES`/`CONDITIONS` — a filter value outside the enum is dropped rather
  *  than matched, because it can only come from a stale payload and would empty the list
- *  with no explanation. */
+ *  with no explanation.
+ *
+ *  **`NONE` leads, spelled in `collection::CONDITIONS`' own order** — this list is what
+ *  {@link validCondition}'s refusal names, so an order of its own would put a different
+ *  sentence on the screen than the app's. It is not {@link CONDITION_RANK}'s order and does
+ *  not want to be: membership is all either use of it asks. */
 const FINISHES: FakeEntry["finish"][] = ["nonfoil", "foil", "etched"];
-const CONDITIONS: FakeEntry["condition"][] = ["NM", "LP", "MP", "HP", "DMG"];
+const CONDITIONS: FakeEntry["condition"][] = ["NONE", "NM", "LP", "MP", "HP", "DMG"];
 
 function inList(value: string, picked: string[] | undefined, allowed: string[]): boolean {
   if (!picked) return true;
@@ -4845,8 +4917,11 @@ const VARIANTS: DeckVariant[] = ["live", "theory"];
 const LIVE = VARIANTS[0];
 
 /**
- * `DeckRow.cardCount`'s definition, and the engine's `SIZE_KINDS` verbatim — a third copy of
- * three words that must stay one rule (`engine.ts`, `deck.rs`'s `DECK_SELECT`, here).
+ * `DeckRow.cardCount`'s definition, and the engine's `SIZE_KINDS` verbatim — a **fourth** copy of
+ * three words that must stay one rule (`engine.ts`, `deck.rs`'s `DECK_SELECT`, `deck.rs`'s
+ * `PIP_COSTS_SQL` since 2026-09-07, here). The colour bar's read is the newest and is fenced from
+ * the other side: `the_colour_bar_reads_the_same_pile_the_gallery_count_does` in `deck.rs` asserts
+ * the two answer over one pile, so a fifth site is a red build rather than a silent divergence.
  *
  * The switch decides whether a pile counts at all; the kind decides only whether it is played
  * *beside* the deck or *in* it, and only `side` and `companion` are beside it — CR 100.4a and
@@ -4871,6 +4946,22 @@ const SIZE_KINDS: CategoryKind[] = ["main", "commander", "maybe"];
  * bracket" looks like, so a nullable column would make "put it back to Auto" unreachable.
  */
 const AUTO_BRACKET = 0;
+
+/**
+ * `decksort::DEFAULT` — how the gallery is ordered for a reader who has never said, and what
+ * {@link readHandlers.deck_sort} answers for a row that is missing or blank.
+ *
+ * **Spelled here rather than imported from `features/decks/deckSort.ts`**, which is
+ * {@link AUTO_BRACKET}'s rule above and lands harder on this one: the string the *backend*
+ * answers and the string the frontend falls back to are two constants that happen to agree, in
+ * two languages, because they cannot share one across a wire. A fake that read the app's copy
+ * would agree with it by construction and could never show them disagreeing — which is the one
+ * thing about this pair worth being able to see.
+ */
+const DEFAULT_DECK_SORT = "updated:desc";
+
+/** `decksort::NO_SORT`, verbatim — the one thing {@link writeHandlers.set_deck_sort} refuses. */
+const NO_DECK_SORT = "A deck sort cannot be blank.";
 
 /** The top of what {@link validBracket} accepts — `deck::MAX_BRACKET`. `5` is cEDH, and the
  *  estimate deliberately never *reaches* it: brackets 4 and 5 have identical deck restrictions
@@ -6933,6 +7024,133 @@ export function readHandlers(db: FakeDb) {
         .map((d) => toDeckRow(db, d)),
 
     /**
+     * `deck::pip_costs` — every deck's printed mana costs, for the gallery's colour bars.
+     *
+     * **The same three exclusions {@link toDeckRow}'s `cardCount` applies, and that is the whole
+     * of the definition rather than a resemblance**: the bar is drawn under a caption that
+     * already says how many cards the deck has, so a bar counting a different pile than that
+     * number counts is a tile disagreeing with itself. `live`, an **active** category, and
+     * {@link SIZE_KINDS}' three kinds — the sideboard and the companion are beside the deck
+     * rather than in it, a theory row is a plan, and a switched-off pile counts toward nothing.
+     *
+     * **A cost string, never a counted pip.** Which of a cost's symbols is a pip, and what a
+     * `{W/U}` half is worth, is `src/lib/mana.ts`'s `countPips` — the facts/conclusions boundary
+     * this whole file mirrors, applied to a colour bar. So there is nothing to get wrong here
+     * except the pile, which is why the pile is the only thing this comment is about.
+     *
+     * **Null and empty costs are dropped, and an orphan with them.** A land contributes no pip
+     * and there is no reason to ship one row per basic; the crate's `JOIN cards` is inner, so a
+     * printing that has left the corpus has no cost to report either — {@link cardById} answering
+     * `null` is that join failing.
+     *
+     * **A deck with nothing to say is absent from the answer rather than present and empty**,
+     * which is what the crate's `GROUP BY` gives and what a caller has to be written for: an
+     * all-lands pile and a deck nobody has filled read alike, and both draw no bar at all. A fake
+     * that emitted an entry per deck would let a story be written against `answer[i].costs` and
+     * that story would break on the real backend.
+     *
+     * Ordered by deck and then by cost — `ORDER BY dc.deck_id, c.mana_cost` — so two runs over
+     * one store answer in one order. It is the grouping's order and not a contract about
+     * presentation: which order the *segments* are drawn in is `MANA_KEYS`', on the other side.
+     */
+    deck_pip_costs: (): DeckPipCosts[] => {
+      const byDeck = new Map<number, Map<string, number>>();
+      for (const dc of db.deckCards) {
+        if (dc.variant !== LIVE) continue;
+        const category = categoryById(db, dc.categoryId);
+        if (category === undefined || !category.isActive) continue;
+        if (!SIZE_KINDS.includes(category.kind)) continue;
+        const cost = cardById(db, dc.cardId)?.manaCost ?? null;
+        if (cost === null || cost === "") continue;
+        const costs = byDeck.get(dc.deckId) ?? new Map<string, number>();
+        // `sum(dc.quantity)`, not a row count: four Lightning Bolts are four red pips.
+        costs.set(cost, (costs.get(cost) ?? 0) + dc.quantity);
+        byDeck.set(dc.deckId, costs);
+      }
+      return [...byDeck]
+        .sort(([a], [b]) => a - b)
+        .map(([deckId, costs]) => ({
+          deckId,
+          costs: [...costs]
+            .sort(([a], [b]) => cmp(a, b))
+            .map(([cost, copies]) => ({ cost, copies })),
+        }));
+    },
+
+    /**
+     * `deck::bracket_reads` — everything the Commander bracket estimate is made of, for the
+     * decks the caller names.
+     *
+     * **A wider pile than {@link readHandlers.deck_pip_costs}' and deliberately so**: `live` and
+     * an **active** category, in **every** kind. Commander has no sideboard, so a reader who has
+     * filed cards in one has filed them somewhere the bracket rules still see, and this is what
+     * `DeckBracket.tsx` hands the estimator today — filtered on `categoryActive` and on nothing
+     * else. Two reads of one deck answering two different piles is the disagreement worth
+     * avoiding: the gallery and the editor have to reach the same bracket for the same deck.
+     *
+     * **The ids are the caller's, and that is the boundary rather than a convenience.** Which
+     * formats have a command zone is `format_specs.commanderRule`, a TypeScript question, so a
+     * filter here would be the backend drawing a conclusion — and drawing it again, differently,
+     * the day a second format grows brackets.
+     *
+     * **One entry per requested id, in request order, whether or not a deck answers to it.** A
+     * caller may zip the answer against the ids it sent, so an id with nothing behind it gets an
+     * empty read rather than being dropped — the two lists coming apart would hand every deck
+     * after the gap its neighbour's bracket. An empty `deckIds` answers `[]`, which the crate
+     * returns before it prepares a statement.
+     *
+     * `DISTINCT` over the four columns and ordered by them, the crate's `BRACKET_CARDS_SQL`: a
+     * card in two piles of one deck is one row, which changes no estimate — `estimateBracket`
+     * dedupes by name anyway — and saves a deck's worth of duplicate oracle text.
+     *
+     * The combos come from {@link matchCombos} over **the same pile's** distinct printing ids,
+     * which is the half that has to be true rather than merely tidy: `estimateBracket` does not
+     * re-check the combos it is handed, so a match made over a switched-off pile's cards would
+     * raise a floor for a combo the deck does not play and nothing downstream could tell.
+     */
+    deck_bracket_reads: (args: { deckIds: number[] }): DeckBracketRead[] =>
+      args.deckIds.map((deckId) => {
+        const rows = db.deckCards.filter(
+          (dc) =>
+            dc.deckId === deckId &&
+            dc.variant === LIVE &&
+            categoryById(db, dc.categoryId)?.isActive === true,
+        );
+        const distinct = new Map<string, BracketCardRow>();
+        for (const dc of rows) {
+          const card = cardById(db, dc.cardId);
+          const row: BracketCardRow = {
+            // `deck_cards.name`, the row's own denormalized column — the only name an orphan
+            // has, and the one the editor's panel dedupes on.
+            name: dc.name,
+            // NULL read as `false`: the column is a list membership, so "not on the list" and
+            // "no row to ask" are one answer to the only question put to this field.
+            gameChanger: card?.gameChanger ?? false,
+            oracleText: card?.oracleText ?? null,
+            faces: card?.faces ?? null,
+            // A literal, because the filter above has already pinned it. See
+            // `BracketCardRow.categoryActive` in `ipc.ts` for why it is carried at all.
+            categoryActive: true,
+          };
+          distinct.set(JSON.stringify([row.name, row.gameChanger, row.oracleText, row.faces]), row);
+        }
+        const cardIds = [...new Set(rows.map((dc) => dc.cardId))].sort(cmp);
+        return {
+          deckId,
+          cards: [...distinct.values()].sort(
+            (a, b) =>
+              cmp(a.name, b.name) ||
+              Number(a.gameChanger) - Number(b.gameChanger) ||
+              nullsFirst(a.oracleText, b.oracleText) ||
+              nullsFirst(a.faces, b.faces),
+          ),
+          // `[]` on a store that has never ingested the combo feed, which is a supported state
+          // and not an error: the estimate then reads three signals instead of four.
+          combos: matchCombos(db, cardIds),
+        };
+      }),
+
+    /**
      * `deck::get_deck` — the deck and everything in it, in one answer.
      *
      * One command rather than five, because the editor and the validation engine ask the
@@ -7649,6 +7867,28 @@ export function readHandlers(db: FakeDb) {
      * A read, so it answers through a sync like every other one here — the write below does not.
      */
     deck_search_open: (): boolean => db.deckSearchOpen,
+
+    /**
+     * `decksort::deck_sort` — how the deck gallery was last ordered, or the default.
+     *
+     * **The narrowest fallback of any setting on this side of the file, and the narrowness is
+     * the point.** Its neighbours check what they read against a list and shrug at anything
+     * else — a marketplace, a grouping mode, a layout word. This one checks for a **blank** and
+     * nothing more, because there is no list here to check against: the sort keys are
+     * `features/decks/deckSort.ts`', three of the six are computed on the frontend, and a
+     * backend that invented a vocabulary would be a second opinion about a table the webview
+     * owns. So a key this build has never heard of is answered **verbatim** and the frontend
+     * falls back — which is the state {@link FakeDb.deckSort} exists to let a story seed.
+     *
+     * Both ways to the default are still here, exactly as {@link readHandlers.printing_group_by}
+     * has both of its: the row has never been written, or somebody emptied it by hand. A blank
+     * is the one value the write refuses, so a row holding one was hand-edited — and it must
+     * still read as the default rather than as an order in nobody's vocabulary.
+     *
+     * A read, so it answers through every second of a sync — the write below does not.
+     */
+    deck_sort: (): string =>
+      db.deckSort !== null && db.deckSort !== "" ? db.deckSort : DEFAULT_DECK_SORT,
 
     /**
      * `mirror::settings::mirror_status` — everything the Backup panel draws, in one round trip.
@@ -8519,10 +8759,23 @@ function validFinish(finish: string): FakeEntry["finish"] {
   throw refuse(`\`${finish}\` is not a finish. Use one of: ${FINISHES.join(", ")}.`);
 }
 
-/** `collection::valid_condition` — an absent condition is `NM`, what an unmarked card is
- *  assumed to be, rather than an error. */
+/**
+ * `collection::valid_condition` — an absent condition is `collection::DEFAULT_CONDITION`
+ * rather than an error, and since schema v35 that is **`NONE`**.
+ *
+ * **It was `NM`, and what changed is that the app no longer guesses.** The old default was
+ * defensible while the scale had no way to say nothing — a write has to put *something* in a
+ * `NOT NULL` column that is also a grain term — but what it wrote was the best grade on the
+ * scale, on the reader's behalf, and indistinguishable afterwards from the grades they typed
+ * by hand. `NONE` is the same write saying *nobody said*.
+ *
+ * **This is the one place the default lives**, which is what makes the three callers agree
+ * without any of them spelling it: `collection_add`, `collection_import_commit` (through
+ * {@link addEntry} and {@link setEntry}) and `deck_quick_add_to_collection`. A junk grade is
+ * still refused in words, in {@link CONDITIONS}' order.
+ */
 function validCondition(condition: string | undefined): FakeEntry["condition"] {
-  const c = condition ?? "NM";
+  const c = condition ?? "NONE";
   const found = CONDITIONS.find((x) => x === c);
   if (found) return found;
   throw refuse(`\`${c}\` is not a condition. Use one of: ${CONDITIONS.join(", ")}.`);
@@ -10102,6 +10355,21 @@ export function writeHandlers(db: FakeDb) {
      * corrects the condition and the quantity in one press folds the quantity they typed rather
      * than the one the row had. The grain half is applied to nothing at all: the surviving row
      * already carries every value it names, which is precisely why the two collided.
+     *
+     * # Absent means "leave it", and there is no value that means "make it null"
+     *
+     * `PATCH_SQL` is `coalesce(?n, column)` in all eighteen holes, so every field this handler
+     * reads with `??` is the same statement in TypeScript — and the two together have a gap
+     * worth naming rather than discovering: **a purchase price cannot be cleared.** Sending
+     * `purchasePrice: undefined` leaves the number that is there, and `EntryPatch.purchasePrice`
+     * is `number | undefined` on the wire with no third state to send. A dialog offering to
+     * empty that field would be a control that silently does nothing, which is the shape of
+     * defect a fake exists to make visible: this handler cannot produce a row whose price went
+     * back to null, because neither can the crate.
+     *
+     * `condition` has no such gap and never did — `NONE` is a *value*, so an edit really can
+     * take a row from `NM` back to nobody-said, and that write goes through the grain: the row
+     * moves to a different one and may fold onto a `NONE` row already standing there.
      */
     collection_update: (args: { id: number; patch: EntryPatch }): EntryChange => {
       refuseIfBusy(db);
@@ -10856,9 +11124,12 @@ export function writeHandlers(db: FakeDb) {
       deckId: number;
       cardId: string;
       finish?: DeckFinish;
-      // A bare `string` because that is what `ipc.ts` sends — `useCardMenuDeps`'s
+      // A bare `string` because that is what `ipc.ts` sends — `lib/conditions.ts`'s
       // `MENU_CONDITION`, spelled by the caller — and {@link validCondition} is where it becomes
-      // one of the five.
+      // one of the six. **Both ends of that now say `NONE`**, which is the whole of what a menu
+      // quick-add changed at schema v35: the constant is still sent from the app rather than
+      // left to the backend's default, so the one decision a menu *declines* to make is visible
+      // where it is declined.
       condition?: string;
       quantity: number;
       wishId?: number | null;
@@ -13598,6 +13869,38 @@ export function writeHandlers(db: FakeDb) {
     set_deck_search_open: (args: { open: boolean }): void => {
       refuseIfBusy(db);
       db.deckSearchOpen = args.open;
+    },
+
+    /**
+     * `decksort::set_deck_sort` — remember how the gallery is ordered.
+     *
+     * **One refusal, and it is a blank.** Every preference write above this one either refuses a
+     * value against a list (`set_marketplace`, `set_printing_group_by`, `set_list_view`,
+     * `set_card_zoom`) or refuses nothing because a `bool` has no junk state
+     * ({@link writeHandlers.set_nav_collapsed}). This is neither, and it is the argument those
+     * two make meeting in one handler: the value **has** a vocabulary and the backend does not
+     * have it, so any wider refusal could only be `decksort.rs` guessing about a table the
+     * frontend owns — while a blank is refusable without a vocabulary, because it is an order in
+     * nobody's. It is also the one value {@link readHandlers.deck_sort} discards, so storing it
+     * would be a write that reported success and read back as the default for ever, which is
+     * exactly the bug `set_printing_group_by`'s note calls the half a fake is easiest to leave
+     * out.
+     *
+     * The sentence is `decksort::NO_SORT` verbatim, like every refusal here — a story renders
+     * these.
+     *
+     * **The argument is `sort`, not `value`.** `invoke` fills parameters by name, so a handler
+     * spelling it differently from the crate would be a story that passed against a call the
+     * real backend rejects. `src/lib/ipc.test.ts` pins the same word against `decksort.rs`.
+     *
+     * It honours `busy` like every other ordinary write — `decksort.rs` takes the write
+     * connection through `sync::with_write`, and the lock comes first: a blank sent while a sync
+     * holds the connection answers BUSY, because nothing has looked at the word yet.
+     */
+    set_deck_sort: (args: { sort: string }): void => {
+      refuseIfBusy(db);
+      if (args.sort === "") throw refuse(NO_DECK_SORT);
+      db.deckSort = args.sort;
     },
 
     /**

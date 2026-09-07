@@ -651,6 +651,86 @@ describe("buildCardMenu", () => {
       expect(labels(items)).not.toContain("Move to");
     });
   });
+
+  /**
+   * `Edit copy…` — the one row here fenced on `entryId` **and never on `entryIds`**, which is the
+   * whole of what tells it from `Move to` directly above it. That row can express the several
+   * (one id is a move, more than one is `pickCopies`' question); this one cannot, because there is
+   * no grade or price that is honestly "the" grade or price of three different rows.
+   */
+  describe("Edit copy…", () => {
+    const EDIT = "Edit copy…";
+
+    it("offers the row for a copy the surface can name, and hands over that copy's id", () => {
+      const editCopy = vi.fn();
+      const items = buildCardMenu({ ...BOLT, entryId: 42 }, deps({ editCopy }));
+      (find(items, EDIT) as MenuAction).onSelect();
+      // The id alone: the menu knows a `collection_entries` row and nothing about what is in it.
+      expect(editCopy).toHaveBeenCalledWith(42);
+    });
+
+    /** The rule arrives with its own separator, so a surface that offers no editing gets no
+     *  hanging divider at the foot of its menu. */
+    it("brings its own rule, and neither without the other", () => {
+      const separators = (items: MenuItem[]) =>
+        items.filter((i) => i.kind === "separator").map((i) => i.id);
+
+      expect(separators(buildCardMenu({ ...BOLT, entryId: 42 }, deps({ editCopy: vi.fn() })))).toContain(
+        "sep-edit",
+      );
+      expect(separators(buildCardMenu(BOLT, deps({ editCopy: vi.fn() })))).not.toContain("sep-edit");
+    });
+
+    it("leaves it out where the surface can name no row", () => {
+      const items = buildCardMenu(BOLT, deps({ editCopy: vi.fn() }));
+      expect(labels(items)).not.toContain(EDIT);
+    });
+
+    it("leaves it out where the surface wired no editor", () => {
+      const items = buildCardMenu({ ...BOLT, entryId: 42 }, deps());
+      expect(labels(items)).not.toContain(EDIT);
+    });
+
+    /**
+     * The two tile cases, and the second is the one that says the fence is the **field**.
+     *
+     * A wall tile names `entryIds` however many rows are behind it — so a tile that happens to
+     * stand for exactly one copy today still gets no row, where `Move to` files it without asking.
+     * A tile is the page's summary of a printing, and how many entries it sums is an accident of
+     * what else the reader owns; an edit row that came and went with that would read as a bug in
+     * the menu rather than as a fact about the card.
+     */
+    it("leaves it out for a tile standing for several rows", () => {
+      const items = buildCardMenu({ ...BOLT, entryIds: [4, 9] }, deps({ editCopy: vi.fn() }));
+      expect(labels(items)).not.toContain(EDIT);
+    });
+
+    it("leaves it out for a tile standing for exactly one row", () => {
+      const editCopy = vi.fn();
+      const items = buildCardMenu({ ...BOLT, entryIds: [4] }, deps({ editCopy }));
+      expect(labels(items)).not.toContain(EDIT);
+      expect(editCopy).not.toHaveBeenCalled();
+    });
+
+    /**
+     * A picked set does not make this row plural, which is `CardMenuDeps.picked`'s own statement
+     * about the four rows that stay singular — there is no plural of "edit this copy" that is not
+     * a different feature. So the label does not grow a count and the press is about the copy that
+     * was right-clicked.
+     */
+    it("stays about the copy that was right-clicked when a set is picked", () => {
+      const editCopy = vi.fn();
+      const target = { ...BOLT, entryId: 3 };
+      const items = buildCardMenu(
+        target,
+        deps({ editCopy, picked: [target, { ...BOLT, entryId: 7 }] }),
+      );
+      expect(labels(items)).toContain(EDIT);
+      (find(items, EDIT) as MenuAction).onSelect();
+      expect(editCopy).toHaveBeenCalledWith(3);
+      expect(editCopy).toHaveBeenCalledTimes(1);
+    });
+  });
 });
 
 /* ------------------------------------------------------------------------------------------ *

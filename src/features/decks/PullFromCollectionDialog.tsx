@@ -180,12 +180,18 @@ export interface PullWrite {
 }
 
 /**
- * A stored grade as the app spells it, or the raw column where it is not one of the five.
+ * A stored grade as the app spells it, or the raw column where it is not one of the six.
  *
  * **A loop rather than a cast**, which is `CollectionPage.tsx`'s narrowing verbatim and for its
  * reason: the database holds text, and a row written by an import or by an older build may carry
  * a word this build has never heard of. `lib/conditions.ts` publishes no type guard, so the
  * narrowing is done at the reading site rather than by widening that module for one caller.
+ *
+ * **The sixth is the sentinel and it is spelled out here rather than dropped** — `Collection ·
+ * Not set · 4 copies`, where `CollectionTable`'s own cell prints the finish and stops.
+ * `PickCopies.tsx`'s `copyFace` carries the argument in full, and it applies to an `<option>`
+ * twice over: nothing here heads a term, and two rows told apart by whether a grade was ever
+ * claimed are exactly the pair this select exists to let a reader choose between.
  */
 function conditionLabel(raw: string): string {
   for (const condition of CONDITIONS) if (condition === raw) return CONDITION_LABEL[condition];

@@ -100,7 +100,16 @@ const meta = {
           'The "+" that records a card, and the popup behind it — **one component for all three ' +
           "surfaces** (printings row, art tile, table row), in its own words " +
           "(`AddToCollection.tsx:48-55`), because the decision is the same one every time: which " +
-          "list, which finish, what condition, how many.\n\n" +
+          "list, which finish, what condition, what it cost, how many.\n\n" +
+          "**Two of those answers open on nothing, and that is the design rather than an " +
+          "omission.** Condition opens on **Not set** — the sixth grade, `NONE` in storage — " +
+          "because recording Near Mint for a reader who never looked at the card is the app " +
+          "claiming the best grade on the scale on their behalf. **Purchase price opens blank**, " +
+          "with the current marketplace's figure for this printing *at the pressed finish* " +
+          "riding as the box's `placeholder`: a hint they can read and retype, never a number " +
+          "this popup writes for them. An empty box sends **neither** price field, which is the " +
+          "only spelling of “say nothing” a `coalesce(?, column)` understands — a `0` would be a " +
+          "claim that the copy was free. {@link PurchasePrice} is both halves.\n\n" +
           "Invisible until its row or tile is hovered or holds the caret — a wall of art is not " +
           "a wall of plus signs — and **always in the tab order**, because “visible on hover” is " +
           "not a state a keyboard has. That is the *caller's* half: `REVEAL_ON_HOVER` is a class " +
@@ -174,8 +183,10 @@ export const Closed: Story = {
  * It is deliberately **not** `aria-modal`: the list behind it stays live, and a dialog that
  * claims the page is inert while it demonstrably is not is worse than no dialog at all.
  *
- * Four answers, all pre-filled with the commonest one: the collection, the printing's first
- * finish, Near mint, one copy. Nothing here is a required field.
+ * Five answers, and only three of them are filled in: the collection, the printing's first
+ * finish, one copy. The grade opens on **Not set** and the price box opens **empty**, because
+ * neither is something the app may decide for a reader who has not said. Nothing here is a
+ * required field.
  */
 export const Open: Story = {
   play: async ({ canvasElement }) => {
@@ -199,11 +210,75 @@ export const Open: Story = {
       "true",
     );
     await expect(within(popup).getByRole("button", { name: "Condition" })).toHaveTextContent(
-      "Near mint",
+      "Not set",
     );
+    await expect(within(popup).getByRole("textbox", { name: "Purchase price" })).toHaveValue("");
     await expect(
       within(popup).getByRole("spinbutton", { name: "Quantity of Lightning Bolt" }),
     ).toHaveValue(1);
+  },
+};
+
+/**
+ * **A price is optional and never guessed** — and the hint beside the box is the whole of how
+ * both halves of that are true at once.
+ *
+ * The box opens blank, so nothing is stored that the reader did not type. What rides as its
+ * `placeholder` is the **current marketplace's** price for this printing at the **pressed
+ * finish**, written with `formatPrice` — `$2.50` nonfoil, `$2.39` in foil for `2X2 117`, from
+ * the fixture's own `usd` and `usd_foil` keys. A reader who paid about the going rate can read
+ * it and retype it; a reader who paid £3 in a shop types £3.
+ *
+ * **The hint has to follow the chips.** A price is looked up by finish and the two are routinely
+ * pounds apart, so a box still offering the nonfoil figure while Foil is pressed is a lie about
+ * the row being written — and the one thing the reader would read it as is what this copy cost.
+ *
+ * **The `$` is part of the offer.** Retyping the hint is the likeliest way this box is ever
+ * filled, so a currency symbol is stripped before parsing rather than treated as a typo: without
+ * that, the commonest input would be the one that silently recorded nothing.
+ *
+ * Two things it deliberately does not do. It never shows `formatPrice`'s em dash or a `0` for a
+ * finish the marketplace does not price — an empty box is the honest state, because the popup is
+ * asking what the reader *paid* and has nothing to suggest. And the success line says nothing
+ * about the price: one sentence for one action.
+ *
+ * The read is `card_detail` on the **card modal's own query key**, issued on the render the panel
+ * opens and never before — so a wall of forty of these costs forty nothing until one is pressed,
+ * and a card whose pane the reader already opened is answered out of the cache.
+ */
+export const PurchasePrice: Story = {
+  play: async ({ canvasElement }) => {
+    const user = userEvent.setup();
+    const canvas = within(canvasElement);
+    await user.click(
+      canvas.getByRole("button", { name: "Add Lightning Bolt (2X2 117) to collection" }),
+    );
+
+    const popup = canvas.getByRole("dialog", { name: "Add Lightning Bolt" });
+    const price = within(popup).getByRole("textbox", { name: "Purchase price" });
+
+    await expect(price).toHaveValue("");
+    await waitFor(async () => {
+      await expect(price).toHaveAttribute("placeholder", "$2.50");
+    });
+
+    await user.click(within(popup).getByRole("button", { name: "Foil" }));
+    await expect(price).toHaveAttribute("placeholder", "$2.39");
+    // Still a hint: switching finish puts no number in the box either.
+    await expect(price).toHaveValue("");
+
+    await user.type(price, "1.75");
+    await user.click(within(popup).getByRole("button", { name: "Add to collection" }));
+
+    await waitFor(async () => {
+      await expect(within(popup).getByRole("status")).toHaveTextContent(
+        "Added 1 × Lightning Bolt to your collection.",
+      );
+    });
+    // The report is the same sentence it always was, and the popup stays open with the answer
+    // still in it — recording the second copy of a card you bought two of is one interaction.
+    await expect(price).toHaveValue("1.75");
+    await expect(within(popup).queryByRole("alert")).toBeNull();
   },
 };
 
@@ -283,12 +358,19 @@ export const FoilOnlyPrinting: Story = {
 };
 
 /**
- * The five grades, spelled out — and the sentence that says what was recorded.
+ * The five grades and the answer that is not one of them — and the sentence that says what was
+ * recorded.
  *
- * A select rather than chips, and the one control in the popup whose name is written beside it:
- * a select shows its value, so it needs a label, while the chip rows are their own. The grades
- * are the NA scale (`conditions.ts:12-22`) in sentence case, which is the app's voice
- * everywhere.
+ * A select rather than chips, and one of the two controls in the popup whose name is written
+ * beside it: a select shows its value and a text box shows what was typed into it, so both need
+ * a label, while the chip rows are their own. The grades are the NA scale in sentence case,
+ * which is the app's voice everywhere.
+ *
+ * **"Not set" leads the list and is not part of the scale.** It is what the popup opens on, and
+ * a default belongs at the top of the list it is the default of; the five grades under it are in
+ * the order every listing these cards were bought from prints them. Wherever they are ordered
+ * *as grades* — a collection sorted by condition — it sorts last instead, so the ungraded pile
+ * lands at the end. Same fact from the other side, not a disagreement.
  *
  * The report is **numbered by the add it belongs to** — a live region whose text does not change
  * announces nothing, and two identical copies is the commonest second add there is, so the node
@@ -313,7 +395,14 @@ export const Conditions: Story = {
       within(popup)
         .getAllByRole("option")
         .map((o) => o.textContent),
-    ).toEqual(["Near mint", "Lightly played", "Moderately played", "Heavily played", "Damaged"]);
+    ).toEqual([
+      "Not set",
+      "Near mint",
+      "Lightly played",
+      "Moderately played",
+      "Heavily played",
+      "Damaged",
+    ]);
 
     await user.click(within(popup).getByRole("option", { name: "Heavily played" }));
     await user.click(
@@ -344,8 +433,9 @@ export const Conditions: Story = {
  * outlives a close so a reader working down a printings list adding wishes is not asked again on
  * every row.
  *
- * The form changes with it. Condition goes — a wish is for a card you do not have, so there is
- * no card to grade — and **"This printing" / "Any printing"** takes its place, because a
+ * The form changes with it. Condition and purchase price both go — a wish is for a card you do
+ * not have, so there is no card to grade and nothing has been paid for it — and **"This
+ * printing" / "Any printing"** takes their place, because a
  * shopping list outlives the printing it was made from: an any-printing wish is keyed on the
  * oracle card and carries its own name.
  *
@@ -366,8 +456,10 @@ export const WishlistMode: Story = {
     await expect(
       canvas.getByRole("button", { name: "Add Lightning Bolt (2X2 117) to wishlist" }),
     ).toBeInTheDocument();
-    // No grade to record on a card nobody owns yet.
+    // No grade to record on a card nobody owns yet, and no price either — nothing has been
+    // bought, and the wishlist table has no column to put one in.
     await expect(within(popup).queryByRole("button", { name: "Condition" })).toBeNull();
+    await expect(within(popup).queryByRole("textbox", { name: "Purchase price" })).toBeNull();
 
     const which = within(popup).getByRole("group", { name: "Which printing" });
     await expect(within(which).getByRole("button", { name: "This printing" })).toHaveAttribute(

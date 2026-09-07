@@ -40,6 +40,13 @@ pub const COMMANDS: &[&str] = &[
     // Decks, read path. The write path is a separate PR: a read that answers the wrong rows
     // is visible on the page, and a write that lands wrong is not.
     "deck_list",
+    // The gallery's other two reads, added with the colour bar and the tile's bracket: the
+    // printed mana costs of every deck at once, and the bracket estimate's facts for the decks
+    // the page names. Unrouted they would cost the web build the two things this list is for —
+    // a wall of decks with no colours on it and no bracket in its captions, drawn beside a
+    // desktop that has both.
+    "deck_pip_costs",
+    "deck_bracket_reads",
     "deck_get",
     "deck_folder_list",
     "deck_category_list",
@@ -179,6 +186,11 @@ pub const COMMANDS: &[&str] = &[
     "set_card_zoom",
     "list_view",
     "set_list_view",
+    // **Both halves, the way `list_view` has both.** The read alone would open every browser
+    // session on the default order however the reader had left it, which is the setting not
+    // existing rather than the setting being read-only.
+    "deck_sort",
+    "set_deck_sort",
     "flatten_state",
     "set_flatten_state",
     "error_log_list",
@@ -336,6 +348,27 @@ pub fn call(
             encode(
                 command,
                 crate::deck::list_decks(&conn).map_err(RouteError::Failed)?,
+            )
+        }
+
+        // No arguments, like `deck_list` above it: the gallery draws every deck it has, so the
+        // colour bars are one read for the whole wall rather than one per tile.
+        "deck_pip_costs" => {
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::deck::pip_costs(&conn).map_err(RouteError::Failed)?,
+            )
+        }
+
+        // `deckIds`, not `deck_ids` — the wrapper's parameter as `invoke` spells it, which is
+        // the rule `the_deck_arms_read_the_camel_case_keys_the_page_sends` fences.
+        "deck_bracket_reads" => {
+            let deck_ids: Vec<i64> = field(command, args, "deckIds")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::deck::bracket_reads(&conn, &deck_ids).map_err(RouteError::Failed)?,
             )
         }
 
@@ -1772,6 +1805,23 @@ pub fn call(
             )
         }
 
+        // `listview`'s pair one setting over, and the read is infallible on this side too: a
+        // browser that cannot read the row opens the gallery on the default order rather than
+        // failing to draw it.
+        "deck_sort" => {
+            let conn = crate::sync::lock_db_read(state);
+            encode(command, crate::decksort::stored(&conn))
+        }
+
+        "set_deck_sort" => {
+            let sort: String = field(command, args, "sort")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::decksort::store(c, &sort))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
         "flatten_state" => {
             let conn = crate::sync::lock_db_read(state);
             encode(command, crate::flatten::stored(&conn))
@@ -2135,6 +2185,85 @@ mod tests {
             out[0].get("formatKey").is_some(),
             "the DTO's camelCase names must survive the route"
         );
+    }
+
+    /// **The gallery's colour bars survive the route, camelCase keys and all.** The fixture's
+    /// four printings carry no `mana_cost` — the index does not read one — so one is given a
+    /// cost here, which is also what makes the assertion about *dropping* the other three real.
+    #[test]
+    fn deck_pip_costs_answers_the_colour_bar_through_the_route() {
+        let s = state("web-route-deck-pips");
+        let id = make_deck(&s, "Coloured");
+        {
+            let conn = crate::db::lock_blocking(&s.db);
+            conn.execute("UPDATE cards SET mana_cost = '{R}' WHERE id = '1'", [])
+                .unwrap();
+            let cat = crate::deck_meta::category_for_name(&conn, id, "Main deck").unwrap();
+            crate::deck::add_card(&conn, id, "1", Some(cat), None, "live", None, 3).unwrap();
+            // A second card with no printed cost, which must not reach the page at all.
+            crate::deck::add_card(&conn, id, "2", Some(cat), None, "live", None, 1).unwrap();
+        }
+
+        let out = call(&s, "deck_pip_costs", &json!({})).unwrap();
+        let decks = out.as_array().expect("deck_pip_costs answers an array");
+        assert_eq!(decks.len(), 1);
+        // camelCase, because `DeckPipCosts` is `rename_all = "camelCase"` and `src/lib/ipc.ts`
+        // reads these exact keys. A snake_case answer is a silent `undefined` on the page.
+        assert_eq!(decks[0]["deckId"], json!(id));
+        assert_eq!(decks[0]["costs"].as_array().unwrap().len(), 1);
+        assert_eq!(decks[0]["costs"][0]["cost"], json!("{R}"));
+        assert_eq!(decks[0]["costs"][0]["copies"], json!(3));
+    }
+
+    /// **`deckIds`, not `deck_ids`** — the arm reads the page's spelling, and the missing-key
+    /// case is asserted beside the working one because that is what a wrong spelling here would
+    /// look like on every real call.
+    #[test]
+    fn deck_bracket_reads_takes_its_ids_under_the_camel_case_key() {
+        let s = state("web-route-deck-brackets");
+        let id = make_deck(&s, "Bracketed");
+        {
+            let conn = crate::db::lock_blocking(&s.db);
+            let cat = crate::deck_meta::category_for_name(&conn, id, "Main deck").unwrap();
+            crate::deck::add_card(&conn, id, "1", Some(cat), None, "live", None, 1).unwrap();
+        }
+
+        let out = call(&s, "deck_bracket_reads", &json!({ "deckIds": [id] })).unwrap();
+        assert_eq!(out.as_array().unwrap().len(), 1);
+        assert_eq!(out[0]["deckId"], json!(id));
+        assert_eq!(out[0]["cards"][0]["name"], json!("Lightning Bolt"));
+        // The four fields beside the name, in the spelling the estimator reads them by.
+        assert_eq!(out[0]["cards"][0]["gameChanger"], json!(false));
+        assert_eq!(out[0]["cards"][0]["categoryActive"], json!(true));
+        assert!(out[0]["cards"][0].get("oracleText").is_some());
+        assert!(out[0]["cards"][0].get("faces").is_some());
+        // A database that has never fetched Commander Spellbook's file is a supported state.
+        assert_eq!(out[0]["combos"], json!([]));
+
+        let err = call(&s, "deck_bracket_reads", &json!({ "deck_ids": [id] })).unwrap_err();
+        assert!(matches!(&err, RouteError::Args { .. }), "got {err:?}");
+    }
+
+    /// **Both halves of the remembered order, the way `list_view` has both.** The read answers
+    /// the default on a database nobody has sorted — infallibly, so a browser that cannot read
+    /// the row still draws the gallery — and the write is what makes the setting exist at all.
+    #[test]
+    fn the_deck_sort_round_trips_through_the_route() {
+        let s = state("web-route-deck-sort");
+        assert_eq!(
+            call(&s, "deck_sort", &json!({})).unwrap(),
+            json!(crate::decksort::DEFAULT),
+            "a fresh database opens on the default order"
+        );
+
+        call(&s, "set_deck_sort", &json!({ "sort": "colors:asc" })).unwrap();
+        assert_eq!(
+            call(&s, "deck_sort", &json!({})).unwrap(),
+            json!("colors:asc")
+        );
+
+        let err = call(&s, "set_deck_sort", &json!({})).unwrap_err();
+        assert!(matches!(&err, RouteError::Args { .. }), "got {err:?}");
     }
 
     /// **The arms take `deckId`, not `deck_id`, and this is what says so.** `invoke` matches a
@@ -2652,9 +2781,13 @@ mod tests {
         // **130** — which neither side could have written and adding one branch's delta to the
         // other's total would have got to only by luck. `left` in the assertion message is
         // `COMMANDS.len()` as the build computed it; that is the answer.
+        //
+        // **It happened again immediately**, which is why the paragraph above is not a story
+        // about one afternoon: the deck-gallery branch (issue #387) and the tokens one
+        // (issue #388) each read 135 while they were open, and the merge answers **139**.
         assert_eq!(
             COMMANDS.len(),
-            135,
+            139,
             "update this number when a command is added"
         );
     }
