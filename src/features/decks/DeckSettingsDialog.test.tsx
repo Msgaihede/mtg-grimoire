@@ -51,6 +51,8 @@ const BURN: DeckRow = {
   folderId: null,
   notes: "Sideboard plan lives in the Maybeboard.",
   theoryEnabled: false,
+  theoryMarkExact: true,
+  theoryMarkName: true,
   lastVariant: "live",
   lastGroupBy: "category",
   lastSortBy: "alphabetical",

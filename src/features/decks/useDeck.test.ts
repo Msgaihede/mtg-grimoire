@@ -90,6 +90,8 @@ const DECK: DeckRow = {
   folderId: null,
   notes: null,
   theoryEnabled: false,
+  theoryMarkExact: true,
+  theoryMarkName: true,
   // How the editor was last read, written by `deckSetViewState` alone — `rememberView` below is
   // the only mutation here that touches them, and the only one that does not invalidate.
   lastVariant: "live",

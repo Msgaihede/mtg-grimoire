@@ -440,6 +440,21 @@ export interface FakeDeck {
    *  can set and never see is a switch nothing can draw. */
   theoryEnabled: boolean;
   /**
+   * `decks.theory_mark_exact` and `decks.theory_mark_name` (schema v35): which of the theory
+   * mark's two tiers this deck draws — green for a live row that is the printing the plan
+   * named, blue for the same card in a printing it did not.
+   *
+   * **Optional here and `NOT NULL DEFAULT 1` in the crate**, which is {@link separateXGroup}'s
+   * arrangement three fields down and made for its reason: a seed written before this column
+   * existed must go on behaving as it always did, so {@link toDeckRow} coalesces to `true`
+   * rather than the type demanding every fixture be rewritten. **`true` and not `false`** —
+   * this is the one column pair on this record whose default is *on*, because the migration's
+   * whole argument is that every deck that already exists draws both marks from the first
+   * launch, with no backfill and no group of older decks behaving differently for ever.
+   */
+  theoryMarkExact?: boolean;
+  theoryMarkName?: boolean;
+  /**
    * What the reader was last looking at in this deck's editor: which tab, grouped how, sorted
    * how. Written by {@link writeHandlers.deck_set_view_state} and by nothing else, so that
    * opening a deck again puts them back where they left it.
@@ -4535,6 +4550,13 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
     folderId: d.folderId,
     notes: d.notes,
     theoryEnabled: d.theoryEnabled,
+    // v35's pair, and the **fifth and sixth** columns on the `?? default` footing — but the
+    // first whose default is `true`. `NOT NULL DEFAULT 1` is the whole of that migration: a
+    // deck that already existed draws both marks from the first launch on the new build, so a
+    // seed written before the column is a deck with both marks on rather than one with neither.
+    // Appended, `bracket`'s note two comments down, and for the crate's own reason there.
+    theoryMarkExact: d.theoryMarkExact ?? true,
+    theoryMarkName: d.theoryMarkName ?? true,
     // The three v12 ones that remember where the reader was. They ride the *gallery's* row
     // rather than a read of their own because the editor already has this row when it mounts —
     // a second command to ask "which tab was I on" would be a round trip between opening a deck

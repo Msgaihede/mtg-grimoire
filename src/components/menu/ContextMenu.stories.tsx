@@ -312,6 +312,8 @@ const DECK: DeckRow = {
   folderId: 2,
   notes: null,
   theoryEnabled: false,
+  theoryMarkExact: true,
+  theoryMarkName: true,
   lastVariant: "live",
   lastGroupBy: "category",
   lastSortBy: "alphabetical",

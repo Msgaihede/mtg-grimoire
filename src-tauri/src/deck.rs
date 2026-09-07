@@ -978,7 +978,7 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
         // to a bracket, with every field still holding a number SQLite is perfectly happy to
         // give back.
         bracket: r.get(20)?,
-        // 21 and 22, at the end of the list, for the reason written five comments up — and the
+        // 21 and 22, at the end of the list, for the reason written four comments up — and the
         // fifth and sixth proofs of that rule, this pair the most dangerous yet. Both are
         // `bool` over an `INTEGER` column, and so are `archived` at 8, `theory_enabled` at 13
         // and `separate_x_group` at 17: a column inserted beside `theory_enabled`, **where it

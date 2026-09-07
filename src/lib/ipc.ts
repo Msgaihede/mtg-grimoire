@@ -2908,6 +2908,39 @@ export interface DeckRow {
    */
   theoryEnabled: boolean;
   /**
+   * Whether this deck draws the **green** theory mark — the live row that is the printing the
+   * plan named.
+   *
+   * `decks.theory_mark_exact INTEGER NOT NULL DEFAULT 1`, schema v35. Per **deck**, which is
+   * {@link DeckRow.separateXGroup}'s argument below and {@link DeckRow.theoryEnabled}'s above:
+   * whether a substitute printing is worth a mark is a statement about how *this* deck is being
+   * built, so two decks may disagree and a duplicate must carry the answer across.
+   *
+   * **Off does not mean unmarked.** An exact row on a deck with this off is re-resolved as a
+   * loose one and draws blue, with blue's own number — `features/decks/theoryMatch.ts` carries
+   * that rule, because which mark a row earns is a *conclusion* and conclusions are this side's.
+   * Turning the strict mark off is a reader asking for less precision, not for less information.
+   *
+   * Read on the row as well as written through {@link DeckPatch}, for
+   * {@link DeckRow.theoryEnabled}'s reason exactly: a switch the app can set and never see is a
+   * switch nothing can draw.
+   */
+  theoryMarkExact: boolean;
+  /**
+   * Whether this deck draws the **blue** theory mark — the same card in a printing the plan did
+   * not name. See {@link DeckRow.theoryMarkExact}, whose every rule this shares.
+   *
+   * **Two booleans rather than one three-valued field**, which is the schema's own argument
+   * carried onto the wire: `none | exact | both` cannot spell blue *without* green, and blue
+   * without green is a real answer — a reader who cares that a card is present and not which
+   * printing it is.
+   *
+   * **Both off is a real answer too, and is not a spelling of {@link DeckRow.theoryEnabled}
+   * being off.** A deck with a plan and no marks at all is a reader who wants the two lists side
+   * by side and no colour on either; a deck with no plan has no second list to compare against.
+   */
+  theoryMarkName: boolean;
+  /**
    * Which of the deck's two lists the editor was last reading — the tab the reader left this
    * deck on, restored when they open it again.
    *

@@ -160,6 +160,8 @@ const DECK: DeckRow = {
   archived: false,
   folderId: null,
   theoryEnabled: false,
+  theoryMarkExact: true,
+  theoryMarkName: true,
   lastVariant: "live",
   lastGroupBy: "category",
   lastSortBy: "alphabetical",

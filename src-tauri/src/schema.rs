@@ -4898,14 +4898,29 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
     // are `INTEGER` beside seven other `INTEGER`s on the row — a column inserted anywhere but
     // last hands a bracket to a bool with nothing going red.
     //
-    // **`decks` is in [`SYNCED_TABLES`], and neither column travels yet.**
-    // `sync_engine::capture`'s `Spec` for this table spells its field list out **by hand** —
-    // `pragma_table_info` appears in that module only in a test asserting the hand-written
-    // names exist — so a column added here is captured by nothing until somebody adds it there.
-    // That is a deliberate non-change on this rung and not an oversight: adding a field to a
-    // spec changes what this device *sends*, which that module's `cover_image_path` note says
-    // is a decision with no written rule yet. Until it is made, two devices in a group can
-    // disagree about which marks a deck draws.
+    // **`decks` is in [`SYNCED_TABLES`] and both columns travel — but only because they were
+    // put on the capture spec by hand.** `sync_engine::capture`'s `Spec` for this table spells
+    // its field list out literally; `pragma_table_info` appears in that module only in a test
+    // asserting the hand-written names exist, and there is **no fence in the other direction**,
+    // so a column added here and nowhere else is captured by nothing and goes red nowhere. Both
+    // names are on that list, `bracket`'s precedent at v26: which tier a deck draws is an answer
+    // *about the deck*, made once by the reader, and two devices showing one deck's marks
+    // differently with nothing on screen explaining it is the failure that edit prevents. The
+    // mark's **colours** are deliberately not on it and never will be — a rendering choice
+    // belongs to the device that draws it, which is why the three `last_*` columns are absent
+    // too.
+    //
+    // **`DEFAULT 1` is load-bearing for the sync as well as for the no-backfill argument
+    // above**, and that is the half only reading `sync_engine::apply` settles. A device on the
+    // old rung sends an op naming neither column: `apply::updates` walks the **local** spec and
+    // `continue`s past a field the incoming op lacks, so the column is left exactly as it was;
+    // `apply::creations` omits it from the INSERT, so it falls to this DDL default and a deck
+    // built from an old peer's op arrives with both marks on — identical to a deck this device
+    // makes itself. A `NOT NULL` column with no default would instead have failed that INSERT,
+    // and `insert_row`'s caller answers a failed insert with `ROLLBACK TO savepoint` and
+    // `Outcome::Deferred`: the group would stall at that op for ever. Adding a field is the safe
+    // direction, which is what `capture`'s own `cover_image_path` note argues from the other
+    // end; removing one is the direction with no rule written down.
     if v < 35 {
         let tx = conn.unchecked_transaction()?;
         tx.execute_batch(

@@ -671,6 +671,8 @@ const deck = (over: Partial<DeckRow> & { id: number; name: string }): DeckRow =>
   folderId: null,
   notes: null,
   theoryEnabled: false,
+  theoryMarkExact: true,
+  theoryMarkName: true,
   lastVariant: "live",
   lastGroupBy: "category",
   lastSortBy: "alphabetical",

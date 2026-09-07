@@ -237,6 +237,8 @@ const DECK: DeckRow = {
   folderId: null,
   notes: null,
   theoryEnabled: false,
+  theoryMarkExact: true,
+  theoryMarkName: true,
   // How the editor was last read. The defaults, so a test that says nothing about them opens on
   // Live, grouped by category, sorted alphabetically — and a test about the memory overrides the
   // one field it is about through `detail()`.
