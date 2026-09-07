@@ -2051,7 +2051,13 @@ describe("a card's per-finish prices", () => {
 });
 
 describe("what a deck owns", () => {
-  it("counts every printing of the oracle card in its group — a Bolt is a Bolt", () => {
+  /**
+   * **The narrowing's whole inversion.** Until 2026-09-07 this fixture read owned 4 — a Bolt was
+   * a Bolt, so the deck's own BOLT_2X2 line was credited both Bolts in the group. Now the group's
+   * *other* printing does not count toward it: only the three copies of the exact printing the
+   * row names do, and the row clamps at that even though it lists four.
+   */
+  it("counts only the exact printing in its group, not every printing of the oracle card", () => {
     const db = makeDeckDb({
       collectionEntries: [
         entry({ id: 1, cardId: BOLT.id, quantity: 1, folderId: groupId(1) }),
@@ -2060,10 +2066,54 @@ describe("what a deck owns", () => {
       decks: [deck({ id: 1 })],
       deckCards: [deckCard({ id: 1, cardId: BOLT_2X2.id, categoryKind: "main", quantity: 4 })],
     });
-    // Four owned off two printings: the deck lists one of them and holds both, and the read is
-    // oracle-grained. The old allocator preferred the exact printing and this has no preference
-    // to express — it is a sum over the folder.
-    expect(liveDeck(db)!.cards[0].ownedQuantity).toBe(4);
+    expect(liveDeck(db)!.cards[0].ownedQuantity).toBe(3);
+  });
+
+  it("does not count a different printing of the same card", () => {
+    // The narrowing's whole point: the group holds BOLT_B and the list names BOLT_A. The two
+    // share an oracle id, which is exactly what the old grain matched on.
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [deckCard({ cardId: BOLT_A.id, quantity: 4 })],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT_B.id, quantity: 4, folderId: groupId(1) }),
+      ],
+    });
+    expect(liveDeck(db)!.cards[0].ownedQuantity).toBe(0);
+  });
+
+  it("does not count a different finish of the same printing", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [deckCard({ cardId: BOLT_A.id, finish: "foil", quantity: 2 })],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT_A.id, finish: "nonfoil", quantity: 2, folderId: groupId(1) }),
+      ],
+    });
+    expect(liveDeck(db)!.cards[0].ownedQuantity).toBe(0);
+  });
+
+  it("counts the exact printing and finish", () => {
+    // A deck row's null finish is a collection row's "nonfoil" — the translation, in the fake.
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [deckCard({ cardId: BOLT_A.id, quantity: 4 })],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT_A.id, finish: "nonfoil", quantity: 3, folderId: groupId(1) }),
+      ],
+    });
+    expect(liveDeck(db)!.cards[0].ownedQuantity).toBe(3);
+  });
+
+  it("counts a foil line against foil copies", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [deckCard({ cardId: BOLT_A.id, finish: "foil", quantity: 2 })],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT_A.id, finish: "foil", quantity: 2, folderId: groupId(1) }),
+      ],
+    });
+    expect(liveDeck(db)!.cards[0].ownedQuantity).toBe(2);
   });
 
   it("gives the commander its copy before the main deck gets one", () => {
@@ -4865,15 +4915,17 @@ describe("moving copies across the deck boundary", () => {
   });
 
   /**
-   * **A cut reaches the copies when the list names another printing**, which is the state
-   * `deck_swap_printing` leaves behind — it rewrites the deck row's `cardId` and touches no
-   * collection table — and the state schema v25's conversion writes wholesale, because the old
-   * allocator matched candidates by **oracle id**. Matched on the exact printing alone the cut
-   * moves nothing: the deck card goes and the copies stay filed under a deck that no longer
-   * lists them. `deck::release_group_copies` matches the oracle card, which is
-   * `owned_by_oracle`'s "a Bolt is a Bolt" read from the other end.
+   * **Since 2026-09-07 a cut does not reach another printing**, which used to be the state
+   * `deck_swap_printing` left behind (it rewrites the deck row's `cardId` and touches no
+   * collection table) and the state schema v25's conversion wrote wholesale, because the old
+   * allocator matched candidates by **oracle id**. That fallback is a bug at the exact grain: a
+   * deck may legitimately list two printings of one card with the group holding both, and a cut
+   * on one line must not give back copies the other line still claims (spec §2.3). The row still
+   * leaves — a deck card with no backing copies just goes away — and the mismatched copies stay
+   * exactly where they were, a stranding `deck_swap_printing`/`deck_set_card_finish` now prevent
+   * at the source (§2.2) rather than one this command papers over.
    */
-  it("cuts through to another printing of the same card in the group", () => {
+  it("does not reach another printing of the same card in the group", () => {
     const db = boundary({
       collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 2, folderId: groupId(1) })],
       deckCards: [deckCard({ id: 1, cardId: BOLT_2X2.id, categoryKind: "main", quantity: 2 })],
@@ -4881,9 +4933,10 @@ describe("moving copies across the deck boundary", () => {
 
     const out = writeHandlers(db).deck_to_collection({ deckCardId: 1, quantity: 2 });
 
-    expect(out.quantity).toBe(2);
-    expect(copiesIn(db, REMOVED_FOLDER)).toBe(2);
-    expect(copiesIn(db, groupId(1))).toBe(0);
+    expect(out.quantity).toBe(0);
+    expect(copiesIn(db, REMOVED_FOLDER)).toBe(0);
+    expect(copiesIn(db, groupId(1))).toBe(2);
+    expect(db.deckCards).toHaveLength(0);
   });
 
   /**
@@ -5296,11 +5349,16 @@ describe("moving copies across the deck boundary", () => {
     });
 
     /**
-     * The oracle arm, in bulk. `deck_swap_printing` rewrites a deck row's identity and touches
-     * no collection table, so after "Use this printing" the group holds the *old* printing —
-     * matched exactly, a cleared pile would strand every copy behind it.
+     * **Since 2026-09-07 this is a stranding rather than a cure.** `release_group_copies` no
+     * longer reaches a sibling printing when a pile is cleared, for §2.3's reason: the fallback
+     * that used to cure this (a swap leaving the group holding the *old* printing) would also
+     * give back copies a deck's *other* line for the same oracle card still claims. The cure for
+     * the swap case is `deck_swap_printing`/`deck_set_card_finish`'s own sweep (§2.2, run before
+     * a category is ever cleared); what is left here is the residual §2.4 names — a mismatch this
+     * command does not create and does not cure, only the v35 migration rung or a later sweep
+     * does.
      */
-    it("reaches another printing of the same card when the pile is cleared", () => {
+    it("does not reach another printing of the same card when the pile is cleared", () => {
       const db = boundary({
         collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 2, folderId: groupId(1) })],
         deckCards: [deckCard({ id: 1, cardId: BOLT_2X2.id, categoryKind: "main", quantity: 2 })],
@@ -5312,8 +5370,8 @@ describe("moving copies across the deck boundary", () => {
         variant: "live",
       });
 
-      expect(copiesIn(db, groupId(1))).toBe(0);
-      expect(copiesIn(db, REMOVED_FOLDER)).toBe(2);
+      expect(copiesIn(db, groupId(1))).toBe(2);
+      expect(copiesIn(db, REMOVED_FOLDER)).toBe(0);
     });
   });
 });
@@ -5521,10 +5579,11 @@ describe("pulling owned copies into a deck", () => {
 
   /**
    * **A different printing of the same oracle card is not a candidate, and neither is a different
-   * finish.** That is a deliberate narrowing rather than an oversight, and it is narrower than
-   * the app's own owned count: `ownedByOracle` keys on `oracle_id`, so a `2x2` Bolt filed in the
-   * group makes the `lea` line read as owned, while this fills only with the exact piece of
-   * cardboard the list names. Pin it rather than fixing it.
+   * finish.** Since 2026-09-07 that is the same grain the app's own owned count reads at, rather
+   * than a narrowing against it: before that date `ownedByOracle` kept on `oracle_id`, so a `2x2`
+   * Bolt filed in the group made the `lea` line read as owned while this still filled only the
+   * exact piece of cardboard the list names. Now the two ask the same question, and this read is
+   * the one that decided which grain won.
    *
    * The seed is one of each with the eligible copy **last**, so a handler matching on the oracle
    * card or ignoring the finish answers three candidates rather than one.
@@ -5867,10 +5926,10 @@ describe("quick-adding bought copies into a deck", () => {
 
   /**
    * **A different printing of the card the deck plays is not refused**, and that is the fence
-   * reading the oracle card rather than the printing \u2014 `deck::release_group_copies`' rule and
-   * `ownedByOracle`'s. It sits here rather than beside the refusal above because the two are one
-   * decision seen from both sides, and a handler comparing `card_id` strings passes the refusal
-   * test and fails this one.
+   * reading the oracle card rather than the printing \u2014 `deck::played_keys`' own reach, and
+   * unrelated to how much of it counts as owned since 2026-09-07's exact grain. It sits here
+   * rather than beside the refusal above because the two are one decision seen from both sides,
+   * and a handler comparing `card_id` strings passes the refusal test and fails this one.
    */
   it("lets a different printing of a card the deck plays through the fence", () => {
     const db = shortOfThree({
@@ -6610,6 +6669,166 @@ describe("the deck grain (deck, variant, category, card)", () => {
     expect(db.decks[0].updatedAt).toBe(100);
   });
 
+  /** Copies in one folder — spec §2.2's sweep tests need it and no test above them did. */
+  const copiesIn = (db: FakeDb, folderId: number | null) =>
+    db.collectionEntries
+      .filter((e) => e.folderId === folderId)
+      .reduce((n, e) => n + e.quantity, 0);
+
+  /**
+   * Copies of **one printing** in one folder, which the folded case needs and {@link copiesIn}
+   * cannot answer: where the group holds two printings, a folder total reads the same whether
+   * the sweep took the one the list stopped naming or took both.
+   */
+  const copiesOf = (db: FakeDb, folderId: number | null, cardId: string) =>
+    db.collectionEntries
+      .filter((e) => e.folderId === folderId && e.cardId === cardId)
+      .reduce((n, e) => n + e.quantity, 0);
+
+  /**
+   * **Spec §2.2, the plain case.** A swap touches no collection table, so the group would
+   * otherwise keep the old printing's copies filed under a deck that no longer lists them —
+   * exactly the stranding `release_group_copies`' oracle fallback used to paper over (§2.3) and
+   * this sweep now prevents at the source. The new line reads owned 0 until the reader files a
+   * copy of the printing it actually names.
+   */
+  it("sweeps the group's old-printing copies to Recently removed after a swap", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      collectionEntries: [entry({ id: 1, cardId: BOLT_A.id, quantity: 2, folderId: groupId(1) })],
+      deckCards: [deckCard({ id: 1, deckId: 1, cardId: BOLT_A.id, categoryKind: "main", quantity: 2 })],
+    });
+
+    writeHandlers(db).deck_swap_printing({
+      deckId: 1,
+      fromCardId: BOLT_A.id,
+      toCardId: BOLT_B.id,
+      ...MAIN,
+    });
+
+    expect(copiesIn(db, groupId(1))).toBe(0);
+    expect(copiesIn(db, REMOVED_FOLDER)).toBe(2);
+    expect(liveDeck(db)!.cards[0].ownedQuantity).toBe(0);
+  });
+
+  /**
+   * **Spec §2.2, the folded case** — the reason the sweep runs *after* the whole rewrite rather
+   * than as a targeted release before it. The swap here folds into a category that already
+   * plays BOLT_B, so a release keyed on "the row that used to be here" would have nothing left to
+   * reason about; reading the finished list against the group answers the plain case and this one
+   * with one query.
+   *
+   * **The group holds _both_ printings, and staging only the one that leaves is what made this
+   * test unable to fail** (corrected 2026-09-07). With BOLT_B's own copies absent, "evicts the
+   * printing that left" and "evicts everything in the group" produce the same two numbers, so a
+   * sweep that had thrown the surplus arithmetic away entirely would still have passed. The
+   * crate's `a_folded_swap_evicts_only_the_printing_that_left` files both from the start for
+   * exactly this reason, and this fixture is now its shape: BOLT_B's copy is claimed by the
+   * folded row and stays, BOLT_A's three are claimed by nothing and go.
+   */
+  it("sweeps correctly when the swap folds into a line the deck already has", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT_A.id, quantity: 3, folderId: groupId(1) }),
+        entry({ id: 2, cardId: BOLT_B.id, quantity: 1, folderId: groupId(1) }),
+      ],
+      deckCards: [
+        deckCard({ id: 1, deckId: 1, cardId: BOLT_A.id, categoryKind: "main", quantity: 2 }),
+        deckCard({ id: 2, deckId: 1, cardId: BOLT_B.id, categoryKind: "main", quantity: 1 }),
+      ],
+    });
+
+    const result = writeHandlers(db).deck_swap_printing({
+      deckId: 1,
+      fromCardId: BOLT_A.id,
+      toCardId: BOLT_B.id,
+      ...MAIN,
+    });
+
+    expect(result).toEqual({ folded: true, quantity: 3 });
+    // Per printing, not per folder: a folder total cannot tell "only BOLT_A left" from
+    // "everything left", which is the whole of what this fixture was changed to say.
+    expect(copiesOf(db, groupId(1), BOLT_A.id)).toBe(0);
+    expect(copiesOf(db, groupId(1), BOLT_B.id)).toBe(1);
+    expect(copiesOf(db, REMOVED_FOLDER, BOLT_A.id)).toBe(3);
+    expect(copiesOf(db, REMOVED_FOLDER, BOLT_B.id)).toBe(0);
+  });
+
+  /**
+   * **Spec §2.2 one axis over.** `deck_set_card_finish` also touches no collection table, so the
+   * group's old-finish copies would otherwise strand exactly as an old printing's would.
+   */
+  it("sweeps the group's old-finish copies to Recently removed after a finish change", () => {
+    // `BOLT_2X2`, not `BOLT`: LEA's Bolt is `finishes: ["nonfoil"]`, and this press needs a
+    // printing the app will actually let go foil.
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT_2X2.id, finish: "nonfoil", quantity: 2, folderId: groupId(1) }),
+      ],
+      deckCards: [
+        deckCard({ id: 1, deckId: 1, cardId: BOLT_2X2.id, categoryKind: "main", quantity: 2 }),
+      ],
+    });
+
+    writeHandlers(db).deck_set_card_finish({
+      deckId: 1,
+      cardId: BOLT_2X2.id,
+      categoryId: MAIN.categoryId,
+      variant: "live",
+      fromFinish: null,
+      toFinish: "foil",
+    });
+
+    expect(copiesIn(db, groupId(1))).toBe(0);
+    expect(copiesIn(db, REMOVED_FOLDER)).toBe(2);
+    expect(liveDeck(db)!.cards[0].ownedQuantity).toBe(0);
+  });
+
+  /**
+   * **The multi-row case none of the three sweep tests above exercises.** Two rows at one
+   * identity means the sweep has an order to get right — `releaseUnclaimedCopies`' `held` `Map`
+   * groups them, and grouping alone promises nothing about which comes out of the group's array
+   * first. A partial surplus (not the whole holding) is the only shape that makes a wrong order
+   * *visible*: taken newest-first, the newer row (id 2) would be the one swept and the older row
+   * (id 1) would be the one left standing, split.
+   */
+  it("takes the surplus oldest row first when two rows share one identity", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT_A.id, quantity: 3, folderId: groupId(1) }),
+        entry({ id: 2, cardId: BOLT_A.id, quantity: 2, folderId: groupId(1) }),
+      ],
+      deckCards: [
+        // Swapped away below, so this pile stops claiming BOLT_A.
+        deckCard({ id: 1, deckId: 1, cardId: BOLT_A.id, categoryKind: "main", quantity: 3 }),
+        // Left alone — BOLT_A is not fully unclaimed after the swap, so the surplus (3 of the
+        // group's 5) is partial rather than the whole holding.
+        deckCard({ id: 2, deckId: 1, cardId: BOLT_A.id, categoryKind: "side", quantity: 2 }),
+      ],
+    });
+
+    writeHandlers(db).deck_swap_printing({
+      deckId: 1,
+      fromCardId: BOLT_A.id,
+      toCardId: BOLT_B.id,
+      ...MAIN,
+    });
+
+    // The older row (id 1) is drawn down first and taken whole; the newer row (id 2) is left
+    // exactly where it was — the reverse of what array order or a newest-first sort would leave.
+    expect(db.collectionEntries.find((e) => e.id === 1)).toMatchObject({
+      folderId: REMOVED_FOLDER,
+      quantity: 3,
+    });
+    expect(db.collectionEntries.find((e) => e.id === 2)).toMatchObject({
+      folderId: groupId(1),
+      quantity: 2,
+    });
+  });
+
   it("moves every copy into the category the target holds, folding", () => {
     const db = makeDeckDb({
       decks: [deck({ id: 1 })],
@@ -7222,9 +7441,11 @@ describe("the decklist import", () => {
    * Collection page and unavailable to every other deck, which is exactly the stranding
    * `deck_clear` releases behind its identical delete.
    *
-   * The imported line names a **different printing of the same card**, which is the arm that
-   * hides it: {@link attributeOwned} matches on the oracle id, so a group nobody released hands
-   * the freshly imported row a copy the reader never filed and the deck reads as owning one.
+   * The imported line names a **different printing of the same card**, and since 2026-09-07 that
+   * is reason enough on its own: {@link attributeOwned} matches the exact printing and finish, so
+   * an unreleased group holding the old printing would answer the freshly imported row owned 0
+   * rather than lending it a copy nobody filed under it — a quieter failure than the old oracle
+   * grain's, but still a group the reader cannot see or use until this release runs.
    */
   it("files a replaced live list's copies into Recently removed", () => {
     const db = filed();

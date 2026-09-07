@@ -754,11 +754,12 @@ pub fn deck_to_collection(
     // genuinely this command's — the `deck_cards` write, the history row, and the
     // [`MoveOutcome`] a caller draws a sentence from.
     //
-    // Everything that walk decides is argued there: the oracle-card fallback that reaches a
-    // swapped printing's copies, the missing group that holds nothing rather than refusing, the
-    // clamp at what the group actually has, and the holding area resolved only when there is
-    // something to file — so a database missing that folder still lets a card nobody owned be
-    // cut.
+    // Everything that walk decides is argued there: the exact `(card_id, finish)` match — an
+    // oracle-card fallback until 2026-09-07, and a bug once `deck::release_unclaimed_copies`
+    // cured the stranding it was written for — the missing group that holds nothing rather than
+    // refusing, the clamp at what the group actually has, and the holding area resolved only
+    // when there is something to file, so a database missing that folder still lets a card
+    // nobody owned be cut.
     let crate::deck::Released { moved, landed } =
         crate::deck::release_group_copies(&tx, deck_id, &card_id, finish.as_deref(), quantity)?;
 
@@ -1145,15 +1146,21 @@ mod tests {
     }
 
     #[test]
-    fn a_cut_reaches_the_copies_when_the_list_names_another_printing() {
-        // The state "Use this printing" leaves behind — `deck_swap_printing` rewrites the deck
-        // row's `card_id` and touches no collection table — and the state the v25 conversion
-        // writes wholesale, because the old allocator matched candidates by **oracle id**: a
-        // claim on an M10 Bolt for a deck that lists the Alpha one becomes exactly this.
+    fn a_cut_never_reaches_another_printings_copies() {
+        // **Inverted on 2026-09-07, and the name and the answer moved together.** This stood as
+        // `a_cut_reaches_the_copies_when_the_list_names_another_printing` and asserted the
+        // opposite: the group holds an Alpha Bolt, the list names the M10 one, and the cut gave
+        // the Alpha copies back on `owned_by_oracle`'s "a Bolt is a Bolt".
         //
-        // Matched on the exact printing alone, the cut moves nothing: the deck card goes and
-        // the copies stay filed under a deck that no longer lists them — invisible, and
-        // unavailable to every other deck.
+        // Under the exact grain that arm is a **bug** rather than a safety net. A deck may
+        // legitimately list both printings with the group holding both, and cutting one line
+        // while its own rows come up short would give back copies the other line still claims.
+        // The stranding the fallback was written for is cured at the source instead:
+        // `deck::release_unclaimed_copies` runs inside `swap_printing` and `set_card_finish`, so
+        // a copy the list does not name is never left in the group to begin with, and schema v36
+        // sweeps what the v25 conversion left. What is left here is a deck holding a printing
+        // nothing in it names — a state only a hand-edited or an out-of-date-device file reaches
+        // — and the honest answer is that this cut is not the press that moves it.
         let (conn, deck, cat) = fixture();
         let group = crate::deck::deck_group(&conn, deck).unwrap();
         seed_entry(&conn, "bolt", 2, group);
@@ -1162,23 +1169,24 @@ mod tests {
         let out = deck_to_collection(&conn, dc, 2).unwrap();
 
         assert_eq!(
-            out.quantity, 2,
-            "a Bolt is a Bolt — `owned_by_oracle`'s rule"
+            out.quantity, 0,
+            "the list named the M10 printing and the group holds none of it"
         );
-        assert_eq!(removed_copies(&conn, "bolt"), 2);
+        assert_eq!(removed_copies(&conn, "bolt"), 0);
         assert_eq!(
             group_copies(&conn, deck, "bolt"),
-            0,
-            "nothing is left stranded in a group whose deck no longer lists it"
+            2,
+            "the Alpha copies are still the deck's — a cut of another line is not what moves them"
         );
     }
 
     #[test]
-    fn a_cut_takes_the_exact_printing_before_another_of_the_same_card() {
-        // The fallback is a fallback: where the group holds the very printing the list names,
-        // that is the row that leaves, and the reader's other copy stays where they put it.
-        // This is what keeps the common case — every cut of a card nobody ever swapped —
-        // byte-for-byte what it was before the oracle arm existed.
+    fn a_cut_takes_the_exact_printing_and_only_that_one() {
+        // Where the group holds the very printing the list names, that is the row that leaves,
+        // and the reader's other copy stays where they put it. This was the *ordering* of a
+        // three-armed match until 2026-09-07 — "the exact printing before another of the same
+        // card" — and it is the whole match now. Not one assertion had to move, which is what
+        // "the ordering keeps the common case byte-for-byte" meant all along.
         let (conn, deck, cat) = fixture();
         let group = crate::deck::deck_group(&conn, deck).unwrap();
         seed_entry(&conn, "bolt", 1, group);
