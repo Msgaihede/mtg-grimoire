@@ -6,8 +6,10 @@
  * DTOs in `src/lib/ipc.ts` and answers three different questions: on `CardSummary` it is
  * every copy of one *printing* and finish-blind; on `WishRow` it is the copies filling one
  * *wish* and finish-aware; on `DeckCard` it is what this deck's **own group** physically
- * holds — oracle-grained, finish-blind, condition-blind, and attributed neither to a category
- * the user has switched off nor to the `theory` list, whatever the category is called. A fixture that
+ * holds — printing-and-finish-grained, condition-blind, and attributed neither to a category
+ * the user has switched off nor to the `theory` list, whatever the category is called. Since
+ * 2026-09-07 that is the same grain `deck_pull_plan` reads its candidates at, so a deck's
+ * missing count and its Pull dialog finally agree. A fixture that
  * stored DTOs would hard-code all three, they would agree, and every story built on it would
  * teach a reader a model the app does not have. Derived from rows they come out right
  * without anyone deciding that they should.
@@ -4721,8 +4723,12 @@ function labelsWorn(db: FakeDb, deckId: number, variant: DeckVariant): DeckLabel
 }
 
 /**
- * `deck::owned_by_oracle` — copies of each oracle card **this deck's own group holds**, keyed
- * by oracle id.
+ * `deck::owned_by_printing` — copies of each `(card_id, finish)` **this deck's own group
+ * holds**, keyed as `` `${cardId}|${finish}` `` — `deck_pull_plan`'s own separator for this
+ * exact pair (below), reused rather than reinvented. A two-field tuple has no `Map` key of its
+ * own in JS, and `|` cannot occur in either a card id (hex and hyphens) or a finish
+ * (`nonfoil`/`foil`/`etched`) — a safer choice than a literal separator escape, which is exactly
+ * how this file picked up a NUL byte once (see `.storybook/CLAUDE.md`).
  *
  * **Schema v25 deleted the allocator, and this is what replaced it.** There used to be a greedy
  * walk here: `deck_allocations` rows were spent in category-kind order over the whole
@@ -4732,24 +4738,29 @@ function labelsWorn(db: FakeDb, deckId: number, variant: DeckVariant): DeckLabel
  * construction because the copies are *physically* in its folder.
  *
  * So the whole derivation is one group-by: sum `quantity` over the entries filed in the deck's
- * group, joined to `cards` for the oracle id. **Matched by oracle card and not by printing** —
- * a Bolt is a Bolt, so a deck listing one printing and holding another of the same card still
- * reads owned, which is the one thing this shares with the walk it replaced.
+ * group, keyed on the exact printing and finish. **Narrowed here from the oracle grain on
+ * 2026-09-07**, to agree with what `deck_pull::CANDIDATE_SQL` has matched exactly since
+ * 2026-09-03 — a Bolt used to be a Bolt, so a deck listing one printing and holding another of
+ * the same oracle card read owned, and that let a deck report a missing count its own Pull
+ * dialog could not fill a single line of. Now the two ask the same question.
  *
- * An orphaned row names no oracle card and contributes nothing, which is the crate's
- * `c.oracle_id IS NOT NULL` and its `JOIN cards` in one test here. The group is **not** scoped
- * to a variant, exactly as the SQL is not: {@link attributeOwned} is where a plan is refused its
- * share, explicitly, rather than by a table's shape.
+ * **`JOIN cards` goes away, and that is a behaviour change worth stating rather than an
+ * optimisation.** The old grain dropped an orphaned `collection_entries` row — one whose
+ * `card_id` names no `cards` row, so it had no oracle id to sum under — reading it owned 0. At
+ * this grain there is nothing to look up: the deck row and the collection row name the same
+ * `card_id` directly, and the copy counts.
+ *
+ * The group is **not** scoped to a variant, exactly as the SQL is not: {@link attributeOwned} is
+ * where a plan is refused its share, explicitly, rather than by a table's shape.
  */
-function ownedByOracle(db: FakeDb, deckId: number): Map<string, number> {
+function ownedByPrinting(db: FakeDb, deckId: number): Map<string, number> {
   const group = deckGroup(db, deckId);
   if (group === undefined) return new Map();
   const owned = new Map<string, number>();
   for (const e of db.collectionEntries) {
     if (e.folderId !== group.id) continue;
-    const oracleId = cardById(db, e.cardId)?.oracleId;
-    if (!oracleId) continue;
-    owned.set(oracleId, (owned.get(oracleId) ?? 0) + e.quantity);
+    const key = `${e.cardId}|${e.finish}`;
+    owned.set(key, (owned.get(key) ?? 0) + e.quantity);
   }
   return owned;
 }
@@ -4881,10 +4892,16 @@ function deckReadOrder(db: FakeDb): Compare<FakeDeckCard> {
  *
  * **That `variant !== LIVE` test is now true by construction rather than because a table lacked
  * a variant column**, which is worth saying plainly because it reads like a leftover. A group is
- * not scoped to a variant either, so {@link ownedByOracle}'s map is the whole deck's; what has
+ * not scoped to a variant either, so {@link ownedByPrinting}'s map is the whole deck's; what has
  * changed is that the map is a fact about where cards *are* rather than a ledger of what was
  * reserved. The conclusion is the same one and is still drawn here, explicitly — the rule
  * `deck::tests::the_allocator_claims_nothing_for_the_theory_variant` pins.
+ *
+ * **The key build is a plain one since 2026-09-07, where it used to be a guard.** A deck row
+ * always has a `cardId`, so there is no `oracleId` that can be missing and nothing left to
+ * filter on beside `isActive` — which now stands on its own next to the `variant` test rather
+ * than folded into the same one. {@link collectionFinish} supplies the `row.finish` half of the
+ * key, `normaliseFinish`'s translation read the other way.
  *
  * The `min(remaining, row.quantity)` clamp is the crate's: a deck listing four copies of a card
  * whose group holds one owns one of them.
@@ -4892,9 +4909,9 @@ function deckReadOrder(db: FakeDb): Compare<FakeDeckCard> {
 function attributeOwned(
   db: FakeDb,
   rows: readonly FakeDeckCard[],
-  ownedByOracle: ReadonlyMap<string, number>,
+  ownedByPrinting: ReadonlyMap<string, number>,
 ): Map<number, number> {
-  const left = new Map(ownedByOracle);
+  const left = new Map(ownedByPrinting);
   const owned = new Map<number, number>();
   for (const row of rows) {
     // A plan reserves nothing, whichever list the reader is looking at.
@@ -4902,14 +4919,16 @@ function attributeOwned(
       owned.set(row.id, 0);
       continue;
     }
-    const oracleId = cardById(db, row.cardId)?.oracleId;
-    if (!oracleId || categoryById(db, row.categoryId)?.isActive !== true) {
+    // A switched-off pile counts toward nothing anywhere in the app — its own test now, where
+    // it used to ride beside the oracle-id lookup this grain no longer needs.
+    if (categoryById(db, row.categoryId)?.isActive !== true) {
       owned.set(row.id, 0);
       continue;
     }
-    const remaining = left.get(oracleId) ?? 0;
+    const key = `${row.cardId}|${collectionFinish(row.finish)}`;
+    const remaining = left.get(key) ?? 0;
     const take = Math.max(0, Math.min(remaining, row.quantity));
-    left.set(oracleId, remaining - take);
+    left.set(key, remaining - take);
     owned.set(row.id, take);
   }
   return owned;
@@ -4944,13 +4963,15 @@ function pullOrder(db: FakeDb, e: FakeEntry): [number, number] {
  * `deck_pull::candidates_for` — every copy on the reader's desk that could fill one hole, best
  * first.
  *
- * **The printing *and* the finish match exactly, and that is the deliberate narrowing this
- * feature took** (2026-09-03), spelled out because it looks like a bug from either side. A
- * deck's owned count is attributed at the **oracle** grain — {@link ownedByOracle} keys on
- * `oracle_id`, so a LEA Bolt filed in the group makes an M10 line read as owned — and this
- * fills strictly fewer holes than that count would allow. The trade is that nothing is ever
- * pulled that is not the exact piece of cardboard the list names, which is the whole of what a
- * reader is agreeing to when they press. Pin it rather than fixing it.
+ * **The printing *and* the finish match exactly, and since 2026-09-07 that is no longer a
+ * narrowing against the owned count — it is the same grain the count reads at.** Before that
+ * date a deck's owned count was attributed at the **oracle** grain (`ownedByOracle` keyed on
+ * `oracle_id`, so a LEA Bolt filed in the group made an M10 line read as owned) while this
+ * stayed exact, so a deck could read *12 missing* and this could honestly offer nothing against
+ * a single one of them. **The resolution was exactness everywhere: the count narrowed to meet
+ * the pull, and the pull did not widen to meet the count** — {@link ownedByPrinting} now keys on
+ * `(card_id, finish)` too, so every hole the deck reports is a hole a candidate here could
+ * genuinely fill.
  *
  * **Eligibility is {@link inADeckFolder} and nothing of its own**, which is what makes the
  * dialog and the Collection page's own switch answer the same question: the root, a folder the
@@ -6556,11 +6577,11 @@ export function readHandlers(db: FakeDb) {
       const rows = db.deckCards
         .filter((dc) => dc.deckId === deck.id && dc.variant === variant)
         .sort(deckReadOrder(db));
-      // `owned_by_oracle` then `attribute_owned`, in that order and with no variant test
+      // `owned_by_printing` then `attribute_owned`, in that order and with no variant test
       // between them — exactly as `deck::get_deck` calls them. The map is what this deck's
       // group physically holds, whichever list is being read; {@link attributeOwned} is where a
       // theory row is refused its share, by hand and for a reason of its own.
-      const owned = attributeOwned(db, rows, ownedByOracle(db, deck.id));
+      const owned = attributeOwned(db, rows, ownedByPrinting(db, deck.id));
       const cards = rows
         // The join on `deck_categories` is inner, so a row whose category is gone is not a
         // row: `flatMap` is what drops one, and nothing in this fake can produce it.
@@ -6756,10 +6777,11 @@ export function readHandlers(db: FakeDb) {
      * to the printing and the finish because a pull moves the exact piece of cardboard.
      *
      * **The owned side is `deck_get`'s and not a second attribution**, which is the whole reason
-     * this reads the DTO rather than the rows. `ownedQuantity` is oracle-grained, skips an
-     * inactive pile and skips the theory list, and every one of those is a decision with a
-     * paragraph behind it — a plan that summed `collection_entries` itself would be a fourth
-     * answer to a question that already has three, and it would be plausible every time.
+     * this reads the DTO rather than the rows. `ownedQuantity` is printing-and-finish-grained
+     * since 2026-09-07, skips an inactive pile and skips the theory list, and every one of those
+     * is a decision with a paragraph behind it — a plan that summed `collection_entries` itself
+     * would be a fourth answer to a question that already has three, and it would be plausible
+     * every time.
      *
      * **A row with no candidate is left out entirely**, so `candidates` is never empty and a
      * plan of zero rows means "nothing here can be filled". That is the ordinary answer rather
@@ -7707,8 +7729,11 @@ const MORE_THAN_MISSING = "That is more copies than this deck is short of.";
  * deck fence stays the first statement in the write.
  *
  * **Matched on the oracle card, not the printing** ({@link playedKeys}): a different printing of
- * a card the deck plays is the same card, which is `deck::release_group_copies`' rule and
- * {@link ownedByOracle}'s.
+ * a card the deck plays is the same card for *this* fence, which is `deck::played_keys`' own
+ * reach and stays oracle-grained on purpose, so a reader may file any printing of a card their
+ * list plays. **{@link ownedByPrinting} no longer shares it** — since 2026-09-07 the owned count
+ * narrows to the exact `(card_id, finish)` a copy sits at, so a copy let through here under a
+ * different printing reads owned 0 until the list names that printing too.
  */
 const NOT_IN_DECK =
   "That deck does not play this card. Add it to the deck first, then file your copies.";
@@ -8890,12 +8915,16 @@ function takeFromDeckList(
  * empty a whole pile left every copy behind them filed under a deck that no longer lists it.
  * Both now call this, through {@link releasePileCopies}.
  *
- * **Matched on the oracle card, exact printing and finish first**, which is the crate's fix for a
- * stranding rather than a nicety: `deck_swap_printing` and `deck_set_card_finish` rewrite a deck
- * row's identity and touch no collection table, so after "Use this printing" an exact-only match
- * finds nothing and the copies stay filed under a deck that no longer lists them. A card whose
- * printing has left `cards` reads `null` and falls back to the exact arm, which needs no `cards`
- * row at all.
+ * **Matched on the exact printing and finish only, since 2026-09-07 — no oracle fallback.** Until
+ * that date this also matched same-`cardId`-any-finish, then any row in the group sharing an
+ * oracle id, and the doc here called that "the crate's fix for a stranding". Under the exact
+ * grain it is a bug instead: a deck may legitimately list **both** an LEA Bolt and an M10 Bolt,
+ * with the group holding both, and cutting the LEA line would give back M10 copies the M10 line
+ * still claims — the second (finish) arm was the same bug one dimension over. What cured the
+ * stranding the fallback existed for is {@link releaseUnclaimedCopies}, called after
+ * `deck_swap_printing` and `deck_set_card_finish` rewrite a row's identity — so by the time this
+ * function is asked to cut a line, the group has nothing filed under an identity no live row
+ * still names.
  *
  * **A deck with no group holds nothing rather than refusing**, and `Recently removed` is resolved
  * only when there is something to file — so a store missing either folder still lets a pile be
@@ -8928,16 +8957,9 @@ function releaseGroupCopies(
   // The deck row's `null` is the collection row's `'nonfoil'` — {@link collectionFinish}'s
   // translation, read the other way.
   const want = collectionFinish(finish);
-  const wantOracle = cardById(db, cardId)?.oracleId ?? null;
-  const rank = (e: FakeEntry): number => (e.cardId === cardId ? (e.finish === want ? 0 : 1) : 2);
   const backing = db.collectionEntries
-    .filter((e) => {
-      if (e.folderId !== group.id) return false;
-      if (e.cardId === cardId) return true;
-      const oracle = cardById(db, e.cardId)?.oracleId ?? null;
-      return oracle !== null && oracle === wantOracle;
-    })
-    .sort((a, b) => rank(a) - rank(b) || a.id - b.id);
+    .filter((e) => e.folderId === group.id && e.cardId === cardId && e.finish === want)
+    .sort((a, b) => a.id - b.id);
   if (backing.length === 0) return nothing;
   const removed = removedFolder(db);
   let moved = 0;
@@ -8949,6 +8971,77 @@ function releaseGroupCopies(
     moved += take;
   }
   return { moved, landed };
+}
+
+/**
+ * `deck::release_unclaimed_copies` — sweep this deck's group and move every copy no **live**
+ * `deck_cards` row claims at `(card_id, finish)` into `Recently removed`.
+ *
+ * **What replaced `release_group_copies`'s oracle fallback.** That fallback existed to cure a
+ * stranding: `deck_swap_printing` and `deck_set_card_finish` rewrite a row's identity and touch
+ * no collection table, so the group would otherwise keep holding the *old* identity's copies
+ * under a deck that no longer lists them. Curing it at the source — a sweep after the rewrite —
+ * is what let the exact-grain match above stop needing a fallback at all.
+ *
+ * **Per `(card_id, finish)` present in the group, `surplus = held - claimed`.** Where it is
+ * positive, the surplus is taken oldest row first ({@link moveCopies}, which is
+ * `collection_folders::take_copies`'s split-and-fold in one call) — the same tiebreak
+ * `releaseGroupCopies` uses, because two rows of one identity should give up the older one
+ * first.
+ *
+ * **"Claimed" is every *live* `deck_cards` row, switched-off piles included, and getting that
+ * wrong is destructive rather than merely wrong.** `attributeOwned` hands an inactive pile no
+ * copies, so it is tempting to read its rows as claiming nothing — but then switching a category
+ * off would evict that pile's cards from the deck the next time this runs, turning a display
+ * switch into a press that moves cardboard. Custody follows what the list **names**; the switch
+ * only decides what is counted. This is `release_live_copies`' existing rule carried over, not a
+ * new one — that read filters by category id and never by `isActive` either.
+ *
+ * **A theory row claims nothing**, so a plan holds no cards and cannot be the reason a sweep
+ * finds a surplus — the `variant !== LIVE` filter below is this function's own, the way
+ * `release_live_copies`' guard is its own rather than each of its callers'. Calling this after a
+ * *theory*-variant swap or finish change is therefore a loop that finds nothing new, because
+ * editing a plan never changes what the live list claims.
+ *
+ * **A deck with no group holds nothing rather than refusing, and `Recently removed` is resolved
+ * only when there is a surplus to file** — {@link releaseGroupCopies}'s asymmetries, carried over
+ * so the two behave alike.
+ */
+function releaseUnclaimedCopies(db: FakeDb, deckId: number): void {
+  const group = deckGroup(db, deckId);
+  if (group === undefined) return;
+  const claimed = new Map<string, number>();
+  for (const dc of db.deckCards) {
+    if (dc.deckId !== deckId || dc.variant !== LIVE) continue;
+    const key = `${dc.cardId}|${collectionFinish(dc.finish)}`;
+    claimed.set(key, (claimed.get(key) ?? 0) + dc.quantity);
+  }
+  // Grouped by identity here; sorted oldest-first per group below — a store's insertion order
+  // is not a promise, so this does not trust `db.collectionEntries` to already be in it.
+  const held = new Map<string, FakeEntry[]>();
+  for (const e of db.collectionEntries) {
+    if (e.folderId !== group.id) continue;
+    const key = `${e.cardId}|${e.finish}`;
+    const rows = held.get(key);
+    if (rows) rows.push(e);
+    else held.set(key, [e]);
+  }
+  for (const [key, rows] of held) {
+    const totalHeld = rows.reduce((n, e) => n + e.quantity, 0);
+    let surplus = totalHeld - (claimed.get(key) ?? 0);
+    if (surplus <= 0) continue;
+    // Resolved only now that there is something to move — a store missing this folder must
+    // still let every *claimed* copy sit undisturbed.
+    const removed = removedFolder(db);
+    // Oldest row first — {@link releaseGroupCopies}'s own sort, spelled the same way here
+    // rather than assumed from how the rows happened to arrive above.
+    for (const e of [...rows].sort((a, b) => a.id - b.id)) {
+      if (surplus === 0) break;
+      const take = Math.min(e.quantity, surplus);
+      moveCopies(db, e.id, take, removed.id);
+      surplus -= take;
+    }
+  }
 }
 
 /**
@@ -11699,6 +11792,10 @@ export function writeHandlers(db: FakeDb) {
      *
      * `needsReview` is deliberately not carried across — the flag says the row's printing
      * left the card database, and a swap onto one that is in it is exactly the cure.
+     *
+     * **Touches no collection table**, which is exactly why {@link releaseUnclaimedCopies} runs
+     * after this write: the group still holds the *old* printing's copies once the list stops
+     * naming it, and nothing else in this command would ever notice.
      */
     deck_swap_printing: (args: {
       deckId: number;
@@ -11761,6 +11858,10 @@ export function writeHandlers(db: FakeDb) {
       }
       db.deckCards = db.deckCards.filter((dc) => dc !== row);
       deck.updatedAt = stamp(db);
+      // §2.2's sweep, after the rewrite rather than a targeted release before it: a swap can
+      // *fold* into a line the deck already has, and reading the finished list against the
+      // group answers both the plain case and the folded one with one query.
+      releaseUnclaimedCopies(db, args.deckId);
       // `CHECK (quantity > 0)` means a row that was already there contributed at least one
       // copy, so the landed total is strictly greater than what moved exactly when it folded.
       return { folded: landed > quantity, quantity: landed };
@@ -11777,6 +11878,10 @@ export function writeHandlers(db: FakeDb) {
      * Three refusals, and the second is the one worth having in the fake: the target finish is
      * checked against `cards.finishes`, so a story that points this at a printing sold only in
      * nonfoil sees what the app does with a refusal rather than a silently shiny card.
+     *
+     * **Touches no collection table**, `deck_swap_printing`'s reason exactly:
+     * {@link releaseUnclaimedCopies} runs after either branch below, because the group still
+     * holds the *old* finish's copies once the list stops naming it.
      */
     deck_set_card_finish: (args: {
       deckId: number;
@@ -11802,16 +11907,21 @@ export function writeHandlers(db: FakeDb) {
       if (!row) throw refuse(cardGone(category.name));
       const target = deckCardAt(db, args.deckId, args.cardId, category.id, variant, to);
       deck.updatedAt = stamp(db);
+      let result: SwapResult;
       if (target) {
         target.quantity += row.quantity;
         db.deckCards = db.deckCards.filter((dc) => dc !== row);
-        return { folded: true, quantity: target.quantity };
+        result = { folded: true, quantity: target.quantity };
+      } else {
+        // Nothing to fold into: the row changes finish in place and keeps everything else. No
+        // new rowid here, unlike the move and the swap above — the crate's statement is a bare
+        // `UPDATE … SET finish`, so the row keeps its place in {@link takeFromDeckList}'s order.
+        row.finish = to;
+        result = { folded: false, quantity: row.quantity };
       }
-      // Nothing to fold into: the row changes finish in place and keeps everything else. No new
-      // rowid here, unlike the move and the swap above — the crate's statement is a bare
-      // `UPDATE … SET finish`, so the row keeps its place in {@link takeFromDeckList}'s order.
-      row.finish = to;
-      return { folded: false, quantity: row.quantity };
+      // §2.2's sweep, after the rewrite either branch took — see the doc above.
+      releaseUnclaimedCopies(db, args.deckId);
+      return result;
     },
 
     /**
