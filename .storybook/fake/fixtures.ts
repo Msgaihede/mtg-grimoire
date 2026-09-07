@@ -30,7 +30,7 @@ import { CARDS, type FakeCard } from "./cards";
 import { finishPrice } from "@/lib/finish";
 import { buildGroups, type GroupBy } from "@/features/decks/grouping";
 import type { SortBy } from "@/features/decks/sorting";
-import { theoryMatchPlan } from "@/features/decks/theoryMatch";
+import { theoryMatchPlan, type TheoryPlan } from "@/features/decks/theoryMatch";
 import type { ValidationIssue } from "@/features/decks/validation/types";
 import type {
   CategoryKind,
@@ -525,8 +525,14 @@ export function deckViolations(): Map<string, ValidationIssue[]> {
  * **The printings are named rather than the cards**, for {@link deckViolations}' reason: `CARDS`
  * is generated and may be regenerated against a newer sync, and a hardcoded name would go on
  * reading as true while pointing at whatever printing that slot had become.
+ *
+ * **Every slot answers a real name** (2026-09-07), taken off the same fixture printing the key is
+ * built from. `nameKey` is `string | null` and `null` is an *orphan* — a printing that has left
+ * the corpus — so a fixture answering it for a card that plainly exists would make the mark's
+ * blue tier dead in every story that draws this deck, silently and in exactly the surface the
+ * tier was added for.
  */
-export function deckTheoryMatches(): ReadonlyMap<string, number> {
+export function deckTheoryMatches(): TheoryPlan {
   const slots = [
     // A plan asking for **twice** what is sleeved up, on the card that also breaks a rule: the
     // `-2` and the `RULE BREAK` are the two marks in opposite corners, one of them now a number.
@@ -543,15 +549,18 @@ export function deckTheoryMatches(): ReadonlyMap<string, number> {
     // rather than through `theorySlot` — a fixture generating the key with the same function
     // the code looks it up with would pass whatever separator either happened to use.
     // `deckCard` builds every fixture row with `finish: null`, so these are the regular
-    // copies, which is the case the grain is strictest about.
-    .map((slot) => ({ key: `${slot.card.id}|`, quantity: slot.quantity }));
+    // copies, which is the case the grain is strictest about. The name is answered raw, as the
+    // `LEFT JOIN c` does: `theoryNameKey` is the only place the fold is written.
+    .map((slot) => ({ key: `${slot.card.id}|`, nameKey: slot.card.name, quantity: slot.quantity }));
   // Through the real function over the real fixture deck, so the three states a story shows are
   // the three the shipped arithmetic produces rather than three numbers typed here — the same
-  // argument `deckGroups` makes for building its groups with `buildGroups`.
-  return theoryMatchPlan(
-    slots,
-    deckGroups().flatMap((group) => group.cards),
-  ) as ReadonlyMap<string, number>;
+  // argument `deckGroups` makes for building its groups with `buildGroups`. Both switches on,
+  // which is what every deck is born with; a story about a deck that has turned one off passes
+  // its own `marks`.
+  return theoryMatchPlan(slots, deckGroups().flatMap((group) => group.cards), {
+    exact: true,
+    name: true,
+  }) as TheoryPlan;
 }
 
 /* ------------------------------------------------------------------- the updater ------- */

@@ -6952,10 +6952,17 @@ export function readHandlers(db: FakeDb) {
      * entries spelling one key are a plan the frontend would read as half the size. The fake does
      * the folding rather than leaning on `theoryMatchPlan`'s own defensive sum, or a story would
      * be exercising that fallback instead of the shape the backend answers in.
+     *
+     * **`nameKey` comes off `cards` and never off the deck row** (2026-09-07), which is the
+     * `LEFT JOIN c` in the real query: an orphan whose printing has left the corpus answers
+     * `null` and is matchable exactly and not loosely, where `deck_cards.name` is denormalised
+     * and would hand every orphan a name it could be matched by. **It is answered unfolded**,
+     * because `theoryNameKey` is where the fold is written and a fake that pre-lowercased it
+     * would make every story's blue tier prove that the fold agrees with itself.
      */
     deck_theory_slots: (args: { deckId: number }): TheorySlot[] => {
       refuseIfMetaUnreadable(db, THEORY_UNREADABLE);
-      const wanted = new Map<string, number>();
+      const wanted = new Map<string, { nameKey: string | null; quantity: number }>();
       for (const dc of db.deckCards) {
         if (
           dc.deckId !== args.deckId ||
@@ -6965,9 +6972,11 @@ export function readHandlers(db: FakeDb) {
           continue;
         }
         const key = `${dc.cardId}|${dc.finish ?? ""}`;
-        wanted.set(key, (wanted.get(key) ?? 0) + dc.quantity);
+        const held = wanted.get(key);
+        if (held) held.quantity += dc.quantity;
+        else wanted.set(key, { nameKey: cardById(db, dc.cardId)?.name ?? null, quantity: dc.quantity });
       }
-      return [...wanted].map(([key, quantity]) => ({ key, quantity }));
+      return [...wanted].map(([key, { nameKey, quantity }]) => ({ key, nameKey, quantity }));
     },
 
     /** `deck_theory::theory_diff` — what the plan wants and the deck does not have. See
