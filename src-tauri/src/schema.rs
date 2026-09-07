@@ -308,9 +308,13 @@ pub const LEGACY_SINGLE_FILE_VERSION: i64 = 26;
 /// storage half of a word this app changed everywhere at once. 34 is one column on
 /// `collection_folders`, `locked` — the drawer a reader has set aside, so the app stops
 /// *offering* what is in it without ever stopping them reaching it; `NOT NULL DEFAULT 0`, so
-/// every folder that already exists is unlocked and the upgrade is invisible. The
+/// every folder that already exists is unlocked and the upgrade is invisible. 35 is the second
+/// rung here that writes no shape: it sweeps every `kind = 'deck'` folder and files whatever no
+/// **live** `deck_cards` row claims at `(card_id, finish)` into `Recently removed`, which is the
+/// one-time pass that brings a file the v25 conversion filed by oracle id under the grain
+/// `deck::owned_by_printing` now counts at. The
 /// user's ladder can never restart, because its rungs describe rows nothing else can produce.
-pub const USER_SCHEMA_VERSION: i64 = 34;
+pub const USER_SCHEMA_VERSION: i64 = 35;
 
 /// `corpus.db`'s version, on a number line of its own.
 ///
@@ -2763,10 +2767,12 @@ pub fn migrate_single_file(conn: &Connection) -> rusqlite::Result<()> {
             let held = source.map(|(q, _)| q);
             let offered = source.map_or(0, |(_, t)| t);
             // **The clamp, and it is not optional.** The old ledger could out-claim a row that
-            // was later stepped down — nothing refused it, because `deck::owned_by_oracle`
-            // applied `min(a.quantity, e.quantity)` at *read* time and the stored overclaim
-            // never showed. Reading the claim literally here would invent copies the reader
-            // does not own, permanently and with nothing to compare against afterwards.
+            // was later stepped down — nothing refused it, because the owned/missing read of the
+            // day (`deck::owned_by_oracle`, which is `deck::owned_by_printing` since 2026-09-07
+            // and narrower still) applied `min(a.quantity, e.quantity)` at *read* time and the
+            // stored overclaim never showed. Reading the claim literally here would invent copies
+            // the reader does not own, permanently and with nothing to compare against
+            // afterwards.
             let take = held.unwrap_or(0).min(claimed);
             if take == 0 {
                 continue;
@@ -4864,6 +4870,200 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
         tx.commit()?;
     }
 
+    // v35: a deck's group holds only what its live list claims at `(card_id, finish)`.
+    //
+    // `deck::owned_by_printing` narrowed the count from the oracle card to the printing, so a
+    // deck now reads as short of the exact object its list names. The v25 conversion filed
+    // placements by matching the old allocator's claims **across** printings — its own doc says
+    // it "routinely files a printing the deck does not list" — so an upgraded file is full of
+    // copies the new count attributes to nothing and which `deck_pull::CANDIDATE_SQL` cannot
+    // offer back, because it excludes every `kind = 'deck'` folder including the deck's own.
+    // This is the one-time pass that brings those files under the rule.
+    //
+    // **They land in `Recently removed`, and that is chosen rather than convenient**: it is
+    // ranked second in `CANDIDATE_SQL`, after the root and before the reader's own folders, so
+    // the first press of `Import missing cards from collection…` offers every one of them back
+    // for the lines that genuinely match. A reader is left with a state they can act on.
+    //
+    // **Spelled out literally and calling no app code.** `'deck'`, `'removed'`, `'live'` and
+    // `'nonfoil'` are written out rather than read from `COLLECTION_FOLDER_KINDS`,
+    // `DECK_VARIANTS` and `FINISHES`, and the split below is this rung's own rather than
+    // `collection_folders::take_copies` or `deck::release_unclaimed_copies`. A migration step is
+    // history the day it ships: a constant that is reordered, or a helper whose rules change,
+    // would silently convert a v34 file differently next year. v25's rung inlines the same
+    // arithmetic for the same reason.
+    //
+    // **It writes no shape at all, so it owes no `USER_SCHEMA_SQL` line and no `UNDO_V35`** —
+    // v32's exemption, and the second time this ladder has earned it.
+    //
+    // **A missing `Recently removed` folder skips the move rather than failing the rung.** A
+    // rung that errors blocks startup, and a hand-edited file without that folder must open.
+    if v < 35 {
+        let tx = conn.unchecked_transaction()?;
+
+        // `None` skips the move and still stamps the version — a hand-edited file with no
+        // holding area must open, and a rung that errors blocks startup.
+        let removed: Option<i64> = tx
+            .query_row(
+                "SELECT id FROM collection_folders WHERE kind = 'removed'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+
+        if let Some(removed) = removed {
+            // Every copy in a deck group that its deck's **live** list does not name at
+            // `(card_id, finish)`, oldest row first.
+            //
+            // **`claimed` sums every live row, switched-off piles included.** Custody follows
+            // what the list *names*; `is_active` decides only what is counted. Reading it the
+            // other way would make this rung empty every reader's Maybeboard into the holding
+            // area on upgrade — the one way this can be destructive. `variant = 'live'` is the
+            // other half of the same sentence read the opposite way: a plan reserves nothing.
+            //
+            // The deck row's `NULL` finish is the collection row's `'nonfoil'`, resolved in SQL
+            // so both sides of the comparison are one spelling.
+            //
+            // **⚠️ The surplus is allocated oldest-row-first, so the OLDEST rows are the ones
+            // that leave — and getting this backwards is the one error here that costs nothing a
+            // total can see.** `deck::release_unclaimed_copies` walks the identity's rows
+            // `ORDER BY id` and *takes* from each in turn (`let take = row_held.min(surplus)`),
+            // which is spec §2.1's rule and `take_copies`' and `release_group_copies`'
+            // convention. Crediting the *claim* oldest-first instead is the exact mirror image:
+            // the same number of copies moves, no copy is lost or invented, and a **different
+            // physical card** leaves the deck. This rung is a one-shot that has to hand the
+            // reader the database the app itself would have produced — otherwise the first
+            // `swap_printing` after the upgrade evicts by a different rule than the upgrade did,
+            // for a reason no reader could ever see.
+            //
+            // So the three subqueries are `total_held`, `claimed` and `prior_held`, and the
+            // column is `max(0, (total_held - claimed) - prior_held)`: the group's whole surplus,
+            // less what the rows above this one have already given up. It is a **remaining
+            // surplus** and not yet a take — `row_held.min(surplus)` is the loop's own line
+            // below, one line for one line with the function this reproduces.
+            //
+            // Worked on a group of two rows of 2 against a line of 3: total surplus is 1, so the
+            // older row gives up `min(2, 1 - 0) = 1` and the newer gives up `min(2, 1 - 2) = 0`.
+            // The `max(0, …)` is what makes that second row a no-op rather than a negative.
+            //
+            // **The whole plan is collected before a single row moves**, which is what lets all
+            // three subqueries read `collection_entries` while the loop below writes to it: the
+            // arithmetic is answered against the file as the reader left it, once.
+            let plan: Vec<(i64, i64)> = {
+                let mut stmt = tx.prepare(
+                    "SELECT e.id,
+                            max(0, coalesce((
+                              SELECT sum(t.quantity) FROM collection_entries t
+                               WHERE t.folder_id = e.folder_id
+                                 AND t.card_id = e.card_id
+                                 AND t.finish = e.finish
+                            ), 0) - coalesce((
+                              SELECT sum(d.quantity) FROM deck_cards d
+                               WHERE d.deck_id = f.deck_id
+                                 AND d.variant = 'live'
+                                 AND d.card_id = e.card_id
+                                 AND coalesce(d.finish, 'nonfoil') = e.finish
+                            ), 0) - coalesce((
+                              SELECT sum(p.quantity) FROM collection_entries p
+                               WHERE p.folder_id = e.folder_id
+                                 AND p.card_id = e.card_id
+                                 AND p.finish = e.finish
+                                 AND p.id < e.id
+                            ), 0))
+                       FROM collection_entries e
+                       JOIN collection_folders f ON f.id = e.folder_id
+                      WHERE f.kind = 'deck'
+                      ORDER BY e.id",
+                )?;
+                let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+                rows.collect::<rusqlite::Result<Vec<_>>>()?
+            };
+
+            for (entry_id, surplus) in plan {
+                // The rows above this one in the same group have already given up everything
+                // that was over the line, so `0` here means this row is entirely claimed.
+                if surplus <= 0 {
+                    continue;
+                }
+                let (held, offered): (i64, i64) = tx.query_row(
+                    "SELECT quantity, tradelist_quantity FROM collection_entries WHERE id = ?1",
+                    params![entry_id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )?;
+                // `release_unclaimed_copies`' `let take = row_held.min(surplus);`, one line for
+                // one line: a row gives up what is left of the surplus, capped at what it holds.
+                let take = surplus.min(held);
+                // **The trade list is split, never copied** — v25's rung's clamp, and its
+                // reason: carrying the number onto both halves would have the reader promising
+                // twice the copies they hold, and no CHECK ties the two columns. Each half is
+                // clamped to its own quantity a second time, which matters only for a
+                // hand-edited row that already held `tradelist > quantity`.
+                let moved_trade = offered.min(take);
+                let kept_trade = (offered - moved_trade).min(held - take);
+
+                // **The placement carries every grain column and every column that is the row's
+                // story** — v25's rung's insert, verbatim, for its reason: these are the same
+                // physical cards, bought on the same day for the same money, and a bare row
+                // would be the upgrade quietly deleting a history that took years to build.
+                // `ON CONFLICT` is the eleven-term grain `idx_collection_grain` builds, and the
+                // `DO UPDATE` sums the trade list beside the quantity because two rows that
+                // merge are one pile.
+                //
+                // **`sync_uid` is not on the column list, which is v25's answer to a question
+                // v25 could not be asked** — that rung predates the column entirely. It is the
+                // right answer here too, and it is `take_copies`' own: the placement lands with
+                // a NULL uid and `capture::insert_trigger` mints one unconditionally. The
+                // triggers are *persistent*, so on every machine that has launched before they
+                // are already in the file when this runs — the same fact the v32 rung's doc
+                // turns on — and `mint_missing_uids` covers the paths that are not a trigger.
+                // Naming the column here would be this rung naming a row the way the sync engine
+                // names it, in a second place. The `ON CONFLICT` path never inserts at all, so
+                // the surviving row keeps the uid it already had.
+                tx.execute(
+                    "INSERT INTO collection_entries
+                         (card_id, set_code, collector_number, lang, finish, condition,
+                          condition_original, quantity, tradelist_quantity, purchase_price,
+                          purchase_currency, acquired_at, acquisition_source, serial_number,
+                          altered, signed, proxy, misprint, grading, tags, notes, needs_review,
+                          folder_id, created_at, updated_at)
+                     SELECT card_id, set_code, collector_number, lang, finish, condition,
+                            condition_original, ?2, ?4, purchase_price,
+                            purchase_currency, acquired_at, acquisition_source, serial_number,
+                            altered, signed, proxy, misprint, grading, tags, notes, needs_review,
+                            ?3, created_at, unixepoch()
+                       FROM collection_entries WHERE id = ?1
+                     ON CONFLICT (card_id, finish, condition, lang, altered, signed, proxy,
+                                  misprint, coalesce(serial_number, ''), coalesce(grading, ''),
+                                  coalesce(folder_id, 0))
+                     DO UPDATE SET quantity = quantity + excluded.quantity,
+                                   tradelist_quantity = tradelist_quantity
+                                                        + excluded.tradelist_quantity,
+                                   updated_at = unixepoch()",
+                    params![entry_id, take, removed, moved_trade],
+                )?;
+                // The source loses exactly what left it, and is deleted at zero rather than
+                // left standing empty — v24's rule: with the folder in the grain, a row holding
+                // no copies is indistinguishable from one somebody filed and emptied.
+                tx.execute(
+                    "UPDATE collection_entries
+                        SET quantity = quantity - ?2, tradelist_quantity = ?3,
+                            updated_at = unixepoch()
+                      WHERE id = ?1",
+                    params![entry_id, take, kept_trade],
+                )?;
+                tx.execute(
+                    "DELETE FROM collection_entries WHERE id = ?1 AND quantity = 0",
+                    params![entry_id],
+                )?;
+            }
+        }
+
+        // Literal `35`, for the reason every step before it writes its own: this step is what
+        // *makes* a database version 35.
+        tx.execute_batch("PRAGMA main.user_version = 35;")?;
+        tx.commit()?;
+    }
+
     // **The clock, repaired on every launch at every version — and this is not belt-and-braces.**
     //
     // Every capture trigger ends `FROM sync_clock c, sync_identity i, sync_group g`. That is a
@@ -6118,6 +6318,154 @@ pub(crate) mod tests {
         conn
     }
 
+    /// The deck whose group carries every case the v35 rung has to tell apart.
+    const DECK_A: i64 = 1;
+    /// A second deck, present so the rung is shown reaching past the first one.
+    const DECK_B: i64 = 2;
+
+    /// A user file at 34 — the shape every machine carries the day before a deck's group is held
+    /// to the printing, and the only population the v35 rung is *for*.
+    ///
+    /// **Head, stamped with the previous number and nothing else, which is [`user_file_at_31`]'s
+    /// construction one number line up.** v35 writes no shape at all; it *moves rows*, so a v34
+    /// database and a v35 one **are** the same schema and renumbering is the whole of the
+    /// difference. There is no `UNDO_V35` for that reason, and no fixture below owes one — the
+    /// same exemption v32 has and v33 and v34 do not.
+    ///
+    /// What makes a test built on this a real upgrade and not a fresh install is what it seeds:
+    /// a deck group holding printings and finishes the deck's own live list does not name, which
+    /// is exactly what the v25 conversion left behind — its own doc records that it "replaced
+    /// matched candidates by oracle id, so the conversion routinely files a printing the deck
+    /// does not list".
+    fn user_file_at_34() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        create_user_schema(&conn, "main").unwrap();
+        conn.execute_batch("PRAGMA main.user_version = 34;")
+            .unwrap();
+        seed_v34_groups(&conn);
+        conn
+    }
+
+    /// The same file with `Recently removed` already holding a row at the exact grain the rung
+    /// is about to file another one at — the case `idx_collection_grain` would refuse.
+    fn user_file_at_34_with_a_matching_removed_row() -> Connection {
+        let conn = user_file_at_34();
+        conn.execute_batch(
+            "INSERT INTO collection_entries
+                 (card_id, set_code, collector_number, lang, finish, quantity, folder_id,
+                  created_at, updated_at)
+             VALUES ('bolt-m10', 'm10', '146', 'en', 'nonfoil', 2, 10, 0, 0);",
+        )
+        .unwrap();
+        conn
+    }
+
+    /// Two decks, their groups, and one of every case the rung has to decide.
+    ///
+    /// The `collection_entries` ids ascend in the order they are written, which is what the
+    /// running-total half of the rung's SELECT walks: the two `mountain` rows are the pair that
+    /// proves the older row of a multi-row group is charged against the claim first. They differ
+    /// in `condition` because they must — `idx_collection_grain` is UNIQUE and two rows at one
+    /// `(card_id, finish)` in one folder can only exist by differing in one of the other nine
+    /// terms.
+    fn seed_v34_groups(conn: &Connection) {
+        conn.execute_batch(
+            "INSERT INTO decks (id, name, format_key, created_at, updated_at)
+                 VALUES (1, 'Burn', 'modern', 0, 0),
+                        (2, 'Islands', 'legacy', 0, 0);
+
+             INSERT INTO deck_categories (id, deck_id, name, kind, is_active, sort_order,
+                                          created_at, updated_at)
+                 VALUES (1, 1, 'Main deck', 'main', 1, 0, 0, 0),
+                        -- Switched off. Its rows still NAME cards, which is the whole of what
+                        -- the rung reads them for.
+                        (2, 1, 'Maybeboard', 'maybe', 0, 1, 0, 0),
+                        (3, 2, 'Main deck', 'main', 1, 0, 0, 0);
+
+             INSERT INTO collection_folders
+                 (id, parent_id, name, kind, deck_id, sort_order, created_at, updated_at)
+                 VALUES (10, NULL, 'Recently removed', 'removed', NULL, 0, 0, 0),
+                        (11, NULL, 'Burn', 'deck', 1, 0, 0, 0),
+                        (12, NULL, 'Islands', 'deck', 2, 0, 0, 0),
+                        (13, NULL, 'Trade pile', 'user', NULL, 0, 0, 0);
+
+             INSERT INTO deck_cards (id, deck_id, category_id, variant, card_id, set_code,
+                                     collector_number, lang, name, finish, quantity,
+                                     created_at, updated_at)
+                 VALUES
+                 -- Named at the exact grain, and matched copy for copy.
+                 (1, 1, 1, 'live', 'bolt-lea', 'lea', '161', 'en', 'Lightning Bolt',
+                  NULL, 2, 0, 0),
+                 -- Named 2 where the group holds one row of 4.
+                 (2, 1, 1, 'live', 'swamp', 'lea', '288', 'en', 'Swamp', NULL, 2, 0, 0),
+                 -- In the switched-off pile. Custody follows what the list names.
+                 (3, 1, 2, 'live', 'forest', 'lea', '294', 'en', 'Forest', NULL, 3, 0, 0),
+                 -- A plan reserves nothing, so this row claims nothing.
+                 (4, 1, 1, 'theory', 'plains', 'lea', '286', 'en', 'Plains', NULL, 2, 0, 0),
+                 -- Named 3 against two rows of 2.
+                 (5, 1, 1, 'live', 'mountain', 'lea', '292', 'en', 'Mountain', NULL, 3, 0, 0),
+                 -- The other deck lists the FOIL and its group holds the plain copy.
+                 (6, 2, 3, 'live', 'island', 'lea', '290', 'en', 'Island', 'foil', 1, 0, 0);
+
+             INSERT INTO collection_entries
+                 (id, card_id, set_code, collector_number, lang, finish, condition, quantity,
+                  tradelist_quantity, purchase_price, purchase_currency, acquired_at,
+                  acquisition_source, notes, tags, folder_id, created_at, updated_at)
+                 VALUES
+                 (100, 'bolt-lea', 'lea', '161', 'en', 'nonfoil', 'NM', 2, 0,
+                  NULL, NULL, NULL, NULL, NULL, '[]', 11, 0, 0),
+                 (101, 'bolt-m10', 'm10', '146', 'en', 'nonfoil', 'NM', 1, 0,
+                  NULL, NULL, NULL, NULL, NULL, '[]', 11, 0, 0),
+                 (102, 'bolt-lea', 'lea', '161', 'en', 'foil', 'NM', 1, 0,
+                  NULL, NULL, NULL, NULL, NULL, '[]', 11, 0, 0),
+                 -- The row with a story, so the split can be shown carrying it.
+                 (103, 'swamp', 'lea', '288', 'en', 'nonfoil', 'NM', 4, 3,
+                  1.5, 'USD', '2019-01-02', 'LGS', 'sleeved', '[\"cube\"]', 11, 0, 0),
+                 (104, 'forest', 'lea', '294', 'en', 'nonfoil', 'NM', 3, 0,
+                  NULL, NULL, NULL, NULL, NULL, '[]', 11, 0, 0),
+                 (105, 'plains', 'lea', '286', 'en', 'nonfoil', 'NM', 2, 0,
+                  NULL, NULL, NULL, NULL, NULL, '[]', 11, 0, 0),
+                 (106, 'mountain', 'lea', '292', 'en', 'nonfoil', 'NM', 2, 0,
+                  NULL, NULL, NULL, NULL, NULL, '[]', 11, 0, 0),
+                 (107, 'mountain', 'lea', '292', 'en', 'nonfoil', 'LP', 2, 0,
+                  NULL, NULL, NULL, NULL, NULL, '[]', 11, 0, 0),
+                 (108, 'island', 'lea', '290', 'en', 'nonfoil', 'NM', 1, 0,
+                  NULL, NULL, NULL, NULL, NULL, '[]', 12, 0, 0),
+                 -- Neither of the last two is in a deck group, and neither may move.
+                 (109, 'bolt-m10', 'm10', '146', 'en', 'nonfoil', 'NM', 5, 0,
+                  NULL, NULL, NULL, NULL, NULL, '[]', 13, 0, 0),
+                 (110, 'bolt-lea', 'lea', '161', 'en', 'nonfoil', 'NM', 1, 0,
+                  NULL, NULL, NULL, NULL, NULL, '[]', NULL, 0, 0);",
+        )
+        .unwrap();
+    }
+
+    /// How many copies of a printing sit in a deck's group.
+    fn in_group(conn: &Connection, deck_id: i64, card_id: &str, finish: &str) -> i64 {
+        conn.query_row(
+            "SELECT coalesce(sum(e.quantity), 0)
+               FROM collection_entries e
+               JOIN collection_folders f ON f.id = e.folder_id
+              WHERE f.deck_id = ?1 AND e.card_id = ?2 AND e.finish = ?3",
+            params![deck_id, card_id, finish],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// How many sit in the holding area.
+    fn in_removed(conn: &Connection, card_id: &str, finish: &str) -> i64 {
+        conn.query_row(
+            "SELECT coalesce(sum(e.quantity), 0)
+               FROM collection_entries e
+               JOIN collection_folders f ON f.id = e.folder_id
+              WHERE f.kind = 'removed' AND e.card_id = ?1 AND e.finish = ?2",
+            params![card_id, finish],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
     /// A user file at 32 — the shape every machine carries the day before the deck tag becomes
     /// the deck label, and the only population the v33 rung is *for*.
     ///
@@ -6578,7 +6926,7 @@ pub(crate) mod tests {
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, USER_SCHEMA_VERSION);
-        assert_eq!(USER_SCHEMA_VERSION, 34);
+        assert_eq!(USER_SCHEMA_VERSION, 35);
     }
 
     /// **It is synced, and `sync_devices` still is not.** The whole point is that a NAME
@@ -7123,6 +7471,372 @@ pub(crate) mod tests {
             )
             .unwrap();
         assert_eq!(names, 1, "a v33 file has everything v31 built");
+    }
+
+    /// The whole of the rung in one pass: what the live list names at `(card_id, finish)` stays,
+    /// and everything else in the group goes to the holding area.
+    #[test]
+    fn the_v35_rung_evicts_what_the_list_does_not_name() {
+        let conn = user_file_at_34();
+        assert_eq!(
+            conn.query_row("PRAGMA main.user_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            34,
+            "the fixture is a v34 file"
+        );
+
+        migrate_user(&conn).unwrap();
+
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 35);
+        assert_eq!(
+            in_group(&conn, DECK_A, "bolt-lea", "nonfoil"),
+            2,
+            "named, kept"
+        );
+        assert_eq!(
+            in_group(&conn, DECK_A, "bolt-m10", "nonfoil"),
+            0,
+            "wrong printing, gone"
+        );
+        assert_eq!(
+            in_group(&conn, DECK_A, "bolt-lea", "foil"),
+            0,
+            "wrong finish, gone"
+        );
+        assert_eq!(in_removed(&conn, "bolt-m10", "nonfoil"), 1);
+        assert_eq!(in_removed(&conn, "bolt-lea", "foil"), 1);
+    }
+
+    /// A row of 4 against a line of 2 is **split**, never moved whole — the case
+    /// `idx_collection_grain` and the arithmetic both have to get right.
+    #[test]
+    fn the_v35_rung_splits_a_partly_claimed_row() {
+        let conn = user_file_at_34();
+        migrate_user(&conn).unwrap();
+        // The line names 2 and the group's single row held 4.
+        assert_eq!(in_group(&conn, DECK_A, "swamp", "nonfoil"), 2);
+        assert_eq!(in_removed(&conn, "swamp", "nonfoil"), 2);
+    }
+
+    /// Every deck, not the first one it finds.
+    #[test]
+    fn the_v35_rung_reaches_every_deck() {
+        let conn = user_file_at_34();
+        migrate_user(&conn).unwrap();
+        assert_eq!(in_group(&conn, DECK_B, "island", "nonfoil"), 0);
+        assert_eq!(in_removed(&conn, "island", "nonfoil"), 1);
+    }
+
+    /// `idx_collection_grain` is UNIQUE with `folder_id` in it, so a bare folder update would
+    /// hit the constraint. The rung merges.
+    #[test]
+    fn the_v35_rung_folds_into_a_row_recently_removed_already_holds() {
+        let conn = user_file_at_34_with_a_matching_removed_row();
+        migrate_user(&conn).unwrap();
+        assert_eq!(in_removed(&conn, "bolt-m10", "nonfoil"), 3);
+        let rows: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM collection_entries
+                  WHERE folder_id = 10 AND card_id = 'bolt-m10' AND finish = 'nonfoil'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 1, "two rows that merge are one pile");
+    }
+
+    /// **The one way this rung can be destructive, and the test that stands between.**
+    ///
+    /// `attribute_owned` hands an inactive pile no copies, so it is tempting to read its rows as
+    /// claiming nothing. Read that way this rung empties every reader's Maybeboard into the
+    /// holding area on upgrade — cardboard moved by a display switch. Custody follows what the
+    /// list *names*; `is_active` decides only what is *counted*.
+    #[test]
+    fn the_v35_rung_leaves_a_switched_off_pile_holding_its_cards() {
+        let conn = user_file_at_34();
+        migrate_user(&conn).unwrap();
+        assert_eq!(
+            in_group(&conn, DECK_A, "forest", "nonfoil"),
+            3,
+            "a switched-off pile still names its cards"
+        );
+        assert_eq!(in_removed(&conn, "forest", "nonfoil"), 0);
+    }
+
+    /// A plan reserves nothing, so a `theory` row claims nothing — `release_live_copies`' rule
+    /// and `attribute_owned`'s, read from the custody end.
+    #[test]
+    fn the_v35_rung_gives_a_theory_row_no_claim() {
+        let conn = user_file_at_34();
+        migrate_user(&conn).unwrap();
+        assert_eq!(in_group(&conn, DECK_A, "plains", "nonfoil"), 0);
+        assert_eq!(in_removed(&conn, "plains", "nonfoil"), 2);
+    }
+
+    /// **Which physical card leaves, not how many.** `deck::release_unclaimed_copies` takes the
+    /// surplus from the **oldest** row of an identity first, so the oldest copies are the ones
+    /// that go and the newest stay — spec §2.1's rule, and `take_copies`' and
+    /// `release_group_copies`' convention. This rung has to hand a reader the database the app
+    /// itself would have produced, and the mirror-image reading (credit the *claim* oldest-first,
+    /// so the oldest are kept) moves the same **number** of copies out of the group while moving
+    /// a different **card** — invisible to every total there is.
+    ///
+    /// So the two `mountain` rows differ in `condition`, and the assertion is on the condition of
+    /// what landed in the holding area rather than on arithmetic: two rows of 2 against a line of
+    /// 3 must file the **NM** copy, because it is the older row.
+    #[test]
+    fn the_v35_rung_takes_from_the_oldest_row_of_a_group_first() {
+        let conn = user_file_at_34();
+        migrate_user(&conn).unwrap();
+
+        // **First**, because it is the assertion this test exists for: the failure that matters
+        // here reads `["LP"]` against `["NM"]`, and a quantity assertion firing ahead of it would
+        // report the arithmetic and say nothing about the card.
+        let filed: Vec<String> = conn
+            .prepare(
+                "SELECT e.condition
+                   FROM collection_entries e
+                   JOIN collection_folders f ON f.id = e.folder_id
+                  WHERE f.kind = 'removed' AND e.card_id = 'mountain'
+                  ORDER BY e.condition",
+            )
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            filed,
+            vec!["NM".to_owned()],
+            "the OLDEST row's copy is the one filed, and only it"
+        );
+
+        let older: i64 = conn
+            .query_row(
+                "SELECT quantity FROM collection_entries WHERE id = 106",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(older, 1, "the older row gives up the copy over the line");
+        let newer: i64 = conn
+            .query_row(
+                "SELECT quantity FROM collection_entries WHERE id = 107",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(newer, 2, "the newer row keeps all of what it held");
+
+        assert_eq!(in_group(&conn, DECK_A, "mountain", "nonfoil"), 3);
+        assert_eq!(in_removed(&conn, "mountain", "nonfoil"), 1);
+    }
+
+    /// **The trade list is split and never copied** — v25's rung's clamp and its reason, which
+    /// this one has to spell for itself. And the placement carries the row's story with it: the
+    /// copies that left are the same physical cards, bought on the same day for the same money.
+    #[test]
+    fn the_v35_rung_splits_the_trade_list_and_carries_the_story() {
+        /// A struct rather than a seven-wide tuple, which `clippy::type_complexity` refuses.
+        struct Story {
+            trade: i64,
+            price: Option<f64>,
+            currency: Option<String>,
+            acquired: Option<String>,
+            source: Option<String>,
+            notes: Option<String>,
+            tags: String,
+        }
+
+        let conn = user_file_at_34();
+        migrate_user(&conn).unwrap();
+
+        let moved: Story = conn
+            .query_row(
+                "SELECT e.tradelist_quantity, e.purchase_price, e.purchase_currency,
+                        e.acquired_at, e.acquisition_source, e.notes, e.tags
+                   FROM collection_entries e
+                   JOIN collection_folders f ON f.id = e.folder_id
+                  WHERE f.kind = 'removed' AND e.card_id = 'swamp'",
+                [],
+                |r| {
+                    Ok(Story {
+                        trade: r.get(0)?,
+                        price: r.get(1)?,
+                        currency: r.get(2)?,
+                        acquired: r.get(3)?,
+                        source: r.get(4)?,
+                        notes: r.get(5)?,
+                        tags: r.get(6)?,
+                    })
+                },
+            )
+            .unwrap();
+        assert_eq!(moved.trade, 2, "min(offered, take)");
+        assert_eq!(moved.price, Some(1.5));
+        assert_eq!(moved.currency.as_deref(), Some("USD"));
+        assert_eq!(moved.acquired.as_deref(), Some("2019-01-02"));
+        assert_eq!(moved.source.as_deref(), Some("LGS"));
+        assert_eq!(moved.notes.as_deref(), Some("sleeved"));
+        assert_eq!(moved.tags, "[\"cube\"]");
+
+        let kept_trade: i64 = conn
+            .query_row(
+                "SELECT tradelist_quantity FROM collection_entries WHERE id = 103",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kept_trade, 1, "the remainder keeps what is left, not all 3");
+    }
+
+    /// The rung reads `kind = 'deck'` and nothing else, so a binder the reader filed by hand and
+    /// the root are both none of its business.
+    #[test]
+    fn the_v35_rung_touches_no_folder_that_is_not_a_deck_group() {
+        let conn = user_file_at_34();
+        migrate_user(&conn).unwrap();
+        let binder: i64 = conn
+            .query_row(
+                "SELECT quantity FROM collection_entries WHERE id = 109",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(binder, 5, "a user folder is not a deck group");
+        let root: i64 = conn
+            .query_row(
+                "SELECT quantity FROM collection_entries WHERE id = 110",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(root, 1, "and neither is the root");
+    }
+
+    /// Nothing leaves the database. Every copy the rung moves is a copy it also files, and both
+    /// clamps can only leave a total where it was.
+    #[test]
+    fn the_v35_rung_moves_copies_and_never_invents_or_loses_one() {
+        let conn = user_file_at_34();
+        let before: i64 = conn
+            .query_row("SELECT sum(quantity) FROM collection_entries", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        let trade_before: i64 = conn
+            .query_row(
+                "SELECT sum(tradelist_quantity) FROM collection_entries",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        migrate_user(&conn).unwrap();
+
+        let after: i64 = conn
+            .query_row("SELECT sum(quantity) FROM collection_entries", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(after, before, "copies in, copies out");
+        let trade_after: i64 = conn
+            .query_row(
+                "SELECT sum(tradelist_quantity) FROM collection_entries",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(trade_after, trade_before, "and the promise is not doubled");
+        let over: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM collection_entries
+                  WHERE tradelist_quantity > quantity",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(over, 0, "no row promises more than it holds");
+    }
+
+    /// **A missing `Recently removed` folder skips the move rather than failing the rung.** A
+    /// rung that errors blocks startup, and a hand-edited file without that folder must open.
+    #[test]
+    fn the_v35_rung_stamps_a_file_with_no_holding_area_rather_than_refusing_it() {
+        let conn = user_file_at_34();
+        conn.execute_batch("DELETE FROM collection_folders WHERE kind = 'removed';")
+            .unwrap();
+
+        migrate_user(&conn).unwrap();
+
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        // The literal, not the constant: `== USER_SCHEMA_VERSION` stays green at every future
+        // head, so it would go on passing over a rung that never ran.
+        assert_eq!(version, 35);
+        assert_eq!(
+            in_group(&conn, DECK_A, "bolt-m10", "nonfoil"),
+            1,
+            "with nowhere to file them the copies stay where they were"
+        );
+    }
+
+    /// The second pass is a no-op — and here that is arithmetic rather than a version guard,
+    /// because after the first pass every group holds exactly what its list names.
+    #[test]
+    fn the_v35_rung_is_idempotent_over_an_already_upgraded_database() {
+        let conn = user_file_at_34();
+        migrate_user(&conn).unwrap();
+        let removed = in_removed(&conn, "swamp", "nonfoil");
+        migrate_user(&conn).unwrap();
+        assert_eq!(in_group(&conn, DECK_A, "swamp", "nonfoil"), 2);
+        assert_eq!(in_removed(&conn, "swamp", "nonfoil"), removed);
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        // The literal, for the reason the test above spells out.
+        assert_eq!(version, 35);
+    }
+
+    /// The fixture is a real v34 file and not head wearing a v34 label.
+    ///
+    /// The mirror of [`the_v33_fixture_carries_none_of_v34`], and it has to be read differently
+    /// because v35 writes no shape: there is no column to probe for. What says the file sits
+    /// **below** the rung is that the state the rung exists to clear is still there — a group
+    /// holding a printing its deck does not list — and what says it has not been rewound too far
+    /// is v34's own column standing on `collection_folders`. Without both halves every
+    /// assertion above is vacuous.
+    #[test]
+    fn the_v34_fixture_carries_none_of_v35() {
+        let conn = user_file_at_34();
+
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 34);
+        assert!(
+            in_group(&conn, DECK_A, "bolt-m10", "nonfoil") > 0,
+            "the unswept state the rung is for must be there before it runs"
+        );
+        assert_eq!(
+            in_removed(&conn, "bolt-m10", "nonfoil"),
+            0,
+            "and nothing may have been filed already"
+        );
+
+        let locked: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('collection_folders')
+                  WHERE name = 'locked'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(locked, 1, "a v34 file has everything v34 built");
     }
 
     /// A v28 file walks up keeping every row it had, and twice is the same as once.
@@ -12976,8 +13690,9 @@ pub(crate) mod tests {
     /// old ledger's own laxity requires.
     #[test]
     fn v25_clamps_a_claim_that_out_counts_the_row_it_claims() {
-        // The old ledger could out-claim a row later stepped down; `owned_by_oracle`'s
-        // `min(a.quantity, e.quantity)` papered over it. The conversion must not invent copies.
+        // The old ledger could out-claim a row later stepped down; the read-time
+        // `min(a.quantity, e.quantity)` in `owned_by_oracle` — `deck::owned_by_printing` since
+        // 2026-09-07 — papered over it. The conversion must not invent copies.
         let conn = Connection::open_in_memory().unwrap();
         schema_at_24(&conn);
         let deck = seed_deck(&conn, "Mono-Red");
