@@ -287,7 +287,7 @@ export function CollectionFolderCard({
    * first — and two payloads land on this card, so they needed two boxes. `@dnd-kit/dom` keys its
    * registry by **entity id**, so two `Droppable`s on one element both register and both compete;
    * what keeps them apart is `accepts()`, which `computeCollisions` asks before it measures
-   * anything, and `readCollectionDrop`/`readWishDrag` and `readFolderDrag` are disjoint by
+   * anything, and `readCollectionDrop`/`readWishDrop` and `readFolderDrag` are disjoint by
    * construction. So one box would now work.
    *
    * It stays two for the two reasons that outlived the registry. **The geometry**: this wrapper

@@ -275,16 +275,31 @@ Every one of these has its measurement and its story in
   driven per surface rather than pointed at the shell, and it is what would go red if a modality
   fix reached one dialog and stopped there. Only a
   surface that is _worked out of_ earns a place in the layout — the deck editor's card search
-  column, whose tiles are drag sources into the deck's own category columns, and the card detail
-  pane, which is how a reader flips through a card's printings — and both of those are
-  collapsible or dismissible.
+  column, whose tiles are drag sources into the deck's own category columns; **the collection's and
+  the wishlist's card search columns (2026-09-07), whose tiles are drag sources into the folder
+  wall beside them**; and the card detail pane, which is how a reader flips through a card's
+  printings — and all of those are collapsible or dismissible.
+  **The two new ones earn it by the same sentence, which is why they are docked and not a
+  `Dialog`**: a search whose `+` files into the folder on screen and whose tiles can be dropped on
+  a folder card is worked *out of*, where a search that could only be consulted would have to be a
+  centred modal. All three draw one component — `features/search/CardSearchPanel.tsx` (the shell)
+  and `CardSearchBody.tsx` (the wall) — because copying two thirds of `DeckSearchPanel` twice is
+  the mistake this file's own *N independent decisions* rule names, and this repo has already made
+  and undone it twice. What each surface supplies is a handful of strings and slots; what none of
+  them may re-decide is the shell's three gates (`open` mounts, `shown` hides, `overlaid`
+  positions), the `aria-disabled`-never-`disabled` refusal, or the clamp split — the environment
+  clamps what is *drawn*, a drag clamps what is *stored*, and folding them makes every momentary
+  squeeze permanent. [frontend-design.md](../docs/reference/frontend-design.md) carries the whole
+  argument and every measurement.
   **Both of those halves moved on 2026-08-22 (issue #183), in opposite directions, and they moved
   together.** The card pane stopped taking a place in the deck editor's layout at all: there it is
   an **overlay** over one of the desk's two columns — over the search column for a card opened
   from the deck, over the deck for a card opened from the search column, so that either way it
   covers what the reader was _not_ looking at — and `App` draws the docked one for every other
   view. With the 384px gone from the desk, the search column **opens by default** again and
-  remembers which way the reader last left it (`app_meta.deck_search_open`). The rule above is
+  remembers which way the reader last left it — `app_meta.search_open` since 2026-09-07, one JSON
+  map of section → bool behind `useSearchOpen(section)`, where it was `deck_search_open` and a
+  hook of its own while the deck editor was the only surface with a column. The rule above is
   unchanged and it is what decided both: a consulted surface is a modal, a worked-out-of surface
   earns its place — and a surface worked out of _beside_ another one may not take the other's
   width to do it.
@@ -356,12 +371,15 @@ Every one of these has its measurement and its story in
   window. Only a live pass finds this one; the figures and the fix are in
   [frontend-design.md](../docs/reference/frontend-design.md).
 - **`FilterBar` is the one filter row for every list of cards in this app**, and since 2026-08-26
-  that is all five surfaces: the Search page, the Tags page, both tabs of the deck editor's docked
-  panel, the Collection and the Wishlist. The last two had bespoke rows of their own until then
+  that is every surface: the Search page, the Tags page, both tabs of the deck editor's docked
+  panel, the Collection and the Wishlist. **Two more joined on 2026-09-07** — the collection's and
+  the wishlist's own docked search columns, which are `CardSearchBody`'s row and therefore the same
+  component again, drawn a second time on a page that already has one. The Collection and the
+  Wishlist had bespoke rows of their own until 2026-08-26
   and the argument for deleting them is the one `CollectionSearchTab` already made — they were the
   same arrangement of the same controls written a third and fourth time, and the four drifted the
   first time any one of them moved. Its prop is a **structural `FilterSurface`**, never one hook's
-  `ReturnType`, which is what lets four different hooks over four different backends satisfy it.
+  `ReturnType`, which is what lets different hooks over different backends satisfy it.
   Three things a new surface has to get right:
   - **Everything below the line in `FilterSurface` is optional, and a control is drawn only where
     its own setter is wired.** A `tray` naming a cell the surface cannot answer draws *nothing*
@@ -375,9 +393,17 @@ Every one of these has its measurement and its story in
   - **`labels` keeps each surface's box its own name.** `Search cards` over the reader's own
     binder is the control lying about which list it narrows, and a `getByLabelText` cannot tell
     two boxes with one name apart. The `idStem` is what stops two mounted rows sharing an `id`.
+    **Both halves of that stopped being hypothetical on 2026-09-07**, when the collection and the
+    wishlist each grew a second `FilterBar` on the same page: the sidebar's box keeps the app-wide
+    `Search cards` and the page's own is `Search your collection` / `Search your wishlist`, so each
+    name is unique *on its page*, and the `idStem`s are `collection-add` / `wishlist-add` against
+    the pages' own. Two rows on one screen is the case this rule was written for — pick names that
+    are distinct on the page, not names that are distinct in the app.
 - **It lays out by its own width, in four bands, through `@container/fb` — never a media query.**
-  The same component is the search page's bar and the deck editor's docked
-  panel, which is draggable from **206px**, so a viewport query answers about the wrong box. Four
+  The same component is the search page's bar and a docked search
+  panel, which is draggable from **206px**, so a viewport query answers about the wrong box. (That
+  was one docked panel until 2026-09-07 and is three now, which changes nothing about the rule and
+  triples what a control overflowing its floor costs.) Four
   controls never fold away — the search box, the colours, the mana values and the sort — and
   everything else (set, format, owned, rarity, price, printings, finish, condition, fulfilled,
   needs review) is behind one `Filters`
@@ -458,11 +484,15 @@ Every one of these has its measurement and its story in
   `useCardSelection`'s `pick` returns *whether the press was a selection*, and a view that gets
   `true` does nothing else.
   - **One selection app-wide, scoped by a string the surface owns** (`deck:12`, `search`,
-    `collection`, `wishlist`, `tags`, `deck-panel`). A write naming a different scope replaces the
+    `collection`, `wishlist`, `tags`, `deck-panel`, `deck-collection`, and since 2026-09-07
+    `collection-panel` and `wishlist-panel`). A write naming a different scope replaces the
     whole thing, so leaving a surface discards the set **structurally** rather than by each
     component remembering to clear it — and that is also what makes clicking a tile in the deck
-    editor's docked panel put the deck's own selection down. Two walls that can be on screen at
-    once must therefore pass different scopes.
+    editor's docked panel put the deck's own selection down. **Two walls that can be on screen at
+    once must therefore pass different scopes**, which is now true of three pages rather than one:
+    the collection page draws `collection` and `collection-panel`, the wishlist `wishlist` and
+    `wishlist-panel`. Sharing a scope between a page's wall and its sidebar would make picking in
+    the sidebar put the binder's selection down, which is the same bug read the other way round.
   - **A set outlives the list it was made in** — a refetch, a filter, a sibling surface's delete —
     so every consumer prunes against the order it is currently drawing. `pruneSelection` returns
     its argument unchanged when nothing went missing, so a wall with nothing picked pays nothing.

@@ -79,8 +79,8 @@ const listSets = vi.hoisted(() => vi.fn());
 // called straight out of a click handler, where `undefined` is a synchronous TypeError nothing
 // catches. `true` is the shipped default (issue #183), so the column is drawn open here exactly
 // as it is on a fresh install — which is what `openSearchPanel` below is idempotent about.
-const deckSearchOpen = vi.hoisted(() => vi.fn());
-const setDeckSearchOpen = vi.hoisted(() => vi.fn());
+const searchOpen = vi.hoisted(() => vi.fn());
+const setSearchOpen = vi.hoisted(() => vi.fn());
 // The five consulted overlays' own reads — categories, labels, history, the theory difference and
 // deck settings. Each is unmounted while closed, so these answer only for the tests that open
 // one — but the whole `ipc` object is replaced here, so a command left out is a `TypeError`
@@ -174,8 +174,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckTokenAdd: vi.fn().mockResolvedValue(undefined),
     formatSpecs,
     searchCards,
-    deckSearchOpen,
-    setDeckSearchOpen,
+    searchOpen,
+    setSearchOpen,
     // The docked search panel's filter row asks for facet counts beside the page. Answered
     // **cold** — `ready: false`, every map empty — so nothing greys and every control keeps
     // its name.
@@ -775,8 +775,8 @@ beforeEach(() => {
   // second button by that name, and every test here addresses cards by name.
   searchCards.mockReset().mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
   listSets.mockReset().mockResolvedValue([]);
-  deckSearchOpen.mockReset().mockResolvedValue(true);
-  setDeckSearchOpen.mockReset().mockResolvedValue(undefined);
+  searchOpen.mockReset().mockResolvedValue({ deck: true });
+  setSearchOpen.mockReset().mockResolvedValue(undefined);
   deckCategoryList.mockReset().mockResolvedValue(CATEGORIES);
   deckLabelList.mockReset().mockResolvedValue([]);
   deckLabelAll.mockReset().mockResolvedValue([]);

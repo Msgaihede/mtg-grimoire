@@ -103,6 +103,46 @@ shopping.
 UNIQUE index are distinct** — so an un-coalesced term would stop enforcing anything for exactly the
 rows that need it most.
 
+### The add path has a folder default now, and the fourth term is what makes that safe
+
+**Since 2026-09-07 the `+` on a card can wish into the folder the reader is standing in.**
+`WishInput.folderId` has been on the wire since v23 and `useCardMenuDeps` has always passed it;
+`AddToCollectionButton` never did, which is why every `+` in the app wished at the root. It now
+takes optional `folderId`, `folderNodes`, `folderName` and `lockMode`, and the wishlist page's
+docked search column passes all four — so a reader building a shopping list adds from the sidebar
+without leaving the folder they are filing into.
+
+**The fourth term is the licence for that rather than a constraint on it.** A default destination
+is only sane where a second destination is a second row: with `coalesce(folder_id, 0)` in the
+grain, wishing for a card the reader already wants *elsewhere* writes a new wish in the folder on
+screen and touches the old one not at all. Without the term the same press would land on the
+existing wish and raise its quantity, so a wish filed into `Ordered` last week would silently move
+into whatever folder happened to be open — a default that quietly undoes filing, which is exactly
+what v23 was built to make impossible. **The merge rule above is not the counter-example**: a merge
+happens when a write *lands on a taken grain*, and a folder default changes which grain is being
+written, never whether a collision folds.
+
+**Three fences around it, and one of them differs from the collection's:**
+
+- **A flattened page defaults to the root** — the breadcrumb reads *all folders*, there is no
+  folder on screen to be standing in, and the page passes `folderId: null` rather than whatever
+  `useWishlist` still holds underneath. **The wishlist's flatten default is `false` where the
+  collection's is `true`**, so this sidebar starts with a real folder default the moment the reader
+  opens a folder, while the collection's starts at the root out of the box. Do not copy the
+  collection's default across; the two lists ship differently on purpose.
+- **Absent and `null` are different on the wire**, and the page sends `null` explicitly — absent
+  sends no `folderId` field at all, which is what `SearchPage` and the Tags page still do and why
+  neither was touched by this.
+- **The destination list is locked.** `lockMode="wishlist"` pins the popup to the wishlist and
+  hides the `Collection` / `Wishlist` switch, because the two folder trees are different tables: a
+  popup that could flip lists mid-form would need two defaults and a picker that swapped trees
+  under the reader's hand.
+
+**A search tile dropped on a folder card wishes into it**, `ipc.wishlistAdd({ cardId, quantity: 1,
+preferredFinish: finish, folderId })` — the printing's own first available finish, never a guess,
+and the `cardId` rather than the `oracleId`, so a drop is a wish for *the printing on the tile*
+where the popup is still where a reader asks for any printing. That needed the discriminator below.
+
 ## The merge rule, shared by both new writes
 
 `wishlist_set_folder` and `wishlist_set_printing` each move one wish onto a grain another row may
@@ -249,9 +289,16 @@ affordances as bulky, as overlapping neighbouring content, and as not lining up 
 outline they appeared to sit on — one cause for all three, since a ring is a box shadow painted
 *outside* the border box and on the wrapper it stood 2px proud of a dash it never touched. A card
 that already owns an outline does not need a second one, so its dash turns faintly gold instead
-and there is no pair of edges left to disagree. The drop *registrations* did not move and could
-not — dnd-kit keeps one target per element, and the `<li>` and its slot are the two boxes the wish
-drag and the folder drag are registered on and measured against. **`DROP_MARK_ROOM` stays for
+and there is no pair of edges left to disagree. The drop *registrations* did not move, and the
+reason they did not is **geometry rather than a library rule** — this paragraph said "dnd-kit keeps
+one target per element" until 2026-09-07 and that was pragmatic-dnd's constraint carried across a
+migration. `@dnd-kit/dom` keys its registry by **entity id**, so two `Droppable`s on one element
+both register and both compete, and `accepts()` is what separates them — `computeCollisions` asks
+it before it measures anything. One box would work here. It stays two because
+`useFolderDropTarget` divides a target's *border box* into three landings and that geometry has to
+be exactly the card's, and because every test and story addresses the two boxes by name. See
+[frontend-design.md](frontend-design.md) for the measured version of the registry rule.
+**`DROP_MARK_ROOM` stays for
 `FOCUS`'s sake rather than the ring's**: an inset ring cannot be clipped, and half a focus
 indicator is a WCAG 2.4.7 failure. `src/lib/dropMarks.ts` carries the reasoning in full.
 
@@ -261,6 +308,41 @@ gets back *out*: without them a drag could only ever push wishes deeper. Both wr
 `Move to folder…` merge on a taken grain identically. There is no second write and no second rule —
 and the panel stays complete on its own, because a drag-only affordance is half a feature and it is
 the half a keyboard cannot use.
+
+### `WishDrop`, the discriminator the wishlist never had (2026-09-07)
+
+The search sidebar put a **third** kind of thing in the air over a folder card: a card nobody
+wishes for yet, carrying `searchCardSource` from `features/search/searchCardDrag.ts`. A folder card
+now has to tell *move this wish* from *make a wish here*, and those are two different commands —
+`wishlist_set_folder` against `wishlist_add`.
+
+`CollectionDrop` had been a discriminated union since the cabinet shipped, so the collection cost
+one arm on the type and one branch in `readCollectionDrop` and **no component edits at all**. This
+side had none — `readWishDrag` answered a bare `WishDrag | null` — so it grew one:
+
+```ts
+export type WishDrop =
+  | { kind: "wish"; wish: WishDrag }
+  | { kind: "new"; card: SearchCardDrag };
+export function readWishDrop(data: Record<string, unknown>): WishDrop | null;
+```
+
+Prop-type churn across six sites and **no new mechanism**: `useWishDropTarget`, `WishFolderCard`'s
+`canDrop`/`onDropCard`, `WishParentFolderCard`'s pair, `WishlistBreadcrumb`'s `Segment`, and the
+page's `canFile`/`fileWish`. `readWishDrag` survives unchanged as the arm that reads a wish
+already on the list, so nothing that only ever wanted a wish had to learn about the union.
+
+**A second droppable per folder card would now be legal and was still refused.** dnd-kit keys its
+registry by entity id, so two registrations on one element both stand and `accepts()` keeps them
+apart — that really would work. What it would cost is the `armed`/`over` pair these cards fold into
+one: two rings on one card, each answering about a different drag, is a *drawing* decision bought
+to avoid a type. The union is the cheaper half of that trade.
+
+**The two marks are disjoint by construction** — a wish tile writes `wishSource`, a search tile
+writes `searchCardSource` — so the order inside `readWishDrop` is a convention rather than a
+tie-break. It is written down anyway, and it matches `readCollectionDrop`'s: **the existing row
+wins.** A record carrying both would be a bug upstream, and the narrower fact is the one to act on,
+because moving a row that already exists and creating one are not equally reversible.
 
 ## The way back up is a tile on the wall, not only a word in the trail
 

@@ -961,6 +961,18 @@ beside it re-packed 965 → 617 → 965 on the way past.
 
 ### The persistence, end to end
 
+⚠️ **Every name in this section was renamed on 2026-09-07 and the measurements stand unchanged.**
+The `app_meta` row is **`search_open`** now — one JSON map of section → bool, `searchopen.rs`,
+shared by the deck editor's column and the collection's and wishlist's own — where it was
+`deck_search_open` holding `"1"`/`"0"` for this column alone. `ipc.deckSearchOpen` /
+`setDeckSearchOpen` are `ipc.searchOpen` / `setSearchOpen(section, open)`; `useDeckSearchOpen` is
+`useSearchOpen("deck")`; `usePrefetchDeckSearchOpen` is `usePrefetchSearchOpen`, still mounted in
+`AppShell` and nowhere else for the reason this pass measured. **No schema rung was spent**, and
+`searchopen::stored` reads the old row when the map has no `deck` entry — so a database recorded by
+this pass still answers, and the bridge decays the first time the reader presses the chevron. The
+old names are kept below because they are what was typed into the running window; a repro follows
+this section by substituting the new ones one for one.
+
 - Collapsing the column wrote `app_meta.deck_search_open = '0'` (read back with a read-only
   `node:sqlite` connection while the app held the database).
 - **Killed the app and relaunched it**: the editor opened on the 36px rail, `aria-expanded`

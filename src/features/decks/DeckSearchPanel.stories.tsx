@@ -156,7 +156,7 @@ const meta = {
           "the one state where that control refuses is {@link NoRoom} — measured width, not a " +
           "guess.\n\n" +
           "**It opens open again** (issue #183, 2026-08-22), and remembers which way the reader " +
-          "last left it — `app_meta.deck_search_open` behind `useDeckSearchOpen`, written on the " +
+          "last left it — `app_meta.search_open` behind `useSearchOpen`, written on the " +
           "**press** and never on the drawn state. It opened collapsed for eight days on a width " +
           "argument that has since gone: 384px plus the desk's 16px gap out of a row measured at " +
           "**602px** at 1280×800 *with the card pane docked beside the editor* left the deck " +

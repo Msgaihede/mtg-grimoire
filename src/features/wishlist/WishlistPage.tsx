@@ -23,6 +23,7 @@ import { everythingLabel, scopeLabel, useExportScope } from "@/features/transfer
 import { wishlistDestination } from "@/features/transfer/import/destinations/WishlistPreview";
 import { ImportExportPair } from "@/features/transfer/ImportExportPair";
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
+import type { SearchCardDrag } from "@/features/search/searchCardDrag";
 import { FilterBar, type FilterLabels, type TrayCell } from "@/features/search/FilterBar";
 import { NewFolderCard } from "@/components/NewFolderCard";
 import { count } from "@/lib/counts";
@@ -44,14 +45,18 @@ import {
   type WishlistPage as Page,
   type WishRow,
 } from "@/lib/ipc";
+import { LAYER } from "@/lib/layers";
 import { statusLine } from "@/lib/motion";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
+import { useDeskWidth } from "@/lib/useDeskWidth";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
+import { useDockHeight } from "@/lib/useDockHeight";
 import { cn } from "@/lib/utils";
 import { writeFailure } from "@/lib/writes";
 import { WishFolderCard, WishParentFolderCard } from "./WishFolderCard";
 import { WishlistBreadcrumb } from "./WishlistBreadcrumb";
+import { WishlistSearchPanel } from "./WishlistSearchPanel";
 import { WishlistGrid } from "./WishlistGrid";
 import { WishlistTable } from "./WishlistTable";
 import { OptimizeWishlistDialog } from "./OptimizeWishlistDialog";
@@ -59,7 +64,7 @@ import { useWishlist, type Wishlist } from "./useWishlist";
 import { useWishlistFolders } from "./useWishlistFolders";
 import { useWishlistOptimize } from "./useWishlistOptimize";
 import { missingOf } from "./wish";
-import type { WishDrag } from "./wishDrag";
+import type { WishDrop } from "./wishDrag";
 
 /**
  * What the top of the cabinet is called, here and in the two lists this page hands it to.
@@ -84,6 +89,40 @@ const ROOT_LABEL = "Wishlist";
  * `DecksPage` spells the same constant for the same reason.
  */
 const ROOT_TARGET = 0;
+
+/**
+ * The width the wishlist's own list must keep, in px — **`DeckEditor`'s `DECK_FLOOR` read across to
+ * a page that draws two things rather than one**, and the number the docked search column is railed
+ * by.
+ *
+ * The deck's floor is 192 because that is one stack column. This page's list is a *pair* of walls
+ * stacked vertically — the cabinet's folder cards above and the card grid or table below — so the
+ * floor is whichever of the two needs more, and both land near the same figure: a folder card's
+ * cell is `minmax(180px, 1fr)` (the `<ul>` below), and the wall under it draws `PHONE_TILE_WIDTH`
+ * tiles at the narrow rung. `CollectionPage` spells the same number for the same arithmetic; the
+ * two pages have the identical work column, which is the whole reason this sidebar was one change
+ * rather than two.
+ *
+ * **Measured in the shipped window on 2026-09-07** (`npm run tauri dev`, a debug build, against a
+ * real 89-wish list), and the measurement split it in two the way `CollectionPage`'s was split:
+ * **the floor is the *view's*, not the page's.** The card wall holds at 192 — driven down to a
+ * 192px list it never overflowed its own box. The table does not.
+ *
+ * **This page's table fails later than the collection's, and the difference is one column.**
+ * `WishlistTable` draws Name, Printing · finish, Owned, Wanted, Cost and Actions where
+ * `CollectionTable` draws six of its own including Folder, so the name column here reads 335px at
+ * a 936px list, **122 at 616** and 25 at 470 — against the collection's 371 / 51 / gone. 616 is
+ * this page's list at the app's own 1280×800 reference window, so the shipped default was
+ * survivable here and plainly broken one page over. A floor is still owed: 25px of card name at
+ * 1118 is not a list.
+ *
+ * {@link TABLE_FLOOR} is 610 — the ~495 this table's other five columns and its gaps take at that
+ * rung, plus a name column worth having. **Deliberately not the collection's 680**, which would be
+ * the two pages agreeing on a number neither measured; they draw different columns and the
+ * arithmetic says so.
+ */
+const CARD_FLOOR = 192;
+const TABLE_FLOOR = 610;
 
 /**
  * The one dismissible layer this page can have open — the union, and never four flags.
@@ -328,6 +367,53 @@ export function WishlistPage() {
   const openerRef = useRef<HTMLElement | null>(null);
 
   /**
+   * The row the list and the docked search column share, and the box the column is pinned inside —
+   * `DeckEditor`'s desk and dock, on a page that had neither because it was `flex-col` from its
+   * root down.
+   *
+   * The desk is the only width the panel can honestly be judged against: the window's own is the
+   * sidebar, the page padding and this page's own gutters away from it.
+   */
+  const deskRef = useRef<HTMLDivElement>(null);
+  const dockRef = useRef<HTMLDivElement>(null);
+  /**
+   * What that row can spare for the column: the widest the panel may be drawn or dragged, whether
+   * the list and the column fit **beside each other**, and — when they do not — how wide to draw
+   * the panel **over** the list, which is the door out of the rail rather than a refusal to open.
+   *
+   * `useDeskWidth` carries the whole of it, including the observer, why the viewport is
+   * `documentElement.clientWidth` rather than `window.innerWidth`, and why an unmeasured row reads
+   * as roomy. **It was this file's own block and `CollectionPage`'s at once**, byte for byte,
+   * which is two decisions that happen to agree rather than one.
+   *
+   * **The floor is handed in rather than assumed by the hook**, because it is a fact about this
+   * page's list and not about docked columns — and since 2026-09-07 a fact about the *view* rather
+   * than the page. The two pages agreed on 192 for a day and have stopped: {@link CARD_FLOOR} is
+   * still shared arithmetic, while {@link TABLE_FLOOR} is 610 here against the collection's 680
+   * because the two tables draw different columns.
+   *
+   * **Switching view re-clamps the panel and never overwrites the reader's width** —
+   * `CardSearchPanel`'s standing rule, that the caps clamp what is *drawn* while a drag clamps what
+   * is *stored*. What comes back likewise **decides what is drawn and never what is mounted**: a
+   * width change must not be able to throw a typed query away.
+   */
+  const { maxPanelWidth, roomy, overWidth } = useDeskWidth(
+    deskRef,
+    view === "table" ? TABLE_FLOOR : CARD_FLOOR,
+  );
+
+  /**
+   * The dock's height — **arithmetic rather than a length**, because CSS cannot say "the scroller's
+   * visible height, less however much of the page sits above this row".
+   *
+   * `sticky top-0` on the dock does the pinning and this does only the height. The hook finds the
+   * scroller itself, which is what lets one hook serve this page (scrolling in `AppShell`'s `main`)
+   * and the deck editor (an `overflow-y-auto` section of its own) without either site knowing
+   * which.
+   */
+  useDockHeight(dockRef, deskRef);
+
+  /**
    * Rewrite one wish wherever the wishlist is cached.
    *
    * Every cached filter combination, not just the one on screen: the same wish is in the
@@ -526,6 +612,41 @@ export function WishlistPage() {
     // Either way, and one handler because there is one behaviour: a refusal leaves the list
     // exactly as unknown as a success does, since a refused move is almost always a row another
     // surface has already moved or deleted.
+    onSettled: settleWhole,
+  });
+
+  /**
+   * A card **dropped** out of the search column onto a folder card or a breadcrumb segment.
+   *
+   * **An add and never a move**, which is the whole of what the second arm of {@link WishDrop}
+   * means: the printing in the air is on nobody's list, so there is no row to re-file and
+   * `wishlist_set_folder` has nothing to address. It is the *same write* `useCardMenuDeps` makes
+   * for `Add to wishlist → this folder`, which is what keeps a drop and a right-click one
+   * behaviour rather than two — `quantity: 1`, the printing's own finish as the preference, and
+   * the folder the reader pointed at.
+   *
+   * **`preferredFinish` is the finish the printing actually exists in, carried on the drag.** A
+   * wish for the foil is not filled by the nonfoil, so this is part of what is being asked for
+   * rather than extra detail — and `searchCardDrag` refuses a record whose finish this build does
+   * not know rather than guessing one, which is `useSidebarDrops.ts`'s standing objection answered
+   * at the only place that can answer it. The `+` on the tile beside it is where a reader who
+   * wants to say more says it.
+   *
+   * **`folderId` is never omitted, and `null` is the root.** The field is part of the row's
+   * storage grain, so a folder the caller failed to pass is not a wish filed in the wrong drawer
+   * but a *second* wish for the same card.
+   *
+   * Settled through {@link settleWhole} like every other write on this page: an add changes the
+   * level being drawn, the folder subtotals above it, and every search row's `wishlisted` mark.
+   */
+  const addWish = useMutation({
+    mutationFn: ({ card, folderId: to }: { card: SearchCardDrag; folderId: number | null }) =>
+      ipc.wishlistAdd({
+        cardId: card.cardId,
+        quantity: 1,
+        preferredFinish: card.finish,
+        folderId: to,
+      }),
     onSettled: settleWhole,
   });
 
@@ -947,18 +1068,37 @@ export function WishlistPage() {
   );
 
   /**
-   * Where a wish in the air may be let go — asked per target, because the answer differs per
+   * Where what is in the air may be let go — asked per target, because the answer differs per
    * target: the folder a wish is already filed in refuses it and draws no ring at all, rather
    * than a ring that would write nothing and bump `updated_at`. `dropWrite`'s rule about a card
    * dropped back in its own column, one screen over.
+   *
+   * **A card off the search column has no such refusal to make, and that is a fact about it
+   * rather than a gap here.** It is on nobody's list, so there is no `folderId` to compare a
+   * destination against — every drawer is somewhere it is not already, so every drawer takes it.
+   * The wishlist has no ownership clause to add either: `wishlist_folders` carries no `kind`
+   * column, so every row in that table was made by the reader and none of them is the app's.
+   * (`CollectionPage`'s twin of this arm does have one, because that cabinet holds deck groups
+   * and `Recently removed`.)
    */
   const canFile = useCallback(
-    (drag: WishDrag, to: number | null) => drag.folderId !== to,
+    (drop: WishDrop, to: number | null) => drop.kind === "new" || drop.wish.folderId !== to,
     [],
   );
+  /**
+   * And what the drop writes — a **re-file** for a wish that exists, an **add** for a printing
+   * that does not.
+   *
+   * One function for both arms rather than two props threaded to every target, because the target
+   * asks one question and gets one answer: a folder card lights up and takes what it is given.
+   * Which command that turns into is the page's business, and it is the page that holds both.
+   */
   const fileWish = useCallback(
-    (drag: WishDrag, to: number | null) => setFolder.mutate({ id: drag.wishId, folderId: to }),
-    [setFolder],
+    (drop: WishDrop, to: number | null) =>
+      drop.kind === "wish"
+        ? setFolder.mutate({ id: drop.wish.wishId, folderId: to })
+        : addWish.mutate({ card: drop.card, folderId: to }),
+    [setFolder, addWish],
   );
 
   /**
@@ -1136,6 +1276,11 @@ export function WishlistPage() {
     setQuantity,
     remove,
     setFolder,
+    // A card dropped out of the search column, refused. It shares the sentence for the reason
+    // every other write in this list does: it is a change to the reader's wishlist, made from
+    // this screen. The **panel's own** add — the `+` on a tile — does not, because that popup
+    // reports at its own site and its failure belongs beside the button that was pressed.
+    addWish,
     anyPrinting,
     folders.create,
     folders.rename,
@@ -1327,315 +1472,361 @@ export function WishlistPage() {
         flatten={{ pressed: wishlist.flatten, onToggle: wishlist.toggleFlatten }}
       />
 
-      <div className="flex min-h-0 flex-1 flex-col gap-2">
-        {/* **The fence is “not among the filters”, and it was never “not on the bar” — which is
-            the half of this note that changed when Flatten moved.** `resetAll` leaves both
-            `folderId` and `flatten` alone (`useWishlist` says so of each), so either one drawn as
-            a *filter* would be the one control in that row Reset all could not undo. But the bar
-            already has a home for controls that are not filters: past the second hairline, beside
-            the sort and the grid-or-table pair, where every control says how the list is **drawn**
-            rather than which rows are in it — and `FilterBar`'s own comment above `ViewToggle`
-            says in as many words that nothing there is counted or cleared by Reset all. Flatten
-            is exactly that kind of statement, so it rides the bar on the far side of the hairline
-            and satisfies the fence rather than breaking it.
+      {/* **The row the sidebar made necessary.** This page was `flex-col` from its root down, so
+          there was nothing to hang a column off — and the figures band and the page's own
+          `FilterBar` deliberately stay full width *above* it: `FilterBar` lays itself out in four
+          `@container/fb` bands at 640/900/1500, so taking width off it rearranges the bar rather
+          than merely shortening it.
 
-            **The breadcrumb does not follow it, and that is the surviving half.** Where the reader
-            is standing is not a way of drawing the list — it is a *place*, one the folder cards
-            below are the doors into — so the drill-down and the trail back out stay down here with
-            the cabinet they are about. This row is the whole of what is left of the old one, so it
-            is drawn only where there is a trail to draw: an empty flex row is chrome with nothing
-            in it. */}
-        {hasFolders && (
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-            <div className="min-w-0 flex-1">
-              <WishlistBreadcrumb
-                // Root-most first and **without the root**, which the breadcrumb prepends itself:
-                // `null` is a destination rather than a folder, and only that component knows what
-                // it calls it.
-                trail={trail}
-                flattened={flatten}
-                onOpen={wishlist.openFolder}
-                canDrop={canFile}
-                onDropWish={fileWish}
-              />
+          `min-w-0` on the content side is not optional. A flex item cannot shrink below its own
+          min-content, and an overhang inside `AppShell`'s `overflow-auto` `main` becomes a
+          horizontal scrollbar across the whole page — the 1024px-floor failure `ManaValueChips`
+          already shipped once. */}
+      <div ref={deskRef} className="flex min-h-0 flex-1 gap-4">
+        <div className="flex min-w-0 flex-1 flex-col gap-2">
+          {/* **The fence is “not among the filters”, and it was never “not on the bar” — which is
+              the half of this note that changed when Flatten moved.** `resetAll` leaves both
+              `folderId` and `flatten` alone (`useWishlist` says so of each), so either one drawn as
+              a *filter* would be the one control in that row Reset all could not undo. But the bar
+              already has a home for controls that are not filters: past the second hairline, beside
+              the sort and the grid-or-table pair, where every control says how the list is **drawn**
+              rather than which rows are in it — and `FilterBar`'s own comment above `ViewToggle`
+              says in as many words that nothing there is counted or cleared by Reset all. Flatten
+              is exactly that kind of statement, so it rides the bar on the far side of the hairline
+              and satisfies the fence rather than breaking it.
+
+              **The breadcrumb does not follow it, and that is the surviving half.** Where the reader
+              is standing is not a way of drawing the list — it is a *place*, one the folder cards
+              below are the doors into — so the drill-down and the trail back out stay down here with
+              the cabinet they are about. This row is the whole of what is left of the old one, so it
+              is drawn only where there is a trail to draw: an empty flex row is chrome with nothing
+              in it. */}
+          {hasFolders && (
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+              <div className="min-w-0 flex-1">
+                <WishlistBreadcrumb
+                  // Root-most first and **without the root**, which the breadcrumb prepends itself:
+                  // `null` is a destination rather than a folder, and only that component knows what
+                  // it calls it.
+                  trail={trail}
+                  flattened={flatten}
+                  onOpen={wishlist.openFolder}
+                  canDrop={canFile}
+                  onDropWish={fileWish}
+                />
+              </div>
             </div>
-          </div>
-        )}
+          )}
 
-        {/* **One strip for the two folder layers that are still layers, and it is not a placement
-            decision so much as the only place there is.** Every other anchored layer in this app
-            hangs off a `relative` wrapper around its own trigger; the trigger here is a folder
-            card's `⋯`, and a card has nowhere to hang a panel — one that hosted one would also
-            clip it against the scroller below. So the strip sits where the thing being moved or
-            deleted is: directly above the row of cards, under the breadcrumb that says which level
-            they are.
+          {/* **One strip for the two folder layers that are still layers, and it is not a placement
+              decision so much as the only place there is.** Every other anchored layer in this app
+              hangs off a `relative` wrapper around its own trigger; the trigger here is a folder
+              card's `⋯`, and a card has nowhere to hang a panel — one that hosted one would also
+              clip it against the scroller below. So the strip sits where the thing being moved or
+              deleted is: directly above the row of cards, under the breadcrumb that says which level
+              they are.
 
-            **The other two moved out of it on 2026-09-03 and this box is what is left.** Naming a
-            folder and renaming one are drawn *in the wall* now — `NewFolderCard` becomes the field
-            it used to raise, and a folder card becomes the field its `⋯` used to raise — because
-            in both cases the thing being named has a tile of its own on screen, and a second
-            bordered box above the wall could only repeat what that tile already says. Moving and
-            deleting have no such tile: the answer to "into which folder" is a list of the *other*
-            folders, and the answer to "delete this?" is a sentence about what happens to the
-            wishes inside. Neither fits on a 62px card, and neither is a name typed on a line. */}
-        {(openPanel?.kind === "moveFolder" || openPanel?.kind === "deleteFolder") && (
-          <div className="w-full max-w-sm shrink-0 rounded-lg border border-border bg-surface p-2 text-xs">
-            {openPanel.kind === "moveFolder" && (
-              <MoveToFolder
-                label={`Move ${folderNameOf(openPanel.folderId) ?? "folder"} into a folder`}
-                nodes={nodes}
-                currentId={
-                  folders.folders.find((f) => f.id === openPanel.folderId)?.parentId ?? null
-                }
-                // The wishlist's own word for the top level. `MoveToFolder` defaults to the deck
-                // gallery's, which is the surface it was written for.
-                rootLabel={ROOT_LABEL}
-                // A folder may not go inside itself or inside anything it holds. The backend
-                // refuses it in words — `wishlist_folders.parent_id` cascades onto itself, so a
-                // cycle is a graph SQLite would walk forever the day the folder is deleted — and
-                // that refusal is a fence rather than the affordance.
-                forbidden={
-                  new Set([
-                    openPanel.folderId,
-                    ...folderDescendants(folders.folders, openPanel.folderId),
-                  ])
-                }
-                forbiddenReason="A folder cannot go inside itself, or inside anything it holds."
-                // Drawn **into** the strip rather than as a popup of its own: the strip is the
-                // layer, and a second box with its own shadow and its own z-index over it would
-                // be a second Escape rung for one decision.
-                inline
-                pending={folders.move.isPending}
-                onPick={(parentId) =>
-                  folders.move.mutate({ id: openPanel.folderId, parentId }, { onSuccess: dismiss })
-                }
-                onClose={close}
-              />
-            )}
-
-            {openPanel.kind === "deleteFolder" && (
-              <DeleteFolderConfirm
-                name={folderNameOf(openPanel.folderId) ?? "this folder"}
-                pending={folders.remove.isPending}
-                onConfirm={() =>
-                  folders.remove.mutate(openPanel.folderId, { onSuccess: dismiss })
-                }
-                onCancel={dismiss}
-                onClose={close}
-              />
-            )}
-          </div>
-        )}
-
-        {cabinet && (
-          // **The scroller is what makes the cabinet a band rather than the page.** A reader with
-          // twenty drawers must not lose the wall to them, so the row of cards is bounded and
-          // scrolls inside itself.
-          //
-          // `DROP_MARK_ROOM` is what that costs — and since 2026-09-03 it is bought for `FOCUS`
-          // alone. `overflow` clips at the padding box and the `FOCUS` outline stands 4px proud of
-          // the border box, so a folder card flush against the content edge would lose half its
-          // focus indicator: a WCAG 2.4.7 failure rather than a cosmetic one. **The drop mark is
-          // no longer part of this.** It used to be `DROP_RING`, a box shadow painted *outside*
-          // the border box and clipped the same way; it is now the card's own dashed edge going
-          // gold (`DROP_EDGE`), which is inside the border box and cannot be clipped at all. The
-          // padding does not change, because 6px was always `FOCUS`'s number rather than the
-          // ring's. It goes on the box carrying the `overflow`; one level in is not
-          // the same fix. `relative` for the rule beside it: a scroll container has to be the
-          // containing block for its own absolutely positioned content, or an `sr-only` label
-          // inside stretches the document. jsdom has no layout engine and can see none of this.
-          //
-          // **`max-h-44` is a ceiling and not a height, which is what makes a wall holding only
-          // the `New folder` tile look right** — measured 2026-08-26 in headless Edge over the
-          // built stylesheet, at the story decorator's 1032px content column. The tile alone
-          // draws this box **74px** tall (62 for the tile, `p-1.5` either side) rather than
-          // standing 176px of empty band under one card; the tile and a folder card measure the
-          // same 62, so the first row is never ragged; and thirteen cards still want 214 and are
-          // clamped to 176 with a scrollbar, which is the case this `max-h` was written for.
-          <div
-            className={cn("relative max-h-44 shrink-0 overflow-y-auto", DROP_MARK_ROOM)}
-          >
-            <ul
-              aria-label="Folders"
-              className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-2"
-            >
-              {/* **First, and shaped like the cards it makes.** A wall of drawers is where a
-                  reader looks for the drawer they want, so it is also where they look for the one
-                  that is not there yet — and the tile is the only thing in this `<ul>` on a
-                  wishlist nobody has filed, which is what {@link cabinet} exists to allow.
-
-                  It is handed {@link openNewFolder} directly rather than through an arrow: the
-                  panel this raises has to give the caret back to the control it was raised from,
-                  and `NewFolderCard` hands over its own button for exactly that. */}
-              {/* **Before the tile that makes a folder, and only inside one.** The way *out* is
-                  the first thing a reader looks for on a wall they have walked into, and the wall
-                  is read leading edge first — so at the root, where there is nowhere to go up to,
-                  nothing moves and `New folder` is still the first tile.
-
-                  It is what issue #283 asked for: a folder card only ever takes a wish deeper, and
-                  the only target that took one back out was a breadcrumb segment — one word of
-                  `text-sm`, a target a fifth the height of the drawers beside it, in a bar the
-                  pointer has already left. The trail stays exactly as it was; this is the same
-                  destination at the size of the things it stands among. */}
-              {folderId !== null && (
-                <WishParentFolderCard
-                  label={folderNameOf(upFolderId) ?? ROOT_LABEL}
-                  onOpen={() => wishlist.openFolder(upFolderId)}
-                  canDrop={(drag) => canFile(drag, upFolderId)}
-                  onDropWish={(drag) => fileWish(drag, upFolderId)}
-                  canDropFolder={canMoveFolderUp}
-                  onDropFolder={moveFolderUp}
+              **The other two moved out of it on 2026-09-03 and this box is what is left.** Naming a
+              folder and renaming one are drawn *in the wall* now — `NewFolderCard` becomes the field
+              it used to raise, and a folder card becomes the field its `⋯` used to raise — because
+              in both cases the thing being named has a tile of its own on screen, and a second
+              bordered box above the wall could only repeat what that tile already says. Moving and
+              deleting have no such tile: the answer to "into which folder" is a list of the *other*
+              folders, and the answer to "delete this?" is a sentence about what happens to the
+              wishes inside. Neither fits on a 62px card, and neither is a name typed on a line. */}
+          {(openPanel?.kind === "moveFolder" || openPanel?.kind === "deleteFolder") && (
+            <div className="w-full max-w-sm shrink-0 rounded-lg border border-border bg-surface p-2 text-xs">
+              {openPanel.kind === "moveFolder" && (
+                <MoveToFolder
+                  label={`Move ${folderNameOf(openPanel.folderId) ?? "folder"} into a folder`}
+                  nodes={nodes}
+                  currentId={
+                    folders.folders.find((f) => f.id === openPanel.folderId)?.parentId ?? null
+                  }
+                  // The wishlist's own word for the top level. `MoveToFolder` defaults to the deck
+                  // gallery's, which is the surface it was written for.
+                  rootLabel={ROOT_LABEL}
+                  // A folder may not go inside itself or inside anything it holds. The backend
+                  // refuses it in words — `wishlist_folders.parent_id` cascades onto itself, so a
+                  // cycle is a graph SQLite would walk forever the day the folder is deleted — and
+                  // that refusal is a fence rather than the affordance.
+                  forbidden={
+                    new Set([
+                      openPanel.folderId,
+                      ...folderDescendants(folders.folders, openPanel.folderId),
+                    ])
+                  }
+                  forbiddenReason="A folder cannot go inside itself, or inside anything it holds."
+                  // Drawn **into** the strip rather than as a popup of its own: the strip is the
+                  // layer, and a second box with its own shadow and its own z-index over it would
+                  // be a second Escape rung for one decision.
+                  inline
+                  pending={folders.move.isPending}
+                  onPick={(parentId) =>
+                    folders.move.mutate({ id: openPanel.folderId, parentId }, { onSuccess: dismiss })
+                  }
+                  onClose={close}
                 />
               )}
-              <NewFolderCard
-                onClick={openNewFolder}
-                // The tile *is* the naming field while this is on. `openPanel` rather than
-                // `panel`, so flattening the list and walking into another folder both close it —
-                // the derived value is what the whole page reads.
-                naming={openPanel?.kind === "newFolder"}
-                pending={folders.create.isPending}
-                onSubmit={nameFolder}
-                onCancel={dismiss}
-              />
-              {childFolders.map((node) => (
-                <WishFolderCard
-                  key={node.folder.id}
-                  node={node}
-                  // The recursive total, never the summary row: that one is direct per folder,
-                  // and a folder holding two sub-folders of six wishes each has none of its own.
-                  //
-                  // **`null` while the summary is still reading, and that is not the same
-                  // fallback as `NO_WISHES`.** This wall is gated on the folder *list*, which is
-                  // one flat `SELECT`; the figures come from a `GROUP BY` with the owned-copies
-                  // subquery and a price expression behind it, and it answers later. Across that
-                  // window a `Map.get` miss is indistinguishable from an empty drawer, so a
-                  // folder holding six wishes worth $312 drew `0 wishes` and then jumped — a
-                  // wrong number rather than a spinner. `isPending` is exactly the read that has
-                  // never answered *for this marketplace*, which is the right span: switching
-                  // marketplace is a new key, and the old currency's subtotals are not this
-                  // one's to draw either.
-                  summary={
-                    folders.summaryQuery.isPending
-                      ? null
-                      : (subtotals.get(node.folder.id) ?? NO_WISHES)
-                  }
-                  currency={currency}
-                  onOpen={() => wishlist.openFolder(node.folder.id)}
-                  rowMenu={folderRowMenu(node.folder)}
-                  // `Rename…` is answered on the card itself. One `openPanel` naming exactly one
-                  // folder is what keeps a wall of twelve drawers to one open field.
-                  rename={{
-                    active:
-                      openPanel?.kind === "renameFolder" &&
-                      openPanel.folderId === node.folder.id,
-                    pending: folders.rename.isPending,
-                    onSubmit: nameFolder,
-                    onCancel: dismiss,
-                  }}
-                  canDrop={(drag) => canFile(drag, node.folder.id)}
-                  onDropWish={(drag) => fileWish(drag, node.folder.id)}
-                  // The card asks about the folder in the air and where on itself it is; the
-                  // page adds which card that is, because only the page holds the level and the
-                  // tree the answer is worked out from.
-                  canDropFolder={(drag, edge) => canPlaceFolder(drag, node, edge)}
-                  onDropFolder={(drag, edge) => placeFolder(drag, node, edge)}
-                />
-              ))}
-            </ul>
-          </div>
-        )}
 
-        {/* One live region, mounted for the life of the view: a region that appears together
-            with its text announces nothing, because there was no change for a screen reader
-            to notice. Empty — and therefore no taller than nothing — while the list below is
-            answering for itself. */}
-        <p
-          role="status"
+              {openPanel.kind === "deleteFolder" && (
+                <DeleteFolderConfirm
+                  name={folderNameOf(openPanel.folderId) ?? "this folder"}
+                  pending={folders.remove.isPending}
+                  onConfirm={() =>
+                    folders.remove.mutate(openPanel.folderId, { onSuccess: dismiss })
+                  }
+                  onCancel={dismiss}
+                  onClose={close}
+                />
+              )}
+            </div>
+          )}
+
+          {cabinet && (
+            // **The scroller is what makes the cabinet a band rather than the page.** A reader with
+            // twenty drawers must not lose the wall to them, so the row of cards is bounded and
+            // scrolls inside itself.
+            //
+            // `DROP_MARK_ROOM` is what that costs — and since 2026-09-03 it is bought for `FOCUS`
+            // alone. `overflow` clips at the padding box and the `FOCUS` outline stands 4px proud of
+            // the border box, so a folder card flush against the content edge would lose half its
+            // focus indicator: a WCAG 2.4.7 failure rather than a cosmetic one. **The drop mark is
+            // no longer part of this.** It used to be `DROP_RING`, a box shadow painted *outside*
+            // the border box and clipped the same way; it is now the card's own dashed edge going
+            // gold (`DROP_EDGE`), which is inside the border box and cannot be clipped at all. The
+            // padding does not change, because 6px was always `FOCUS`'s number rather than the
+            // ring's. It goes on the box carrying the `overflow`; one level in is not
+            // the same fix. `relative` for the rule beside it: a scroll container has to be the
+            // containing block for its own absolutely positioned content, or an `sr-only` label
+            // inside stretches the document. jsdom has no layout engine and can see none of this.
+            //
+            // **`max-h-44` is a ceiling and not a height, which is what makes a wall holding only
+            // the `New folder` tile look right** — measured 2026-08-26 in headless Edge over the
+            // built stylesheet, at the story decorator's 1032px content column. The tile alone
+            // draws this box **74px** tall (62 for the tile, `p-1.5` either side) rather than
+            // standing 176px of empty band under one card; the tile and a folder card measure the
+            // same 62, so the first row is never ragged; and thirteen cards still want 214 and are
+            // clamped to 176 with a scrollbar, which is the case this `max-h` was written for.
+            <div
+              className={cn("relative max-h-44 shrink-0 overflow-y-auto", DROP_MARK_ROOM)}
+            >
+              <ul
+                aria-label="Folders"
+                className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-2"
+              >
+                {/* **First, and shaped like the cards it makes.** A wall of drawers is where a
+                    reader looks for the drawer they want, so it is also where they look for the one
+                    that is not there yet — and the tile is the only thing in this `<ul>` on a
+                    wishlist nobody has filed, which is what {@link cabinet} exists to allow.
+
+                    It is handed {@link openNewFolder} directly rather than through an arrow: the
+                    panel this raises has to give the caret back to the control it was raised from,
+                    and `NewFolderCard` hands over its own button for exactly that. */}
+                {/* **Before the tile that makes a folder, and only inside one.** The way *out* is
+                    the first thing a reader looks for on a wall they have walked into, and the wall
+                    is read leading edge first — so at the root, where there is nowhere to go up to,
+                    nothing moves and `New folder` is still the first tile.
+
+                    It is what issue #283 asked for: a folder card only ever takes a wish deeper, and
+                    the only target that took one back out was a breadcrumb segment — one word of
+                    `text-sm`, a target a fifth the height of the drawers beside it, in a bar the
+                    pointer has already left. The trail stays exactly as it was; this is the same
+                    destination at the size of the things it stands among. */}
+                {folderId !== null && (
+                  <WishParentFolderCard
+                    label={folderNameOf(upFolderId) ?? ROOT_LABEL}
+                    onOpen={() => wishlist.openFolder(upFolderId)}
+                    canDrop={(drag) => canFile(drag, upFolderId)}
+                    onDropWish={(drag) => fileWish(drag, upFolderId)}
+                    canDropFolder={canMoveFolderUp}
+                    onDropFolder={moveFolderUp}
+                  />
+                )}
+                <NewFolderCard
+                  onClick={openNewFolder}
+                  // The tile *is* the naming field while this is on. `openPanel` rather than
+                  // `panel`, so flattening the list and walking into another folder both close it —
+                  // the derived value is what the whole page reads.
+                  naming={openPanel?.kind === "newFolder"}
+                  pending={folders.create.isPending}
+                  onSubmit={nameFolder}
+                  onCancel={dismiss}
+                />
+                {childFolders.map((node) => (
+                  <WishFolderCard
+                    key={node.folder.id}
+                    node={node}
+                    // The recursive total, never the summary row: that one is direct per folder,
+                    // and a folder holding two sub-folders of six wishes each has none of its own.
+                    //
+                    // **`null` while the summary is still reading, and that is not the same
+                    // fallback as `NO_WISHES`.** This wall is gated on the folder *list*, which is
+                    // one flat `SELECT`; the figures come from a `GROUP BY` with the owned-copies
+                    // subquery and a price expression behind it, and it answers later. Across that
+                    // window a `Map.get` miss is indistinguishable from an empty drawer, so a
+                    // folder holding six wishes worth $312 drew `0 wishes` and then jumped — a
+                    // wrong number rather than a spinner. `isPending` is exactly the read that has
+                    // never answered *for this marketplace*, which is the right span: switching
+                    // marketplace is a new key, and the old currency's subtotals are not this
+                    // one's to draw either.
+                    summary={
+                      folders.summaryQuery.isPending
+                        ? null
+                        : (subtotals.get(node.folder.id) ?? NO_WISHES)
+                    }
+                    currency={currency}
+                    onOpen={() => wishlist.openFolder(node.folder.id)}
+                    rowMenu={folderRowMenu(node.folder)}
+                    // `Rename…` is answered on the card itself. One `openPanel` naming exactly one
+                    // folder is what keeps a wall of twelve drawers to one open field.
+                    rename={{
+                      active:
+                        openPanel?.kind === "renameFolder" &&
+                        openPanel.folderId === node.folder.id,
+                      pending: folders.rename.isPending,
+                      onSubmit: nameFolder,
+                      onCancel: dismiss,
+                    }}
+                    canDrop={(drag) => canFile(drag, node.folder.id)}
+                    onDropWish={(drag) => fileWish(drag, node.folder.id)}
+                    // The card asks about the folder in the air and where on itself it is; the
+                    // page adds which card that is, because only the page holds the level and the
+                    // tree the answer is worked out from.
+                    canDropFolder={(drag, edge) => canPlaceFolder(drag, node, edge)}
+                    onDropFolder={(drag, edge) => placeFolder(drag, node, edge)}
+                  />
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* One live region, mounted for the life of the view: a region that appears together
+              with its text announces nothing, because there was no change for a screen reader
+              to notice. Empty — and therefore no taller than nothing — while the list below is
+              answering for itself. */}
+          <p
+            role="status"
+            className={cn(
+              empty && status ? "py-16 text-center text-sm" : "text-xs",
+              empty && failure ? "text-destructive" : "text-dim",
+            )}
+          >
+            {status}
+          </p>
+
+          {/* A write that was refused, said where the writing happened. Not folded into the
+              line above: that one describes the list, and this one describes something the
+              reader just did to it.
+
+              It grows into place instead of shoving the table down by its whole height. The
+              animated element is the wrapper and carries only `overflow-hidden`, because
+              `statusLine` takes `height` to 0 and a box with its own padding and border can
+              never — under `box-sizing: border-box` — be shorter than the two of them. */}
+          <AnimatePresence initial={false}>
+            {bannerFailure && (
+              <motion.div {...statusLine} className="overflow-hidden">
+                <p
+                  role="alert"
+                  className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+                >
+                  Could not change your wishlist — {bannerFailure}
+                </p>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* A write the right-click menu started and the backend refused, beside the banner
+              above rather than folded into it: that one is about this list's own controls — a
+              stepper press, a removal — and this one is about a card the reader filed somewhere
+              from a menu that has already closed. */}
+          <CardMenuRefusal error={menuFailure} />
+
+          {!empty &&
+            (view === "grid" ? (
+              <WishlistGrid
+                rows={rows}
+                listKey={wishlist.queryKeyString}
+                onNeedNextPage={onNeedNextPage}
+                onSetQuantity={onSetQuantity}
+                onRemove={onRemove}
+                rowMenu={rowMenu}
+                rowMenuKey={rowMenuKey}
+                marketplace={marketplace}
+                {...filing}
+              />
+            ) : (
+              <WishlistTable
+                rows={rows}
+                total={total}
+                listKey={wishlist.queryKeyString}
+                sort={wishlist.sort}
+                onSort={wishlist.toggleSort}
+                onNeedNextPage={onNeedNextPage}
+                onSetQuantity={onSetQuantity}
+                onRemove={onRemove}
+                rowMenu={rowMenu}
+                rowMenuKey={rowMenuKey}
+                marketplace={marketplace}
+                {...filing}
+              />
+            ))}
+
+          {/* **Spec §5: a price is never shown without saying how old it is** — and, with five
+              marketplaces in the picker, whose it is. `pricesAsOf` answers both, and names which of
+              the two clocks this marketplace runs on: the card-data sync for the blob-backed pair,
+              the last price-feed refresh for the two this app downloads itself.
+
+              **The rule reaches this wall as of 2026-08-26**, when the tiles' chins started quoting
+              what one copy costs. `WishlistGrid` already binds the same sentence as a tooltip on the
+              corner mark, and that is **not** this line and does not stand in for it: that one is
+              attached to the cost still to buy — `unit × copies missing` — and is drawn on no wish
+              the reader has finished, while the chin's figure is on every tile.
+
+              **Said once, under the wall, rather than on every tile** — the argument the search
+              page, the Tags page, the printings modal and the deck's docked panel all make, and the
+              reason the chin's money slot is a plain string rather than a tooltip binding.
+
+              **Grid only.** The table states it in the Cost column's own header (`WishlistTable`'s
+              `columnsFor`), so drawing it here as well would say it twice in one view. */}
+          {!empty && view === "grid" && (
+            <p className="shrink-0 text-[0.7rem] text-dim">{pricesAsOf(marketplace)}</p>
+          )}
+        </div>
+
+        {/* The dock: a 36px column of the row whatever the panel is doing inside it, so nothing
+            reflows on a collapse. `sticky top-0` pins it to the top of `AppShell`'s scroller and
+            {@link useDockHeight} gives it the height, because CSS cannot say "the scroller's
+            visible height, less however much of the page sits above this row".
+
+            **`LAYER.popup` only while the panel is drawn over the list, and it has to be _here_.**
+            `position: sticky` always creates a stacking context, so a z-index asked for inside
+            this box competes only with its own siblings — which is why the overlay itself carries
+            no number. What it is covering is the folder wall and the card grid, both of which draw
+            raised rungs of their own; this is the one element that can out-rank them. It is not
+            applied at every width, because a rung nothing overlaps is a claim about an overlap
+            that does not occur. */}
+        <div
+          ref={dockRef}
           className={cn(
-            empty && status ? "py-16 text-center text-sm" : "text-xs",
-            empty && failure ? "text-destructive" : "text-dim",
+            "sticky top-0 flex shrink-0 self-start",
+            overWidth !== undefined && LAYER.popup,
           )}
         >
-          {status}
-        </p>
-
-        {/* A write that was refused, said where the writing happened. Not folded into the
-            line above: that one describes the list, and this one describes something the
-            reader just did to it.
-
-            It grows into place instead of shoving the table down by its whole height. The
-            animated element is the wrapper and carries only `overflow-hidden`, because
-            `statusLine` takes `height` to 0 and a box with its own padding and border can
-            never — under `box-sizing: border-box` — be shorter than the two of them. */}
-        <AnimatePresence initial={false}>
-          {bannerFailure && (
-            <motion.div {...statusLine} className="overflow-hidden">
-              <p
-                role="alert"
-                className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
-              >
-                Could not change your wishlist — {bannerFailure}
-              </p>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* A write the right-click menu started and the backend refused, beside the banner
-            above rather than folded into it: that one is about this list's own controls — a
-            stepper press, a removal — and this one is about a card the reader filed somewhere
-            from a menu that has already closed. */}
-        <CardMenuRefusal error={menuFailure} />
-
-        {!empty &&
-          (view === "grid" ? (
-            <WishlistGrid
-              rows={rows}
-              listKey={wishlist.queryKeyString}
-              onNeedNextPage={onNeedNextPage}
-              onSetQuantity={onSetQuantity}
-              onRemove={onRemove}
-              rowMenu={rowMenu}
-              rowMenuKey={rowMenuKey}
-              marketplace={marketplace}
-              {...filing}
-            />
-          ) : (
-            <WishlistTable
-              rows={rows}
-              total={total}
-              listKey={wishlist.queryKeyString}
-              sort={wishlist.sort}
-              onSort={wishlist.toggleSort}
-              onNeedNextPage={onNeedNextPage}
-              onSetQuantity={onSetQuantity}
-              onRemove={onRemove}
-              rowMenu={rowMenu}
-              rowMenuKey={rowMenuKey}
-              marketplace={marketplace}
-              {...filing}
-            />
-          ))}
-
-        {/* **Spec §5: a price is never shown without saying how old it is** — and, with five
-            marketplaces in the picker, whose it is. `pricesAsOf` answers both, and names which of
-            the two clocks this marketplace runs on: the card-data sync for the blob-backed pair,
-            the last price-feed refresh for the two this app downloads itself.
-
-            **The rule reaches this wall as of 2026-08-26**, when the tiles' chins started quoting
-            what one copy costs. `WishlistGrid` already binds the same sentence as a tooltip on the
-            corner mark, and that is **not** this line and does not stand in for it: that one is
-            attached to the cost still to buy — `unit × copies missing` — and is drawn on no wish
-            the reader has finished, while the chin's figure is on every tile.
-
-            **Said once, under the wall, rather than on every tile** — the argument the search
-            page, the Tags page, the printings modal and the deck's docked panel all make, and the
-            reason the chin's money slot is a plain string rather than a tooltip binding.
-
-            **Grid only.** The table states it in the Cost column's own header (`WishlistTable`'s
-            `columnsFor`), so drawing it here as well would say it twice in one view. */}
-        {!empty && view === "grid" && (
-          <p className="shrink-0 text-[0.7rem] text-dim">{pricesAsOf(marketplace)}</p>
-        )}
+          <WishlistSearchPanel
+            // **The root while the list is flattened**, which is spec §5.3 rather than a
+            // simplification: Flatten means "show me everything", the breadcrumb reads
+            // `Wishlist · all folders`, and there is no folder on screen to be standing in. Note
+            // this page's flatten default is `false` where the collection's is `true` — the two
+            // cabinets disagree about the root and always have.
+            folderId={flatten ? null : folderId}
+            folderNodes={nodes}
+            folderName={folderNameOf}
+            roomy={roomy}
+            overWidth={overWidth}
+            maxWidth={maxPanelWidth}
+          />
+        </div>
       </div>
 
       {/* Mounted unconditionally — `CollectionPage`'s reason: `Dialog` renders nothing while
