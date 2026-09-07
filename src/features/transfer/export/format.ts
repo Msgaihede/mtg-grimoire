@@ -96,6 +96,43 @@ function sectionOf(card: TransferCard): string | null {
 const ACTIVE_ONLY: ReadonlySet<ExportFormat> = new Set<ExportFormat>(["arena", "mtgo"]);
 
 /**
+ * Whether this format leaves switched-off piles out **by itself**, whatever anybody asks of it.
+ *
+ * `ACTIVE_ONLY` read from outside, and the reason it is a function rather than the set exported:
+ * the dialog's `Include inactive categories` box is the *reader's* answer to the same question,
+ * and it must not be drawn for a format that has already answered it — a checkbox that cannot
+ * move the file is furniture (`src/CLAUDE.md`). Arena and MTGO have no maybeboard, so writing one
+ * produces an illegal import at the other end, and no preference may turn that back on.
+ *
+ * The dialog's filter is fenced on this **as well as** on the flag, exactly as the Arena row
+ * filter is fenced on `format === "arena"`. Applying it here too would swap the sentence under
+ * these two formats — {@link omittedCount}'s "not written in this format", which is the true one
+ * for a format with nowhere to put the pile — for the reader's own, which is not.
+ */
+export function dropsInactive(format: ExportFormat): boolean {
+  return ACTIVE_ONLY.has(format);
+}
+
+/** A card in a pile the reader has **not** switched off — `categoryActive === null`, a surface
+ *  with no piles at all, is one of them. The dialog's filter and nothing else; the writer's own
+ *  is {@link written}, which asks the same question behind a format gate. */
+export function isActivePile(card: TransferCard): boolean {
+  return card.categoryActive !== false;
+}
+
+/**
+ * Copies sitting in a switched-off pile, whatever any format would do about them.
+ *
+ * **Copies rather than rows**, for {@link omittedCount}'s reason — six basic lands on one row are
+ * six cards missing from the file — and it is that function's arithmetic, lifted so the two
+ * readers cannot drift: what the *format* leaves out and what the *reader* asked to leave out are
+ * one count behind two different gates.
+ */
+export function inactiveCopies(cards: readonly TransferCard[]): number {
+  return cards.reduce((n, card) => (isActivePile(card) ? n : n + card.quantity), 0);
+}
+
+/**
  * The `*F*` / `*E*` marker a line ends with, or `""` for the regular copy.
  *
  * The one thing every text format here can say about a finish, and the channel `parse.ts` reads
@@ -188,14 +225,13 @@ function writeLine(
  * all — omits nothing, the same as a switched-on pile.
  */
 export function omittedCount(cards: readonly TransferCard[], format: ExportFormat): number {
-  if (!ACTIVE_ONLY.has(format)) return 0;
-  return cards.reduce((n, card) => (card.categoryActive === false ? n + card.quantity : n), 0);
+  return dropsInactive(format) ? inactiveCopies(cards) : 0;
 }
 
 /** The cards a format writes, in the caller's own order. */
 function written(cards: readonly TransferCard[], format: ExportFormat): readonly TransferCard[] {
-  if (!ACTIVE_ONLY.has(format)) return cards;
-  return cards.filter((card) => card.categoryActive !== false);
+  if (!dropsInactive(format)) return cards;
+  return cards.filter(isActivePile);
 }
 
 /**

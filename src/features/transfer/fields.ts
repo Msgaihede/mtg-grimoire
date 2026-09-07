@@ -205,6 +205,28 @@ export const SURFACE_FIELDS: Record<TransferSurface, readonly TransferFieldId[]>
   ],
 };
 
+/**
+ * Whether this surface files its cards into piles at all — the deck, and nothing else.
+ *
+ * **A declaration of its own rather than `SURFACE_FIELDS[s].includes("category")`, because the
+ * two questions only happen to have the same answer today.** `category` is a *field* — a column
+ * a reader switches on — and this is about whether `TransferCard.categoryActive` is ever
+ * anything but `null` on rows from this surface. A surface could hold piles and offer no
+ * category column, and reading the field list would then quietly answer the wrong question.
+ *
+ * The export dialog's `Include inactive categories` box is the one reader: on a collection or a
+ * wishlist every row carries `categoryActive: null`, so the box would be a control over nothing.
+ *
+ * **Total, not partial**, for `DISCRIMINATOR`'s reason (`export/format.ts`): a fourth surface
+ * has to answer this rather than defaulting to `undefined` and drawing the box over a list that
+ * has no piles in it.
+ */
+export const SURFACE_HAS_PILES: Record<TransferSurface, boolean> = {
+  deck: true,
+  collection: false,
+  wishlist: false,
+};
+
 /** The intersection, in registry order — which is what makes a CSV's columns stable. */
 export function availableFields(
   format: ExportFormat,
