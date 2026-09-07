@@ -176,6 +176,12 @@ pub const COMMANDS: &[&str] = &[
     "set_card_zoom",
     "list_view",
     "set_list_view",
+    // **Both halves, and the write's `color` is the optional one.** A browser reader recolours a
+    // mark and resets it from the same panel, and Reset sends no colour at all — so the arm reads
+    // it with `optional` rather than `field`, or the reset is the one press that works on the
+    // desktop and refuses here.
+    "mark_colors",
+    "set_mark_color",
     // **Both halves, the way `list_view` has both.** The read alone would open every browser
     // session on the default order however the reader had left it, which is the setting not
     // existing rather than the setting being read-only.
@@ -1727,6 +1733,29 @@ pub fn call(
             )
         }
 
+        // `listview`'s pair with the vocabulary moved out, and the read is infallible on this side
+        // too: a browser that cannot read the row draws every mark in the colour the stylesheet
+        // gives it rather than failing to draw the card.
+        "mark_colors" => {
+            let conn = crate::sync::lock_db_read(state);
+            encode(command, crate::markcolors::stored(&conn))
+        }
+
+        // **`color` is `optional` and not `field`, and that is the whole of this arm's care.**
+        // Reset sends no colour, which `field` would refuse as `missing \`color\`` — a Reset
+        // button that works on the desktop and answers an argument error in a browser.
+        "set_mark_color" => {
+            let mark: String = field(command, args, "mark")?;
+            let color: Option<String> = optional(command, args, "color")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::markcolors::store(c, &mark, color.as_deref())
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
         // `listview`'s pair one setting over, and the read is infallible on this side too: a
         // browser that cannot read the row opens the gallery on the default order rather than
         // failing to draw it.
@@ -2705,7 +2734,7 @@ mod tests {
         // `COMMANDS.len()` as the build computed it; that is the answer.
         assert_eq!(
             COMMANDS.len(),
-            135,
+            137,
             "update this number when a command is added"
         );
     }
