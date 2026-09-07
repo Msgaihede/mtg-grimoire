@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import type { UserEvent } from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MANA_VALUES } from "@/components/FilterChips";
+import { CONDITION_LABEL, CONDITION_NOT_SET } from "@/lib/conditions";
 import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID, TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import type { FacetResponse, SearchSortKey } from "@/lib/ipc";
 import type { TagChip } from "@/features/tags/tagFilters";
@@ -1585,8 +1586,10 @@ describe("FilterBar, its tray as a sheet", () => {
    * `@container/fb` box — so moving the tray into the sheet without giving the sheet a container
    * of its own would leave four rules inside `FilterTray` with nothing to resolve against: the
    * cell grid's one-to-two-to-three columns at 640 and 900, and the rarity and condition chips'
-   * grid-to-flow at 640. They would fall to their base arrangement **silently** — no error, no
-   * warning, and jsdom applies no container query, so not a red test either.
+   * grid-to-flow at 640 — which for the condition cell is now a grid-to-*wrapping*-flow, since
+   * six chips do not fit one line of that cell at the widths it is drawn at. They would fall to
+   * their base arrangement **silently** — no error, no warning, and jsdom applies no container
+   * query, so not a red test either.
    *
    * What jsdom *can* see is an ancestor's class. That is the whole of what this pins, and it is
    * enough: the query cannot be evaluated here, but the box it would be evaluated against can be
@@ -2035,8 +2038,10 @@ describe("FilterBar, the filters its strip states", () => {
 describe("FilterBar, its rarity chips", () => {
   /**
    * Common through mythic, and **not alphabetical** — the order is the information, the way Near
-   * Mint through Damaged is on the collection's condition chips. `sortOptions`' second kind of
-   * exemption, and the one place on this row it applies.
+   * Mint through Damaged is on the collection's condition chips (which since schema v35 are led
+   * by an ungraded chip that is not on that scale at all — it sits in front of it because it is
+   * the *default*, not because it is a sixth grade). `sortOptions`' second kind of exemption, and
+   * the one place on this row it applies.
    */
   it("offers the four rarities in the order a card is printed at them", async () => {
     render(<FilterBar search={search()} />);
@@ -2426,5 +2431,86 @@ describe("FilterBar, its Flatten switch", () => {
 
     expect(chip.parentElement).toBe(layout.parentElement);
     expect(layout.previousElementSibling).toBe(chip);
+  });
+});
+
+/**
+ * The condition cell, and the one chip in it that is not an abbreviation.
+ *
+ * **This cell had no case in this file at all until schema v35**, which is why it could ship
+ * drawing a chip that read `NONE`: `SEARCH_TRAY` does not list `condition` — the card search is
+ * over every printing Scryfall has published, and a printing has no grade — so every case above
+ * renders a bar this cell is not on. It reaches a reader through the collection's and the
+ * wishlist's own trays, whose page suites assert what those pages do with the *filter* rather
+ * than what this row draws for it.
+ *
+ * So the stub below opts in explicitly, on both halves: `tray` names the cell, and `conditions` /
+ * `toggleCondition` are what `FilterSurface` reads to decide the control exists at all — a tray
+ * naming a cell the surface cannot answer draws nothing rather than a dead control, which is the
+ * rule that lets the wishlist skip the price band.
+ */
+describe("FilterBar, its condition chips", () => {
+  const withConditions = (over: Record<string, unknown> = {}) =>
+    search({ conditions: [] as string[], toggleCondition: vi.fn(), ...over });
+
+  /**
+   * Five grades are drawn as the code and *spoken* as the word — `ToggleChip`'s `hint`, and the
+   * argument is that `NM`/`LP`/`MP`/`HP`/`DMG` are what every marketplace listing prints, while
+   * five spelled-out grades are 400px of chrome above the table they filter.
+   *
+   * **The sixth is not an abbreviation of anything.** No listing prints `NONE`; a reader has
+   * never seen those four letters, so expanding them into a phrase would be explaining a code
+   * they were never shown. It takes the plain treatment the first paragraph of `ToggleChip`'s doc
+   * describes as the default — the label spelled out, no `hint` — and the storage token never
+   * reaches the page.
+   */
+  it("spells out the grade that abbreviates nothing, and abbreviates the five that do not", async () => {
+    render(<FilterBar search={withConditions()} tray={["condition"]} />);
+    await openTray();
+
+    const group = screen.getByRole("group", { name: "Condition" });
+    const notSet = within(group).getByRole("button", { name: CONDITION_LABEL.NONE });
+
+    // The visible text *is* the accessible name here, which is what says no `hint` was passed:
+    // a hinted chip carries its expansion in an `aria-label`, as the `NM` chip below does.
+    expect(notSet).not.toHaveAttribute("aria-label");
+    expect(within(group).getByRole("button", { name: "NM, near mint" })).toBeInTheDocument();
+    expect(group).not.toHaveTextContent(CONDITION_NOT_SET);
+  });
+
+  /**
+   * The default leads the scale it is not a member of — `CONDITIONS`' own order, and the reason
+   * is that a default a reader has to scroll past five grades to find is a default in name only.
+   * The database ranks it the other way (`NM 0 … DMG 4, NONE 5`) because a sorted column is the
+   * scale read *as* a scale; neither order is derived from the other.
+   */
+  it("offers the ungraded chip first and the scale behind it", async () => {
+    render(<FilterBar search={withConditions()} tray={["condition"]} />);
+    await openTray();
+
+    const names = within(screen.getByRole("group", { name: "Condition" }))
+      .getAllByRole("button")
+      .map((b) => b.textContent);
+
+    expect(names).toEqual([CONDITION_LABEL.NONE, "NM", "LP", "MP", "HP", "DMG"]);
+  });
+
+  /**
+   * The summary chip under the bar reads the same words as the control that made it.
+   *
+   * It joined **raw storage codes** before this cell had a sixth value, which was invisible while
+   * every code was also a word a reader recognises. `Condition: Not set, LP` is the whole of what
+   * `conditionChip` being shared between the two sites buys — the tray and this row cannot come
+   * to disagree, because there is one function deciding.
+   */
+  it("names the picked grades in the chip the way the tray named them", () => {
+    render(
+      <FilterBar
+        search={withConditions({ conditions: [CONDITION_NOT_SET, "LP"] })}
+        tray={["condition"]}
+      />,
+    );
+
+    expect(chipLabels()).toEqual([`Condition: ${CONDITION_LABEL.NONE}, LP`]);
   });
 });

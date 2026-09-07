@@ -14,7 +14,7 @@ import { VirtualTable, type TableColumn } from "@/components/table/VirtualTable"
 import { useTooltip, type TooltipBinder } from "@/components/tooltip/useTooltip";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { collectionDraggable } from "@/features/collection/collectionDrag";
-import { CONDITION_LABEL, type Condition } from "@/lib/conditions";
+import { CONDITION_LABEL, CONDITION_NOT_SET, type Condition } from "@/lib/conditions";
 import { finishLabel, isFinish } from "@/lib/finish";
 import { finishTreatments } from "@/lib/treatment";
 import { FOCUS } from "@/lib/focus";
@@ -48,12 +48,20 @@ function conditionLabel(raw: string): string {
 /**
  * Which copy a row is about, for the accessible name of a control that acts on it.
  *
- * `Foil, NM` — both halves always, because `condition` is `NOT NULL DEFAULT 'NM'` on the column
- * and non-nullable on {@link CollectionRow}. The "no grade" branch this used to carry was
- * unreachable.
+ * `Foil, NM` where the reader said what state the copy is in, and **`Foil` alone where they did
+ * not**. The "no grade" branch this used to carry was documented as unreachable, on the argument
+ * that `condition` is `NOT NULL DEFAULT 'NM'` on the column and non-nullable on
+ * {@link CollectionRow} — the column and the DTO have not changed, and the *default* has: it is
+ * the `NONE` sentinel since schema v35, so the arm is what every add that states no grade lands
+ * on rather than a state the backend cannot build.
+ *
+ * Neither half of the sentinel belongs in a name. `Foil, NONE` says a storage token out loud,
+ * `Foil, Not set` names a grade the reader never chose, and a bare `Foil, ` trails a comma into
+ * nothing. An absence is said by saying nothing.
  */
 function copyLabel(row: CollectionRow): string {
-  return `${finishLabel(row.finish)}, ${row.condition}`;
+  const finish = finishLabel(row.finish);
+  return row.condition === CONDITION_NOT_SET ? finish : `${finish}, ${row.condition}`;
 }
 
 /**
@@ -197,8 +205,20 @@ function columnsFor(
       cellClassName: "truncate text-xs text-dim",
       cell: (row) => {
         const condition = row.condition;
-        /* Always both halves and always the separator: `condition` is `NOT NULL DEFAULT 'NM'`
-          on the column, so the "no grade" arm this cell used to carry could not be reached. */
+        /* **The finish alone where the grade was never stated.** Both halves and the separator
+          were unconditional while `condition` was `NOT NULL DEFAULT 'NM'`, which made the "no
+          grade" arm this cell used to carry a state the backend could not build. Schema v35
+          moved the default onto the `NONE` sentinel, so that arm is now where every add that
+          says nothing about a grade lands — and it is the commonest row in a new collection
+          rather than a rarity.
+
+          It prints `Foil`. Not `Foil · NONE`, which puts a storage token in a column a reader
+          scans; not `Foil · —`, because an em dash is what this table draws for a *value* it
+          does not have (the root folder, an unpriced row) and a grade nobody claimed is not a
+          missing value. The `<abbr>` and its `sr-only` twin go with it for the same reason:
+          an abbreviation that expands to nothing, and a " (…)" read aloud after a finish, are
+          two ways of announcing an absence that is better left silent. */
+        if (condition === CONDITION_NOT_SET) return finishLabel(row.finish);
         return (
           <>
             {finishLabel(row.finish)} ·{" "}

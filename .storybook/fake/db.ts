@@ -236,7 +236,22 @@ export interface FakeEntry {
   id: number;
   cardId: string;
   finish: "nonfoil" | "foil" | "etched";
-  condition: "NM" | "LP" | "MP" | "HP" | "DMG";
+  /**
+   * The grade, or **`NONE` for nobody said** — schema v35's sixth value, and the column's
+   * `DEFAULT` since it landed. Spelled in the CHECK's own order.
+   *
+   * **A sentinel string rather than a NULL**, and the reason is `idx_collection_grain`:
+   * `condition` is that unique index's third term and SQLite counts two NULLs as distinct in
+   * one, so a nullable column would make every ungraded add a brand-new row instead of folding
+   * onto the one already there — a reader pressing `+` four times would end with four rows of
+   * one copy. A sentinel folds like any other value and costs {@link collectionGrain}, the
+   * reconcile and the sync no special case at all.
+   *
+   * **Existing rows keep the grade they have.** The v35 rebuild changes the CHECK and the
+   * DEFAULT and touches no value, because nobody can tell which `NM` the reader meant and
+   * which the app chose for them — so a seeded world's explicit grades are as real as they were.
+   */
+  condition: "NONE" | "NM" | "LP" | "MP" | "HP" | "DMG";
   quantity: number;
   tradelistQuantity: number;
   /** Denormalised from `cards` at write time, and the identity a row keeps when its
@@ -3458,9 +3473,17 @@ function rarityRank(rarity: string | null): number {
  * `collection::COLLECTION_SORTS`' condition `CASE`: grade order, because `DMG` before `LP`
  * is alphabetical order and not what anybody means by condition.
  *
- * Its `ELSE 5` has no counterpart here and needs none — `collection_entries.condition` is
- * `NOT NULL` with a `CHECK` over exactly these five (`schema.rs`), which is the statement
- * `FakeEntry["condition"]` makes in the type system.
+ * **`NONE` is ranked `5` and sorts last, which is the opposite end from where a picker draws
+ * it** (`lib/conditions.ts`'s `CONDITIONS` leads with it). The two orders are not in conflict
+ * and neither is derived from the other: a sorted column is the scale being read *as* a scale,
+ * so the ungraded pile belongs at the end of it rather than in front of the Near Mints, while a
+ * dropdown opens on its default. One list, two orders.
+ *
+ * The crate's `CASE` carries an `ELSE 5` beside the spelled `WHEN 'NONE' THEN 5`, and the
+ * duplication is deliberate there — an `ELSE` that happens to be right is not a rule. Here it
+ * has no counterpart and needs none: `collection_entries.condition` is `NOT NULL` with a
+ * `CHECK` over exactly these six (`schema.rs`), which is the statement `FakeEntry["condition"]`
+ * makes in the type system.
  */
 const CONDITION_RANK: Record<FakeEntry["condition"], number> = {
   NM: 0,
@@ -3468,6 +3491,7 @@ const CONDITION_RANK: Record<FakeEntry["condition"], number> = {
   MP: 2,
   HP: 3,
   DMG: 4,
+  NONE: 5,
 };
 
 /* ------------------------------------------------------------------ card filters ------ */
@@ -4126,9 +4150,14 @@ function ownsPrinting(db: FakeDb, cardId: string, forDeck?: number): boolean {
 
 /** `collection::FINISHES`/`CONDITIONS` — a filter value outside the enum is dropped rather
  *  than matched, because it can only come from a stale payload and would empty the list
- *  with no explanation. */
+ *  with no explanation.
+ *
+ *  **`NONE` leads, spelled in `collection::CONDITIONS`' own order** — this list is what
+ *  {@link validCondition}'s refusal names, so an order of its own would put a different
+ *  sentence on the screen than the app's. It is not {@link CONDITION_RANK}'s order and does
+ *  not want to be: membership is all either use of it asks. */
 const FINISHES: FakeEntry["finish"][] = ["nonfoil", "foil", "etched"];
-const CONDITIONS: FakeEntry["condition"][] = ["NM", "LP", "MP", "HP", "DMG"];
+const CONDITIONS: FakeEntry["condition"][] = ["NONE", "NM", "LP", "MP", "HP", "DMG"];
 
 function inList(value: string, picked: string[] | undefined, allowed: string[]): boolean {
   if (!picked) return true;
@@ -8054,10 +8083,23 @@ function validFinish(finish: string): FakeEntry["finish"] {
   throw refuse(`\`${finish}\` is not a finish. Use one of: ${FINISHES.join(", ")}.`);
 }
 
-/** `collection::valid_condition` — an absent condition is `NM`, what an unmarked card is
- *  assumed to be, rather than an error. */
+/**
+ * `collection::valid_condition` — an absent condition is `collection::DEFAULT_CONDITION`
+ * rather than an error, and since schema v35 that is **`NONE`**.
+ *
+ * **It was `NM`, and what changed is that the app no longer guesses.** The old default was
+ * defensible while the scale had no way to say nothing — a write has to put *something* in a
+ * `NOT NULL` column that is also a grain term — but what it wrote was the best grade on the
+ * scale, on the reader's behalf, and indistinguishable afterwards from the grades they typed
+ * by hand. `NONE` is the same write saying *nobody said*.
+ *
+ * **This is the one place the default lives**, which is what makes the three callers agree
+ * without any of them spelling it: `collection_add`, `collection_import_commit` (through
+ * {@link addEntry} and {@link setEntry}) and `deck_quick_add_to_collection`. A junk grade is
+ * still refused in words, in {@link CONDITIONS}' order.
+ */
 function validCondition(condition: string | undefined): FakeEntry["condition"] {
-  const c = condition ?? "NM";
+  const c = condition ?? "NONE";
   const found = CONDITIONS.find((x) => x === c);
   if (found) return found;
   throw refuse(`\`${c}\` is not a condition. Use one of: ${CONDITIONS.join(", ")}.`);
@@ -9615,6 +9657,21 @@ export function writeHandlers(db: FakeDb) {
      * corrects the condition and the quantity in one press folds the quantity they typed rather
      * than the one the row had. The grain half is applied to nothing at all: the surviving row
      * already carries every value it names, which is precisely why the two collided.
+     *
+     * # Absent means "leave it", and there is no value that means "make it null"
+     *
+     * `PATCH_SQL` is `coalesce(?n, column)` in all eighteen holes, so every field this handler
+     * reads with `??` is the same statement in TypeScript — and the two together have a gap
+     * worth naming rather than discovering: **a purchase price cannot be cleared.** Sending
+     * `purchasePrice: undefined` leaves the number that is there, and `EntryPatch.purchasePrice`
+     * is `number | undefined` on the wire with no third state to send. A dialog offering to
+     * empty that field would be a control that silently does nothing, which is the shape of
+     * defect a fake exists to make visible: this handler cannot produce a row whose price went
+     * back to null, because neither can the crate.
+     *
+     * `condition` has no such gap and never did — `NONE` is a *value*, so an edit really can
+     * take a row from `NM` back to nobody-said, and that write goes through the grain: the row
+     * moves to a different one and may fold onto a `NONE` row already standing there.
      */
     collection_update: (args: { id: number; patch: EntryPatch }): EntryChange => {
       refuseIfBusy(db);
@@ -10369,9 +10426,12 @@ export function writeHandlers(db: FakeDb) {
       deckId: number;
       cardId: string;
       finish?: DeckFinish;
-      // A bare `string` because that is what `ipc.ts` sends — `useCardMenuDeps`'s
+      // A bare `string` because that is what `ipc.ts` sends — `lib/conditions.ts`'s
       // `MENU_CONDITION`, spelled by the caller — and {@link validCondition} is where it becomes
-      // one of the five.
+      // one of the six. **Both ends of that now say `NONE`**, which is the whole of what a menu
+      // quick-add changed at schema v35: the constant is still sent from the app rather than
+      // left to the backend's default, so the one decision a menu *declines* to make is visible
+      // where it is declined.
       condition?: string;
       quantity: number;
       wishId?: number | null;

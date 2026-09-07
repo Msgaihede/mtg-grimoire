@@ -1175,9 +1175,12 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    * changes — no `deck_cards` row is written — and the root is owed for `ownedQuantity` alone,
    * exactly as it is on the pull.
    *
-   * **`MENU_CONDITION` rather than a second spelling of `"NM"`.** A quick add records a copy at
-   * the condition every other menu add in this app records one at, and two constants holding that
-   * default drift the first time either moves.
+   * **`MENU_CONDITION` rather than a second spelling of whatever it holds.** A quick add records
+   * a copy at the condition every other menu add in this app records one at, and two constants
+   * holding that decision drift the first time either moves — which it has: the constant was
+   * `"NM"` until schema v35 gave the column a grade meaning "the reader did not say", and every
+   * site that had spelled the letters out would have gone on recording Near Mint for a reader who
+   * never claimed it.
    *
    * **The card is passed whole rather than a `(cardId, finish)` pair**, because the row is the
    * thing the reader right-clicked and its finish is part of its address — a caller assembling

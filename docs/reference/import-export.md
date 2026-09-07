@@ -528,6 +528,45 @@ than the picker gesture:
 3. Exported the same two rows to CSV and read the preview: `2,Lightning Bolt,2x2,117,,LP` and
    `1,Sol Ring,c21,263,foil,NM` — the condition survived exactly, on both rows, at both finishes.
 
+### An ungraded copy is an empty Condition cell, and that is what closes the round trip
+
+Schema v35 gave `collection_entries.condition` a sixth value, `NONE` — *not set*, the grade that
+says nobody assessed the copy, and the column's `DEFAULT` since 2026-09-07
+([issue #361](https://github.com/Msgaihede/mtg-grimoire/issues/361)). It is a **storage** decision
+— a sentinel exists because `condition` is `idx_collection_grain`'s third term and SQLite counts
+two NULLs as distinct in a unique index — and **it stops at the database**. A row → `TransferCard`
+mapping turns it into `null`, `fields.ts` already writes `c.condition ?? ""`, and the cell comes
+out **empty**.
+
+Writing the four letters instead would export the mechanism rather than the fact. A re-import
+would still close, because `normalizeCondition` knows the word — but every other tool a reader
+opens that CSV in would show a column of `NONE` where the truthful answer is a blank. The blank is
+also *exactly* what the importer already reads as "the file did not say", which is now `NONE`
+again: the round trip closes because the two ends were already speaking about silence, not because
+anything was added to make them.
+
+**This is the one mapping the golden fence does not cover, and that is worth stating plainly**
+because the shape of `__golden__/` suggests otherwise. Its `corpus.json` holds *already-built*
+`TransferCard`s, so the fence begins **downstream** of the row → Card step; neither
+`src/features/transfer/TransferCard.ts`'s `conditionOf` nor `src-tauri/src/mirror/read.rs`'s
+`condition_of` is executed by any golden test, and the corpus contains no `NONE`. The two
+implementations of this substitution are held by one unit test each and by nothing else. Two
+agents writing the halves in parallel both recorded the fence as covering it; it does not.
+
+### A recorded purchase price can be corrected, never removed
+
+`EntryPatch` is `coalesce(?n, column)` in all eighteen of its holes, so an absent field means
+"leave it" and **there is no value that means "make it null"**. That is right for a patch built
+from an eight-field form, and it leaves one thing a reader cannot do: unsay a price. The Edit copy
+dialog does not pretend otherwise — the box is seeded with the recorded figure, and a line under
+it says emptying the box leaves that figure recorded. The alternative considered was a box that
+opens blank, which makes "empty means leave it" true by construction and buys it by hiding the
+number the reader opened the dialog to check.
+
+The neighbouring trap is the same no-op reached from the other side: a box holding something
+unparseable **greys Save and names the trouble**, rather than dropping the field from the patch
+and writing nothing while looking like it wrote something.
+
 ### A plain-text list into the wishlist
 
 Pasted `1 Lightning Bolt`, `1 Sol Ring`, `1 Counterspell` — no set, no collector number on any line
