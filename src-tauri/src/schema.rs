@@ -6760,11 +6760,11 @@ pub(crate) mod tests {
     /// A user file at 35 — the shape every machine carries the day before a deck's group is held
     /// to the printing, and the only population the v36 rung is *for*.
     ///
-    /// **Head, stamped with the previous number and nothing else, which is [`user_file_at_31`]'s
-    /// construction one number line up.** v36 writes no shape at all; it *moves rows*, so a v35
-    /// database and a v36 one **are** the same schema and renumbering is the whole of the
-    /// difference. There is no `UNDO_V36` for that reason, and no fixture below owes one — the
-    /// same exemption v32 has and v33, v34 and v35 do not.
+    /// **Head rewound past v37 and stamped with 35, which is [`user_file_at_31`]'s construction
+    /// one number line up.** v36 writes no shape at all; it *moves rows*, so a v35 database and
+    /// a v36 one **are** the same schema and renumbering is the whole of the difference between
+    /// those two. There is no `UNDO_V36` for that reason, and no fixture below owes one — the
+    /// same exemption v32 has and v33, v34, v35 and v37 do not.
     ///
     /// **It was written as a v34 fixture and renumbered on the way in**, the same rule the rung
     /// it serves was renumbered under: `main`'s sixth-grade rebuild took 35 while this branch was
@@ -8565,9 +8565,14 @@ pub(crate) mod tests {
     /// vacuous.
     ///
     /// **The other half is that it sits below v36 and not below v35**, which is the question the
-    /// renumbering added: head plus a stamp is a legitimate v35 file only because v36 writes no
-    /// shape, and v35 — the rung immediately under it — does. So both of v35's and v34's own
-    /// marks are probed: the CHECK that accepts `'NONE'`, and `collection_folders.locked`.
+    /// renumbering added: v35 — the rung immediately under it — writes shape, so both of v35's
+    /// and v34's own marks are probed: the CHECK that accepts `'NONE'`, and
+    /// `collection_folders.locked`.
+    ///
+    /// **This said "head plus a stamp is a legitimate v35 file only because v36 writes no
+    /// shape", and v37 ended that.** Two `decks` columns above v36 mean head is no longer a v35
+    /// shape at all, so [`user_file_at_35`] rewinds [`UNDO_V37`] like every other fixture here —
+    /// and the probes below are what still say the rewind stopped in the right place.
     #[test]
     fn the_v35_fixture_carries_none_of_v36() {
         let conn = user_file_at_35();
