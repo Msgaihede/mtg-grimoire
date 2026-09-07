@@ -109,6 +109,18 @@ remainder, including the trade-list clamp.
 folder is resolved only when there is something to file — both are `release_group_copies`'
 existing asymmetries, carried over so the two functions behave alike.
 
+**"Claimed" means every live `deck_cards` row, switched-off piles included**, and getting this
+wrong is destructive rather than merely wrong. `attribute_owned` hands an inactive pile no
+copies, so it is tempting to read its rows as claiming nothing — but then flipping a category off
+would *evict that pile's cards from the deck*, turning a display switch into a press that moves
+cardboard. Custody follows what the list **names**; the switch only decides what is counted.
+`release_live_copies` already works this way — its query filters by `category_id` and never by
+`category_active` — so this is the file's existing rule, not a new one.
+
+**A `theory` variant is a loop that never runs**, `release_live_copies`' shape exactly: the guard
+lives inside this function rather than in its two callers, because a rule written down twice is a
+rule one copy will not have.
+
 ### 2.2 Two callers: `swap_printing` and `set_card_finish`
 
 These are the only two commands that rewrite a live row's **identity** while touching no
@@ -270,7 +282,19 @@ a second Escape closes settings. Plus a story for the section.
 settings from both the editor and the gallery, press the button, confirm a pull, and confirm the
 deck's missing count moves.
 
-## 6. Docs to update in the same commits
+## 6. The Storybook fake follows
+
+`.storybook/fake/db.ts` reimplements this attribution — `ownedByOracle` and `attributeOwned`, named
+after the Rust functions they mirror — and its module header states the grain in as many words:
+"on `DeckCard` it is what this deck's **own group** physically holds — oracle-grained,
+finish-blind, condition-blind". It narrows with §1, to `(card_id, finish)`, and the header and the
+two doc comments that name the old grain are rewritten with it.
+
+This is not tidiness. The fake exists so that a story teaches the model the app actually has; one
+left at the oracle grain would draw every deck story's owned count from a rule the shipped app no
+longer follows, and the workbench would quietly disagree with the window.
+
+## 7. Docs to update in the same commits
 
 - `docs/reference/decks-storage.md` — how owned/missing is answered, at the new grain, and §2.4's
   residual.
