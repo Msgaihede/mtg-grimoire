@@ -338,7 +338,7 @@ Pathway` is one card and there are seven such names in the reference list alone,
 `export/` is the mirror of `import/`, and the split is the repo's boundary: `format.ts` is
 `(cards, format, fields) => string` — no React, no hook, no IPC, and `arena.ts` beside it holds
 to the same rule — `ExportDialog.tsx` is the surface (a format picker, a field-checkbox row, the
-Arena format's own filter, a live preview, Copy and Save as…), and Rust supplies only the file
+**two row filters**, a live preview, Copy and Save as…), and Rust supplies only the file
 write. **Four controls open that dialog now** — the deck editor header's
 `Export deck` and a category heading's `Export cards…` (`DeckEditor.tsx:3443`, one mount both
 reach), and one apiece on `CollectionPage.tsx:585` and `WishlistPage.tsx:438` — and what differs
@@ -354,21 +354,82 @@ measured on: [import-export.md](../../../docs/reference/import-export.md).
   `ALWAYS` and never drawn as checkboxes, because a line with no count and no name is not a card.
   Switching format re-derives the checked set from that format's own defaults rather than
   carrying the old selection forward — a set chosen for CSV means nothing to Arena.
-- **The Arena format's own checkbox is a _row_ filter, not a field, and that is why it is not in
-  `fields.ts`** (issue #192, 2026-08-22). A field says what a line says about a card; **Only cards
-  MTG Arena has** says which cards there are lines for, so it sits under the format radios rather
-  than in the `Fields` row, is drawn for `arena` alone, and rides in `exportPrefs` beside the
-  format and the field set — **surviving a format switch where `fields` is re-derived**, because a
-  field set chosen for CSV means nothing to Arena while "leave out what Arena does not have" is
-  the same answer whatever the reader passed through. **Off on every surface on a first run**: the
-  format has written every card handed to it since it shipped, and a filter that started on would
-  quietly change what an existing reader's next export contains. It is applied in the **dialog**,
-  before `formatExport` — which keeps that function `(cards, format, fields) => string`, the
-  boundary this whole directory is built on, and keeps `omittedCount` honest, since it then
-  measures what the format leaves out of the list it was actually handed and a card that is both
-  outside Arena and in a switched-off pile is reported once rather than twice. The filter is
-  fenced on the **format** as well as the flag, or a reader who ticked it and moved to CSV would
-  find their CSV quietly short of rows.
+- **A _row filter_ says which cards there are lines for; a _field_ says what a line says about
+  one — and there are two row filters now, which makes it a pattern rather than one format's
+  exception.** `Only cards MTG Arena has` (issue #192, 2026-08-22) and `Include inactive
+  categories` (issue #390, 2026-09-07) are both **absent from `fields.ts`** for that one reason,
+  and the four things they share are the shape a third would have to take. Each sits **under the
+  format radios** rather than in the `Fields` fieldset. Each **rides in `exportPrefs`** beside the
+  format and the field set, so it **survives a format switch where `fields` is re-derived** — a
+  field set chosen for CSV means nothing to Arena, while "leave out what Arena does not have" and
+  "write my switched-off piles" are the same answers whatever the reader passed through on the way
+  back. Each is **fenced on the format as well as on its own flag**, so a preference the reader
+  cannot see is never quietly narrowing the file. And each is applied **in the dialog, before
+  `formatExport`** — which is what keeps that function `(cards, format, fields) => string`, the
+  boundary this whole directory is built on, and what keeps `omittedCount` honest, since it then
+  measures what the *format* leaves out of the list it was actually handed.
+- **The Arena filter is drawn for `arena` alone and opens off on every surface.** The format has
+  written every card handed to it since it shipped, and a filter that started on would quietly
+  change what an existing reader's next export contains. Fencing it on the format is what stops a
+  reader who ticked it and moved to CSV finding their CSV short of rows; applying it before the
+  writer is what stops a card that is both outside Arena and in a switched-off pile being reported
+  by two lines at once.
+- **`Include inactive categories` is the second row filter, it opens _off_, and that changes what
+  five formats write** (issue #390, 2026-09-07). Ticked, the reader's switched-off piles are in
+  the file; left alone they are not — so `plain`, `moxfield`, `archidekt`, `tcgplayer` and `csv`,
+  every format that wrote a maybeboard before this shipped, stop writing one. **That is the
+  reported bug rather than a side effect of fixing it**: #390 is a reader finding their maybeboard
+  in a deck they exported, so shipping the box on by default would have shipped the fix with the
+  bug still in it. It is the one place the argument `arenaOnly` makes for its own default — a
+  filter that starts on changes an existing reader's next export silently — is deliberately spent,
+  and what pays for it is the count line: whatever the box is holding back is on screen, in
+  copies, before Copy is pressed. **Named for what ticking it _does_**, where the Arena box is
+  named for what ticking that one leaves out — the reader's question is "is my maybeboard in this
+  file", and a box called `Leave out…` answers it inverted.
+- **It is fenced twice, and the fence gates the _filter_ as well as the checkbox.**
+  `SURFACE_HAS_PILES[surface]` is the surface's half: only the deck files cards into piles, so a
+  collection or wishlist row carries `categoryActive: null` and the box there would be a control
+  over nothing. `!dropsInactive(format)` is the format's: Arena and MTGO leave a switched-off pile
+  out whatever anybody asks, because a maybeboard in an Arena file is an illegal import at the
+  other end — a box there could never move a byte, which is the furniture `src/CLAUDE.md` forbids.
+  Gating the **filter** on the same pair is the half worth stating, because it is what keeps the
+  honest sentence under those two formats the *format's own* rather than the reader's.
+  `SURFACE_HAS_PILES` is a declaration of its own rather than `SURFACE_FIELDS[s].includes(…)`,
+  because the two questions only happen to agree today: `category` is a **column a reader switches
+  on**, and this asks whether `TransferCard.categoryActive` is ever anything but `null` on rows
+  from that surface. It is total over `TransferSurface` for `DISCRIMINATOR`'s reason — a fourth
+  surface answers rather than defaulting to `undefined` and drawing the box over a list with no
+  piles in it.
+- **Two omission lines, two sentences, and they can never be on screen together.** The reader's
+  reads `6 cards in inactive categories are not written.` / `1 card in an inactive category is not
+  written.` — `inactive categories` because that is the box they just pressed. The format's still
+  reads `6 cards in switched-off piles are not written in this format.`, because under Arena and
+  MTGO there is no box, the pile is the only thing to name, and `in this format` is the true
+  ending there and not here. Both count **copies** rather than rows — six basic lands on one cut
+  row are six cards missing from the file — and both are ordinary `text-dim` lines rather than
+  alerts, because nothing has failed. They are fenced on complementary halves of `dropsInactive`,
+  so each is non-zero exactly where the other cannot be.
+- **`omittedCount` is `inactiveCopies` behind a gate now, and its behaviour did not change.**
+  `dropsInactive(format) ? inactiveCopies(cards) : 0`, and the dialog counts what the reader is
+  holding back from that same `inactiveCopies` behind the complementary half of the same fence —
+  so what the *format* leaves out and what the *reader* asked to leave out are one piece of
+  arithmetic read through two gates rather than two implementations free to drift. The failure
+  that closes is a line under the format radios describing a different file from the one Copy puts
+  on the clipboard: silent, plausible, and wrong in the direction nobody checks.
+- **Nothing in `__golden__/` or `src-tauri/src/transfer/` moved for it, and that is the fence
+  working rather than a gap.** The filter is the dialog's, above `formatExport`, so no golden byte
+  changes and the Rust writer needs no port — exactly as `export/arena.ts` needed none, and for
+  the same reason: **the mirror does not get this filter either**, because a backup that narrows
+  itself is not a backup. `SURFACE_HAS_PILES` sits outside `fields.json` on the same argument —
+  that golden pins `SURFACE_FIELDS`, `availableFields` and `defaultFields`, which are what the
+  *writer* renders from, and there is nothing in Rust to keep in step with a preference the mirror
+  never applies.
+- **A single switched-off pile exported on its own is an empty file, and the dialog says so.** A
+  category heading's `Export cards…` over a pile the reader has switched off writes `""` with the
+  box unticked: the disclosure reads `Show decklist (0 lines)` and the count line says how many
+  copies are being held back. Deliberate rather than a hole, and the difference from the Arena
+  case is the whole point — there the same emptiness is the format's decision and nothing on
+  screen can undo it, here the box is on screen to untick.
 - **`export/arena.ts` reads legality because `games` answers a different question, and the key
   list has one exclusion that cannot be derived.** Scryfall's `games` says `arena` about a
   *printing*: the Alpha Lightning Bolt is `["paper"]` while the card is in Timeless, so a
@@ -447,7 +508,13 @@ measured on: [import-export.md](../../../docs/reference/import-export.md).
   that is what the whole `## Import` section above is about — and each writer here emits **one**
   spelling. It is the same rule that makes the output LF with a trailing newline whatever the
   parser would tolerate: a file this app wrote should have one answer.
-- **Four of the decisions inside the formats are worth carrying.** `EXPORT_FORMATS` is
+- **Four of the decisions inside the formats are worth carrying, and all four are facts about the
+  _writer_ rather than about the file a reader ends up with.** Since #390 the writer is no longer
+  handed the whole deck: `Include inactive categories` narrows the list in the dialog, so
+  "writes an inactive pile" and "keeps a switched-off pile" below both mean **would, given one** —
+  and with the box unticked those rows never reach `formatExport` at all. Keep the two halves
+  apart when reading any of this: what a format *can say* has not moved, what the dialog *hands
+  it* has. `EXPORT_FORMATS` is
   `plain · mtgo · arena · moxfield · archidekt · tcgplayer · csv`, and the dialog's radio row
   **maps that array** rather than listing them, so the count is the array's and never a number
   written down twice. **(1) `mtgo` has stopped being byte-identical to `plain`.** It was, for as long as there
@@ -459,17 +526,24 @@ measured on: [import-export.md](../../../docs/reference/import-export.md).
   out** — `omittedCount`, in _copies_ rather than rows, because six basic lands on one row are six
   cards missing from the file — so the omission is never silent. **(3) `archidekt` writes
   `{noDeck}` and a lowercase set code.** The flag is the only thing any of these formats can say
-  about a pile that counts toward nothing, which makes Archidekt the one format that writes an
-  inactive pile _and_ leaves nothing out; it is the round trip that makes the flag worth writing,
-  not fidelity to the site for its own sake. **(4) `tcgplayer` is a _cart_ rather than a decklist**
+  about a pile that counts toward nothing, which makes Archidekt the one format that **can** write
+  an inactive pile _and_ leave nothing out; it is the round trip that makes the flag worth writing,
+  not fidelity to the site for its own sake. That sentence used to describe the file as well as the
+  writer, and since #390 it describes only the writer: an Archidekt export leaves the switched-off
+  pile out like the other four unless the reader ticks the box, and it is the one format where
+  ticking it is also a round trip — the flag goes with the pile.
+  **(4) `tcgplayer` is a _cart_ rather than a decklist**
   (added 2026-08-18), and that decides all three of the ways it differs. Its line is
   `2 Lightning Bolt [2X2] 117` — the most specific of the three shapes TCGplayer Mass Entry
   documents, so the cart lands on the printing the deck names. It is **flat**, because Mass Entry
   reads every line as one item and a heading would be read as a card nobody sells. It writes **no
   finish marker**, because a printing's foil is chosen in the cart. And it is the one flat format
   that **keeps a switched-off pile**, where Arena and MTGO cut theirs: the pile a reader switched
-  off is usually exactly what they still have to buy, so `omittedCount` is 0 here and the dialog's
-  omission line never fires for it. The lowercase set code is what Archidekt itself emits
+  off is usually exactly what they still have to buy, so `omittedCount` is 0 here and the
+  *format's* omission line never fires for it. **The reader's does, since #390** — a cart is
+  exactly the export where ticking `Include inactive categories` is worth the press, and the
+  count line under the radios is how they are told there is a press to make. The lowercase set
+  code is what Archidekt itself emits
   and what its own importer round-trips, and our parser uppercases on read, so it costs the round
   trip nothing.
 - **`KIND_SECTION` maps `maybe` to `Deck` and `sectionOf` asks `categoryActive`. That is "nothing
@@ -499,8 +573,13 @@ measured on: [import-export.md](../../../docs/reference/import-export.md).
 - **`Export deck` in the header, `Export cards…` on a heading — one `Layer` arm with two scopes.**
   `{ kind: "export"; categoryId: number | null }`, where `null` is the whole deck; `exportSubject`
   turns that into a subject, a card list and a file name, and the deck scope passes **every** row of
-  the variant on screen, switched-off piles included, because what a format does with a maybeboard
-  is the _format's_ decision and `omittedCount` is what says so. It is the one layer kind two
+  the variant on screen, switched-off piles included, because what happens to a maybeboard is
+  decided **in the dialog** and never by the caller — the format's own rule under Arena and MTGO,
+  the reader's box everywhere else, each with a count line saying what it cost. A caller that
+  filtered first would take the box's answer away before it was asked, and a pile's own
+  `Export cards…` is the case that proves it: with the box off that export is empty, which is a
+  thing the reader can undo and would not be if the list had been narrowed on the way in.
+  It is the one layer kind two
   controls reach, which is the whole reason `layerMatches` exists: a header button reading
   `aria-expanded` off the kind alone would claim to be open while a pile's dialog was up. The names
   are the argument that produced `Import cards` run again — the category menu's row is already
@@ -511,7 +590,10 @@ measured on: [import-export.md](../../../docs/reference/import-export.md).
   lone CR, but a file this app wrote should have one answer. **An empty list is an empty string in
   every format, CSV included** — a header row over no rows is a file claiming to be a decklist and
   is not one — and **that now covers a list a format empties for itself**: an Arena export of a
-  deck that is entirely maybeboard is `""`, not a `Deck` heading over nothing.
+  deck that is entirely maybeboard is `""`, not a `Deck` heading over nothing. **A list the
+  _reader_ empties arrives here as an empty array and needs no arm of its own**, since #390: the
+  box's filter runs above `formatExport`, so a switched-off pile exported with the box unticked is
+  a caller handing this function nothing, which it already had an answer for.
 - **Rust writes the file _where there is a filesystem to write to_, and that is a permission
   decision rather than a division of labour.** `save()` answers a _path_; writing bytes at it from
   the page would need an `fs:` permission this app grants nowhere, so `export_write_file` takes
@@ -618,8 +700,15 @@ corpus is what turns drift into a red build. Full record:
   has already proved Rust reproduces those bytes exactly — so the app's parser demonstrably reads
   what the mirror writes, a claim a writer-then-parse test closed inside one implementation
   cannot make.
-- **`export/arena.ts`'s row filter did not follow either.** The mirror leaves it off, so
-  `*.arena.txt` in the backup lists every card and is therefore a complete record and **not** a
-  valid Arena import. That is said in the mirror's own `README.txt` rather than left to be
-  discovered, and it is one of the two omissions [import-export.md](../../../docs/reference/import-export.md)
-  now records.
+- **Neither row filter followed, and the rule is the general one: a filter that lives in the
+  dialog stays in the dialog.** The mirror leaves `export/arena.ts`'s off, so `*.arena.txt` in the
+  backup lists every card and is therefore a complete record and **not** a valid Arena import; it
+  leaves `Include inactive categories` on, which is the same decision worded the other way up
+  because that box is named for what ticking it does — so the five formats the dialog now narrows
+  by default still carry every pile on disk. Both are said in the mirror's own `README.txt` rather
+  than left to be discovered, and
+  [import-export.md](../../../docs/reference/import-export.md) and
+  [text-mirror.md](../../../docs/reference/text-mirror.md) record them beside the omission that is
+  the *format's* rather than a filter's — Arena and MTGO having no maybeboard at all. **A backup
+  that narrows itself is not a backup**, which is why a third row filter needs no thought about
+  this side: the answer is already off.

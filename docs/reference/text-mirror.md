@@ -103,6 +103,19 @@ have switched on:
   and *not* a file Arena would accept for a paper collection. The mirror is a backup first; a reader
   who wants an importable Arena list has the export dialog, where that filter is a checkbox.
 
+**A mirrored file can now hold more than the dialog would write, and that direction needs no
+warning in `README.txt`** (issue #390, 2026-09-07). The export dialog grew a second row filter —
+`Include inactive categories`, **off** by default — so a deck a reader exports to plain, Moxfield,
+Archidekt, TCGplayer or CSV leaves their switched-off piles out unless they tick it. The mirror
+reads no `exportPrefs` and never has, so those five mirrored files still carry every pile. **Both
+of the dialog's row filters are therefore absent here, and the rule generalises**: a filter the
+dialog offers is a filter the mirror leaves off, because a backup that narrows itself is not a
+backup. Only Arena's is written down in `README.txt`, and the asymmetry is deliberate — that one
+costs the reader something (a file Arena will reject), while this one only ever hands them a pile
+they still have. It cost the mirror no code either: the filter lives in `ExportDialog` above
+`formatExport`, exactly where Arena's does, which is why neither `src-tauri/src/transfer/` nor the
+golden corpus moved for it.
+
 Prices are quoted at whatever marketplace the reader has selected, read fresh on every pass, so a
 mirrored CSV's `Price` column agrees with what the app shows them.
 
