@@ -665,7 +665,7 @@ function deckLine(p: Record<string, unknown>): AuditLine {
         detail: before === now ? null : `was ${name(before)}`,
       };
     }
-    // `decks.theory_mark_exact` and `decks.theory_mark_name` (schema v37) — which of the theory
+    // `decks.theory_mark_exact` and `decks.theory_mark_name` (schema v38) — which of the theory
     // mark's two tiers this deck draws. The **third and fourth** multi-word field names in this
     // switch, and `xGroup`'s paragraph applies to both word for word: the `default` arm below
     // answers an unrecognised field with a sentence true of every deck edit, so a spelling that

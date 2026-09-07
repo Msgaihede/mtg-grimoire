@@ -2733,7 +2733,7 @@ export interface DeckPatch {
    * Whether this deck draws the **green** theory mark — the live row that is the printing the
    * plan named. See {@link DeckRow.theoryMarkExact}, where the whole rule is written.
    *
-   * `decks.theory_mark_exact`, schema v37, and a **reading** preference like
+   * `decks.theory_mark_exact`, schema v38, and a **reading** preference like
    * {@link DeckPatch.separateXGroup} below: switching it writes one column and touches not one
    * `deck_cards` row. Unlike {@link DeckPatch.theoryEnabled} above it moves nothing at all —
    * every card stays in the list it was in, and only what is drawn over them changes.
@@ -2957,7 +2957,7 @@ export interface DeckRow {
    * Whether this deck draws the **green** theory mark — the live row that is the printing the
    * plan named.
    *
-   * `decks.theory_mark_exact INTEGER NOT NULL DEFAULT 1`, schema v37. Per **deck**, which is
+   * `decks.theory_mark_exact INTEGER NOT NULL DEFAULT 1`, schema v38. Per **deck**, which is
    * {@link DeckRow.separateXGroup}'s argument below and {@link DeckRow.theoryEnabled}'s above:
    * whether a substitute printing is worth a mark is a statement about how *this* deck is being
    * built, so two decks may disagree and a duplicate must carry the answer across.

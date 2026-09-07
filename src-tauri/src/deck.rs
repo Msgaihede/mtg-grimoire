@@ -461,14 +461,14 @@ pub struct DeckPatch {
     /// floor the deck's contents imply — is domain logic and TypeScript's. Rust records the
     /// number and concludes nothing from it.
     pub bracket: Option<i64>,
-    /// Whether this deck draws the **green** theory mark — schema v37, and see
+    /// Whether this deck draws the **green** theory mark — schema v38, and see
     /// [`DeckRow::theory_mark_exact`] for what the two tiers are.
     ///
     /// **No fence and no `valid_*` call**, unlike [`Self::bracket`] beside it: a bool has two
     /// values and both are answers, so there is nothing a caller could send that this would
     /// have to refuse. It is [`Self::separate_x_group`]'s shape exactly, one column along.
     pub theory_mark_exact: Option<bool>,
-    /// Whether this deck draws the **blue** theory mark — schema v37, and
+    /// Whether this deck draws the **blue** theory mark — schema v38, and
     /// [`Self::theory_mark_exact`]'s rules throughout.
     ///
     /// **Two fields rather than one three-valued one**, which is the schema's own argument
@@ -564,7 +564,7 @@ pub struct DeckRow {
     /// switched on.
     pub theory_enabled: bool,
     /// Whether this deck draws the **green** theory mark — the live row that is the printing
-    /// the plan named. Schema v37, `NOT NULL DEFAULT 1`, and per deck rather than per user for
+    /// the plan named. Schema v38, `NOT NULL DEFAULT 1`, and per deck rather than per user for
     /// [`Self::theory_enabled`]'s argument: whether a substitute printing is worth a mark is a
     /// statement about how *this* deck is being built.
     ///
@@ -925,7 +925,7 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
     /// named column. Named rather than inlined for `deck_card_select`'s reason: the pairing
     /// arithmetic below is `front_face_map`'s and only the *offset* is this function's.
     ///
-    /// **It read `21` until schema v37 appended two columns**, which is the one number in this
+    /// **It read `21` until schema v38 appended two columns**, which is the one number in this
     /// function a new column can move without any read below it going wrong — and the reason it
     /// is a named constant rather than a literal in the closure.
     const IMAGE_COL: usize = 23;
@@ -2469,7 +2469,7 @@ pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     let copy: Option<(i64, String)> = tx
         .query_row(
-            // **Schema v37's two marks are copied, not defaulted**, which is the same rule
+            // **Schema v38's two marks are copied, not defaulted**, which is the same rule
             // `separate_x_group` and `bracket` are already on this list for and which
             // `DeckRow::separate_x_group` states in words: these are answers *about the deck*
             // that a copy inherits, where the three `last_*` columns are how the reader was
@@ -9010,7 +9010,7 @@ mod tests {
             folder_id: Some(7),
             notes: None,
             theory_enabled: true,
-            // **Not both `true`, and not both `false`.** Schema v37 defaults both to 1, so a
+            // **Not both `true`, and not both `false`.** Schema v38 defaults both to 1, so a
             // matched pair would read correct on a wire that carried one field twice or neither
             // at all — the rule the three comments in the expectation below already state about
             // `defaultCategoryId`, `gameKey` and `bracket`, applied to the one pair of fields
@@ -9048,7 +9048,7 @@ mod tests {
                 "coverArtist": "Christopher Rush", "archived": false,
                 "cardCount": 60, "updatedAt": 1800000000,
                 "folderId": 7, "notes": null, "theoryEnabled": true,
-                // Schema v37's pair, deliberately disagreeing with each other: both default to
+                // Schema v38's pair, deliberately disagreeing with each other: both default to
                 // `1`, so a matched pair would be the answer whether or not either column
                 // reached the wire — and these two are the only fields on this row a crossed
                 // pair of positional reads could swap without changing a single value's type.
@@ -9481,7 +9481,7 @@ mod tests {
         );
     }
 
-    /// A deck is born with both theory marks on, which is what makes schema v37 need no
+    /// A deck is born with both theory marks on, which is what makes schema v38 need no
     /// backfill: the columns' own `DEFAULT 1`, never a Rust fallback.
     ///
     /// **`create_deck` names neither column in its INSERT and must not start to**, which is

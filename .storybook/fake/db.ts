@@ -460,7 +460,7 @@ export interface FakeDeck {
    *  can set and never see is a switch nothing can draw. */
   theoryEnabled: boolean;
   /**
-   * `decks.theory_mark_exact` and `decks.theory_mark_name` (schema v37): which of the theory
+   * `decks.theory_mark_exact` and `decks.theory_mark_name` (schema v38): which of the theory
    * mark's two tiers this deck draws — green for a live row that is the printing the plan
    * named, blue for the same card in a printing it did not.
    *
@@ -4643,7 +4643,7 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
     folderId: d.folderId,
     notes: d.notes,
     theoryEnabled: d.theoryEnabled,
-    // v37's pair, and the **fifth and sixth** columns on the `?? default` footing — but the
+    // v38's pair, and the **fifth and sixth** columns on the `?? default` footing — but the
     // first whose default is `true`. `NOT NULL DEFAULT 1` is the whole of that migration: a
     // deck that already existed draws both marks from the first launch on the new build, so a
     // seed written before the column is a deck with both marks on rather than one with neither.

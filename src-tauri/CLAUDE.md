@@ -148,16 +148,18 @@ both plus the frontend.
   they do at 32. **It was written as v35 and renumbered on the way
   in**, this list's own rule again, and it runs *after* v35 for a reason renumbering does not
   settle by itself: v35 rebuilds `collection_entries`, and v36 reads and writes that table.
-  **v37** adds `decks.theory_mark_exact` and `decks.theory_mark_name`, `NOT NULL DEFAULT 1`
+  **v37** is the token rung — `deck_tokens` plus `decks.tokens_open` — and **v38** adds
+  `decks.theory_mark_exact` and `decks.theory_mark_name`, `NOT NULL DEFAULT 1`
   both. Which of the theory mark's two tiers a deck draws is an answer *about the deck*, so both
   columns are on
   `capture::TABLES`' `decks` spec beside `bracket`; **that spec spells its field list by hand and
   has no fence in the other direction**, so a column added to a synced table and not to it is
   captured by nothing and goes red nowhere.
-  **v35, v36 and v37 all landed within days of each other from three branches, and the theory
-  rung was renumbered twice** — written as 35, moved to 36 when the sixth grade landed, moved to
-  37 when the deck-group sweep did. That is the fourth and fifth time this list has recorded a
-  collision, and twice on one branch is new. It is the strongest form of the rule above: **take
+  **v35, v36, v37 and v38 all landed within days of each other from four branches, and the
+  theory rung was renumbered three times** — written as 35, moved to 36 when the sixth grade
+  landed, to 37 when the deck-group sweep did, and to 38 when the token rung did. **The token
+  rung was itself renumbered twice on its own way in**, so this is a property of the ladder under
+  parallel work rather than of any one branch. It is the strongest form of the rule above: **take
   the next free number at the moment you land, never at the moment you start**, and never assume
   the number you wrote is the one you ship.)
 - **v35 is the user ladder's third table rebuild, and a CHECK is why.** SQLite cannot alter one,
@@ -175,9 +177,9 @@ both plus the frontend.
   rebuild emits no sync ops**: `DROP TABLE` takes the three capture triggers with it,
   `prepare_database` reinstalls them on the next line, and the copy lands in a table that has none
   while it is being written.
-- **`UNDO_V35` maps rather than deletes, and it runs second — behind `UNDO_V37` and ahead of
+- **`UNDO_V35` maps rather than deletes, and it runs third — behind `UNDO_V38` and `UNDO_V37`, ahead of
   everything else.** It read "and it runs first" for as long as v35 was head, which the theory
-  rung made false the same day; the chains themselves are `{UNDO_V37} {UNDO_V35} {UNDO_V34} …`
+  rung made false the same day; the chains themselves are `{UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} …`
   — **there is no `UNDO_V36`, because v36 writes no shape** — and they were
   right throughout, because they are code. The rewind carries an ungraded row
   back as `'NM'` — precisely what the old `DEFAULT` would have recorded for the same press —
@@ -188,7 +190,7 @@ both plus the frontend.
   holds in the list**: `UNDO_V29` does
   `ALTER TABLE collection_entries DROP COLUMN sync_uid`, and `DROP COLUMN` refuses a column an
   index names — so `UNDO_V35` has to have put `idx_collection_entries_uid` back before
-  `UNDO_V29` takes it away. `UNDO_V37` sitting above it changes nothing about that: it drops two
+  `UNDO_V29` takes it away. `UNDO_V38` sitting above it changes nothing about that: it drops two
   `decks` columns and touches no index anywhere.
 - **v24 and v25 are one spec's rung split in two, and the split is deliberate.** v24 creates
   `collection_folders` in its **final** shape — `kind` and `deck_id` columns and both partial
