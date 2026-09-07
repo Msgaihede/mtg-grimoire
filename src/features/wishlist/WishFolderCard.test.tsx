@@ -18,7 +18,7 @@ import { boxed, startPointerDrag } from "@/test-drag";
 import { dndManager } from "@/lib/dndManager";
 import { WishFolderCard } from "./WishFolderCard";
 import { WishlistBreadcrumb } from "./WishlistBreadcrumb";
-import { wishDraggable, type WishDrag } from "./wishDrag";
+import { wishDraggable, type WishDrag, type WishDrop } from "./wishDrag";
 
 /**
  * The two things the wishlist page draws around its wishes: the dashed folder tile a reader
@@ -48,6 +48,15 @@ import { wishDraggable, type WishDrag } from "./wishDrag";
  */
 
 const WISH: WishDrag = { wishId: 7, name: "Lightning Bolt", folderId: null };
+/**
+ * The same wish as the **drop** a target now answers about.
+ *
+ * `readWishDrop` became a discriminated union on 2026-09-07, when the wishlist page grew a docked
+ * search column whose tiles are drag sources too — so a folder card can be handed a wish being
+ * re-filed *or* a printing nobody owns. Nothing about this card's drawing branches on which; the
+ * page's `fileWish` is what turns one into a re-file and the other into an add.
+ */
+const WISH_DROP: WishDrop = { kind: "wish", wish: WISH };
 
 function folder(over: Partial<WishlistFolder> & { id: number; name: string }): WishlistFolder {
   return { parentId: null, sortOrder: over.id, ...over };
@@ -217,7 +226,7 @@ describe("WishFolderCard", () => {
     /** The page's rename state, laid over {@link RESTING} — so a case that is about the field
      *  says only the part of it that is its own. */
     rename?: Partial<typeof RESTING>;
-    canDrop?: (drag: WishDrag) => boolean;
+    canDrop?: (drop: WishDrop) => boolean;
     canDropFolder?: (drag: FolderDrag, edge: FolderEdge) => boolean;
     withSource?: boolean;
     /** A sibling drawer in the air — the second payload this card reads, under its own key. */
@@ -526,7 +535,7 @@ describe("WishFolderCard", () => {
     const held = await startPointerDrag(screen.getByText("the wish"));
     await held.over(card());
     await held.drop();
-    expect(onDropWish).toHaveBeenCalledWith(WISH);
+    expect(onDropWish).toHaveBeenCalledWith(WISH_DROP);
   });
 
   /* ------------------------------------------------------ the folder drag ------- */
@@ -696,7 +705,7 @@ describe("WishFolderCard", () => {
     const wish = await startPointerDrag(screen.getByText("the wish"));
     await wish.over(card());
     await wish.drop();
-    expect(onDropWish).toHaveBeenCalledWith(WISH);
+    expect(onDropWish).toHaveBeenCalledWith(WISH_DROP);
     expect(onDropFolder).not.toHaveBeenCalled();
 
     onDropWish.mockReset();
@@ -809,7 +818,7 @@ describe("WishFolderCard", () => {
     expect(marked(item(), DROP_RING)).toBe(true);
     await wish.over(item());
     await wish.drop();
-    expect(onDropWish).toHaveBeenCalledWith(WISH);
+    expect(onDropWish).toHaveBeenCalledWith(WISH_DROP);
 
     const drawer = await startPointerDrag(screen.getByText("the folder"));
     expect(marked(item(), DROP_RING)).toBe(true);
@@ -863,7 +872,7 @@ describe("WishlistBreadcrumb", () => {
   }: {
     trail?: readonly WishlistFolder[];
     flattened?: boolean;
-    canDrop?: (drag: WishDrag, folderId: number | null) => boolean;
+    canDrop?: (drop: WishDrop, folderId: number | null) => boolean;
     withSource?: boolean;
   } = {}) {
     render(
@@ -929,7 +938,7 @@ describe("WishlistBreadcrumb", () => {
     await held.over(root);
     expect(marked(root, DROP_OVER)).toBe(true);
     await held.drop();
-    expect(onDropWish).toHaveBeenCalledWith(WISH, null);
+    expect(onDropWish).toHaveBeenCalledWith(WISH_DROP, null);
   });
 
   it("takes a wish dropped on an ancestor and moves it up", async () => {
@@ -940,7 +949,7 @@ describe("WishlistBreadcrumb", () => {
     const held = await startPointerDrag(screen.getByText("the wish"));
     await held.over(ancestor);
     await held.drop();
-    expect(onDropWish).toHaveBeenCalledWith(WISH, 3);
+    expect(onDropWish).toHaveBeenCalledWith(WISH_DROP, 3);
   });
 
   it("offers no drop on the folder the reader is already standing in", async () => {

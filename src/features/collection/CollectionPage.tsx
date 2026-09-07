@@ -24,6 +24,7 @@ import { dragData } from "@/features/decks/dnd";
 import { CONFIRM_CANCEL, CONFIRM_DESTRUCTIVE, useConfirmFocus } from "@/features/decks/metaRows";
 import { MoveToFolder } from "@/features/decks/MoveToFolder";
 import { CardGrid, PHONE_TILE_WIDTH, type GridCard } from "@/features/search/CardGrid";
+import { MIN_PANEL_WIDTH_PX } from "@/features/search/CardSearchPanel";
 import { FilterBar, type FilterLabels, type TrayCell } from "@/features/search/FilterBar";
 import { ExportDialog } from "@/features/transfer/export/ExportDialog";
 import { everythingLabel, scopeLabel, useExportScope } from "@/features/transfer/export/scope";
@@ -31,7 +32,7 @@ import { collectionDestination } from "@/features/transfer/import/destinations/C
 import { ImportExportPair } from "@/features/transfer/ImportExportPair";
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import { WishFolderCaption } from "@/features/wishlist/wishMarks";
-import { CONDITION_LABEL, CONDITIONS } from "@/lib/conditions";
+import { CONDITION_LABEL, CONDITIONS, MENU_CONDITION } from "@/lib/conditions";
 import { DROP_MARK_ROOM } from "@/lib/dropMarks";
 import type { FolderDrag, FolderEdge } from "@/lib/folderDrag";
 import { reorderedLevel } from "@/lib/folderOrder";
@@ -51,11 +52,13 @@ import {
   type CollectionPage as Page,
   type CollectionRow,
 } from "@/lib/ipc";
+import { LAYER } from "@/lib/layers";
 import { statusLine } from "@/lib/motion";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { tileKeyOf } from "@/lib/tileKey";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
+import { useDockHeight } from "@/lib/useDockHeight";
 import { useNarrowWindow } from "@/lib/useNarrowWindow";
 import { cn } from "@/lib/utils";
 import { writeFailure } from "@/lib/writes";
@@ -65,6 +68,7 @@ import {
   CollectionParentFolderCard,
   type CollectionFolderTotals,
 } from "./CollectionFolderCard";
+import { CollectionSearchPanel } from "./CollectionSearchPanel";
 import { CollectionSummaryHeader } from "./CollectionSummary";
 import { CollectionTable } from "./CollectionTable";
 import { EditCopy, type EditCopyTarget } from "./EditCopy";
@@ -569,6 +573,28 @@ const COLLECTION_LABELS: FilterLabels = {
 };
 
 /**
+ * The width the collection's own list must keep, in px — **`DeckEditor`'s `DECK_FLOOR` read across
+ * to a page that draws two things rather than one**, and the number the docked search column is
+ * railed by.
+ *
+ * The deck's floor is 192 because that is one stack column. This page's list is a *pair* of walls
+ * stacked vertically — the cabinet's folder cards above and the card grid or table below — so the
+ * floor is whichever of the two needs more, and both land near the same figure: a folder card's
+ * cell is `minmax(180px, 1fr)` (`CollectionFolderCard`), and the wall below it draws
+ * `PHONE_TILE_WIDTH` tiles at the narrow rung. 192 holds one of each with the page's own padding
+ * off it, which is why the deck's number is reused rather than a second one invented.
+ *
+ * **Provisional, and to be re-measured in the shipped window** (plan Task 9). Nothing about it is
+ * arithmetic anybody can do from here: what it has to be is the width at which the list stops
+ * being a list, and that is a thing a browser answers.
+ */
+const LIST_FLOOR = 192;
+
+/** The `gap-4` between the list and the dock, in px — spelled here because the arithmetic below
+ *  has to subtract it and Tailwind's number is not readable from JavaScript. */
+const DESK_GAP = 16;
+
+/**
  * Which of `FilterBar`'s tray cells this page offers, in the order it draws them.
  *
  * The four the card search shares, then the three only a collection can ask: what the copy *is*,
@@ -624,6 +650,93 @@ export function CollectionPage() {
    */
   const [panel, setPanel] = useState<Panel>(null);
   const openerRef = useRef<HTMLElement | null>(null);
+
+  /**
+   * The row the list and the docked search column share, and the box the column is pinned inside
+   * — `DeckEditor`'s desk and dock, on a page that had neither because it was `flex-col` from its
+   * root down.
+   *
+   * The desk is the only width the panel can honestly be judged against: the window's own is the
+   * sidebar, the page padding and this page's own gutters away from it.
+   */
+  const deskRef = useRef<HTMLDivElement>(null);
+  const dockRef = useRef<HTMLDivElement>(null);
+  /** How wide that row is. `0` is *unmeasured* — jsdom, and the first paint before the observer
+   *  has answered — and is read below as "roomy", never as a row of no width. */
+  const [deskWidth, setDeskWidth] = useState(0);
+  /**
+   * How wide the window is, for the half-of-it cap on the panel's drag.
+   *
+   * `document.documentElement.clientWidth` rather than `window.innerWidth`, which is this app's
+   * rule wherever a viewport width is used for anything: `innerWidth` counts the classic vertical
+   * scrollbar and the layout does not — 1280 against 1265, measured on the deck editor — and this
+   * page scrolls inside `AppShell`'s `main`, so there is always one.
+   */
+  const [viewport, setViewport] = useState(0);
+  // One observer answering both, `DeckEditor`'s arrangement and its reason: this row is `flex-1`
+  // inside the page, so nothing can change the window's width without changing the desk's, and a
+  // second listener would let the two numbers be a frame apart. `entry` is deliberately not read,
+  // so the callback is the same whether the observer or the line below it calls it.
+  useEffect(() => {
+    const el = deskRef.current;
+    if (!el) return;
+    const measure = () => {
+      setViewport(document.documentElement.clientWidth);
+      setDeskWidth(el.clientWidth);
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    measure();
+    return () => observer.disconnect();
+  }, []);
+
+  /**
+   * The dock's height — **arithmetic rather than a length**, because CSS cannot say "the
+   * scroller's visible height, less however much of the page sits above this row".
+   *
+   * `sticky top-0` on the dock does the pinning and this does only the height. The hook finds the
+   * scroller itself, which is what lets one hook serve this page (scrolling in `AppShell`'s
+   * `main`) and the deck editor (an `overflow-y-auto` section of its own) without either site
+   * knowing which. `useDockHeight` carries the whole of it, including why it re-checks its wiring
+   * after every commit.
+   */
+  useDockHeight(dockRef, deskRef);
+
+  /**
+   * The widest the docked panel may be drawn or dragged — the smaller of two caps that bind at
+   * different window sizes, and `Infinity` while neither has been measured.
+   *
+   * **Half the window**, because a search column that can take three quarters of the app has
+   * stopped being a column; and **whatever the row can spare over {@link LIST_FLOOR}**, because
+   * the list is what the width is being taken from. Neither is redundant: at 1032 — the app's own
+   * narrow rung — the floor allows 824 where half the window is 640, and at 1920 the floor would
+   * allow ~1700 and only the half-window cap holds the column to a column.
+   */
+  const maxPanelWidth = Math.min(
+    viewport > 0 ? Math.floor(viewport / 2) : Number.POSITIVE_INFINITY,
+    deskWidth > 0 ? deskWidth - DESK_GAP - LIST_FLOOR : Number.POSITIVE_INFINITY,
+  );
+  /**
+   * Whether this row can hold the list and the column side by side.
+   *
+   * **`deskWidth === 0` reads as roomy**, which is what keeps jsdom and the first paint out of the
+   * way: an unmeasured row is not a narrow one, and railing on the first frame would draw the
+   * panel shut for one commit on every load.
+   *
+   * **The press is what is stored, never this.** A railing is a measurement about a narrow window
+   * and not a thing the reader asked for, so it decides what is *drawn* and `useSearchOpen` goes
+   * on holding what they chose.
+   */
+  const roomForPanel = deskWidth === 0 || maxPanelWidth >= MIN_PANEL_WIDTH_PX;
+  /**
+   * How wide to draw the panel **over** the list, for a row that cannot hold both — the door out
+   * of the rail, and the whole row's width because that is what the panel gets when it takes it.
+   *
+   * `undefined` is a row that can. Unlike the deck editor's, this carries no "unless a card is
+   * open" term: the card surface is a centred modal on every page since 2026-09-03 and takes width
+   * from nothing.
+   */
+  const panelOverWidth = deskWidth > 0 && !roomForPanel ? deskWidth : undefined;
 
   /**
    * The export dialog, and the sweep that fills it — see `scope.ts`'s doc for why the sweep
@@ -803,6 +916,56 @@ export function CollectionPage() {
    * one now.
    */
   const setFolder = useSetCollectionFolder();
+
+  /**
+   * **The other write a drop can make: an add, for a card the reader does not own yet.**
+   *
+   * The two are one gesture with two verbs behind it. A copy already in the binder dragged onto a
+   * folder is `collection_set_folder` above; a printing dragged off the sidebar's search wall is
+   * this, because there is no row to move — `folder_id` is the eleventh term of the storage grain,
+   * so the folder is part of what the new row *is* rather than somewhere it is put afterwards.
+   *
+   * **`MENU_CONDITION`, and it is the answer to the standing objection in `useSidebarDrops.ts`.**
+   * That file refuses to make the sidebar's Collection entry a drop target in as many words — *a
+   * drop that invented "NM nonfoil" would write facts the reader never said* — and the objection
+   * is sound. It is already answered by the card menu's own add, which writes `CONDITION_NOT_SET`:
+   * **an add that names no grade records that nobody named one, which is a fact, where `NM` would
+   * be a guess dressed as one.** The finish is not guessed either — it travels on the drag, as the
+   * printing's own first available finish. What is left for a reader who wants to say more is the
+   * `+` popup beside the tile, which is where they say it.
+   *
+   * The four keys are `useCardMenuDeps`' verbatim and for its reasons: the list and its summary,
+   * every wish for that card (`ownedQuantity` is summed from `collection_entries`), every deck (a
+   * claim is clamped to what the entry holds), and the search results, which draw
+   * `ownedQuantity` on every row and tile — including the wall this card was just dragged off.
+   */
+  const addDropped = useMutation({
+    mutationFn: ({
+      cardId,
+      finish,
+      folderId: into,
+    }: {
+      cardId: string;
+      finish: Finish;
+      folderId: number | null;
+    }) =>
+      ipc.collectionAdd({
+        cardId,
+        finish,
+        condition: MENU_CONDITION,
+        quantity: 1,
+        // Where the reader pointed, and `null` for the root — never omitted, for the reason the
+        // grain gives: a folder the caller failed to pass is not a copy filed in the wrong drawer
+        // but a *second row* at the root for the same printing.
+        folderId: into,
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["collection"] });
+      void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
+      void queryClient.invalidateQueries({ queryKey: ["decks"] });
+      void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+    },
+  });
 
   const onSetQuantity = useCallback(
     (row: CollectionRow, quantity: number) => setQuantity.mutate({ row, quantity }),
@@ -1885,11 +2048,21 @@ export function CollectionPage() {
    * and folder still split rows without splitting a tile.)
    */
   const canFile = useCallback(
-    (drop: CollectionDrop, to: number | null) =>
-      drop.kind === "entry"
+    (drop: CollectionDrop, to: number | null) => {
+      // **A card nobody owns has no `from`, so two of {@link canMoveCopy}'s three clauses have
+      // nothing to say about it.** It is leaving no folder, so it cannot be leaving a deck's
+      // group; and it is in no folder, so "already there" — the clause that stops a folder
+      // offering a ring for a write that would move nothing — cannot be true of it either. A
+      // reader may perfectly well add a second copy of a printing to the drawer one is already
+      // in, which is a different sentence from moving the one they have. What is left is the
+      // destination's own fence, which is the backend's (`user_folder`) and is
+      // {@link readersOwnLevel} on this side.
+      if (drop.kind === "new") return readersOwnLevel(to);
+      return drop.kind === "entry"
         ? canMoveCopy(drop.entry.folderId, to)
-        : drop.tile.copies.some((copy) => canMoveCopy(copy.folderId, to)),
-    [canMoveCopy],
+        : drop.tile.copies.some((copy) => canMoveCopy(copy.folderId, to));
+    },
+    [canMoveCopy, readersOwnLevel],
   );
   /**
    * The write, or the question about **which copy** that has to come before it — everything a drop
@@ -1911,6 +2084,13 @@ export function CollectionPage() {
    */
   const commitFile = useCallback(
     (drop: CollectionDrop, to: number | null) => {
+      // **The one branch that is an add rather than a refile**, and it never asks the reader
+      // anything: there is exactly one row to write, so the picker below has nothing to pick
+      // between. See {@link addDropped} for what the write says and why it says so little.
+      if (drop.kind === "new") {
+        addDropped.mutate({ cardId: drop.card.cardId, finish: drop.card.finish, folderId: to });
+        return;
+      }
       if (drop.kind === "entry") {
         setFolder.mutate({ entryId: drop.entry.entryId, folderId: to });
         return;
@@ -1922,7 +2102,7 @@ export function CollectionPage() {
       }
       setPicking({ cardName: name, entryIds: copies.map((copy) => copy.entryId), folderId: to });
     },
-    [setFolder],
+    [addDropped, setFolder],
   );
 
   /**
@@ -1966,11 +2146,20 @@ export function CollectionPage() {
   const fileCard = useCallback(
     (drop: CollectionDrop, to: number | null) => {
       const sources =
-        drop.kind === "entry"
-          ? [drop.entry.folderId]
-          : drop.tile.copies
-              .filter((copy) => canMoveCopy(copy.folderId, to))
-              .map((copy) => copy.folderId);
+        // **A card nobody owns comes from the root, and that is a statement rather than a
+        // placeholder.** The lock question is *has this drop crossed the edge of a drawer the
+        // reader set aside*, and it has two halves: leaving one, and landing in one. A new copy
+        // cannot be leaving — `lockRootOf(null)` is `null`, so the "out of" half is silent — and
+        // it can perfectly well be landing in one, which is the half the sentence *“X” is locked.
+        // Filing “Y” there sets that copy aside.* already says. Writing `[]` here would have made
+        // the sidebar the one door into a locked drawer that never asks.
+        drop.kind === "new"
+          ? [null]
+          : drop.kind === "entry"
+            ? [drop.entry.folderId]
+            : drop.tile.copies
+                .filter((copy) => canMoveCopy(copy.folderId, to))
+                .map((copy) => copy.folderId);
       const crossed = sources.filter((from) => crossesLock(from, to));
       if (crossed.length === 0) {
         commitFile(drop, to);
@@ -1985,7 +2174,14 @@ export function CollectionPage() {
       setCrossing({
         drop,
         to,
-        card: drop.kind === "entry" ? drop.entry.name : drop.tile.name,
+        // The card, whichever of the three shapes is in the air — all of them carry a name, and
+        // the sentence is about the printing rather than about the rows behind it.
+        card:
+          drop.kind === "entry"
+            ? drop.entry.name
+            : drop.kind === "tile"
+              ? drop.tile.name
+              : drop.card.name,
         out: leaving === null ? null : (folderNameOf(leaving) ?? "a folder you have set aside"),
         into: arriving === null ? null : (folderNameOf(arriving) ?? "a folder you have set aside"),
       });
@@ -2052,6 +2248,10 @@ export function CollectionPage() {
     setQuantity,
     remove,
     setFolder,
+    // The sidebar's drop, which is a write this screen makes and shares the banner for the
+    // reason the folder writes do: everything here is a change to the reader's collection. The
+    // `+` beside it reports for itself, inside its own popup.
+    addDropped,
     folders.create,
     folders.rename,
     folders.move,
@@ -2446,602 +2646,660 @@ export function CollectionPage() {
         flatten={{ pressed: collection.flatten, onToggle: collection.toggleFlatten }}
       />
 
-      <div className="flex min-h-0 flex-1 flex-col gap-2">
-        {/* **The fence is "not among the filters", and it was never "not on the bar" — which is
-            the half of this note that changed when Flatten moved.** `resetAll` leaves both
-            `folderId` and `flatten` alone (`useCollection` says so of each), so either one drawn
-            as a *filter* would be the one control in that row Reset all could not undo. But the
-            bar already has a home for controls that are not filters: past the second hairline,
-            beside the sort and the grid-or-table pair, where every control says how the list is
-            **drawn** rather than which rows are in it — and `FilterBar`'s own comment above
-            `ViewToggle` says in as many words that nothing there is counted or cleared by Reset
-            all. Flatten is exactly that kind of statement, so it rides the bar on the far side of
-            the hairline and satisfies the fence rather than breaking it.
+      {/* **The row the list and the search column share** (design §4), and the one thing on this
+          page that had to move to make room for a sidebar: everything above stays full width,
+          because the figures band is a band and `FilterBar` lays itself out in four `@container/fb`
+          bands at 640/900/1500 — taking width off that row rearranges the bar rather than merely
+          shortening it.
 
-            **The breadcrumb does not follow it, and that is the surviving half.** Where the reader
-            is standing is not a way of drawing the list — it is a *place*, one the folder cards
-            below are the doors into — so the drill-down and the trail back out stay down here with
-            the cabinet they are about. `+ New folder` left this row in the other direction: it is
-            the wall's first tile now (`NewFolderCard`), which is where a reader already looks for
-            drawers. So this row is the whole of what is left of the old one, and it is drawn
-            wherever there is a cabinet to speak of — an empty flex row is chrome with nothing in
-            it, but a *flattened* cabinet is not empty, it is being ignored, and the bar is what
-            says so. Hence `hasFolders` alone and no `cabinet` term. */}
-        {hasFolders && (
-          <div className="min-w-0">
-            <CollectionBreadcrumb
-              // Root-most first and **without the root**, which the breadcrumb prepends itself:
-              // `null` is a destination rather than a folder, and only that component knows what
-              // it calls it.
-              trail={trail}
-              // **Not gated on `cabinet`, and it is the one piece of the cabinet that is not.**
-              // The wall and the pinned strip go; this stays and says so, in the inert words the
-              // component draws for the state — which is `WishlistBreadcrumb`'s own behaviour
-              // under the same flag, and the reason the two pages read identically under one
-              // control. See that component for why the argument for hiding it did not hold.
-              flattened={flatten}
-              onOpen={collection.openFolder}
-              canDrop={canFile}
-              onDropCard={fileCard}
-            />
-          </div>
-        )}
+          `min-h-0` so the column inside can be squeezed below its content and take the scroll,
+          which is what it did as this element's own class before the row existed. */}
+      <div ref={deskRef} className="flex min-h-0 flex-1 gap-4">
+        {/* **`min-w-0` is not optional.** A flex item cannot shrink below its own min-content, and
+            an overhang inside `AppShell`'s `overflow-auto` `main` becomes a horizontal scrollbar
+            across the whole page — the 1024px-floor failure `ManaValueChips` already shipped once.
+            Everything else here is what this box has always carried. */}
+        <div className="flex min-w-0 flex-1 flex-col gap-2">
+          {/* **The fence is "not among the filters", and it was never "not on the bar" — which is
+              the half of this note that changed when Flatten moved.** `resetAll` leaves both
+              `folderId` and `flatten` alone (`useCollection` says so of each), so either one drawn
+              as a *filter* would be the one control in that row Reset all could not undo. But the
+              bar already has a home for controls that are not filters: past the second hairline,
+              beside the sort and the grid-or-table pair, where every control says how the list is
+              **drawn** rather than which rows are in it — and `FilterBar`'s own comment above
+              `ViewToggle` says in as many words that nothing there is counted or cleared by Reset
+              all. Flatten is exactly that kind of statement, so it rides the bar on the far side of
+              the hairline and satisfies the fence rather than breaking it.
 
-        {/* **One strip for the two folder layers that are still layers, and it is not a placement
-            decision so much as the only place there is.** Every other anchored layer in this app
-            hangs off a `relative` wrapper around its own trigger; the trigger here is a folder
-            card's `⋯`, and a card has nowhere to hang a panel and would clip it against the
-            scroller it sits in. So the strip sits where the thing being moved or deleted is:
-            directly above the row of cards, under the breadcrumb that says which level they are.
-
-            **The other two moved out of it on 2026-09-03 and this box is what is left.** Naming a
-            folder and renaming one are drawn *in the wall* now — `NewFolderCard` becomes the field
-            it used to raise, and a folder card becomes the field its `⋯` used to raise — because
-            in both cases the thing being named has a tile of its own on screen, and a second
-            bordered box above the wall could only repeat what that tile already says. Moving and
-            deleting have no such tile: the answer to "into which folder" is a list of the *other*
-            folders, and the answer to "delete this?" is a sentence about what happens to the cards
-            inside. Neither fits on a 62px card, and neither is a name typed on a line. */}
-        {(openPanel?.kind === "moveFolder" || openPanel?.kind === "deleteFolder") && (
-          <div className="w-full max-w-sm shrink-0 rounded-lg border border-border bg-surface p-2 text-xs">
-            {openPanel.kind === "moveFolder" && (
-              <MoveToFolder
-                label={`Move ${folderNameOf(openPanel.folderId) ?? "folder"} into a folder`}
-                nodes={nodes}
-                currentId={userFolders.find((f) => f.id === openPanel.folderId)?.parentId ?? null}
-                // The collection's own word for the top level. `MoveToFolder` defaults to the deck
-                // gallery's, which is the surface it was written for.
-                rootLabel={ROOT_LABEL}
-                // A folder may not go inside itself or inside anything it holds. The backend
-                // refuses it in words — `collection_folders.parent_id` cascades onto itself, so a
-                // cycle is a graph SQLite would walk forever the day the folder is deleted — and
-                // that refusal is a fence rather than the affordance.
-                forbidden={
-                  new Set([
-                    openPanel.folderId,
-                    ...folderDescendants(userFolders, openPanel.folderId),
-                  ])
-                }
-                forbiddenReason="A folder cannot go inside itself, or inside anything it holds."
-                // Drawn **into** the strip rather than as a popup of its own: the strip is the
-                // layer, and a second box with its own shadow and its own z-index over it would be
-                // a second Escape rung for one decision.
-                inline
-                pending={folders.move.isPending}
-                onPick={(parentId) =>
-                  folders.move.mutate({ id: openPanel.folderId, parentId }, { onSuccess: dismiss })
-                }
-                onClose={close}
+              **The breadcrumb does not follow it, and that is the surviving half.** Where the reader
+              is standing is not a way of drawing the list — it is a *place*, one the folder cards
+              below are the doors into — so the drill-down and the trail back out stay down here with
+              the cabinet they are about. `+ New folder` left this row in the other direction: it is
+              the wall's first tile now (`NewFolderCard`), which is where a reader already looks for
+              drawers. So this row is the whole of what is left of the old one, and it is drawn
+              wherever there is a cabinet to speak of — an empty flex row is chrome with nothing in
+              it, but a *flattened* cabinet is not empty, it is being ignored, and the bar is what
+              says so. Hence `hasFolders` alone and no `cabinet` term. */}
+          {hasFolders && (
+            <div className="min-w-0">
+              <CollectionBreadcrumb
+                // Root-most first and **without the root**, which the breadcrumb prepends itself:
+                // `null` is a destination rather than a folder, and only that component knows what
+                // it calls it.
+                trail={trail}
+                // **Not gated on `cabinet`, and it is the one piece of the cabinet that is not.**
+                // The wall and the pinned strip go; this stays and says so, in the inert words the
+                // component draws for the state — which is `WishlistBreadcrumb`'s own behaviour
+                // under the same flag, and the reason the two pages read identically under one
+                // control. See that component for why the argument for hiding it did not hold.
+                flattened={flatten}
+                onOpen={collection.openFolder}
+                canDrop={canFile}
+                onDropCard={fileCard}
               />
-            )}
-
-            {openPanel.kind === "deleteFolder" && (
-              <DeleteFolderConfirm
-                name={folderNameOf(openPanel.folderId) ?? "this folder"}
-                pending={folders.remove.isPending}
-                onConfirm={() => folders.remove.mutate(openPanel.folderId, { onSuccess: dismiss })}
-                onCancel={dismiss}
-                onClose={close}
-              />
-            )}
-          </div>
-        )}
-
-        {/**
-         * **The one gesture a lock slows down**, issue #365 and design §5 — a copy dragged into a
-         * drawer the reader set aside, or out of one, asked about before it moves.
-         *
-         * **Above the wall rather than under the tile it was asked from**, which is the
-         * `CollectionSearchTab` question's own placement and for its reason one surface over: the
-         * grid virtualises, so a tile scrolled out from under an open question would unmount it
-         * mid-answer — and a box drawn *into* the wall would reflow the row of drawers around the
-         * card the reader is aiming at. It survives the position by naming the card and the drawer
-         * in words, so the question never depended on remembering which tile the drag started on.
-         *
-         * **Not gated on {@link cabinet}.** The wall is off while the list is flattened and the
-         * breadcrumb still takes copy drops, so a question that rode the cabinet would be a
-         * confirmation the reader could raise and never see.
-         *
-         * `statusLine` and `overflow-hidden`, the failure banner's own grow-in: this column is a
-         * stack of rows, so anything appearing in it pushes everything below it down together, and
-         * a box with its own padding can never animate shorter than that padding.
-         */}
-        <AnimatePresence initial={false}>
-          {crossing && (
-            <motion.div {...statusLine} className="shrink-0 overflow-hidden">
-              <LockedMoveConfirm
-                move={crossing}
-                onConfirm={() => {
-                  commitFile(crossing.drop, crossing.to);
-                  setCrossing(null);
-                }}
-                onCancel={() => setCrossing(null)}
-              />
-            </motion.div>
+            </div>
           )}
-        </AnimatePresence>
 
-        {/* The sentence the substitution above needs, and only where it is doing something: a wall
-            of the reader's own binders drawn over a pile of copies that just left a deck is not
-            self-explaining, and the gesture it is inviting is one a reader has no reason to guess
-            at. Not drawn in a drawer of their own, where the wall is that drawer's contents — and
-            not over an *empty* holding area, where it would be inviting a drag of nothing beside a
-            line already saying there is nothing here.
+          {/* **One strip for the two folder layers that are still layers, and it is not a placement
+              decision so much as the only place there is.** Every other anchored layer in this app
+              hangs off a `relative` wrapper around its own trigger; the trigger here is a folder
+              card's `⋯`, and a card has nowhere to hang a panel and would clip it against the
+              scroller it sits in. So the strip sits where the thing being moved or deleted is:
+              directly above the row of cards, under the breadcrumb that says which level they are.
 
-            **And not while the list is flattened**, which is the clause Flatten added: `folderId`
-            survives the press, so `inRemoved` stays true under a page that is no longer drawing
-            the wall this sentence is about — a caption for a row of folder cards that is not on
-            screen. It rides {@link cabinet} for exactly that reason rather than a fourth
-            condition of its own. */}
-        {cabinet && inRemoved && wall.length > 0 && !empty && (
-          <p className="shrink-0 text-xs text-dim">
-            Drag a card onto a folder to file it back into your collection.
-          </p>
-        )}
-
-        {/* Drawn wherever the cabinet is *and* there is something to put in it — a folder card, or
-            the tile that makes the first one. The two clauses are not the same: inside a deck
-            group or `Recently removed` the tile is refused ({@link canMakeFolder}), so a deck
-            group with no cards of its own would otherwise draw an empty bordered band. */}
-        {cabinet && (wall.length > 0 || canMakeFolder) && (
-          // **The scroller is what makes the cabinet a band rather than the page.** A reader with
-          // twenty drawers must not lose the wall to them, so the row of cards is bounded and
-          // scrolls inside itself.
-          //
-          // `DROP_MARK_ROOM` is what that costs — and since 2026-09-03 it is bought for `FOCUS`
-          // alone. `overflow` clips at the padding box and the `FOCUS` outline stands 4px proud of
-          // the border box, so a folder card flush against the content edge would lose half its
-          // focus indicator: a WCAG 2.4.7 failure rather than a cosmetic one. **The drop mark is
-          // no longer part of this.** It used to be `DROP_RING`, a box shadow painted *outside*
-          // the border box and clipped the same way; it is now the card's own dashed edge going
-          // gold (`DROP_EDGE`), which is inside the border box and cannot be clipped at all. The
-          // padding does not change, because 6px was always `FOCUS`'s number rather than the
-          // ring's. It goes on the box carrying the `overflow`; one level in is not
-          // the same fix. `relative` for the rule beside it: a scroll container has to be the
-          // containing block for its own absolutely positioned content, or an `sr-only` label
-          // inside stretches the document. jsdom has no layout engine and can see none of this.
-          <div className={cn("relative max-h-44 shrink-0 overflow-y-auto", DROP_MARK_ROOM)}>
-            <ul
-              aria-label="Folders"
-              className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-2"
-            >
-              {/* **First, and shaped like the cards it makes.** A wall of drawers is where a
-                  reader looks for the drawer they want, so it is also where they look for the one
-                  that is not there yet — and it is the only thing in this `<ul>` on a collection
-                  nobody has filed, which is what {@link cabinet} exists to allow.
-
-                  **Not drawn where the level cannot hold one** — see {@link canMakeFolder}. That
-                  is the collection's own clause and the wishlist has no equivalent: only this
-                  cabinet has folders the app owns, and only this page substitutes one level's wall
-                  for another's ({@link wall}), so `Recently removed` is the one place where every
-                  other tile in the row is a live drop target and this one would not be.
-
-                  It is handed {@link openNewFolder} directly rather than through an arrow: the
-                  panel this raises has to give the caret back to the control it was raised from,
-                  and `NewFolderCard` hands over its own button for exactly that. */}
-              {/* **Before the tile that makes a folder, and only inside one.** The way *out* is
-                  the first thing a reader looks for on a wall they have walked into, and the wall
-                  is read leading edge first — so at the root, where there is nowhere to go up to,
-                  nothing moves and `New folder` is still the first tile.
-
-                  It is what issue #283 asked for: a folder card only ever takes a copy deeper, and
-                  the only target that took one back out was a breadcrumb segment — one word of
-                  `text-sm`, a target a fifth the height of the drawers beside it, in a bar the
-                  pointer has already left. The trail stays exactly as it was; this is the same
-                  destination at the size of the things it stands among.
-
-                  **It rides the wall's own gate rather than adding a clause to it**, which is what
-                  keeps it out of a deck group: there the wall is not drawn at all, because that
-                  level has no children of its own and refuses a new folder — and a lone tile in an
-                  otherwise empty band, whose ring refuses every card in the group
-                  ({@link canFile}), is the invitation to a gesture that does nothing that
-                  {@link wall} declines to make one paragraph up. The breadcrumb is still the way
-                  out of one, as it always was. */}
-              {folderId !== null && (
-                <CollectionParentFolderCard
-                  label={folderNameOf(upFolderId) ?? ROOT_LABEL}
-                  onOpen={() => collection.openFolder(upFolderId)}
-                  canDrop={(drop) => canFile(drop, upFolderId)}
-                  onDropCard={(drop) => fileCard(drop, upFolderId)}
-                  canDropFolder={canMoveFolderUp}
-                  onDropFolder={moveFolderUp}
-                />
-              )}
-              {canMakeFolder && (
-                <NewFolderCard
-                  onClick={openNewFolder}
-                  // The tile *is* the naming field while this is on. `openPanel` rather than
-                  // `panel`, so flattening the list and walking into another folder both close it
-                  // — the derived value is what the whole page reads.
-                  naming={openPanel?.kind === "newFolder"}
-                  pending={folders.create.isPending}
-                  onSubmit={nameFolder}
-                  onCancel={dismiss}
-                />
-              )}
-              {wall.map((node) => (
-                <CollectionFolderCard
-                  key={node.folder.id}
-                  node={node}
-                  // The recursive total, never the summary row: that one is direct per folder, and
-                  // a folder holding two sub-folders of six cards each has none of its own.
-                  //
-                  // **`null` while the summary is still reading, and that is not the same fallback
-                  // as `NO_CARDS`.** This wall is gated on the folder *list*, which is one flat
-                  // `SELECT`; the figures come from a `GROUP BY` with a price expression behind
-                  // it, and it answers later. Across that window a `Map.get` miss is
-                  // indistinguishable from an empty drawer, so a drawer holding 240 copies would
-                  // draw `0 cards` and then jump — a wrong number rather than a spinner.
-                  // `isPending` is exactly the read that has never answered *for this
-                  // marketplace*, which is the right span: switching marketplace is a new key, and
-                  // the old currency's subtotals are not this one's to draw either.
-                  summary={
-                    folders.summaryQuery.isPending
-                      ? null
-                      : (subtotals.get(node.folder.id) ?? NO_CARDS)
+              **The other two moved out of it on 2026-09-03 and this box is what is left.** Naming a
+              folder and renaming one are drawn *in the wall* now — `NewFolderCard` becomes the field
+              it used to raise, and a folder card becomes the field its `⋯` used to raise — because
+              in both cases the thing being named has a tile of its own on screen, and a second
+              bordered box above the wall could only repeat what that tile already says. Moving and
+              deleting have no such tile: the answer to "into which folder" is a list of the *other*
+              folders, and the answer to "delete this?" is a sentence about what happens to the cards
+              inside. Neither fits on a 62px card, and neither is a name typed on a line. */}
+          {(openPanel?.kind === "moveFolder" || openPanel?.kind === "deleteFolder") && (
+            <div className="w-full max-w-sm shrink-0 rounded-lg border border-border bg-surface p-2 text-xs">
+              {openPanel.kind === "moveFolder" && (
+                <MoveToFolder
+                  label={`Move ${folderNameOf(openPanel.folderId) ?? "folder"} into a folder`}
+                  nodes={nodes}
+                  currentId={userFolders.find((f) => f.id === openPanel.folderId)?.parentId ?? null}
+                  // The collection's own word for the top level. `MoveToFolder` defaults to the deck
+                  // gallery's, which is the surface it was written for.
+                  rootLabel={ROOT_LABEL}
+                  // A folder may not go inside itself or inside anything it holds. The backend
+                  // refuses it in words — `collection_folders.parent_id` cascades onto itself, so a
+                  // cycle is a graph SQLite would walk forever the day the folder is deleted — and
+                  // that refusal is a fence rather than the affordance.
+                  forbidden={
+                    new Set([
+                      openPanel.folderId,
+                      ...folderDescendants(userFolders, openPanel.folderId),
+                    ])
                   }
-                  currency={marketplace.currency}
-                  // **The effective lock, never `node.folder.locked`.** A drawer inside a locked
-                  // one is locked, so it wears the badge too — a mark that appeared only on the
-                  // folder the reader pressed Lock on would make the inheritance invisible
-                  // exactly where it matters, which is standing inside that drawer looking at
-                  // what it took with it. {@link lockedIds} is the one place the tree is walked.
-                  locked={lockedIds.has(node.folder.id)}
-                  onOpen={() => collection.openFolder(node.folder.id)}
-                  rowMenu={folderRowMenu(node.folder)}
-                  // `Rename…` is answered on the card itself. One `openPanel` naming exactly one
-                  // folder is what keeps a wall of twelve drawers to one open field.
-                  rename={{
-                    active:
-                      openPanel?.kind === "renameFolder" &&
-                      openPanel.folderId === node.folder.id,
-                    pending: folders.rename.isPending,
-                    onSubmit: nameFolder,
-                    onCancel: dismiss,
-                  }}
-                  canDrop={(drag) => canFile(drag, node.folder.id)}
-                  onDropCard={(drag) => fileCard(drag, node.folder.id)}
-                  // The card asks about the folder in the air and where on itself it is; the
-                  // page adds which card that is, because only the page holds the level and the
-                  // tree the answer is worked out from.
-                  canDropFolder={(drag, edge) => canPlaceFolder(drag, node, edge)}
-                  onDropFolder={(drag, edge) => placeFolder(drag, node, edge)}
+                  forbiddenReason="A folder cannot go inside itself, or inside anything it holds."
+                  // Drawn **into** the strip rather than as a popup of its own: the strip is the
+                  // layer, and a second box with its own shadow and its own z-index over it would be
+                  // a second Escape rung for one decision.
+                  inline
+                  pending={folders.move.isPending}
+                  onPick={(parentId) =>
+                    folders.move.mutate({ id: openPanel.folderId, parentId }, { onSuccess: dismiss })
+                  }
+                  onClose={close}
                 />
-              ))}
-            </ul>
-          </div>
-        )}
+              )}
 
-        {/* **Under the reader's own cabinet, and drawn at every level — except the one that is not
-            a level.** The wall above is what the reader arranged and is the thing they came to
-            this page for; this is the app's own record of where the rest of their copies are, and
-            it belongs beside that rather than above it. Drawn at every level because *pinned* is
-            the word the spec uses and it is what makes `Recently removed` reachable from three
-            drawers down — see the component for the whole of what pinned, flat and fixed cost, and
-            for why its third word is no longer *locked*: that one belongs to the reader's own Lock
-            press since issue #365, and means very nearly the opposite.
+              {openPanel.kind === "deleteFolder" && (
+                <DeleteFolderConfirm
+                  name={folderNameOf(openPanel.folderId) ?? "this folder"}
+                  pending={folders.remove.isPending}
+                  onConfirm={() => folders.remove.mutate(openPanel.folderId, { onSuccess: dismiss })}
+                  onCancel={dismiss}
+                  onClose={close}
+                />
+              )}
+            </div>
+          )}
 
-            **Flatten is the exception, and it is the one thing that could take this section away.**
-            Flatten's promise is that the filing is off screen and every copy is in the list; a
-            pinned strip surviving it would leave a row of doors into levels the list is
-            deliberately ignoring, so a press would silently un-flatten by drilling in. Nothing is
-            lost by the absence: the copies in every deck group and in the holding area are *in*
-            the flattened list, each tile captioned with the drawer it sits in ({@link captionFor})
-            and each table row naming it in the Folder column. What goes is the navigation, which
-            is the whole of what Flatten is for. */}
-        {cabinet && (
-          <PinnedFolders
-            decks={pinned.decks}
-            removed={pinned.removed}
-            totals={pinnedTotals}
-            currency={marketplace.currency}
-            openFolderId={folderId}
-            onOpen={collection.openFolder}
-          />
-        )}
+          {/**
+           * **The one gesture a lock slows down**, issue #365 and design §5 — a copy dragged into a
+           * drawer the reader set aside, or out of one, asked about before it moves.
+           *
+           * **Above the wall rather than under the tile it was asked from**, which is the
+           * `CollectionSearchTab` question's own placement and for its reason one surface over: the
+           * grid virtualises, so a tile scrolled out from under an open question would unmount it
+           * mid-answer — and a box drawn *into* the wall would reflow the row of drawers around the
+           * card the reader is aiming at. It survives the position by naming the card and the drawer
+           * in words, so the question never depended on remembering which tile the drag started on.
+           *
+           * **Not gated on {@link cabinet}.** The wall is off while the list is flattened and the
+           * breadcrumb still takes copy drops, so a question that rode the cabinet would be a
+           * confirmation the reader could raise and never see.
+           *
+           * `statusLine` and `overflow-hidden`, the failure banner's own grow-in: this column is a
+           * stack of rows, so anything appearing in it pushes everything below it down together, and
+           * a box with its own padding can never animate shorter than that padding.
+           */}
+          <AnimatePresence initial={false}>
+            {crossing && (
+              <motion.div {...statusLine} className="shrink-0 overflow-hidden">
+                <LockedMoveConfirm
+                  move={crossing}
+                  onConfirm={() => {
+                    commitFile(crossing.drop, crossing.to);
+                    setCrossing(null);
+                  }}
+                  onCancel={() => setCrossing(null)}
+                />
+              </motion.div>
+            )}
+          </AnimatePresence>
 
-        {/* One live region, mounted for the life of the view: a region that appears together
-            with its text announces nothing, because there was no change for a screen reader
-            to notice. Empty — and therefore no taller than nothing — while the table below
-            is answering for itself. */}
-        <p
-          role="status"
+          {/* The sentence the substitution above needs, and only where it is doing something: a wall
+              of the reader's own binders drawn over a pile of copies that just left a deck is not
+              self-explaining, and the gesture it is inviting is one a reader has no reason to guess
+              at. Not drawn in a drawer of their own, where the wall is that drawer's contents — and
+              not over an *empty* holding area, where it would be inviting a drag of nothing beside a
+              line already saying there is nothing here.
+
+              **And not while the list is flattened**, which is the clause Flatten added: `folderId`
+              survives the press, so `inRemoved` stays true under a page that is no longer drawing
+              the wall this sentence is about — a caption for a row of folder cards that is not on
+              screen. It rides {@link cabinet} for exactly that reason rather than a fourth
+              condition of its own. */}
+          {cabinet && inRemoved && wall.length > 0 && !empty && (
+            <p className="shrink-0 text-xs text-dim">
+              Drag a card onto a folder to file it back into your collection.
+            </p>
+          )}
+
+          {/* Drawn wherever the cabinet is *and* there is something to put in it — a folder card, or
+              the tile that makes the first one. The two clauses are not the same: inside a deck
+              group or `Recently removed` the tile is refused ({@link canMakeFolder}), so a deck
+              group with no cards of its own would otherwise draw an empty bordered band. */}
+          {cabinet && (wall.length > 0 || canMakeFolder) && (
+            // **The scroller is what makes the cabinet a band rather than the page.** A reader with
+            // twenty drawers must not lose the wall to them, so the row of cards is bounded and
+            // scrolls inside itself.
+            //
+            // `DROP_MARK_ROOM` is what that costs — and since 2026-09-03 it is bought for `FOCUS`
+            // alone. `overflow` clips at the padding box and the `FOCUS` outline stands 4px proud of
+            // the border box, so a folder card flush against the content edge would lose half its
+            // focus indicator: a WCAG 2.4.7 failure rather than a cosmetic one. **The drop mark is
+            // no longer part of this.** It used to be `DROP_RING`, a box shadow painted *outside*
+            // the border box and clipped the same way; it is now the card's own dashed edge going
+            // gold (`DROP_EDGE`), which is inside the border box and cannot be clipped at all. The
+            // padding does not change, because 6px was always `FOCUS`'s number rather than the
+            // ring's. It goes on the box carrying the `overflow`; one level in is not
+            // the same fix. `relative` for the rule beside it: a scroll container has to be the
+            // containing block for its own absolutely positioned content, or an `sr-only` label
+            // inside stretches the document. jsdom has no layout engine and can see none of this.
+            <div className={cn("relative max-h-44 shrink-0 overflow-y-auto", DROP_MARK_ROOM)}>
+              <ul
+                aria-label="Folders"
+                className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-2"
+              >
+                {/* **First, and shaped like the cards it makes.** A wall of drawers is where a
+                    reader looks for the drawer they want, so it is also where they look for the one
+                    that is not there yet — and it is the only thing in this `<ul>` on a collection
+                    nobody has filed, which is what {@link cabinet} exists to allow.
+
+                    **Not drawn where the level cannot hold one** — see {@link canMakeFolder}. That
+                    is the collection's own clause and the wishlist has no equivalent: only this
+                    cabinet has folders the app owns, and only this page substitutes one level's wall
+                    for another's ({@link wall}), so `Recently removed` is the one place where every
+                    other tile in the row is a live drop target and this one would not be.
+
+                    It is handed {@link openNewFolder} directly rather than through an arrow: the
+                    panel this raises has to give the caret back to the control it was raised from,
+                    and `NewFolderCard` hands over its own button for exactly that. */}
+                {/* **Before the tile that makes a folder, and only inside one.** The way *out* is
+                    the first thing a reader looks for on a wall they have walked into, and the wall
+                    is read leading edge first — so at the root, where there is nowhere to go up to,
+                    nothing moves and `New folder` is still the first tile.
+
+                    It is what issue #283 asked for: a folder card only ever takes a copy deeper, and
+                    the only target that took one back out was a breadcrumb segment — one word of
+                    `text-sm`, a target a fifth the height of the drawers beside it, in a bar the
+                    pointer has already left. The trail stays exactly as it was; this is the same
+                    destination at the size of the things it stands among.
+
+                    **It rides the wall's own gate rather than adding a clause to it**, which is what
+                    keeps it out of a deck group: there the wall is not drawn at all, because that
+                    level has no children of its own and refuses a new folder — and a lone tile in an
+                    otherwise empty band, whose ring refuses every card in the group
+                    ({@link canFile}), is the invitation to a gesture that does nothing that
+                    {@link wall} declines to make one paragraph up. The breadcrumb is still the way
+                    out of one, as it always was. */}
+                {folderId !== null && (
+                  <CollectionParentFolderCard
+                    label={folderNameOf(upFolderId) ?? ROOT_LABEL}
+                    onOpen={() => collection.openFolder(upFolderId)}
+                    canDrop={(drop) => canFile(drop, upFolderId)}
+                    onDropCard={(drop) => fileCard(drop, upFolderId)}
+                    canDropFolder={canMoveFolderUp}
+                    onDropFolder={moveFolderUp}
+                  />
+                )}
+                {canMakeFolder && (
+                  <NewFolderCard
+                    onClick={openNewFolder}
+                    // The tile *is* the naming field while this is on. `openPanel` rather than
+                    // `panel`, so flattening the list and walking into another folder both close it
+                    // — the derived value is what the whole page reads.
+                    naming={openPanel?.kind === "newFolder"}
+                    pending={folders.create.isPending}
+                    onSubmit={nameFolder}
+                    onCancel={dismiss}
+                  />
+                )}
+                {wall.map((node) => (
+                  <CollectionFolderCard
+                    key={node.folder.id}
+                    node={node}
+                    // The recursive total, never the summary row: that one is direct per folder, and
+                    // a folder holding two sub-folders of six cards each has none of its own.
+                    //
+                    // **`null` while the summary is still reading, and that is not the same fallback
+                    // as `NO_CARDS`.** This wall is gated on the folder *list*, which is one flat
+                    // `SELECT`; the figures come from a `GROUP BY` with a price expression behind
+                    // it, and it answers later. Across that window a `Map.get` miss is
+                    // indistinguishable from an empty drawer, so a drawer holding 240 copies would
+                    // draw `0 cards` and then jump — a wrong number rather than a spinner.
+                    // `isPending` is exactly the read that has never answered *for this
+                    // marketplace*, which is the right span: switching marketplace is a new key, and
+                    // the old currency's subtotals are not this one's to draw either.
+                    summary={
+                      folders.summaryQuery.isPending
+                        ? null
+                        : (subtotals.get(node.folder.id) ?? NO_CARDS)
+                    }
+                    currency={marketplace.currency}
+                    // **The effective lock, never `node.folder.locked`.** A drawer inside a locked
+                    // one is locked, so it wears the badge too — a mark that appeared only on the
+                    // folder the reader pressed Lock on would make the inheritance invisible
+                    // exactly where it matters, which is standing inside that drawer looking at
+                    // what it took with it. {@link lockedIds} is the one place the tree is walked.
+                    locked={lockedIds.has(node.folder.id)}
+                    onOpen={() => collection.openFolder(node.folder.id)}
+                    rowMenu={folderRowMenu(node.folder)}
+                    // `Rename…` is answered on the card itself. One `openPanel` naming exactly one
+                    // folder is what keeps a wall of twelve drawers to one open field.
+                    rename={{
+                      active:
+                        openPanel?.kind === "renameFolder" &&
+                        openPanel.folderId === node.folder.id,
+                      pending: folders.rename.isPending,
+                      onSubmit: nameFolder,
+                      onCancel: dismiss,
+                    }}
+                    canDrop={(drag) => canFile(drag, node.folder.id)}
+                    onDropCard={(drag) => fileCard(drag, node.folder.id)}
+                    // The card asks about the folder in the air and where on itself it is; the
+                    // page adds which card that is, because only the page holds the level and the
+                    // tree the answer is worked out from.
+                    canDropFolder={(drag, edge) => canPlaceFolder(drag, node, edge)}
+                    onDropFolder={(drag, edge) => placeFolder(drag, node, edge)}
+                  />
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* **Under the reader's own cabinet, and drawn at every level — except the one that is not
+              a level.** The wall above is what the reader arranged and is the thing they came to
+              this page for; this is the app's own record of where the rest of their copies are, and
+              it belongs beside that rather than above it. Drawn at every level because *pinned* is
+              the word the spec uses and it is what makes `Recently removed` reachable from three
+              drawers down — see the component for the whole of what pinned, flat and fixed cost, and
+              for why its third word is no longer *locked*: that one belongs to the reader's own Lock
+              press since issue #365, and means very nearly the opposite.
+
+              **Flatten is the exception, and it is the one thing that could take this section away.**
+              Flatten's promise is that the filing is off screen and every copy is in the list; a
+              pinned strip surviving it would leave a row of doors into levels the list is
+              deliberately ignoring, so a press would silently un-flatten by drilling in. Nothing is
+              lost by the absence: the copies in every deck group and in the holding area are *in*
+              the flattened list, each tile captioned with the drawer it sits in ({@link captionFor})
+              and each table row naming it in the Folder column. What goes is the navigation, which
+              is the whole of what Flatten is for. */}
+          {cabinet && (
+            <PinnedFolders
+              decks={pinned.decks}
+              removed={pinned.removed}
+              totals={pinnedTotals}
+              currency={marketplace.currency}
+              openFolderId={folderId}
+              onOpen={collection.openFolder}
+            />
+          )}
+
+          {/* One live region, mounted for the life of the view: a region that appears together
+              with its text announces nothing, because there was no change for a screen reader
+              to notice. Empty — and therefore no taller than nothing — while the table below
+              is answering for itself. */}
+          <p
+            role="status"
+            className={cn(
+              empty && status ? "py-16 text-center text-sm" : "text-xs",
+              empty && failure ? "text-destructive" : "text-dim",
+            )}
+          >
+            {status}
+          </p>
+
+          {/* A write that was refused, said where the writing happened. Not folded into the
+              line above: that one describes the list, and this one describes something the
+              reader just did to it.
+
+              It grows into place instead of shoving the table down by its whole height. The
+              animated element is the wrapper and carries only `overflow-hidden`, because
+              `statusLine` takes `height` to 0 and a box with its own padding and border can
+              never — under `box-sizing: border-box` — be shorter than the two of them. */}
+          <AnimatePresence initial={false}>
+            {bannerFailure && (
+              <motion.div {...statusLine} className="overflow-hidden">
+                <p
+                  role="alert"
+                  className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+                >
+                  Could not change your collection — {bannerFailure}
+                </p>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* A write the right-click menu started and the backend refused, beside the banner
+              above rather than folded into it: that one is about this list's own controls — a
+              stepper press, a removal — and this one is about a card the reader filed somewhere
+              from a menu that has already closed. */}
+          <CardMenuRefusal error={menuFailure} />
+
+          {!empty &&
+            (view === "grid" ? (
+              <CardGrid
+                rows={tiles}
+                label="Your collection"
+                listKey={collection.queryKeyString}
+                // **A phone gets a narrower card, so the binder is two columns rather than one.**
+                // The same width the search wall takes and for the same arithmetic: 324px of wall
+                // at 390, where 170 floors to one column. `PHONE_TILE_WIDTH` carries the
+                // derivation, the 160 that looks like a fix and is not, and the decision that the
+                // chin does not scale with it.
+                baseTileWidth={narrowWindow ? PHONE_TILE_WIDTH : undefined}
+                // This wall's own zoom, kept apart from the search's: the two views are the same
+                // component over different rows, and a reader who peers at one printing's art in
+                // search is not asking for a binder at 2× as well. `CardGrid`'s `zoomSection`
+                // carries why it is required rather than defaulted.
+                zoomSection="collection"
+                // **The wall is a drag source now**, through `dragRecord` rather than
+                // `dragPayload`: a tile's drag means two things at once — a card, for the deck
+                // categories and the sidebar's Decks entry that have always taken one from this
+                // page's *table*; and the several `collection_entries` rows the wall summed into
+                // one piece of art, for a folder card and a breadcrumb segment. Two marks in one
+                // flat record is what that slot carries, and the wishlist's tiles reached the
+                // shape first. See {@link tileDrag}.
+                dragRecord={tileDrag}
+                // Ctrl and Shift build a set of tiles (issue #214).
+                selectionScope="collection"
+                // **The ring follows the *tile*, so `selectedId` is a composite.** Two tiles here
+                // carry one card id, and the pane's `selectedCardId` alone would ring both of a
+                // printing the reader opened one of. Built through {@link tileKeyOf} rather than
+                // spelled out, because the tile's own key is built by the same function and two
+                // spellings that drifted would be a wall where nothing rings at all.
+                selectedId={
+                  selectedCardId === null ? null : tileKeyOf(selectedCardId, paneFinish)
+                }
+                // The finish travels with the press, so the pane opens showing the object the
+                // reader pointed at rather than the plain one. The tile is the second argument
+                // because a tile here is a printing *and* a finish — see `CardGrid`'s `onSelect`,
+                // which the other six walls ignore.
+                onSelect={(cardId, tile) => openCardAsFinish(cardId, tile.finish)}
+                // The same arrow-key walk the search wall takes, on the same terms: both slots
+                // above reach the store the card surface reads, so a press moves the open card
+                // rather than only an outline. The two walls that are a *page* pass this and the
+                // two that are a panel do not — `CardGrid`'s `arrowNav` is where that split is
+                // argued.
+                //
+                // **What the caret note is filed under is still the card**, not the tile key:
+                // `CardGrid` hands `keepCaretForCard` the printing because the note is read back by
+                // the card it was opened on, so a note filed under `c1:foil` would break this
+                // wall's walk after exactly one step. **Nothing reads it since the docked pane was
+                // deleted on 2026-09-03, and nothing needs to** — the modal is `aria-modal`, so
+                // this wall takes no arrow press while a card is open, and `Dialog` focuses its
+                // panel once per open rather than per card. Dormant, not broken; `caretWalk.ts`
+                // carries the argument.
+                arrowNav
+                onNeedNextPage={onNeedNextPage}
+                // The same mark search draws, and only the mark: the corner and the felt
+                // behind it are the wall's, so the two views cannot drift into two shades.
+                // No `wishlisted` — this wall shows what is owned and has no opinion about
+                // what is wanted. A tile at zero copies draws nothing, which is the badge's
+                // own guard and the reason this view no longer has a badge of its own.
+                badge={(tile) => <OwnedBadge owned={tile.copies} />}
+                // What one copy of this printing **in this finish** costs. Already on the row and
+                // priced at that entry's exact finish by `collection.rs`; the wall simply never
+                // drew it. `formatPrice` and never a bare `Intl.NumberFormat`, and a `null` is the
+                // em dash rather than a reason to borrow another marketplace's number.
+                money={(tile) => formatPrice(tile.unitPrice, marketplace.currency)}
+                // The sheen over the art and the glyph in the chin, which is the *other* half of
+                // what tells a reader the two tiles of one printing apart.
+                //
+                // **`nonfoil` is mapped to `null`, and that is not a tidy-up** — {@link finishMarkOf}
+                // is where that argument lives, and it is a named function rather than the inline
+                // expression this slot held until the stepper below started announcing the same fact
+                // in words.
+                finish={finishMarkOf}
+                // **Only while flattened**, which is the one state where a tile cannot be read off
+                // the level it is drawn on: with the filing ignored there is no breadcrumb saying
+                // which drawer these are, so the caption has to say it per tile. Unset otherwise, so
+                // the wall draws its own `SET · number` and this page spells that text exactly once
+                // — in {@link captionFor}, which is the flattened line and nothing else.
+                caption={flatten ? captionFor(folderNameOf) : undefined}
+                /* **The wall's own stepper** (issue #284), standing in the tile's right margin
+                   (issue #348). Until it landed this view could maintain quantities in its *table*
+                   alone, which made the wall the layout a reader looked at and the table the one
+                   they worked in.
+
+                   **It rode in the bottom strip for its first two days and does not any more.** The
+                   report was that neither the style nor the location matched the deck builder's, and
+                   neither did: the deck stack draws a 36px column up the card's right-hand side and
+                   this drew a 20px bar tucked into the bottom corner. It is the same control over
+                   the same kind of object, so it is one recipe now — {@link CardGrid}'s `column`
+                   slot is the position and `size="card"` the size, both of them the deck stack's,
+                   and the wishlist's wall took the identical change in the same commit. It still
+                   costs the wall no height: the box is absolute, so `tileHeight` is unchanged by its
+                   existence, which was the strip's property and is inherited rather than re-argued.
+
+                   **Absent is a real answer, not a fallback**: {@link stepperByTile} draws nothing
+                   for a tile whose copies the reader may not step, and that is the fence rather than
+                   an affordance — every rule about it is at that map's own site. */
+                column={(tile) => {
+                  const step = stepperByTile.get(tile.key);
+                  if (step === undefined) return null;
+                  // The mark the art is drawing, read through the same function the chip above it
+                  // takes — so a plain tile is announced "Copies of Black Lotus" and never
+                  // "(Nonfoil)", which is the wall's own rule stated in words instead of in a sheen.
+                  const mark = finishMarkOf(tile);
+                  return (
+                    // **`data-no-drag` is load-bearing and must not be dropped.** `NOT_A_DRAG`
+                    // (`dnd.ts`) is `"[data-no-drag], input, select, textarea"`, so the stepper's
+                    // `<input>` is excluded by tag and its two `<button>`s are not — and the whole
+                    // tile is a drag source. Without this mark a press on `−` plus five pixels of
+                    // travel is a drag of the card, and the press is never delivered as a click.
+                    // `cardDraggable` asks `closest()`, so one mark on the wrapper covers both
+                    // buttons; `DeckCardControls` carries the identical mark for the identical
+                    // reason.
+                    <span data-no-drag="" className="flex">
+                      <QuantityStepper
+                        // The deck stack's column, verbatim — the 36px box, standing on end, over
+                        // art. `xs` and `card` are the two sizes drawn on a card face and both
+                        // follow the reader's zoom through `--control-scale`; this is the larger.
+                        // Against a 170px tile whose art box is 238px (5:7) the column rests at
+                        // 30.6 × ~98.6px — 18% of the width and 41% of the height, starting 24px
+                        // down — where on the deck's own 210 × 293 card it is 15% and 34%. Both are
+                        // constants across the zoom ladder rather than readings at 1×, because the
+                        // tile, the art and the column are each linear in the same zoom.
+                        size="card"
+                        orientation="vertical"
+                        // Drawn over an illustration, and inside a box that clips its own corners —
+                        // the deck stepper's two reasons, unchanged one surface over.
+                        tone="art"
+                        focus="inset"
+                        // **The tile's sum, never the addressed row's own number.** `OwnedBadge`
+                        // draws that same figure in the tile's other corner, and two numbers on one
+                        // piece of art disagreeing about how many copies it stands for is not a
+                        // state this wall may show. (They were six pixels apart while this rode in
+                        // the bottom strip; the column has moved and the rule has not, because what
+                        // makes it one is the tile rather than the distance.)
+                        value={tile.copies}
+                        // The copies this control cannot reach — see {@link stepperByTile}, where
+                        // the arithmetic and the two behaviours that fall out of it are worked
+                        // through. `0` on the ordinary single-entry tile, so zero deletes the entry
+                        // exactly as the table's stepper does.
+                        min={step.floor}
+                        // **Name the object, not the control** — and the object is a *printing in a
+                        // finish*, which is the whole of this wall's grain, so the name has to carry
+                        // both or it is not a name.
+                        //
+                        // **The set and number are not decoration here, and a live pass is what
+                        // proved it.** Driven in the browser (2026-09-01, Storybook's
+                        // `SteppingFromTheWall` at 170px), the seed put three Lightning Bolt tiles on
+                        // one screen — 2X2 ×4, LEA ×1 and an etched STA — and with the printing left
+                        // out the first two both announced `Copies of Lightning Bolt`. A collection
+                        // holds several printings of one card as a matter of course, far more often
+                        // than a wishlist does, so that is the ordinary case rather than a corner:
+                        // two controls with one name, on a surface where the only other thing
+                        // distinguishing them is a picture. jsdom cannot referee it — both names are
+                        // *correct*, they are merely not *unique*, and no assertion about one tile
+                        // can see the other.
+                        //
+                        // {@link wishLabel}'s grammar exactly — `Name (SET 123)`, with the finish
+                        // folded into the same bracket — because the wishlist's wall stands one tab
+                        // away and reached this conclusion first. The chin under the art already
+                        // draws `SET · number`, so the name says what the tile shows.
+                        //
+                        // The finish rides it **only where the tile wears a mark**: a plain copy
+                        // draws no chip ({@link finishMarkOf}), so announcing `(Nonfoil)` would be
+                        // the wall's own rule contradicted in words six pixels from where it is
+                        // being obeyed in pixels.
+                        label={
+                          `Copies of ${tile.name} ` +
+                          `(${tile.setCode.toUpperCase()} ${tile.collectorNumber}` +
+                          `${mark === null ? "" : `, ${finishLabel(mark)}`})`
+                        }
+                        // **A delta applied to the addressed row**, because the control shows a sum
+                        // and the write moves one entry: the reader asked for one more copy of this
+                        // *object*, and the row this tile addresses is where that copy goes.
+                        onChange={(next) =>
+                          onSetQuantity(step.row, step.row.quantity + (next - tile.copies))
+                        }
+                      />
+                    </span>
+                  );
+                }}
+                // The whole tile is the target: the art, its badge and the caption.
+                cardMenu={tileMenu}
+                cardMenuKey={tileMenuKey}
+              />
+            ) : (
+              <>
+                <CollectionTable
+                  rows={rows}
+                  total={total}
+                  listKey={collection.queryKeyString}
+                  sort={collection.sort}
+                  onSort={collection.toggleSort}
+                  onNeedNextPage={onNeedNextPage}
+                  onSetQuantity={onSetQuantity}
+                  onRemove={onRemove}
+                  // **The same fence the wall draws, said in words** (issue #284). It is one
+                  // predicate on this page rather than one per layout, because the table and the
+                  // wall are two drawings of one list and a row editable in one of them and not the
+                  // other is a difference no reader can account for. See {@link quantityBlocked},
+                  // which carries the three sentences and why the third names no mechanism.
+                  quantityBlocked={quantityBlocked}
+                  rowMenu={rowMenu}
+                  rowMenuKey={rowMenuKey}
+                  marketplace={marketplace}
+                />
+                {/* The one thing about this table a reader cannot see: **the stepper is the
+                    removal**. Since schema v24 a row taken to zero is deleted rather than kept
+                    (`collection::set_quantity`), and the stepper is `min={0}` — so a mis-added
+                    four-copy row is got rid of by holding Decrease down, and there is no other
+                    control in the table that does it. Said once, under the table, at the end of
+                    the line the stepper itself lives on — not per row, where forty copies of a
+                    sentence about a rare action would be louder than the rows. */}
+                <p className="text-right text-[0.7rem] text-dim">
+                  To remove an entry, set its copies to zero.
+                </p>
+              </>
+            ))}
+
+          {/* **Spec §5: a price is never shown without saying how old it is** — and, with five
+              marketplaces in the picker, whose it is. `pricesAsOf` answers both, and names which of
+              the two clocks this marketplace runs on: the card-data sync for the blob-backed pair,
+              the last price-feed refresh for the two this app downloads itself.
+
+              **The rule reaches this wall as of 2026-08-26**, when the tiles' chins started quoting
+              what one copy costs; before that the grid drew no money at all and had nothing to date.
+
+              **Said once, under the wall, rather than on every tile** — the argument the search
+              page, the Tags page, the printings modal and the deck's docked panel all make, and the
+              reason the chin's money slot is a plain string rather than a tooltip binding: forty
+              tiles would be one sentence said forty times.
+
+              **Grid only.** The table states it in the Value column's own header (`CollectionTable`'s
+              `columnsFor`), so drawing it here as well would say it twice in one view. Drawn rather
+              than hung on a `title`, for the reason the card pane and `TheoryDiffDialog` decided the
+              same way: a hover is not a reader. */}
+          {!empty && view === "grid" && (
+            <p className="shrink-0 text-[0.7rem] text-dim">{pricesAsOf(marketplace)}</p>
+          )}
+        </div>
+
+        {/* **The docked search column, and the box it is pinned inside.**
+
+            `sticky` so the search stays put while a collection taller than the window scrolls
+            past it, `self-start` so the row's own `stretch` does not draw it as tall as the list,
+            and `flex` so the panel inside fills whatever height {@link useDockHeight} measures for
+            it.
+
+            **`LAYER.popup` while the panel is drawn over the list, and it has to be _here_.**
+            `position: sticky` always creates a stacking context, so a z-index asked for inside
+            this box competes only with its own siblings — which is why the panel itself carries no
+            number and this element does. What it out-ranks is real: the table view draws a sticky
+            header at `LAYER.header` and a row holding an open popup at `LAYER.raised`, and both
+            would paint straight through an unraised overlay. It is not applied at every width,
+            because a rung nothing overlaps is a claim about an overlap that does not occur. */}
+        <div
+          ref={dockRef}
           className={cn(
-            empty && status ? "py-16 text-center text-sm" : "text-xs",
-            empty && failure ? "text-destructive" : "text-dim",
+            "sticky top-0 flex shrink-0 self-start",
+            panelOverWidth !== undefined && LAYER.popup,
           )}
         >
-          {status}
-        </p>
-
-        {/* A write that was refused, said where the writing happened. Not folded into the
-            line above: that one describes the list, and this one describes something the
-            reader just did to it.
-
-            It grows into place instead of shoving the table down by its whole height. The
-            animated element is the wrapper and carries only `overflow-hidden`, because
-            `statusLine` takes `height` to 0 and a box with its own padding and border can
-            never — under `box-sizing: border-box` — be shorter than the two of them. */}
-        <AnimatePresence initial={false}>
-          {bannerFailure && (
-            <motion.div {...statusLine} className="overflow-hidden">
-              <p
-                role="alert"
-                className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
-              >
-                Could not change your collection — {bannerFailure}
-              </p>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* A write the right-click menu started and the backend refused, beside the banner
-            above rather than folded into it: that one is about this list's own controls — a
-            stepper press, a removal — and this one is about a card the reader filed somewhere
-            from a menu that has already closed. */}
-        <CardMenuRefusal error={menuFailure} />
-
-        {!empty &&
-          (view === "grid" ? (
-            <CardGrid
-              rows={tiles}
-              label="Your collection"
-              listKey={collection.queryKeyString}
-              // **A phone gets a narrower card, so the binder is two columns rather than one.**
-              // The same width the search wall takes and for the same arithmetic: 324px of wall
-              // at 390, where 170 floors to one column. `PHONE_TILE_WIDTH` carries the
-              // derivation, the 160 that looks like a fix and is not, and the decision that the
-              // chin does not scale with it.
-              baseTileWidth={narrowWindow ? PHONE_TILE_WIDTH : undefined}
-              // This wall's own zoom, kept apart from the search's: the two views are the same
-              // component over different rows, and a reader who peers at one printing's art in
-              // search is not asking for a binder at 2× as well. `CardGrid`'s `zoomSection`
-              // carries why it is required rather than defaulted.
-              zoomSection="collection"
-              // **The wall is a drag source now**, through `dragRecord` rather than
-              // `dragPayload`: a tile's drag means two things at once — a card, for the deck
-              // categories and the sidebar's Decks entry that have always taken one from this
-              // page's *table*; and the several `collection_entries` rows the wall summed into
-              // one piece of art, for a folder card and a breadcrumb segment. Two marks in one
-              // flat record is what that slot carries, and the wishlist's tiles reached the
-              // shape first. See {@link tileDrag}.
-              dragRecord={tileDrag}
-              // Ctrl and Shift build a set of tiles (issue #214).
-              selectionScope="collection"
-              // **The ring follows the *tile*, so `selectedId` is a composite.** Two tiles here
-              // carry one card id, and the pane's `selectedCardId` alone would ring both of a
-              // printing the reader opened one of. Built through {@link tileKeyOf} rather than
-              // spelled out, because the tile's own key is built by the same function and two
-              // spellings that drifted would be a wall where nothing rings at all.
-              selectedId={
-                selectedCardId === null ? null : tileKeyOf(selectedCardId, paneFinish)
-              }
-              // The finish travels with the press, so the pane opens showing the object the
-              // reader pointed at rather than the plain one. The tile is the second argument
-              // because a tile here is a printing *and* a finish — see `CardGrid`'s `onSelect`,
-              // which the other six walls ignore.
-              onSelect={(cardId, tile) => openCardAsFinish(cardId, tile.finish)}
-              // The same arrow-key walk the search wall takes, on the same terms: both slots
-              // above reach the store the card surface reads, so a press moves the open card
-              // rather than only an outline. The two walls that are a *page* pass this and the
-              // two that are a panel do not — `CardGrid`'s `arrowNav` is where that split is
-              // argued.
-              //
-              // **What the caret note is filed under is still the card**, not the tile key:
-              // `CardGrid` hands `keepCaretForCard` the printing because the note is read back by
-              // the card it was opened on, so a note filed under `c1:foil` would break this
-              // wall's walk after exactly one step. **Nothing reads it since the docked pane was
-              // deleted on 2026-09-03, and nothing needs to** — the modal is `aria-modal`, so
-              // this wall takes no arrow press while a card is open, and `Dialog` focuses its
-              // panel once per open rather than per card. Dormant, not broken; `caretWalk.ts`
-              // carries the argument.
-              arrowNav
-              onNeedNextPage={onNeedNextPage}
-              // The same mark search draws, and only the mark: the corner and the felt
-              // behind it are the wall's, so the two views cannot drift into two shades.
-              // No `wishlisted` — this wall shows what is owned and has no opinion about
-              // what is wanted. A tile at zero copies draws nothing, which is the badge's
-              // own guard and the reason this view no longer has a badge of its own.
-              badge={(tile) => <OwnedBadge owned={tile.copies} />}
-              // What one copy of this printing **in this finish** costs. Already on the row and
-              // priced at that entry's exact finish by `collection.rs`; the wall simply never
-              // drew it. `formatPrice` and never a bare `Intl.NumberFormat`, and a `null` is the
-              // em dash rather than a reason to borrow another marketplace's number.
-              money={(tile) => formatPrice(tile.unitPrice, marketplace.currency)}
-              // The sheen over the art and the glyph in the chin, which is the *other* half of
-              // what tells a reader the two tiles of one printing apart.
-              //
-              // **`nonfoil` is mapped to `null`, and that is not a tidy-up** — {@link finishMarkOf}
-              // is where that argument lives, and it is a named function rather than the inline
-              // expression this slot held until the stepper below started announcing the same fact
-              // in words.
-              finish={finishMarkOf}
-              // **Only while flattened**, which is the one state where a tile cannot be read off
-              // the level it is drawn on: with the filing ignored there is no breadcrumb saying
-              // which drawer these are, so the caption has to say it per tile. Unset otherwise, so
-              // the wall draws its own `SET · number` and this page spells that text exactly once
-              // — in {@link captionFor}, which is the flattened line and nothing else.
-              caption={flatten ? captionFor(folderNameOf) : undefined}
-              /* **The wall's own stepper** (issue #284), standing in the tile's right margin
-                 (issue #348). Until it landed this view could maintain quantities in its *table*
-                 alone, which made the wall the layout a reader looked at and the table the one
-                 they worked in.
-
-                 **It rode in the bottom strip for its first two days and does not any more.** The
-                 report was that neither the style nor the location matched the deck builder's, and
-                 neither did: the deck stack draws a 36px column up the card's right-hand side and
-                 this drew a 20px bar tucked into the bottom corner. It is the same control over
-                 the same kind of object, so it is one recipe now — {@link CardGrid}'s `column`
-                 slot is the position and `size="card"` the size, both of them the deck stack's,
-                 and the wishlist's wall took the identical change in the same commit. It still
-                 costs the wall no height: the box is absolute, so `tileHeight` is unchanged by its
-                 existence, which was the strip's property and is inherited rather than re-argued.
-
-                 **Absent is a real answer, not a fallback**: {@link stepperByTile} draws nothing
-                 for a tile whose copies the reader may not step, and that is the fence rather than
-                 an affordance — every rule about it is at that map's own site. */
-              column={(tile) => {
-                const step = stepperByTile.get(tile.key);
-                if (step === undefined) return null;
-                // The mark the art is drawing, read through the same function the chip above it
-                // takes — so a plain tile is announced "Copies of Black Lotus" and never
-                // "(Nonfoil)", which is the wall's own rule stated in words instead of in a sheen.
-                const mark = finishMarkOf(tile);
-                return (
-                  // **`data-no-drag` is load-bearing and must not be dropped.** `NOT_A_DRAG`
-                  // (`dnd.ts`) is `"[data-no-drag], input, select, textarea"`, so the stepper's
-                  // `<input>` is excluded by tag and its two `<button>`s are not — and the whole
-                  // tile is a drag source. Without this mark a press on `−` plus five pixels of
-                  // travel is a drag of the card, and the press is never delivered as a click.
-                  // `cardDraggable` asks `closest()`, so one mark on the wrapper covers both
-                  // buttons; `DeckCardControls` carries the identical mark for the identical
-                  // reason.
-                  <span data-no-drag="" className="flex">
-                    <QuantityStepper
-                      // The deck stack's column, verbatim — the 36px box, standing on end, over
-                      // art. `xs` and `card` are the two sizes drawn on a card face and both
-                      // follow the reader's zoom through `--control-scale`; this is the larger.
-                      // Against a 170px tile whose art box is 238px (5:7) the column rests at
-                      // 30.6 × ~98.6px — 18% of the width and 41% of the height, starting 24px
-                      // down — where on the deck's own 210 × 293 card it is 15% and 34%. Both are
-                      // constants across the zoom ladder rather than readings at 1×, because the
-                      // tile, the art and the column are each linear in the same zoom.
-                      size="card"
-                      orientation="vertical"
-                      // Drawn over an illustration, and inside a box that clips its own corners —
-                      // the deck stepper's two reasons, unchanged one surface over.
-                      tone="art"
-                      focus="inset"
-                      // **The tile's sum, never the addressed row's own number.** `OwnedBadge`
-                      // draws that same figure in the tile's other corner, and two numbers on one
-                      // piece of art disagreeing about how many copies it stands for is not a
-                      // state this wall may show. (They were six pixels apart while this rode in
-                      // the bottom strip; the column has moved and the rule has not, because what
-                      // makes it one is the tile rather than the distance.)
-                      value={tile.copies}
-                      // The copies this control cannot reach — see {@link stepperByTile}, where
-                      // the arithmetic and the two behaviours that fall out of it are worked
-                      // through. `0` on the ordinary single-entry tile, so zero deletes the entry
-                      // exactly as the table's stepper does.
-                      min={step.floor}
-                      // **Name the object, not the control** — and the object is a *printing in a
-                      // finish*, which is the whole of this wall's grain, so the name has to carry
-                      // both or it is not a name.
-                      //
-                      // **The set and number are not decoration here, and a live pass is what
-                      // proved it.** Driven in the browser (2026-09-01, Storybook's
-                      // `SteppingFromTheWall` at 170px), the seed put three Lightning Bolt tiles on
-                      // one screen — 2X2 ×4, LEA ×1 and an etched STA — and with the printing left
-                      // out the first two both announced `Copies of Lightning Bolt`. A collection
-                      // holds several printings of one card as a matter of course, far more often
-                      // than a wishlist does, so that is the ordinary case rather than a corner:
-                      // two controls with one name, on a surface where the only other thing
-                      // distinguishing them is a picture. jsdom cannot referee it — both names are
-                      // *correct*, they are merely not *unique*, and no assertion about one tile
-                      // can see the other.
-                      //
-                      // {@link wishLabel}'s grammar exactly — `Name (SET 123)`, with the finish
-                      // folded into the same bracket — because the wishlist's wall stands one tab
-                      // away and reached this conclusion first. The chin under the art already
-                      // draws `SET · number`, so the name says what the tile shows.
-                      //
-                      // The finish rides it **only where the tile wears a mark**: a plain copy
-                      // draws no chip ({@link finishMarkOf}), so announcing `(Nonfoil)` would be
-                      // the wall's own rule contradicted in words six pixels from where it is
-                      // being obeyed in pixels.
-                      label={
-                        `Copies of ${tile.name} ` +
-                        `(${tile.setCode.toUpperCase()} ${tile.collectorNumber}` +
-                        `${mark === null ? "" : `, ${finishLabel(mark)}`})`
-                      }
-                      // **A delta applied to the addressed row**, because the control shows a sum
-                      // and the write moves one entry: the reader asked for one more copy of this
-                      // *object*, and the row this tile addresses is where that copy goes.
-                      onChange={(next) =>
-                        onSetQuantity(step.row, step.row.quantity + (next - tile.copies))
-                      }
-                    />
-                  </span>
-                );
-              }}
-              // The whole tile is the target: the art, its badge and the caption.
-              cardMenu={tileMenu}
-              cardMenuKey={tileMenuKey}
-            />
-          ) : (
-            <>
-              <CollectionTable
-                rows={rows}
-                total={total}
-                listKey={collection.queryKeyString}
-                sort={collection.sort}
-                onSort={collection.toggleSort}
-                onNeedNextPage={onNeedNextPage}
-                onSetQuantity={onSetQuantity}
-                onRemove={onRemove}
-                // **The same fence the wall draws, said in words** (issue #284). It is one
-                // predicate on this page rather than one per layout, because the table and the
-                // wall are two drawings of one list and a row editable in one of them and not the
-                // other is a difference no reader can account for. See {@link quantityBlocked},
-                // which carries the three sentences and why the third names no mechanism.
-                quantityBlocked={quantityBlocked}
-                rowMenu={rowMenu}
-                rowMenuKey={rowMenuKey}
-                marketplace={marketplace}
-              />
-              {/* The one thing about this table a reader cannot see: **the stepper is the
-                  removal**. Since schema v24 a row taken to zero is deleted rather than kept
-                  (`collection::set_quantity`), and the stepper is `min={0}` — so a mis-added
-                  four-copy row is got rid of by holding Decrease down, and there is no other
-                  control in the table that does it. Said once, under the table, at the end of
-                  the line the stepper itself lives on — not per row, where forty copies of a
-                  sentence about a rare action would be louder than the rows. */}
-              <p className="text-right text-[0.7rem] text-dim">
-                To remove an entry, set its copies to zero.
-              </p>
-            </>
-          ))}
-
-        {/* **Spec §5: a price is never shown without saying how old it is** — and, with five
-            marketplaces in the picker, whose it is. `pricesAsOf` answers both, and names which of
-            the two clocks this marketplace runs on: the card-data sync for the blob-backed pair,
-            the last price-feed refresh for the two this app downloads itself.
-
-            **The rule reaches this wall as of 2026-08-26**, when the tiles' chins started quoting
-            what one copy costs; before that the grid drew no money at all and had nothing to date.
-
-            **Said once, under the wall, rather than on every tile** — the argument the search
-            page, the Tags page, the printings modal and the deck's docked panel all make, and the
-            reason the chin's money slot is a plain string rather than a tooltip binding: forty
-            tiles would be one sentence said forty times.
-
-            **Grid only.** The table states it in the Value column's own header (`CollectionTable`'s
-            `columnsFor`), so drawing it here as well would say it twice in one view. Drawn rather
-            than hung on a `title`, for the reason the card pane and `TheoryDiffDialog` decided the
-            same way: a hover is not a reader. */}
-        {!empty && view === "grid" && (
-          <p className="shrink-0 text-[0.7rem] text-dim">{pricesAsOf(marketplace)}</p>
-        )}
+          <CollectionSearchPanel
+            // **`null` while the cabinet is flattened, and that is a decision rather than a
+            // fallback** (spec §5.3). `folderId` survives the Flatten press — it is where the
+            // reader was standing before they asked to see everything — so passing it here would
+            // file into a drawer that is not on screen, under a breadcrumb reading
+            // `Collection · all folders`. Flatten means "show me everything", and the root is what
+            // there is to be standing in when every folder is.
+            //
+            // **Written out rather than left `undefined`**: absent and `null` are different on the
+            // wire, and only `null` says *the root* — see the prop's own doc.
+            folderId={flatten ? null : folderId}
+            // The reader's own tree, already built for the wall below. Deck groups and
+            // `Recently removed` are not in it and must not be: `collection_add` files into a
+            // folder the same way `set_entry_folder` moves into one, and claiming a deck's group
+            // holds a copy no `deck_cards` row knows about is the thing both fences prevent.
+            folderNodes={nodes}
+            folderName={folderNameOf}
+            roomy={roomForPanel}
+            overWidth={panelOverWidth}
+            maxWidth={maxPanelWidth}
+          />
+        </div>
       </div>
 
       {/* The question a drop or a `Move to` asks when the art stands for more than one row.

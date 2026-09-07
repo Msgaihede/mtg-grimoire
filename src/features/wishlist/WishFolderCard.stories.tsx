@@ -10,7 +10,7 @@ import type { FolderNode } from "@/lib/folderTree";
 import type { WishlistFolder } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { WishFolderCard } from "./WishFolderCard";
-import { wishDraggable, type WishDrag } from "./wishDrag";
+import { wishDraggable, type WishDrag, type WishDrop } from "./wishDrag";
 
 /**
  * How long a `waitFor` will wait for a state a drag has to travel to reach.
@@ -146,7 +146,7 @@ const meta = {
     // The page's own answer, verbatim — spec §9: a folder takes any wish that is not already
     // filed in it. Stated once here rather than per story, because it is the rule rather than a
     // property of one tile; only {@link DropTarget} ever puts a wish in the air to ask it.
-    canDrop: (drag: WishDrag): boolean => drag.folderId !== EXPENSIVE.id,
+    canDrop: (drop: WishDrop): boolean => drop.kind === "new" || drop.wish.folderId !== EXPENSIVE.id,
     // The page's rule for the *other* drag, cut down to the one drawer this wall draws: a folder
     // takes a sibling at any of the three landings, and refuses the folder that **is** it — which
     // is `reorderedLevel`'s first line said in the workbench's terms. The rest of what the page

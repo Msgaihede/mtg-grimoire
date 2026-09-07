@@ -91,7 +91,7 @@ import type { WishlistFolder } from "@/lib/ipc";
 import type { Currency } from "@/lib/marketplace";
 import { formatPrice } from "@/lib/prices";
 import { cn } from "@/lib/utils";
-import { useWishDropTarget, type WishDrag } from "./wishDrag";
+import { useWishDropTarget, type WishDrop } from "./wishDrag";
 
 /**
  * What a folder card is drawn from: the wishes in it, the copies still to find, what those cost
@@ -207,10 +207,19 @@ export function WishFolderCard({
     onSubmit: (name: string) => void;
     onCancel: () => void;
   };
-  /** Whether *this* folder would take the wish currently in the air — spec §9: the folder a wish
-   *  is already filed in refuses it, and draws no mark rather than one that does nothing. */
-  canDrop: (drag: WishDrag) => boolean;
-  onDropWish: (drag: WishDrag) => void;
+  /**
+   * Whether *this* folder would take what is currently in the air — spec §9: the folder a wish is
+   * already filed in refuses it, and draws no mark rather than one that does nothing.
+   *
+   * **A {@link WishDrop} rather than a bare wish since 2026-09-07**, when the page grew a search
+   * column whose tiles are drag sources too. The card's own drawing does not branch on which arm
+   * it is — a folder either lights up or it does not — so the whole of the change here is the type
+   * and the two names below. What the page does with each arm is `canFile`'s and `fileWish`'s.
+   */
+  canDrop: (drop: WishDrop) => boolean;
+  /** Named for the wish because it is still what a reader drags most; it also carries a printing
+   *  nobody owns yet, which the page files as an **add**. */
+  onDropWish: (drop: WishDrop) => void;
   /**
    * The other drag: a **folder** let go on this card, and which of the three landings it would
    * take — inside this drawer, or beside it on either side.
@@ -238,7 +247,7 @@ export function WishFolderCard({
    * first — and two payloads land on this card, so they needed two boxes. `@dnd-kit/dom` keys its
    * registry by **entity id**, so two `Droppable`s on one element both register and both compete;
    * what keeps them apart is `accepts()`, which `computeCollisions` asks before it measures
-   * anything, and `readCollectionDrop`/`readWishDrag` and `readFolderDrag` are disjoint by
+   * anything, and `readCollectionDrop`/`readWishDrop` and `readFolderDrag` are disjoint by
    * construction. So one box would now work.
    *
    * It stays two for the two reasons that outlived the registry. **The geometry**: this wrapper
@@ -432,7 +441,7 @@ export function WishFolderCard({
  * `ParentFolderCard` is the whole of what it looks like; what is here is the pair of drop targets,
  * which is the part that is the wishlist's own. Both register on the **same `<li>`** — the tile
  * has one landing, so it needs none of the geometry a folder card's second box exists for, and
- * `readWishDrag` and `readFolderDrag` are disjoint, so `accepts()` keeps the two apart.
+ * `readWishDrop` and `readFolderDrag` are disjoint, so `accepts()` keeps the two apart.
  *
  * **The folder half ignores the edge on purpose.** {@link useFolderDropTarget} divides a target
  * into before / inside / after because a folder card offers three landings; this tile offers one,
@@ -455,11 +464,11 @@ export function WishParentFolderCard({
    *  same place, so the tile and the trail above it cannot name one destination two ways. */
   label: string;
   onOpen: () => void;
-  /** Whether the level above would take the wish in the air — the page's own `canFile` bound to
+  /** Whether the level above would take what is in the air — the page's own `canFile` bound to
    *  the destination, so a wish already filed there draws no mark rather than one that does
    *  nothing. */
-  canDrop: (drag: WishDrag) => boolean;
-  onDropWish: (drag: WishDrag) => void;
+  canDrop: (drop: WishDrop) => boolean;
+  onDropWish: (drop: WishDrop) => void;
   /** The other drag: a **folder** moved up out of the level on screen, landing last in the level
    *  above. Answered by the page, which is what holds the cabinet the order comes from. */
   canDropFolder: (drag: FolderDrag) => boolean;

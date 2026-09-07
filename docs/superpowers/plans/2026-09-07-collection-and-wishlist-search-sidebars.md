@@ -611,6 +611,21 @@ ipc.wishlistAdd({ cardId, quantity: 1, preferredFinish: finish, folderId })
 
 # Wave 4 — after the suite is green
 
+## Task 7.5: Extract `useDeskWidth` (added after Wave 3 reported)
+
+Task 7 reported that `LIST_FLOOR`, `DESK_GAP`, the `ResizeObserver` effect and the whole
+`maxPanelWidth` / `roomForPanel` / `panelOverWidth` block are now **byte-identical** in
+`CollectionPage.tsx` and `WishlistPage.tsx`. This plan asked for that ("Task 6's Step 7 verbatim")
+and it was the wrong instruction: a resemblance is N independent decisions that happen to agree
+today, and this repo has deleted two of those already.
+
+**Files:** create `src/lib/useDeskWidth.ts` + `useDeskWidth.test.ts`; modify
+`src/features/collection/CollectionPage.tsx`, `src/features/wishlist/WishlistPage.tsx`.
+
+- [ ] **Step 1:** `export function useDeskWidth(desk: RefObject<HTMLElement | null>, floor: number): { maxPanelWidth: number; roomy: boolean; overWidth: number | undefined }` — the observer, `document.documentElement.clientWidth` (never `innerWidth`, which counts the page scrollbar and caps the panel 8px too wide), and the three derived numbers.
+- [ ] **Step 2:** Point both pages at it and delete both copies. `DeckEditor` is deliberately **not** folded in: its `panelOverWidth` carries an extra `selectedCardId === null` clause, and it measures a desk that holds a deck rather than a list.
+- [ ] **Step 3:** `npx vitest run src/features/collection src/features/wishlist src/lib` and `npx tsc --noEmit`.
+
 ## Task 8: The documentation
 
 **Files:** `docs/reference/collection-folders.md`, `wishlist-folders.md`, `frontend-design.md`, `data-and-sync.md`, `web-target.md`, `src/CLAUDE.md`, `src/features/decks/CLAUDE.md`, `src-tauri/src/update.rs`

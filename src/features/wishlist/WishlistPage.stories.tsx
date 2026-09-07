@@ -102,6 +102,14 @@ const meta = {
           "({@link EditingFromATile}) — floor at zero together. **Removal keeps its own named " +
           "control**, which is the route that says the word rather than the one a held button " +
           "arrives at: {@link Removed} is the story of it.\n\n" +
+          "**It has a docked card search on its right since 2026-09-07** " +
+          "({@link WithSearchColumn}), which is what closed the sentence this page's own empty " +
+          "state used to end on — *“Add cards from search with the + on any row or tile”*, a view " +
+          "sending the reader to another route to fill the list it is about. The column is " +
+          "`WishlistSearchPanel` and is storied in full at `Wishlist/SearchPanel`; every `+` in " +
+          "it files into **the drawer on screen**, and a tile dropped on a folder card files " +
+          "there instead. Two `FilterBar`s are therefore mounted together on this page, told " +
+          "apart by their boxes' names — `Search your wishlist` against `Search cards`.\n\n" +
           "**There is no `Large` story, and that is a fact about the seeds rather than about " +
           'this page.** `seed: "large"` builds 5 243 cards and 600 collection entries and ' +
           "**no wishes at all** — `largeSeed` says so in as many words, and " +
@@ -116,6 +124,26 @@ const meta = {
 
 export default meta;
 type Story = StoryObj<typeof meta>;
+
+/** The docked search column's `<section>`, by the name only it answers to. */
+const PANEL_LABEL = "Add cards to your wishlist";
+
+/**
+ * The **page's own** copy of a control the sidebar draws too.
+ *
+ * Two `FilterBar`s are mounted on this page since 2026-09-07, and `FilterBar` names its own
+ * controls — so `Show filters` and `Sort results` are each on screen twice. That is not a bug in
+ * either row (a control means the same thing wherever it appears); what it means is that a play
+ * reaching for one has to say which column it is about. The boxes themselves are already distinct
+ * (`Search your wishlist` against `Search cards`), which is `FilterLabels`' whole reason.
+ */
+const pageControl = (canvas: ReturnType<typeof within>, name: RegExp | string): HTMLElement => {
+  const found = canvas
+    .getAllByRole("button", { name })
+    .find((el: HTMLElement) => el.closest(`[aria-label="${PANEL_LABEL}"]`) === null);
+  if (!found) throw new Error(`no page-side control named ${String(name)}`);
+  return found;
+};
 
 /**
  * Five wishes, and the one number the view exists for.
@@ -160,7 +188,7 @@ export const Default: Story = {
     // screen carries that name. It used to be a chip drawn only where there was something to
     // filter; `WISHLIST_TRAY` in `WishlistPage.tsx` says why that rule did not survive the move.
     await expect(canvas.queryByRole("button", { name: "Needs review" })).toBeNull();
-    await expect(canvas.getByRole("button", { name: /^Show filters/ })).toBeInTheDocument();
+    await expect(pageControl(canvas, /^Show filters/)).toBeInTheDocument();
   },
 };
 
@@ -558,7 +586,7 @@ export const FulfilledAndUnfulfilled: Story = {
 
     // Off → still missing. Behind the Filters disclosure since this page started drawing the
     // shared row — the box, the colours, the order and the layout pair are what stay on the bar.
-    await userEvent.click(canvas.getByRole("button", { name: /^Show filters/ }));
+    await userEvent.click(pageControl(canvas, /^Show filters/));
 
     await userEvent.click(canvas.getByRole("button", { name: "Still missing" }));
     await waitFor(async () => {
@@ -637,7 +665,7 @@ export const NeedsReview: Story = {
       "aria-rowcount",
       "7",
     );
-    await userEvent.click(canvas.getByRole("button", { name: /^Show filters/ }));
+    await userEvent.click(pageControl(canvas, /^Show filters/));
     await expect(canvas.getByRole("button", { name: "Needs review" })).toBeInTheDocument();
   },
 };
@@ -716,5 +744,58 @@ export const Removed: Story = {
     );
     // A removal that succeeded says nothing: the row going is the whole report.
     await expect(canvas.queryByRole("alert")).toBeNull();
+  },
+};
+
+/**
+ * The page as it actually opens since 2026-09-07: **the list and a docked card search sharing one
+ * row.**
+ *
+ * The column is `WishlistSearchPanel`, storied in full at `Wishlist/SearchPanel`; what this story
+ * is about is the *page* around it — the row that had to be invented, since this view was
+ * `flex-col` from its root down and had nothing to hang a column off.
+ *
+ * **Three things are being claimed here and only a browser can settle them.** The figures band and
+ * the page's own `FilterBar` stay **full width above** the row, because that bar lays itself out in
+ * four container bands and taking width off it rearranges the bar rather than shortening it. The
+ * list side carries `min-w-0`, without which a flex item cannot shrink below its own min-content
+ * and the overhang becomes a horizontal scrollbar across the whole app — `ManaValueChips` shipped
+ * exactly that once, at 25px, invisible to the suite and to a screenshot. And the two filter rows
+ * are separately addressable, which is what `FilterLabels` exists for: the page's box is
+ * `Search your wishlist` and the column's is `Search cards`.
+ */
+export const WithSearchColumn: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const column = canvas.getByRole("region", { name: PANEL_LABEL });
+    await expect(
+      within(column).getByRole("button", { name: /card search$/ }),
+    ).toHaveAttribute("aria-expanded", "true");
+
+    // Two rows, two names, and neither reaches the other's field.
+    await expect(canvas.getByLabelText(/search your wishlist/i)).toBeInTheDocument();
+    await expect(within(column).getByLabelText("Search cards")).toBeInTheDocument();
+
+    // **The page's own wall, awaited** — it is gated on `wishlist_list` answering, so a synchronous
+    // query here asks before there is anything to find. The two walls carry different names by
+    // construction rather than by agreement: this one passes `label="Your wishlist"` and
+    // `CardSearchBody` passes none, so the column's is `CardGrid`'s default `Search results`.
+    const list = await canvas.findByRole("group", { name: "Your wishlist" });
+
+    // Nothing overhangs. Storybook is a real browser, so unlike the suite this is read off the box
+    // rather than off a class — and the page's own scroller is what an overhang would reach.
+    const row = column.parentElement!.parentElement!;
+    await expect(row.scrollWidth).toBe(row.clientWidth);
+    await expect(list.scrollWidth).toBeLessThanOrEqual(list.clientWidth);
+
+    // And the destination is the page: at the root that is the list's own name, never "no folder".
+    // Asked of **one card**, because the column draws a quick-add per tile and the corpus's default
+    // browse is 37 of them — a `.+` here is a question with 37 honest answers. `Ancient Tomb` is the
+    // row `Wishlist/SearchPanel` and `Decks/SearchPanel` both reach for.
+    await expect(
+      await within(column).findByRole("button", {
+        name: /^Add Ancient Tomb \(.+\) to Wishlist$/,
+      }),
+    ).toBeInTheDocument();
   },
 };
