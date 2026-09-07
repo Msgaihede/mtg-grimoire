@@ -348,7 +348,7 @@ function importLine(kind: DeckAuditKind, p: Record<string, unknown>): AuditLine 
  * press — three copies of one card and three copies of three cards are the same first number and
  * a different act. The detail is drawn only when the row carries a card count: `numberField`
  * reads an absent key as `0`, and "across 0 cards" beside "Pulled 3 copies" is arithmetic that
- * cannot be true. That is `importLine`'s `tagsCreated` rule, one payload over.
+ * cannot be true. That is `importLine`'s `labelsCreated` rule, one payload over.
  *
  * `null` for any kind but `move`, so a row a newer build wrote with a `pull` payload on a kind
  * this one has no sentence for falls through to its own branch instead of being claimed here —
