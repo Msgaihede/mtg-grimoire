@@ -102,6 +102,12 @@ type PartialCopy = Partial<
  * **Reading them defensively is not only about a stub.** `row.setCode.toUpperCase()` threw during
  * render until 2026-08-23, and this is the tab the panel *opens* on — so one unexpected row was
  * the whole deck editor rather than one line.
+ *
+ * **A grade the reader never stated is a fact and is said**, so `Not set` joins the list the way
+ * any other grade does — `CollectionTable`'s cell drops it and this does not, which is one rule at
+ * two grains rather than a disagreement (`PickCopies.tsx`'s `copyFace` has it in full). The
+ * absence this function drops is a column that is *missing*, and the sentinel is a column that
+ * says something.
  */
 function copyFacts(row: PartialCopy): string[] {
   const printing = [row.setCode?.toUpperCase(), row.collectorNumber].filter(Boolean).join(" ");

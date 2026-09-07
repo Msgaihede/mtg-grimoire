@@ -891,7 +891,8 @@ export interface EntryInput {
    * rows, never one row that moves. Moving one is {@link ipc.collectionSetFolder} and only that.
    */
   folderId?: number | null;
-  /** Defaults to `NM` — what an unmarked card is assumed to be. */
+  /** Defaults to `NONE` — *not set*. An add that names no grade records that nobody
+   *  named one, which is a fact; `NM` would be a guess dressed as one. */
   condition?: Condition;
   /** What the user's file called that condition, kept because the normalisation is lossy. */
   conditionOriginal?: string;
@@ -1224,12 +1225,17 @@ export interface CollectionRow {
    * What state the copy is in — `collection_entries.condition`, straight off the entry, and
    * always one of {@link Condition}.
    *
-   * **Not `| null`, because the column is `TEXT NOT NULL DEFAULT 'NM'`** and no backend write
-   * can leave it unset — an absent condition becomes `NM` before the insert. It carried `| null`
-   * for three releases as a fence around the wire, which cost every reader of the row a branch
-   * that could not be reached. The reader who never stated a grade is not represented by a
-   * missing `condition`; they are represented by `conditionOriginal` being `null`, which is the
-   * field that records what their file actually said.
+   * **Not `| null`, because the column is `TEXT NOT NULL DEFAULT 'NONE'`** and no backend write
+   * can leave it unset — an absent condition becomes `NONE` before the insert. It carried
+   * `| null` for three releases as a fence around the wire, which cost every reader of the row a
+   * branch that could not be reached.
+   *
+   * **A reader who never stated a grade is now represented in the column itself**, as `NONE`,
+   * and that is what schema v35 is for. Until then this doc pointed at `conditionOriginal` being
+   * `null` as the only record of their silence — which was true, and which meant the silence
+   * could not be filtered, sorted or drawn, because it lived in a *provenance* field rather than
+   * in the grade. `conditionOriginal` still answers the question it was built for: what the
+   * reader's own file said before the normalisation flattened it.
    */
   condition: string;
   quantity: number;
@@ -5828,8 +5834,9 @@ export const ipc = {
    *
    * **`finish` is the deck row's** — `null` is the regular copy, {@link DeckFinish}'s
    * translation — and the collection word it is recorded under is `nonfoil`. `condition` is the
-   * one decision this press makes for the reader, and it is `MENU_CONDITION` (NM) rather than a
-   * second spelling of it.
+   * one decision this press makes for the reader — or rather the one it now declines to make,
+   * because `MENU_CONDITION` is *not set*. Passed as that constant rather than as a second
+   * spelling of whatever it currently holds.
    *
    * **One transaction, so a wish that has moved on rolls the copies back too.** The backend
    * re-reads the named wish against the same predicate {@link ipc.deckQuickAddWishes} used —

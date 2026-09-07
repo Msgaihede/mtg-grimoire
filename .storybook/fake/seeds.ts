@@ -375,15 +375,17 @@ function emptySeed(): FakeDb {
 /* ------------------------------------------------------------------ starter ------------ */
 
 /**
- * Twelve collection rows over twelve printings, spanning all three finishes and all five
+ * Thirteen collection rows over twelve printings, spanning all three finishes and all six
  * conditions, and every one of them is here for a branch.
  *
- * Counted: nonfoil 8, foil 3, etched 1; NM 8, LP 1, MP 1, HP 1, DMG 1; **20 copies across 12
- * entries**, which is why `collection_summary`'s `totalCards` and `entries` disagree in every
- * story built on this seed — as they must, since a row at zero is still a row.
+ * Counted: nonfoil 8, foil 3, etched 2; NM 8, LP 1, MP 1, HP 1, DMG 1, NONE 1; **21 copies
+ * across 13 entries**, which is why `collection_summary`'s `totalCards` and `entries` disagree
+ * in every story built on this seed — as they must, since a row at zero is still a row.
+ * `uniqueCards` stays **12**, because the thirteenth row is a second grade of a printing already
+ * here rather than a card the reader did not own before.
  *
- * **Four of the twelve sit in binders the reader named, three sit in a deck's group — two in
- * {@link DECK_1_GROUP} and one in {@link DECK_2_GROUP} — and five are at the root.** Filing moves
+ * **Four of the thirteen sit in binders the reader named, three sit in a deck's group — two in
+ * {@link DECK_1_GROUP} and one in {@link DECK_2_GROUP} — and six are at the root.** Filing moves
  * no copies and changes no total: `CollectionQuery.folderId` is absent by default and means
  * *every* folder, so every count above is what it always was and every story that says nothing
  * about folders sees the list it always saw.
@@ -478,6 +480,31 @@ function starterEntries(): FakeEntry[] {
       notes: "Cube proxy. The real one is not happening.",
       folderId: 2,
     }),
+    // **The ungraded copy — `NONE`, schema v35's sixth value, and the seed's only row wearing
+    // it.** A state a reader reaches by pressing `+` and saying nothing, which since v35 is
+    // every menu quick-add and an add popup opened and submitted untouched.
+    //
+    // **The same printing and the same finish as the `sta 105` row above**, differing in the
+    // grain's third term alone — which is the whole reason it is a second `sta 105` rather than a
+    // card of its own. The collection table draws the two together, one reading `Etched · Near
+    // mint` and the other `Etched` with nothing after it, so a surface that printed
+    // `Etched · NONE` or `Etched · —` has something on screen to be wrong about. It is the
+    // sort's fixture too: ordering by Finish puts this row **after** the NM one inside the
+    // etched run, because `CONDITION_RANK` ranks `NONE` last while a picker draws it first.
+    //
+    // Deliberately unfiled and deliberately without a price — a reader who fills in an
+    // acquisition story is a reader who picked a grade, so a `NONE` row carrying one would be a
+    // row nobody produces.
+    //
+    // **Last in the array on purpose.** Every id above it is one a story or a test may have
+    // written down (`collection_to_deck({ entryId: 5 })`, a drag payload, a `PickCopies` row),
+    // and inserting beside its twin would have shifted nine of them by one — a rename with no
+    // compiler behind it. `sta 105` is also the one printing here no deck lists and no wish
+    // pins, and this copy is at the root rather than in a group, so no editor badge and no
+    // shortage mark moves: a deck's `ownedQuantity` is what its **own group** physically holds.
+    // What does move is `entries` 12 → 13 and `totalCards` 20 → 21, plus this printing's owned
+    // pip 1 → 2 and the Lightning Bolt oracle's `card_holdings.owned`; `uniqueCards` stays 12.
+    entry(next(), printing("sta", "105"), "etched", "NONE", 1),
   ];
 }
 
@@ -1639,6 +1666,12 @@ function largeCards(): FakeCard[] {
  * Finish is drawn from each card's own `finishes` array rather than cycled blindly: a foil row
  * on a nonfoil-only printing is a state the app cannot produce, and it would price as null and
  * look like a bug in the summary.
+ *
+ * **The condition cycle is the five real grades and deliberately not the six.** `NONE` is the
+ * *absence* of a grade, and a sixth of a 600-row wall wearing it would say the reader left one
+ * card in six ungraded, which is a claim about a reader rather than a shape a screen needs. So
+ * a Condition filter narrowed to `Not set` finds nothing in this world, on purpose: `starter`
+ * is where that row lives, and depth is the only thing this seed is for.
  */
 function largeEntries(cards: FakeCard[]): FakeEntry[] {
   const next = ids();

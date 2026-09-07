@@ -45,7 +45,7 @@ export interface CopyChoice {
   entryId: number;
   /** Nonfoil / Foil / Etched — already labelled by the caller. */
   finish: string;
-  /** NM, LP, … — already labelled by the caller. */
+  /** Near mint, Lightly played, Not set … — already labelled by the caller. */
   condition: string;
   /** "en", "ja" … The caller passes it through; drawn only when it is not English. */
   lang: string;
@@ -76,6 +76,15 @@ export interface CopyChoice {
  * everywhere else here: a `JA` beside the condition is a fact worth a word, and an `EN` on
  * ninety-odd per cent of rows is a column of noise that pushes the folder — the term actually
  * doing the disambiguating — off the end of a narrow panel.
+ *
+ * **A grade the reader never stated is said rather than dropped, which is the reverse of what
+ * the collection table does with the same fact and is not a disagreement with it.** That table
+ * has a `Finish · condition` heading over a column of four hundred rows, so an ungraded row can
+ * print its finish and stop and still be read correctly. Here the terms run together in one
+ * sentence with no heading over any of them, and every row is drawn precisely because another
+ * row looks nearly like it — a copy that quietly omitted the term would read as the *same* copy
+ * as the graded one above it. Two rows of one printing differing only in whether a grade was
+ * ever claimed is exactly the pair this panel exists to let a reader choose between.
  */
 function copyFace(copy: CopyChoice): { shown: string; spoken: string } {
   const parts = [

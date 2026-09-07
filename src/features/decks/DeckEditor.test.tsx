@@ -5,6 +5,9 @@ import type { UserEvent } from "@testing-library/user-event";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
+// The constant and never the two letters: what a menu quick add records moved once already, and a
+// suite spelling the grade out would have gone green over the app that had stopped agreeing.
+import { MENU_CONDITION } from "@/lib/conditions";
 import type {
   CardDetail,
   CardSummary,
@@ -5328,7 +5331,7 @@ describe("DeckEditor — the Collection submenu", () => {
         4,
         "c-Lightning Bolt",
         null,
-        "NM",
+        MENU_CONDITION,
         4,
         null,
       ),
@@ -5360,7 +5363,7 @@ describe("DeckEditor — the Collection submenu", () => {
         4,
         "c-Lightning Bolt",
         null,
-        "NM",
+        MENU_CONDITION,
         4,
         31,
       ),
@@ -5384,7 +5387,7 @@ describe("DeckEditor — the Collection submenu", () => {
         4,
         "c-Lightning Bolt",
         null,
-        "NM",
+        MENU_CONDITION,
         4,
         null,
       ),
@@ -5420,7 +5423,7 @@ describe("DeckEditor — the Collection submenu", () => {
         4,
         "c-Lightning Bolt",
         null,
-        "NM",
+        MENU_CONDITION,
         4,
         32,
       ),

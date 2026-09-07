@@ -92,11 +92,17 @@ const meta = {
           "over the same filters** (`useCollection` keeps the summary on a key with no sort in " +
           "it), both answered by `db.ts`'s `collection_list` and `collection_summary`, and the " +
           "stepper writes through `collection_set_quantity`.\n\n" +
-          "**The `starter` seed is 12 entries holding 20 copies**, and the two numbers " +
+          "**The `starter` seed is 13 entries holding 21 copies**, and the two numbers " +
           "disagreeing is the whole grammar of this view: a row is a *thing owned* — a foil and " +
-          "a played nonfoil of one printing are two rows — and one of the twelve holds zero " +
-          'copies. Measured 2026-08-10 by calling `readHandlers(seed("starter")).' +
-          "collection_summary`: `totalCards: 20`, `uniqueCards: 12`, `entries: 12`.\n\n" +
+          "a played nonfoil of one printing are two rows — and one of the thirteen holds zero " +
+          'copies. Re-measured 2026-09-07 by calling `readHandlers(seed("starter")).' +
+          "collection_summary`: `totalCards: 21`, `uniqueCards: 12`, `entries: 13`.\n\n" +
+          "**`uniqueCards` did not move with the other two, and that is the seed's newest row " +
+          "saying what it is for**: a second `sta 105`, etched like the graded one above it and " +
+          "recorded at `NONE`, so the table draws `Etched · Near mint` beside a bare `Etched` and " +
+          "the Finish sort has a real not-set pair inside one finish. Same printing, so the " +
+          "*card* count is unchanged — and one tile on the wall rather than two, since a tile is " +
+          "a printing and a finish.\n\n" +
           "**Quantity 0 deletes the row, and this reverses what this page said until v24.** " +
           "{@link ZeroDeletesTheRow} is it, and carries the argument on both sides: the row's " +
           "condition, purchase price, tags and acquisition story go with it, which is exactly " +
@@ -108,16 +114,16 @@ const meta = {
           "fields at once and must not delete its own subject — and it is what the Folder " +
           "column's removal control exists for.\n\n" +
           "**The page opens flattened — every copy, wherever it is filed — and the root it is " +
-          "ignoring is five of those twelve.** The root asks `rootOnly` since the Flatten switch " +
+          "ignoring is six of those thirteen.** The root asks `rootOnly` since the Flatten switch " +
           "landed, where an absent `folderId` used to mean every folder; that narrowing is the " +
           "reason the switch defaults **on**, because since schema v25 every card in a deck sits " +
           "in that deck's group folder, and on the maintainer's own database 275 of 275 entries " +
           "are filed in one — an unflattened first launch there draws `Cards 0 · Unique 0` over " +
           "a full binder. So {@link Default} is the flattened list, and {@link TheCabinet} is " +
           "the one press that puts the filing back on screen: four rows in the reader's binders " +
-          "and three in two deck groups behind folder cards, five left at the root. The seed is " +
-          "what makes the difference visible: `collection_summary` still reads `totalCards: 20` " +
-          "over `entries: 12` when it is asked *nothing*, which is what the export dialog's " +
+          "and three in two deck groups behind folder cards, six left at the root. The seed is " +
+          "what makes the difference visible: `collection_summary` still reads `totalCards: 21` " +
+          "over `entries: 13` when it is asked *nothing*, which is what the export dialog's " +
           '"ignoring the filters and folders" offer reaches.\n\n' +
           "**One state has no story: a page-load failure.** The `busy` fault is honoured by " +
           "write handlers only — deliberately, because reads go through a second, read-only " +
@@ -143,7 +149,7 @@ type Story = StoryObj<typeof meta>;
  * **The list is every copy the reader owns, wherever it is filed — because that is what the page
  * opens on.** `collectionFlattened` starts `true`: the root was narrowed to mean "filed nowhere",
  * and since schema v25 every card in a deck sits in that deck's group, so the unflattened root is
- * a screen a reader with decks would meet empty. All twelve of the seed's entries are here,
+ * a screen a reader with decks would meet empty. All thirteen of the seed's entries are here,
  * including the Black Lotus in `Trade binder` and the three in two deck groups, each naming its
  * own drawer in the Folder column.
  *
@@ -172,10 +178,10 @@ export const Default: Story = {
     await expect(canvas.getByText("Black Lotus")).toBeInTheDocument();
     // What assistive tech is told the list is: every matching row plus the header
     // (`VirtualTable.tsx:181`), not the two dozen rows a virtualised table keeps in the DOM.
-    // The whole seed, so 12 entries plus the header.
+    // The whole seed, so 13 entries plus the header.
     await expect(canvas.getByRole("table", { name: "Your collection" })).toHaveAttribute(
       "aria-rowcount",
-      "13",
+      "14",
     );
     // And no cabinet: no drawers to open, no doors into the levels this list is ignoring.
     await expect(canvas.queryByRole("list", { name: "Folders" })).toBeNull();
@@ -201,7 +207,7 @@ export const Default: Story = {
  *
  * **And the list narrows, which is the half worth a story of its own.** `CollectionQuery.folderId`
  * absent used to mean "every folder"; it is `rootOnly` now, so the root is the copies filed
- * *nowhere* — five of the seed's twelve. The other seven are one folder card away: Black Lotus in
+ * *nowhere* — six of the seed's thirteen. The other seven are one folder card away: Black Lotus in
  * `Trade binder`, three more in two decks' groups. That reversal is the requested behaviour rather
  * than a regression, and it is exactly why {@link Default} opens with the switch on.
  *
@@ -217,12 +223,12 @@ export const TheCabinet: Story = {
 
     await userEvent.click(canvas.getByRole("button", { name: "Flatten" }));
 
-    // Five unfiled entries plus the header. The count is what says the root narrowed; a named
+    // Six unfiled entries plus the header. The count is what says the root narrowed; a named
     // row alone could not tell "filed away" from "scrolled past".
     await waitFor(async () => {
       await expect(canvas.getByRole("table", { name: "Your collection" })).toHaveAttribute(
         "aria-rowcount",
-        "6",
+        "7",
       );
     });
     await expect(canvas.queryByText("Black Lotus")).toBeNull();
@@ -238,7 +244,9 @@ export const TheCabinet: Story = {
 };
 
 /**
- * The same twelve entries as a wall of art — and **a drag source**, which reverses what this
+ * The same thirteen entries as **twelve** pieces of art — the seed's two `sta 105` rows are one
+ * printing in one finish, which is exactly the wall's grain — and **a drag source**, which
+ * reverses what this
  * story asserted until 2026-08-26.
  *
  * It used to pin the opposite, and the paragraph here argued it: spec §1's card surfaces were the
@@ -649,7 +657,7 @@ export const Large: Story = {
  *
  * `db.ts:1479`'s `BUSY` is `collection::BUSY` verbatim, raised by `refuseIfBusy` at the top of
  * every write handler and by no read handler — which is why the list underneath is untouched and
- * still counting twelve. The alert is a `role="alert"` of its own rather than a line folded into
+ * still counting thirteen. The alert is a `role="alert"` of its own rather than a line folded into
  * the status above it: that one describes the list, and this one describes something the reader
  * just did to it.
  *
@@ -732,5 +740,52 @@ export const ZeroDeletesTheRow: Story = {
     ).toBeNull();
     // No refusal: this is a successful write, not a tolerated failure.
     await expect(canvas.queryByRole("alert")).toBeNull();
+  },
+};
+
+/**
+ * **Correcting a copy from the row it is on** — the collection's own `Edit copy…`, and the app's
+ * first press that reaches `collection_update` at all.
+ *
+ * The row is the whole fence. A table row *is* one `collection_entries` entry, so there is a copy
+ * to be about; the wall's tile is the page's **summary** of a printing across however many entries
+ * it happens to hold, and a dialog editing "the grade" of three rows at once would be choosing a
+ * copy the reader never named. So the row offers the item and a tile does not — absent rather than
+ * greyed, because it is missing from every tile of that wall and therefore reads as a fact about
+ * the surface. {@link CardMode} is that surface; this is this one.
+ *
+ * **The dialog is seeded from the row it was opened on**, which is what the identity line under
+ * the heading is for: a reader with a Near Mint Bolt in two binders is told which drawer this
+ * question is about before they answer it.
+ *
+ * `Collection/Edit copy` is the dialog's own page, with the states this page cannot reach in one
+ * press — a copy nobody has graded, a price recorded in another currency, a grade this build
+ * cannot name.
+ */
+export const EditingACopy: Story = {
+  args: { view: "table", flatten: true },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // The proxy Black Lotus, filed in `Trade binder` — early in `COLLECTION_DEFAULT_ORDER`, so it
+    // is in the DOM under `stories.test.tsx`'s layout stub, and filed, so the identity line has a
+    // drawer to name rather than falling back to `Collection`.
+    const row = await canvas.findByRole("row", { name: /Black Lotus/ });
+
+    await userEvent.pointer({ keys: "[MouseRight]", target: row });
+    await canvas.findByRole("menu");
+    await userEvent.click(canvas.getByRole("menuitem", { name: "Edit copy…" }));
+
+    const dialog = await canvas.findByRole("dialog", { name: "Edit copy" });
+    // The copy, and the grade it is recorded at — read off the row rather than defaulted.
+    await expect(within(dialog).getByText("LEA 232 · Nonfoil · Trade binder")).toBeInTheDocument();
+    await expect(within(dialog).getByRole("button", { name: "Condition" })).toHaveTextContent(
+      "Near mint",
+    );
+    // Nothing has changed yet, so there is nothing to write — and the button says so before the
+    // press rather than after it.
+    await expect(within(dialog).getByRole("button", { name: "Save" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
   },
 };

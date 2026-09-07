@@ -6,7 +6,7 @@ import {
   stepZoom,
   type ZoomSection,
 } from "./cardZoom";
-import type { Condition } from "./conditions";
+import { CONDITION_NOT_SET, type Condition } from "./conditions";
 import type { Finish } from "./finish";
 import { applySelect, EMPTY_SELECTION, type Selection, type SelectModifiers } from "./multiSelect";
 import { defaultFields } from "@/features/transfer/fields";
@@ -785,9 +785,10 @@ interface AppState {
    * this app's collection-only vocabulary).
    *
    * **One shared pair rather than one per surface**, unlike {@link exportPrefs}: a reader who has
-   * just told the collection's import "assume Near Mint, foil" is answering a question about
-   * *their box*, not about the collection screen — so a wishlist import opened next re-reads the
-   * same answer rather than asking again. `NM` matches Rust's `DEFAULT_CONDITION`.
+   * just told the collection's import "assume nothing about the grade, and foil" is answering a
+   * question about *their box*, not about the collection screen — so a wishlist import opened
+   * next re-reads the same answer rather than asking again. `NONE` matches Rust's
+   * `DEFAULT_CONDITION`.
    */
   importDefaults: { condition: Condition; finish: DeckFinish };
   setImportDefaults: (defaults: { condition: Condition; finish: DeckFinish }) => void;
@@ -1285,6 +1286,16 @@ export const useAppStore = create<AppState>((set) => ({
   },
   setExportPrefs: (surface, prefs) =>
     set((s) => ({ exportPrefs: { ...s.exportPrefs, [surface]: prefs } })),
-  importDefaults: { condition: "NM", finish: null },
+  // The condition opens on the sentinel since schema v35: an import line that says nothing about
+  // a grade records that it said nothing, rather than the app writing the best grade on the scale
+  // on the reader's behalf.
+  //
+  // **Nothing converts a value already in hand, and today there is none to convert** — this pair
+  // is in-memory session state with no `app_meta` row and no persist middleware behind it, so
+  // this literal is what every launch opens on. If it is ever given a stored home, the migration
+  // to write is *none*: a reader whose stored answer is `NM` either chose it or lived with it,
+  // and silently changing what their next import records is worse than the inconsistency it
+  // would tidy away.
+  importDefaults: { condition: CONDITION_NOT_SET, finish: null },
   setImportDefaults: (importDefaults) => set({ importDefaults }),
 }));
