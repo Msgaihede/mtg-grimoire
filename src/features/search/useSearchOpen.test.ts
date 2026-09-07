@@ -58,7 +58,33 @@ describe("useSearchOpen", () => {
     const { result } = renderHook(() => useSearchOpen("wishlist"), { wrapper });
 
     await waitFor(() => expect(searchOpen).toHaveBeenCalled());
-    expect(result.current.open).toBe(true);
+    expect(result.current.open).toBe(false);
+  });
+
+  /**
+   * **The three defaults are not the same and the difference is the point**, so it is pinned as a
+   * fact rather than left to whichever section the cases above happen to name. The deck is built
+   * *out of* a search, so its column is the work and opens open (issue #183); the two lists carry a
+   * `FilterBar` of their own and draw the panel as an *overlay* rather than a rail when narrow, so
+   * opening open would put two filter rows on screen unasked and cover the list on a small window.
+   * Measured at seven widths in the shipped window on 2026-09-07 — `useSearchOpen.ts` has the
+   * reading.
+   *
+   * Spelled as three literals rather than read back out of `DEFAULT_SEARCH_OPEN`: an assertion that
+   * reads its own constant passes against any value the constant takes, including the one this case
+   * exists to refuse.
+   */
+  it("opens the deck's column and rails the two lists'", async () => {
+    searchOpen.mockResolvedValue({});
+
+    const deck = renderHook(() => useSearchOpen("deck"), { wrapper });
+    const collection = renderHook(() => useSearchOpen("collection"), { wrapper });
+    const wishlist = renderHook(() => useSearchOpen("wishlist"), { wrapper });
+
+    await waitFor(() => expect(searchOpen).toHaveBeenCalled());
+    expect(deck.result.current.open).toBe(true);
+    expect(collection.result.current.open).toBe(false);
+    expect(wishlist.result.current.open).toBe(false);
   });
 
   /**
@@ -80,11 +106,16 @@ describe("useSearchOpen", () => {
    * read is driven all the way into `error` rather than merely observed for a beat, so this cannot
    * pass on a read that had simply not answered yet — and a preference that cannot be read is not
    * worth a page that will not draw.
+   *
+   * **It names the deck, and the section is load-bearing rather than arbitrary.** The deck is the
+   * one whose default is `true`, so a hook that answered a bare `false` on any failed read — the
+   * obvious way to get this wrong — fails here. Asked about the collection it would pass against
+   * exactly that bug, because `false` is the answer either way.
    */
   it("answers the default while the read is in flight", async () => {
     searchOpen.mockRejectedValue("The database is busy with a sync — try again in a moment.");
 
-    const { result } = renderHook(() => useSearchOpen("collection"), { wrapper });
+    const { result } = renderHook(() => useSearchOpen("deck"), { wrapper });
 
     await waitFor(() => expect(client.getQueryState(SEARCH_OPEN_KEY)?.status).toBe("error"));
     expect(result.current.open).toBe(true);

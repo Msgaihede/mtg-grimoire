@@ -93,9 +93,13 @@ type Story = StoryObj<typeof meta>;
 /**
  * The column at rest, filing at the root.
  *
- * Open, because that is what a database nobody has pressed the disclosure in answers: a sidebar
- * that opens shut is a feature the reader has to find, where one that opens open is a feature they
- * dismiss once and are not shown again.
+ * **Railed at rest, and opened by the press a reader would use.** A database nobody has expressed a
+ * preference in rails this column (`DEFAULT_SEARCH_OPEN`): the page already draws a `FilterBar` of
+ * its own, and below 544px the panel is an overlay rather than a rail, so opening open would put
+ * two filter rows on screen unasked and cover the binder on a small window. Measured at seven
+ * widths in the shipped window on 2026-09-07. The rail is the affordance and the press is
+ * remembered, so this play walks in the way a first-time reader does rather than seeding the cache
+ * behind the control.
  *
  * The `+`'s name states the destination before the press — `DeckSearchPanel`'s rule (`Add Ancient
  * Tomb to Land`) — and at the root that destination is the **list's** own word.
@@ -104,8 +108,9 @@ export const Docked: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("region", { name: "Add cards to your collection" });
+    await userEvent.click(within(panel).getByRole("button", { name: "Expand card search" }));
     await expect(
-      within(panel).getByRole("button", { name: "Collapse card search" }),
+      await within(panel).findByRole("button", { name: "Collapse card search" }),
     ).toHaveAttribute("aria-expanded", "true");
 
     // Narrowed to one card, so the tile this play is about is the one on screen rather than
@@ -137,9 +142,12 @@ export const InAFolder: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("region", { name: "Add cards to your collection" });
+    // Railed at rest — see {@link Docked}. The body is not merely hidden but unmounted, so the
+    // searchbox below does not exist until this press.
+    await userEvent.click(within(panel).getByRole("button", { name: "Expand card search" }));
 
     await userEvent.type(
-      within(panel).getByRole("searchbox", { name: "Search cards" }),
+      await within(panel).findByRole("searchbox", { name: "Search cards" }),
       "Ancient Tomb",
     );
     const add = await within(panel).findByRole("button", {
@@ -193,12 +201,18 @@ export const Narrow: Story = {
     // control being dropped.
     await expect(toggle).toBeVisible();
 
+    // Railed at rest — see {@link Docked} — and this story is about what the *open* panel measures
+    // at its floor, so it presses first. The element is the same one across the press, which is
+    // what lets the row below be read off it either way.
+    await userEvent.click(toggle);
+
     // Nothing overhangs — the panel, its title row, and the filter row under it, which is the
     // piece most likely to break at this width because it is the one with ten chips in it.
     const row = toggle.parentElement!;
     await expect(panel.scrollWidth).toBe(panel.clientWidth);
     await expect(row.scrollWidth).toBe(row.clientWidth);
-    const filters = within(panel).getByRole("searchbox", { name: "Search cards" }).parentElement!;
+    const filters = (await within(panel).findByRole("searchbox", { name: "Search cards" }))
+      .parentElement!;
     await expect(filters.scrollWidth).toBe(filters.clientWidth);
   },
 };

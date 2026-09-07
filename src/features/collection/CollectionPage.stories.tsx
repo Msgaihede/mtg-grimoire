@@ -815,17 +815,20 @@ export const WithSearch: Story = {
     const canvas = within(canvasElement);
     const panel = await canvas.findByRole("region", { name: "Add cards to your collection" });
 
-    // Open at rest — the reader's stored answer, and `true` for a database nobody has pressed it
-    // in. A sidebar that opens shut is a feature the reader has to find.
+    // **Railed at rest** — `DEFAULT_SEARCH_OPEN` rails the two lists' columns and opens only the
+    // deck's, because this page already draws a `FilterBar` of its own and below 544px the panel
+    // is an overlay rather than a rail. Measured at seven widths in the shipped window on
+    // 2026-09-07. The press is the reader's real entry point, so the play uses it.
+    await userEvent.click(within(panel).getByRole("button", { name: "Expand card search" }));
     await expect(
-      within(panel).getByRole("button", { name: "Collapse card search" }),
+      await within(panel).findByRole("button", { name: "Collapse card search" }),
     ).toHaveAttribute("aria-expanded", "true");
 
     // The two boxes, and the whole of what tells them apart.
     await expect(
       canvas.getByRole("searchbox", { name: "Search your collection" }),
     ).toBeInTheDocument();
-    const box = within(panel).getByRole("searchbox", { name: "Search cards" });
+    const box = await within(panel).findByRole("searchbox", { name: "Search cards" });
 
     // At the root the destination is the list's own name — never "no folder", which would
     // describe the same drawer the breadcrumb calls Collection.
@@ -879,12 +882,18 @@ export const Narrow: Story = {
     // Drawn beside the list rather than over it: 206 is the floor, not below it.
     await expect(panel).not.toHaveAttribute("data-search-over");
 
+    // Railed at rest — see {@link WithSearch} — and this story measures the *open* panel at its
+    // floor. The disclosure is the same element across the press, so the row read off it is the
+    // same box either way.
+    await userEvent.click(toggle);
+
     // Nothing overhangs — the panel, its title row, and its own filter row, which is the piece
     // most likely to break at this width because it is the one with ten chips in it.
     const row = toggle.parentElement!;
     await expect(panel.scrollWidth).toBe(panel.clientWidth);
     await expect(row.scrollWidth).toBe(row.clientWidth);
-    const filters = within(panel).getByRole("searchbox", { name: "Search cards" }).parentElement!;
+    const filters = (await within(panel).findByRole("searchbox", { name: "Search cards" }))
+      .parentElement!;
     await expect(filters.scrollWidth).toBe(filters.clientWidth);
   },
 };
@@ -924,10 +933,18 @@ export const Overlaid: Story = {
     const panel = await canvas.findByRole("region", { name: "Add cards to your collection" });
 
     // The disclosure never refuses on this page — there is always somewhere to draw the column,
-    // beside the list or over it — so it is open and pressable at every width.
+    // beside the list or over it — so it is pressable at every width rather than `aria-disabled`.
+    // It starts railed (see {@link WithSearch}), so the press is what this story is about: at a
+    // width the row cannot dock, the disclosure still opens rather than refusing.
+    //
+    // **The placement is deliberately not asserted here.** As the note above says, this runner
+    // stubs `ResizeObserver` to a no-op, so `deskWidth` never leaves 0 and 0 reads as roomy — the
+    // overlay is a browser-only fact and `data-search-over` is absent under the suite. What is
+    // true in both places is that the control opens and the list survives underneath.
     const toggle = within(panel).getByRole("button", { name: /card search$/ });
-    await expect(toggle).toHaveAttribute("aria-expanded", "true");
     await expect(toggle).not.toHaveAttribute("aria-disabled");
+    await userEvent.click(toggle);
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
 
     // And the list is still mounted underneath rather than replaced: an overlay covers the binder
     // for as long as the reader wants the search, and one press gives it back.

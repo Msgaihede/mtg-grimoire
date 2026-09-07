@@ -103,11 +103,26 @@ const ROOT_TARGET = 0;
  * two pages have the identical work column, which is the whole reason this sidebar was one change
  * rather than two.
  *
- * **Provisional, and to be re-measured in the shipped window** (plan Task 9). Nothing about it is
- * arithmetic anybody can do from here: what it has to be is the width at which the list stops being
- * a list, and that is a thing a browser answers.
+ * **Measured in the shipped window on 2026-09-07** (`npm run tauri dev`, a debug build, against a
+ * real 89-wish list), and the measurement split it in two the way `CollectionPage`'s was split:
+ * **the floor is the *view's*, not the page's.** The card wall holds at 192 — driven down to a
+ * 192px list it never overflowed its own box. The table does not.
+ *
+ * **This page's table fails later than the collection's, and the difference is one column.**
+ * `WishlistTable` draws Name, Printing · finish, Owned, Wanted, Cost and Actions where
+ * `CollectionTable` draws six of its own including Folder, so the name column here reads 335px at
+ * a 936px list, **122 at 616** and 25 at 470 — against the collection's 371 / 51 / gone. 616 is
+ * this page's list at the app's own 1280×800 reference window, so the shipped default was
+ * survivable here and plainly broken one page over. A floor is still owed: 25px of card name at
+ * 1118 is not a list.
+ *
+ * {@link TABLE_FLOOR} is 610 — the ~495 this table's other five columns and its gaps take at that
+ * rung, plus a name column worth having. **Deliberately not the collection's 680**, which would be
+ * the two pages agreeing on a number neither measured; they draw different columns and the
+ * arithmetic says so.
  */
-const LIST_FLOOR = 192;
+const CARD_FLOOR = 192;
+const TABLE_FLOOR = 610;
 
 /**
  * The one dismissible layer this page can have open — the union, and never four flags.
@@ -371,12 +386,21 @@ export function WishlistPage() {
    * as roomy. **It was this file's own block and `CollectionPage`'s at once**, byte for byte,
    * which is two decisions that happen to agree rather than one.
    *
-   * **{@link LIST_FLOOR} is handed in rather than assumed by the hook**, because it is a fact about
-   * this page's list and not about docked columns — the two pages agree on 192 today and are free
-   * to stop. What comes back **decides what is drawn and never what is mounted**, which is
-   * `CardSearchPanel`'s own prop doc: a width change must not be able to throw a typed query away.
+   * **The floor is handed in rather than assumed by the hook**, because it is a fact about this
+   * page's list and not about docked columns — and since 2026-09-07 a fact about the *view* rather
+   * than the page. The two pages agreed on 192 for a day and have stopped: {@link CARD_FLOOR} is
+   * still shared arithmetic, while {@link TABLE_FLOOR} is 610 here against the collection's 680
+   * because the two tables draw different columns.
+   *
+   * **Switching view re-clamps the panel and never overwrites the reader's width** —
+   * `CardSearchPanel`'s standing rule, that the caps clamp what is *drawn* while a drag clamps what
+   * is *stored*. What comes back likewise **decides what is drawn and never what is mounted**: a
+   * width change must not be able to throw a typed query away.
    */
-  const { maxPanelWidth, roomy, overWidth } = useDeskWidth(deskRef, LIST_FLOOR);
+  const { maxPanelWidth, roomy, overWidth } = useDeskWidth(
+    deskRef,
+    view === "table" ? TABLE_FLOOR : CARD_FLOOR,
+  );
 
   /**
    * The dock's height — **arithmetic rather than a length**, because CSS cannot say "the scroller's

@@ -34,16 +34,28 @@ export type SearchSection = "deck" | "collection" | "wishlist";
  * What each column does before the stored answer has arrived, and on a database that has never
  * been asked.
  *
- * **All three open, and the deck's `true` is the one with a history.** It opened shut, on the
- * argument that a search is a thing the reader asks for — and that argument only ever held while
- * the answer was forgotten the moment the deck closed, so a reader who searches while they build
- * pressed the same control on every deck they opened (issue #183). The default and the memory are
- * one change: this is the state of a database nobody has expressed a preference in, and every
- * reader who shuts a column once never sees it again.
+ * **The deck opens open and the two lists open railed, and the split is a measurement rather than
+ * a taste.** The deck's `true` has a history: it opened shut, on the argument that a search is a
+ * thing the reader asks for — and that argument only ever held while the answer was forgotten the
+ * moment the deck closed, so a reader who searches while they build pressed the same control on
+ * every deck they opened (issue #183). A deck is *built* out of a search; the column is the work.
  *
- * The collection's and the wishlist's follow it rather than deciding again. A sidebar that opens
- * shut is a feature the reader has to find; one that opens open is a feature they have to dismiss,
- * once, and the dismissal is remembered.
+ * **The collection and the wishlist followed it for a day and were measured out of it**
+ * (2026-09-07, `npm run tauri dev`, a debug build, driven at seven window widths). Two things the
+ * suite cannot see decided it. At **544px and below the panel is an overlay, not a rail** — these
+ * pages have no docked card pane to suppress it, so `roomy === false` always implies `overWidth`,
+ * and a default of open means arriving at your own wishlist to find a card search drawn over it.
+ * And these pages, unlike a deck editor, already carry a `FilterBar` of their own, so opening open
+ * puts two filter rows on screen before the reader has asked for either. Neither is a reason to
+ * open shut on a *deck*, where there is no second filter row and no list being covered.
+ *
+ * What makes railed acceptable is that a rail is not an absence: 36px of chevron with
+ * `Search cards` turned on its side is the affordance, and the press is remembered per section
+ * forever after. A reader who wants the column gets it on every later visit to that page.
+ *
+ * **This is the state of a database nobody has expressed a preference in** — not a cap. Every
+ * reader who opens a column once never has to again, and every reader who shuts one never sees it
+ * again.
  *
  * **A literal `Record<SearchSection, boolean>` on purpose**, `DEFAULT_SECTION_ZOOMS`' rule: a
  * fourth surface is then a compile error until somebody says which way it starts, rather than a
@@ -56,8 +68,8 @@ export type SearchSection = "deck" | "collection" | "wishlist";
  */
 export const DEFAULT_SEARCH_OPEN: Readonly<Record<SearchSection, boolean>> = {
   deck: true,
-  collection: true,
-  wishlist: true,
+  collection: false,
+  wishlist: false,
 };
 
 /**

@@ -5459,14 +5459,43 @@ describe("the docked card search", () => {
     // Named for the list it files into, which is what keeps it apart from the wishlist's — see
     // the section label's own note.
     const panel = await screen.findByRole("region", { name: "Add cards to your collection" });
-    // Open at rest: `DEFAULT_SEARCH_OPEN.collection` is `true`, so a feature a reader has to find
-    // is a feature they have to dismiss instead — once, and it is remembered.
+    // **Awaited, not read on the first frame.** `searchOpen` is mocked to `{ collection: true }` —
+    // a reader who had left the column open — and that answer arrives a round trip after the
+    // first paint, where `DEFAULT_SEARCH_OPEN.collection` (`false`) is what is drawn. Read
+    // synchronously this passed on the default and never once observed the stored value, which is
+    // exactly what it went red for when the default flipped on 2026-09-07.
     expect(
-      within(panel).getByRole("button", { name: "Collapse card search" }),
+      await within(panel).findByRole("button", { name: "Collapse card search" }),
     ).toHaveAttribute("aria-expanded", "true");
     // And the wall is really the card search rather than a second drawing of the binder: this
     // printing is in no fixture `collection_list` answers with.
     expect(await within(panel).findByRole("button", { name: "Black Lotus" })).toBeInTheDocument();
+  });
+
+  /**
+   * **What a database nobody has expressed a preference in draws** — the other half of the case
+   * above, and the one the default actually decides.
+   *
+   * Railed since 2026-09-07, measured at seven window widths in the shipped window. This page
+   * already draws a `FilterBar` of its own, so opening open puts two filter rows on screen before
+   * the reader has asked for either; and below 544px the panel is an **overlay** rather than a
+   * rail — these pages have no docked card pane to suppress it — so the default would cover the
+   * binder outright on a small window. `useSearchOpen.ts` carries the whole reading. The rail is
+   * still the affordance, and the press is remembered per section forever after.
+   */
+  it("opens railed on a database that has never been asked", async () => {
+    searchOpen.mockResolvedValue({});
+
+    wrap(<CollectionPage />);
+
+    const panel = await screen.findByRole("region", { name: "Add cards to your collection" });
+    expect(
+      await within(panel).findByRole("button", { name: "Expand card search" }),
+    ).toHaveAttribute("aria-expanded", "false");
+    // **Nothing is mounted**, not merely hidden — which is what keeps `search_cards` off a page
+    // nobody searched from. `CardSearchPanel`'s three gates: `open` mounts, `shown` hides.
+    expect(within(panel).queryByRole("searchbox")).not.toBeInTheDocument();
+    expect(searchCards).not.toHaveBeenCalled();
   });
 
   /**

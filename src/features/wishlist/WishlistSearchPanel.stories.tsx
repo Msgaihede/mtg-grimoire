@@ -151,8 +151,13 @@ export const WithSearch: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("region", { name: "Add cards to your wishlist" });
+    // **Railed at rest** — a database nobody has expressed a preference in rails this column
+    // (`DEFAULT_SEARCH_OPEN`), because the page already draws a `FilterBar` of its own and below
+    // 544px the panel is an overlay rather than a rail. Measured at seven widths in the shipped
+    // window on 2026-09-07. So the play presses the way a first-time reader does.
+    await userEvent.click(within(panel).getByRole("button", { name: PANEL_TOGGLE }));
     await expect(
-      within(panel).getByRole("button", { name: PANEL_TOGGLE }),
+      await within(panel).findByRole("button", { name: PANEL_TOGGLE }),
     ).toHaveAttribute("aria-expanded", "true");
 
     // The `+` on a tile names the card, the printing **and** where pressing it would file — the
@@ -186,6 +191,9 @@ export const InAFolder: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("region", { name: "Add cards to your wishlist" });
+    // Railed at rest — see {@link WithSearch}. The body is unmounted rather than hidden, so no
+    // tile exists to carry a `+` until this press.
+    await userEvent.click(within(panel).getByRole("button", { name: PANEL_TOGGLE }));
 
     await expect(
       await within(panel).findByRole("button", { name: plusFor("Ordered") }),
@@ -219,6 +227,12 @@ export const Narrow: Story = {
 
     // Drawn and reachable — the layout is an answer about width, never a control being dropped.
     await expect(toggle).toBeVisible();
+
+    // Railed at rest — see {@link WithSearch} — and this story is about what the *open* panel
+    // measures at its floor. The disclosure is the same element across the press, so the row read
+    // off it below is the same box either way.
+    await userEvent.click(toggle);
+
     const row = toggle.parentElement!;
     await expect(row.scrollWidth).toBe(row.clientWidth);
     await expect(panel.scrollWidth).toBe(panel.clientWidth);

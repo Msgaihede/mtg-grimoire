@@ -857,18 +857,52 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
     way. **`DeckEditor` is deliberately not a caller**: its `panelOverWidth` carries an extra
     `selectedCardId === null` clause, its desk mounts only once `deck_get` has answered, and it
     measures a desk holding a deck rather than a list — three differences, none cosmetic.
-  - ⚠️ **`LIST_FLOOR` is 192 and is still provisional.** It is the deck's `DECK_FLOOR` borrowed as
-    an opening figure — one card column plus the folder wall's `minmax(180px,1fr)` cell — and it
-    has **not** been driven in the shipped window yet. What is already known is that 192 describes
-    the **grid** and not the whole page: `CollectionTable`'s min-content is near **520px**, so a
-    reader in table view at a narrow window has a floor the panel's cap knows nothing about. Do not
-    quote 192 as measured, and do not fold the two pages' floors into the hook — `useDeskWidth`
-    takes `floor` as a parameter precisely so one page can answer differently from the other once
-    somebody measures it.
+  - **The floor is the _view's_, not the page's, and that is a measurement rather than a
+    refinement.** Driven 2026-09-07 (`npm run tauri dev`, a **debug** build, against a real
+    276-copy collection and 89-wish list) at viewport widths of 1584, 1384, 1264, 1134, 1118, 1008,
+    884, 784, 544, 414 and 374.
+    - **The card wall really does hold at 192.** Its `scrollWidth` never exceeded its `clientWidth`
+      at any width, and it went on drawing tiles down to a 192px list — four of them at 360, five
+      at 192. `CARD_FLOOR` is the deck's `DECK_FLOOR` borrowed, confirmed.
+    - **The table does not, and it failed at a window nobody would call narrow.**
+      `CollectionTable`'s five fixed columns measure **464** and its gaps another **~101**, so its
+      name column is `list − 565` — linear, checked at three widths: a 936px list gives **371**,
+      736 gives **171**, and **616 gives 51**. 616 is what this page's list got at the app's own
+      **1280×800** with the panel at its 384 opening width, so the shipped default put card names
+      in a 51px column. Below a 486px list the name column is *gone* and the table scrolls sideways
+      inside its own root — **no page-wide scrollbar, because `min-w-0` holds**, which is exactly
+      why neither suite nor a screenshot of the whole window would ever have caught it.
+    - **`TABLE_FLOOR` is 680 on the collection and 610 on the wishlist**, and the two differ because
+      the two tables draw different columns: `WishlistTable`'s name column reads 335 / **122** / 25
+      at the same three rungs where the collection's reads 371 / 51 / gone. Agreeing on one number
+      would be the two pages agreeing on a figure neither measured.
+    - **After the fix, at 1280×800: list 680, panel 320, name column 115.** The panel gives up 64px
+      and stays comfortably docked. Switching back to the card view returns it to 384 — the clamp
+      split working, since the cap clamps what is *drawn* and only a drag clamps what is *stored*.
+    - **Not folded into one number for both views.** A single floor at the table's figure would push
+      the panel to its overlay at 1024 on the card view, where a 360px list was measured drawing
+      four tiles with no overflow at all — a working layout refused because a different view could
+      not have used it. `useDeskWidth` takes `floor` as a parameter for exactly this.
   - **The overlay ships too**, and it is the half a phone needs. Below the floor the shell already
     knows how to draw itself *over* the list at the full row width, so the plumbing is one more
     number from the page. Without it a narrow window would offer a sidebar that is only ever a
     greyed chevron.
+  - **The two lists open _railed_ where the deck opens open, and the overlay is why.** These pages
+    have no docked card pane to suppress the overlay, so `roomy === false` always implies an
+    `overWidth` — measured, the panel is `data-search-over` at **544px and below** and there is no
+    rail state to fall back to. A default of open therefore meant arriving at your own wishlist to
+    find a card search drawn over it. The second reason is desktop-side and independent: these
+    pages already draw a `FilterBar` of their own, so opening open puts two filter rows on screen
+    before the reader has asked for either. Neither argument touches a *deck*, which has no second
+    filter row and no list being covered, so `DEFAULT_SEARCH_OPEN` is `{ deck: true, collection:
+    false, wishlist: false }`. A rail is not an absence — 36px of chevron with `Search cards` turned
+    on its side — and the press is remembered per section forever after.
+  - **One overflow at 414px is _not_ this column's, and it was checked rather than assumed.** At a
+    414px window the nav rail is still 208px (`PHONE_PX` is 390, so `BottomTabBar` has not taken
+    over) and `main` overflows horizontally by **105px**. Collapsing the panel to its rail leaves
+    **90** of that, so 90px is the wishlist's own figure-row actions and 15px is the rail. The page
+    was already broken at that width; at a true phone width (374, tab bar engaged) `main` overflows
+    by **0**.
 - **A scaled budget floors rather than scales only while the chrome inside it is unscaled — and
   since 2026-08-17 almost none of it is.** The rule was `max(base, scaled(base, zoom))` and three
   surfaces landed on it independently: `CardGrid`'s 28px caption was set by the 24px quick-add

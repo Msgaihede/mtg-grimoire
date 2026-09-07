@@ -768,13 +768,19 @@ export const WithSearchColumn: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const column = canvas.getByRole("region", { name: PANEL_LABEL });
+    // **Railed at rest** — `DEFAULT_SEARCH_OPEN` opens only the deck's column and rails the two
+    // lists', because this page already draws a `FilterBar` of its own and below 544px the panel
+    // is an overlay rather than a rail. Measured at seven widths in the shipped window on
+    // 2026-09-07. So the two-filter-rows case below is one this play has to *ask* for, which is
+    // the honest reading of it: it is what a reader who wants both sees, not what they arrive to.
+    await userEvent.click(within(column).getByRole("button", { name: /card search$/ }));
     await expect(
-      within(column).getByRole("button", { name: /card search$/ }),
+      await within(column).findByRole("button", { name: /card search$/ }),
     ).toHaveAttribute("aria-expanded", "true");
 
     // Two rows, two names, and neither reaches the other's field.
     await expect(canvas.getByLabelText(/search your wishlist/i)).toBeInTheDocument();
-    await expect(within(column).getByLabelText("Search cards")).toBeInTheDocument();
+    await expect(await within(column).findByLabelText("Search cards")).toBeInTheDocument();
 
     // **The page's own wall, awaited** — it is gated on `wishlist_list` answering, so a synchronous
     // query here asks before there is anything to find. The two walls carry different names by

@@ -584,11 +584,33 @@ const COLLECTION_LABELS: FilterLabels = {
  * `PHONE_TILE_WIDTH` tiles at the narrow rung. 192 holds one of each with the page's own padding
  * off it, which is why the deck's number is reused rather than a second one invented.
  *
- * **Provisional, and to be re-measured in the shipped window** (plan Task 9). Nothing about it is
- * arithmetic anybody can do from here: what it has to be is the width at which the list stops
- * being a list, and that is a thing a browser answers.
+ * **Measured in the shipped window on 2026-09-07** (`npm run tauri dev`, a debug build, against a
+ * real 276-copy collection), and the measurement split it in two: **the floor is the *view's*, not
+ * the page's.**
+ *
+ * The card wall really does hold at 192 — driven at viewport widths of 1264, 1008, 884 and 784 the
+ * wall's `scrollWidth` never exceeded its `clientWidth` and it went on drawing tiles all the way
+ * down. So {@link CARD_FLOOR} is the paragraph above, confirmed.
+ *
+ * **The table does not, and it fails at a window nobody would call narrow.** `CollectionTable`'s
+ * five fixed columns measure 464px and its gaps and padding another ~101, so the name column is
+ * `list − 565` — checked at three widths and linear: a 936px list gives it 371, 736 gives 171,
+ * and **616 gives 51**. 616 is what this page's list gets at the app's own 1280×800 reference
+ * window with the panel at its opening width, so the shipped default put a reader's card names in
+ * a 51px column. Below a 486px list the name column is *gone* and the table scrolls sideways
+ * inside its own root — no page-wide scrollbar, because `min-w-0` holds, which is exactly why
+ * neither suite nor a screenshot of the whole window would ever have caught it.
+ *
+ * {@link TABLE_FLOOR} is therefore 565 plus a name column worth having. 115px shows
+ * "Ancient Tomb" and truncates a long one, which is what the column does at every width anyway.
+ *
+ * **Not folded into one number for both views.** A single floor at the table's figure would push
+ * the panel to its overlay at 1024 on the *card* view, where a 360px list was measured drawing
+ * four tiles with no overflow at all — a working layout refused because a different view could
+ * not have used it.
  */
-const LIST_FLOOR = 192;
+const CARD_FLOOR = 192;
+const TABLE_FLOOR = 680;
 
 /**
  * Which of `FilterBar`'s tray cells this page offers, in the order it draws them.
@@ -667,12 +689,23 @@ export function CollectionPage() {
    * as roomy. **It was this file's own block until it was the wishlist's too**, byte for byte,
    * which is N decisions that happen to agree rather than one.
    *
-   * **{@link LIST_FLOOR} is handed in rather than assumed by the hook**, because it is a fact
-   * about this page's list and not about docked columns. What comes back carries no "unless a card
-   * is open" term either, unlike the deck editor's: the card surface is a centred modal on every
-   * page since 2026-09-03 and takes width from nothing.
+   * **The floor is handed in rather than assumed by the hook**, because it is a fact about this
+   * page's list and not about docked columns — and since 2026-09-07 it is a fact about the *view*
+   * rather than the page: {@link CARD_FLOOR} against {@link TABLE_FLOOR} carries the measurement
+   * and why one number for both would refuse a layout the card wall was measured working in.
+   *
+   * **Switching view therefore re-clamps the panel but never overwrites the reader's width**, which
+   * is `CardSearchPanel`'s standing rule read from a new direction: the caps clamp what is *drawn*
+   * and a drag clamps what is *stored*, so a reader who opens the table, loses 100px of panel to
+   * it, and goes back to the cards gets their own width back rather than the squeeze.
+   *
+   * What comes back carries no "unless a card is open" term either, unlike the deck editor's: the
+   * card surface is a centred modal on every page since 2026-09-03 and takes width from nothing.
    */
-  const { maxPanelWidth, roomy, overWidth } = useDeskWidth(deskRef, LIST_FLOOR);
+  const { maxPanelWidth, roomy, overWidth } = useDeskWidth(
+    deskRef,
+    view === "table" ? TABLE_FLOOR : CARD_FLOOR,
+  );
 
   /**
    * The dock's height — **arithmetic rather than a length**, because CSS cannot say "the
