@@ -105,7 +105,7 @@ impl Spec {
 }
 
 /// One spec per synced table. `schema::SYNCED_TABLES` is the census this is held to.
-pub const TABLES: [Spec; 12] = [
+pub const TABLES: [Spec; 13] = [
     Spec {
         table: "collection_entries",
         keys: &["id"],
@@ -144,7 +144,11 @@ pub const TABLES: [Spec; 12] = [
     Spec {
         table: "collection_folders",
         keys: &["id"],
-        fields: &["name", "kind", "sort_order", "needs_review"],
+        // **`locked` is a plain field and deliberately nothing more** (user schema v33). It is
+        // not a counter, not a parent and not part of any unique index, so `apply::META` needs
+        // no entry and the merge is last-writer-wins per field — which is the right rule: "is
+        // this drawer set aside" is a decision, and the last device to make it wins.
+        fields: &["name", "kind", "sort_order", "locked", "needs_review"],
         counters: &[],
         parents: &[
             Parent {
@@ -216,9 +220,9 @@ pub const TABLES: [Spec; 12] = [
                 soft: false,
             },
             Parent {
-                key: "tag",
-                col: "tag_id",
-                table: "deck_tags",
+                key: "label",
+                col: "label_id",
+                table: "deck_labels",
                 absent: Absent::Null,
                 soft: false,
             },
@@ -254,11 +258,35 @@ pub const TABLES: [Spec; 12] = [
         append_only: false,
     },
     Spec {
-        table: "deck_tags",
+        table: "deck_labels",
         keys: &["id"],
         fields: &["name", "name_key", "color"],
         counters: &[],
         parents: &[],
+        append_only: false,
+    },
+    Spec {
+        table: "deck_tokens",
+        keys: &["id"],
+        // **`quantity` is a field and not a counter, on two grounds.** Mechanically a counter
+        // carries `NEW - OLD` and this column is nullable, so there is no arithmetic to carry;
+        // `deck_cards.quantity` can be a counter precisely because it is NOT NULL.
+        // Semantically last-write-wins is what is wanted: `deck_cards.quantity` sums because
+        // two devices each sleeving a copy means two copies, but "how many Treasures I want to
+        // bring" is a setting, and two devices each setting it to 4 must mean 4, not 8.
+        //
+        // **`oracle_id` is on the field list although it is half the grain**, `muted_tags`' and
+        // `device_names`' reason: the far device has to be able to *build* the row, and the
+        // grain `apply::META` restates is a way of recognising one that is already there.
+        fields: &["oracle_id", "card_id", "quantity", "state"],
+        counters: &[],
+        parents: &[Parent {
+            key: "deck",
+            col: "deck_id",
+            table: "decks",
+            absent: Absent::Null,
+            soft: false,
+        }],
         append_only: false,
     },
     Spec {
@@ -295,7 +323,38 @@ pub const TABLES: [Spec; 12] = [
             "last_group_by",
             "last_sort_by",
             "separate_x_group",
+            // Whether the Tokens & emblems area under this deck is expanded (user schema v37).
+            // It joins the three above it rather than staying local for their reason: it is
+            // per-deck view state, and a reader who opened that area on one device meant it
+            // about the deck rather than about the machine.
+            "tokens_open",
             "bracket",
+            // **Schema v38's two theory marks, and they travel for `bracket`'s reason** — which
+            // of the mark's two tiers a deck draws is an answer *about the deck*, made once by
+            // the reader, exactly like the bracket and the X group above it. Two devices showing
+            // one deck's marks differently, with nothing on screen saying why, is the failure
+            // this pair of lines exists to prevent.
+            //
+            // **The mark's colours are deliberately not here, and could not have been.** They
+            // are one `mark_colors` row in `app_meta`, which is in no `SYNCED_TABLES` entry at
+            // all, so there is no field for this spec to leave off — the decision was made one
+            // table over and it is the same decision: a rendering choice belongs to the device
+            // that draws it, and what a *deck is* is what these two columns say.
+            //
+            // **The three `last_*` columns are not the analogy**, which this comment claimed
+            // until 2026-09-07: all three are on this very list, just above `separate_x_group`,
+            // and `tokens_open` joined them on the opposite argument — per-deck view state is
+            // about the deck. Where they *are* absent is `duplicate_deck`, which answers a
+            // different question, and that is the list the sentence had been read off.
+            //
+            // **Adding is the safe direction**, which is what `cover_image_path`'s note above
+            // says from the other end: `apply::updates` and `apply::creations` walk the *local*
+            // spec and ask the incoming op for each name, so a device on the old rung receiving
+            // one of these ops never reads a field it does not know, and a device on this rung
+            // receiving an old op finds the key absent and leaves the column alone. Removing a
+            // field is the direction with no rule written down; this is the other one.
+            "theory_mark_exact",
+            "theory_mark_name",
         ],
         counters: &[],
         parents: &[
@@ -664,7 +723,7 @@ fn delete_trigger(spec: &Spec) -> String {
 
 /// The clock follows the op it just stamped.
 ///
-/// A separate trigger rather than a second statement inside each of the thirty-four, so the rule
+/// A separate trigger rather than a second statement inside each of the thirty-seven, so the rule
 /// lives once. It is not recursive — a different table — so `PRAGMA recursive_triggers` has no
 /// bearing on it either way, and nothing here depends on that pragma's value.
 const CLOCK_TRIGGER: &str = "DROP TRIGGER IF EXISTS sync_ops_clock;
@@ -679,11 +738,11 @@ const CLOCK_TRIGGER: &str = "DROP TRIGGER IF EXISTS sync_ops_clock;
 /// **`DROP` then `CREATE`, never `CREATE … IF NOT EXISTS`.** A trigger is stored SQL: a build
 /// that changed the generator and shipped `IF NOT EXISTS` would leave every existing database
 /// running last year's rules forever, silently, and a bug fixed here would reach nobody who
-/// already had the app. Thirty-four drops and creates at open is a fraction of a millisecond.
+/// already had the app. Thirty-seven drops and creates at open is a fraction of a millisecond.
 ///
 /// Called from [`crate::schema::prepare_database`], so it reaches the desktop, Android and the
 /// browser through the one door. **Not** on a read-only connection: it never writes, and a
-/// trigger there is thirty-four objects nobody fires.
+/// trigger there is thirty-seven objects nobody fires.
 pub fn install(conn: &Connection) -> rusqlite::Result<()> {
     for spec in &TABLES {
         conn.execute_batch(&insert_trigger(spec))?;
@@ -976,6 +1035,55 @@ mod tests {
         assert!(
             fields.get("name").is_none(),
             "name did not change: {fields}"
+        );
+    }
+
+    /// **Both of schema v38's theory marks travel, and independently.**
+    ///
+    /// The whole reason they are on the spec: which of the mark's two tiers a deck draws is an
+    /// answer *about the deck*, made once by the reader, and two devices showing one deck's
+    /// marks differently with nothing on screen saying why is the failure the lines exist to
+    /// prevent. `every_column_a_spec_names_exists_on_its_table` says the names are real; this
+    /// says a change to one is actually captured.
+    ///
+    /// **One column moved and the other named nowhere**, which is the part a test writing both
+    /// at once could not show: per-field last-writer-wins means an op naming a field it did not
+    /// touch clobbers the far device's newer answer, and these two are the pair most likely to
+    /// be written as one because they are set from one dialog.
+    #[test]
+    fn both_theory_marks_travel_and_only_the_one_that_moved() {
+        let conn = db();
+        conn.execute(
+            "INSERT INTO decks (name, format_key, created_at, updated_at)
+             VALUES ('A', 'commander', unixepoch(), unixepoch())",
+            [],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM sync_ops", []).unwrap();
+        conn.execute("UPDATE decks SET theory_mark_exact = 0", [])
+            .unwrap();
+
+        let o = ops(&conn);
+        assert_eq!(o.len(), 1);
+        let fields: serde_json::Value = serde_json::from_str(&o[0].2).unwrap();
+        assert_eq!(fields["theory_mark_exact"], 0);
+        assert!(
+            fields.get("theory_mark_name").is_none(),
+            "the other mark did not change: {fields}"
+        );
+
+        // And the other one on its own, so neither line is carrying the other's weight — a spec
+        // naming one column twice would pass the half above.
+        conn.execute("DELETE FROM sync_ops", []).unwrap();
+        conn.execute("UPDATE decks SET theory_mark_name = 0", [])
+            .unwrap();
+        let o = ops(&conn);
+        assert_eq!(o.len(), 1);
+        let fields: serde_json::Value = serde_json::from_str(&o[0].2).unwrap();
+        assert_eq!(fields["theory_mark_name"], 0);
+        assert!(
+            fields.get("theory_mark_exact").is_none(),
+            "the other mark did not change: {fields}"
         );
     }
 

@@ -533,15 +533,32 @@ export interface MissingWrite {
  * value and price were drawn under two screens of deck, which is the wrong end of the page for
  * the numbers a reader edits *against*; `DeckLedger` draws them from a `deckStats` call of its
  * own over the same rows, so there is still one definition of each. What stays here is what
- * needs the room: the pips, the shortfall and the press that acts on it, and the charts.
+ * needs the room: the pips, the shortfall and the **two** presses that act on it, and the
+ * charts. The second of those arrived with the pull (2026-09-03) and is `onPull` below — the
+ * shortfall's other answer, and the argument for it living here rather than in the header is
+ * made on {@link Missing}.
  */
 export function DeckStats({
   cards,
   send,
+  onPull,
   separateXGroup = false,
 }: {
   cards: readonly DeckCard[];
   send: MissingWrite;
+  /**
+   * Opens the pull dialog. `null` where there is nothing to open — the theory list, whose rows
+   * hold no cards at all.
+   *
+   * **A callback and not a write**, which is the difference between this prop and `send` beside
+   * it. The wishlist is one press and one command, so the strip can make it and word the answer;
+   * a pull is a plan the reader reads and picks from, and every part of that is the dialog's.
+   * What this strip owns is the *place the press belongs* — beside the number it is about.
+   *
+   * **Nullable rather than optional**, so a host that has not thought about it cannot silently
+   * get the absent case: `DeckEditor` draws the strip over both lists and has to answer for each.
+   */
+  onPull: (() => void) | null;
   /**
    * The deck's own `separateXGroup`, and it has to be **the same value the grouping beside this
    * strip was built with**.
@@ -622,6 +639,7 @@ export function DeckStats({
             setSentFor(stats.missing);
             send.mutate();
           }}
+          onPull={onPull}
           sendRef={sendRef}
           added={added}
           failure={failure}
@@ -686,18 +704,27 @@ function Pips({ pips }: { pips: Record<PipKey, number> }) {
 }
 
 /**
- * What the deck is short of, and the one press that does something about it.
+ * What the deck is short of, and the two presses that do something about it.
  *
- * The button is absent when there is nothing missing — a control that spends its life offering
+ * The buttons are absent when there is nothing missing — a control that spends its life offering
  * to do nothing teaches the reader to stop looking at the line it is in — and the sentence
  * that replaces it is still a fact worth having: a deck you own every card of is the answer to
  * the question this line asks.
+ *
+ * **Two presses because the shortfall has two answers, and they are one idea read in two
+ * directions**: what you have *not* got goes on a shopping list, what you *have* got is sitting
+ * in a binder and can be moved. That symmetry is the whole argument for the second control being
+ * here rather than in the editor's header — that row already gives up its longest word at
+ * `SETTINGS_ICON_PX` and measured 825px against the ~729 the ribbon can spare with five buttons
+ * on it, and a control belongs beside the number it acts on rather than beside the other things
+ * a reader presses once a session.
  */
 function Missing({
   stats,
   pending,
   spent,
   onSend,
+  onPull,
   sendRef,
   added,
   failure,
@@ -708,6 +735,9 @@ function Missing({
    *  second time — the backend folds quantities rather than replacing them. */
   spent: boolean;
   onSend: () => void;
+  /** Opens the pull dialog, or `null` where there is nothing to open — see the prop on
+   *  {@link DeckStats}, which is where the theory list's absence is argued. */
+  onPull: (() => void) | null;
   sendRef: RefObject<HTMLButtonElement | null>;
   added: number | null;
   failure: string | null;
@@ -723,6 +753,51 @@ function Missing({
           <p className="font-mono tabular-nums text-destructive">
             {count(stats.missing)} of {count(stats.copies)} missing
           </p>
+          {/* **First of the two, because it is the cheaper answer.** A hole a reader can fill
+              out of their own binder is one they should be offered before they are offered a
+              shopping list for it — the order of the row is the recommendation, and reversing it
+              would put "buy these" in front of "you already own these".
+
+              **Drawn only inside the `missing > 0` arm, like its neighbour**: a deck short of
+              nothing has no hole for a pull to fill, and `deck_pull_plan` would answer zero rows
+              by construction. So the two controls appear and disappear together, and the line
+              never draws one of them alone.
+
+              `null` is the second, separate absence — a list with no cards in it at all — and it
+              is argued at {@link DeckStats}' own prop.
+
+              **`aria-haspopup` without `aria-expanded`, deliberately.** This strip is handed a
+              callback and is never told what came of it, and the state is not one a reader can
+              observe from here anyway: the layer it opens is a full-window overlay, so while it
+              is up this button is behind a scrim and off the tab order. Saying "expanded" about
+              a control nobody can reach would be a second prop for a claim with no observer. */}
+          {onPull !== null && (
+            <button
+              type="button"
+              aria-haspopup="dialog"
+              onClick={onPull}
+              // **Not disabled while the wishlist write is in flight**, which is the one thing a
+              // reader of these two lines has to get right: they are independent writes about
+              // the same number, and the half-second `send` spends disabling itself is no reason
+              // this control cannot be pressed. It has no pending state of its own either — the
+              // press opens a dialog, and the write it leads to is made in there.
+              //
+              // The class list is its neighbour's, character for character, including the two
+              // state variants nothing here can currently reach. They are copied rather than
+              // trimmed so that the pair cannot drift into looking like a primary and a
+              // secondary: these are peers, and the day one of them grows a "no" it will grey
+              // exactly as the other already does.
+              className={cn(
+                "rounded-md border border-border px-2 py-1 text-dim",
+                "transition-colors duration-150 hover:text-text disabled:opacity-50",
+                "aria-disabled:opacity-50 aria-disabled:hover:text-dim",
+                "motion-reduce:transition-none",
+                FOCUS,
+              )}
+            >
+              Pull from collection
+            </button>
+          )}
           {/* **No `<span>` wrapper — bound on the button itself.** A wrapper earns its keep only
               for a control that is genuinely `disabled` for as long as the hint would need to be
               read, because a real `disabled` attribute fires no pointer events and drops the tab

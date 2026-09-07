@@ -1068,8 +1068,9 @@ pub const MAX_PREWARM: usize = 2_000;
 /// JPG/PNG family its own docs mark as replaced (`card_row::webp_uris`).
 ///
 /// It costs about 93 KB a card against `grid`'s ~62 KB, and less than that sum suggests: it is
-/// what `CardDetailPane` and `PrintingPreview` already draw, so a card the reader opens is now
-/// one cache key instead of two.
+/// what the open card already draws — `CardModalArt` names `display` outright, as the docked pane
+/// and its `PrintingPreview` did before they were deleted on 2026-09-03 — so a card the reader
+/// opens is now one cache key instead of two.
 pub const COLLECTION_PREWARM: Variant = Variant::Display;
 
 /// The variant a **deck card** is drawn at — the two views that draw one as a picture, which is

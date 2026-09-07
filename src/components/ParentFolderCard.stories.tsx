@@ -193,12 +193,19 @@ export const InsideASubFolder: Story = {
 
 /**
  * **The two drag marks, which are one vocabulary with the folder cards beside it.** `armed` is the
- * ring every eligible target raises the moment something leaves the list — that is what tells a
- * reader mid-drag where they may let go — and `over` is the wash on the one under the pointer.
+ * tile's own dash gone faintly gold the moment something leaves the list — that is what tells a
+ * reader mid-drag where they may let go — and `over` takes that same edge to full strength beside
+ * a wash, on the one under the pointer.
  *
- * Both are drawn here at once because that is the real state of the tile a reader is about to drop
- * on. One wash for both payloads: a card over this tile and a folder over it are the same claim,
- * which is what a single landing means.
+ * **Both are drawn on the face, and that is the whole point of this story** (2026-09-03). The
+ * eligible mark used to be a ring on the `<li>` around the button: a ring is a box shadow painted
+ * *outside* the border box, so it stood 2px proud of the dash it was meant to agree with and a
+ * reader saw two concentric outlines for one landing. A surface that already owns an edge changes
+ * *that* edge instead, which makes alignment something there is no way to get wrong.
+ *
+ * Both marks are drawn here at once because that is the real state of the tile a reader is about
+ * to drop on. One wash for both payloads: a card over this tile and a folder over it are the same
+ * claim, which is what a single landing means.
  */
 export const HoldingSomethingOverIt: Story = {
   args: { armed: true, over: true },
@@ -210,13 +217,19 @@ export const HoldingSomethingOverIt: Story = {
     </Wall>
   ),
   play: async ({ canvas }) => {
-    const tile = canvas.getByRole("button", { name: upCardName("Wishlist") }).closest("li");
+    const face = canvas.getByRole("button", { name: upCardName("Wishlist") });
 
-    // The ring is on the `<li>` so it stands outside the button's own edge; the wash is on the
-    // face. Asked of the class list rather than of the class string, because a substring test
-    // would pass on any class that merely contains these.
-    await expect(tile?.classList.contains("ring-2")).toBe(true);
-    await expect(tile?.querySelector("button")?.classList.contains("bg-accent/10")).toBe(true);
+    // Both marks are on the face — the element carrying the dash — and nothing is drawn on the
+    // `<li>` around it. Asked of the class list rather than of the class string, because a
+    // substring test would pass on any class that merely contains these.
+    await expect(face.classList.contains("bg-accent/15")).toBe(true);
+    await expect(face.closest("li")?.classList.contains("ring-1")).toBe(false);
+
+    // And `over` outranks `armed` on the one edge they share: `tailwind-merge` resolves a border
+    // colour by argument order, so the faint `border-accent/45` is gone rather than merely
+    // overpainted. This is the assertion that would go red if the two lines were ever swapped.
+    await expect(face.classList.contains("border-accent")).toBe(true);
+    await expect(face.classList.contains("border-accent/45")).toBe(false);
   },
 };
 

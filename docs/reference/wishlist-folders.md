@@ -103,6 +103,46 @@ shopping.
 UNIQUE index are distinct** — so an un-coalesced term would stop enforcing anything for exactly the
 rows that need it most.
 
+### The add path has a folder default now, and the fourth term is what makes that safe
+
+**Since 2026-09-07 the `+` on a card can wish into the folder the reader is standing in.**
+`WishInput.folderId` has been on the wire since v23 and `useCardMenuDeps` has always passed it;
+`AddToCollectionButton` never did, which is why every `+` in the app wished at the root. It now
+takes optional `folderId`, `folderNodes`, `folderName` and `lockMode`, and the wishlist page's
+docked search column passes all four — so a reader building a shopping list adds from the sidebar
+without leaving the folder they are filing into.
+
+**The fourth term is the licence for that rather than a constraint on it.** A default destination
+is only sane where a second destination is a second row: with `coalesce(folder_id, 0)` in the
+grain, wishing for a card the reader already wants *elsewhere* writes a new wish in the folder on
+screen and touches the old one not at all. Without the term the same press would land on the
+existing wish and raise its quantity, so a wish filed into `Ordered` last week would silently move
+into whatever folder happened to be open — a default that quietly undoes filing, which is exactly
+what v23 was built to make impossible. **The merge rule above is not the counter-example**: a merge
+happens when a write *lands on a taken grain*, and a folder default changes which grain is being
+written, never whether a collision folds.
+
+**Three fences around it, and one of them differs from the collection's:**
+
+- **A flattened page defaults to the root** — the breadcrumb reads *all folders*, there is no
+  folder on screen to be standing in, and the page passes `folderId: null` rather than whatever
+  `useWishlist` still holds underneath. **The wishlist's flatten default is `false` where the
+  collection's is `true`**, so this sidebar starts with a real folder default the moment the reader
+  opens a folder, while the collection's starts at the root out of the box. Do not copy the
+  collection's default across; the two lists ship differently on purpose.
+- **Absent and `null` are different on the wire**, and the page sends `null` explicitly — absent
+  sends no `folderId` field at all, which is what `SearchPage` and the Tags page still do and why
+  neither was touched by this.
+- **The destination list is locked.** `lockMode="wishlist"` pins the popup to the wishlist and
+  hides the `Collection` / `Wishlist` switch, because the two folder trees are different tables: a
+  popup that could flip lists mid-form would need two defaults and a picker that swapped trees
+  under the reader's hand.
+
+**A search tile dropped on a folder card wishes into it**, `ipc.wishlistAdd({ cardId, quantity: 1,
+preferredFinish: finish, folderId })` — the printing's own first available finish, never a guess,
+and the `cardId` rather than the `oracleId`, so a drop is a wish for *the printing on the tile*
+where the popup is still where a reader asks for any printing. That needed the discriminator below.
+
 ## The merge rule, shared by both new writes
 
 `wishlist_set_folder` and `wishlist_set_printing` each move one wish onto a grain another row may
@@ -240,9 +280,27 @@ means nothing there.
 **`WishDrag.folderId` is on the payload so a target can refuse before the drop.** The folder a wish
 is already filed in draws no ring at all, rather than a ring that would lead to a write that moved
 nothing and bumped `updated_at` — the same rule as a deck card dropped back into its own column.
-`DROP_RING` goes up on *every* eligible folder the moment the wish leaves the tile, and `DROP_OVER`
-on the one under the pointer; the wall's scroller carries `DROP_MARK_ROOM`, or a folder card flush
-against the content edge loses the outer 2px of its ring for the whole length of the drag.
+The eligible mark goes up on *every* eligible folder the moment the wish leaves the tile, and
+`DROP_OVER` on the one under the pointer; the wall's scroller carries `DROP_MARK_ROOM`.
+
+**That mark is `DROP_EDGE` rather than `DROP_RING` since 2026-09-03, and both marks sit on the
+card's own `<button>` face rather than on the `<li>` around it.** A reader reported the
+affordances as bulky, as overlapping neighbouring content, and as not lining up with the dashed
+outline they appeared to sit on — one cause for all three, since a ring is a box shadow painted
+*outside* the border box and on the wrapper it stood 2px proud of a dash it never touched. A card
+that already owns an outline does not need a second one, so its dash turns faintly gold instead
+and there is no pair of edges left to disagree. The drop *registrations* did not move, and the
+reason they did not is **geometry rather than a library rule** — this paragraph said "dnd-kit keeps
+one target per element" until 2026-09-07 and that was pragmatic-dnd's constraint carried across a
+migration. `@dnd-kit/dom` keys its registry by **entity id**, so two `Droppable`s on one element
+both register and both compete, and `accepts()` is what separates them — `computeCollisions` asks
+it before it measures anything. One box would work here. It stays two because
+`useFolderDropTarget` divides a target's *border box* into three landings and that geometry has to
+be exactly the card's, and because every test and story addresses the two boxes by name. See
+[frontend-design.md](frontend-design.md) for the measured version of the registry rule.
+**`DROP_MARK_ROOM` stays for
+`FOCUS`'s sake rather than the ring's**: an inset ring cannot be clipped, and half a focus
+indicator is a WCAG 2.4.7 failure. `src/lib/dropMarks.ts` carries the reasoning in full.
 
 The two destinations are the folder cards and **the breadcrumb's segments**, which is how a wish
 gets back *out*: without them a drag could only ever push wishes deeper. Both write through
@@ -250,6 +308,41 @@ gets back *out*: without them a drag could only ever push wishes deeper. Both wr
 `Move to folder…` merge on a taken grain identically. There is no second write and no second rule —
 and the panel stays complete on its own, because a drag-only affordance is half a feature and it is
 the half a keyboard cannot use.
+
+### `WishDrop`, the discriminator the wishlist never had (2026-09-07)
+
+The search sidebar put a **third** kind of thing in the air over a folder card: a card nobody
+wishes for yet, carrying `searchCardSource` from `features/search/searchCardDrag.ts`. A folder card
+now has to tell *move this wish* from *make a wish here*, and those are two different commands —
+`wishlist_set_folder` against `wishlist_add`.
+
+`CollectionDrop` had been a discriminated union since the cabinet shipped, so the collection cost
+one arm on the type and one branch in `readCollectionDrop` and **no component edits at all**. This
+side had none — `readWishDrag` answered a bare `WishDrag | null` — so it grew one:
+
+```ts
+export type WishDrop =
+  | { kind: "wish"; wish: WishDrag }
+  | { kind: "new"; card: SearchCardDrag };
+export function readWishDrop(data: Record<string, unknown>): WishDrop | null;
+```
+
+Prop-type churn across six sites and **no new mechanism**: `useWishDropTarget`, `WishFolderCard`'s
+`canDrop`/`onDropCard`, `WishParentFolderCard`'s pair, `WishlistBreadcrumb`'s `Segment`, and the
+page's `canFile`/`fileWish`. `readWishDrag` survives unchanged as the arm that reads a wish
+already on the list, so nothing that only ever wanted a wish had to learn about the union.
+
+**A second droppable per folder card would now be legal and was still refused.** dnd-kit keys its
+registry by entity id, so two registrations on one element both stand and `accepts()` keeps them
+apart — that really would work. What it would cost is the `armed`/`over` pair these cards fold into
+one: two rings on one card, each answering about a different drag, is a *drawing* decision bought
+to avoid a type. The union is the cheaper half of that trade.
+
+**The two marks are disjoint by construction** — a wish tile writes `wishSource`, a search tile
+writes `searchCardSource` — so the order inside `readWishDrop` is a convention rather than a
+tie-break. It is written down anyway, and it matches `readCollectionDrop`'s: **the existing row
+wins.** A record carrying both would be a bug upstream, and the narrower fact is the one to act on,
+because moving a row that already exists and creating one are not equally reversible.
 
 ## The way back up is a tile on the wall, not only a word in the trail
 
@@ -296,6 +389,55 @@ two drop targets. Four decisions:
 **The trail is untouched.** It still takes a wish drop on every segment, still says where the
 reader is standing, and is still the only way out of a level whose wall is not drawn. What changed
 is that the ordinary case has a target the size of the things around it.
+
+## The wall names its own folders, and the strip kept two of its four jobs
+
+**2026-09-03.** `New folder` and a folder card's `⋯ → Rename…` used to raise a **bordered strip
+under the breadcrumb** — a box with its own edge, an input, `Create folder` and `Cancel` spelled
+out in words, and, on a create, a line reading *in Wishlist* to say which level the strip was
+about. Every one of those pieces re-established a context the wall on screen already carried, so
+each one is gone and the tile *becomes* the field.
+`src/components/FolderNameField.tsx` is the shape and
+[frontend-design.md](frontend-design.md) is the whole argument. Three things belong here, because
+they are facts about this cabinet rather than about the field.
+
+**It is the section above one step further in.** The way *out* of a folder had to be a tile
+because every place a wish can be pushed *into* is a 62px tile in the row above the wishes and a
+breadcrumb segment is a word — the same reading applies to naming one. A name typed on the line
+the folder's name will occupy needs nothing above the wall to say which level it lands in, because
+the wall it is drawn in **is** that level; the *in Wishlist* line was the strip paying, in a
+second panel, for standing somewhere the wall was not.
+
+**A rename keeps the wish count and the cost under the field.** `6 wishes · $312.00` — `face`'s
+line, and the `—` of a summary that has not answered yet — stays exactly where a folder card
+prints it, inside the same dashed edge with only its colour moved to `border-accent`. A folder
+being renamed is still a container, so the dash every drawer on this wall wears stays, and the
+create tile's **solid** edge is the whole of what tells the two shapes apart. Dropping the figures
+would have made a reader stop to check they had the right drawer, and collapsing "still counting"
+into "empty" is exactly the distinction `face` draws that em dash for.
+
+**The strip survives for `Move to folder…` and `Delete…`, and that residue is the rule rather
+than a leftover.** The answer to "into which folder" is a list of the *other* folders, and the
+answer to "delete this?" is a sentence about what happens to the wishes inside. Neither is a name
+typed on a line, and neither has a tile of its own to be drawn on.
+
+One consequence in the page itself: `openPanel` gained a level clause —
+`flatten || (panel?.kind === "newFolder" && panel.parentId !== folderId) ? null : panel` — because
+a create panel that outlives a walk into another folder used to be merely confusing about which
+level it meant, and is now a layer with **no field on screen at all**, still swallowing the
+Escape that should have walked the reader back out.
+
+**The geometry is measured; the shipped window is not.** Headless Edge over the built stylesheet
+on 2026-09-03 put all four states in one row — the resting tile, the tile naming, a resting folder
+card, a card renaming — and read **62px** and one `top` for every one of them, with the whole
+single-row scroller at **74px** (62 plus `p-1.5` either side), which is `max-h-44`-is-a-ceiling
+holding exactly as this page's own wall promises. The ✓ / ✕ pair lands at the same `y = 34` as a
+folder card's `⋯`, and `border-style` computes `solid` on the two create shapes against `dashed`
+on the two rename shapes. The method and the full table are in
+[frontend-design.md](frontend-design.md). What no headless page can settle is where the caret goes
+on the way out of the field, and the app lock was held elsewhere all session — so nothing here has
+been driven in the real app, and the pass recorded at the end of this page predates the change and
+says nothing about it.
 
 ## What a wish costs, and which printing it is drawn as
 
@@ -437,9 +579,15 @@ marketplace's and never travel across a switch.
 rule this app argued for in three separate places.** The wishlist's **wall** had no copies control
 at all: the table edited a wish in place, and on a tile the number could only be reached by opening
 the pencil's panel. A wall that is the view opening by default and cannot do what its own list view
-does is the gap the issue named, so the wall now carries a `QuantityStepper` beside the pencil, in
-`CardGrid`'s action strip over the art — the strip is absolutely positioned, so the wall's
-`tileHeight` is unchanged by it.
+does is the gap the issue named, so the wall now carries a `QuantityStepper` over the art —
+absolutely positioned, so the wall's `tileHeight` is unchanged by it.
+
+**It stood beside the pencil in `CardGrid`'s action strip for two days and stands in the tile's
+right margin now** — [issue #348](https://github.com/Msgaihede/mtg-grimoire/issues/348),
+2026-09-03, which reported that the wall's control matched the deck builder's in neither style nor
+location. It is the deck stack's column at the deck stack's size on both walls now, through
+`CardGrid`'s own `column` slot; the pencil kept the strip to itself. Every measurement is in
+[frontend-design.md](frontend-design.md#one-quantity-control-on-a-card-face-on-all-three-surfaces-2026-09-03-issue-348).
 
 **And every one of the three floors moved from `1` to `0`.** The rule they held said, in as many
 words, that "a wish for none of something is not a wish" and that "a stepper that deleted the row
@@ -481,6 +629,149 @@ The collection's half of this — including the fence that keeps a stepper out o
 `Recently removed`, which the wishlist has no equivalent of because none of its folders belong to
 the app — is in
 [collection-folders.md](collection-folders.md#the-copies-control-belongs-to-a-normal-folder-in-both-views).
+
+## Re-pointing the list at its cheapest printings
+
+**2026-09-03, [issue #352](https://github.com/Msgaihede/mtg-grimoire/issues/352), and the whole
+feature is the fact that it is _two_ commands.** `wishlist_optimize_plan` writes nothing and says
+what would change; `wishlist_optimize_apply` takes back the subset the reader left ticked and
+commits it. One button that repointed forty wishes the moment it was pressed would be a shopping
+list rewritten by a rule its owner never saw applied to rows they never looked at — and the rule is
+not obvious, because "cheapest" here means cheapest *at one marketplace, at this wish's finish,
+today*, which is three qualifications a press cannot carry. The preview is where they become
+visible, and it is why there is no confirmation dialog in front of Apply: the preview **is** the
+confirmation.
+
+### The scope is the query, not the page
+
+`plan` takes the page's own `WishlistQuery` and reads it through `wishlist::wishlist_scope` — the
+same `FROM` and `WHERE` `list_wishes` draws with, rather than a second copy of the folder rule and
+the filter terms. So the folder the reader is standing in, the Flatten switch and every active card
+filter scope the sweep, and the sentence the dialog opens with is about the list they are looking
+at.
+
+**`limit` and `offset` are ignored**, which is the half worth stating: a preview that stopped at the
+foot of page one would leave wishes un-optimised for a reason nothing on screen mentions, and the
+reader would have to press the button once per page to find out. Ignoring them makes `considered`
+the very number the page header already shows as its total — one figure, two places, and no way for
+them to disagree.
+
+### Which wishes can move, and why the other two buckets exist
+
+`moves.length + alreadyCheapest + skipped == considered`. The partition is the point: a preview that
+quietly dropped a wish and a preview that quietly counted it twice look identical on screen, because
+the dialog draws the moves and a sentence made of the other three numbers, and nothing in it can be
+checked against anything else.
+
+- **An any-printing wish is `alreadyCheapest` and is never offered.** `list_wishes`' join already
+  draws and prices it at the cheapest printing of its oracle card (the section above), so there is
+  no saving to find — and pinning it would *cost* the reader something real: the day a cheaper
+  printing is released, the wish that names none follows it and a wish this sweep pinned does not.
+  The flexibility is what makes it cheap, so spending it to buy nothing is the wrong trade.
+- **Three ways a wish is `skipped`**, all of them "there is nothing to compare against" rather than
+  "nothing to gain": a wish with **no `oracle_id`** has nothing to find sibling printings *by*; a
+  wish **pinned to a printing `cards` no longer has** — the state `needs_review` marks — has no
+  price on the `from` side and no printing to describe honestly, because its denormalised
+  `set_code`/`collector_number`/`lang` would put a piece of cardboard on screen that does not
+  exist; and an oracle card **no printing of which this marketplace prices at this wish's finish**
+  is a question this marketplace cannot answer, which is not the same as a saving of nothing.
+- **Everything else is a move only if the candidate is _strictly_ cheaper.** Without the `<`, a
+  printing tied at the same price sorts ahead of the one the reader is already on — the candidate
+  order breaks a tie by release date — and the preview would offer a saving of 0.00 on a swap that
+  buys nothing. The wish's own printing is a candidate like any other, which is what makes the
+  comparison meaningful instead of a special case, and "priced, and nothing beats it" is by far the
+  commonest way a wish lands in `alreadyCheapest`.
+
+### What is a candidate, measured rather than assumed
+
+The candidate query is `WHERE c.oracle_id = ? AND c.digital = 0 AND (price) IS NOT NULL`, ordered
+`price ASC, released_at DESC, id ASC` — the same tiebreak `list_wishes`' cheapest-printing join
+uses, so a pinned wish is offered the printing an un-pinned one would already be drawn as.
+
+- **A printing with no price is not a candidate at all**, which is issue #352's own sentence: "a
+  card without a price should not be considered the cheapest printing". A hole in a pricelist is
+  not a bargain. It is also what makes `to.price` a number and never `null`, everywhere in the
+  answer.
+- **`c.digital = 0` states the intent and excludes nothing today.** Measured against the dev card
+  database on 2026-09-03: **9 355 digital printings of 117 621, 0 of which carry a `price_usd`** —
+  so the `IS NOT NULL` beside it already drops every one of them. It stays because an Arena-only
+  printing is not a piece of cardboard anybody can be sent, and arithmetic that happens to agree
+  today is not a rule; the day a feed prices them, the clause is already there.
+- **No language fence, and it is a decision rather than an omission.** Measured the same day:
+  **1 073 non-English printings carry a USD price**, so a cheaper printing in another language is a
+  live case and not a theoretical one. What makes it safe is that the preview shows `lang` on
+  **both** sides — a Japanese `sta 105` becoming an English `2x2 117` is visible before the press,
+  which is exactly what having a preview is for.
+
+Every figure is `sorting::row_price_expr` over `WISH_PREFERRED_FINISH`, the same expression
+`WishRow.unitPrice` is, so the dialog and the row behind it cannot disagree about what one copy
+costs. The finish column is handed over **bare** and never coalesced — the rule the section above
+argues at length — so a foil wish is compared foil to foil and a wish that names no finish is
+compared through the `nonfoil → foil → etched` chain at both ends.
+
+### Where a `null` can appear, and what each one means
+
+| Field | `null` means |
+| --- | --- |
+| `from.price` | Unpriced **there** — this marketplace does not list the printing the wish is on. |
+| `to.price` | Never `null`. An unpriced printing is not a candidate. |
+| `savedPerCopy`, `saved` | `null` **exactly when `from.price` is**, and never `0`. |
+| `preferredFinish` | The reader has not said, which prices through the chain rather than at nonfoil. |
+| `folderId` | The root of the list — a real place, the grain's fourth term. |
+
+**A wish whose current printing this marketplace does not list is still offered, and counts no
+saving.** An unlisted printing may be cheap rather than dear, so the saving is *unknown* and not
+zero, and a figure invented for it would inflate a headline nobody can check. The dialog draws that
+row `— → $2.00` and leaves it **unticked**, which is the one place the default is a subset rather
+than everything: the app has no basis for claiming that swap is an improvement, so the reader has
+to say so.
+
+**The plan does not echo the marketplace back.** Every price in it was quoted at the one the query
+carried, which came from `useMarketplace()`, which is also what the dialog renders with — and the
+query is in the caller's key, so a switch refetches rather than relabels. A second copy of that fact
+travelling in the answer is one more thing that can disagree with the hook.
+
+**The moves come back in `list_wishes`' _fallback_ order — `name ASC, id ASC` — and not in the
+reader's chosen sort.** The money sorts order by output aliases (`unit_price`, `owned_quantity`)
+this statement does not select, so honouring `sort` would mean selecting columns a preview has no
+use for. A preview is a list of changes, not a second rendering of the page.
+
+### Apply: one transaction, and two things that are not failures
+
+`apply` is one transaction over the whole batch, `wishlist::commit_import`'s rule: a sweep seen half
+done is a shopping list nobody can reason about, and a reader who pressed once must not have to work
+out which half of their list moved. Every item gets a `WishOptimizeResult`, **in the order it was
+sent**, so the caller can sum the saving over exactly the rows that moved rather than over the rows
+it hoped would.
+
+- **`fromCardId` is a guard, not a description.** Between the preview and the press a sync can land
+  or another pane can repoint the same wish; applying regardless would move a printing the reader
+  never saw. So the wish's *current* `card_id` is read inside the transaction and a row that no
+  longer matches is left exactly as it is and reported **`stale`**. A wish that has left the list
+  entirely is **`missing`** — the same thought one step further along.
+- **A repoint that lands on a grain another wish already holds merges**, which is the merge rule
+  this page already states for both of the writes above and not a new one. It is reported
+  **`merged`** rather than as a failure, the two quantities sum into the row that was already
+  there, and **the saving still stands** — the reader is buying the cheaper printing either way.
+  The result names the **item's** `wishId` and not the survivor's, because the caller matches
+  results back to the rows it sent.
+
+The repoint itself goes through `set_printing_inner` and never a second `UPDATE`, so the merge, the
+`needs_review` clear and the four-column refresh from `cards` are that function's and not a second
+spelling of all three. A `toCardId` `cards` has no row for is the one genuine `Err` here, and it
+rolls the whole batch back — which is what one transaction *means*.
+
+### Deliberately not built: the post-apply highlight
+
+The issue offers a transient highlight on the rows that moved, marked optional, and it was **not
+built**. The preview is the verification — the reader has already seen every `from → to` pair and
+ticked the ones they wanted — and the dialog's outcome state then says what happened and stays on
+screen until they dismiss it: how many moved, how many folded into a wish they already had, how
+many moved from a printing this marketplace does not price, and **every wish that did not move, by
+name and with its reason**. A highlight that fades would say a thinner version of that worse: a
+reader who looked away misses it entirely, and a list that flashes after a press teaches nothing
+the press did not already say. It is recorded here rather than left unmentioned so that the next
+reader knows it was weighed.
 
 ## The wipe
 
@@ -550,9 +841,14 @@ dx 0.0 / dy 0.0 from its trigger on keyboard activation, which is what `menuClic
 | `src-tauri/src/schema.rs` | The v23 step, `WISHLIST_GRAIN`, and the whole-schema `ON DELETE` inventory |
 | `src-tauri/src/wishlist_folders.rs` | The five folder commands, `set_wish_folder`, `folder_summary` |
 | `src-tauri/src/wishlist.rs` | `set_wish_printing`, `elsewhere`, `OWNED_SQL`, `WISH_PREFERRED_FINISH`, the cheapest-printing join |
+| `src-tauri/src/wishlist_optimize.rs` | `plan` and `apply`, the candidate query, and the six DTOs `ipc.test.ts`'s `plainMirrors` pins |
+| `src/features/wishlist/optimizePlan.ts` | The conclusions drawn from those facts — the ticked set, the headline, the outcome reading |
+| `src/features/wishlist/OptimizeWishlistDialog.tsx` | The preview, and the one press that commits it |
 | `src-tauri/src/sorting.rs` | `row_price_expr`'s two arms, and `deck_card_price_expr` as one caller of it |
 | `src/lib/folderTree.ts` | `buildFolderTree` and friends, shared with the deck gallery |
 | `src/features/wishlist/wishDrag.ts` | The payload, the tile that offers it, the target that takes it |
-| `src/features/wishlist/WishFolderCard.tsx` | The tile, and its stories beside it |
+| `src/features/wishlist/WishFolderCard.tsx` | The tile, its `rename` branch, and its stories beside it |
+| `src/components/FolderNameField.tsx` | The one naming field, both shapes, `FOLDER_CARD_HEIGHT` and `useFolderFieldReturn` |
+| `src/components/NewFolderCard.tsx` | The tile that makes a folder, and the field it becomes |
 | `src/components/ParentFolderCard.tsx` | The up-one-level tile all three cabinets draw, and its stories |
 | `src/features/card/cardMenu.tsx` | `buildWishlistTargetItems` — `Add to → Wishlist` |

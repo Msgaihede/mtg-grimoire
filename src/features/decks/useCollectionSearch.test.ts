@@ -8,6 +8,11 @@ import type { CollectionFolder, CollectionRow } from "@/lib/ipc";
 const collectionList = vi.hoisted(() => vi.fn());
 const collectionToDeck = vi.hoisted(() => vi.fn());
 const collectionFolderList = vi.hoisted(() => vi.fn());
+// The deck's live census, which `useDeckPlays` reads and this hook fences every tile on
+// (issue #358). The real hook is mounted rather than mocked — what is faked is the one command
+// under it — so the key this file asserts on is `playKey`'s own `coalesce(oracle_id, card_id)`
+// rather than a second copy of that rule written here.
+const deckPlayedKeys = vi.hoisted(() => vi.fn());
 // `useMarketplace` is the real hook here rather than a fake — the marketplace is part of both
 // the payload and the key — so its own two queries need answers or it sits rejected for the
 // life of the file.
@@ -19,12 +24,18 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     collectionList,
     collectionToDeck,
     collectionFolderList,
+    deckPlayedKeys,
     getMarketplace,
     marketplaceFeedStatus,
   },
 }));
 
-import { copySource, useCollectionSearch } from "./useCollectionSearch";
+import {
+  copySource,
+  DEFAULT_EXCLUDE_LOCKED,
+  playStateFor,
+  useCollectionSearch,
+} from "./useCollectionSearch";
 
 /** The deck this panel is docked beside — the one a move files *into*. */
 const DECK_ID = 4;
@@ -37,6 +48,7 @@ const THIS_GROUP: CollectionFolder = {
   kind: "deck",
   deckId: DECK_ID,
   sortOrder: 0,
+  locked: false,
 };
 /** Another deck's group — the folder the confirm exists for. */
 const OTHER_GROUP: CollectionFolder = {
@@ -46,6 +58,7 @@ const OTHER_GROUP: CollectionFolder = {
   kind: "deck",
   deckId: 9,
   sortOrder: 0,
+  locked: false,
 };
 /** A drawer the reader made. On the desk, so no confirm. */
 const BINDER: CollectionFolder = {
@@ -55,6 +68,7 @@ const BINDER: CollectionFolder = {
   kind: "user",
   deckId: null,
   sortOrder: 0,
+  locked: false,
 };
 /** The one holding area. **On the desk too** — a card that left the collection without leaving
  *  the database is not a card a deck is using. */
@@ -65,6 +79,7 @@ const REMOVED: CollectionFolder = {
   kind: "removed",
   deckId: null,
   sortOrder: 0,
+  locked: false,
 };
 
 const FOLDERS = [THIS_GROUP, OTHER_GROUP, BINDER, REMOVED];
@@ -112,6 +127,13 @@ function row(over: Partial<CollectionRow> = {}): CollectionRow {
 
 const BOLT = row();
 
+/**
+ * The Bolt as the **wall** hands it to the fence — `CopyTile.id` is the printing, which is
+ * `CollectionRow.cardId` under the wall's own name, and `PlayableTile` is written down precisely
+ * so that a row's numeric `id` cannot be passed where a printing is wanted.
+ */
+const BOLT_TILE = { id: BOLT.cardId, oracleId: BOLT.oracleId };
+
 let client: QueryClient;
 function wrapper({ children }: { children: ReactNode }) {
   return createElement(QueryClientProvider, { client }, children);
@@ -128,6 +150,9 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue({ entryId: 5, fromDeck: null, deckCardId: 41, quantity: 1 });
   collectionFolderList.mockReset().mockResolvedValue(FOLDERS);
+  // The deck plays the Bolt, so every case in this file that is not about the fence sees the
+  // pressable answer. The key is the **oracle** id, which is what `played_keys` selects.
+  deckPlayedKeys.mockReset().mockResolvedValue([BOLT.oracleId]);
   getMarketplace.mockReset().mockResolvedValue("tcgplayer");
   marketplaceFeedStatus.mockReset().mockResolvedValue([]);
 });
@@ -184,6 +209,43 @@ describe("useCollectionSearch", () => {
 
     await waitFor(() => expect(collectionList.mock.calls.length).toBeGreaterThan(asked));
     expect(lastQuery().allocation).toBe("all");
+  });
+
+  /**
+   * **The set-aside drawers drop out, and it is asserted on the payload for `allocation`'s
+   * reason.** `CollectionQuery.excludeLocked` defaults to `false` — an unasked question keeps
+   * today's answer, which is what keeps the mirror's and the export sweep's whole-collection
+   * reads whole — so a tab that merely *believed* it wanted the narrow list and dropped the field
+   * on the way to the wire would read as correct everywhere except in the rows it got back.
+   *
+   * The expected value is written out as a literal rather than read off the hook or off a
+   * constant: a test that asks the implementation what it sends passes against the defect it was
+   * written for.
+   *
+   * It is the same question `DEFAULT_ALLOCATION` answers one line above — *what can I build with
+   * today* — so the two travel together and there is no press that turns this one off.
+   */
+  it("drops the copies in a locked folder, with no press to turn it off", async () => {
+    const { result } = mount();
+
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+    expect(lastQuery().excludeLocked).toBe(true);
+
+    // Widening the allocation is the one control over which copies this list asks for, and it
+    // says nothing about a drawer the reader set aside: `all` puts back the copies a *deck* is
+    // holding, not the ones they took off the table themselves.
+    let asked = collectionList.mock.calls.length;
+    act(() => result.current.setAllocation("all"));
+    await waitFor(() => expect(collectionList.mock.calls.length).toBeGreaterThan(asked));
+    expect(lastQuery().excludeLocked).toBe(true);
+
+    // And `Reset all` leaves it alone, for the reason it leaves the allocation pressed: this is
+    // what the tab *is* rather than a filter laid over it. The wait is on a **new request**, so
+    // the assertion cannot be read off the page the reset replaced.
+    asked = collectionList.mock.calls.length;
+    act(() => result.current.resetAll());
+    await waitFor(() => expect(collectionList.mock.calls.length).toBeGreaterThan(asked));
+    expect(lastQuery().excludeLocked).toBe(true);
   });
 
   /**
@@ -353,8 +415,15 @@ describe("useCollectionSearch", () => {
    * came out of another deck's group that deck's live list is one shorter too. `invalidateQueries`
    * matches by key **prefix**, so `["collection"]` reaches the list, the summary, the folder
    * census and the per-folder subtotals together, and `["decks"]` reaches every deck's detail.
+   *
+   * **The card search is the third and joined on 2026-09-03** (issue #349). It used to move
+   * nothing — that wall counted every copy the reader owned wherever it was filed — but the tab
+   * one press away now counts what *this deck* can use, and a copy taken out of another deck's
+   * group is exactly the case that changes: spoken for before the press, this deck's after it.
+   * `lib/query.ts` caches 30 s, so a missing root here is a badge that reads from before the
+   * press with nothing on screen to say so.
    */
-  it("invalidates the collection and every deck", async () => {
+  it("invalidates the collection, every deck and the card search", async () => {
     const invalidate = vi.spyOn(client, "invalidateQueries");
     const { result } = mount();
     await waitFor(() => expect(collectionList).toHaveBeenCalled());
@@ -366,6 +435,54 @@ describe("useCollectionSearch", () => {
     const keys = invalidate.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey));
     expect(keys).toContain(JSON.stringify(["collection"]));
     expect(keys).toContain(JSON.stringify(["decks"]));
+    expect(keys).toContain(JSON.stringify(["cards", "search"]));
+  });
+
+  /**
+   * **The census is read here rather than threaded down from the editor**, and this is the whole
+   * of why: `collection_to_deck` hardcodes `LIVE`, so the list the fence has to be built from is
+   * the deck's live one whatever variant the editor happens to be drawing. The assertion is that
+   * the hook asks for it at all — a fence built from a prop would ask nothing.
+   */
+  it("reads the deck's own live census", async () => {
+    mount();
+
+    await waitFor(() => expect(deckPlayedKeys).toHaveBeenCalled());
+    expect(deckPlayedKeys.mock.calls[0][0]).toBe(DECK_ID);
+  });
+
+  /**
+   * **Fail closed while the census is in flight** — `CollectionPage.tsx`'s `stepperByTile` argues
+   * this direction in full, and the failure it names is exactly this one: a control that is live
+   * for the length of one query and greys afterwards is worse than one that was never live,
+   * because the reader has already reached for it.
+   *
+   * The two ends are both asserted, because only the pair can fail: a hook that answered `unread`
+   * for ever would pass the first half and grey the whole wall.
+   */
+  it("greys every tile until the census answers, then opens", async () => {
+    let answer: (keys: string[]) => void = () => undefined;
+    deckPlayedKeys.mockReturnValue(new Promise<string[]>((resolve) => (answer = resolve)));
+    const { result } = mount();
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+
+    expect(result.current.playStateOf(BOLT_TILE)).toBe("unread");
+
+    act(() => answer([BOLT.oracleId!]));
+
+    await waitFor(() => expect(result.current.playStateOf(BOLT_TILE)).toBe("plays"));
+  });
+
+  /**
+   * And a census that **failed** is a separate word rather than the same one, because the two
+   * sentences differ: a wall that is waiting is about to fix itself and a wall that could not find
+   * out is not. Both are closed.
+   */
+  it("greys the wall when the census cannot be read", async () => {
+    deckPlayedKeys.mockRejectedValue(new Error("no such deck"));
+    const { result } = mount();
+
+    await waitFor(() => expect(result.current.playStateOf(BOLT_TILE)).toBe("unreadable"));
   });
 
   /**
@@ -427,5 +544,99 @@ describe("copySource", () => {
   it("treats a folder it cannot place as spoken for", () => {
     const source = copySource(row({ folderId: 99, folderName: "Somewhere" }), [], DECK_ID);
     expect(source).toEqual({ kind: "otherDeck", deckName: "Somewhere" });
+  });
+
+  /**
+   * **The coupling, not the behaviour** ([#365](https://github.com/Msgaihede/mtg-grimoire/issues/365)).
+   *
+   * A locked drawer is `kind: "user"`, so a copy in one falls through to `desk` — *freely
+   * movable, nothing asked*. Read on its own that is the wrong answer by this module's own
+   * rule: an unclassifiable copy is treated as **spoken for** precisely so an add cannot slip
+   * past the confirmation, and a drawer the reader deliberately set aside is that copy.
+   *
+   * **It is nevertheless correct today, and this test is why it stays correct.** The tab sends
+   * `excludeLocked: true` unconditionally, so a locked row never reaches `copySource` at all —
+   * the answer below is unreachable rather than wrong. The two halves are asserted **in one
+   * test on purpose**: the `desk` answer is only sound while the exclusion holds, and a test
+   * that pinned the classification alone would go on passing, green and meaningless, the day
+   * somebody put those rows back.
+   *
+   * So if this fails, do not "fix" the expectation. It means locked copies can now reach this
+   * function, and `copySource` owes them a real answer — see its doc comment, and note that a
+   * fourth arm is a fourth press, so `pickCopy` and `CollectionSearchTab` owe one too.
+   *
+   * **It reads `DEFAULT_EXCLUDE_LOCKED` where the payload test above deliberately writes `true`
+   * out, and the two are not in disagreement.** That one asks *what went on the wire*, so
+   * reading the constant would let it pass against a hook that had stopped sending the field —
+   * the defect it exists for. This one asks *what the decision is*, and the constant **is** the
+   * decision: flipping it to `false` has to fail something, and this is the something.
+   */
+  it("has no answer for a locked copy, which is why the tab must never send it one", () => {
+    const locked: CollectionFolder = { ...BINDER, id: 14, name: "Graded", locked: true };
+
+    // Half one: unreachable-by-construction. `DEFAULT_ALLOCATION`'s neighbour on the wire.
+    expect(DEFAULT_EXCLUDE_LOCKED).toBe(true);
+
+    // Half two: what it *would* say if it ever saw one — the absence of a considered answer.
+    expect(copySource(row({ folderId: locked.id }), [...FOLDERS, locked], DECK_ID).kind).toBe(
+      "desk",
+    );
+  });
+});
+
+/**
+ * Whether the deck's live list plays a card at all — **the second axis of what a press does**, and
+ * the one issue #358 added (this tab is assign-only).
+ *
+ * Pure over the census, so it is a truth table rather than a mounted panel: two inputs, four
+ * answers, no DOM and no query behind it. `PlayState`'s doc comment carries the argument for why
+ * this is not a fourth `CopySource` arm.
+ */
+describe("playStateFor", () => {
+  const ANSWERED = { isSuccess: true, isError: false };
+  const IN_FLIGHT = { isSuccess: false, isError: false };
+  const FAILED = { isSuccess: false, isError: true };
+
+  /** The 2XM Bolt in the deck, the Alpha Bolt in the binder — **one oracle card**, and this is the
+   *  case the whole `coalesce` exists for. A printing-exact test greys exactly the tile this tab
+   *  is for: a copy the reader owns of a card their deck plays. */
+  it("matches on the oracle card rather than on the printing", () => {
+    const plays = new Set(["o-bolt"]);
+    expect(playStateFor({ id: "bolt-2xm", oracleId: "o-bolt" }, plays, ANSWERED)).toBe("plays");
+    expect(playStateFor({ id: "bolt-lea", oracleId: "o-bolt" }, plays, ANSWERED)).toBe("plays");
+  });
+
+  /** A card the list does not name — the refusal that sends the reader to the Card search tab. */
+  it("refuses a card the deck does not play", () => {
+    expect(playStateFor({ id: "sol", oracleId: "o-sol" }, new Set(["o-bolt"]), ANSWERED)).toBe(
+      "notPlayed",
+    );
+  });
+
+  /**
+   * An **orphan** — a copy whose printing has left `cards`, so it carries no oracle id on either
+   * side of the comparison. `coalesce(oracle_id, card_id)` falls back to the printing on *both*
+   * sides, so the two still meet; this is that fallback, and it is why `playKey` takes the pair
+   * rather than an oracle id.
+   */
+  it("falls back to the printing for a copy with no oracle id", () => {
+    expect(playStateFor({ id: "ghost", oracleId: null }, new Set(["ghost"]), ANSWERED)).toBe(
+      "plays",
+    );
+    expect(playStateFor({ id: "ghost", oracleId: null }, new Set(["o-bolt"]), ANSWERED)).toBe(
+      "notPlayed",
+    );
+  });
+
+  /**
+   * **Fail closed on both of the two states that are not an answer**, and note the fixture: the
+   * census here *contains* the key, so a permissive reading would say `plays` and the assertion is
+   * genuinely about the gate rather than about an empty set. `CollectionPage.tsx`'s
+   * `stepperByTile` argues the direction.
+   */
+  it("greys a card the census has not answered for, even one it would allow", () => {
+    const plays = new Set(["o-bolt"]);
+    expect(playStateFor({ id: "bolt", oracleId: "o-bolt" }, plays, IN_FLIGHT)).toBe("unread");
+    expect(playStateFor({ id: "bolt", oracleId: "o-bolt" }, plays, FAILED)).toBe("unreadable");
   });
 });

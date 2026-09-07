@@ -6,12 +6,15 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID, TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { readDragData } from "@/features/decks/dnd";
+import { MENU_CONDITION } from "@/lib/conditions";
 import { readWishDrag } from "./wishDrag";
 import type {
+  CardSummary,
   ImportMatch,
   WishlistFolder,
   WishlistFolderSummary,
   WishlistQuery,
+  WishOptimizeMove,
   WishRow,
 } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
@@ -45,6 +48,20 @@ const wishlistFolderMove = vi.hoisted(() => vi.fn());
 const wishlistFolderReorder = vi.hoisted(() => vi.fn());
 const wishlistFolderDelete = vi.hoisted(() => vi.fn());
 const wishlistSetFolder = vi.hoisted(() => vi.fn());
+// The price sweep (issue #352). Two commands and one dialog — the plan writes nothing, and only
+// the ticked rows reach the apply.
+const wishlistOptimizePlan = vi.hoisted(() => vi.fn());
+const wishlistOptimizeApply = vi.hoisted(() => vi.fn());
+// The docked search column (2026-09-07). `search_cards` is its wall, `facet_cards` and
+// `list_sets` are the filter row it draws, `prefetch_images` is what its tiles ask for, and the
+// `search_open` pair is the disclosure's memory. Every one of them is a real `invoke`, so an
+// unmocked member is a `TypeError` on a page that now mounts this column by default.
+const searchCards = vi.hoisted(() => vi.fn());
+const facetCards = vi.hoisted(() => vi.fn());
+const listSets = vi.hoisted(() => vi.fn());
+const prefetchImages = vi.hoisted(() => vi.fn());
+const searchOpen = vi.hoisted(() => vi.fn());
+const setSearchOpen = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -65,11 +82,20 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     wishlistFolderReorder,
     wishlistFolderDelete,
     wishlistSetFolder,
+    wishlistOptimizePlan,
+    wishlistOptimizeApply,
+    searchCards,
+    facetCards,
+    listSets,
+    prefetchImages,
+    searchOpen,
+    setSearchOpen,
   },
 }));
 
 import { WishlistPage } from "./WishlistPage";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
+import { SEARCH_OPEN_KEY } from "@/features/search/useSearchOpen";
 import { useAppStore } from "@/lib/store";
 
 /** The one printing `import_resolve` answers with for the import test below —
@@ -170,6 +196,36 @@ const FILED: WishRow = {
   quantity: 1,
   ownedQuantity: 0,
   unitPrice: 30,
+};
+
+/**
+ * What the **docked search column** finds — a `CardSummary`, which is a different object from the
+ * `WishRow`s above and is the whole distinction between the two walls this page now mounts.
+ *
+ * `finishes` is the JSON the column stores, because `parseFinishes` is what the tile's drag record
+ * and the `+` popup both read it through: an unparsed list would be a drag `readSearchCardDrag`
+ * refuses rather than one that lands somewhere wrong.
+ */
+const SEARCH_BOLT: CardSummary = {
+  promoTypes: null,
+  id: "c1",
+  name: "Lightning Bolt",
+  setCode: "lea",
+  setName: "Limited Edition Alpha",
+  collectorNumber: "161",
+  rarity: "common",
+  typeLine: "Instant",
+  manaCost: "{R}",
+  price: 400.5,
+  layout: "normal",
+  oracleId: "o-bolt",
+  finishes: `["nonfoil","foil"]`,
+  ownedQuantity: 1,
+  wishlisted: true,
+  printings: 1,
+  priceLow: 400.5,
+  priceHigh: 400.5,
+  gameChanger: false,
 };
 
 /**
@@ -275,8 +331,29 @@ const total = async (currency: "USD" | "EUR" = "USD") =>
  * the next visit and a missing invalidation is invisible. One test below opts into the app's own
  * number for exactly that reason.
  */
-function wrap(ui: ReactElement, { staleTime = 0 }: { staleTime?: number } = {}) {
+function wrap(
+  ui: ReactElement,
+  { staleTime = 0, searchOpen: panelOpen = false }: { staleTime?: number; searchOpen?: boolean } = {},
+) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime } } });
+  /**
+   * The docked search column, **shut unless a case asks for it** — and that is a deliberate
+   * inversion of the app's own default (`DEFAULT_SEARCH_OPEN.wishlist` is `true`).
+   *
+   * Two `FilterBar`s are mounted together when the column is open, and `FilterBar` names its own
+   * controls: the `Show filters` disclosure, the `Sort results` trigger and every tray chip carry
+   * the same accessible name in both rows. That is not a bug in either — a control means the same
+   * thing wherever it appears — but it makes an unscoped `getByRole` on this page ambiguous, and
+   * `test-dropdown.ts`'s helpers query `screen` and cannot be scoped from here.
+   *
+   * So the hundred cases about *the wishlist* run with the column railed, which is a state a
+   * reader reaches with one press, and the cases about *the column* seed it open and say so. It is
+   * `DeckSearchPanel.test.tsx`'s `panel({ storedOpen })` seam, reached from the page side.
+   *
+   * Seeded into the cache rather than through the `search_open` command, because `useSearchOpen`'s
+   * query is `staleTime: Infinity` — a seeded entry is the answer, with no round trip to race.
+   */
+  client.setQueryData(SEARCH_OPEN_KEY, { wishlist: panelOpen });
   return {
     client,
     ...render(
@@ -337,6 +414,32 @@ const folderSlot = (name: string): HTMLElement =>
  */
 const upTile = (label: string): HTMLElement =>
   screen.getByRole("button", { name: `Up one level to ${label}` }).closest("li")!;
+
+/**
+ * Whether a card on the wall is wearing either drop mark.
+ *
+ * **Both marks moved onto the card's own `<button>` face on 2026-09-03**, off the `<li>` around
+ * it — `lib/dropMarks.ts` carries the reason (a ring is a box shadow painted *outside* the border
+ * box, so on the wrapper it stood 2px proud of the dashed edge it was meant to agree with, which
+ * is the misalignment a reader reported). The drop *registrations* did not move and could not;
+ * only the `className` did.
+ *
+ * **This helper exists because the assertion it replaces would otherwise have gone quietly
+ * vacuous.** It read `classList.contains("ring-2")` on the `<li>` and asserts `false` — a target
+ * that lights up and then refuses the drop is a promise this page cannot keep. Nothing on this
+ * page draws a `ring-2` any more, so left alone it would pass in every state and prove nothing.
+ *
+ * It asks the whole subtree rather than the face alone, so it goes on answering if a card ever
+ * carries its edge somewhere else. The two marks are checked separately because `tailwind-merge`
+ * replaces one with the other rather than stacking them: an armed card reads `DROP_EDGE`'s
+ * `border-accent/45`, and the one actually under the pointer reads a solid `border-accent` beside
+ * `DROP_OVER`'s `bg-accent/15`.
+ */
+const wearsDropMark = (card: HTMLElement): boolean =>
+  [card, ...card.querySelectorAll("*")].some(
+    (box) =>
+      box.classList.contains("border-accent/45") || box.classList.contains("bg-accent/15"),
+  );
 
 /**
  * A wish carried out of the list and onto one of the two places it can be filed — a folder card,
@@ -410,7 +513,9 @@ beforeEach(() => {
   wishlistImportCommit.mockReset().mockResolvedValue({ added: 1, updated: 0, removed: 0 });
   oracleTagsForPrintings.mockReset().mockResolvedValue([]);
   // **A wishlist nobody has filed, which is the case every block but the last one is about.** The
-  // cabinet draws nothing at all without folders — no breadcrumb, no cards, no strip — so this
+  // cabinet draws no breadcrumb, no folder card and nothing above the wall without folders — all
+  // that is left of it is the `New folder` tile, which is drawn over an empty cabinet on purpose
+  // (see `the folders`' trap-door case) and reaches nothing unless a test presses it — so this
   // default is what keeps the rest of this file a test of the list rather than of the tree.
   wishlistFolderList.mockReset().mockResolvedValue([]);
   wishlistFolderSummary.mockReset().mockResolvedValue([]);
@@ -423,6 +528,29 @@ beforeEach(() => {
   wishlistFolderReorder.mockReset().mockResolvedValue([]);
   wishlistFolderDelete.mockReset().mockResolvedValue(undefined);
   wishlistSetFolder.mockReset().mockResolvedValue({ id: 7, quantity: 4, removed: false });
+  // A wishlist already on its cheapest printings, which is what every block but the price sweep's
+  // is about — so the dialog is drawable everywhere and reaches nothing unless a case presses it.
+  wishlistOptimizePlan
+    .mockReset()
+    .mockResolvedValue({ moves: [], considered: 1, alreadyCheapest: 1, skipped: 0 });
+  wishlistOptimizeApply.mockReset().mockResolvedValue({ results: [] });
+  searchCards.mockReset().mockResolvedValue({ items: [SEARCH_BOLT], total: 1, totalIsCapped: false });
+  // Answered **cold** — `ready: false`, every map empty — so nothing in the panel's filter row
+  // greys and every control keeps its name. `DeckSearchPanel.test.tsx`'s fixture.
+  facetCards.mockReset().mockResolvedValue({
+    colors: {},
+    manaValues: {},
+    manaX: 0,
+    formats: {},
+    sets: {},
+    owned: { owned: 0, missing: 0 },
+    total: 0,
+    ready: false,
+  });
+  listSets.mockReset().mockResolvedValue([]);
+  prefetchImages.mockReset().mockResolvedValue(undefined);
+  searchOpen.mockReset().mockResolvedValue({});
+  setSearchOpen.mockReset().mockResolvedValue(undefined);
   // The table, which is not this view's default — the wall is (`store.ts`). Everything in the
   // first block below is about the list view and says so by asking for it; `the wall` block at
   // the end switches to the grid, and one test there holds the default itself. The same
@@ -1354,7 +1482,9 @@ describe("the card menu", () => {
       expect(collectionAdd).toHaveBeenCalledWith({
         cardId: "c1",
         finish: "foil",
-        condition: "NM",
+        // The constant rather than the grade: a one-press add makes no decision about a copy's
+        // condition, and this suite must go red the day it starts making one again.
+        condition: MENU_CONDITION,
         quantity: 1,
         // The root, because this reader has no collection folders — which is also why
         // `Collection` above is a plain action rather than the folder submenu (v24).
@@ -1694,6 +1824,24 @@ describe("the folders", () => {
   const crumbs = () => screen.getByRole("navigation", { name: "Wishlist folders" });
 
   /**
+   * Whether a folder layer is drawn **in the strip above the wall** rather than in the wall
+   * itself — the two facts the strip is, now that naming and renaming have left it for the tiles:
+   * outside the `<ul>` of folder cards, and before it in document order.
+   *
+   * Structural rather than a class assertion, which is the only form of this that can go red for
+   * the right reason: `rounded-lg border bg-surface` matches a dozen boxes on this page, jsdom
+   * paints none of them, and a panel that had wandered into the wall would still be wearing the
+   * classes. Containment and order are the whole of what "above the wall" means to a reader.
+   */
+  const drawnAboveTheWall = (panel: HTMLElement): boolean => {
+    const wall = screen.getByRole("list", { name: "Folders" });
+    return (
+      !wall.contains(panel) &&
+      (panel.compareDocumentPosition(wall) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+    );
+  };
+
+  /**
    * A real Escape at `document.body`, reporting whether **anything consumed it** —
    * `useDismissOnEscape.test.tsx`'s own helper, here because `userEvent.keyboard` throws the
    * answer away and the answer is the whole of what the three "does nothing" tests below assert.
@@ -2031,22 +2179,37 @@ describe("the folders", () => {
 
     await userEvent.click(within(wall).getByRole("button", { name: "New folder" }));
 
-    expect(await screen.findByLabelText("New folder name")).toBeInTheDocument();
-    // At the top of the cabinet, so the folder lands at the root rather than inside anything.
-    expect(screen.getByText("in Wishlist")).toBeInTheDocument();
+    // **The tile becomes the field**, which is what makes the empty cabinet the case worth
+    // pressing rather than a second copy of the case below: there is no folder card beside it to
+    // stretch against, so this one `<li>` is both the control and the answer to it.
+    const field = await screen.findByLabelText("New folder name");
+    expect(within(wall).getAllByRole("listitem")[0]).toContainElement(field);
+    // And nothing above the wall says which level this is, because the wall the field is standing
+    // in already does. The strip used to print `in Wishlist` here for a reader who could not see
+    // which level it was drawn over; there is no strip to be unsure about now.
+    expect(screen.queryByText("in Wishlist")).toBeNull();
   });
 
   /**
-   * **The tile hands the caret back**, which is the whole reason `NewFolderCard` passes its own
-   * button up rather than a `MouseEvent`: `open(next, opener)` latches the element and `dismiss`
-   * focuses it before the panel unmounts, because an element that unmounts with the caret on it
-   * drops focus to `<body>` and the next Tab restarts from the top of the app.
+   * **The tile hands the caret back, and it no longer does it the way the rest of this app
+   * does.** The page's `dismiss` still runs and still focuses the element `open(next, opener)`
+   * latched — but that element is the `New folder` button, and the button is what the field
+   * *replaced*, so by the time the page focuses it it is a detached node and the call is a silent
+   * no-op. The element that should take the caret is the one React has just rendered in its
+   * place, which only the tile knows: `useFolderFieldReturn` is that half, and it restores only
+   * where `document.activeElement` is `<body>` — the state a caret dropped by an unmounting
+   * element leaves behind, and the state an outside click that landed on something else does not.
+   *
+   * **Both ways out, because they are two different mechanisms arriving at one place.** The ✕ is
+   * the field's own button and unmounts under the caret; Escape is the page's `"inner"` rung,
+   * fired at the input. A restore written for one of them and not the other would leave half the
+   * gesture dropping focus to the top of the app, and nothing on screen would say so.
    *
    * **Driven by a click, never by `el.focus()`.** A past session found that starting a keyboard
    * flow from a programmatically focused element tests a caret a reader cannot produce — and the
    * caret this asserts about is one a *pointer* creates, so the pointer is what has to make it.
    */
-  it("gives the caret back to the New folder tile when its panel is cancelled", async () => {
+  it("gives the caret back to the New folder tile, by the ✕ and by Escape", async () => {
     wrap(<WishlistPage />);
     const wall = await screen.findByRole("list", { name: "Folders" });
 
@@ -2060,6 +2223,70 @@ describe("the folders", () => {
       expect(screen.queryByLabelText("New folder name")).not.toBeInTheDocument(),
     );
     expect(screen.getByRole("button", { name: "New folder" })).toHaveFocus();
+
+    await userEvent.click(screen.getByRole("button", { name: "New folder" }));
+    expect(await screen.findByLabelText("New folder name")).toHaveFocus();
+
+    await userEvent.keyboard("{Escape}");
+
+    await waitFor(() =>
+      expect(screen.queryByLabelText("New folder name")).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole("button", { name: "New folder" })).toHaveFocus();
+  });
+
+  /**
+   * **And the third way out, which is the one that succeeds** — the caret has to come back from a
+   * committed write as well as from an abandoned one, or a reader who makes three folders in a
+   * row is thrown to the top of the app after each.
+   *
+   * It is a different route to the same place and that is why it is its own case: pressing ✓
+   * greys the tick *while the write is in flight*, so the browser blurs the control under the
+   * reader's own hand and the caret is already at `<body>` before the field unmounts. Nothing in
+   * the ✕ path exercises that, and a restore guarded on the wrong element would pass there and
+   * fail here.
+   */
+  it("gives the caret back to the tile when the create commits", async () => {
+    wrap(<WishlistPage />);
+    const wall = await screen.findByRole("list", { name: "Folders" });
+
+    await userEvent.click(within(wall).getByRole("button", { name: "New folder" }));
+    await userEvent.type(await screen.findByLabelText("New folder name"), "Paid for");
+    await userEvent.click(screen.getByRole("button", { name: "Create folder" }));
+
+    expect(wishlistFolderCreate).toHaveBeenCalledWith(null, "Paid for");
+    await waitFor(() =>
+      expect(screen.queryByLabelText("New folder name")).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole("button", { name: "New folder" })).toHaveFocus();
+  });
+
+  /**
+   * **The field stands in the wall, in the tile's own place** — the whole claim of moving it off
+   * the strip, and the one a test that merely found the input would pass without.
+   *
+   * Three facts together, because any one of them alone is satisfied by an arrangement nobody
+   * wanted: the input is inside *this* `<li>` (a field in a strip above is not), the `New folder`
+   * button has left the tree (a field drawn *beside* the tile would leave it), and the wall is
+   * still three cards long with the drawers in their own positions (a field appended as a fourth
+   * `<li>` would pass the first two and reflow the row).
+   */
+  it("draws the naming field in the wall, in the tile's own place", async () => {
+    wrap(<WishlistPage />);
+    const wall = await screen.findByRole("list", { name: "Folders" });
+    await screen.findByRole("button", { name: /^Someday folder/ });
+
+    await userEvent.click(within(wall).getByRole("button", { name: "New folder" }));
+
+    const field = await screen.findByLabelText("New folder name");
+    const cards = within(wall).getAllByRole("listitem");
+    expect(cards).toHaveLength(3);
+    expect(cards[0]).toContainElement(field);
+    expect(within(wall).queryByRole("button", { name: "New folder" })).toBeNull();
+    // The drawers behind it are where they were, and are still drawers rather than fields: one
+    // open field across the whole wall is what `openPanel` naming exactly one thing buys.
+    expect(within(cards[1]).getByRole("button", { name: /^Ordered folder/ })).toBeInTheDocument();
+    expect(within(cards[2]).getByRole("button", { name: /^Someday folder/ })).toBeInTheDocument();
   });
 
   /**
@@ -2182,6 +2409,10 @@ describe("the folders", () => {
    *
    * `"New folder"` and no longer `"+ New folder"` — the plus was a control's decoration and the
    * tile draws a `FolderPlus` glyph instead, so the accessible name is the words alone.
+   *
+   * **The whole trip, from a tile inside a drawer.** The press turns that tile into the field, the
+   * name is typed on the line the folder's own name will occupy, and ✓ is what commits it — so
+   * this is also the case that would go red if the tile opened something that reached no write.
    */
   it("creates a folder inside the one the reader is standing in", async () => {
     wrap(<WishlistPage />);
@@ -2199,6 +2430,14 @@ describe("the folders", () => {
    * The `⋯` trigger is the app's first click-opened menu, and it reaches the three things a
    * folder can have done to it. The delete question is the one a reader guesses wrong: the two
    * cascades point opposite ways, and the sentence says both with the reassuring half first.
+   *
+   * **The strip is what answers two of those three, and this is where that survives.** Naming and
+   * renaming left it for the tiles on 2026-09-03; moving and deleting could not follow, because
+   * the answer to "into which folder" is a list of the *other* folders and the answer to "delete
+   * this?" is a sentence about what happens to the wishes inside — neither of which is a name
+   * typed on a 62px card's own line. So the question is asserted to be drawn where it always was:
+   * outside the wall and above it. Emptying the strip entirely is the plausible next edit, and
+   * this line is what would go red for it.
    */
   it("reaches Rename, Move and Delete from a folder card, and says what a delete takes", async () => {
     wrap(<WishlistPage />);
@@ -2211,19 +2450,22 @@ describe("the folders", () => {
 
     await userEvent.click(within(menu).getByRole("menuitem", { name: /Delete/ }));
 
-    expect(
-      await screen.findByText(
-        "Its wishes move back to your wishlist; folders inside it are deleted.",
-      ),
-    ).toBeInTheDocument();
+    const question = await screen.findByText(
+      "Its wishes move back to your wishlist; folders inside it are deleted.",
+    );
+    expect(drawnAboveTheWall(question)).toBe(true);
 
     await userEvent.click(screen.getByRole("button", { name: "Delete folder" }));
 
     expect(wishlistFolderDelete).toHaveBeenCalledWith(1);
   });
 
-  /** The rename field is the same one field the create uses, doing its other job. */
-  it("renames a folder from the same field", async () => {
+  /**
+   * **A rename is answered on the card**, by the same `FolderNameField` the `New folder` tile
+   * becomes — its other job, and the one that keeps the dashed border because the thing being
+   * renamed is already a container.
+   */
+  it("renames a folder from the card's own field", async () => {
     wrap(<WishlistPage />);
 
     await userEvent.click(await screen.findByRole("button", { name: "Manage Ordered" }));
@@ -2245,6 +2487,129 @@ describe("the folders", () => {
   });
 
   /**
+   * **The field opens on the drawer it is about, and every other drawer goes on resting.**
+   *
+   * This is the half a rename has that a create does not: there are twelve cards on a full wall
+   * and one of them is being renamed, so "the field is on screen" is not the claim — "the field
+   * is on *that* card" is. `openPanel` names exactly one folder and `WishFolderCard` compares
+   * against it, which is what keeps a wall from turning into a wall of fields; a card holding its
+   * own flag could not know another card's `Rename…` had been pressed.
+   *
+   * The figures line is asserted with it, because it is the whole reason a rename is not simply
+   * the `New folder` tile with a different label: a reader renaming a drawer is looking at what
+   * is in it, and a box that dropped the count would make them check they had the right one.
+   */
+  it("renames on the card itself, and leaves every other drawer alone", async () => {
+    wrap(<WishlistPage />);
+    await screen.findByRole("button", { name: /^Someday folder/ });
+
+    await userEvent.click(screen.getByRole("button", { name: "Manage Ordered" }));
+    await userEvent.click(
+      within(await screen.findByRole("menu")).getByRole("menuitem", { name: /Rename/ }),
+    );
+
+    const field = await screen.findByLabelText("Rename Ordered");
+    const cards = within(screen.getByRole("list", { name: "Folders" })).getAllByRole("listitem");
+    // The tile, `Ordered`, `Someday` — and the field is on the second of them.
+    expect(cards[1]).toContainElement(field);
+    expect(within(cards[1]).getByText("3 wishes · $30.00")).toBeInTheDocument();
+    // The card's own door and its `⋯` are out of the tree while the field stands in their place:
+    // a drawer that could still be opened underneath its own name field is two controls for one
+    // press.
+    expect(screen.queryByRole("button", { name: /^Ordered folder/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Manage Ordered" })).toBeNull();
+    // Everything else on the wall is untouched — one field at a time, tile included.
+    expect(within(cards[0]).getByRole("button", { name: "New folder" })).toBeInTheDocument();
+    expect(within(cards[2]).getByRole("button", { name: /^Someday folder/ })).toBeInTheDocument();
+    expect(within(cards[2]).getByRole("button", { name: "Manage Someday" })).toBeInTheDocument();
+  });
+
+  /**
+   * **And the card's `⋯` takes the caret back**, by both ways out and for
+   * `useFolderFieldReturn`'s reason: the trigger the page latched when the menu was opened is the
+   * `⋯` the field replaced, so it is a detached node by the time `dismiss` focuses it and the
+   * element that should have the caret is the one this render has just built.
+   *
+   * A committed rename as well as an abandoned one, because they leave the caret in different
+   * places on the way: Escape fires at the input, and ✓ greys itself while the write is in flight
+   * so the browser blurs it first.
+   */
+  it("gives the caret back to the folder's ⋯, by Escape and by a committed rename", async () => {
+    wrap(<WishlistPage />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Manage Ordered" }));
+    await userEvent.click(
+      within(await screen.findByRole("menu")).getByRole("menuitem", { name: /Rename/ }),
+    );
+    expect(await screen.findByLabelText("Rename Ordered")).toHaveFocus();
+
+    await userEvent.keyboard("{Escape}");
+
+    await waitFor(() => expect(screen.queryByLabelText("Rename Ordered")).toBeNull());
+    expect(screen.getByRole("button", { name: "Manage Ordered" })).toHaveFocus();
+
+    await userEvent.click(screen.getByRole("button", { name: "Manage Ordered" }));
+    await userEvent.click(
+      within(await screen.findByRole("menu")).getByRole("menuitem", { name: /Rename/ }),
+    );
+    await screen.findByLabelText("Rename Ordered");
+    await userEvent.keyboard("On its way");
+    await userEvent.click(screen.getByRole("button", { name: "Rename folder" }));
+
+    // The mock answers `Ordered` and the refetched list still holds that name, so the card the
+    // caret lands back on is the one that was renamed rather than a different drawer.
+    await waitFor(() => expect(screen.queryByLabelText("Rename Ordered")).toBeNull());
+    expect(screen.getByRole("button", { name: "Manage Ordered" })).toHaveFocus();
+  });
+
+  /**
+   * **Walking into another folder puts the naming field away**, and the clause that does it
+   * (`openPanel`'s `panel.parentId !== folderId`) is the one thing here a blur cannot cover.
+   *
+   * The ordinary pointer gesture never reaches it: clicking a folder card moves focus out of the
+   * field, and the field discards its draft on blur, so the panel is already gone before the
+   * level changes. The one state where that route is switched off is a **write in flight** — the
+   * field holds itself open through the round trip, precisely so a slow create cannot be
+   * cancelled by the browser blurring the tick it has just greyed — and a reader who gives up
+   * waiting and opens a drawer is exactly the reader this clause is for. So the create below
+   * never answers.
+   *
+   * What it would cost is asserted rather than described: without the clause the panel is still
+   * open at the new level, which means `useDismissOnEscape`'s `"inner"` rung is still armed and
+   * takes the press in the capture phase — so Escape stops walking the reader back out of the
+   * folder they have just opened, and nothing on screen says why. The field being gone and the
+   * press reaching the `"navigation"` rung are the two halves of the same fact.
+   */
+  it("closes the naming field when the reader walks into another folder", async () => {
+    // Never answers: the field stays open, which is what takes the blur discard out of the way.
+    wishlistFolderCreate.mockImplementation(() => new Promise(() => {}));
+    wrap(<WishlistPage />);
+    const wall = await screen.findByRole("list", { name: "Folders" });
+
+    await userEvent.click(within(wall).getByRole("button", { name: "New folder" }));
+    await userEvent.type(await screen.findByLabelText("New folder name"), "Paid for");
+    await userEvent.click(screen.getByRole("button", { name: "Create folder" }));
+    expect(wishlistFolderCreate).toHaveBeenCalledWith(null, "Paid for");
+    // Held open by the write rather than by the caret, which is what puts the blur discard out of
+    // reach: the tick greyed itself on the press, so nothing inside the field holds focus and the
+    // click below fires no `focusout` the form could cancel on.
+    expect(screen.getByLabelText("New folder name")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /^Ordered folder/ }));
+
+    await waitFor(() => expect(lastQuery().folderId).toBe(1));
+    // Gone, and the tile is a tile again — naming *this* level, not the one that was left.
+    await waitFor(() => expect(screen.queryByLabelText("New folder name")).toBeNull());
+    expect(screen.getByRole("button", { name: "New folder" })).toBeInTheDocument();
+
+    // And the press the invisible layer would have eaten walks the reader back out.
+    await userEvent.keyboard("{Escape}");
+
+    expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
+    expect(within(crumbs()).getByText("Wishlist")).toHaveAttribute("aria-current", "page");
+  });
+
+  /**
    * A folder may not go inside itself or inside anything it holds — `wishlist_folders.parent_id`
    * cascades onto itself, so a cycle is a graph SQLite would walk forever the day the folder is
    * deleted. The backend refuses it in words; this is the fence drawn before the reader can ask.
@@ -2258,6 +2623,9 @@ describe("the folders", () => {
     );
 
     const list = await screen.findByRole("group", { name: "Move Ordered into a folder" });
+    // The other half of the strip that survived the naming forms moving into the wall: a list of
+    // every other drawer has nowhere to be drawn on a 62px card.
+    expect(drawnAboveTheWall(list)).toBe(true);
     // Its own row and its child's are inert; the third folder is a live destination.
     expect(within(list).getByRole("button", { name: /Ordered/ })).toBeDisabled();
     expect(within(list).getByRole("button", { name: /Backordered/ })).toBeDisabled();
@@ -2644,7 +3012,7 @@ describe("rearranging the wishlist's cabinet", () => {
     for (const at of [AT_START, AT_MIDDLE, AT_END]) {
       stand("Backordered");
       const held = await startPointerDrag(source);
-      expect(folderCard("Backordered").classList.contains("ring-2")).toBe(false);
+      expect(wearsDropMark(folderCard("Backordered"))).toBe(false);
       await held.over(folderSlot("Backordered"), at);
       await held.drop();
     }
@@ -2714,5 +3082,343 @@ describe("rearranging the wishlist's cabinet", () => {
     await held.drop();
 
     await waitFor(() => expect(wishlistFolderReorder).toHaveBeenCalledWith(null, [1, 3, 2]));
+  });
+});
+
+/**
+ * **The price sweep** — issue #352's one press, and the preview that stands between it and a
+ * shopping list somebody would have to audit card by card.
+ *
+ * What is checked here is the *wiring*: that nothing is fetched until the reader asks, that the
+ * sweep is scoped by the same query the list is drawn from, and that the press sends exactly the
+ * rows left ticked. Everything about how the preview reads — the em dash, the tri-state, the
+ * outcome's wording — belongs to `OptimizeWishlistDialog.test.tsx`, which drives the dialog with
+ * no page and no query client under it.
+ */
+describe("the price sweep", () => {
+  /** One move, at the two prices the assertions below read. */
+  const MOVE: WishOptimizeMove = {
+    wishId: 7,
+    name: "Lightning Bolt",
+    quantity: 2,
+    preferredFinish: null,
+    folderId: null,
+    from: { cardId: "c1", setCode: "lea", collectorNumber: "161", lang: "en", price: 5 },
+    to: { cardId: "c2", setCode: "2x2", collectorNumber: "117", lang: "en", price: 2 },
+    savedPerCopy: 3,
+    saved: 6,
+  };
+  const SECOND: WishOptimizeMove = {
+    ...MOVE,
+    wishId: 8,
+    name: "Ancestral Recall",
+    quantity: 1,
+    from: { cardId: "c3", setCode: "lea", collectorNumber: "48", lang: "en", price: 9 },
+    to: { cardId: "c4", setCode: "vma", collectorNumber: "1", lang: "en", price: 4 },
+    savedPerCopy: 5,
+    saved: 5,
+  };
+
+  const openSweep = async () => {
+    await screen.findByText("Lightning Bolt");
+    await userEvent.click(screen.getByRole("button", { name: "Optimise wishlist prices" }));
+    return screen.findByRole("dialog");
+  };
+
+  it("fetches nothing until the button is pressed", async () => {
+    wrap(<WishlistPage />);
+    await screen.findByText("Lightning Bolt");
+    // The dialog is mounted unconditionally so its close can fade, and the query behind it is
+    // gated on the flag rather than on the mount — which is the whole difference between a read
+    // nobody asked for and one they did.
+    expect(wishlistOptimizePlan).not.toHaveBeenCalled();
+
+    await openSweep();
+    await waitFor(() => expect(wishlistOptimizePlan).toHaveBeenCalledTimes(1));
+  });
+
+  it("takes the sweep over the same query the list is drawn from", async () => {
+    wrap(<WishlistPage />);
+    await openSweep();
+
+    await waitFor(() => expect(wishlistOptimizePlan).toHaveBeenCalled());
+    const asked = wishlistOptimizePlan.mock.calls[0][0] as WishlistQuery;
+    // The marketplace decides every figure in the answer, so it travels with the question.
+    expect(asked.marketplace).toBe(lastQuery().marketplace);
+    // `limit`/`offset` are ignored by the command — the plan covers the whole query rather than
+    // the page on screen, which is what makes its `considered` the header's own `Wishes` figure.
+    expect(asked).toMatchObject({ limit: 0, offset: 0 });
+  });
+
+  it("draws the moves and sends only the rows left ticked", async () => {
+    wishlistOptimizePlan.mockResolvedValue({
+      moves: [MOVE, SECOND],
+      considered: 2,
+      alreadyCheapest: 0,
+      skipped: 0,
+    });
+    wrap(<WishlistPage />);
+    const dialog = await openSweep();
+
+    const second = await within(dialog).findByRole("checkbox", {
+      name: /^Switch Ancestral Recall/,
+    });
+    expect(within(dialog).getByText("LEA · 161 · EN")).toBeInTheDocument();
+    expect(within(dialog).getByText("2X2 · 117 · EN")).toBeInTheDocument();
+
+    await userEvent.click(second);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Switch 1 wish" }));
+
+    await waitFor(() =>
+      expect(wishlistOptimizeApply).toHaveBeenCalledWith([
+        { wishId: 7, fromCardId: "c1", toCardId: "c2" },
+      ]),
+    );
+  });
+
+  it("re-reads the list and the search once the sweep lands", async () => {
+    wishlistOptimizePlan.mockResolvedValue({
+      moves: [MOVE],
+      considered: 1,
+      alreadyCheapest: 0,
+      skipped: 0,
+    });
+    wishlistOptimizeApply.mockResolvedValue({ results: [{ wishId: 7, status: "changed" }] });
+    const { client } = wrap(<WishlistPage />);
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    const dialog = await openSweep();
+
+    await userEvent.click(await within(dialog).findByRole("button", { name: "Switch 1 wish" }));
+
+    // A repointed wish changes its printing, its price and the folder subtotal above it — none of
+    // it arithmetic this page could redo — and it moves the heart on every search tile of the
+    // card. `settleWhole`'s two roots, made in bulk.
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] }));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
+  });
+
+  it("stays open afterwards and says what it did", async () => {
+    wishlistOptimizePlan.mockResolvedValue({
+      moves: [MOVE],
+      considered: 1,
+      alreadyCheapest: 0,
+      skipped: 0,
+    });
+    wishlistOptimizeApply.mockResolvedValue({ results: [{ wishId: 7, status: "merged" }] });
+    wrap(<WishlistPage />);
+    const dialog = await openSweep();
+
+    await userEvent.click(await within(dialog).findByRole("button", { name: "Switch 1 wish" }));
+
+    // The page underneath has no place for a transient sentence, and the reader has just asked a
+    // question they are owed an answer to. One way out, and the preview's own button gone.
+    expect(await within(dialog).findByRole("button", { name: "Done" })).toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: /^Switch/ })).not.toBeInTheDocument();
+
+    // Scoped to the body: the same sentence is in the footer's permanently mounted `sr-only`
+    // live region, which is the only arrangement that announces anything.
+    const body = dialog.querySelector("footer")?.previousElementSibling as HTMLElement;
+    expect(
+      within(body).getByText("Switched 1 wish to the cheapest printing, saving $6.00."),
+    ).toBeInTheDocument();
+    expect(
+      within(body).getByText(/folded into a wish you already had in the same folder/),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * **The dialog's own state resets on close; the mutation's does not**, and the body draws the
+   * outcome *instead of* the preview whenever there is one — so a reader who optimised once and
+   * pressed the button again would be handed last time's receipt and no list at all.
+   */
+  it("opens on a fresh preview rather than on the last sweep's receipt", async () => {
+    wishlistOptimizePlan.mockResolvedValue({
+      moves: [MOVE],
+      considered: 1,
+      alreadyCheapest: 0,
+      skipped: 0,
+    });
+    wishlistOptimizeApply.mockResolvedValue({ results: [{ wishId: 7, status: "changed" }] });
+    wrap(<WishlistPage />);
+    const dialog = await openSweep();
+
+    await userEvent.click(await within(dialog).findByRole("button", { name: "Switch 1 wish" }));
+    await within(dialog).findByRole("button", { name: "Done" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Done" }));
+
+    // Straight to the button rather than through `openSweep`: a closing panel is still in the
+    // tree for the length of its fade, so a text query would match the row twice.
+    await userEvent.click(screen.getByRole("button", { name: "Optimise wishlist prices" }));
+    const reopened = await screen.findByRole("dialog");
+    expect(
+      await within(reopened).findByRole("button", { name: "Switch 1 wish" }),
+    ).toBeInTheDocument();
+    expect(within(reopened).queryByRole("button", { name: "Done" })).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The docked card search, and the one thing it exists for: **a card the reader wants gets onto the
+ * list from the page that shows the list.**
+ *
+ * This page's own empty state used to send them away in as many words — *"Add cards from search
+ * with the + on any row or tile."* — so what is asserted here is the destination rather than the
+ * search: where a press files, where a drop files, and that the two rows of filters on screen are
+ * separately addressable.
+ *
+ * `WishlistSearchPanel.test.tsx` is where the column is the subject; this block is where the
+ * **page** is, which is why every case here reads a folder id off the wire.
+ */
+describe("the search column", () => {
+  /** The panel's `<section>`, by the name only this one answers to. */
+  const panel = () => screen.getByRole("region", { name: "Add cards to your wishlist" });
+
+  /** The `+` on the search wall's one tile, whose name states the destination it would file into. */
+  const plus = (destination: string) =>
+    screen.findByRole("button", { name: `Add Lightning Bolt (LEA 161) to ${destination}` });
+
+  /** Press the `+` and then the popup's own Add — the two-step every quick add is. */
+  const add = async (destination: string) => {
+    await userEvent.click(await plus(destination));
+    await userEvent.click(await screen.findByRole("button", { name: "Add to wishlist" }));
+  };
+
+  beforeEach(() => {
+    wishlistFolderList.mockResolvedValue(FOLDERS);
+    wishlistFolderSummary.mockResolvedValue(SUMMARY);
+  });
+
+  /**
+   * **Railed is still drawn**, which is what makes this a statement about the page rather than
+   * about the disclosure: the `<section>` and its chevron are the same three nodes in all three
+   * states, and only the body mounts on the press.
+   */
+  it("draws a card search beside the list", async () => {
+    wrap(<WishlistPage />);
+    await screen.findByText("Lightning Bolt");
+
+    const column = panel();
+    expect(within(column).getByRole("button", { name: "Expand card search" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    // Nothing was searched, because nothing was opened.
+    expect(searchCards).not.toHaveBeenCalled();
+
+    // And the collection's panel is not this one — two sidebars answering to one name is one of
+    // them being found by accident.
+    expect(
+      screen.queryByRole("region", { name: "Add cards to your collection" }),
+    ).not.toBeInTheDocument();
+  });
+
+  /**
+   * The two `FilterBar`s this page mounts together, told apart by the one thing that differs: the
+   * box's own name. `FilterLabels.idStem` is the other half — two mounted rows sharing an `id`
+   * would make the second row's `<label htmlFor>` name the first row's field — and it is asserted
+   * here through the labels resolving at all, since a duplicate `id` is what breaks that.
+   */
+  it("gives the two filter rows different names", async () => {
+    wrap(<WishlistPage />, { searchOpen: true });
+    await screen.findByText("Lightning Bolt");
+
+    expect(screen.getByLabelText(/search your wishlist/i)).toBeInTheDocument();
+    expect(within(panel()).getByLabelText("Search cards")).toBeInTheDocument();
+    // Neither name reaches the other row.
+    expect(within(panel()).queryByLabelText(/search your wishlist/i)).toBeNull();
+  });
+
+  /** Nothing is open, so the destination is the root — and `null` goes on the wire as itself. */
+  it("adds at the root when no folder is open", async () => {
+    wrap(<WishlistPage />, { searchOpen: true });
+    await screen.findByText("Lightning Bolt");
+
+    await add("Wishlist");
+
+    expect(wishlistAdd).toHaveBeenCalledWith(
+      expect.objectContaining({ cardId: "c1", folderId: null }),
+    );
+  });
+
+  /** And the whole point of the column: the drawer on screen is where a press files. */
+  it("adds from the search into the folder on screen", async () => {
+    wrap(<WishlistPage />, { searchOpen: true });
+    await userEvent.click(await screen.findByRole("button", { name: /^Ordered folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(1));
+
+    await add("Ordered");
+
+    expect(wishlistAdd).toHaveBeenCalledWith(
+      expect.objectContaining({ cardId: "c1", folderId: 1 }),
+    );
+  });
+
+  /**
+   * **Flatten means the root** (spec §5.3): the breadcrumb reads `Wishlist · all folders` and
+   * there is no folder on screen to be standing in, so the folder the reader last opened is not a
+   * destination the page may still file into behind their back.
+   *
+   * Driven by opening a folder *first* and then flattening, because the state this is about is a
+   * `folderId` that is still set underneath — flattening from the root would pass whether the page
+   * read the flag or not.
+   */
+  it("adds at the root while the cabinet is flattened", async () => {
+    wrap(<WishlistPage />, { searchOpen: true });
+    await userEvent.click(await screen.findByRole("button", { name: /^Ordered folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(1));
+
+    await userEvent.click(screen.getByRole("button", { name: /^Flatten/ }));
+    await waitFor(() => expect(lastQuery().flatten).toBe(true));
+
+    await add("Wishlist");
+
+    expect(wishlistAdd).toHaveBeenCalledWith(
+      expect.objectContaining({ cardId: "c1", folderId: null }),
+    );
+  });
+
+  /**
+   * **A wish for the printing the tile is of, not for the card.** `oracleId` is what an "any
+   * printing" wish is keyed on, and that is a choice the `+` popup offers explicitly — so a press
+   * that never made it must put the `cardId` on the wire and nothing else.
+   */
+  it("wishes for the printing the tile is of", async () => {
+    wrap(<WishlistPage />, { searchOpen: true });
+    await screen.findByText("Lightning Bolt");
+
+    await add("Wishlist");
+
+    const sent = wishlistAdd.mock.calls[0][0] as Record<string, unknown>;
+    expect(sent.cardId).toBe("c1");
+    expect(sent).not.toHaveProperty("oracleId");
+    // The printing's first available finish, carried rather than guessed — a wish for the foil is
+    // not filled by the nonfoil.
+    expect(sent.preferredFinish).toBe("nonfoil");
+  });
+
+  /**
+   * The drag half, and the assertion that separates it from every other drop on this page: a card
+   * nobody has wished for has no row to re-file, so the write is `wishlist_add` and **never**
+   * `wishlist_set_folder`.
+   */
+  it("files a dropped card into the folder it was dropped on", async () => {
+    wrap(<WishlistPage />, { searchOpen: true });
+    await screen.findByText("Lightning Bolt");
+    // The panel's tile, which is a `[data-dnd-source]` like the page's own rows — told apart by
+    // the column it is in rather than by its shape.
+    const tile = await waitFor(() => {
+      const found = panel().querySelector<HTMLElement>(`[${DND_SOURCE_ATTR}]`);
+      if (!found) throw new Error("no search tile");
+      return found;
+    });
+
+    await wishOnto(tile, folderCard("Ordered"));
+
+    await waitFor(() =>
+      expect(wishlistAdd).toHaveBeenCalledWith(
+        expect.objectContaining({ cardId: "c1", quantity: 1, preferredFinish: "nonfoil", folderId: 1 }),
+      ),
+    );
+    expect(wishlistSetFolder).not.toHaveBeenCalled();
   });
 });

@@ -3,6 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TitleBar } from "@/components/TitleBar";
 import { LAYER } from "@/lib/layers";
+import { useAppStore } from "@/lib/store";
 import { SNAP_BUTTON_ID, SNAP_HOVER_EVENTS } from "@/lib/window";
 import { emitFake, resetListeners } from "../../.storybook/fake/event";
 import { resetWindow, setMaximized, windowCalls } from "../../.storybook/fake/window";
@@ -19,6 +20,9 @@ vi.mock("@tauri-apps/api/event", () => import("../../.storybook/fake/event"));
 beforeEach(() => {
   resetWindow();
   resetListeners();
+  // The keyboard map's flag lives in the store, which is a module singleton — a test that
+  // opened the panel would otherwise hand the next one a caption with a panel hanging off it.
+  useAppStore.setState(useAppStore.getInitialState());
 });
 
 describe("TitleBar", () => {
@@ -126,9 +130,60 @@ describe("TitleBar", () => {
     expect(mark).not.toBeNull();
     expect(mark).toHaveClass("pointer-events-none");
 
-    for (const name of ["Minimize", "Maximize", "Close"]) {
+    for (const name of ["Keyboard shortcuts", "Minimize", "Maximize", "Close"]) {
       expect(screen.getByRole("button", { name })).not.toHaveAttribute("data-tauri-drag-region");
     }
+  });
+
+  /**
+   * The fourth button, which is the one that opens something rather than doing something to the
+   * window.
+   *
+   * A caption button is a glyph with no visible label, so `aria-label` is the whole of its name;
+   * `aria-expanded` is the whole of what says the panel is open, since the button draws no
+   * chevron and there is no room for one. Both states are asserted because the attribute is only
+   * useful if it moves — a button reporting `false` for ever is worse than one reporting nothing,
+   * which is why the three window verbs below carry none at all.
+   */
+  it("names the keyboard button and reports whether its panel is open", async () => {
+    const user = userEvent.setup();
+    render(<TitleBar />);
+
+    const button = screen.getByRole("button", { name: "Keyboard shortcuts" });
+    expect(button).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("heading", { name: "Everywhere" })).not.toBeInTheDocument();
+
+    await user.click(button);
+    expect(button).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("heading", { name: "Everywhere" })).toBeInTheDocument();
+
+    await user.click(button);
+    expect(button).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("heading", { name: "Everywhere" })).not.toBeInTheDocument();
+
+    for (const name of ["Minimize", "Maximize", "Close"]) {
+      expect(screen.getByRole("button", { name })).not.toHaveAttribute("aria-expanded");
+    }
+  });
+
+  /**
+   * Open draws the same wash the pointer draws, through the same branch `forceHover` uses —
+   * there is no third styling path, and this is what says so.
+   *
+   * `classList.contains`, never `className.includes`: the button always carries
+   * `hover:bg-accent/10`, whose name *contains* the unprefixed class, so a substring check passes
+   * before anything has been pressed. That trap cost a run in the snap-overlay test above, which
+   * is why the same sentence is written twice.
+   */
+  it("lights the keyboard button while its panel is open", async () => {
+    const user = userEvent.setup();
+    render(<TitleBar />);
+
+    const button = screen.getByRole("button", { name: "Keyboard shortcuts" });
+    expect(button.classList.contains("bg-accent/10")).toBe(false);
+
+    await user.click(button);
+    expect(button.classList.contains("bg-accent/10")).toBe(true);
   });
 
   /**

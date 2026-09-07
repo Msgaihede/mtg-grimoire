@@ -32,7 +32,15 @@
  * **Flat rows, indented — no twisty**, and the reason is a fact about the *drawing*, so it is
  * written at the drawing: `FolderTree.tsx`'s own head. What reaches this file is {@link indent},
  * which every surface that draws a folder list shares.
+ *
+ * **One function here is not generic, deliberately** — {@link lockedFolderIds}, which is the
+ * collection cabinet's alone because `locked` is a column only `collection_folders` has. It sits
+ * here rather than in the collection's own folder because it is the same downward walk over the
+ * same flat rows as {@link folderDescendants}, and a second implementation of that walk one
+ * directory over is how the two come to disagree.
  */
+
+import type { CollectionFolder } from "./ipc";
 
 /** Pixels of indent per level of nesting, and the padding the root sits at. */
 const INDENT_STEP = 14;
@@ -214,4 +222,52 @@ export function folderDescendants<F extends FolderLike>(
     frontier = next;
   }
   return out;
+}
+
+/**
+ * Every collection folder that is **effectively locked** — the ones the reader set aside, plus
+ * everything filed inside one, because the lock inherits down the tree.
+ *
+ * **This is the single place that inheritance is computed on the TypeScript side, and no call
+ * site may re-derive it.** `CollectionFolder.locked` is the folder's *own* flag and never the
+ * answer: the badge on a folder card, the greyed Lock/Unlock row, the greyed Delete and the
+ * drag confirmation are all four about the effective lock, and a surface that read the raw
+ * field would draw an unmarked drawer inside a locked one — making the inheritance invisible
+ * exactly where it matters. A move *within* one locked sub-tree is likewise computed from both
+ * ends' membership of this set, not from the two folders' flags.
+ *
+ * **`readonly CollectionFolder[]` rather than a type parameter, and that narrowness is the
+ * point.** This module serves the deck gallery and the wishlist as well, and neither
+ * `DeckFolder` nor `WishlistFolder` carries a `locked` column — there is no wishlist equivalent
+ * of this feature and no plan for one. A generic would invite exactly the widening the design
+ * refused.
+ *
+ * **The mirror of `collection_folders`' recursive CTE**, spelled once on each side. Written
+ * downward from the locked rows rather than by walking each folder's ancestors upward, for
+ * {@link folderDescendants}' reason: one breadth-first pass with a visited set costs one sweep
+ * per level instead of one per folder, and it **terminates on a corrupt cycle** — which is the
+ * same `UNION` rather than `UNION ALL` the SQL uses, and for the same reason. `move_folder`
+ * refuses to write a cycle; only a hand-edited database could hold one, and a helper that hung
+ * the window over it would be worse than the corruption.
+ */
+export function lockedFolderIds(folders: readonly CollectionFolder[]): ReadonlySet<number> {
+  const locked = new Set<number>();
+  let frontier = new Set<number>();
+  for (const folder of folders) {
+    if (!folder.locked) continue;
+    locked.add(folder.id);
+    frontier.add(folder.id);
+  }
+
+  while (frontier.size > 0) {
+    const next = new Set<number>();
+    for (const folder of folders) {
+      if (folder.parentId === null || !frontier.has(folder.parentId)) continue;
+      if (locked.has(folder.id)) continue;
+      locked.add(folder.id);
+      next.add(folder.id);
+    }
+    frontier = next;
+  }
+  return locked;
 }

@@ -1,0 +1,110 @@
+    /// v33's column exists on an UPGRADED file, the ladder is what put it there, and a folder
+    /// that predates the rung reads unlocked.
+    ///
+    /// **The value is the half of this that matters, and the column check alone would not
+    /// catch the failure worth catching.** A rung that added the column with no `DEFAULT`, or
+    /// with `DEFAULT 1`, passes a `pragma_table_info` probe and hands the reader a collection
+    /// whose every drawer was set aside by the upgrade — a silent change to what the
+    /// collection page offers, with nothing going red. So the folder is seeded **before**
+    /// `migrate_user` runs: a row inserted afterwards takes its value from the table's shape
+    /// either way and cannot tell a backfilled 0 from a fresh one.
+    #[test]
+    fn v33_adds_the_locked_column() {
+        let conn = user_file_at_32();
+        conn.execute(
+            "INSERT INTO collection_folders
+                 (id, parent_id, name, kind, deck_id, sort_order, created_at, updated_at)
+             VALUES (7, NULL, 'Trade pile', 'user', NULL, 0, 0, 0)",
+            [],
+        )
+        .unwrap();
+
+        migrate_user(&conn).unwrap();
+
+        let cols: Vec<String> = conn
+            .prepare("SELECT name FROM pragma_table_info('collection_folders')")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert!(
+            cols.iter().any(|c| c == "locked"),
+            "the ladder did not add locked: {cols:?}"
+        );
+
+        let locked: i64 = conn
+            .query_row(
+                "SELECT locked FROM collection_folders WHERE id = 7",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            locked, 0,
+            "a folder that existed before the rung must not come out set aside"
+        );
+
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, USER_SCHEMA_VERSION);
+    }
+
+    /// The second pass has to be a no-op rather than `duplicate column name`.
+    ///
+    /// `the_v24_rung_is_idempotent_over_an_already_upgraded_database`'s job one number line up,
+    /// and this rung has less standing between it and that failure than that one did: v24
+    /// probes `pragma_table_info` before its `ALTER`, while this is a bare
+    /// `ALTER TABLE … ADD COLUMN` — SQLite offers no `IF NOT EXISTS` on either half of
+    /// `ALTER TABLE`, so the version guard is the only thing making a second launch survivable.
+    /// A rung written `if v <= 33`, or one whose stamp never landed, breaks on the launch after
+    /// the upgrade and on nobody's machine before that.
+    #[test]
+    fn the_v33_rung_is_idempotent_over_an_already_upgraded_database() {
+        let conn = user_file_at_32();
+        migrate_user(&conn).unwrap();
+        migrate_user(&conn).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, USER_SCHEMA_VERSION);
+    }
+
+    /// The fixture is a real v32 file and not head wearing a v32 label.
+    ///
+    /// `the_v27_fixture_carries_none_of_v28`'s job for this rung. What it catches is the
+    /// fixture rewound in only one of its two halves: the column really gone but the version
+    /// left at head would leave `migrate_user` no rung to run, and the test above would pass
+    /// while watching nothing happen. The other order is loud on its own — a fixture that kept
+    /// `locked` dies at `duplicate column name`, which is [`UNDO_V33`]'s whole reason.
+    #[test]
+    fn the_v32_fixture_carries_none_of_v33() {
+        let conn = user_file_at_32();
+
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 32);
+        let n: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('collection_folders')
+                  WHERE name = 'locked'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 0, "locked must not exist before the rung that adds it");
+
+        // And it is a real user file otherwise — a fixture that rewound too far would test the
+        // rung against a database no reader has. `device_names` is v31's, so its presence is
+        // what says this file sits above that rung rather than below it.
+        let names: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM main.sqlite_master
+                  WHERE type = 'table' AND name = 'device_names'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(names, 1, "a v32 file has everything v31 built");

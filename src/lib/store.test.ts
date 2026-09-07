@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { CardWalkStop } from "@/features/decks/deckWalk";
+import { CONDITIONS, CONDITION_NOT_SET } from "@/lib/conditions";
 import { useAppStore, type PaneDeckContext } from "@/lib/store";
 
 beforeEach(() => useAppStore.setState(useAppStore.getInitialState()));
@@ -930,6 +931,7 @@ describe("the export dialog's remembered choice", () => {
       format: "csv",
       fields: ["quantity", "name", "condition"],
       arenaOnly: false,
+      includeInactive: false,
     });
     expect(useAppStore.getState().exportPrefs.collection.format).toBe("csv");
     expect(useAppStore.getState().exportPrefs.deck.format).toBe("plain");
@@ -954,5 +956,88 @@ describe("the export dialog's remembered choice", () => {
     useAppStore.getState().setExportPrefs("deck", { ...prefs, arenaOnly: true });
     expect(useAppStore.getState().exportPrefs.deck.arenaOnly).toBe(true);
     expect(useAppStore.getState().exportPrefs.collection.arenaOnly).toBe(false);
+  });
+
+  /**
+   * `Include inactive categories` opens **off** as well, and the argument is the *opposite* of
+   * the one above it — which is the whole reason this is a test of its own rather than another
+   * line inside the Arena one.
+   *
+   * `arenaOnly` starts off because the Arena export had written every card handed to it since it
+   * shipped, so a filter that started on would quietly change what an existing reader's next
+   * export contained. Here the change is the fix: issue #390 is a reader reporting their
+   * maybeboard turning up in a deck they exported, so `includeInactive: true` would ship the
+   * feature with the bug still in it. Off is the *new* behaviour rather than the old one, and
+   * that is what makes the default worth pinning — the value that preserves what shipped is
+   * exactly the value the issue asks against.
+   *
+   * **So it is worth writing down what this costs, because it is the thing `arenaOnly` refused
+   * to do.** The five formats that wrote a switched-off pile before this landed — plain,
+   * Moxfield, Archidekt, TCGplayer and CSV — stop writing one unless the box is ticked, so an
+   * existing reader's next deck export really does come out different from their last. The
+   * dialog's own count line — `N cards in inactive categories are not written.` — is how they
+   * find the box: it is drawn whenever this flag is holding something back, so the change is
+   * never silent, which is the condition on which a default that changes behaviour is
+   * acceptable at all. Arena and MTGO are untouched in both directions, because `dropsInactive`
+   * already answered for them and no preference may turn a maybeboard back on there.
+   *
+   * All three surfaces are asserted even though only the deck can ever draw the box:
+   * `ExportPrefs` is one shape, and `SURFACE_HAS_PILES` is what makes the other two unreachable
+   * rather than a value chosen for them. A `true` seeded on the collection would be invisible in
+   * the app and would still be wrong.
+   */
+  it("opens with inactive categories left out on every surface", () => {
+    const { exportPrefs } = useAppStore.getState();
+    expect([
+      exportPrefs.deck.includeInactive,
+      exportPrefs.collection.includeInactive,
+      exportPrefs.wishlist.includeInactive,
+    ]).toEqual([false, false, false]);
+  });
+
+  /** Per surface, like the two pairs beside it. Whether a reader wants their cuts in the deck
+   *  list they are pasting into a bracket checker says nothing about the CSV they take of their
+   *  binder — and the write must not leak, because a `Record` written back whole is exactly the
+   *  shape that would let it. */
+  it("keeps the inactive-category choice apart by surface", () => {
+    const prefs = useAppStore.getState().exportPrefs.deck;
+    useAppStore.getState().setExportPrefs("deck", { ...prefs, includeInactive: true });
+    expect(useAppStore.getState().exportPrefs.deck.includeInactive).toBe(true);
+    expect(useAppStore.getState().exportPrefs.collection.includeInactive).toBe(false);
+  });
+});
+
+/**
+ * What a bulk import writes into a row the file said nothing about.
+ *
+ * **One value, and it is the only thing in this store that decides what reaches the database.**
+ * Everything else here is a view preference — which layout, which pane, which deck a reader
+ * parked on — and the worst a wrong one does is draw the wrong thing. This one is a *default for
+ * a write*: a CSV with no Condition column takes it on every line, and a reader who imports a
+ * three-thousand-card collection under the wrong one has three thousand rows claiming a grade
+ * nobody assessed.
+ *
+ * Pinned against `conditions.ts` rather than against the four letters, because the two are one
+ * decision — the import dialog's dropdown is filled from `CONDITIONS` and opens on this value, so
+ * a default that drifted out of that list would set the control to a row it does not contain.
+ * `Dropdown` draws its `placeholder` for a value it cannot match, which defaults to an **em
+ * dash** — so the drift shows up as a Condition control reading `—` while the writes underneath
+ * it go on using whatever this holds, and the list opens on row 0 rather than on anything the
+ * reader chose (`startIndex`, `Dropdown.tsx:115`).
+ */
+describe("the condition a bulk import assumes", () => {
+  it("assumes nothing — a line with no grade records that no grade was given", () => {
+    expect(useAppStore.getInitialState().importDefaults.condition).toBe(CONDITION_NOT_SET);
+  });
+
+  it("offers that default as a row of the control the reader picks it from", () => {
+    expect(CONDITIONS).toContain(useAppStore.getInitialState().importDefaults.condition);
+  });
+
+  /** The finish half of the same pair, and it stays `null`: `DeckFinish`'s `null` is the regular
+   *  copy, so this pair has always said "no grade, plain cardboard" for a silent file — the
+   *  condition half is what stopped being able to say the first of those two. */
+  it("assumes nothing about the finish either", () => {
+    expect(useAppStore.getInitialState().importDefaults.finish).toBeNull();
   });
 });

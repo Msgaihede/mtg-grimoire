@@ -17,9 +17,10 @@
 use crate::sync::AppState;
 use crate::{
     camera, card, collection, collection_alloc, collection_folders, combos, db, deck, deck_audit,
-    deck_meta, deck_theory, deck_undo, errors, export, flatten, images, import, index, listview,
-    marketplace, marketplace_feed, mirror, nav, paths, reset, schema, scryfall, search, sync,
-    sync_engine, sync_pair, tags, update, wishlist, wishlist_folders, zoom,
+    deck_meta, deck_pull, deck_quick_add, deck_theory, deck_tokens, deck_undo, decksort, errors,
+    export, flatten, images, import, index, listview, markcolors, marketplace, marketplace_feed,
+    mirror, nav, paths, reset, schema, scryfall, search, searchopen, sync, sync_engine, sync_pair,
+    tags, update, wishlist, wishlist_folders, wishlist_optimize, zoom,
 };
 // **Not in the list above, because this file compiles for Android too.** Its name says
 // `desktop`, but its gate is `cfg(not(target_family = "wasm"))` — desktop *and* mobile — while
@@ -360,6 +361,7 @@ pub fn run() {
             card::card_detail,
             card::card_printings,
             card::card_meld_parts,
+            card::card_holdings,
             card::card_image_uri,
             card::printing_group_by,
             card::set_printing_group_by,
@@ -375,6 +377,7 @@ pub fn run() {
             collection_folders::collection_folder_list,
             collection_folders::collection_folder_create,
             collection_folders::collection_folder_rename,
+            collection_folders::collection_folder_set_locked,
             collection_folders::collection_folder_move,
             collection_folders::collection_folder_reorder,
             collection_folders::collection_folder_delete,
@@ -385,12 +388,26 @@ pub fn run() {
             // module. `generate_handler!` names a command after the last path segment.
             collection_alloc::commands::collection_to_deck,
             collection_alloc::commands::deck_to_collection,
+            // The third crossing, and the one that moves custody without writing a
+            // `deck_cards` row — see `deck_pull`. Registered from its `commands` module for
+            // the pair above's reason: `generate_handler!` names a command after the last
+            // path segment, so these are `deck_pull_plan` and `deck_pull_from_collection`.
+            deck_pull::commands::deck_pull_plan,
+            deck_pull::commands::deck_pull_from_collection,
+            // The fourth crossing, and the only one that *creates* copies rather than moving
+            // them — see `deck_quick_add`. Same registration shape as the pair above:
+            // `generate_handler!` names a command after the last path segment, so these are
+            // `deck_quick_add_wishes` and `deck_quick_add_to_collection`.
+            deck_quick_add::commands::deck_quick_add_wishes,
+            deck_quick_add::commands::deck_quick_add_to_collection,
             wishlist::wishlist_add,
             wishlist::wishlist_set_quantity,
             wishlist::wishlist_remove,
             wishlist::wishlist_list,
             wishlist::wishlist_import_commit,
             wishlist::wishlist_set_printing,
+            wishlist_optimize::wishlist_optimize_plan,
+            wishlist_optimize::wishlist_optimize_apply,
             wishlist_folders::wishlist_folder_list,
             wishlist_folders::wishlist_folder_create,
             wishlist_folders::wishlist_folder_rename,
@@ -406,10 +423,19 @@ pub fn run() {
             deck::deck_set_folder,
             deck::deck_set_view_state,
             deck::deck_list,
+            // The gallery's two second reads — the colour bar's mana costs for every deck at
+            // once, and the bracket estimate's facts for the decks the page names. Both are
+            // reads and take `db_read`, so they sit with `deck_list` rather than with the card
+            // writes below.
+            deck::deck_pip_costs,
+            deck::deck_bracket_reads,
             deck::deck_get,
+            // The two reads a folder rule is answered from: what one deck's live list plays,
+            // and which decks play a given set of cards. Both are reads and take `db_read`,
+            // so they sit with `deck_list`/`deck_get` rather than with the card writes below.
+            deck::deck_played_keys,
+            deck::deck_ids_playing,
             deck::deck_last_format,
-            deck::deck_search_open,
-            deck::set_deck_search_open,
             deck::deck_add_card,
             deck::deck_set_card_quantity,
             deck::deck_category_clear,
@@ -428,13 +454,13 @@ pub fn run() {
             deck_meta::deck_category_set_active,
             deck_meta::deck_category_reorder,
             deck_meta::deck_category_delete,
-            deck_meta::deck_tag_list,
-            deck_meta::deck_tag_create,
-            deck_meta::deck_tag_update,
-            deck_meta::deck_tag_delete,
-            deck_meta::deck_tag_remove_from_deck,
-            deck_meta::deck_tag_all,
-            deck_meta::deck_card_set_tag,
+            deck_meta::deck_label_list,
+            deck_meta::deck_label_create,
+            deck_meta::deck_label_update,
+            deck_meta::deck_label_delete,
+            deck_meta::deck_label_remove_from_deck,
+            deck_meta::deck_label_all,
+            deck_meta::deck_card_set_label,
             deck_meta::deck_folder_list,
             deck_meta::deck_folder_create,
             deck_meta::deck_folder_rename,
@@ -449,6 +475,15 @@ pub fn run() {
             deck_theory::deck_theory_slots,
             deck_theory::deck_theory_copy_from_live,
             deck_theory::deck_theory_missing_to_wishlist,
+            // The tokens and emblems a deck needs, and the three writes that record a deviation
+            // from them. `generate_handler!` names a command after the **last path segment**, so
+            // `deck_tokens::deck_tokens` registers as `deck_tokens` — the module and the read
+            // wear the same name on purpose, because the wire name is the one `src/lib/ipc.ts`
+            // invokes and `deck_tokens_list` would be a second thing to remember.
+            deck_tokens::deck_tokens,
+            deck_tokens::deck_token_set,
+            deck_tokens::deck_token_clear,
+            deck_tokens::deck_token_add,
             marketplace::get_marketplace,
             marketplace::set_marketplace,
             zoom::card_zoom,
@@ -457,6 +492,12 @@ pub fn run() {
             nav::set_nav_collapsed,
             listview::list_view,
             listview::set_list_view,
+            searchopen::search_open,
+            searchopen::set_search_open,
+            markcolors::mark_colors,
+            markcolors::set_mark_color,
+            decksort::deck_sort,
+            decksort::set_deck_sort,
             flatten::flatten_state,
             flatten::set_flatten_state,
             marketplace_feed::marketplace_feed_refresh,

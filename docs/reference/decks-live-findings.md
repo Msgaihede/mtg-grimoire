@@ -187,7 +187,7 @@ are resolutions a later reader has to be able to tell apart:
    it rather than branching.
 3. **Table view starves the card name.** Seven fixed columns take **696px of 963px**, leaving the
    two `fr` columns 147px between them: **Card name gets 84px** (`minmax(0,2fr)`) and Type 63px,
-   truncating names to ~10 characters, while the empty Tags column holds 112px and Owned 64px.
+   truncating names to ~10 characters, while the empty Labels column holds 112px and Owned 64px.
 
 **Unverified, and not by choice:**
 
@@ -961,6 +961,18 @@ beside it re-packed 965 → 617 → 965 on the way past.
 
 ### The persistence, end to end
 
+⚠️ **Every name in this section was renamed on 2026-09-07 and the measurements stand unchanged.**
+The `app_meta` row is **`search_open`** now — one JSON map of section → bool, `searchopen.rs`,
+shared by the deck editor's column and the collection's and wishlist's own — where it was
+`deck_search_open` holding `"1"`/`"0"` for this column alone. `ipc.deckSearchOpen` /
+`setDeckSearchOpen` are `ipc.searchOpen` / `setSearchOpen(section, open)`; `useDeckSearchOpen` is
+`useSearchOpen("deck")`; `usePrefetchDeckSearchOpen` is `usePrefetchSearchOpen`, still mounted in
+`AppShell` and nowhere else for the reason this pass measured. **No schema rung was spent**, and
+`searchopen::stored` reads the old row when the map has no `deck` entry — so a database recorded by
+this pass still answers, and the bridge decays the first time the reader presses the chevron. The
+old names are kept below because they are what was typed into the running window; a repro follows
+this section by substituting the new ones one for one.
+
 - Collapsing the column wrote `app_meta.deck_search_open = '0'` (read back with a read-only
   `node:sqlite` connection while the app held the database).
 - **Killed the app and relaunched it**: the editor opened on the 36px rail, `aria-expanded`
@@ -990,7 +1002,7 @@ Driven against the `Azula` deck — 122 rows across 13 piles — and the search 
 | Drag one picked card onto another pile | all **3** moved, `41 → 39`, one gesture |
 | After the drop | `cardSelection` `null`, one ring left (the pane's own card) |
 | The drag preview | a chip reading **`3 cards`**, `color: oklch(0.75 0.12 85)` — `--color-accent` exactly |
-| Right-click a picked card | `Add 2 cards to · Move 2 cards to · Tag 2 cards · Remove 2 cards`, with `Copy card name`, `Copy card image`, `Open on`, `View all printings`, `Set as commander`, `Set as companion`, `Set as foil` singular |
+| Right-click a picked card | `Add 2 cards to · Move 2 cards to · Label 2 cards · Remove 2 cards`, with `Copy card name`, `Copy card image`, `Open on`, `View all printings`, `Set as commander`, `Set as companion`, `Set as foil` singular |
 | `Delete` with 2 picked | `122 → 120` rows, both named cards gone, set stood down |
 | `Delete` with the caret in **Deck name** | `118 → 118`, the set of 2 survived |
 | Ctrl-click in Stacks / Table / Grid | `2` keys and `2` marked in all three |
@@ -1164,6 +1176,14 @@ At **1920** (editor column 1657) the actions block is seven children on one line
 | `History` | 83 × 36 | 1675 |
 | `Deck settings` | 119 × 36 | 1766 |
 
+⚠️ **That row's fourth button says `Labels` now, and three of these numbers moved with the
+word.** The pass above was driven while it read `Tags`; the rename is two characters longer, so
+that button's **70px** and the `x` of everything to its right of it are the old word's and are
+owed a re-measure. Every height, every `y` and everything left of it stand — they are not
+functions of the text — and the shape of the finding, which is about the gap and the group, is
+untouched. The table is left as it was read rather than adjusted by arithmetic, because a
+measured figure nobody re-took is worth less than one nobody wrote down.
+
 The group ends at 1210 and `Compare` starts at 1217 — **the row's own `gap-2`**, 8px, the same
 distance as every other pair on the line, which is the whole of the spacing decision. Inside the
 group are exactly two buttons, `Theory` (57px) and `Actual` (56px), and `group.contains(compare)`
@@ -1173,7 +1193,7 @@ is false: it is an action *about* the two lists rather than a third list in a `r
 **`Compare` is 36px tall where the two joined groups are 38, and that is the row as it already
 was.** A group's own 1px borders sit outside its `h-9` children, so `Deck list` and
 `Import and export` measure 38 at y 118 while every standalone button — `Compare`,
-`Categories`, `Tags`, `History`, `Deck settings` — measures 36 at y 119. `Compare` is now
+`Categories`, `Labels`, `History`, `Deck settings` — measures 36 at y 119. `Compare` is now
 byte-identical in geometry to the four beside it, which is what moving it onto `CONTROL` bought.
 
 ### The word goes at `TIGHT_HEADER_PX` and the control does not
@@ -1512,3 +1532,76 @@ the next four gestures reported `data-dragging: false`, no quick-zone bar and no
 exactly like the packaged build having no drags at all. The console was silent throughout. There is
 no `afterEach` in a live window; the cure is `location.reload()`, and the tell is that the very
 first gesture after a reload works.
+
+## The gallery's colour bar, bracket and filter row (#387) — 2026-09-07, `npm run tauri dev` (debug), a copy of the real db
+
+Three decks on the wall — **Azula** (Commander, 101 cards), **Serah** (Commander, 100) and **Test
+Deck** (Commander, 0) — plus a folder card. Everything below was read off the shipped WebView2.
+
+**The bar draws the arithmetic, and the arithmetic was checked against SQL rather than against
+itself.** The rendered segment widths were compared with a **from-scratch** recomputation over
+`user.db`/`corpus.db` — its own `{…}` tokeniser, its own hybrid rule, not an import of `mana.ts`,
+because an assertion that re-uses the module under test only proves the module agrees with itself.
+They matched to four decimal places:
+
+| deck | drawn | recomputed | pips |
+| --- | --- | --- | --- |
+| Azula | `U 30.6667%` `B 16%` `R 53.3333%` | `30.6667 / 16.0000 / 53.3333` | 23 / 12 / 40 of 75 |
+| Serah | `W 50%` `G 50%` | `50.0000 / 50.0000` | 42 / 42 of 84 |
+
+Serah's exact half-and-half is **real** rather than a rounding artefact or a placeholder — 42 pips
+each — which is worth recording because an exact 50/50 is precisely the reading one would
+otherwise go looking for a bug behind. The fills computed `rgb(14,104,171)`, `rgb(59,58,62)`,
+`rgb(211,32,42)`, `rgb(248,231,185)` and `rgb(0,115,62)` — the `--color-pie-*` deeps, not a
+palette of the bar's own.
+
+**Test Deck draws no bar at all.** Nought cards is nought pips, and the silence is what the
+component argues for: an empty rule under a tile cannot be told from a rendering fault.
+
+**The tile is still named for its deck, which is the one thing the suite nearly let through.** The
+button's accessible name reads `Azula` → `Blue, Black, Red` → `Commander · Paper · Bracket ~4 ·
+101 cards`, in that order. With the name on the bar itself — how it was first written — it read
+`White, Red Zoo …`, and `getByRole("button", { name: /^Zoo/ })` matched nothing: a tile that no
+longer answers to "click Zoo" by voice. The bar is `aria-hidden` and the colours are an `sr-only`
+span after the name.
+
+**The bracket is on the caption and agrees with the editor's own button.** `Bracket ~4` on Azula,
+`Bracket ~2` on Serah and on the empty Test Deck — an empty Commander deck reads `~2` because
+`BASE_FLOOR` is 2 and a deck with no cards flags no rule, which is exactly what `DeckBracket`
+prints over the same empty list.
+
+**No credit line survives on the wall, and the artist is still reachable.** `indexOf("Art by")` is
+`-1` on all three tiles and on the wall as a whole; hovering Azula's crop raised the shared panel
+reading **`Art by JungShan`** with `role="tooltip"`.
+
+**The bar scales with `--mark-scale` and nothing else**, stepped through the store rather than by
+dispatching wheels (the zoom persists across restarts, so it was read first and put back):
+
+| zoom | height | margin-top |
+| --- | --- | --- |
+| 0.5× | 2.5px | 2px |
+| 1× | 5px | 4px |
+| 2× | 10px | 8px |
+
+**The sort works and is remembered.** The picker offered six rows — `Bracket · Cards · Colors ·
+Format · Last updated · Name`, alphabetical, which is `sortOptions` and not the array's own order.
+The default `Last updated` wall read `Test Deck, Azula, Serah`; `Name` reordered it to `Azula,
+Serah, Test Deck`; the arrow reversed it to `Test Deck, Serah, Azula` — an **exact** reversal
+rather than a differently-shuffled list — and its accessible name flipped from
+`Sort direction: ascending — press for descending` to the descending sentence. `deck_sort` then
+answered **`"name:desc"`**, so the press really reached `app_meta`.
+
+**The two new reads answered.** `deck_pip_costs` returned 3 decks / 72 folded rows for the whole
+gallery, and `deck_bracket_reads([])` returned `[]` — the empty request that touches no database.
+
+**At the 1024px floor the filter row neither wraps nor overflows** — the figures are in
+[frontend-design.md](frontend-design.md), where the `~548px` this row was designed against was
+arithmetic until this pass and is now a reading.
+
+**The console was clean**: 8 entries across a Search → Decks navigation, no error and no warning.
+
+**One trap this pass paid for, and it is not about the feature.** `cdp.mjs console <file>`
+**appends**. The first capture came back carrying two React `ReferenceError`s and a Vite HMR
+failure that looked exactly like this branch breaking the search wall — and every one of them was
+dated `2026-08-05`, out of a file left behind by a session a month earlier. Delete the log before
+the run, and read the timestamps before believing the contents.

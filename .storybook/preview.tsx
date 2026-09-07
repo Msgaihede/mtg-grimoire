@@ -5,6 +5,7 @@ import type { Decorator, Preview } from "@storybook/react-vite";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { CardToDeckProvider } from "@/features/card/cardMenu";
+import { installKeyboardModality } from "@/lib/keyboardModality";
 import { installWorld, type FakeParams, type FakeWorld } from "./fake/world";
 import { setArtMode } from "./fake/images";
 // The app's stylesheet *through* `preview.css`, never directly: that file adds `.storybook` as
@@ -12,6 +13,14 @@ import { setArtMode } from "./fake/images";
 import "./preview.css";
 import "mana-font/css/mana.css";
 import "keyrune/css/keyrune.css";
+
+// **What `main.tsx` does for the app, done once for the preview frame.** Every focus outline in
+// the app is gated on the `data-kbd` attribute this maintains, so a workbench without it is one
+// where Tab draws nothing and a play that asserts a focus ring fails for a reason that has
+// nothing to do with the component under test. Module scope, not a decorator: it is a property
+// of the frame the stories share, and installing it per story would stack a listener set per
+// remount. The uninstaller is dropped deliberately — the frame outlives every story in it.
+installKeyboardModality(window);
 
 /**
  * Point the fake at this story's world, once per commit, **before the story's own effects
@@ -103,11 +112,16 @@ function FakeWorld({
  * not expose the initializer it was given, and the store's actions close over that one store's
  * `set`, so a second instance of it cannot be built from `.storybook/` — it would take an edit
  * to component source, which this branch does not have. So the store is reset per story on the
- * canvas and left alone on a docs page, and the story files that **write** it during render —
- * `AppShell`, `CardDetailPane`, `SearchPage`, `CollectionPage`, `AllPrintingsDialog` — carry
+ * canvas and left alone on a docs page, and the story files that **write** it during render carry
  * `docs.story.inline: false`, which gives each of their docs stories its own frame and with it
  * its own module graph. Most of the catalogue is isolated in-process instead, which is what
- * keeps it readable. The list is named rather than counted, for the reason two paragraphs down.
+ * keeps it readable.
+ *
+ * **Which files those are is a grep and not a list here**, and that is a correction: this
+ * paragraph named five of them and the naming rotted exactly the way the count below did —
+ * `CardDetailPane` was on it until the docked card surface was deleted on 2026-09-03, and by
+ * then the real set was more than twice as long. `grep -rl "useAppStore" src/ --include=*.stories.tsx`
+ * is the question; every answer needs the parameter.
  *
  * **There is no longer a count here, and its deletion is the fix rather than a gap.** This
  * paragraph used to carry "43 of the 51 story files still render inline" and it rotted three

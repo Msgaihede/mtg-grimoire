@@ -400,7 +400,7 @@ export function TheoryDiffDialog({
       // named only those two would be describing the `Missing` view rather than the dialog.
       subtitle="What the plan asks for and the deck has not got — to buy, to pull, or already played as another printing"
       closeLabel="Close the difference list"
-      width="w-[47.5rem]"
+      size="w-[47.5rem]"
       onDismiss={onDismiss}
       onClose={onClose}
     >

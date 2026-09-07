@@ -102,7 +102,7 @@ describe("auditSentence", () => {
         ),
       );
 
-    expect(cleared("live")).toEqual({ text: "Cleared 42 cards from the live list", detail: null });
+    expect(cleared("live")).toEqual({ text: "Cleared 42 cards from the actual list", detail: null });
     expect(cleared("theory")).toEqual({
       text: "Cleared 42 cards from the theory list",
       detail: null,
@@ -159,12 +159,12 @@ describe("auditSentence", () => {
   it("degrades a clear whose payload it cannot read", () => {
     expect(
       auditSentence(entry("remove", { action: "clear", scope: "deck" }, { cardId: null })).text,
-    ).toBe("Cleared 0 cards from the live list");
+    ).toBe("Cleared 0 cards from the actual list");
     expect(
       auditSentence(
         entry("remove", { action: "clear", scope: "deck", cards: "lots" }, { cardId: null }),
       ).text,
-    ).toBe("Cleared 0 cards from the live list");
+    ).toBe("Cleared 0 cards from the actual list");
     // A scope that is not the word is every row written before `deck_clear` existed: a pile's.
     expect(
       auditSentence(
@@ -205,6 +205,178 @@ describe("auditSentence", () => {
       text: "Moved Sol Ring",
       detail: "Creature → Maybeboard",
     });
+  });
+
+  /**
+   * **A pull wears the `move` kind and names no card**, exactly as an import wears `add` and a
+   * cleared pile wears `remove` — the payload is what tells it apart, because
+   * `deck_audit.kind`'s CHECK cannot be altered and a tenth word would rebuild every reader's
+   * whole history for a spelling.
+   *
+   * `move` is the honest word for it: nothing was added to the list and nothing taken off it,
+   * only *where the copies sit* changed — which is also why `delta` is `0` on the row and why
+   * the fixture says so rather than leaving the default to carry the claim.
+   */
+  it("words a pull rather than reading it as a card move", () => {
+    const pulled = auditSentence(
+      entry(
+        "move",
+        { pull: { copies: 12, cards: 5 } },
+        { cardId: null, cardName: null, delta: 0 },
+      ),
+    );
+
+    expect(pulled).toEqual({
+      text: "Pulled 12 copies from your collection",
+      detail: "across 5 cards",
+    });
+    // The wrong-but-plausible answer, asserted the way the cleared pile's is: every `default`
+    // arm in this file is a true-sounding sentence, so a drift here fails nothing on its own.
+    expect(pulled.text).not.toContain("Moved");
+    expect(pulled.text).not.toContain("a card");
+  });
+
+  /** One copy of one card is the count a reader meets on the smallest useful press, and the
+   *  one both halves of this sentence have to get right. */
+  it("says one copy and one card, not 1 copys and 1 cards", () => {
+    expect(
+      auditSentence(entry("move", { pull: { copies: 1, cards: 1 } }, { cardId: null })),
+    ).toEqual({
+      text: "Pulled 1 copy from your collection",
+      detail: "across 1 card",
+    });
+  });
+
+  /**
+   * **The regression that matters: an ordinary move must stay a move.** The branch is keyed on
+   * the payload, so a `move` row carrying no `pull` key is untouched by it — a pull sentence
+   * claiming every card a reader ever dragged between piles would rewrite their whole history
+   * rather than add a line to it.
+   */
+  it("leaves an ordinary card move to its own branch", () => {
+    expect(auditSentence(entry("move", { from: "Ramp", to: "Land" }))).toEqual({
+      text: "Moved Sol Ring",
+      detail: "Ramp → Land",
+    });
+    // Including the payload-less move, which is the shape a truncated or older row takes.
+    expect(auditSentence(entry("move", {}))).toEqual({ text: "Moved Sol Ring", detail: null });
+  });
+
+  /** A card count the row does not carry reads as `0` through `numberField`, and "across 0
+   *  cards" beside "Pulled 3 copies" is arithmetic that cannot be true — so there is no detail
+   *  at all. `importLine`'s `labelsCreated` rule, one payload over. */
+  it("draws no detail for a pull row that carries no card count", () => {
+    expect(
+      auditSentence(entry("move", { pull: { copies: 3 } }, { cardId: null })).detail,
+    ).toBeNull();
+  });
+
+  /** A `pull` payload on a kind this build has no pull sentence for falls through to that
+   *  kind's own branch rather than being claimed here — `importLine`'s defensive rule, which
+   *  exists because a payload shape is something a newer build is free to put anywhere. */
+  it("leaves a kind it has no pull sentence for to its own branch", () => {
+    expect(
+      auditSentence(
+        entry(
+          "add",
+          { category: "Ramp", quantity: 2, pull: { copies: 12, cards: 5 } },
+          { cardId: "c-1" },
+        ),
+      ),
+    ).toEqual({ text: "Added 2 × Sol Ring", detail: "to Ramp" });
+  });
+
+  /**
+   * **A quick add is the second `move` that names no card**, and it is the fourth reuse of an
+   * existing kind: `AUDIT_KINDS` stays at nine because the column carries a CHECK SQLite cannot
+   * alter. `move` is the least wrong word rather than the honest one — this write *creates*
+   * copies where the pull moves them — and what the two share is that neither writes a
+   * `deck_cards` row, so `delta` is `0` on both and the fixture says so.
+   *
+   * "for this deck" rather than "into this deck": the copies went into the reader's collection,
+   * filed in the deck's group. A line saying they were added to the deck would be the one thing
+   * this press did not do.
+   */
+  it("words a quick add rather than reading it as a card move", () => {
+    const recorded = auditSentence(
+      entry("move", { quickAdd: { copies: 4, wishes: 1 } }, { cardId: null, cardName: null, delta: 0 }),
+    );
+
+    expect(recorded).toEqual({
+      text: "Recorded 4 copies for this deck",
+      detail: "1 copy off your wishlist",
+    });
+    // The wrong-but-plausible answers, asserted the way the pull's are: every `default` arm in
+    // this file is a true-sounding sentence, so a drift here fails nothing on its own.
+    expect(recorded.text).not.toContain("Moved");
+    expect(recorded.text).not.toContain("Pulled");
+    expect(recorded.text).not.toContain("a card");
+  });
+
+  /** One copy in each half is the smallest useful press and the count both have to get right. */
+  it("says one copy and not 1 copys, in both halves", () => {
+    expect(
+      auditSentence(entry("move", { quickAdd: { copies: 1, wishes: 1 } }, { cardId: null })),
+    ).toEqual({ text: "Recorded 1 copy for this deck", detail: "1 copy off your wishlist" });
+
+    expect(
+      auditSentence(entry("move", { quickAdd: { copies: 3, wishes: 2 } }, { cardId: null })).detail,
+    ).toBe("2 copies off your wishlist");
+  });
+
+  /**
+   * **`wishes` is copies, never wishlist lines** — `deck_quick_add_to_collection` takes one
+   * optional `wish_id`, so a press clears **at most one line** and records
+   * `min(copies, wish.quantity)` off it. A four-copy press against a wish for four is therefore
+   * `{"copies": 4, "wishes": 4}` and one line cleared, and the detail this used to draw — `4
+   * wishes cleared` — sent the reader looking for three shopping lines that never existed. The
+   * assertion is the *absence* of that word, because the count alone reads correctly under both
+   * spellings and only the noun is wrong.
+   */
+  it("counts wishlist copies rather than wishlist lines", () => {
+    const detail = auditSentence(
+      entry("move", { quickAdd: { copies: 4, wishes: 4 } }, { cardId: null }),
+    ).detail;
+
+    expect(detail).toBe("4 copies off your wishlist");
+    expect(detail).not.toContain("wishes");
+    expect(detail).not.toContain("cleared");
+  });
+
+  /** A press that named no wish, an older build's row and a truncated payload all read `0`
+   *  through `numberField` — and "0 copies off your wishlist" is a detail about something that
+   *  did not happen. `importLine`'s `labelsCreated` rule, a third payload over. */
+  it("draws no detail for a quick add that cleared no wish", () => {
+    expect(
+      auditSentence(entry("move", { quickAdd: { copies: 4, wishes: 0 } }, { cardId: null })).detail,
+    ).toBeNull();
+    expect(
+      auditSentence(entry("move", { quickAdd: { copies: 4 } }, { cardId: null })).detail,
+    ).toBeNull();
+  });
+
+  /** The regression that matters, twice over: an ordinary move stays a move, and a **pull** is
+   *  still a pull. The two payloads sit side by side in one branch, so a quick-add arm that
+   *  claimed the `move` kind whole would rewrite every pull line in the reader's history. */
+  it("leaves the pull's own rows to the pull", () => {
+    expect(auditSentence(entry("move", { pull: { copies: 2, cards: 1 } }, { cardId: null }))).toEqual(
+      { text: "Pulled 2 copies from your collection", detail: "across 1 card" },
+    );
+    expect(auditSentence(entry("move", { from: "Ramp", to: "Land" })).text).toBe("Moved Sol Ring");
+  });
+
+  /** A `quickAdd` payload on a kind this build has no sentence for falls through to that kind's
+   *  own branch — `pullLine`'s defensive rule, one payload over. */
+  it("leaves a kind it has no quick-add sentence for to its own branch", () => {
+    expect(
+      auditSentence(
+        entry(
+          "add",
+          { category: "Ramp", quantity: 2, quickAdd: { copies: 4, wishes: 1 } },
+          { cardId: "c-1" },
+        ),
+      ),
+    ).toEqual({ text: "Added 2 × Sol Ring", detail: "to Ramp" });
   });
 
   /**
@@ -269,51 +441,51 @@ describe("auditSentence", () => {
     ).toBe("CMM → 3ED");
   });
 
-  it("says what a card was tagged, and what it was wearing before", () => {
-    expect(auditSentence(entry("tag", { tag: "Cut candidate", previous: null }))).toEqual({
-      text: "Tagged Sol Ring",
+  it("says what a card was labelled, and what it was wearing before", () => {
+    expect(auditSentence(entry("label", { label: "Cut candidate", previous: null }))).toEqual({
+      text: "Labelled Sol Ring",
       detail: "Cut candidate",
     });
-    expect(auditSentence(entry("tag", { tag: "Wincon", previous: "Cut candidate" }))).toEqual({
-      text: "Tagged Sol Ring",
+    expect(auditSentence(entry("label", { label: "Wincon", previous: "Cut candidate" }))).toEqual({
+      text: "Labelled Sol Ring",
       detail: "Cut candidate → Wincon",
     });
-    expect(auditSentence(entry("tag", { tag: null, previous: "Wincon" }))).toEqual({
-      text: "Untagged Sol Ring",
+    expect(auditSentence(entry("label", { label: null, previous: "Wincon" }))).toEqual({
+      text: "Unlabelled Sol Ring",
       detail: "was Wincon",
     });
   });
 
   /**
    * The same kind wears two different events, and `action` is what tells them apart. Without
-   * this branch, deleting the "Cut candidate" label renders as "Tagged a card" — a sentence
-   * about a card the row does not have, since a tag CRUD row names none.
+   * this branch, deleting the "Cut candidate" label renders as "Labelled a card" — a sentence
+   * about a card the row does not have, since a label CRUD row names none.
    */
-  it("says what happened to a tag itself, not to a card wearing it", () => {
-    const label = (payload: Record<string, unknown>) =>
-      auditSentence(entry("tag", payload, { cardId: null, cardName: null }));
+  it("says what happened to a label itself, not to a card wearing it", () => {
+    const labelEvent = (payload: Record<string, unknown>) =>
+      auditSentence(entry("label", payload, { cardId: null, cardName: null }));
 
-    expect(label({ action: "create", tag: "Cut candidate" })).toEqual({
-      text: "Created tag Cut candidate",
+    expect(labelEvent({ action: "create", label: "Cut candidate" })).toEqual({
+      text: "Created label Cut candidate",
       detail: null,
     });
-    expect(label({ action: "rename", tag: "Wincon", previous: "Win", cards: 4 })).toEqual({
-      text: "Renamed tag Win to Wincon",
+    expect(labelEvent({ action: "rename", label: "Wincon", previous: "Win", cards: 4 })).toEqual({
+      text: "Renamed label Win to Wincon",
       detail: "4 cards carry it",
     });
-    expect(label({ action: "recolour", tag: "Wincon", color: "moss" })).toEqual({
-      text: "Recoloured tag Wincon",
+    expect(labelEvent({ action: "recolour", label: "Wincon", color: "moss" })).toEqual({
+      text: "Recoloured label Wincon",
       detail: "moss",
     });
-    // Deleting a tag untags its cards rather than deleting them, which is the half of the
+    // Deleting a label unlabels its cards rather than deleting them, which is the half of the
     // sentence a reader would otherwise have to go and check.
-    expect(label({ action: "delete", tag: "Wincon", cards: 1 })).toEqual({
-      text: "Deleted tag Wincon",
-      detail: "1 card untagged",
+    expect(labelEvent({ action: "delete", label: "Wincon", cards: 1 })).toEqual({
+      text: "Deleted label Wincon",
+      detail: "1 card unlabelled",
     });
     // An action this build has never heard of still reads as a line of history.
-    expect(label({ action: "reticulate", tag: "Wincon" })).toEqual({
-      text: "Changed tag Wincon",
+    expect(labelEvent({ action: "reticulate", label: "Wincon" })).toEqual({
+      text: "Changed label Wincon",
       detail: null,
     });
   });
@@ -474,6 +646,58 @@ describe("auditSentence", () => {
   });
 
   /**
+   * `decks.theory_mark_exact` and `decks.theory_mark_name` (schema v38) — the **third and
+   * fourth** multi-word field names the backend writes, and the X-split test's paragraph
+   * applies to both: an unrecognised field is "Changed the deck", which is true of every deck
+   * edit and therefore never fails, so only a test can hold the two spellings together.
+   *
+   * **Deriving either word from its column gives the wrong answer**, `xGroup`'s own trap: the
+   * columns are `theory_mark_exact` and `theory_mark_name`, and the plausible-looking
+   * `theoryMark` — one key for both switches — is asserted below so that a regression to it is
+   * a failing test rather than a history line quietly saying less than it knows.
+   *
+   * **The sentences are the UI's words and not the columns'.** The switches read *Matching
+   * printing* and *Different printing*; a line naming `theory_mark_exact` at the reader would
+   * be the log describing a column at somebody who pressed a switch.
+   */
+  it("names both theory marks by the words `deck.rs` writes, and tells them apart", () => {
+    const deck = (payload: Record<string, unknown>) =>
+      auditSentence(entry("deck", payload, { cardId: null, cardName: null }));
+
+    expect(deck({ field: "theoryMarkExact", from: false, to: true })).toEqual({
+      text: "Started marking cards in the printing the plan names",
+      detail: null,
+    });
+    expect(deck({ field: "theoryMarkExact", from: true, to: false })).toEqual({
+      text: "Stopped marking cards in the printing the plan names",
+      detail: null,
+    });
+    expect(deck({ field: "theoryMarkName", from: false, to: true })).toEqual({
+      text: "Started marking cards in a different printing",
+      detail: null,
+    });
+    expect(deck({ field: "theoryMarkName", from: true, to: false })).toEqual({
+      text: "Stopped marking cards in a different printing",
+      detail: null,
+    });
+    // **The two must not share a sentence**, which is the half a test of one arm cannot show:
+    // the switches are independent and one Save moves both, so two rows land in the drawer
+    // together and a reader has to be able to tell which one they are reading.
+    expect(deck({ field: "theoryMarkExact", to: true }).text).not.toEqual(
+      deck({ field: "theoryMarkName", to: true }).text,
+    );
+    // The wrong-but-plausible spellings: one key for both switches, and the raw column name.
+    expect(deck({ field: "theoryMark", to: true })).toEqual({
+      text: "Changed the deck",
+      detail: null,
+    });
+    expect(deck({ field: "theory_mark_exact", to: true })).toEqual({
+      text: "Changed the deck",
+      detail: null,
+    });
+  });
+
+  /**
    * `decks.bracket` (schema v26), and **the arm that `0` would otherwise swallow**.
    *
    * Every other deck field in this switch is read through `text()`, which answers `null` for a
@@ -578,20 +802,20 @@ describe("auditSentence", () => {
 
   /**
    * The labels an import **made**, in the detail — news exactly when it is not zero, and
-   * app-wide news, since `deck_tags` has no `deck_id` since schema v21.
+   * app-wide news, since `deck_labels` has no `deck_id` since schema v21.
    *
-   * The zero arm and the absent arm are one branch on purpose: `tagsCreated` is written on every
-   * import row from 2026-08-24, so an absent key is a row from before that date and a list that
-   * carried no labels reads the same either way. Neither draws a detail.
+   * The zero arm and the absent arm are one branch on purpose: `labelsCreated` is written on
+   * every import row from 2026-08-24, so an absent key is a row from before that date and a list
+   * that carried no labels reads the same either way. Neither draws a detail.
    */
   it("says how many labels an import invented, and nothing when it invented none", () => {
     const imported = (payload: Record<string, unknown>) =>
       auditSentence(entry("add", { import: payload }, { cardId: null, cardName: null }));
     const base = { mode: "merge", lines: 105, cards: 117, categories: 9 };
 
-    expect(imported({ ...base, tagsCreated: 2 }).detail).toBe("2 new tags");
-    expect(imported({ ...base, tagsCreated: 1 }).detail).toBe("1 new tag");
-    expect(imported({ ...base, tagsCreated: 0 }).detail).toBeNull();
+    expect(imported({ ...base, labelsCreated: 2 }).detail).toBe("2 new labels");
+    expect(imported({ ...base, labelsCreated: 1 }).detail).toBe("1 new label");
+    expect(imported({ ...base, labelsCreated: 0 }).detail).toBeNull();
     // A row written before the field existed.
     expect(imported(base).detail).toBeNull();
   });

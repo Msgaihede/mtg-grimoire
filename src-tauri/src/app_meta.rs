@@ -4,8 +4,9 @@
 //! `images.rs`.** `update` is the portable updater — `zip`, `tokio`, and an `.exe` swapped
 //! on disk — so it is `#[cfg(not(target_family = "wasm"))]` in `lib.rs`. But it also held
 //! `app_meta`, which is neither: it is one SQLite table read and written by eleven modules
-//! that have nothing to do with updating anything. `deck.rs` remembers whether the search
-//! column is open in it; `zoom`, `nav`, `listview` and `flatten` keep their view state here.
+//! that have nothing to do with updating anything. `searchopen.rs` remembers which docked
+//! search columns are open in it; `zoom`, `nav`, `listview` and `flatten` keep their view
+//! state here.
 //!
 //! So the *storage* moved to a module both builds compile, and the *updater* stayed behind.
 //! All sixty call sites moved with it — `crate::update::get_app_meta` is now
@@ -66,11 +67,19 @@ mod tests {
         assert_eq!(get_app_meta(&conn(), "never-written"), None);
     }
 
+    /// **The key is deliberately one no module owns.** This test is about the table, not about
+    /// any setting stored in it, and a real key here reads as a claim about that setting's
+    /// spelling — which is what it was when it named `deck_search_open`, a row nothing writes
+    /// any more ([`crate::searchopen`]'s map replaced it, and the old row survives only as a
+    /// read-side bridge). A made-up key can never rot.
     #[test]
     fn a_value_survives_the_round_trip() {
         let c = conn();
-        set_app_meta(&c, "deck_search_open", "1").unwrap();
-        assert_eq!(get_app_meta(&c, "deck_search_open").as_deref(), Some("1"));
+        set_app_meta(&c, "a_key_no_module_owns", "1").unwrap();
+        assert_eq!(
+            get_app_meta(&c, "a_key_no_module_owns").as_deref(),
+            Some("1")
+        );
     }
 
     /// **The `ON CONFLICT` clause is the whole point of the write.** Without it the second

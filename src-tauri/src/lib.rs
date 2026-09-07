@@ -61,8 +61,22 @@ pub mod db;
 pub mod deck;
 pub mod deck_audit;
 pub mod deck_meta;
+pub mod deck_pull;
+pub mod deck_quick_add;
 pub mod deck_theory;
+/// **The tokens and emblems a deck needs, derived rather than stored** — schema v37. It reads
+/// `all_parts` out of each deck card's gzip `raw` blob, which is [`card::meld_parts`]' one
+/// trick applied to a different `component`, so it is a sibling of that function and not of
+/// the eleven modules around it. Nothing here reaches a filesystem or a network.
+pub mod deck_tokens;
 pub mod deck_undo;
+/// **A view-state module wearing the deck domain's name.** It is [`listview`]'s shape exactly —
+/// one `app_meta` row, an infallible read and a write whose only refusal is a blank — and it is
+/// filed here rather than beside its four siblings below because a `decksort` between
+/// `deck_undo` and `errors` is where the next person looking for the deck gallery's settings
+/// will look. Nothing in it touches the filesystem, `tokio` or the network, so it is on the
+/// every-target half of this map like the rest of them.
+pub mod decksort;
 pub mod errors;
 pub mod feed;
 pub mod filters;
@@ -71,11 +85,13 @@ pub mod filters;
 /// one predicate over a string — no filesystem, no protocol handler, nothing a browser
 /// lacks. `search.rs` puts a card's URL on a result row from here, and `images` composes
 /// the same three pieces into a cached fetch.
-/// **The four view-state modules, moved here on 2026-08-30.** `flatten`, `listview`, `nav` and
-/// `zoom` each keep one setting in `app_meta` and answer it back - two commands apiece and no
-/// filesystem, no `tokio` and no `reqwest` between them. They were on the other side only
-/// because [`app_meta`] used to live inside the portable updater; PR 10a moved the store and
-/// this moves the four modules that lean on it hardest.
+/// **The five view-state modules, four of them moved here on 2026-08-30.** `flatten`,
+/// `listview`, `nav`, `searchopen` and `zoom` each keep one setting in `app_meta` and answer it
+/// back - two commands apiece and no filesystem, no `tokio` and no `reqwest` between them. The
+/// first four were on the other side only because [`app_meta`] used to live inside the portable
+/// updater; PR 10a moved the store and this moves the modules that lean on it hardest.
+/// [`searchopen`] was born here, on 2026-09-07, when `deck.rs`'s one boolean row became a map
+/// three docked search columns share.
 pub mod flatten;
 pub mod image_uri;
 pub mod index;
@@ -83,6 +99,13 @@ pub mod ingest;
 pub mod legalities;
 pub mod listview;
 pub mod maintenance;
+/// **A settings row wearing [`listview`]'s shape with the vocabulary moved one step out.**
+/// There the frontend owns which walls exist and this crate owns the two words a wall may be
+/// drawn in; here the frontend owns which *marks* exist and this crate owns only the shape a
+/// colour may have. One `app_meta` row, an infallible read and a write whose refusals are a
+/// blank key and anything that is not `#rrggbb` — no filesystem, no clock and no network, so it
+/// is on the every-target half of this map with its four siblings.
+pub mod markcolors;
 /// **The stored marketplace id is every target's; telling the mirror about a change is not.**
 /// `stored` and `store` are one settings row, and `deck_meta`'s readback quotes the first of
 /// them on every platform — so the module is here and `set_marketplace_now`, which calls
@@ -108,6 +131,7 @@ pub mod nav;
 pub mod reset;
 pub mod schema;
 pub mod search;
+pub mod searchopen;
 pub mod slug;
 pub mod sorting;
 /// **Compiles for wasm and can never succeed there**, which is cheaper than gating it and is
@@ -156,6 +180,14 @@ pub mod update;
 pub mod web;
 pub mod wishlist;
 pub mod wishlist_folders;
+/// **The wishlist's cheapest-printing sweep** — issue #352, and two commands rather than one
+/// button because the reader has to be able to see what a press would do before making it.
+/// Beside [`wishlist`] rather than inside it: that module is the wishlist's storage and its
+/// list, and this one is a *policy* over both — it reads through
+/// [`wishlist::wishlist_scope`] and writes through [`wishlist::set_printing_inner`], adding
+/// no SQL over `wishlist_entries` of its own except the one guard read that tells a stale
+/// row from a live one.
+pub mod wishlist_optimize;
 pub mod zoom;
 
 // ── Desktop and Android ──────────────────────────────────────────────────────────

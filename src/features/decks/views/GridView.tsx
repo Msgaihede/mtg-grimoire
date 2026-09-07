@@ -18,7 +18,7 @@ import { formatPrice } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
 import { cn } from "@/lib/utils";
-import { RuleBreakMark, TagDot, TheoryMatchMark } from "../CardMarks";
+import { LabelDot, RuleBreakMark, TheoryMatchMark } from "../CardMarks";
 import {
   DECK_CARD_VARIANT,
   deckCardBodyProps,
@@ -39,7 +39,7 @@ import {
   useDeckCardDrag,
   type DeckCardActions,
 } from "../cardControl";
-import { theoryMatchDelta } from "../theoryMatch";
+import { theoryMatchMark, type TheoryMark, type TheoryPlan } from "../theoryMatch";
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
 import { ruleBreak } from "../violations";
@@ -72,7 +72,7 @@ export function GridView({
   groups,
   marketplace,
   violations,
-  theoryMatches,
+  theoryPlan,
   onSelect,
   actions,
   selectedSlot,
@@ -84,10 +84,10 @@ export function GridView({
    *  tile's own unit price. */
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
-  /** What the deck's plan says about each row — `theoryMatch.ts`'s map of slot → how far the
-   *  live list is from the planned count, handed down whole like `violations` beside it.
-   *  `undefined` for a deck with no plan, and on the plan itself. */
-  theoryMatches?: ReadonlyMap<string, number>;
+  /** The deck's plan — `theoryMatch.ts`'s two lookups and the deck's own two mark switches,
+   *  handed down whole like `violations` beside it. `undefined` for a deck with no plan, and on
+   *  the plan itself. */
+  theoryPlan?: TheoryPlan;
   onSelect?: (card: DeckCard) => void;
   /** What may be done to a card here — see {@link DeckCardActions}. */
   actions?: DeckCardActions;
@@ -136,10 +136,12 @@ export function GridView({
     // its own.
     //
     // {@link DROP_MARK_ROOM} for `StackView`'s reason and it is the same defect, not a matching
-    // spacing choice: a group's ring is painted outside its border box, this box clips at its
-    // padding box, and with no padding every group in the wall lost the ring down both of its
-    // sides — the full height of the group rather than a corner, since a group here is as wide as
-    // the desk.
+    // spacing choice: this box clips at its padding box, and with no padding every group in the
+    // wall lost its mark down both sides — the full height of the group rather than a corner,
+    // since a group here is as wide as the desk. The mark that was clipped was the drop ring,
+    // which has been `ring-inset` since 2026-09-03 and is now drawn within the border box where
+    // nothing can reach it; `FOCUS` is what still needs the room, and is what the 6px was sized
+    // for all along. See `StackView`'s note.
     <div
       ref={scrollRef}
       className={cn(
@@ -154,7 +156,7 @@ export function GridView({
           group={group}
           marketplace={marketplace}
           violations={violations}
-          theoryMatches={theoryMatches}
+          theoryPlan={theoryPlan}
           onSelect={onSelect}
           actions={actions}
           selectedSlot={selectedSlot}
@@ -172,7 +174,7 @@ function GridGroup({
   group,
   marketplace,
   violations,
-  theoryMatches,
+  theoryPlan,
   onSelect,
   actions,
   selectedSlot,
@@ -183,7 +185,7 @@ function GridGroup({
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
   /** Handed through to the tiles — see {@link GridView}'s own props. */
-  theoryMatches?: ReadonlyMap<string, number>;
+  theoryPlan?: TheoryPlan;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
   /** Handed through to the tiles — see {@link GridView}'s own props. */
@@ -239,7 +241,7 @@ function GridGroup({
               card={card}
               currency={marketplace.currency}
               ruleBreakText={ruleBreak(violations?.get(card.cardId))}
-              theoryDelta={theoryMatchDelta(theoryMatches, card)}
+              theoryMark={theoryMatchMark(theoryPlan, card)}
               onSelect={onSelect}
               actions={actions}
               selected={deckCardMarked(card, selectedSlot, actions)}
@@ -268,8 +270,8 @@ function GridGroup({
  * surface that had opted out.
  *
  * What stays this view's own is what a card *in a deck* says and a card in a wall does not: the
- * copy count, the reader's tag, the rule break, the landed flash and the stepper. They are laid
- * in the corners the wall leaves free — see the tile's body.
+ * copy count, the reader's label, the rule break, the landed flash and the stepper. They are
+ * laid in the corners the wall leaves free — see the tile's body.
  *
  * **No name line, and that is the app's existing answer rather than a new one.** A 150px card's
  * printed name is a few pixels tall — but `CardGrid`'s search wall already draws whole `grid`
@@ -281,7 +283,7 @@ function GridCard({
   card,
   currency,
   ruleBreakText,
-  theoryDelta,
+  theoryMark,
   onSelect,
   actions,
   selected,
@@ -292,10 +294,11 @@ function GridCard({
   /** How the tile's foot writes the row's one unit price. */
   currency: Currency;
   ruleBreakText: string | null;
-  /** What the deck's plan says about this row — `theoryMatchDelta`, resolved by the group so a
-   *  tile is handed an answer rather than a map to look itself up in. `null` is a card the plan
-   *  does not ask for, `0` the card it asks for exactly. */
-  theoryDelta: number | null;
+  /** What the deck's plan says about this row — `theoryMatchMark`, resolved by the group so a
+   *  tile is handed an answer rather than a plan to look itself up in. `null` is a card the plan
+   *  does not ask for; otherwise the tier it is in and how far the live list is from the plan at
+   *  that tier's own grain, where `0` is the card the plan asks for exactly. */
+  theoryMark: TheoryMark | null;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
   /** This is the card the pane is open on. */
@@ -325,9 +328,9 @@ function GridCard({
       // interpolated one emits no rule and the tile collapses to its content.
       //
       // The two variables beside it are the other half of that geometry: everything drawn *on* the
-      // card — the copy count, the tag, the rule break, the gem, the stepper — sizes itself against
-      // them rather than taking a prop, because each of those marks is also drawn in the table and
-      // text views, where nothing zooms. See `MARK_SCALE_VAR` in `lib/cardZoom.ts`.
+      // card — the copy count, the label, the rule break, the gem, the stepper — sizes itself
+      // against them rather than taking a prop, because each of those marks is also drawn in the
+      // table and text views, where nothing zooms. See `MARK_SCALE_VAR` in `lib/cardZoom.ts`.
       style={{ width: scaled(TILE_WIDTH, zoom), ...cardScaleVars(zoom) }}
       // The tile is the card's whole body, so a press on the chin under the card or on the
       // control bar over it — both siblings of the button rather than part of it — does not read
@@ -354,7 +357,7 @@ function GridCard({
     >
       <button
         type="button"
-        aria-label={deckCardName(card, ruleBreakText, theoryDelta)}
+        aria-label={deckCardName(card, ruleBreakText, theoryMark)}
         {...deckCardProps(card)}
         {...deckCardPress(card, onSelect, actions)}
         // Inset, for the stacked card's reason: the button holds a face that clips its own
@@ -425,8 +428,8 @@ function GridCard({
               "gap-[calc(0.25rem*var(--mark-scale,1))]",
             )}
           >
-            {card.tagName !== null && <TagDot name={card.tagName} color={card.tagColor} />}
-            {/* The copy count, at the size it is on a card at 100% zoom. `TagDot` beside it reads
+            {card.labelName !== null && <LabelDot name={card.labelName} color={card.labelColor} />}
+            {/* The copy count, at the size it is on a card at 100% zoom. `LabelDot` beside it reads
                 the same variable from inside its own component; this one is the view's own chip,
                 so it says so here. */}
             <span
@@ -455,7 +458,7 @@ function GridCard({
               spells it (`finish !== null || gameChanger`), because a chip is drawn for **either**
               fact and reading only the finish would put the tick under an empty corner on every
               non-foil game changer. */}
-          {theoryDelta !== null && (
+          {theoryMark !== null && (
             <span
               className={cn(
                 "absolute right-[calc(0.25rem*var(--mark-scale,1))]",
@@ -465,7 +468,7 @@ function GridCard({
               )}
             >
               {/* The tile's own quantity chip, not the stack's banner — see the component. */}
-              <TheoryMatchMark variant="chip" delta={theoryDelta} />
+              <TheoryMatchMark tier={theoryMark.tier} variant="chip" delta={theoryMark.delta} />
             </span>
           )}
 

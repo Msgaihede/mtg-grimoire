@@ -1,6 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
+import { AllPrintingsDialog } from "@/features/card/AllPrintingsDialog";
+import { CardDetailModal } from "@/features/card/CardDetailModal";
 import { ipc } from "@/lib/ipc";
 import { openDropdown, pickOption } from "@/test-dropdown";
 import { DeckEditor } from "./DeckEditor";
@@ -28,12 +30,17 @@ import { DeckEditor } from "./DeckEditor";
  * else. It is in the query key too: a deck is made once per key, so two formats have to be two
  * keys or the second story would open the first one's deck.
  *
- * **The pane is the editor's own now** (issue #183, 2026-08-22) and this wrapper no longer draws
- * one. It used to render a `CardDetailPane` as a *sibling*, exactly as `App.tsx` did, keyed on
- * the card id — and both halves of that have moved: the editor draws the pane as an overlay over
- * one of its two columns, and `App` steps aside for it. A copy left here would be a second
- * `complementary` landmark answering to the same name as the real one, which is precisely what
- * `SwapFolds` reaches for.
+ * **The card is a centred modal mounted beside the editor** (2026-09-03), which is what this
+ * wrapper draws and where `App.tsx` draws it. Its two predecessors were a docked `CardDetailPane`
+ * this file rendered as a sibling (until issue #183) and then the editor's own sticky overlay
+ * (until the modal); the pane is deleted and the overlay with it, so there is one mount again and
+ * the wrapper is where it goes. `AllPrintingsDialog` comes with it because it is the only way to
+ * a printing **swap** now — `SwapFolds` is the one story that needs either, and a story that
+ * mounts what the app mounts is the whole reason it can be trusted about a ladder of surfaces.
+ *
+ * Both are `App`-level siblings rather than children of anything, for the reason `App.tsx` states
+ * at its own site: the modal's panel is a container-query context and a `fixed` scrim rendered
+ * inside it would resolve against the panel.
  */
 function Editor({ deckId, formatKey = "modern" }: { deckId: number | null; formatKey?: string }) {
   const created = useQuery({
@@ -47,6 +54,8 @@ function Editor({ deckId, formatKey = "modern" }: { deckId: number | null; forma
   return (
     <div className="flex h-full min-h-0 gap-4">
       <div className="min-w-0 flex-1">{id !== null && <DeckEditor key={id} deckId={id} />}</div>
+      <CardDetailModal />
+      <AllPrintingsDialog />
     </div>
   );
 }
@@ -131,7 +140,7 @@ const meta = {
           "**The shell is `Dialog`** (2026-08-14), and the exception list is the thing worth " +
           "carrying rather than the count: the scrim, the centring, `aria-modal`, the tab trap, " +
           "the ✕ and the Escape rung are written once and every host passes a title, a close " +
-          "label and a width, so Categories, Tags, History, Deck settings, the export dialog, " +
+          "label and a width, so Categories, Labels, History, Deck settings, the export dialog, " +
           "the quick zones' New category and both destructive confirmations are one behaviour. " +
           "**Import cards and the theory difference are the two still off it**: each carries its " +
           "own copy of that chrome, deliberately out of scope rather than exempt, so until they " +
@@ -141,7 +150,7 @@ const meta = {
           "are drag sources into the deck's own columns, and a scrim would end that path and " +
           "cover the card pane a reader flips printings in. It stays docked, and collapsed " +
           "until pressed.\n\n" +
-          "**Categories and tags are two dialogs, not two sections of one drawer.** They shared " +
+          "**Categories and labels are two dialogs, not two sections of one drawer.** They shared " +
           "a panel and a scroll; each is one press now, and each is sized for what it draws — " +
           "`w-[48rem]` for the piles and their reordering, `w-[36rem]` for the labels.\n\n" +
           "**The first three toolbar controls are remembered on the deck row.** Which list, " +
@@ -216,12 +225,12 @@ const meta = {
           "({@link EmptyDeck}) and grows the rest by name. **Deck 4 " +
           "`Rhystic Testbed`** is that second shape filled in: three `main` piles — two the " +
           "reader named, one of them switched off, and `Ramp`, which the add path made and " +
-          "which therefore carries `origin: auto` — plus two game changers, a tagged card, a " +
+          "which therefore carries `origin: auto` — plus two game changers, a labelled card, a " +
           "copy limit broken on purpose and a theory list that differs from the deck. Its " +
           "`Ramp` is the pile whose *name* proves nothing: the two beside it are the reader's " +
-          "and one of them is called `Card advantage`. The categories, tags, history " +
+          "and one of them is called `Card advantage`. The categories, labels, history " +
           "and theory commands the dialogs read are all the fake's now, so those surfaces are " +
-          "driven rather than degraded — see `Decks/CategoriesDialog`, `Decks/TagsDialog`, " +
+          "driven rather than degraded — see `Decks/CategoriesDialog`, `Decks/LabelsDialog`, " +
           "`Decks/DeckHistoryDialog` and `Decks/TheoryDiffDialog` for what each of them draws, " +
           "and `Decks/Dialog shell` for the shell they share.",
       },
@@ -665,6 +674,117 @@ export const NoMoveControl: Story = {
 };
 
 /**
+ * **`Collection ▸` — the three presses that answer one card's shortfall** (issue #350).
+ *
+ * A deck reads *you own 2 of 4* on a card and the two copies that would settle it are either on
+ * the reader's desk or about to be bought; until this landed, neither fact could be acted on from
+ * the card that was stating it. The submenu is the shortest path from the number to the act:
+ *
+ * - **Quick add N copies** — record them, filed straight into this deck's own group. It is the
+ *   only write in the app that *creates* cardboard rather than moving it.
+ * - **Quick add N and remove from wishlist** — the same, and take them off a matching shopping
+ *   line. A prompt only where several lines match; one match and no match both write straight
+ *   through, which is `quickCollection.ts`'s `chooseWish`.
+ * - **Pull N from your collection** — copies the reader already owns loose, moved in. One
+ *   candidate pulls outright; several, or none, open `PullFromCollectionDialog` over this one
+ *   card.
+ *
+ * **The count is the card's own.** It is `quickAddShort` — `max(0, quantity − ownedQuantity)`,
+ * exactly the red `2/4` the card wears in its chin — so the menu can never press for a number the
+ * card is not showing. Counterspell is the deck's short row and reads `you own 2 of 4`, which is
+ * why every label below says two.
+ *
+ * **A submenu rather than three flat rows**: this menu already carries thirteen, and three more on
+ * every card of the surface a reader spends longest in is a menu that has to be read instead of
+ * scanned. It sits under `Move to` because filing copies and moving a card are the same kind of
+ * act, and above the zone rows, which are claims about the deck.
+ */
+export const CollectionSubmenu: Story = {
+  args: { deckId: 1 },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // The card that states the shortfall these three rows act on — and the assertion that makes
+    // the numbers below facts rather than fixtures.
+    const card = await canvas.findByRole("button", { name: /^Counterspell.*you own 2 of 4/ });
+
+    await userEvent.pointer({ keys: "[MouseRight]", target: card });
+    const menu = await canvas.findByRole("menu");
+    await waitFor(async () => await expect(menu).toBeVisible());
+
+    // A submenu row says so in ARIA rather than only with a chevron — the chevron is
+    // `aria-hidden`, so this is the whole of what a screen reader is told.
+    const parent = canvas.getByRole("menuitem", { name: "Collection" });
+    await expect(parent).toHaveAttribute("aria-haspopup", "menu");
+    await expect(parent).toHaveAttribute("aria-expanded", "false");
+
+    await userEvent.click(parent);
+    const panels = canvas.getAllByRole("menu");
+    // The innermost panel, which is the one just opened. `.at(-1)` is not in this build's
+    // `lib` target — see the TS 6.0.x pin.
+    const panel = panels[panels.length - 1];
+    await expect(
+      within(panel).getByRole("menuitem", { name: "Quick add 2 copies" }),
+    ).toBeVisible();
+    await expect(
+      within(panel).getByRole("menuitem", { name: "Quick add 2 and remove from wishlist" }),
+    ).toBeVisible();
+    await expect(
+      within(panel).getByRole("menuitem", { name: "Pull 2 from your collection" }),
+    ).toBeVisible();
+  },
+};
+
+/**
+ * The press, and the number it moves — `Quick add 2 copies` on a card reading *you own 2 of 4*,
+ * and the same card reading *4 of 4* afterwards.
+ *
+ * **This is the one frame that shows what the row is _for_.** The submenu above can be read from
+ * a screenshot; that the copies land in this deck's own group, are counted against this row, and
+ * settle the shortfall the reader was looking at cannot be — it is three tables agreeing, and the
+ * card's own name is where they agree.
+ *
+ * **The list itself does not change**, which is the whole difference from every other add in this
+ * editor: `deck_quick_add_to_collection` writes a `collection_entries` row and never a
+ * `deck_cards` one, so the deck still plays four Counterspells and now holds four. A row that
+ * folded the quantity into the list would make a 4-copy line the reader was 2 short of into a
+ * 6-copy line.
+ *
+ * The wishlist is untouched here and deliberately: this row sends `wishId: null` and does not so
+ * much as read the shopping list. A reader who wanted both halves pressed the row below it.
+ */
+export const QuickAddSettlesTheShortfall: Story = {
+  args: { deckId: 1 },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const card = await canvas.findByRole("button", { name: /^Counterspell.*you own 2 of 4/ });
+
+    await userEvent.pointer({ keys: "[MouseRight]", target: card });
+    await canvas.findByRole("menu");
+    // **Scoped to the open submenu's panel**, because two rows on this menu are called
+    // `Collection` — this one and `Add to ▸ Collection` — and the repeat is deliberate: it is the
+    // reader's binder in both places. What tells them apart is the panel each is in.
+    await userEvent.click(canvas.getByRole("menuitem", { name: "Collection" }));
+    const panels = canvas.getAllByRole("menu");
+    // The innermost panel, which is the one just opened. `.at(-1)` is not in this build's
+    // `lib` target — see the TS 6.0.x pin.
+    const panel = panels[panels.length - 1];
+    await userEvent.click(
+      within(panel).getByRole("menuitem", { name: "Quick add 2 copies" }),
+    );
+
+    // The deck re-reads and the card says so itself. **The shortage clause is _gone_ rather than
+    // reading `you own 4 of 4`** — `deckCardShort` is one predicate behind both the red figure in
+    // the card's chin and this half of its name, and a deck that holds what it plays is not
+    // short of anything. The line is still four copies, which is the other half of the sentence
+    // above: the list did not change.
+    await waitFor(async () => {
+      await expect(canvas.queryByRole("button", { name: /^Counterspell.*you own/ })).toBeNull();
+      await expect(canvas.getByRole("button", { name: /^Counterspell, 4 copies/ })).toBeVisible();
+    });
+  },
+};
+
+/**
  * The deck's own filter, and the stats band it deliberately does not reach.
  *
  * The filter narrows the cards **before** they are grouped, so every heading's count is a count
@@ -726,14 +846,14 @@ export const FilterAndStats: Story = {
  * two focus traps over one screen. A union cannot say it, and the failure is invisible to any
  * test that opens one layer at a time.
  *
- * **Categories and Tags are the pair worth pressing in a row**, because until 2026-08-14 they
- * were one drawer called "Categories & tags" and a reader reaching for the second still reaches
+ * **Categories and Labels are the pair worth pressing in a row**, because until 2026-08-14 they
+ * were one drawer called "Categories & labels" and a reader reaching for the second still reaches
  * for it next. Two dialogs, one slot: the second press replaces the first rather than stacking
  * on it.
  *
  * What this story asserts is the *arrangement* rather than any layer's contents: each press
  * leaves exactly one dialog on screen, and it is the one just pressed. Their own contents are
- * `Decks/CategoriesDialog`'s and `Decks/TagsDialog`'s.
+ * `Decks/CategoriesDialog`'s and `Decks/LabelsDialog`'s.
  */
 export const NeverTwoLayers: Story = {
   args: { deckId: 2 },
@@ -755,8 +875,8 @@ export const NeverTwoLayers: Story = {
 
     // The half the split makes worth showing: the button beside it, pressed while the first is
     // still up, and no second panel behind it.
-    await userEvent.click(canvas.getByRole("button", { name: "Tags" }));
-    await only("Tags");
+    await userEvent.click(canvas.getByRole("button", { name: "Labels" }));
+    await only("Labels");
 
     // Escape closes the one that is up and hands the caret back to the control that opened it —
     // the editor is a *view*, so the deck is still on screen afterwards.
@@ -764,7 +884,7 @@ export const NeverTwoLayers: Story = {
     await waitFor(async () => {
       await expect(canvas.queryByRole("dialog")).toBeNull();
     });
-    await expect(canvas.getByRole("button", { name: "Tags" })).toHaveFocus();
+    await expect(canvas.getByRole("button", { name: "Labels" })).toHaveFocus();
   },
 };
 
@@ -1047,26 +1167,31 @@ export const Gone: Story = {
 };
 
 /**
- * Two printings of one card in one category, folded into one row — and the sentence that says so.
+ * Two printings of one card in one category, folded into one row.
  *
- * **`deck_swap_printing` folds on `(deck, variant, category, card)`.** A category holds a
- * printing at most once per list, so swapping onto one it already has is not an error and not two
- * rows: the quantities sum, the answer carries `folded: true` with the landed total, and the pane
- * announces it. Without the sentence a card would simply disappear out of the deck, which reads
- * like a bug.
+ * **`deck_swap_printing` folds on `(deck, variant, category, card)`.** A category holds a printing
+ * at most once per list, so swapping onto one it already has is not an error and not two rows: the
+ * quantities sum and the answer carries `folded: true` with the landed total. What a reader sees
+ * is one of their two rows going away, which is the whole of what this play asserts.
  *
- * **This is the one editor story that opens the card pane, because the swap has no control in
- * the editor at all.** "Use this printing" is drawn on the pane's printings rows and only for a
- * card opened *as a deck card* — `openCardFromDeck` is the sole writer of `paneDeckContext`, so
- * the offer exists exactly where a slot exists to rewrite. The context carries the **variant**
- * too, since schema v8: a swap addressed to the wrong list either misses or rewrites a row the
- * reader is not looking at.
+ * **The sentence that used to say so is gone with the docked pane** (2026-09-03). `SwapResult`
+ * still carries `folded` and the total, and nothing draws them: the pane announced the fold in a
+ * `role="status"` of its own and `AllPrintingsDialog`, which is where the swap lives now, closes
+ * on success and says nothing. Recorded here rather than quietly dropped, because a card
+ * disappearing out of a deck with no sentence is the failure the old announcement existed for.
+ *
+ * **This is the one editor story that opens a card, because the swap has no control in the editor
+ * at all.** It is a tile of the printings modal, reached from the card modal's
+ * `View all printings`, and it is offered only for a card opened *as a deck card* —
+ * `openCardFromDeck` is the sole writer of `paneDeckContext`, so the write exists exactly where a
+ * slot exists to rewrite. The context carries the **variant** too, since schema v8: a swap
+ * addressed to the wrong list either misses or rewrites a row the reader is not looking at.
  *
  * Sol Ring is the only fold the corpus can produce: it is the one card with two printings in the
  * fixture that a seeded deck already plays (deck 2's main category holds `c21 263`; `sld 913` is
  * the other). The play adds `sld 913` from the docked panel — a Commander deck's singleton rule
- * now broken, which is beside the point — clicks it, and swaps it onto the printing already in
- * the category.
+ * now broken, which is beside the point — opens *that* row, and swaps it onto the printing
+ * already in the category.
  */
 export const SwapFolds: Story = {
   args: { deckId: 2 },
@@ -1074,9 +1199,8 @@ export const SwapFolds: Story = {
     const user = userEvent.setup();
     const canvas = within(canvasElement);
     // **The panel is open at rest again** (issue #183), so there is no disclosure to press
-    // first — the card pane it used to trade width with is an overlay now and takes none. The
-    // button and the search field share the name "Search cards" — the disclosure names what it
-    // reveals — so each is still addressed by its own role.
+    // first. The button and the search field share the name "Search cards" — the disclosure
+    // names what it reveals — so each is still addressed by its own role.
     //
     // **The tab is pressed, though.** The panel opens on its Collection tab, and the card
     // search — the wall this play adds `sld 913` from — is the second one. Without this the
@@ -1127,29 +1251,32 @@ export const SwapFolds: Story = {
       { timeout: 4000 },
     );
 
-    // The pane, opened as a deck card — which is what puts the offer on the *other* printing.
-    // Either of the two rows does: they are two printings of one card in one category, so
-    // whichever is opened, the swap offered is onto the one that is not open.
-    await userEvent.click(within(main()).getAllByRole("button", { name: /^Sol Ring/ })[0]);
-    const pane = await canvas.findByRole("complementary", { name: "Card details" });
-    const use = await within(pane).findByRole(
-      "button",
-      { name: /^Use this printing .* in Main deck$/ },
-      { timeout: 4000 },
-    );
-    await userEvent.click(use);
+    // **The `sld 913` row specifically, and it is addressed by its own data line.** Which of the
+    // two the swap is *from* decides which tile it is *onto*, so "either one does" — true while
+    // the pane drew a row per printing and offered the other — is no longer enough: the printings
+    // wall draws every printing and the tile pressed has to be the one the open row is not.
+    const rows = within(main()).getAllByRole("button", { name: /^Sol Ring/ });
+    const sld = rows.find((row) => row.closest("li")?.textContent?.includes("SLD"));
+    await expect(sld).toBeDefined();
+    await userEvent.click(sld as HTMLElement);
+    await canvas.findByRole("button", { name: /^View all printings/ });
+    await userEvent.click(canvas.getByRole("button", { name: /^View all printings/ }));
 
-    // One card of two, and the pane saying which. The number is the server's arithmetic, never a
-    // guess: `useDeck.swapPrinting` writes no optimistic patch precisely because the fold is the
-    // one number only the backend can compute.
+    // **Both dialogs are named after the card**, because `AllPrintingsDialog`'s title is the
+    // card's name and the card modal's is too. The close label is what tells them apart, and it
+    // is a label rather than a heuristic: `closeLabel` is a required prop of `Dialog`.
+    const closePrintings = await canvas.findByRole("button", { name: "Close printings" });
+    const printings = within(closePrintings.closest('[role="dialog"]') as HTMLElement);
+    await userEvent.click(await printings.findByRole("button", { name: /C21/ }, { timeout: 4000 }));
+
+    // One card of two. The number is the server's arithmetic, never a guess: `useDeck.swapPrinting`
+    // writes no optimistic patch precisely because the fold is the one number only the backend can
+    // compute.
     await waitFor(
       async () => {
         await expect(within(main()).getAllByRole("button", { name: /^Sol Ring/ })).toHaveLength(1);
       },
       { timeout: 4000 },
     );
-    await expect(
-      await canvas.findByText(/^Folded into one row of 2 in Main deck\.$/),
-    ).toBeInTheDocument();
   },
 };

@@ -115,6 +115,26 @@ export function auditSentence(
     if (line !== null) return line;
   }
 
+  // A pull is the `move` that names no card, for the import's reason one kind over: one press
+  // moves copies of several printings at once, so the payload carries the counts instead. Read
+  // **before** the per-card branches, because the `move` arm would call it "Moved a card" — a
+  // sentence about a card the row has not got.
+  const pulled = nested(p.pull);
+  if (pulled !== null) {
+    const line = pullLine(entry.kind, pulled);
+    if (line !== null) return line;
+  }
+
+  // A quick add is the second `move` that names no card, and it is read here for the pull's
+  // reason exactly: the `move` arm would render it as "Moved a card", a sentence about a card
+  // the row has not got. Beside the pull rather than inside it because they are opposite acts —
+  // that one moves cardboard that exists, this one records cardboard that did not.
+  const recorded = nested(p.quickAdd);
+  if (recorded !== null) {
+    const line = quickAddLine(entry.kind, recorded);
+    if (line !== null) return line;
+  }
+
   switch (entry.kind) {
     case "add": {
       const quantity = numberField(p.quantity);
@@ -215,10 +235,12 @@ export function auditSentence(
     // Two different events wear this one kind, and `action` is what tells them apart: a
     // change to the **label itself** (created, renamed, recoloured, deleted) carries one and
     // names no card, while putting a label **on a card** carries none. Reading only the
-    // second would render "deleted the Cut candidate tag" as "Tagged a card" — a sentence
+    // second would render "deleted the Cut candidate label" as "Labelled a card" — a sentence
     // about a card the row does not have.
-    case "tag":
-      return text(p.action) !== null || entry.cardId === null ? tagLine(p) : cardTagLine(p, name);
+    case "label":
+      return text(p.action) !== null || entry.cardId === null
+        ? labelLine(p)
+        : cardLabelLine(p, name);
     case "category":
       return categoryLine(p);
     case "folder":
@@ -292,19 +314,103 @@ function importLine(kind: DeckAuditKind, p: Record<string, unknown>): AuditLine 
       const cards = plural(numberField(p.cards), "card");
       const categories = plural(numberField(p.categories), "category", "categories");
       // The labels the import **made**, in the detail rather than the sentence: it is news
-      // exactly when it is not zero, and it is app-wide news — a tag belongs to no deck, so an
-      // import that invented three changed a list every other deck reads from. `numberField`
+      // exactly when it is not zero, and it is app-wide news — a label belongs to no deck, so
+      // an import that invented three changed a list every other deck reads from. `numberField`
       // reads an absent key as 0, which is every import row written before 2026-08-24 and every
       // list that carried no labels, and a zero draws no detail at all.
-      const made = numberField(p.tagsCreated);
+      const made = numberField(p.labelsCreated);
       return {
         text: `Imported ${cards} into ${categories}`,
-        detail: made > 0 ? `${plural(made, "new tag")}` : null,
+        detail: made > 0 ? `${plural(made, "new label")}` : null,
       };
     }
     default:
       return null;
   }
+}
+
+/**
+ * The one row a pull writes: copies the reader already owned, moved into this deck's group.
+ *
+ * **It wears `move` and is not a tenth audit kind**, which is `reversalLine`'s paragraph applied
+ * a second time and for exactly the same reason: `deck_audit.kind` carries a CHECK, SQLite has no
+ * `ALTER … CHECK`, and a tenth word would mean rebuilding every reader's whole deck history for a
+ * spelling. `deck_import_commit` reached that conclusion first and reused `add`/`remove`; the undo
+ * reached it second and reused `deck`. This is the third, and `move` is the honest word — nothing
+ * was added to the list and nothing taken off it, only *where the copies sit* changed.
+ *
+ * **`delta` is `0` on the row and that is honest rather than a hole.** The column counts copies
+ * the deck's *list* gained or lost, and a pull writes no `deck_cards` row at all: a 4-copy line
+ * the reader was 3 short of is still a 4-copy line afterwards. The two counts in the payload are
+ * what moved, and they are deliberately not the delta.
+ *
+ * **Copies in the sentence, cards in the detail**, because they are different units of the same
+ * press — three copies of one card and three copies of three cards are the same first number and
+ * a different act. The detail is drawn only when the row carries a card count: `numberField`
+ * reads an absent key as `0`, and "across 0 cards" beside "Pulled 3 copies" is arithmetic that
+ * cannot be true. That is `importLine`'s `labelsCreated` rule, one payload over.
+ *
+ * `null` for any kind but `move`, so a row a newer build wrote with a `pull` payload on a kind
+ * this one has no sentence for falls through to its own branch instead of being claimed here —
+ * {@link importLine}'s own defensive rule, and the reason a plain card move is untouched by this.
+ */
+function pullLine(kind: DeckAuditKind, p: Record<string, unknown>): AuditLine | null {
+  if (kind !== "move") return null;
+  const cards = numberField(p.cards);
+  return {
+    text: `Pulled ${plural(numberField(p.copies), "copy", "copies")} from your collection`,
+    detail: cards > 0 ? `across ${plural(cards, "card")}` : null,
+  };
+}
+
+/**
+ * The one row a quick add writes: copies the reader has just told the app they own, filed
+ * straight into this deck's group.
+ *
+ * **It wears `move` and is the fourth reuse of an existing kind** — `deck_import_commit` took
+ * `add`/`remove`, the undo took `deck`, the pull took `move`, and this is the pull's neighbour.
+ * `AUDIT_KINDS` stays at nine for the reason it stayed at nine three times before: the column
+ * carries a CHECK, SQLite has no `ALTER … CHECK`, and a tenth word would rebuild every reader's
+ * whole deck history for a spelling.
+ *
+ * **`move` is the least wrong word rather than the honest one, and that is worth saying plainly.**
+ * A pull really did move copies; this one *creates* them — it is the first of the four deck
+ * boundary crossings that records cardboard that was not written down before. What the two share
+ * is the half the column can express: neither writes a `deck_cards` row, so `delta` is `0` on
+ * both and the deck's *list* gained nothing either time.
+ *
+ * **Copies in the sentence, wishlist copies in the detail**, {@link pullLine}'s split for its
+ * reason: they are two facts about one press, and a press that cleared a shopping line did
+ * something a press that did not never mentions. The detail is drawn only above zero —
+ * `numberField` reads an absent key as `0`, so an older row, a truncated payload and a press that
+ * named no wish all arrive the same way and all correctly say nothing. That is `importLine`'s
+ * `labelsCreated` rule a third time.
+ *
+ * **`wishes` counts _copies_ taken off the wishlist, never wishlist lines, and the detail has to
+ * say so.** `deck_quick_add_to_collection` takes `wish_id: Option<i64>` — **at most one wish per
+ * press** — and records `min(copies, wish.quantity)`, so a press against a wish for four copies
+ * writes `{"copies": 4, "wishes": 4}` while clearing exactly one line. This read `4 wishes
+ * cleared`, which is a sentence about four shopping lines the reader can go and fail to find; the
+ * ambiguity was flagged from both sides of the boundary on the day it landed, and the payload's
+ * own doc on `QuickAddOutcome::wish_copies` is what settles it. Saying `copies` twice in one row
+ * is the price, and it is worth paying: the two numbers can differ (a 4-copy press against a wish
+ * for one is `4` and `1`), which is exactly when a reader needs to know which is which.
+ *
+ * **"for this deck" rather than "into this deck"**, because the copies went into the reader's
+ * *collection* — filed in the deck's group, which is custody rather than the list. A history line
+ * saying they were added to the deck would be the one thing this write did not do.
+ *
+ * `null` for any kind but `move`, so a `quickAdd` payload a newer build put on a kind this one
+ * has no sentence for falls through to that kind's own branch — {@link importLine}'s defensive
+ * rule, and what keeps an ordinary card move untouched by this.
+ */
+function quickAddLine(kind: DeckAuditKind, p: Record<string, unknown>): AuditLine | null {
+  if (kind !== "move") return null;
+  const wishes = numberField(p.wishes);
+  return {
+    text: `Recorded ${plural(numberField(p.copies), "copy", "copies")} for this deck`,
+    detail: wishes > 0 ? `${plural(wishes, "copy", "copies")} off your wishlist` : null,
+  };
 }
 
 /**
@@ -328,7 +434,7 @@ function importLine(kind: DeckAuditKind, p: Record<string, unknown>): AuditLine 
  * build wrote, and `entry.variant` is typed {@link DeckVariant} without anything having
  * *checked* that it is one. A variant this build has never heard of names no list and falls back
  * to the deck, which stays true of a whole-list clear whichever list it was — where a bare
- * `listName(entry.variant)` would confidently call it the live list.
+ * `listName(entry.variant)` would confidently call it the actual list.
  */
 function clearedFrom(entry: DeckAuditEntry, p: Record<string, unknown>): string {
   if (text(p.scope) !== "deck") return text(p.category) ?? "a category";
@@ -339,32 +445,32 @@ function clearedFrom(entry: DeckAuditEntry, p: Record<string, unknown>): string 
 }
 
 /** A label put on a card, taken off it, or swapped for another one. */
-function cardTagLine(p: Record<string, unknown>, name: string): AuditLine {
-  const tag = text(p.tag);
+function cardLabelLine(p: Record<string, unknown>, name: string): AuditLine {
+  const label = text(p.label);
   const previous = text(p.previous);
-  if (tag === null) return { text: `Untagged ${name}`, detail: previous && `was ${previous}` };
-  return { text: `Tagged ${name}`, detail: previous ? `${previous} → ${tag}` : tag };
+  if (label === null) return { text: `Unlabelled ${name}`, detail: previous && `was ${previous}` };
+  return { text: `Labelled ${name}`, detail: previous ? `${previous} → ${label}` : label };
 }
 
 /**
- * What happened to a tag itself — the label, not a card wearing it.
+ * What happened to a label itself, rather than to a card wearing it.
  *
  * The name is read from either spelling the backend might use, because this half of the
  * contract arrived after the payload table was written and a renderer that insisted on one
- * key would render half of them as "a tag".
+ * key would render half of them as "a label".
  */
-function tagLine(p: Record<string, unknown>): AuditLine {
-  const name = text(p.tag) ?? text(p.name) ?? "a tag";
+function labelLine(p: Record<string, unknown>): AuditLine {
+  const name = text(p.label) ?? text(p.name) ?? "a label";
   const previous = text(p.previous) ?? text(p.previousName);
   const cards = numberField(p.cards);
   const moved = (suffix: string) => (cards > 0 ? `${plural(cards, "card")} ${suffix}` : null);
 
   switch (text(p.action)) {
     case "create":
-      return { text: `Created tag ${name}`, detail: null };
+      return { text: `Created label ${name}`, detail: null };
     case "rename":
       return {
-        text: previous ? `Renamed tag ${previous} to ${name}` : `Renamed a tag to ${name}`,
+        text: previous ? `Renamed label ${previous} to ${name}` : `Renamed a label to ${name}`,
         detail: moved("carry it"),
       };
     case "recolour":
@@ -373,19 +479,19 @@ function tagLine(p: Record<string, unknown>): AuditLine {
       // share the `rename` verb, because a colour was one of six palette tokens and never
       // appeared in a sentence. It is the reader's own hex now, and the same hex in every deck,
       // so it is a change worth being able to find again.
-      return { text: `Recoloured tag ${name}`, detail: text(p.color) };
+      return { text: `Recoloured label ${name}`, detail: text(p.color) };
     case "remove":
       // Taking a label off one deck's list, which is **not** deleting it — the distinction the
-      // per-deck tag never had to make. The sentence names the deck rather than the tag as the
-      // thing that changed, which is what tells the two lines apart in a history.
-      return { text: `Took tag ${name} off this deck`, detail: moved("untagged") };
+      // per-deck label never had to make. The sentence names the deck rather than the label as
+      // the thing that changed, which is what tells the two lines apart in a history.
+      return { text: `Took label ${name} off this deck`, detail: moved("unlabelled") };
     case "delete":
-      // Deleting a tag untags its cards rather than deleting them — in **every** deck wearing
-      // it, since v21 — which is the half of this sentence a reader would otherwise have to go
-      // and check.
-      return { text: `Deleted tag ${name}`, detail: moved("untagged") };
+      // Deleting a label unlabels its cards rather than deleting them — in **every** deck
+      // wearing it, since v21 — which is the half of this sentence a reader would otherwise
+      // have to go and check.
+      return { text: `Deleted label ${name}`, detail: moved("unlabelled") };
     default:
-      return { text: `Changed tag ${name}`, detail: null };
+      return { text: `Changed label ${name}`, detail: null };
   }
 }
 
@@ -559,6 +665,38 @@ function deckLine(p: Record<string, unknown>): AuditLine {
         detail: before === now ? null : `was ${name(before)}`,
       };
     }
+    // `decks.theory_mark_exact` and `decks.theory_mark_name` (schema v38) — which of the theory
+    // mark's two tiers this deck draws. The **third and fourth** multi-word field names in this
+    // switch, and `xGroup`'s paragraph applies to both word for word: the `default` arm below
+    // answers an unrecognised field with a sentence true of every deck edit, so a spelling that
+    // drifts from `deck.rs`'s reads as a bland line rather than as a failure. Both words are
+    // `deck.rs`'s, spelled once there and once here.
+    //
+    // **The reader's words, not the columns'.** The two switches are labelled *Matching
+    // printing* and *Different printing* in the deck's settings, so that is what the history
+    // says — a line reading "turned theory_mark_exact on" would be naming a column at somebody
+    // who pressed a switch with a name.
+    //
+    // **Two arms rather than one**, `record_deck_edit`'s own reason: the switches are
+    // independent and one Save can move both, so two rows is what happened and a single row
+    // saying "changed the theory marks" could be worded into neither decision.
+    //
+    // No `detail`, `xGroup`'s shape: a boolean's `from` is whatever its `to` is not, so "was
+    // off" under "turned it on" is a line of history spent saying nothing.
+    case "theoryMarkExact":
+      return {
+        text: flag(p.to)
+          ? "Started marking cards in the printing the plan names"
+          : "Stopped marking cards in the printing the plan names",
+        detail: null,
+      };
+    case "theoryMarkName":
+      return {
+        text: flag(p.to)
+          ? "Started marking cards in a different printing"
+          : "Stopped marking cards in a different printing",
+        detail: null,
+      };
     // A field this build has never heard of, written by a newer one — or by an older one,
     // since a database outlives the app that wrote it. A plain line with a date and a delta
     // beats a blank one, and beats a throw by a good deal more.

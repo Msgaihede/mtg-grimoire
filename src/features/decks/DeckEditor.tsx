@@ -1,12 +1,5 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronLeft,
   Columns3Cog,
@@ -31,11 +24,11 @@ import {
 } from "@/components/FilterChips";
 import { isTextField, useContextMenu } from "@/components/menu/useContextMenu";
 import { useTooltip } from "@/components/tooltip/useTooltip";
-import { CardDetailPane } from "@/features/card/CardDetailPane";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
 import { usePublishCardWalk } from "@/features/card/cardWalk";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
+import { useSearchOpen } from "@/features/search/useSearchOpen";
 import { FOCUS } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
 import {
@@ -45,14 +38,18 @@ import {
   type DeckCard,
   type DeckCategory,
   type DeckFinish,
+  type DeckPullRow,
+  type DeckQuickAddWish,
   type DeckVariant,
 } from "@/lib/ipc";
 import { PRESS, statusLine } from "@/lib/motion";
 import { sortOptions } from "@/lib/options";
+import { matchesShortcut, shortcut } from "@/lib/shortcuts";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { clearFieldOnEscape, useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useAppStore, type PaneDeckContext } from "@/lib/store";
 import { useCardSelection } from "@/lib/useCardSelection";
+import { useDockHeight } from "@/lib/useDockHeight";
 import { cn } from "@/lib/utils";
 import { newestWrite, writeFailure } from "@/lib/writes";
 import {
@@ -77,6 +74,7 @@ import { DeckNameField } from "./DeckNameField";
 import { DeckSearchPanel, MIN_PANEL_WIDTH_PX } from "./DeckSearchPanel";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
 import { DeckStats } from "./DeckStats";
+import { DeckTokensPanel } from "./DeckTokensPanel";
 import { useDeckUndo } from "./useDeckUndo";
 import { deckCardSlot, dropWrite, type DeckWrite, type DragPayload } from "./dnd";
 import { ExportDialog } from "@/features/transfer/export/ExportDialog";
@@ -94,15 +92,24 @@ import { newDeckDestination } from "@/features/transfer/import/destinations/newD
 import { NewDeckPreview } from "@/features/transfer/import/destinations/NewDeckPreview";
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import { RenameField } from "./metaRows";
-import { AddTagDialog } from "./AddTagDialog";
+import { AddLabelDialog } from "./AddLabelDialog";
 import { PriceStrip } from "./PriceStrip";
+import { pullKey } from "./pullPlan";
+import { PullFromCollectionDialog } from "./PullFromCollectionDialog";
+// **`quickCollection` and not `quickAdd`**, which is a Windows filename hazard rather than a
+// naming preference: `QuickAdd.tsx` — the toolbar's quick-add field — already sits in this
+// directory, and a case-insensitive filesystem resolves `./quickAdd` to whichever of the two the
+// resolver reaches first. `tsc` refuses the whole program with TS1149 and a suite that got past
+// it went red with `quickAddShort is not a function`, having imported the component.
+import { chooseWish, choosePull } from "./quickCollection";
 import { QuickAdd } from "./QuickAdd";
+import { QuickUnwishDialog } from "./QuickUnwishDialog";
 import { QuickCategoryDialog, QuickZones } from "./QuickZones";
 import { asSortBy, DEFAULT_SORT_BY, SORT_OPTIONS, type SortBy } from "./sorting";
-import { TagsDialog } from "./TagsDialog";
+import { LabelsDialog } from "./LabelsDialog";
 import { TheoryDiffDialog } from "./TheoryDiffDialog";
 import { theoryMatchPlan } from "./theoryMatch";
-import { useDeck } from "./useDeck";
+import { pullPlanQuery, quickAddWishesQuery, useDeck, usePullPlan } from "./useDeck";
 import { useDeckMeta } from "./useDeckMeta";
 import { useFormatSpecs } from "./useFormatSpecs";
 import { useRecentAdds } from "./useRecentAdds";
@@ -127,8 +134,22 @@ const GROUP_BY_PICKER = sortOptions(GROUP_BY_OPTIONS, (o) => o.label);
 const SORT_BY_PICKER = sortOptions(SORT_OPTIONS, (o) => o.label);
 
 /**
+ * The three chords this editor binds, looked up **once at module scope** — `AppShell`'s
+ * arrangement for the two it binds, and it is the right one here for the same reason.
+ *
+ * `shortcut()` throws on an id the catalogue does not carry, which is the whole reason it is a
+ * function rather than an index; resolving at import makes that throw arrive before a render and
+ * before a press. Resolved inside a `keydown` handler instead, a renamed id throws on a `window`
+ * listener where no error boundary is standing — the editor keeps drawing, and the only symptom
+ * is a key that quietly stopped working.
+ */
+const UNDO = shortcut("deckEditor", "undo");
+const REDO = shortcut("deckEditor", "redo");
+const REMOVE = shortcut("deckEditor", "remove");
+
+/**
  * A header/toolbar press that is not a chip — since 2026-08-26 exactly the undo/redo pair and
- * the header's Categories/Tags/History/Deck settings row.
+ * the header's Categories/Labels/History/Deck settings row.
  *
  * **The toolbar's three pickers — View, Group by, Sort — drew from this same string until
  * then.** They moved onto `components/Dropdown`, whose trigger is a `<button>` rather than a
@@ -219,23 +240,6 @@ const DECK_FLOOR = 192;
 const DESK_GAP = 16;
 
 /**
- * Which of the desk's two columns the card pane is drawn over — `"search"` or `"deck"`.
- *
- * **An attribute because the decision is invisible to everything else.** What the two positions
- * differ by is a `right` offset and a width, and both are numbers this component measures — so
- * jsdom, which has no layout engine, reads `0` for each of them and cannot tell the two apart at
- * all. The attribute is the *choice* rather than its geometry, which is the half a suite can
- * honestly hold; the geometry is a live-window question, and this is also the handle a CDP pass
- * uses to ask it (`[data-pane-over]`, then the rects).
- *
- * `DECK_GROUP_ATTR`'s argument, one surface over: an attribute is a question the DOM can answer
- * from anywhere, and the alternative here — walking up from the pane's own `complementary` role
- * to whatever box happens to be its parent — is a test that breaks when a wrapper is added and
- * says nothing about what the wrapper is for.
- */
-export const PANE_OVER_ATTR = "data-pane-over";
-
-/**
  * The shortest the desk row may be squeezed to — `DECK_FLOOR`'s rule turned on its side, because
  * the stats band is the first thing this editor has ever stacked *below* the deck rather than
  * beside it.
@@ -301,8 +305,15 @@ export const PANE_OVER_ATTR = "data-pane-over";
  */
 const DECK_HEIGHT_FLOOR = "min-h-96";
 
-/** Stable identity for "no tag filter", so the memo below does not re-run on every render. */
-const NO_TAGS: readonly number[] = [];
+/** Stable identity for "no label filter", so the memo below does not re-run on every
+ *  render. */
+const NO_LABELS: readonly number[] = [];
+
+/** Stable identity for the wishes a *closed* {@link QuickUnwishDialog} is handed. The shell
+ *  mounts no body while it is shut, so nothing reads this — a fresh `[]` on every render would
+ *  still be a new prop on every render of the deck, which is the kind of churn `NO_ROWS` in
+ *  `PullFromCollectionDialog` exists to avoid. */
+const NO_WISHES: readonly DeckQuickAddWish[] = [];
 
 /**
  * Which deck the editor has restored the remembered controls for, and under which readings of
@@ -535,10 +546,11 @@ const VIEW_OPTIONS: readonly DropdownOption[] = VIEW_PICKER.map(({ id, label }) 
  * `check` is the format check anchored to its chip; **every other arm is a full-window overlay**
  * on `LAYER.overlay` — one rung between them, rather than one each, because of that same "at most
  * one is up": they
- * never need ordering against each other (see `layers.ts`). Categories and tags used to be one of
- * them: a single right-hand drawer with two sections in it. Splitting it into two dialogs adds a
- * member here and takes nothing away from the argument — one slot is one slot however many things
- * can occupy it, which is also why the export dialog joined without an argument being reopened.
+ * never need ordering against each other (see `layers.ts`). Categories and labels used to be one
+ * of them: a single right-hand drawer with two sections in it. Splitting it into two dialogs adds
+ * a member here and takes nothing away from the argument — one slot is one slot however many
+ * things can occupy it, which is also why the export dialog joined without an argument being
+ * reopened.
  *
  * **Two members carry a field, and both are the same idea**: which pile the layer is about. A
  * union arm is where such a thing belongs — a second `useState` beside this one could hold a
@@ -603,7 +615,52 @@ type Layer =
    */
   | { kind: "bracket" }
   | { kind: "categories" }
-  | { kind: "tags" }
+  | { kind: "labels" }
+  /**
+   * The pull: what this deck is short of that the reader **already owns**, and which copies to
+   * move into its group.
+   *
+   * **A full-window overlay like its neighbours, by the rule that decides every one of them**
+   * (`src/CLAUDE.md`): a surface the reader *consults* is a centred modal, and only a surface
+   * they work *out of* while editing beside it earns a place in the layout. This is consulted —
+   * a plan is read, a few numbers are set, and it is shut — and it is consulted at the widest
+   * grain anything in this editor asks about: every hole in the list, and every unallocated copy
+   * on the reader's desk that could fill one. A docked column of that would take its width from
+   * the deck for the whole session; the desk row measures 602px at the app's own 1280×800 with
+   * the card pane docked, and the deck's own floor is what runs out first.
+   *
+   * **The card, or absent for the whole deck — and the payload arrived on 2026-09-03.** It used
+   * to carry nothing, on the argument that `deck_pull_plan` takes the deck and no variant (it
+   * reads the live list, because a plan holds no cards to be short of), so there was nothing for
+   * an arm to hold that the editor did not already know. That is still true of the *read*: a
+   * deck card's `Collection ▸ Pull …` (issue #350) fetches the same plan under the same key and
+   * this arm narrows only what the dialog is handed — the rows whose {@link pullKey} matches
+   * this card, and that card's name for the subtitle.
+   *
+   * **So the payload is what the dialog draws, never what is read**, which is why the query's
+   * gate below asks `layer?.kind === "pull"` and not {@link layerMatches}: both shapes want the
+   * same plan, and a gate that distinguished them would spend a second `deck_pull_plan` on the
+   * card entrance for an answer already in the cache.
+   *
+   * `null` for the opener on the theory tab is unchanged and is still not a disabled button:
+   * there is no question to ask there, rather than a question with an empty answer.
+   */
+  | { kind: "pull"; card?: DeckCard }
+  /**
+   * **Which wish these copies come off** — a deck card's `Collection ▸ Quick add N and remove
+   * from wishlist`, on the one press where the answer is ambiguous (issue #350).
+   *
+   * **Every field is frozen on purpose, which is `quickCategory`'s exception rather than
+   * `export`'s rule.** The arms that carry an id name a row the editor re-reads the deck into;
+   * this one names a **press that is over**: the reader right-clicked one row, the menu quoted
+   * one number off it, and `deck_quick_add_wishes` has already answered for that printing and
+   * finish. Looking any of it back up would be looking up the answer the reader was shown.
+   *
+   * `wishes` is `many` and only `many` — {@link chooseWish} writes outright for none and for
+   * one, so this layer is opened for two or more and the dialog never asks a question with one
+   * answer in it.
+   */
+  | { kind: "quickUnwish"; card: DeckCard; copies: number; wishes: readonly DeckQuickAddWish[] }
   | { kind: "history" }
   | { kind: "theoryDiff" }
   | { kind: "settings" }
@@ -612,7 +669,7 @@ type Layer =
   | { kind: "import"; forcedCategoryName?: string }
   /**
    * What is being exported. **The id and not the cards**: the deck is re-read after every write
-   * and this editor already holds the answer, so the dialog is fed from the live list rather
+   * and this editor already holds the answer, so the dialog is fed from the actual list rather
    * than from an array frozen at the moment a control was pressed.
    *
    * **`null` is the whole deck**, which is the header's `Export deck`; a number is one pile,
@@ -656,23 +713,23 @@ type Layer =
    */
   | { kind: "quickCategory"; payload: DragPayload }
   /**
-   * A card's **Tag card ▸ New tag…** was pressed, and the label it will wear has no name and no
-   * colour yet.
+   * A card's **Label card ▸ New label…** was pressed, and the label it will wear has no name
+   * and no colour yet.
    *
    * **The slot rather than a card id, and frozen on purpose** — `quickCategory`'s exception
    * rather than `export`'s rule. The three arms above name a row the editor re-reads the deck
    * into, so an id keeps them current; this one names a **press that is over**, on one card in
-   * one pile in one finish, and the write it ends in (`deck_card_set_tag`) is addressed by
+   * one pile in one finish, and the write it ends in (`deck_card_set_label`) is addressed by
    * exactly that triple. Looking it back up would be looking up the answer the reader already
    * gave. The name rides along because the dialog's header says which card it is about, and a
    * card removed under the open dialog must not turn that sentence into a blank.
    */
-  | { kind: "addTag"; slot: AddTagSlot }
+  | { kind: "addLabel"; slot: AddLabelSlot }
   | null;
 
-/** The card a label is being put on: the grain `deck_card_set_tag` is addressed at, plus the
- *  name {@link AddTagDialog} says out loud. */
-interface AddTagSlot {
+/** The card a label is being put on: the grain `deck_card_set_label` is addressed at, plus the
+ *  name {@link AddLabelDialog} says out loud. */
+interface AddLabelSlot {
   cardId: string;
   categoryId: number;
   finish: DeckFinish;
@@ -682,11 +739,12 @@ interface AddTagSlot {
 /**
  * Is the open layer the one this control opens?
  *
- * `export` is the only kind **two** controls reach — the header's `Export deck` and a category
- * heading's `Export cards…` — so it is the only one where the kind alone is not the answer, and a
- * header button that read `aria-expanded` off the kind would claim to be open while a pile's
- * dialog was up. Every other arm has one opener, which is why this is a widening of
- * `layer?.kind === kind` rather than a second rule beside it.
+ * **Two kinds are reached by two controls each**, and for both the kind alone is not the answer:
+ * `export` (the header's `Export deck` and a category heading's `Export cards…`) and, since
+ * 2026-09-03, `pull` (the stats band's `Pull from collection` and a deck card's
+ * `Collection ▸ Pull …`). A control that read `aria-expanded` off the kind would claim to be
+ * open while the *other* one's dialog was up. Every other arm has one opener, which is why this
+ * is a widening of `layer?.kind === kind` rather than a second rule beside it.
  *
  * Pure and exported for its test, like the two functions above it: the case it exists for is
  * unreachable by a press — an open export paints a scrim over both of its openers — so the only
@@ -696,6 +754,19 @@ export function layerMatches(open: Layer, target: NonNullable<Layer>): boolean {
   if (open === null || open.kind !== target.kind) return false;
   if (open.kind === "export" && target.kind === "export") {
     return open.categoryId === target.categoryId;
+  }
+  if (open.kind === "pull" && target.kind === "pull") {
+    // **Absent and present are different controls**, which is the whole of what this arm asks:
+    // the stats band opens `{ kind: "pull" }` over the deck and a card's menu opens one carrying
+    // that card, so a bare kind test would have the band's button claim to be open while a
+    // per-card dialog was up. Two *cards* can never be open at once — there is one slot — so the
+    // comparison below is a courtesy rather than a case anything reaches, and it is by
+    // {@link pullKey} rather than by object identity because a `DeckCard` is a fresh object on
+    // every `deck_get`.
+    if (open.card === undefined || target.card === undefined) {
+      return open.card === undefined && target.card === undefined;
+    }
+    return pullKey(open.card) === pullKey(target.card);
   }
   return true;
 }
@@ -714,8 +785,9 @@ export function layerMatches(open: Layer, target: NonNullable<Layer>): boolean {
  * for the mirror of that reason — the category menu's row is already called `Export cards…`, so
  * this one names its scope instead.
  *
- * **Two buttons where there was one called "Categories & tags".** The piles and the labels were
- * two sections of one drawer, so reaching the second cost a press and a scroll; they are two
+ * **Two buttons where there was one called "Categories & tags"** — the title it carried while
+ * a label was called a tag. The piles and the labels were two sections of one drawer, so
+ * reaching the second cost a press and a scroll; they are two
  * dialogs now, each one press away and each sized for what it draws. The ampersand went with the
  * split — a control named for two things is a control that can only ever be right about one of
  * them.
@@ -760,7 +832,7 @@ const TRANSFER: readonly HeaderAction[] = [
 
 const ACTIONS: readonly HeaderAction[] = [
   { layer: { kind: "categories" }, label: "Categories", Icon: Columns3Cog },
-  { layer: { kind: "tags" }, label: "Tags", Icon: Tag },
+  { layer: { kind: "labels" }, label: "Labels", Icon: Tag },
   { layer: { kind: "history" }, label: "History", Icon: History },
   { layer: { kind: "settings" }, label: "Deck settings", Icon: Wrench },
 ];
@@ -828,9 +900,9 @@ const REFILE_NOTE_MS = 6000;
  *
  * **Three of those decisions outlive the editor**: the variant, the grouping and the sort are
  * columns on the deck row, restored on the way in and written on every press
- * (`deck.rememberView`). The view, the filter, the tag chips and the stats block are not — they
- * are how the reader is looking *now*, and a deck that reopened filtered would be a deck missing
- * cards until somebody noticed the field.
+ * (`deck.rememberView`). The view, the filter, the label chips and the stats block are not —
+ * they are how the reader is looking *now*, and a deck that reopened filtered would be a deck
+ * missing cards until somebody noticed the field.
  */
 export function DeckEditor({ deckId }: { deckId: number }) {
   // Live until the deck row says otherwise, which it does on the first read — a deck nobody has
@@ -887,13 +959,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    */
   const setCardSelection = useAppStore((s) => s.setCardSelection);
   /**
-   * Which of the desk's two columns the card pane is drawn **over** — see the pane host at the
-   * end of the desk row, and {@link useAppStore}'s `paneFromDeckSearch` for why this is a field
-   * of its own rather than `paneDeckContext !== null` read backwards.
-   */
-  const paneFromDeckSearch = useAppStore((s) => s.paneFromDeckSearch);
-
-  /**
    * Close the deck — the ribbon's `Back to decks` button and Escape's floor, as one callback.
    *
    * **Two entrances to one act, so there is one function rather than two spellings of it.** The
@@ -905,9 +970,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   /**
    * **Escape's floor on this screen: the deck closes.**
    *
-   * `"navigation"` is the bottom rung, so this fires only on a press nothing nearer wanted — the
-   * card pane docked beside the desk is `"outer"` and outranks it, every dialog and popup here is
-   * `"inner"` and outranks both, and a filter box with text in it spends the press before any of
+   * `"navigation"` is the bottom rung, so this fires only on a press nothing nearer wanted —
+   * every dialog and popup here is `"inner"` and outranks it (the card is one of them since
+   * 2026-09-03, when the docked pane that held the `"outer"` rung beside this desk was deleted),
+   * and a filter box with text in it spends the press before any of
    * them (see {@link clearFieldOnEscape} on the toolbar's field below). One press closes one
    * thing, all the way down.
    *
@@ -951,8 +1017,24 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const [groupBy, setGroupBy] = useState<GroupBy>(DEFAULT_GROUP_BY);
   const [sortBy, setSortBy] = useState<SortBy>(DEFAULT_SORT_BY);
   const [filter, setFilter] = useState("");
-  const [tagIds, setTagIds] = useState<readonly number[]>(NO_TAGS);
+  const [labelIds, setLabelIds] = useState<readonly number[]>(NO_LABELS);
   const [layer, setLayer] = useState<Layer>(null);
+  /**
+   * A **read** the reader pressed for and that refused, as a sentence — the wishes behind
+   * `Quick add and remove from wishlist`, or the plan behind a card's `Pull …`.
+   *
+   * **In the write banner rather than in a second sentence of its own**, which is the one thing
+   * about this state worth arguing. Both reads are made *inside* a press: the reader chose a
+   * menu row, the row promised an act, and the act cannot happen — so what has failed is the
+   * press, not a background query, and the press's family is the banner. It is also the only
+   * place either could be said at all: the menu closes before its handler runs, and neither
+   * read has a surface of its own until it has answered.
+   *
+   * Cleared on the next press of either row rather than on a timer, so a sentence stays up for
+   * as long as it is the last thing that happened — {@link bannerFailure}'s own rule, since a
+   * refused write's sentence stays until another write replaces it.
+   */
+  const [pressReadFailure, setPressReadFailure] = useState<string | null>(null);
   /**
    * The pile whose heading is showing its rename field, or `null`.
    *
@@ -1016,12 +1098,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   /** The box the docked search panel is pinned inside — see {@link DeckEditor}'s dock effect. */
   const dockRef = useRef<HTMLDivElement>(null);
   /**
-   * The box the card pane is drawn in — **placed and sized by the same effect the dock is**,
-   * because it stands beside the dock and the two must never be measured a frame apart. See the
-   * pane host, the first thing this column draws.
-   */
-  const paneFrameRef = useRef<HTMLDivElement>(null);
-  /**
    * How wide the desk row is — **width only, and the height that used to sit beside it is gone**
    * (2026-08-14).
    *
@@ -1031,20 +1107,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * instead and this measurement is about the axis the desk really does have to share.
    */
   const [deskWidth, setDeskWidth] = useState(0);
-  /**
-   * How wide the docked search panel is drawn, in px — **read here only to place the card pane
-   * beside it**, never to decide anything about the panel itself.
-   *
-   * The width is the panel's own state (the reader drags it) and this component does not get to
-   * know it any other way, so it is measured rather than passed: an editor that was *told* the
-   * panel's width would be a second copy of a number the panel clamps twice, and the two would
-   * disagree the first time a drag was refused. A measurement cannot disagree with what is drawn.
-   *
-   * `0` is jsdom, which has no layout engine, and is read below as "not measured" rather than as
-   * a panel of no width — the pane then falls back on its own 384 and is laid out by nothing,
-   * which is the honest answer on a surface with no layout at all.
-   */
-  const [dockWidth, setDockWidth] = useState(0);
   /**
    * How wide the window is, for the half-of-it cap on the docked panel's drag.
    *
@@ -1082,15 +1144,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
 
   /**
    * The deck's piles and labels **as things in themselves** — what the category menu writes
-   * through, and where the menu's "New tag…" now makes its label.
+   * through, and where the menu's "New label…" now makes its label.
    *
    * **Four local-SQLite reads on every deck opened, and they are paid deliberately.** The
-   * categories (a *priced* per-category aggregate), the tags of the list on screen, the tags of
-   * the **other** list, and the global suggestion palette — counted off `useDeckMeta.ts`'s four
-   * `useQuery` calls, every one of them `enabled` on nothing but the deck id. Two things make
-   * that the right trade *here* and made it the wrong one inside a lazy menu body, which is
-   * where this hook was refused a round earlier: a reader **opening a deck** already pays a
-   * `deck_get` of the whole deck, its cards, its categories and its tags, so four more local
+   * categories (a *priced* per-category aggregate), the labels of the list on screen, the labels
+   * of the **other** list, and the global suggestion palette — counted off `useDeckMeta.ts`'s four
+   * `useQuery` calls, every one of them `enabled` on nothing but the deck id. Two things make that
+   * the right trade *here* and made it the wrong one inside a lazy menu body, which is where this
+   * hook was refused a round earlier: a reader **opening a deck** already pays a
+   * `deck_get` of the whole deck, its cards, its categories and its labels, so four more local
    * reads sit inside an act that is already a read; and what they buy is not one write but every
    * write the category menu makes — rename, the switch, delete — each from its single
    * definition. The lazy body paid the same four to draw a text field the reader might never
@@ -1102,10 +1164,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const meta = useDeckMeta(deckId, variant);
 
   /**
-   * The menu's "New tag…" — a label made and put on the card, as one act.
+   * The menu's "New label…" — a label made and put on the card, as one act.
    *
-   * **`useDeckMeta.createTag`, the single definition**, now that the hook is mounted above for
-   * the category menu. It replaced a hand-rolled `useMutation` over `ipc.deckTagCreate` whose
+   * **`useDeckMeta.createLabel`, the single definition**, now that the hook is mounted above for
+   * the category menu. It replaced a hand-rolled `useMutation` over `ipc.deckLabelCreate` whose
    * whole justification was avoiding this mount; that justification stopped being true, so it
    * was deleted rather than corrected.
    *
@@ -1119,20 +1181,20 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    *
    * **`mutateAsync` rather than a per-call `onSuccess`, and the difference is a second create.**
    * Those callbacks live on the *observer*, and starting a second mutation on one observer
-   * removes the first's — so two "New tag…" presses inside one round trip would create both
+   * removes the first's — so two "New label…" presses inside one round trip would create both
    * labels and attach only the second's. The promise belongs to the call rather than to the
    * observer, so each attach survives the next press. Narrow, but it costs a line and it is
    * strictly the stronger shape; the observer's own state still drives the banner, which is why
    * the rejection is swallowed here and not reported here.
    *
    * **The colour is the reader's and arrives with the name**, which is what changed on
-   * 2026-08-20. It used to be `DEFAULT_TAG_COLOR`, chosen here and never asked for, because the
+   * 2026-08-20. It used to be `DEFAULT_LABEL_COLOR`, chosen here and never asked for, because the
    * control was a text field inside a context menu with no room for a picker — so every label a
-   * reader made this way was gold and had to be visited in the Tags dialog to be told from the
-   * last one. `AddTagDialog` asks for both, and this chain is otherwise untouched.
+   * reader made this way was gold and had to be visited in the Labels dialog to be told from the
+   * last one. `AddLabelDialog` asks for both, and this chain is otherwise untouched.
    */
-  const startTagCreate = meta.createTag.mutateAsync;
-  const setTagOnSlot = deck.setTag.mutate;
+  const startLabelCreate = meta.createLabel.mutateAsync;
+  const setLabelOnSlot = deck.setLabel.mutate;
   // The category menu's two direct writes, taken as `mutate` for the reason every other write
   // here is: TanStack hands back a fresh result object each render, and these end up in
   // `useCallback` dependency lists that the four views' group elements are built from.
@@ -1165,57 +1227,58 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const resetCategoryClear = deck.clearCategory.reset;
   const clearCategory = deck.clearCategory.mutate;
   const clearPending = deck.clearCategory.isPending;
-  const createTagFor = useCallback(
-    (slot: AddTagSlot, name: string, color: string) => {
-      void startTagCreate({ name, color })
-        .then((tag) =>
-          setTagOnSlot({
+  const createLabelFor = useCallback(
+    (slot: AddLabelSlot, name: string, color: string) => {
+      void startLabelCreate({ name, color })
+        .then((label) =>
+          setLabelOnSlot({
             cardId: slot.cardId,
             categoryId: slot.categoryId,
             finish: slot.finish,
-            tagId: tag.id,
+            labelId: label.id,
           }),
         )
         // The refusal is already on the observer, and the observer is in the banner family above.
         // Swallowed here so a refused create is a sentence rather than an unhandled rejection.
         .catch(() => {});
     },
-    [startTagCreate, setTagOnSlot],
+    [startLabelCreate, setLabelOnSlot],
   );
 
-  /** Putting an **existing** tag on the slot — `createTagFor` without the create. One write
-   *  rather than two, and the same `deck_card_set_tag` grain, which is the whole reason the
+  /** Putting an **existing** label on the slot — `createLabelFor` without the create. One write
+   *  rather than two, and the same `deck_card_set_label` grain, which is the whole reason the
    *  slot is frozen rather than looked back up. */
-  const setCardTagOnSlot = useCallback(
-    (slot: AddTagSlot, tagId: number) => {
-      setTagOnSlot({
+  const setCardLabelOnSlot = useCallback(
+    (slot: AddLabelSlot, labelId: number) => {
+      setLabelOnSlot({
         cardId: slot.cardId,
         categoryId: slot.categoryId,
         finish: slot.finish,
-        tagId,
+        labelId,
       });
     },
-    [setTagOnSlot],
+    [setLabelOnSlot],
   );
 
   /**
-   * What "More tags…" offers: every tag the reader owns, minus the ones the context menu has
-   * already listed.
+   * What "More labels…" offers: every label the reader owns, minus the ones the context menu
+   * has already listed.
    *
-   * **The subtraction is here because this is the only place holding both halves.** `deck.tags`
-   * is what this deck and variant wears, carried in with `deck_get`; `meta.allTags` is the
+   * **The subtraction is here because this is the only place holding both halves.**
+   * `deck.labels` is what this deck and variant wears, carried in with `deck_get`;
+   * `meta.allLabels` is the
    * app-wide list, off a command that takes no deck at all. Neither knows about the other, and
    * a dialog handed both would be a dialog re-deriving the menu's own rule.
    *
    * The app-wide list's order survives the filter — most-used first — because `filter` keeps
    * it, which is the ordering the issue asks for and the reason nothing sorts here.
    */
-  const wornHere = deck.tags;
-  const allTags = meta.allTags;
-  const addTagChoices = useMemo(() => {
+  const wornHere = deck.labels;
+  const allLabels = meta.allLabels;
+  const addLabelChoices = useMemo(() => {
     const worn = new Set(wornHere.map((t) => t.id));
-    return allTags.filter((t) => !worn.has(t.id));
-  }, [allTags, wornHere]);
+    return allLabels.filter((t) => !worn.has(t.id));
+  }, [allLabels, wornHere]);
 
   // Every write the editor's **own banner** speaks for — the array is the list, deliberately not
   // a number in this sentence, because it has been recounted twice in one day. The *latest* of
@@ -1228,8 +1291,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // panel, beside the button that was pressed, and two banners for one refusal would be worse
   // than one in the wrong place.
   //
-  // **The two right-click menus of 2026-08-14 are what the tail of this list is.** `setTag` sat
-  // outside the family for as long as nothing in the app could reach it, and the four
+  // **The two right-click menus of 2026-08-14 are what the tail of this list is.** `setLabel`
+  // sat outside the family for as long as nothing in the app could reach it, and the four
   // `useDeckMeta` writes below it had no control in this view at all — they were the Categories
   // dialog's, which draws its own sentence for its own observer. A write a reader can now make
   // from a card's menu or a pile's heading is a write whose refusal has to be said somewhere,
@@ -1253,11 +1316,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     deck.moveCard,
     deck.refileCard,
     deck.update,
-    deck.setTag,
+    deck.setLabel,
     // The finish write, whose three refusals — already that finish, a printing not sold in it,
     // a row that is not in the pile — all arrive after the menu that made the press has closed.
     deck.setCardFinish,
-    meta.createTag,
+    meta.createLabel,
     meta.renameCategory,
     meta.setCategoryActive,
     // A pile dragged past its neighbours on the desk, which is the fifth `useDeckMeta` write a
@@ -1266,13 +1329,26 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     // nothing else on screen says why it moved.
     meta.reorderCategories,
     meta.deleteCategory,
+    // **The quick add, and it is in this family on purpose even though it writes no
+    // `deck_cards` row** (2026-09-03, issue #350). Every argument the family is built on holds:
+    // it goes through `touch_deck`, so it answers the same `deck::GONE` and must not leave a
+    // dead deck painted; it is pressed from a card's right-click, which has closed by the time
+    // an answer arrives, so its refusal has nowhere else to be said; and its two other refusals
+    // (`NOT_IN_DECK`, and a wish that moved under the reader) are exactly the kind this banner
+    // exists for. What it records is the copies a deck row is short of, so "a write to what is
+    // in the deck" is true of it in every sense but the table it touches.
+    deck.quickAddToCollection,
   ] as const;
   // **The undo hook's own refusal joins this banner rather than drawing a second one.** Its
   // two mutations are writes to what is in the deck like any other, and its commonest refusal
   // — "the deck has been edited since" — is exactly the kind this line exists to say. It is not
   // in `writes` because it is not a `useMutation` the array's type accepts: `useDeckUndo`
   // reports through a string of its own so that it can also drop a redo that can never work.
-  const bannerFailure = writeFailure(writes) ?? undo.error;
+  // **And a read the reader pressed for**, which is {@link pressReadFailure}'s own argument:
+  // the two menu rows that fetch before they write have no surface to report into, and their
+  // failure is the failure of a press rather than of a background query. It is last in the
+  // chain because a refused *write* is the more specific answer whenever both are standing.
+  const bannerFailure = writeFailure(writes) ?? undo.error ?? pressReadFailure;
 
   /**
    * What to say when a re-file moved nothing — and **nothing at all when it moved something**,
@@ -1500,7 +1576,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
 
   // A deck deleted under an open layer takes its trigger with it — but not the state that says
   // one is open, and an `"inner"` layer nothing draws is a layer that eats the first Escape of
-  // whatever the reader does next. Reset during render (`CardDetailPane`'s face, `Cover`'s art).
+  // whatever the reader does next. Reset during render (`CardDetailModal`'s face, `Cover`'s art).
   if (gone && layer !== null) setLayer(null);
 
   // Put the reader back where they left this deck: the tab, the grouping and the sort the row
@@ -1635,10 +1711,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   }, [faceKey]);
 
   // How much room the two things on the desk have between them. A window resize changes it, and
-  // so does the card pane opening and closing beside the whole view — neither of which this
-  // component would otherwise hear about, which is why it is an observer and not a prop
-  // (`CardGrid`'s arrangement). Re-run when the deck lands, because the element being measured
-  // does not exist until then.
+  // this component would not otherwise hear about that, which is why it is an observer and not a
+  // prop (`CardGrid`'s arrangement). Re-run when the deck lands, because the element being
+  // measured does not exist until then.
+  //
+  // **It observed the dock as well until 2026-09-03, and that half went with the card pane.**
+  // The dock's own width was measured only to place a pane beside it; the card is a centred
+  // modal now, so the panel's width is nobody's business but the panel's and a drag on its edge
+  // moves nothing this callback answers. The desk row is what a window resize changes, and it is
+  // the one box left to watch.
   const hasRow = row !== null;
   //
   // The window's own width is read in the same callback rather than through a second listener:
@@ -1647,23 +1728,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // frame apart.
   useEffect(() => {
     const el = deskRef.current;
-    const dock = dockRef.current;
-    if (!el || !dock) return;
+    if (!el) return;
     const measure = () => {
       setViewport(document.documentElement.clientWidth);
       setDeskWidth(el.clientWidth);
-      // `offsetWidth` rather than a `contentRect`: what the pane has to be placed beside is the
-      // panel's **border box**, hairline and all, and the rail state has a border of its own.
-      setDockWidth(dock.offsetWidth);
     };
-    // Both boxes, and neither is redundant. The desk resizes when the window does; the dock
-    // resizes when the reader drags the panel's edge or collapses it, which moves nothing else
-    // on this row. `entry` is deliberately not read any more — with two observed elements the
-    // callback fires for either, so the widths are taken off the elements themselves rather than
-    // off whichever one happened to trigger this call.
+    // `entry` is deliberately not read: the width is taken off the element itself, so this stays
+    // one callback whether it is called by the observer or by the line below it.
     const observer = new ResizeObserver(measure);
     observer.observe(el);
-    observer.observe(dock);
     measure();
     return () => observer.disconnect();
   }, [hasRow]);
@@ -1683,6 +1756,26 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     viewport > 0 ? Math.floor(viewport / 2) : Number.POSITIVE_INFINITY,
     deskWidth > 0 ? deskWidth - DESK_GAP - DECK_FLOOR : Number.POSITIVE_INFINITY,
   );
+
+  /**
+   * Which way the reader last left the search column — **read here and handed down** since
+   * 2026-09-07, where the panel used to ask for itself.
+   *
+   * The hoist is what lets one `CardSearchPanel` serve three surfaces that each remember their own
+   * answer: the shell takes a boolean and a setter and knows nothing about where either came
+   * from, and this editor is the component that already hands the panel its mutation, its
+   * categories and its two measurements. `DeckSearchPanel` keeps a fallback for a panel mounted on
+   * its own — a story, or `DeckSearchPanel.test.tsx` — and the prop is what overrides it here.
+   *
+   * **`"deck"` is the section**, one entry of the `app_meta.search_open` map the collection's and
+   * the wishlist's columns share. It is the word `searchopen.rs`'s legacy bridge answers for, and
+   * the one section name that crate spells at all.
+   *
+   * **The press is what is stored, never {@link roomForPanel}.** A railing is a measurement about
+   * a narrow window and not a thing the reader asked for, so it reaches the drawn state and
+   * nothing else.
+   */
+  const { open: panelOpen, setOpen: setPanelOpen } = useSearchOpen("deck");
 
   /**
    * Whether the panel may draw itself open, or has to fall back to its rail.
@@ -1713,22 +1806,28 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * arithmetic was right and the question was wrong — there is no room for the two of them
    * **beside each other**, which is not the same as no room for the search.
    *
-   * **The placement is issue #183's, reused.** The card pane already draws over one of this
-   * row's two columns rather than taking width from either; this is that arrangement at the one
-   * width where the deck and the panel cannot both be on screen. The panel positions itself
-   * inside its own dock, which is `sticky` and therefore already the box it needs — so what it
-   * is missing, and all it is missing, is this number.
+   * **The placement is issue #183's, reused.** The card pane used to draw over one of this row's
+   * two columns rather than taking width from either; this is that arrangement at the one width
+   * where the deck and the panel cannot both be on screen. The panel positions itself inside its
+   * own dock, which is `sticky` and therefore already the box it needs — so what it is missing,
+   * and all it is missing, is this number.
    *
-   * **Never while a card is open, and that is a paint-order fact rather than a preference.** The
-   * pane and this overlay would both be covering the deck, and the pane is drawn from a `sticky`
-   * host *earlier* in this scroller at the same `LAYER.popup` — equal z-indexes resolve by
-   * document order, so an overlay raised enough to beat the deck's own `LAYER.raised` also beats
-   * the pane, and a tile pressed in the search would open a card behind the search. One surface
-   * at a time is the honest answer at 390px anyway, and it is the phone's own idiom: the list
-   * steps aside for the thing you tapped and is there again when you come back — `open` is
-   * untouched and the body is hidden rather than unmounted, exactly as a railing already does.
-   * The refusal the reader then sees on the rail is `NO_ROOM`, whose first remedy is *close the
-   * card details*, which is now literally the thing to do.
+   * **Never while a card is open, and the argument for that changed under it on 2026-09-03.** It
+   * was paint order: the pane and this overlay both covered the deck, the pane was drawn from a
+   * `sticky` host *earlier* in this scroller at the same `LAYER.popup`, and equal z-indexes
+   * resolve by document order — so an overlay raised enough to beat the deck's own `LAYER.raised`
+   * also beat the pane, and a tile pressed in the search opened a card **behind** the search.
+   * There is no pane now; the card is a centred modal at `LAYER.overlay` over a scrim, so it
+   * covers this overlay whatever this line says and nothing can paint in the wrong order.
+   *
+   * What is left is the half that was always the better half: **one surface at a time is the
+   * honest answer at 390px**, and it is the phone's own idiom — the list steps aside for the
+   * thing you tapped and is there again when you come back. `open` is untouched and the body is
+   * hidden rather than unmounted, exactly as a railing already does, so nothing the reader typed
+   * is thrown away. The refusal on the rail is `NO_ROOM`, whose first remedy is *close the card
+   * details*, which is still literally the thing to do. **Kept rather than deleted with its
+   * original reason**, and flagged here so the next reader knows it is a preference now rather
+   * than a constraint.
    */
   const panelOverWidth =
     deskWidth > 0 && !roomForPanel && selectedCardId === null ? deskWidth : undefined;
@@ -1746,73 +1845,19 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * bottom of it. Pinned instead, the search stays exactly where it was while the deck scrolls
    * past it, which is what the column is *for*.
    *
-   * `sticky top-0` is the pinning and CSS does all of it; the height is the part CSS cannot
-   * answer. `100%` of this row is the deck's height, and a viewport unit is wrong by the app
-   * chrome above the scroller — so the number is measured: the scroller's visible height, less
-   * however much of the desk row still sits below its top. Scrolled past, that term is zero and
-   * the panel is the full height of the window; at rest it is the window under the header, which
-   * is where the panel is drawn anyway. Both ends exact, and no second scrollbar in either.
+   * `sticky top-0` on the dock is the pinning and CSS does all of it; the height is the part CSS
+   * cannot answer, and {@link useDockHeight} is where the arithmetic for it lives — the
+   * scroller's visible height, less however much of the desk row still sits below its top.
    *
-   * `useLayoutEffect` rather than `useEffect`: the panel's wall is a `min-h-0 flex-1` child, so
-   * an unsized dock draws it at nothing, and after paint is one frame too late to avoid the
-   * reader seeing that. **jsdom has no layout engine and answers `0` to every one of these
-   * reads**, which is why a zero height is left unset rather than written — a `height: 0px` here
-   * would be a real collapse in the one environment that cannot see it.
-   *
-   * The rAF is coalescing, not animation: a scroll fires far more often than a frame, and the
-   * work is two `getBoundingClientRect`s. The observer covers a window resize and the card pane
-   * opening beside the editor; a scroll covers everything the reader does. The one gap is the
-   * refusal banner growing in above the desk, which moves the row's top without resizing either
-   * observed box — worth ~34px for the length of one animation, on a surface that has just
-   * refused a write.
+   * **It was forty lines here until the collection and the wishlist grew the same column**
+   * (2026-09-07), and the whole of what moving it cost is that the scroller is now *found* rather
+   * than named: this editor is an `overflow-y-auto` page of its own, while those two pages scroll
+   * in `AppShell`'s `main` several levels up. Nothing about this editor's arrangement changed —
+   * every measurement, the jsdom branch and the `requestAnimationFrame` that coalesces a scroll
+   * are the hook's doc, including the one gap it still has: a refusal banner growing in above the
+   * desk moves the row's top without resizing either observed box.
    */
-  useLayoutEffect(() => {
-    const page = editorRef.current;
-    if (!page) return;
-
-    let frame = 0;
-    const size = () => {
-      frame = 0;
-      const visible = page.clientHeight;
-      if (visible === 0) return;
-      // **Where the desk starts is what both boxes are measured from**, and it is read fresh
-      // rather than closed over: the deck may not have arrived yet, and a refused write may take
-      // it away again while the pane over it is still up.
-      const deskEl = deskRef.current;
-      const below = deskEl
-        ? deskEl.getBoundingClientRect().top - page.getBoundingClientRect().top
-        : 0;
-      const top = Math.max(0, below);
-      const height = Math.max(0, visible - top);
-      // The dock is inside the desk row and shares its left edge with the panel, so it needs
-      // only the height; the pane's frame is pinned to the top of the *page* and needs the
-      // offset as well. **One read for both**, which is the whole reason they are written here
-      // together: two measurements a frame apart would draw the search column and the card
-      // beside it at different heights on every scroll.
-      if (dockRef.current) dockRef.current.style.height = `${height}px`;
-      if (paneFrameRef.current) {
-        paneFrameRef.current.style.top = `${top}px`;
-        paneFrameRef.current.style.height = `${height}px`;
-      }
-    };
-    const schedule = () => {
-      if (frame === 0) frame = requestAnimationFrame(size);
-    };
-
-    size();
-    page.addEventListener("scroll", schedule, { passive: true });
-    const observer = new ResizeObserver(schedule);
-    observer.observe(page);
-    // The desk only when it is drawn. Everything else this effect answers for — the window
-    // resizing, the page growing — reaches it through `page`, and `hasRow` re-runs the whole
-    // effect when the deck arrives or goes, which is what re-observes this.
-    if (deskRef.current) observer.observe(deskRef.current);
-    return () => {
-      if (frame !== 0) cancelAnimationFrame(frame);
-      page.removeEventListener("scroll", schedule);
-      observer.disconnect();
-    };
-  }, [hasRow]);
+  useDockHeight(dockRef, deskRef);
 
   // A refused write re-reads the deck, and the read is what decides what happened: every write
   // goes through `touch_deck`, which answers "That deck is not there any more" when the deck
@@ -1842,8 +1887,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // coverage from a pointer *and* from the keyboard, rather than the placeholder the line above
   // it describes.
   //
-  // **`setTag` rides in through `writes`** and is live coverage for the same reason: nothing in
-  // the app could reach it until that menu, and every one of the four views can now.
+  // **`setLabel` rides in through `writes`** and is live coverage for the same reason: nothing
+  // in the app could reach it until that menu, and every one of the four views can now.
   const refetch = deck.query.refetch;
   const lastOfAny = newestWrite([
     ...writes,
@@ -1873,32 +1918,43 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   }, [succeededAt, clearRedo]);
 
   /**
-   * `Ctrl+Z`, `Ctrl+Shift+Z` and `Ctrl+Y`, on `window` for the length of this editor.
+   * Undo and redo, on `window` for the length of this editor.
+   *
+   * **The chords are the catalogue's** — {@link UNDO} and {@link REDO}, `deckEditor`'s entries in
+   * `src/lib/shortcuts.ts` — rather than comparisons written out here, so the key map cannot
+   * advertise a chord this handler does not bind. `redo` carries more than one spelling and this
+   * site does not know how many; the argument for the pair is written at that entry, where the
+   * chords are, and a spelling added there is bound with no edit here.
    *
    * **It yields inside a text field**, which is the whole of what keeps the quick-add box, the
    * deck name and the notes usable: those get the browser's own undo, which this cannot
-   * replace and must not swallow. `isTextField` is `useContextMenu`'s — the same predicate the
-   * native-context-menu carve-out already turns on, rather than a second spelling of "is the
-   * caret in something typed".
+   * replace and must not swallow. That yield stays at this call site rather than moving into
+   * the matcher, because it is a fact about *this* binding — `Ctrl+1` has no native meaning in
+   * a field, and yielding there would kill view-switching exactly where the caret usually is.
+   * `isTextField` is `useContextMenu`'s — the same predicate the native-context-menu carve-out
+   * already turns on, rather than a second spelling of "is the caret in something typed".
    *
-   * `Ctrl+Y` and `Ctrl+Shift+Z` both redo because both are what a reader's hands know: the
-   * first is Windows' and the second is everywhere else's, and this app ships on Windows to
-   * people who use both.
+   * **The match runs first and the caret test second**, which is the `Delete` handler's order one
+   * screen down and the *inverse* of `useContextMenu.ts:119`'s. Both orders are the same rule —
+   * pay for the cheap half first — read against two different expensive halves: there the item
+   * list is built on every press and `isTextField` is the cheap guard, here matching two chords
+   * is arithmetic over an event and `isTextField` is a `closest()` walk up the DOM. Tested first
+   * it walked the tree on every keystroke typed into the quick-add box, for the two presses in a
+   * session that are `Ctrl+Z`.
+   *
+   * There is no modifier pre-check left: `matchesChord`, which `src/lib/shortcuts.ts` builds
+   * {@link matchesShortcut} out of, is exact in both directions — so an unlisted modifier is
+   * already a non-match and a guard for it would be a second, looser statement of the same rule.
    */
   const runUndo = undo.runUndo;
   const runRedo = undo.runRedo;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      const run = matchesShortcut(UNDO, e) ? runUndo : matchesShortcut(REDO, e) ? runRedo : null;
+      if (run === null) return;
       if (isTextField(e.target)) return;
-      const key = e.key.toLowerCase();
-      if (key === "z" && !e.shiftKey) {
-        e.preventDefault();
-        runUndo();
-      } else if (key === "y" || (key === "z" && e.shiftKey)) {
-        e.preventDefault();
-        runRedo();
-      }
+      e.preventDefault();
+      run();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -1944,10 +2000,108 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     () => openLayer({ kind: "bracket" }, () => bracketRef.current?.focus()),
     [openLayer],
   );
+  /**
+   * **Pull from collection** — the one layer opened from the stats band at the foot of the page.
+   *
+   * **The hand-back is read off `document.activeElement`**, which is `openAddLabel`'s answer rather
+   * than the two above it, and for its reason: those two hold a ref to the control they are
+   * drawn on, and this button is `DeckStats`' own. A ref threaded down through that component
+   * would be a second `sendRef` — one prop, one `RefObject`, one more thing a strip rendered in
+   * a test has to be handed — to name an element the browser has already focused by the time
+   * this runs. A press focuses what it presses, so the caret is on the button and reading it is
+   * exact.
+   *
+   * `null` if the caret is somewhere else by then, which is `handBackRef`'s documented floor:
+   * the dialog focuses its own panel either way, and the reader who moved on owns where they are.
+   */
+  const openPull = useCallback(() => {
+    const opener = document.activeElement;
+    openLayer({ kind: "pull" }, () => {
+      if (opener instanceof HTMLElement) opener.focus();
+    });
+  }, [openLayer]);
 
   /**
-   * **Tag card ▸ New tag…** — the one layer opened from a *card's* menu rather than a pile's or
-   * the toolbar's.
+   * The plan behind that layer — **gated on the layer being up**, which is the whole of what
+   * `enabled` is here for.
+   *
+   * A `deck_pull_plan` is the widest read this editor makes: every hole in the live list, and
+   * every unallocated collection row that could fill one, joined and ordered. Nothing on the
+   * screen behind the dialog draws a word of it, so an ungated query would be that read on every
+   * deck anybody merely opened — the `Layer` union's own doc states the rule, and this is the
+   * first member with a query to spend.
+   *
+   * **The kind and not {@link layerMatches}, and this line reversed on 2026-09-03.** It used to
+   * read `layerMatches(layer, { kind: "pull" })` with a note saying that for an arm with no
+   * payload it was the same question, and that it could not be the thing that was wrong on the
+   * day the arm grew a field. The arm grew a field, and the note was half right: it is the thing
+   * that would have been wrong, and the fix is the *opposite* of what the note implied. Both
+   * shapes of the arm want this exact plan under this exact key — the per-card one narrows what
+   * the dialog is *handed*, not what is read — so a `layerMatches` here would have left the card
+   * entrance's dialog reading an idle query while the answer sat in the cache beside it.
+   *
+   * The answer survives the dialog closing — the key is the deck's, and TanStack keeps a
+   * disabled query's cache — so reopening it in the same minute redraws immediately and
+   * refetches behind the rows. Anything invalidating `["decks"]` in between, the pull included,
+   * refills it: see {@link usePullPlan} for why the key is shaped to sit under that root. It is
+   * also what {@link pullCard}'s `fetchQuery` fills, through the shared options factory, so the
+   * press that *decides* whether to open this dialog and the dialog itself are one read.
+   */
+  const pullPlan = usePullPlan(deckId, layer?.kind === "pull");
+
+  /** The one card an open pull is about, or `null` for the deck-wide press. */
+  const pulledCard = layer?.kind === "pull" ? (layer.card ?? null) : null;
+
+  /**
+   * What the pull dialog draws: the whole plan, or the rows for one card.
+   *
+   * **The narrowing is here rather than in the dialog**, which is that component's own fence —
+   * it holds no notion of a {@link pullKey} and therefore cannot come to disagree with this
+   * about which rows belong to which card. And it is derived from the **live** query rather
+   * than frozen into the layer, so a pull made from the dialog re-reads the plan and the rows
+   * under the reader's eyes are the rows a second press would write.
+   *
+   * `pullKey` is `(cardId, finish)`, which is the grain the plan is folded to — the same card
+   * short in two piles is one row of it — so a deck card's key matches at most one row and the
+   * filter is a lookup rather than a subset.
+   */
+  const pulledRows = useMemo(() => {
+    const rows = pullPlan.data;
+    if (rows === undefined) return null;
+    if (pulledCard === null) return rows;
+    const wanted = pullKey(pulledCard);
+    return rows.filter((planRow) => pullKey(planRow) === wanted);
+  }, [pullPlan.data, pulledCard]);
+
+  /** The press {@link QuickUnwishDialog} is asking about — the card, the count and the wishes,
+   *  all frozen at the press. See the arm's own doc for why none of the three is looked up. */
+  const unwish = layer?.kind === "quickUnwish" ? layer : null;
+
+  /**
+   * The refusal that dialog draws **inside its own panel** — and it is narrowed to the write the
+   * dialog itself made.
+   *
+   * One mutation serves all three `Collection ▸` rows, so `isError` alone is the *last* quick add
+   * of any kind: a refused `Quick add 4 copies` would still be standing when the reader opened
+   * this question on some other card a minute later, and the panel would greet them with a red
+   * sentence about a press they had already been told about in the banner. The mutation's own
+   * `variables` are what tell the two apart — this dialog is the only presser that sends both a
+   * `wishId` and *this* card — and reading them is a derivation rather than a `reset()`, which
+   * would take the banner's memory of that earlier refusal away with it.
+   */
+  const unwishVariables = deck.quickAddToCollection.variables;
+  const unwishFailure =
+    unwish !== null &&
+    deck.quickAddToCollection.isError &&
+    unwishVariables !== undefined &&
+    unwishVariables.wishId !== null &&
+    unwishVariables.card.cardId === unwish.card.cardId
+      ? ipcError(deck.quickAddToCollection.error)
+      : null;
+
+  /**
+   * **Label card ▸ New label…** — the one layer opened from a *card's* menu rather than a
+   * pile's or the toolbar's.
    *
    * **The hand-back is read off `document.activeElement`, and that is exact rather than a
    * guess**: `ContextMenu`'s `run` focuses the opener *before* it calls a row's `onSelect` — in
@@ -1958,12 +2112,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * Reading the caret asks the question the other callers answer from a lookup, and answers it
    * for all four views at once.
    */
-  const openAddTag = useCallback(
+  const openAddLabel = useCallback(
     (card: DeckCard) => {
       const opener = document.activeElement;
       openLayer(
         {
-          kind: "addTag",
+          kind: "addLabel",
           slot: {
             cardId: card.cardId,
             categoryId: card.categoryId,
@@ -1977,6 +2131,138 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       );
     },
     [openLayer],
+  );
+
+  /**
+   * The client the two menu reads below go through.
+   *
+   * **`fetchQuery` rather than a hook, because a right-click must fire nothing.** A `useQuery`
+   * for the wishes would run for every card the deck draws, and one for the pull plan is the
+   * widest read this editor makes — the `Layer` union's own rule applied a rung lower: nothing
+   * is asked for until the reader presses the row that needs it. It also means the answer lands
+   * in the same cache the dialogs read, so a press that *decides* and a dialog that *draws* are
+   * one round trip rather than two.
+   */
+  const queryClient = useQueryClient();
+
+  /**
+   * The write behind all three `Collection ▸` rows, and the pull's own — `mutate` rather than
+   * the mutation, for the reason the three category writes below give: TanStack hands back a
+   * fresh result object every render, so a callback closing over the whole thing has a new
+   * identity every render and every menu built from it is rebuilt.
+   */
+  const writeQuickAdd = deck.quickAddToCollection.mutate;
+  const writePull = deck.pullFromCollection.mutate;
+
+  /**
+   * **Quick add N copies** — record what this row is short of into the deck's own group, and ask
+   * nothing.
+   *
+   * No read and no dialog, which is what makes it the simplest of the three: the count arrives
+   * from the menu (it is `quickAddShort` over the row that was right-clicked, so it is exactly
+   * the `3/4` the card is wearing) and `wishId: null` says this press is not about the wishlist
+   * at all. A reader who wanted the wishlist half pressed the row below it.
+   */
+  const quickAdd = useCallback(
+    (card: DeckCard, copies: number) => {
+      setPressReadFailure(null);
+      writeQuickAdd({ card, quantity: copies, wishId: null });
+    },
+    [writeQuickAdd],
+  );
+
+  /**
+   * **Quick add N and remove from wishlist** — the same record, then take the copies off a wish
+   * that was asking for this exact printing.
+   *
+   * **A prompt only when the answer is ambiguous**, which is `chooseWish`'s whole job and
+   * deliberately not this callback's: no matching wish and one matching wish both write straight
+   * through, because a dialog with nothing to decide is a dialog that made the reader press
+   * twice. Two or more open {@link QuickUnwishDialog}, because which of two lists a purchase
+   * satisfies is a thing only the reader knows.
+   *
+   * **A failed read reaches the banner and never nothing.** This is a read the reader pressed
+   * for, inside an act they were promised, and the menu that made the press has closed — so a
+   * silent catch would be a menu row that sometimes does nothing at all. The write's own
+   * refusals are the banner's already, through `writes`; this puts the read beside them.
+   *
+   * The hand-back is read off `document.activeElement` **before** the await, which is
+   * {@link openAddLabel}'s answer and a rung more careful for the same reason: `ContextMenu`'s
+   * `run` focuses the opener before it calls a row, so the caret is right *now* — where by the
+   * time the round trip lands the reader may have moved on, and the element read here is still
+   * the honest destination.
+   */
+  const quickAddAndUnwish = useCallback(
+    (card: DeckCard, copies: number) => {
+      const opener = document.activeElement;
+      const handBack = () => {
+        if (opener instanceof HTMLElement) opener.focus();
+      };
+      setPressReadFailure(null);
+      void (async () => {
+        let wishes: DeckQuickAddWish[];
+        try {
+          wishes = await queryClient.fetchQuery(quickAddWishesQuery(card.cardId, card.finish));
+        } catch (error) {
+          setPressReadFailure(ipcError(error));
+          return;
+        }
+        const choice = chooseWish(wishes);
+        if (choice.kind === "many") {
+          openLayer({ kind: "quickUnwish", card, copies, wishes: choice.wishes }, handBack);
+          return;
+        }
+        writeQuickAdd({
+          card,
+          quantity: copies,
+          wishId: choice.kind === "one" ? choice.wish.id : null,
+        });
+      })();
+    },
+    [openLayer, queryClient, writeQuickAdd],
+  );
+
+  /**
+   * **Pull N from your collection** — the per-card entrance to the dialog the stats band already
+   * opens over the whole deck.
+   *
+   * The same test as the row above it and the same argument: `choosePull` answers `take` where
+   * the plan holds exactly one candidate for this printing — a lone source is unambiguous even
+   * when it cannot cover the line, so what there is is taken — and `ask` for two or more, **and
+   * for none**. None goes to the dialog rather than to a sentence here, because the dialog
+   * already words that case (`NOTHING_TO_PULL`) and words it better than a banner could: a
+   * reader whose deck says *3 missing* needs to be told *why* the pull found nothing, not merely
+   * that it did.
+   *
+   * The read is {@link pullPlan}'s own, through the shared options factory, so this press fills
+   * the cache the dialog then draws from and the two can never disagree about the key. The
+   * filtering is done at the render site off the **live** query rather than frozen into the
+   * layer: the arm carries the card, and the plan is re-read after every write.
+   */
+  const pullCard = useCallback(
+    (card: DeckCard) => {
+      const opener = document.activeElement;
+      const handBack = () => {
+        if (opener instanceof HTMLElement) opener.focus();
+      };
+      setPressReadFailure(null);
+      void (async () => {
+        let rows: DeckPullRow[];
+        try {
+          rows = await queryClient.fetchQuery(pullPlanQuery(deckId));
+        } catch (error) {
+          setPressReadFailure(ipcError(error));
+          return;
+        }
+        const choice = choosePull(rows, card);
+        if (choice.kind === "take") {
+          writePull(choice.picks);
+          return;
+        }
+        openLayer({ kind: "pull", card }, handBack);
+      })();
+    },
+    [deckId, openLayer, queryClient, writePull],
   );
 
   // The three category writes, each addressed by the slot rather than by a `DeckCard` — because
@@ -1994,7 +2280,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const writeQuantity = deck.setQuantity.mutate;
   const writeMove = deck.moveCard.mutate;
   const writeAdd = deck.addCard.mutate;
-  const writeTag = deck.setTag.mutate;
+  const writeLabel = deck.setLabel.mutate;
   const writeFinish = deck.setCardFinish.mutate;
 
   /**
@@ -2400,10 +2686,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       moveTo(card.cardId, card.categoryId, categoryId, card.finish),
     [moveTo],
   );
-  const setCardTag = useCallback(
-    (card: DeckCard, tagId: number | null) =>
-      writeTag({ cardId: card.cardId, categoryId: card.categoryId, finish: card.finish, tagId }),
-    [writeTag],
+  const setCardLabel = useCallback(
+    (card: DeckCard, labelId: number | null) =>
+      writeLabel({
+        cardId: card.cardId,
+        categoryId: card.categoryId,
+        finish: card.finish,
+        labelId,
+      }),
+    [writeLabel],
   );
 
   /**
@@ -2411,7 +2702,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    *
    * A view that assembled its own would be four copies of one rule, and the rule reads three
    * facts no view has: every category the deck holds (`categories`, in the reader's own order
-   * and deliberately not the drawn groups), the deck's format spec, and the deck's tags.
+   * and deliberately not the drawn groups), the deck's format spec, and the deck's labels.
    *
    * The item list is a thunk inside `menu`, so a hundred-card deck pays for nothing until a
    * reader right-clicks a card. The `printingsDeck` override is per **card** rather than per
@@ -2443,11 +2734,27 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           cards: deck.cards,
           spec,
           moveTo: moveCardTo,
-          setTag: setCardTag,
+          setLabel: setCardLabel,
           setFinish: setFinishAt,
-          tags: deck.tags,
-          addTag: openAddTag,
+          labels: deck.labels,
+          addLabel: openAddLabel,
           remove: removeCard,
+          // **The `Collection ▸` submenu's three rows** (2026-09-03, issue #350). All three are
+          // callbacks and none of them is a mutation, which is this builder's contract — and
+          // here it is load-bearing rather than ceremonial: two of the three *read* before they
+          // write, and one of those two ends in a dialog rather than in a write at all, so
+          // "which write does this row make" is a question with no single answer.
+          //
+          // **Passed on both lists, and the theory one is greyed rather than absent.** That is
+          // `quickAddBlock`'s call and not this file's: a plan holds no cards, so a theory row
+          // can neither record copies nor pull any — but every card of this surface can be
+          // short, so a submenu that simply vanished on one tab would read as a bug rather than
+          // as a refusal. The row says `a plan holds no cards` instead. The stats band's
+          // deck-wide `onPull` is `null` there for a different reason and stays so: that button
+          // has a *question* to lose, where these rows have an answer to give.
+          quickAdd,
+          quickAddAndUnwish,
+          pullCard,
           // **Only when this card is in the set** — `dragsWholeSelection`'s rule for a press
           // instead of a drag. A right-click on a card the reader has not picked is about that
           // card, so `[]` goes over and the menu is the singular one it has always been.
@@ -2469,13 +2776,16 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       deckSlotOf,
       categories,
       deck.cards,
-      deck.tags,
+      deck.labels,
       spec,
       moveCardTo,
-      setCardTag,
+      setCardLabel,
       setFinishAt,
-      openAddTag,
+      openAddLabel,
       removeCard,
+      quickAdd,
+      quickAddAndUnwish,
+      pullCard,
       pickedCards,
     ],
   );
@@ -2630,18 +2940,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * `paneDeckContext`, and writing a store slice on every click on the desk would re-render the
    * pane's whole subtree for nothing.
    */
-  /**
-   * The pane's ✕ and its Escape, which are the same act — closing the card and forgetting the
-   * row it was anchored to, exactly as {@link dropSelection} below does for a click on the desk.
-   *
-   * Stable, because it is the pane's `onClose` and therefore a dependency of the `keydown`
-   * listener behind it: an inline arrow is a new function on every render of this editor — every
-   * keystroke in the deck's filter box, every optimistic patch — and each one tears that window
-   * listener down and adds it back for no change in behaviour. `App` holds the identical
-   * `useCallback` for the identical reason, one mount over.
-   */
-  const closeCard = useCallback(() => setSelectedCardId(null), [setSelectedCardId]);
-
   const dropSelection = useCallback(
     (event: React.MouseEvent) => {
       if (keepsSelection(event.target)) return;
@@ -2793,12 +3091,22 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // beside a tab strip and a `Compare` that had both correctly gone. Same fix as the tab's, on
   // the same line, because it is the same mistake one axis over — the gate belongs where the
   // question is asked.
-  const theoryMatches = useMemo(
+  // **`row !== null` is a narrowing rather than a third gate.** `theoryEnabled` is read off that
+  // row, so it is already false without one; what the test buys is the two switches below being
+  // reachable at the type level, which is the whole of how a per-deck mark reaches the screen.
+  const theoryPlan = useMemo(
     () =>
-      theoryEnabled && variant === "live"
-        ? theoryMatchPlan(planned.data, deck.cards)
+      theoryEnabled && variant === "live" && row !== null
+        ? theoryMatchPlan(planned.data, deck.cards, {
+            // The deck's own answer to *which of the two marks do I want drawn*, carried into the
+            // plan so `theoryMatchMark` needs no second argument at every call site in four views
+            // — `theoryMatch.ts`'s `TheoryMarkSwitches` says why it is two booleans and not one
+            // three-valued field.
+            exact: row.theoryMarkExact,
+            name: row.theoryMarkName,
+          })
         : undefined,
-    [planned.data, theoryEnabled, variant, deck.cards],
+    [planned.data, theoryEnabled, variant, deck.cards, row],
   );
 
   /**
@@ -2821,15 +3129,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    */
   const shown = useMemo(() => {
     const needle = filter.trim().toLowerCase();
-    if (!needle && tagIds.length === 0) return deck.cards;
+    if (!needle && labelIds.length === 0) return deck.cards;
     return deck.cards.filter(
       (card) =>
-        (tagIds.length === 0 || (card.tagId !== null && tagIds.includes(card.tagId))) &&
+        (labelIds.length === 0 || (card.labelId !== null && labelIds.includes(card.labelId))) &&
         (!needle ||
           card.name.toLowerCase().includes(needle) ||
           (card.typeLine ?? "").toLowerCase().includes(needle)),
     );
-  }, [deck.cards, filter, tagIds]);
+  }, [deck.cards, filter, labelIds]);
 
   /**
    * Whether the `{X}` spells get a heading of their own — **the deck's, not this editor's.**
@@ -2859,12 +3167,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * there and never after it.
    *
    * **The `narrowed` half is gone, and the filter is deliberately not a dependency of this memo
-   * any more.** It reported whether the toolbar's box or a tag chip was running, and while one
+   * any more.** It reported whether the toolbar's box or a label chip was running, and while one
    * was, only the four seeded zones drew empty. Every pile that wall was made of was one the app
-   * had created while filing a card, and `grouping.ts` now keeps those out whenever they are
-   * empty — a pile the filter emptied included. What is left drawing under a filter is the
-   * reader's own piles, which is what they asked for, so the editor has one fact to pass rather
-   * than two and this recomputes only when the format does.
+   * had created while filing a card, and `grouping.ts` now keeps those out whenever they are empty
+   * — a pile the filter emptied included. What is left drawing under a filter is the reader's own
+   * piles, which is what they asked for, so the editor has one fact to pass rather than two and
+   * this recomputes only when the format does.
    */
   const emptyGroupRules = useMemo(
     () => ({ requiresCommander: spec?.requiresCommander ?? false }),
@@ -2888,7 +3196,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * of the shell, so there is no context between here and there; and it is published from here
    * rather than derived there because {@link groups} is the only place this order exists.
    * `groupBy` and `sortBy` are this component's `useState`, and the rows are `shown` — the deck
-   * narrowed by the toolbar's text box and tag chips. Nothing outside this file can reconstruct
+   * narrowed by the toolbar's text box and label chips. Nothing outside this file can reconstruct
    * any of that.
    *
    * **What it costs, since the input recomputes on every keystroke in that box.** `groups` is a
@@ -3067,8 +3375,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   );
 
   /**
-   * **Delete takes the picked cards out of the deck** — issue #214, and the one keyboard verb this
-   * editor has that is not undo.
+   * **The catalogue's `remove` takes the picked cards out of the deck** — issue #214, and the one
+   * keyboard verb this editor has that is not undo. The chord is {@link REMOVE}, `deckEditor`'s
+   * `remove` entry in `src/lib/shortcuts.ts`, rather than a comparison written out here, so the
+   * key map cannot advertise a chord this handler does not bind.
    *
    * ## Why it exists here and nowhere else in the app
    *
@@ -3081,9 +3391,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    *
    * **A text field keeps the key**, through the same `isTextField` the undo handler one screen up
    * yields to and the native context menu's carve-out turns on — a reader deleting a character out
-   * of the deck's name must not lose four cards. **A layer takes it too**: with a dialog or a
-   * confirmation open the deck is behind a scrim, and a key that reached past it would act on a
-   * surface the reader cannot see. And **nothing is written for a set of one**, which is the
+   * of the deck's name must not lose four cards. It stays at this call site for that handler's
+   * reason: which bindings yield to a caret is a fact about each binding, not about matching a
+   * chord. **A layer takes it too**: with a dialog or a confirmation open the deck is behind a
+   * scrim, and a key that reached past it would act on a surface the reader cannot see.
+   * And **nothing is written for a set of one**, which is the
    * deliberate asymmetry — one card has a stepper, a menu row and a tray, all of them visible, and
    * a bare Delete that silently removed whatever was last clicked is a keystroke away from a deck
    * the reader did not mean to edit.
@@ -3100,8 +3412,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   useEffect(() => {
     if (layerOpen) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Delete") return;
-      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (!matchesShortcut(REMOVE, event)) return;
       if (isTextField(event.target)) return;
       const held = pickedRef.current;
       if (held.length < 2) return;
@@ -3183,7 +3494,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     groups,
     marketplace,
     violations,
-    theoryMatches,
+    theoryPlan,
     onSelect: openCard,
     actions,
     // The two marks a card can carry here, in the four views that draw them. `landed` is this
@@ -3246,7 +3557,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       // position is still inside *this* column's scrolled content, so the phantom bar moved rather
       // than went. The rule that generalises is "a scroll container is the containing block for
       // its own absolutely positioned content", and the scroller here is this element.
-      className={cn("relative flex h-full min-h-0 flex-col gap-3", FOCUS)}
+      // No `FOCUS`: this section is a landing pad, not a control. `tabIndex={-1}` is there so
+      // the caret has somewhere to go when a card leaves the pile under it, and neither Tab nor
+      // an arrow can reach the editor root itself — so the outline ringed the entire builder,
+      // piles and rail and all, on any keystroke. The piles and cards inside keep theirs.
+      // `src/lib/focus.ts` has the rule.
+      className={cn("relative flex h-full min-h-0 flex-col gap-3")}
     >
       {/* The four quick destinations, drawn across the top of this scroller for the length of a
           drag and at no other time. **The first child on purpose**: it is `sticky top-0`, so it
@@ -3258,99 +3574,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           one read at the other end of the gesture, so both ends of a drag now re-render
           themselves rather than the editor.) */}
       <QuickZones categories={categories} onDrop={applyDrops} onNewCategory={openQuickCategory} />
-
-      {/**
-       * **The card pane, drawn over one of this editor's own columns rather than beside them**
-       * (issue #183). Everything about this box serves one sentence: opening a card must not
-       * change the flow of the deck.
-       *
-       * It used to be `App`'s, docked at the right-hand edge of the shell — a real flex item,
-       * 384px plus a gap, taken out of this editor whether or not the reader was reading a card.
-       * That is a **reflow of the whole deck on a click**: the piles re-pack, the desk narrows
-       * past {@link DECK_FLOOR}, and the search column beside it collapses to its rail — so a
-       * reader who pressed a card to look at it lost the search they were adding from. `App`
-       * still draws the docked pane for every other view and steps aside for this one; see its
-       * `inDeckEditor`.
-       *
-       * ## The two positions
-       *
-       * **A card opened from the deck draws over the search column; a card opened from the
-       * search column draws over the deck, against that column's left edge.** Either way the
-       * pane covers what the reader was *not* looking at — a search whose answer covers the
-       * search is the failure the whole arrangement exists to avoid. `paneFromDeckSearch` is the
-       * whole of the decision, and the store's own note says why it is a field rather than
-       * `paneDeckContext` read backwards.
-       *
-       * ## Why it is here and not inside the desk row
-       *
-       * The desk row is where the panel it is drawn against lives, and the dock beside it is
-       * already sticky and already sized — so that is where this went first. Two things make it
-       * wrong. **The desk row is unmounted when the deck read answers `null`**, which is the one
-       * state the pane matters most in: a swap refused with GONE draws its sentence *in the
-       * pane*, over an editor that has stopped painting the deck (`App.test.tsx` holds both
-       * halves). And **the dock is `position: sticky`, which always creates a stacking
-       * context**, so a pane inside it could never be raised above the {@link LAYER.raised} the
-       * deck's own stack puts on an open card — a card standing proud of its neighbours would
-       * paint straight through the pane drawn over it. Here it is a sibling of the desk row and
-       * competes in this column's context, where `LAYER.popup` beats that lift.
-       *
-       * `sticky top-0 h-0 -mb-3` is `QuickZones`' arrangement one line up and for its reason:
-       * the first children of this scroller are the only ones a `sticky` box can be pinned to
-       * the top of the window from, and this one has to cost no layout in either state — `h-0`
-       * so it takes no height and `-mb-3` so it takes back the column's `gap-3`. That is the
-       * "no reflow" claim, and it is structural rather than a number to keep in step.
-       */}
-      <div className={cn("pointer-events-none sticky top-0 -mb-3 h-0", LAYER.popup)}>
-        {/**
-         * Where the pane is allowed to be, on the side it was opened from — a real box rather
-         * than an offset, because `max-w-full` needs something to be full *of*. The pane asks
-         * for 384px; a desk narrower than that would otherwise clip it against the editor's own
-         * `overflow`, and content overflowing the inline-start edge is unreachable rather than
-         * scrollable, so the missing half of the card could not even be scrolled to.
-         *
-         * `top` and `height` are written by the dock effect and are deliberately not classes:
-         * at rest the pane starts where the desk starts, under the deck's ribbon and toolbar,
-         * and scrolled past it takes the whole window — the same two ends the search column
-         * beside it is drawn between, measured once for both.
-         *
-         * `pointer-events-none`, because this box spans a whole column and is transparent; the
-         * pane inside re-enables them for itself (`CardDetailPane`). Without it, opening a card
-         * would make the deck under it unclickable, which is the exact opposite of what an
-         * overlay that leaves the list live is for.
-         *
-         * An undefined width is jsdom, where nothing has been measured: the box then shrinks to
-         * the pane's own 384 and `max-w-full` binds on nothing, which is the honest answer on a
-         * surface with no layout engine.
-         */}
-        <div
-          ref={paneFrameRef}
-          {...{ [PANE_OVER_ATTR]: paneFromDeckSearch ? "deck" : "search" }}
-          className="pointer-events-none absolute flex justify-end"
-          // The desk's right edge, or the search column's left edge one gap further in. The
-          // unmeasured fallback for the second is the first — it is reachable only before the
-          // observers have answered, which on this side means before the reader can have pressed
-          // a tile in a column that has not been laid out yet, and in jsdom, which never lays
-          // anything out. See {@link PANE_OVER_ATTR} for what a suite can hold instead.
-          style={
-            paneFromDeckSearch
-              ? {
-                  right: dockWidth > 0 ? dockWidth + DESK_GAP : 0,
-                  width: deskWidth > 0 ? Math.max(0, deskWidth - dockWidth - DESK_GAP) : undefined,
-                }
-              : { right: 0, width: deskWidth > 0 ? deskWidth : undefined }
-          }
-        >
-          {/* The presence and nothing finer — `App`'s note on this key holds word for word: a
-              constant, because keying on the card would turn every card-to-card move into one
-              pane leaving and another arriving. The per-card remount lives inside the pane,
-              where React can throw the body away without the box going anywhere. */}
-          <AnimatePresence>
-            {selectedCardId && (
-              <CardDetailPane key="card-pane" cardId={selectedCardId} onClose={closeCard} />
-            )}
-          </AnimatePresence>
-        </div>
-      </div>
 
       {/**
        * The deck's own ribbon, and the `py-1.5` on it is load-bearing rather than spacing.
@@ -3875,31 +4098,31 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               pickers and the tools without moving either in the DOM. */}
           {tightHeader && <span aria-hidden="true" className="order-2 h-0 basis-full" />}
 
-          {/* The deck's own labels, as filters. Nothing at all for a deck with no tags — an
+          {/* The deck's own labels, as filters. Nothing at all for a deck with no labels — an
               empty group with a name is a control that says there is something to press.
 
               **A toolbar item of its own, and it was inside the filter's box until 2026-08-24.**
               That box grew a `max-w-[25rem]` ceiling in the same change — the field's, and a good
               one — and a row of arbitrary user strings crammed into 400px is not what the ceiling
               was for. */}
-          {deck.tags.length > 0 && (
+          {deck.labels.length > 0 && (
             <div
               role="group"
-              aria-label="Filter by tag"
+              aria-label="Filter by label"
               className={cn("flex flex-wrap items-center gap-1.5", tightHeader && "order-3")}
             >
-              {deck.tags.map((tag) => {
-                const on = tagIds.includes(tag.id);
+              {deck.labels.map((label) => {
+                const on = labelIds.includes(label.id);
                 return (
                   <button
-                    key={tag.id}
+                    key={label.id}
                     type="button"
                     aria-pressed={on}
                     onClick={() =>
-                      setTagIds((held) =>
-                        held.includes(tag.id)
-                          ? held.filter((id) => id !== tag.id)
-                          : [...held, tag.id],
+                      setLabelIds((held) =>
+                        held.includes(label.id)
+                          ? held.filter((id) => id !== label.id)
+                          : [...held, label.id],
                       )
                     }
                     className={cn(
@@ -3907,13 +4130,13 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                       FILTER_FOCUS,
                       // `FILTER_CONTROL`'s own 36px, which the `h-8` here used to override
                       // back down to the toolbar's old height. Only the type size is still
-                      // overridden: a deck's tags are a row of arbitrary user strings, and
+                      // overridden: a deck's labels are a row of arbitrary user strings, and
                       // 14px of them is a line that pushes the filter field off the end.
                       "px-2.5 text-xs",
                       filterChipState(on),
                     )}
                   >
-                    {tag.name}
+                    {label.name}
                   </button>
                 );
               })}
@@ -4117,6 +4340,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               deckId={deckId}
               targetCategoryId={targetCategoryId}
               defaultFormat={searchFormatDefault}
+              open={panelOpen}
+              setOpen={setPanelOpen}
               cardMenu={panelCardMenu}
               cardMenuKey={panelCardMenuKey}
               roomy={roomForPanel}
@@ -4146,8 +4371,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         // **It was an aside on the desk row with a toggle in the toolbar, and both halves of
         // that cost more than they bought.** The block took 280px off a row that already had to
         // fit a deck and a search panel, so opening it at 1280 with a card pane docked pushed
-        // the panel to its rail — and the toggle beside the tag filters was a control whose only
-        // job was to give that width back. Full width under the deck, the four charts and the
+        // the panel to its rail — and the toggle beside the label filters was a control whose
+        // only job was to give that width back. Full width under the deck, the four charts and the
         // figure row lay themselves out across the page instead of stacking down a column, and
         // no reader has to trade their search for their curve.
         //
@@ -4162,9 +4387,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         // drop that takes it out.
         //
         // **A `section`, not an `aside`** — the same call `DeckSearchPanel` makes and for the
-        // same measured reason: the card detail pane is the app's one complementary landmark,
-        // and a second one answers `getByRole("complementary")` too. Drawn as an aside, this
-        // block broke five of `App.test.tsx`'s pane assertions without touching the pane.
+        // same measured reason: the docked card detail pane was the app's one complementary
+        // landmark, and a second one answered `getByRole("complementary")` too. Drawn as an
+        // aside, this block broke five of `App.test.tsx`'s pane assertions without touching the
+        // pane. The pane is a modal since 2026-09-03 and no longer claims that role, but the
+        // call stands: a landmark is a promise about the page and this block is not a
+        // complementary one.
         //
         // Named by its `aria-label` and by nothing drawn: every figure in it carries its own
         // label and every chart its own caption, so a heading over the top would be a fifth
@@ -4187,12 +4415,50 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               two ways. It is drawn here whichever grouping is up, unlike the chip that sets it —
               the deck's answer does not stop being true because the reader went back to looking
               at their categories. */}
+          {/* **`onPull` is `null` on the plan, and that is the list rather than the feature.**
+              A theory list is what the deck is being built *toward*, and since schema v25 a deck
+              holds a card because a collection row sits in its group — so a theory row holds no
+              cards at all and there is nothing on that tab to pull into. The backend agrees at
+              the same seam: `deck_pull_plan` takes no variant and reads the live list, exactly as
+              `deck_missing_to_wishlist` does one command over. Absent rather than greyed, for the
+              editor's own rule about a control that cannot act: a button that spends the whole
+              Theory tab refusing teaches the reader to stop looking at the line it is in. */}
           <DeckStats
             cards={deck.cards}
             send={deck.missingToWishlist}
+            onPull={variant === "live" ? openPull : null}
             separateXGroup={separateX}
           />
         </section>
+      )}
+
+      {row && (
+        // What this deck puts on the table beside itself — the tokens and emblems its cards
+        // make, resolved out of each card's `all_parts` on every open and never stored.
+        //
+        // **After the stats band, which is the far side of a pair that may not be split.** The
+        // price strip is where the remove tray is drawn for the length of a drag, at `-top-3`
+        // over this column's own `gap-3`, so the strip and the deck above it stay adjacent; the
+        // stats band is already below that pair, and this is below the stats. Between the strip
+        // and the band it would put a wall of tokens between a card in the air and the one drop
+        // that takes it out.
+        //
+        // **A `section` and `shrink-0`** for the two reasons the band above spells out in full —
+        // a second complementary landmark answered `getByRole("complementary")` and broke five of
+        // `App.test.tsx`'s pane assertions, and `shrink-0` on the bands below the desk is the
+        // whole of why this editor scrolls. Both live on the panel's own root, so this mount
+        // cannot get either wrong.
+        //
+        // `tokensOpen` is the deck's own column (`decks.tokens_open`, schema v37) rather than
+        // editor state, for `separateXGroup`'s reason one control over: whether a reader wants
+        // the token wall in front of them is an answer about a *particular* deck, and a
+        // `useState` here would ask it again every time they opened one.
+        <DeckTokensPanel
+          deckId={deckId}
+          variant={variant}
+          open={row.tokensOpen}
+          onToggle={(next) => deck.update.mutate({ tokensOpen: next })}
+        />
       )}
 
       {/* The overlays, mounted **at the editor's top level and as siblings of the layout
@@ -4216,7 +4482,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
 
           **Two of them were one until 2026-08-14.** `CategoriesPanel` drew the deck's piles and
           its labels as two sections of a single right-hand drawer; they are `CategoriesDialog`
-          and `TagsDialog` now, which is why the toolbar above has a button for each. */}
+          and `LabelsDialog` now, which is why the toolbar above has a button for each. */}
       <CategoriesDialog
         deckId={deckId}
         variant={variant}
@@ -4224,35 +4490,37 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         onDismiss={dismiss}
         onClose={close}
       />
-      <TagsDialog
+      <LabelsDialog
         deckId={deckId}
         variant={variant}
-        open={layer?.kind === "tags"}
+        open={layer?.kind === "labels"}
         onDismiss={dismiss}
         onClose={close}
       />
-      {/* The label a card's menu asked for — pick one of the reader's other tags, or make one.
-          **The press closes it and the chain finishes without it** — `createTagFor` is two
+      {/* The label a card's menu asked for — pick one of the reader's other labels, or make
+          one.
+          **The press closes it and the chain finishes without it** — `createLabelFor` is two
           writes on this component's observers, so the dialog is free to go on the press exactly
           as the field it replaced did, and a create still in flight when the reader dismisses
           still lands on the card.
 
           `choices` is the app-wide list minus what this list already wears, and the subtraction
           is here rather than in the dialog because the editor is the only thing holding both
-          halves: `deck.tags` came in with `deck_get` and `meta.allTags` off `deck_tag_all`. */}
-      <AddTagDialog
-        open={layer?.kind === "addTag"}
-        cardName={layer?.kind === "addTag" ? layer.slot.name : null}
-        choices={addTagChoices}
-        pending={meta.createTag.isPending}
-        onPick={(tagId) => {
-          if (layer?.kind !== "addTag") return;
-          setCardTagOnSlot(layer.slot, tagId);
+          halves: `deck.labels` came in with `deck_get` and `meta.allLabels` off
+          `deck_label_all`. */}
+      <AddLabelDialog
+        open={layer?.kind === "addLabel"}
+        cardName={layer?.kind === "addLabel" ? layer.slot.name : null}
+        choices={addLabelChoices}
+        pending={meta.createLabel.isPending}
+        onPick={(labelId) => {
+          if (layer?.kind !== "addLabel") return;
+          setCardLabelOnSlot(layer.slot, labelId);
           dismiss();
         }}
         onCreate={(name, color) => {
-          if (layer?.kind !== "addTag") return;
-          createTagFor(layer.slot, name, color);
+          if (layer?.kind !== "addLabel") return;
+          createLabelFor(layer.slot, name, color);
           dismiss();
         }}
         onDismiss={dismiss}
@@ -4323,7 +4591,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         closeLabel="Close delete category"
         // Narrow, because the body is one question, one picker and two buttons — the width class
         // is written out whole, since Tailwind emits no rule for a class built at runtime.
-        width="w-[28rem]"
+        size="w-[28rem]"
         onDismiss={dismiss}
         onClose={close}
       >
@@ -4370,7 +4638,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         open={layer?.kind === "clearCategory"}
         title={clearedCategory === null ? "Clear stack" : `Clear “${clearedCategory.name}”`}
         closeLabel="Close clear stack"
-        width="w-[28rem]"
+        size="w-[28rem]"
         onDismiss={dismiss}
         onClose={close}
       >
@@ -4412,6 +4680,71 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         surface="deck"
         cards={exported.cards}
         suggestedFileName={exported.fileName}
+        onDismiss={dismiss}
+        onClose={close}
+      />
+
+      {/* The pull, beside the transfer pair because it is the third way cards reach this deck —
+          and the one that moves cardboard the reader already has rather than writing a list.
+
+          **Fed rather than fetching**, which is `ExportDialog`'s arrangement one overlay up and
+          for a sharper version of its reason: the read is gated on this layer being open, and a
+          query mounted inside a component that only exists while the dialog is up would make
+          "does a closed dialog cost a round trip" a question about `AnimatePresence`'s teardown
+          instead of about one `enabled` flag. See {@link pullPlan}.
+
+          **The mutation goes down whole and narrowed by the dialog's own type**, exactly as
+          `DeckStats`' `send` does — so the write is `useDeck`'s single definition (with its three
+          invalidations) and the dialog owns the sentence it words about the answer.
+
+          **`dismiss` rather than `close`**, and the dialog takes one callback rather than the two
+          `Dialog` splits: every way out of this one is the reader saying "put me back" — its ✕,
+          its Cancel, Escape — and the caret's destination is a button in the stats band two
+          screens down the page, which is precisely where a reader who has just shut this expects
+          to be. `close` exists for the click-away, and a scrim press here is not one this surface
+          distinguishes. */}
+      <PullFromCollectionDialog
+        open={layer?.kind === "pull"}
+        deckName={row?.name ?? ""}
+        cardName={pulledCard?.name ?? null}
+        rows={pulledRows}
+        loading={pullPlan.isLoading}
+        readError={pullPlan.isError ? ipcError(pullPlan.error) : null}
+        pull={deck.pullFromCollection}
+        onClose={dismiss}
+      />
+
+      {/* **Which wish those copies came off**, and the third of the editor's overlays with no
+          button in this view — a card's right-click is the affordance, like the delete and clear
+          confirmations above.
+
+          **The card and the count come off the layer, and the wishes do too** — which is the one
+          place this file freezes a payload rather than re-reading it. `deck_quick_add_wishes`
+          answered for one printing at one finish and the reader was shown that answer; a second
+          read here would be re-asking a question they have already been given, and would let the
+          list change under an open radio group. `quickCategory`'s exception, for its reason.
+
+          **Its refusal is drawn inside the panel** rather than in the editor's banner, which is
+          behind this scrim — the delete confirmation's rule. The banner still gets it, because
+          the write is in `writes`; what this passes is the same sentence said where the reader
+          is looking. */}
+      <QuickUnwishDialog
+        open={layer?.kind === "quickUnwish"}
+        cardName={unwish?.card.name ?? null}
+        copies={unwish?.copies ?? 0}
+        wishes={unwish?.wishes ?? NO_WISHES}
+        pending={deck.quickAddToCollection.isPending}
+        failure={unwishFailure}
+        onConfirm={(wishId) => {
+          if (unwish === null) return;
+          writeQuickAdd(
+            { card: unwish.card, quantity: unwish.copies, wishId },
+            // Closed on the answer rather than on the press, so a refusal leaves the question
+            // open with its sentence under it — `ClearCategory`'s arrangement, and the reason
+            // the panel takes a `failure` at all.
+            { onSuccess: dismiss },
+          );
+        }}
         onDismiss={dismiss}
         onClose={close}
       />

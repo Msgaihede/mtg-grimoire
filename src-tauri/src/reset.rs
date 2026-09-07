@@ -323,7 +323,7 @@ pub fn clear_wishlist(conn: &Connection) -> Result<i64, String> {
 /// [`crate::schema::COLLECTION_GRAIN`] with nothing saying what it will land on, which is why the
 /// refile above is the mechanism.
 ///
-/// **`deck_tags` is the exception and is swept by name.** It lost its `deck_id` in schema v21
+/// **`deck_labels` is the exception and is swept by name.** It lost its `deck_id` in schema v21
 /// and is not a deck's any more, so no cascade reaches it — see the statement's own comment for
 /// why "every deck" is the one case where clearing them is right.
 ///
@@ -394,14 +394,14 @@ pub fn clear_decks(conn: &Connection) -> Result<DecksCleared, String> {
     let folders = tx
         .execute("DELETE FROM deck_folders", [])
         .map_err(|e| e.to_string())?;
-    // **The labels, by hand, because since schema v21 nothing else takes them.** `deck_tags`
+    // **The labels, by hand, because since schema v21 nothing else takes them.** `deck_labels`
     // carried `deck_id … ON DELETE CASCADE` and rode out on the statement above; it belongs to
     // the app now and outlives the deck it was made in, deliberately. That is right for *one*
     // deck and wrong for all of them: a reader who has just deleted every deck they own would
-    // otherwise open the Tags dialog onto forty labels attached to nothing, with no deck left
-    // to reach them from. Nothing else in the app can hold a tag, so this is exact rather than
-    // a guess — a tag is only ever worn by a `deck_cards` row, and there are none left.
-    tx.execute("DELETE FROM deck_tags", [])
+    // otherwise open the Labels dialog onto forty labels attached to nothing, with no deck left
+    // to reach them from. Nothing else in the app can hold a label, so this is exact rather than
+    // a guess — a label is only ever worn by a `deck_cards` row, and there are none left.
+    tx.execute("DELETE FROM deck_labels", [])
         .map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())?;
 
@@ -807,7 +807,7 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO deck_tags (id, name, name_key, color, created_at, updated_at)
+            "INSERT INTO deck_labels (id, name, name_key, color, created_at, updated_at)
              VALUES (1, 'Ramp', 'ramp', 'green', 0, 0)",
             [],
         )
@@ -842,7 +842,7 @@ mod tests {
             "deck_categories",
             // Not by cascade any more — see `clear_decks`. Asserted in the same list all the
             // same: what the reader is promised is an empty deck surface, however it is got.
-            "deck_tags",
+            "deck_labels",
             "deck_audit",
             "deck_undo",
             // The deck's collection group, by `collection_folders.deck_id`'s CASCADE — a folder

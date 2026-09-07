@@ -439,6 +439,14 @@ export function ManaValueChips({
  * and five spelled-out grades are 400px of chrome above the table they filter. The
  * abbreviation is drawn, the grade is spoken, and the accessible name *begins* with the
  * visible text so the chip is still addressable by what is written on it (WCAG 2.5.3).
+ *
+ * **The condition tray's sixth chip takes the other branch, and it is the rule rather than an
+ * exception to it.** Schema v35 gave the scale a `NONE` — *Not set*, the copy nobody has graded —
+ * and that value is an abbreviation of nothing: no listing prints it, so a reader has never seen
+ * those four letters and `hint` would be expanding a code into a phrase they were never shown in
+ * the first place. It draws its label spelled out and passes no `hint`, which is what the first
+ * paragraph says a chip does by default. Five grades earn the abbreviation because the world
+ * already taught them; the sixth did not come from the world.
  */
 export function ToggleChip({
   label,

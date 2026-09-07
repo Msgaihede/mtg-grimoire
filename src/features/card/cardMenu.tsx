@@ -36,6 +36,7 @@ import {
   Inbox,
   Layers,
   LibraryBig,
+  Pencil,
   Plus,
 } from "lucide-react";
 import { MenuRows } from "@/components/menu/ContextMenu";
@@ -48,6 +49,10 @@ import type { MenuAction, MenuItem } from "@/components/menu/types";
 import { buildFolderTree, type FolderNode } from "@/lib/folderTree";
 import { DEFAULT_VARIANT, useDeck } from "@/features/decks/useDeck";
 import { useDeckFolders } from "@/features/decks/useDeckFolders";
+// The census behind the cabinet's greyed deck rows — see {@link appSection}. A **read**, and the
+// one this file makes lazily: `useDecksPlaying` is a backend query, so it lives inside a
+// `MenuLazy.Content` and fires on an expand rather than on a right-click.
+import { playKey, useDecksPlaying } from "@/features/decks/useDeckPlays";
 import { useDecks } from "@/features/decks/useDecks";
 import { copyText } from "@/lib/clipboard";
 import { marketplaceSearchUrl, openExternal, scryfallCardUrl } from "@/lib/externalLinks";
@@ -162,16 +167,23 @@ export interface CardMenuDeps {
    */
   moveToFolder?: (entryId: number, folderId: number | null) => void;
   /**
-   * File a copy into a **deck's** group — the one destination in the collection's cabinet that is
+   * Aim a card at a **deck's** group — the one destination in the collection's cabinet that is
    * not a folder write.
    *
    * `collection_folders::set_entry_folder` refuses a `deck` folder outright (`FOLDER_NOT_YOURS`),
    * and the refusal is the point rather than an obstacle: a deck group means *this deck holds
    * these copies*, so filing into one by hand would assert that without writing the `deck_cards`
-   * row, and the deck would go on listing a card whose copies have walked off. The sanctioned
-   * write is the deck's own add, which does both halves in one transaction — so this is
-   * `useAddCardToDeck`'s callback, and {@link buildCollectionTargetItems} routes the row to it
-   * instead of to `choose`.
+   * row, and the deck would go on listing a card whose copies have walked off. So the row routes
+   * to the deck's own add — this is `useAddCardToDeck`'s callback, and
+   * {@link buildCollectionTargetItems} sends the row to it instead of to `choose`.
+   *
+   * **The add writes the `deck_cards` row and no copies, which is the half worth stating.** A
+   * sentence here claimed it "does both halves in one transaction" until 2026-09-03; it does not.
+   * `deck_add_card` touches `deck_cards` and nothing else (`useDeck.ts`'s `addCard`), and the
+   * command that moves custody is `collection_alloc::collection_to_deck`, which the Collection
+   * Search tab presses and this row does not. What a press records is an intention — and issue
+   * #358 is what keeps that honest: {@link appSection} greys a deck whose live list does not
+   * already play the card, so this callback is only ever reached for a deck that plays it.
    *
    * **Optional, and absent is the ordinary answer for a surface with no `CardToDeckProvider`
    * above it** — see {@link useOptionalAddCardToDeck}. Absent means the `Decks` rows are not
@@ -195,6 +207,26 @@ export interface CardMenuDeps {
    * set has always done and is not a regression to introduce here.
    */
   pickCopies?: (entryIds: readonly number[], folderId: number | null) => void;
+  /**
+   * Open the editor for one copy the reader owns — its grade and what they paid for it.
+   *
+   * **Optional for {@link moveToFolder}'s reason and fenced harder than it**: that write needs a
+   * row, and this one needs a row the reader *pointed at*. A surface with no
+   * {@link CardMenuTarget.entryId} leaves both out and neither row is built.
+   *
+   * **It takes an id and answers nothing**, which is the whole of what a menu can do here. The
+   * dialog is a layer, the layer belongs to the page, and a `MenuAction.onSelect` is a bare
+   * callback the panel closes on top of — so the host raises the surface and this row's only job
+   * is to say which copy it is about.
+   *
+   * **No plural, and that is a statement rather than a gap** — {@link picked}'s own paragraph
+   * about "Copy card name" and "View all printings", reached from the write side. Editing four
+   * copies at once is not this row with a bigger number in its label; it is a bulk edit, which is
+   * a different feature and would have to decide what "the grade" of a foil, a played nonfoil and
+   * a slab is. So a group's press is about the card that was right-clicked, exactly as it is for
+   * the four rows above.
+   */
+  editCopy?: (entryId: number) => void;
   /**
    * The collection's filing cabinet, flat, as the host page already holds it.
    *
@@ -404,6 +436,11 @@ export function buildCardMenu(target: CardMenuTarget, deps: CardMenuDeps): MenuI
     // and of one they do. Absent entirely on every surface that cannot name a row; see
     // {@link CardMenuTarget.entryId} for why that is an absence rather than a greyed row.
     ...toItems(moveItem(rows, deps)),
+    // Ruled off from the two filing rows above it, because it is a different question about the
+    // same cardboard: those two say where a copy *goes*, this one says what it *is*. Built as a
+    // pair so the rule arrives with the row — a separator with nothing under it is a menu that
+    // looks broken, and every surface that can name no row gets neither.
+    ...editItems(target, deps),
   ];
 }
 
@@ -551,13 +588,22 @@ function collectionItem(
    * "Add to → Collection" as a single press, and turning that into a submenu so it could offer
    * decks would put a fork in the commonest path in the app to describe a cabinet they do not
    * have — with `Add to → Deck` sitting one row above it the whole time. It cost a test to learn:
-   * `CardDetailPane`'s refusal case clicks Add to → Collection → Nonfoil on a printing with no
-   * folders, and the extra rung swallowed the add.
+   * the docked pane's refusal case clicked Add to → Collection → Nonfoil on a printing with no
+   * folders, and the extra rung swallowed the add. **That test went with `CardDetailPane.test.tsx`
+   * on 2026-09-03 and nothing has replaced it**, so the rule above is currently guarded by this
+   * comment rather than by a build.
    */
-  const appTargets = (rows: readonly CardMenuTarget[]) =>
+  const appTargets = (rows: readonly CardMenuTarget[]): CollectionAppSection | undefined =>
     deps.toDeck === undefined
       ? undefined
-      : { toDeck: (deckId: number) => rows.forEach((row) => deps.toDeck?.(row, deckId)) };
+      : {
+          toDeck: (deckId: number) => rows.forEach((row) => deps.toDeck?.(row, deckId)),
+          // **The same `rows` the write loops over, and that identity is the whole point.** The
+          // deck rows are greyed unless the deck plays every one of these, so a `targets` naming a
+          // different set than the loop would grey against one list and write another — a fence
+          // measuring something other than what it guards.
+          targets: rows,
+        };
 
   /**
    * **A group is recorded in each card's own plain finish, and the finish level is dropped.**
@@ -646,7 +692,7 @@ function finishBranch(
   /** The whole list, for the builder — see {@link collectionItem}'s `cabinet`. */
   cabinet: readonly CollectionFolder[],
   choose: (folderId: number | null) => void,
-  app?: { toDeck?: (deckId: number) => void },
+  app?: CollectionAppSection,
 ): MenuItem {
   const row = { id: `add-collection-${finish}`, label: FINISH_LABEL[finish] } as const;
   if (folders.length === 0) {
@@ -750,6 +796,52 @@ function movableEntryIds(rows: readonly CardMenuTarget[]): number[] {
     for (const id of row.entryIds ?? []) seen.add(id);
   }
   return [...seen];
+}
+
+/**
+ * "Edit copy…" — the rule and, where it is offered, the separator above it.
+ *
+ * **Fenced on {@link CardMenuTarget.entryId}, the *field* and not a count**, which is the whole
+ * of the difference from `Move to` directly above it. That row reads `entryId` **and**
+ * {@link CardMenuTarget.entryIds}, because it can express the several: one id is a move, and
+ * more than one is a question `pickCopies` asks. There is no such question here. A dialog editing
+ * a grade and a price over three rows would have to decide what "the condition" of a foil, a
+ * played nonfoil and a slabbed copy is, and every answer to that is the app choosing a copy the
+ * reader never named.
+ *
+ * **So a wall tile gets no row even when it stands for exactly one entry**, which is deliberate
+ * and is `entryIds`' own doc read as a rule: it "is not a weaker `entryId`". A tile is the page's
+ * *summary* of a printing — the reader pointed at a picture, and how many rows happen to be
+ * behind it today is an accident of what else they own. A row that appeared on some tiles of one
+ * wall and not on others would read as a bug in the menu rather than as a fact about the card,
+ * and the collection's table is one press away with the copy itself on it.
+ *
+ * **Out rather than greyed**, `moveItem`'s judgement for `moveItem`'s reason: it is missing from
+ * every card of every surface that owns no rows, so the absence reads as a property of the
+ * surface. "View all printings" greys instead because it is on every other card of the surface it
+ * refuses on — that is the test, and this row fails it.
+ *
+ * **Nothing is read here but the id.** The menu does not know the row's grade, its price or
+ * whether it still exists; the host looks all of that up against the list it is drawing, which is
+ * the same division `pickCopies` uses for the card's name.
+ */
+function editItems(target: CardMenuTarget, deps: CardMenuDeps): MenuItem[] {
+  const edit = deps.editCopy;
+  const { entryId } = target;
+  if (edit === undefined || entryId === undefined) return [];
+  return [
+    { kind: "separator", id: "sep-edit" },
+    {
+      kind: "action",
+      id: "edit-copy",
+      // The ellipsis is the app's mark for a row that opens a surface rather than making a
+      // write — the folder card's `Rename…`, `Move to folder…` and `Delete…` all wear it, and
+      // this row is the first on a *card* menu that does.
+      label: "Edit copy…",
+      Icon: Pencil,
+      onSelect: () => edit(entryId),
+    },
+  ];
 }
 
 /**
@@ -1276,6 +1368,26 @@ function userFolders(folders: readonly CollectionFolder[] | undefined): readonly
 }
 
 /**
+ * What a surface has to hand over before the cabinet may offer the app's own deck groups.
+ *
+ * **The cards are as required as the write, and that is the shape saying what {@link appSection}
+ * now needs.** A deck row is greyed unless the deck's live list already plays *every* card this
+ * press is about, so the rows cannot be built from the folder list alone — the census is a
+ * question about these particular cards. Making `targets` optional would let a caller reach the
+ * rows with nothing to check them against, and the safe answer to that (`[]` → nothing plays it →
+ * every deck greyed) is a picker that is silently, permanently dead. Required, so a caller that
+ * has not thought about it does not compile.
+ */
+export interface CollectionAppSection {
+  /** Claim these copies for a deck. The caller routes this to the sanctioned write —
+   *  never `collection_set_folder`. Absent means the surface offers no deck row. */
+  toDeck?: (deckId: number) => void;
+  /** The cards the press is about — one for an ordinary right-click, the whole picked set for a
+   *  group. Exactly {@link menuTargets}' answer, handed down. */
+  targets: readonly CardMenuTarget[];
+}
+
+/**
  * The collection as a menu: the root, a rule, and the folders filed under it.
  *
  * **{@link buildWishlistTargetItems} ported, both divergences included**, because the two
@@ -1310,14 +1422,10 @@ function userFolders(folders: readonly CollectionFolder[] | undefined): readonly
 export function buildCollectionTargetItems(
   folders: readonly CollectionFolder[],
   choose: (folderId: number | null) => void,
-  app?: {
-    /** Claim these copies for a deck. The caller routes this to the sanctioned write —
-     *  never `collection_set_folder`. Absent means the surface offers no deck row. */
-    toDeck?: (deckId: number) => void;
-  },
+  app?: CollectionAppSection,
 ): MenuItem[] {
   const mine = collectionLevel(buildFolderTree(userFolders(folders), []), choose);
-  const theirs = appSection(folders, app?.toDeck);
+  const theirs = appSection(folders, app);
   return [
     {
       kind: "action",
@@ -1379,6 +1487,32 @@ function separated(groups: readonly MenuItem[][], idPrefix: string): MenuItem[] 
  * rather than the folder tree's: a `Decks` row that opens onto nothing is a promise with no
  * destination behind it, and a database with no decks has no group to offer.
  *
+ * ## A deck the card is not in is greyed, and that is what makes the row `lazy`
+ *
+ * Issue #358. A deck group means *this deck holds these copies*, so aiming a card at one that the
+ * deck does not play would file custody for a card the list says nothing about — the same
+ * placement-with-no-deck-card the paragraph above rejects, arrived at from the other end. The
+ * fence is therefore the deck's **live list**: {@link useDecksPlaying} answers which decks already
+ * play every card this press is about, and a deck outside that set is drawn with a `reason`
+ * instead of a destination.
+ *
+ * **That answer is a backend read, so the row is `kind: "lazy"` rather than `"submenu"`** — this
+ * file's opening paragraph, and the rule `MenuLazy` exists for: a right-click on a wall of forty
+ * tiles must fire nothing. The census runs when the reader expands `Decks`, which is a deliberate
+ * act, exactly as `Add to → Deck`'s own picker does one row up.
+ *
+ * **A component defined here and threaded through the `app` parameter, rather than injected as a
+ * `ComponentType` the way {@link CardMenuDeps.DeckTargetSubmenu} is.** That injection is a fence
+ * around a *write*: the deck picker reaches the app's single `useCardToDeck` through a context, so
+ * handing the component itself is what stops a surface wiring a callback that quietly never lands.
+ * Nothing of that applies here. The write these rows make is already an argument —
+ * {@link CardMenuDeps.toDeck}, threaded to `app.toDeck` — and what is new is a *read*, which needs
+ * no fence because it fails in the safe direction: a census that never answers greys every row
+ * rather than writing anything. What injection would cost is a second `ComponentType` on every
+ * `CardMenuDeps` on eight surfaces and in every fixture, to move one hook call across a file
+ * boundary this module already stands on both sides of — `DeckTargetSubmenu` and
+ * {@link useCardToDeck} are defined *in here*.
+ *
  * **Sorted by name**, which is `PinnedFolders.pinnedFolders`' opinion borrowed rather than a
  * second one invented: schema v25 writes `sort_order = 0` on every group it creates, so the
  * backend's `ORDER BY sort_order, id` is deck-**id** order — the order the decks happened to be
@@ -1408,9 +1542,15 @@ function separated(groups: readonly MenuItem[][], idPrefix: string): MenuItem[] 
  */
 function appSection(
   folders: readonly CollectionFolder[],
-  toDeck: ((deckId: number) => void) | undefined,
+  app: CollectionAppSection | undefined,
 ): MenuItem[] {
-  if (toDeck === undefined) return [];
+  if (app === undefined || app.toDeck === undefined) return [];
+  const { targets } = app;
+  // **Annotated rather than left to the narrowing above**, because the `lazy` body below is a
+  // hoisted function declaration: TypeScript analyses one at its own position, where the guard
+  // has not run, so a closure over the bare `app.toDeck` is `… | undefined` however plainly it
+  // was checked three lines up.
+  const toDeck: (deckId: number) => void = app.toDeck;
   // **A `{ deckId, name }` rather than the folder**, so the row below cannot reach `folder.id`:
   // the group's own id is the one number that must never leave this function, and a `flatMap`
   // narrows away the nullable `deckId` where a `filter` would have needed a cast to say the same
@@ -1435,27 +1575,32 @@ function appSection(
   // order carries no information — schema v25 writes `sort_order = 0` on every group it creates,
   // so the backend's order is deck-id order, which is the order the decks happened to be made in.
   const ordered = sortOptions(decks, (deck) => deck.name);
+
+  /** The `lazy` row's body, closed over the groups and the cards. Named rather than inline for
+   *  `DeckPicker`'s reason: its identity has to hold for the life of the built array, or every
+   *  render of the open panel remounts it and asks the census again.
+   *
+   *  **It takes no `onDone` and calls none.** Every row it draws is an `action`, and `ctx.run`
+   *  closes the whole menu before an `onSelect` runs — `onDone` is for a body that finishes
+   *  without a row being pressed, which this one cannot do. */
+  function DeckGroups() {
+    return <DeckGroupRows groups={ordered} targets={targets} toDeck={toDeck} />;
+  }
+
   return [
     ...(ordered.length === 0
       ? []
       : [
           {
-            kind: "submenu",
+            // **`lazy`, not `submenu`** — see this function's doc. The rows are decided by a
+            // backend read, and a right-click may fire none.
+            kind: "lazy",
             id: "collection-decks",
             label: "Decks",
             // `Layers`, the glyph every deck wears in this file and in the pinned band the
             // reader met these folders in.
             Icon: Layers,
-            items: ordered.map(
-              ({ deckId, name }): MenuItem => ({
-                kind: "action",
-                // Keyed by the **deck**, which is what the press hands over.
-                id: `collection-deck-${deckId}`,
-                label: name,
-                Icon: Layers,
-                onSelect: () => toDeck(deckId),
-              }),
-            ),
+            Content: DeckGroups,
           } satisfies MenuItem,
         ]),
     {
@@ -1468,6 +1613,86 @@ function appSection(
       onSelect: () => {},
     },
   ];
+}
+
+/**
+ * The phrase on a deck the card is not in.
+ *
+ * **A phrase and not a sentence, because a row is as wide as its widest content** — `MenuAction`'s
+ * own rule for `reason`, and the reason `Recently removed`'s is six words rather than the
+ * paragraph in {@link appSection}. It says the fact rather than the remedy: the remedy is *add the
+ * card to that deck*, which is the row one level up in this very menu, and a picker that spelled
+ * it out on every greyed deck would set the width of the panel from the deck the reader is not
+ * filing into.
+ */
+const NOT_PLAYED_REASON = "not in this deck";
+
+/**
+ * The rows behind `Decks`, mounted when the reader expands it — one per deck group, greyed unless
+ * that deck's live list already plays every card the press is about.
+ *
+ * ## Every target, never any
+ *
+ * `rows.length > 1` is a picked set, and a press writes **one add per target**. A deck that plays
+ * three of four cards would take the three and refuse the fourth — or, worse, take all four and
+ * claim custody the fourth deck card does not back — and the reader would see one press, one menu
+ * closing and no complaint anywhere. That is the failure this whole fence exists to prevent, made
+ * partial. {@link useDecksPlaying} answers *every* by construction, and the greyed row is what
+ * says so before the press rather than after it.
+ *
+ * ## Fail closed while the census is loading
+ *
+ * A pending read draws {@link PickerNote}, not a list of rows. The alternative is rows that are
+ * each pressable for one frame with `deckIds` still empty — or, if the arms were flipped, live
+ * rows that grey underneath the pointer — and either way the reader can land a press on a row
+ * whose answer had not arrived. `CollectionPage.tsx`'s `stepperByTile` argues this direction in
+ * full for the same class of control: a tile whose rows the wall cannot vouch for gets **no**
+ * stepper (`continue`), because a control drawn before its fence is known is a control that
+ * writes past it. `DeckTargetSubmenu` one function up already tells "no decks" from "not answered
+ * yet" with `isPending` rather than the empty array; this is that rule, with the greying attached.
+ */
+function DeckGroupRows({
+  groups,
+  targets,
+  toDeck,
+}: {
+  groups: readonly { deckId: number; name: string }[];
+  targets: readonly CardMenuTarget[];
+  toDeck: (deckId: number) => void;
+}) {
+  // The oracle card, or the printing where `cards` has never heard of it — `playKey` mirrors the
+  // Rust `coalesce(oracle_id, card_id)` so a deck row and a collection row are matched on the same
+  // thing the backend matched them on.
+  const keys = useMemo(() => targets.map(playKey), [targets]);
+  // **`pending`, never `query.isPending`** — the hook's own note, and the trap it names: TanStack
+  // leaves a *disabled* query `status: "pending"` for ever, so the raw flag would draw this note
+  // permanently on any surface whose `keys` came back empty. `pending` is false there, `deckIds`
+  // is empty, and every deck greys — which is the same fail-closed answer arrived at honestly.
+  const { deckIds, pending } = useDecksPlaying(keys);
+  if (pending) return <PickerNote>Checking your decks…</PickerNote>;
+  return (
+    <MenuRows
+      items={groups.map(({ deckId, name }): MenuItem => {
+        const live = {
+          kind: "action",
+          // Keyed by the **deck**, which is also what the press hands over — never `folder.id`.
+          id: `collection-deck-${deckId}`,
+          label: name,
+          Icon: Layers,
+          onSelect: () => toDeck(deckId),
+        } as const;
+        return deckIds.has(deckId)
+          ? live
+          : // Greyed rather than absent, `Recently removed`'s argument one row down: the deck is
+            // on the page behind the menu and in the pinned band, so a group that vanished from
+            // this list would read as a picker that lost a deck rather than as a fact about the
+            // card. `onSelect` is emptied as well as `disabled` set — `ActionRow` already refuses
+            // to run a disabled row's handler, and a row that would write if that check ever
+            // moved is not a fence.
+            { ...live, disabled: true, reason: NOT_PLAYED_REASON, onSelect: () => {} };
+      })}
+    />
+  );
 }
 
 function collectionLevel(

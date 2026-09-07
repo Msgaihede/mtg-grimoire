@@ -1,4 +1,4 @@
-Quantity,Name,Set,Collector number,Category,Finish,Tag,Tag colour,Language,Set name,Rarity,Type line,Price
+Quantity,Name,Set,Collector number,Category,Finish,Label,Label colour,Language,Set name,Rarity,Type line,Price
 1,"Bruna, Light of Alabaster",AVR,5,Commander,,,,en,Avacyn Restored,mythic,Legendary Creature — Angel,4.31
 1,Lurrus of the Dream-Den,IKO,226,Companion,foil,,,en,Ikoria: Lair of Behemoths,rare,Legendary Creature — Cat Nightmare,2.5
 2,Lightning Bolt,LEA,161,Removal,,,,en,Limited Edition Alpha,common,Instant,380

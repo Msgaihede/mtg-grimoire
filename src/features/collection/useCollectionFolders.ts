@@ -38,7 +38,7 @@ export function useCollectionFolderList() {
 }
 
 /**
- * The collection's filing cabinet: every folder there is, the four writes that shape them, and the
+ * The collection's filing cabinet: every folder there is, the five writes that shape them, and the
  * per-folder summary a folder card is drawn from.
  *
  * **The folder list itself comes from {@link useCollectionFolderList}**, which this composes
@@ -98,20 +98,32 @@ export function useCollectionFolders() {
    * the definition rather than on a call site.
    *
    * A refusal here is a busy database, a folder another surface has already deleted, or one of
-   * the cabinet's **four** refusals in words; the middle one must not leave a tree drawing a node
-   * that is gone. The four are `FOLDER_GONE`, `FOLDER_CYCLE` and `FOLDER_NOT_YOURS` — which are
-   * the ones these four writes can raise — plus `ENTRY_IN_A_DECK`, which belongs to
-   * `set_entry_folder` and reaches {@link useSetCollectionFolder} below rather than this hook.
-   * It is the newest and the odd one out: the other three are about a **folder**, and that one is
-   * about the **row** being filed, refusing to let a copy walk out of a deck's group by hand.
+   * the cabinet's **five** refusals in words; the middle one must not leave a tree drawing a node
+   * that is gone. Four are `FOLDER_GONE`, `FOLDER_CYCLE`, `FOLDER_NOT_YOURS` and
+   * `FOLDER_IS_LOCKED` — which are the ones these five writes can raise — plus `ENTRY_IN_A_DECK`,
+   * which belongs to `set_entry_folder` and reaches {@link useSetCollectionFolder} below rather
+   * than this hook. That last one is the odd one out: the other four are about a **folder**, and
+   * it is about the **row** being filed, refusing to let a copy walk out of a deck's group by
+   * hand.
    *
-   * Nothing outside `["collection"]` moves. A folder write files copies rather than counting
-   * them: no quantity changes, so no wish's `ownedQuantity` and no search row's owned badge can
-   * be different afterwards. Nor any deck's owned count, which since schema v25 is the sum over
-   * that deck's *own* group: all four of these writes are fenced to `user` folders, so none of
-   * them can reach a deck's group or put one inside a folder that is about to be deleted.
+   * Nothing outside `["collection"]` moves — **except the card search, which joined on
+   * 2026-09-03 with issue #349.** No quantity changes, so no wish's `ownedQuantity` moves and no
+   * *unscoped* search row's owned badge can be different afterwards. Nor any deck's owned count,
+   * which since schema v25 is the sum over that deck's *own* group: all five writes are fenced to
+   * `user` folders, so none can reach a deck's group or put one inside a folder about to be
+   * deleted. What did change is that the deck builder's card search now counts *what a deck can
+   * use* (`SearchRequest.availableForDeck`), and that answer reads the **effective lock** — so
+   * `setLocked`, and a `move` that carries a subtree under a locked parent, do move a badge.
+   *
+   * **All five fire it rather than the two that need it**, deliberately: splitting the helper
+   * would put the decision at five call sites where four of them are "no", and a rename that
+   * invalidates a root nothing is observing costs nothing at all — the reader is on the
+   * collection page, where no card search is mounted.
    */
-  const invalidate = () => void queryClient.invalidateQueries({ queryKey: ["collection"] });
+  const invalidate = () => {
+    void queryClient.invalidateQueries({ queryKey: ["collection"] });
+    void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+  };
   const writes = { onSuccess: invalidate, onError: invalidate };
 
   /** A new folder — at the root with `parentId: null`, or inside another one. */
@@ -146,9 +158,10 @@ export function useCollectionFolders() {
    * and the narrowing is the point rather than an oversight, because the comments either side of
    * it are arguments for the two biggest settle sets in the app.
    *
-   * `invalidate` above takes the whole `["collection"]` root because the other four writes reach
+   * `invalidate` above takes the whole `["collection"]` root because the other five writes reach
    * **entries**: a delete re-files the sub-tree by hand, so copies surface at the root and the
-   * table, both folder subtotals and the header are all suddenly wrong. And
+   * table, both folder subtotals and the header are all suddenly wrong; a lock changes which rows
+   * the list itself answers with. And
    * {@link useSetCollectionFolder} adds `["decks"]` on top of that, because since schema v25 a deck
    * owns exactly the copies filed in its own group and filing a copy is how one enters or leaves.
    *
@@ -201,6 +214,39 @@ export function useCollectionFolders() {
     ...writes,
   });
 
+  /**
+   * Set a folder aside, or bring it back — `collection_folder_set_locked`, writing the folder's
+   * **own** flag. The lock inherits down the tree, so what the reader sees afterwards is
+   * `lockedFolderIds` over the re-read list and never this one row.
+   *
+   * **On `writes`, not on {@link settleOrder}, and the difference is the whole reason this is
+   * commented at all.** A reorder settles narrowly because it moves no
+   * `collection_entries.folder_id` and therefore changes no number counted from entries. A lock
+   * is the opposite kind of write: nothing moves, but the collection page asks its list with
+   * `excludeLocked`, so locking a drawer changes **which rows the list answers with** — and with
+   * it the header's totals and the page's count. Every one of those lives under
+   * `["collection"]`, including `["collection", "folderSummary", marketplace]`, and a settle
+   * that named only `["collection", "folders"]` would leave the table drawing copies the reader
+   * has just set aside until something else happened to invalidate it. `lib/query.ts` sets
+   * `staleTime: 30_000`, so a mounted observer that is merely stale never refetches on its own.
+   *
+   * `["decks"]` stays out, `reorder`'s reason: a deck owns exactly the copies filed in its **own
+   * group** since schema v25, a lock is fenced to the reader's own folders, and §1 of the design
+   * is explicit that locking cannot move a deck's owned or missing figures in either direction.
+   * `["cards", "search"]` is the root that does **not** stay out, and this is the write it is
+   * there for: the deck builder's card search counts what a deck can use and reads the effective
+   * lock, so setting a drawer aside changes an `×N` a reader may be one navigation away from.
+   *
+   * On error as well as on success: a refusal is a busy database, a folder another surface has
+   * already deleted, or one of the app's own that this write refuses in words — and the middle
+   * one must not leave a tree drawing a node that is gone.
+   */
+  const setLocked = useMutation({
+    mutationFn: ({ id, locked }: { id: number; locked: boolean }) =>
+      ipc.collectionFolderSetLocked(id, locked),
+    ...writes,
+  });
+
   return {
     // Both passed straight through, so this hook's public surface is exactly what it would have
     // been without the split: the page reads `query` and `folders` off this object and must not
@@ -214,6 +260,7 @@ export function useCollectionFolders() {
     move,
     reorder,
     remove,
+    setLocked,
   };
 }
 
@@ -291,8 +338,8 @@ export function useSetCollectionFolder({ onMutate, onError }: SetCollectionFolde
       // so a mounted observer that is merely stale never refetches.
       void queryClient.invalidateQueries({ queryKey: ["collection"] });
       // **And every deck, which is the half the drag's own mutation was missing.** A move changes
-      // no quantity, so no wish's `ownedQuantity` and no search row's owned badge can be
-      // different afterwards — but since schema v25 a deck owns exactly the copies filed in its
+      // no quantity, so no wish's `ownedQuantity` and no *unscoped* search row's owned badge can
+      // be different afterwards — but since schema v25 a deck owns exactly the copies filed in its
       // own group, and this is the write that files copies.
       //
       // **Both ends are fenced now, which is newer than the sentence that stood here** (it read
@@ -308,6 +355,12 @@ export function useSetCollectionFolder({ onMutate, onError }: SetCollectionFolde
       // fence at all, which is exactly what lets `collection_alloc`'s two writes and
       // `delete_deck` file into those folders.
       void queryClient.invalidateQueries({ queryKey: ["decks"] });
+      // **And the card search, since 2026-09-03** (issue #349). The deck builder's card search
+      // counts *what a deck can use*, which is a fact about where each copy is filed — so this
+      // write, whose whole job is to change that, moves an `×N` even though it moves no quantity.
+      // A copy dragged into a locked drawer is the plainest case: nothing was gained or lost and
+      // every deck's badge for that card is one lower.
+      void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
     },
   });
 }

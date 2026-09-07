@@ -13,11 +13,11 @@
 //!
 //! # The row handle here is the `sync_uid`, not the rowid
 //!
-//! Every statement this module builds addresses a row by `WHERE sync_uid = ?`. Ten of the
-//! twelve synced tables have an `INTEGER PRIMARY KEY` and two have none at all — `muted_tags`
+//! Every statement this module builds addresses a row by `WHERE sync_uid = ?`. Eleven of the
+//! thirteen synced tables have an `INTEGER PRIMARY KEY` and two have none at all — `muted_tags`
 //! is `WITHOUT ROWID` on `(namespace, tag_id)` and `device_names` on `device_id` — so a rowid
 //! would need a second spelling of every statement for both. The uid is `UNIQUE` on all
-//! twelve and every row has one, which is what `schema::mint_missing_uids` and the capture
+//! thirteen and every row has one, which is what `schema::mint_missing_uids` and the capture
 //! trigger's mint are between them for.
 //!
 //! # Add-wins needs this device's own history, and `sync_ops` is where it is
@@ -160,14 +160,15 @@ struct Meta {
     /// `created_at` / `updated_at`. `deck_audit` and `muted_tags` carry their own stamp
     /// (`at`, `muted_at`) as an ordinary field and have neither column.
     timestamps: bool,
-    /// Whether the table can hold a sentence for the reader at all. Six of the twelve cannot:
-    /// `decks`, `deck_categories`, `deck_tags`, `deck_audit`, `muted_tags` and `device_names`.
+    /// Whether the table can hold a sentence for the reader at all. Seven of the thirteen
+    /// cannot: `decks`, `deck_categories`, `deck_labels`, `deck_tokens`, `deck_audit`,
+    /// `muted_tags` and `device_names`.
     needs_review: bool,
     /// The self-referencing column a cycle can form on, for the three folder tables.
     tree: Option<&'static str>,
 }
 
-const META: [Meta; 12] = [
+const META: [Meta; 13] = [
     Meta {
         table: "deck_folders",
         order: 0,
@@ -208,7 +209,7 @@ const META: [Meta; 12] = [
         tree: None,
     },
     Meta {
-        table: "deck_tags",
+        table: "deck_labels",
         order: 3,
         grains: &[Grain {
             predicate: "name_key = ?",
@@ -355,6 +356,36 @@ const META: [Meta; 12] = [
             predicate: "device_id = ?",
             sources: &[Source::Field("device_id")],
         }],
+        counters: &[],
+        timestamps: true,
+        needs_review: false,
+        tree: None,
+    },
+    Meta {
+        table: "deck_tokens",
+        // **Appended rather than slotted in behind `decks`, and 12 is after 1.** The rank is
+        // read by [`super::baseline::build`] through [`order_of`] and is only ever *sorted* by,
+        // so what it has to say is "after the deck this row hangs off" — which any number above
+        // 1 says. Renumbering the tail to put this at 2 would move ten ranks to change nothing
+        // an emission can observe, and `baseline`'s hard failure is on a *missing* rank rather
+        // than on a gap or an order.
+        order: 12,
+        // `idx_deck_tokens_grain`, restating `schema::DECK_TOKEN_GRAIN` as a predicate. It is
+        // owed for `deck_labels`' reason: two devices that each picked an art for the same
+        // token in the same deck hold one row under two uids, so without this the far op is not
+        // a row to update but a row to insert — which hits the unique index, rolls the group's
+        // savepoint back, and defers that op for ever.
+        //
+        // **`deck_id` comes from the parent and `oracle_id` from the field**, because a local
+        // deck id means nothing on the far device while an oracle id is Scryfall's and means
+        // the same thing everywhere.
+        grains: &[Grain {
+            predicate: "deck_id = ? AND oracle_id = ?",
+            sources: &[Source::Parent("deck"), Source::Field("oracle_id")],
+        }],
+        // **No counter, so no `Floor`** — `quantity` is nullable and travels as a field, which
+        // `super::capture`'s spec argues at length. A stored zero is a token the reader zeroed
+        // and is information; there is no arithmetic here that could produce one by accident.
         counters: &[],
         timestamps: true,
         needs_review: false,

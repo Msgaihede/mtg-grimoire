@@ -24,12 +24,14 @@ const deckGet = vi.hoisted(() => vi.fn());
 const deckAddCard = vi.hoisted(() => vi.fn());
 const prefetchImages = vi.hoisted(() => vi.fn());
 // The disclosure is an `app_meta` row behind a query now, so the panel reads one on the way up
-// and writes one on every press. Answered `true`, which is the shipped default — a test that
-// wants the other state seeds the cache through `panel({ storedOpen: false })` rather than
-// re-pointing this, because that is the state a *stored* preference puts the panel in and a
-// resolved mock and a resolved cache entry are not the same moment.
-const deckSearchOpen = vi.hoisted(() => vi.fn());
-const setDeckSearchOpen = vi.hoisted(() => vi.fn());
+// and writes one on every press. The row is a *map* keyed by section since 2026-09-07 — the
+// collection and the wishlist grew the same column — so the read answers `{ deck: true }`, which
+// is the shipped default for this panel's own section. A test that wants the other state seeds the
+// cache through `panel({ storedOpen: false })` rather than re-pointing this, because that is the
+// state a *stored* preference puts the panel in and a resolved mock and a resolved cache entry are
+// not the same moment.
+const searchOpen = vi.hoisted(() => vi.fn());
+const setSearchOpen = vi.hoisted(() => vi.fn());
 /**
  * The collection tab's three reads and its one write — **and the panel opens on that tab**, so
  * these are asked for on every mount in this file rather than only by the tests that name them.
@@ -41,6 +43,18 @@ const setDeckSearchOpen = vi.hoisted(() => vi.fn());
 const collectionList = vi.hoisted(() => vi.fn());
 const collectionToDeck = vi.hoisted(() => vi.fn());
 const collectionFolderList = vi.hoisted(() => vi.fn());
+/**
+ * What the open deck plays, for the Collection tab's #358 fence — and a read this mock **must**
+ * answer, rather than one it may leave out.
+ *
+ * `useDeckPlays` fails *closed*: until the census has come back, every tile on that wall is
+ * greyed, because "the answer has not arrived" and "the deck plays nothing" are the same empty
+ * set and only one of them may make a card pressable. So an `ipc` object without this key does
+ * not fail as a missing mock — it fails as a **wall of greyed tiles**, and the two cases below
+ * that press Add would go red for a reason that has nothing to do with what they assert. That is
+ * the whole cost of the fail-closed direction, paid here once.
+ */
+const deckPlayedKeys = vi.hoisted(() => vi.fn());
 // `useMarketplace` is the real hook on both tabs — the marketplace is in every price-bearing
 // key — so its two reads need answers as well.
 const getMarketplace = vi.hoisted(() => vi.fn());
@@ -65,11 +79,12 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckGet,
     deckAddCard,
     prefetchImages,
-    deckSearchOpen,
-    setDeckSearchOpen,
+    searchOpen,
+    setSearchOpen,
     collectionList,
     collectionToDeck,
     collectionFolderList,
+    deckPlayedKeys,
     getMarketplace,
     marketplaceFeedStatus,
   },
@@ -81,7 +96,7 @@ import {
   SEARCH_OVER_ATTR,
   type DeckSearchTab,
 } from "./DeckSearchPanel";
-import { DECK_SEARCH_OPEN_KEY } from "./useDeckSearchOpen";
+import { SEARCH_OPEN_KEY } from "@/features/search/useSearchOpen";
 import { useDeck } from "./useDeck";
 import { useAppStore } from "@/lib/store";
 
@@ -211,8 +226,8 @@ beforeEach(() => {
   deckGet.mockReset().mockResolvedValue(null);
   deckAddCard.mockReset().mockResolvedValue({ id: 7, quantity: 1, removed: false });
   prefetchImages.mockReset().mockResolvedValue(undefined);
-  deckSearchOpen.mockReset().mockResolvedValue(true);
-  setDeckSearchOpen.mockReset().mockResolvedValue(undefined);
+  searchOpen.mockReset().mockResolvedValue({ deck: true });
+  setSearchOpen.mockReset().mockResolvedValue(undefined);
   collectionList.mockReset().mockResolvedValue({ items: [OWNED_BOLT], total: 1 });
   // `deckCardId` is the `deck_cards` row the move landed on — always named by this command,
   // so a mock that omitted it would encode an answer the backend cannot give.
@@ -220,6 +235,12 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue({ entryId: 9, fromDeck: null, deckCardId: 41, quantity: 1 });
   collectionFolderList.mockReset().mockResolvedValue([]);
+  // The deck plays Bolt, keyed the way the crate keys it — `coalesce(oracle_id, card_id)`, so
+  // the **oracle** id and not `OWNED_BOLT.cardId`. Answering with the printing would grey the
+  // one tile this file's collection cases press, and it would grey it for the exact reason
+  // #358's match is oracle-wide: the copy on the wall is a different piece of cardboard from
+  // whatever printing the deck happens to list.
+  deckPlayedKeys.mockReset().mockResolvedValue([OWNED_BOLT.oracleId]);
   getMarketplace.mockReset().mockResolvedValue("tcgplayer");
   marketplaceFeedStatus.mockReset().mockResolvedValue([]);
 });
@@ -331,7 +352,7 @@ function panel({
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  if (storedOpen !== undefined) client.setQueryData(DECK_SEARCH_OPEN_KEY, storedOpen);
+  if (storedOpen !== undefined) client.setQueryData(SEARCH_OPEN_KEY, { deck: storedOpen });
   if (storedTab !== undefined) client.setQueryData(DECK_SEARCH_TAB_KEY, storedTab);
   let props: Props = {
     categories,
@@ -497,7 +518,8 @@ describe("DeckSearchPanel", () => {
    * outlives the deck they gave it on.
    *
    * Both directions, because they fail differently. The **write** is what the press produces —
-   * a boolean through `set_deck_search_open`, and asserting the argument is what would catch a
+   * a section and a boolean through `set_search_open`, and asserting the arguments is what would
+   * catch a
    * panel that remembered the drawn state rather than the choice. The **read** is a second panel
    * mounted over a cache the first one's press left behind, which is exactly what opening a
    * second deck is: the editor is keyed on the deck id, so the panel is thrown away and the query
@@ -509,7 +531,7 @@ describe("DeckSearchPanel", () => {
 
     await userEvent.click(screen.getByRole("button", { name: PANEL_TOGGLE }));
 
-    expect(setDeckSearchOpen).toHaveBeenCalledWith(false);
+    expect(setSearchOpen).toHaveBeenCalledWith("deck", false);
     // The strip is the tell that the body has gone, whichever tab was on: a searchbox would have
     // asked about the card search alone, which the panel no longer opens on.
     expect(screen.queryByRole("group", { name: "Search in" })).not.toBeInTheDocument();
@@ -525,7 +547,7 @@ describe("DeckSearchPanel", () => {
     );
 
     await userEvent.click(screen.getByRole("button", { name: PANEL_TOGGLE }));
-    expect(setDeckSearchOpen).toHaveBeenLastCalledWith(true);
+    expect(setSearchOpen).toHaveBeenLastCalledWith("deck", true);
   });
 
   /**
@@ -1068,10 +1090,16 @@ describe("DeckSearchPanel", () => {
   /**
    * The panel is what took the caret away, so the panel is what gives it somewhere to go.
    *
-   * At 1024 a tile press opens the card pane, the pane's arrival squeezes this panel down to
-   * its rail, and the tile that was pressed unmounts with it — so `CardDetailPane`'s hand-back
-   * finds an opener that is not connected, and Escape drops the caret on `<body>` with the next
-   * Tab restarting from the top of the app.
+   * A tile press opens the card, the card's arrival takes this panel down to its rail, and the
+   * tile that was pressed unmounts with it — so the card surface's hand-back finds an opener that
+   * is not connected, and Escape drops the caret on `<body>` with the next Tab restarting from
+   * the top of the app.
+   *
+   * **The road in has narrowed since this was written.** It was the docked pane squeezing the
+   * desk at 1024; the card is a centred modal since 2026-09-03 and takes width from neither
+   * column, so what reaches it now is the overlay case — a desk with room for one surface, where
+   * the editor takes the panel's overlay away when a card opens. The shape under test is the
+   * same, which is why this drives `roomy` itself rather than a width.
    */
   it("takes the caret when the pane closes and the tile that opened it has gone", async () => {
     const view = await openPanel();
@@ -1199,8 +1227,10 @@ describe("DeckSearchPanel", () => {
   /**
    * The Escape stack, from inside the panel: the set picker is an `"inner"` layer and consumes
    * its press in the capture phase, and the next press reaches `window` untouched — which is
-   * where the card detail pane listens, in the bubble phase. Observed in the running window;
-   * this is what holds it.
+   * where the layer behind it listens. That was the docked card pane, in the bubble phase, when
+   * this was observed in the running window; the card is a `Dialog` since 2026-09-03, so the
+   * press it falls to is the editor's `"navigation"` floor. What this holds is the half that did
+   * not move: one layer per press, and this panel is not one of them.
    */
   it("spends the first Escape on the set picker and lets the second through to the pane", async () => {
     listSets.mockResolvedValue([
@@ -1218,7 +1248,7 @@ describe("DeckSearchPanel", () => {
     await screen.findByRole("combobox", { name: /search sets/i });
 
     const heard: boolean[] = [];
-    // The bubble phase, which is the rung the card pane is on.
+    // The bubble phase, which is the rung the layer behind this panel is on.
     const listen = (e: KeyboardEvent) => {
       if (e.key === "Escape") heard.push(e.defaultPrevented);
     };
@@ -1262,7 +1292,7 @@ describe("DeckSearchPanel", () => {
 /**
  * The two searches this column offers, and the strip that picks between them.
  *
- * The strip is `aria-pressed` over a `.map` — the shape `DeckEditor`'s Theory/Live switch
+ * The strip is `aria-pressed` over a `.map` — the shape `DeckEditor`'s Theory/Actual switch
  * already uses — and deliberately **not** `role="tab"`: that role brings a keyboard contract
  * (arrow-key roving focus, `aria-controls`, a `tabpanel`) that nothing else in this app
  * implements, so adopting it here would either be half-built or would make this one control
@@ -1342,6 +1372,28 @@ describe("DeckSearchPanel tabs", () => {
     await waitFor(() =>
       expect(collectionToDeck).toHaveBeenCalledWith(OWNED_BOLT.id, 4, { id: MAIN.id }, 1),
     );
+  });
+
+  /**
+   * **The card search tab is addressed by the same deck**, and the categories belong to another
+   * one here for the reason one test up: a list of piles is a different fact from which deck
+   * this is.
+   *
+   * What it buys is a *number* rather than a write — issue #349. Every tile's `×N` and the
+   * Owned/Missing chip count the copies **this deck can use**, so a playset sleeved into another
+   * deck stops being an offer this column makes. Until it rode, the two tabs of one panel
+   * disagreed about the same card: the Collection tab has sent `allocation: "unallocated"` since
+   * folders landed and this one counted every copy in the cabinet.
+   */
+  it("counts the card search's owned badges for the deck it was given", async () => {
+    panel({ categories: [category({ deckId: 99 })], deckId: 4 });
+
+    await userEvent.click(tab(ALL_CARDS));
+    await screen.findByRole("searchbox", { name: "Search cards" });
+
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    const calls = searchCards.mock.calls;
+    expect(calls[calls.length - 1][0].availableForDeck).toBe(4);
   });
 
   /**

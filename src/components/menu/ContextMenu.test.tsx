@@ -806,36 +806,37 @@ describe("ContextMenu", () => {
   });
 
   /**
-   * A text field inside a panel — "Tag card ▸ New tag…" — and the keys it has to be given back.
+   * A text field inside a panel — "Label card ▸ New label…" — and the keys it has to be given
+   * back.
    *
    * The panel owns `ArrowUp`/`ArrowDown`/`Home`/`End`/`ArrowLeft`/`ArrowRight` and `preventDefault`s
    * every one of them, which is right for a list of rows and wrong for a caret in a field: typing
    * works and *editing* does not. Nothing surfaced it until a body rendered the first input.
    */
-  function tagField() {
+  function labelField() {
     function Content() {
       return (
         <>
-          <input aria-label="New tag" defaultValue="" />
+          <input aria-label="New label" defaultValue="" />
           <MenuRows
-            items={[{ kind: "action", id: "burn", label: "Existing tag", onSelect: vi.fn() }]}
+            items={[{ kind: "action", id: "burn", label: "Existing label", onSelect: vi.fn() }]}
           />
         </>
       );
     }
-    open([{ kind: "lazy", id: "tag", label: "Tag card", Content }]);
+    open([{ kind: "lazy", id: "label", label: "Label card", Content }]);
     rightClick(screen.getByRole("button", { name: "target" }));
     return Content;
   }
 
   /**
-   * A lazy body that finishes *without* a row — "Tag card ▸ New tag… ▸ Add" — hands the caret
-   * back exactly as a row does.
+   * A lazy body that finishes *without* a row — "Label card ▸ New label… ▸ Add" — hands the
+   * caret back exactly as a row does.
    *
-   * The two halves of that one panel used to disagree. Its tag rows are drawn by `MenuRows`, so
+   * The two halves of that one panel used to disagree. Its label rows are drawn by `MenuRows`, so
    * they go through `ctx.run` and put the caret back on the card; the `Add` button beside them
    * called `onDone`, which was a bare `onClose`, and dropped it on `<body>`. A reader pressing
-   * `Add` has acted as deliberately as one picking an existing tag two rows above it, so
+   * `Add` has acted as deliberately as one picking an existing label two rows above it, so
    * `ctx.close` is `run` with nothing to run.
    *
    * This sits at the primitive rather than in `deckCardMenu.test.tsx` because that is where the
@@ -848,14 +849,14 @@ describe("ContextMenu", () => {
     function Content({ onDone }: { onDone: () => void }) {
       return (
         <>
-          <input aria-label="New tag" defaultValue="" />
+          <input aria-label="New label" defaultValue="" />
           <button type="button" onClick={onDone}>
             Add
           </button>
         </>
       );
     }
-    open([{ kind: "lazy", id: "tag", label: "Tag card", Content }]);
+    open([{ kind: "lazy", id: "label", label: "Label card", Content }]);
     const target = screen.getByRole("button", { name: "target" });
     rightClick(target);
     await screen.findByRole("menu");
@@ -869,11 +870,11 @@ describe("ContextMenu", () => {
 
   it("gives the caret keys to a text field inside a panel", async () => {
     const user = userEvent.setup();
-    tagField();
+    labelField();
     await screen.findByRole("menu");
     await user.keyboard("{ArrowDown}{ArrowRight}");
 
-    const field = screen.getByLabelText<HTMLInputElement>("New tag");
+    const field = screen.getByLabelText<HTMLInputElement>("New label");
     await user.click(field);
     await user.keyboard("burn");
     expect(field).toHaveValue("burn");
@@ -914,12 +915,13 @@ describe("ContextMenu", () => {
    * A field a lazy body draws is not a `menuitem`, so it was never on the caret walk; it was
    * reachable only as a panel's one tab stop, which Tab closing the menu took away. A reader who
    * opened the menu with `menuKey` — the entry point that exists for exactly that reader — could
-   * see "New tag…" and never put a caret in it.
+   * see "New label…" and never put a caret in it.
    *
    * Landing *on* the field instead would have swapped the problem for its mirror: every caret key
    * yields once the caret is inside one, so the rows above it become the unreachable half. The
-   * real consumer's panel draws its existing tags first and the new-tag field last, which is what
-   * this fixture models — so ArrowRight lands on the tags and ArrowDown walks down into the field.
+   * real consumer's panel draws its existing labels first and the new-label field last, which is
+   * what this fixture models — so ArrowRight lands on the labels and ArrowDown walks down into the
+   * field.
    */
   it("walks the caret from a panel's rows into the field it also holds", async () => {
     const user = userEvent.setup();
@@ -927,26 +929,26 @@ describe("ContextMenu", () => {
       return (
         <>
           <MenuRows
-            items={[{ kind: "action", id: "burn", label: "Existing tag", onSelect: vi.fn() }]}
+            items={[{ kind: "action", id: "burn", label: "Existing label", onSelect: vi.fn() }]}
           />
-          <input aria-label="New tag" defaultValue="" />
+          <input aria-label="New label" defaultValue="" />
         </>
       );
     }
-    open([{ kind: "lazy", id: "tag", label: "Tag card", Content }]);
+    open([{ kind: "lazy", id: "label", label: "Label card", Content }]);
     rightClick(screen.getByRole("button", { name: "target" }));
     await screen.findByRole("menu");
 
     await user.keyboard("{ArrowDown}{ArrowRight}");
     // The rows first, in document order -- not the field, which would strand them.
-    expect(screen.getByRole("menuitem", { name: "Existing tag" })).toHaveFocus();
+    expect(screen.getByRole("menuitem", { name: "Existing label" })).toHaveFocus();
 
     await user.keyboard("{ArrowDown}");
-    expect(screen.getByLabelText("New tag")).toHaveFocus();
+    expect(screen.getByLabelText("New label")).toHaveFocus();
 
     // And it is a caret from here on: typing goes in rather than firing the row above.
     await user.keyboard("burn");
-    expect(screen.getByLabelText("New tag")).toHaveValue("burn");
+    expect(screen.getByLabelText("New label")).toHaveValue("burn");
   });
 
   /**
@@ -977,11 +979,11 @@ describe("ContextMenu", () => {
 
   it("does not move the menu's caret out of a field on ArrowDown", async () => {
     const user = userEvent.setup();
-    tagField();
+    labelField();
     await screen.findByRole("menu");
     await user.keyboard("{ArrowDown}{ArrowRight}");
 
-    const field = screen.getByLabelText<HTMLInputElement>("New tag");
+    const field = screen.getByLabelText<HTMLInputElement>("New label");
     await user.click(field);
     await user.keyboard("{ArrowDown}");
     expect(field).toHaveFocus();
@@ -996,13 +998,13 @@ describe("ContextMenu", () => {
    */
   it("still closes the panel a field is in, on Escape", async () => {
     const user = userEvent.setup();
-    tagField();
+    labelField();
     await screen.findByRole("menu");
     await user.keyboard("{ArrowDown}{ArrowRight}");
-    await user.click(screen.getByLabelText("New tag"));
+    await user.click(screen.getByLabelText("New label"));
 
     await user.keyboard("{Escape}");
-    expect(screen.queryByLabelText("New tag")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("New label")).not.toBeInTheDocument();
     expect(screen.getByRole("menu")).toBeInTheDocument();
   });
 
@@ -1010,23 +1012,23 @@ describe("ContextMenu", () => {
    * The pointer half of the same problem, and the one that costs the reader their words.
    *
    * Hover-to-open is the panel assuming its contents are rows: a sweep onto a row that opens
-   * nothing collapses whatever was open — which, once a panel holds a field, is a half-typed tag
-   * name deleted by a nudge of the mouse while the reader is looking at the keyboard. A field is a
-   * mode for the pointer exactly as it is for the arrows.
+   * nothing collapses whatever was open — which, once a panel holds a field, is a half-typed
+   * label name deleted by a nudge of the mouse while the reader is looking at the keyboard. A
+   * field is a mode for the pointer exactly as it is for the arrows.
    */
   it("does not let a pointer sweep collapse a panel the reader is typing in", async () => {
     const user = userEvent.setup();
     function Content() {
-      return <input aria-label="New tag" defaultValue="" />;
+      return <input aria-label="New label" defaultValue="" />;
     }
     open([
-      { kind: "lazy", id: "tag", label: "Tag card", Content },
+      { kind: "lazy", id: "label", label: "Label card", Content },
       { kind: "action", id: "copy", label: "Copy card name", onSelect: vi.fn() },
     ]);
     rightClick(screen.getByRole("button", { name: "target" }));
     await screen.findByRole("menu");
     await user.keyboard("{ArrowDown}{ArrowRight}");
-    const field = screen.getByLabelText("New tag");
+    const field = screen.getByLabelText("New label");
     await user.click(field);
     await user.keyboard("burn");
     expect(field).toHaveValue("burn");
@@ -1037,7 +1039,7 @@ describe("ContextMenu", () => {
     fireEvent.pointerOver(screen.getByRole("menuitem", { name: "Copy card name" }));
     act(() => void vi.advanceTimersByTime(SUBMENU_HOVER_MS));
 
-    expect(screen.getByLabelText("New tag")).toHaveValue("burn");
+    expect(screen.getByLabelText("New label")).toHaveValue("burn");
   });
 
   /**
@@ -1104,17 +1106,17 @@ describe("ContextMenu", () => {
    */
   it("closes on Tab out of a field, discarding what was typed", async () => {
     const user = userEvent.setup();
-    tagField();
+    labelField();
     await screen.findByRole("menu");
     await user.keyboard("{ArrowDown}{ArrowRight}");
-    const field = screen.getByLabelText("New tag");
+    const field = screen.getByLabelText("New label");
     await user.click(field);
     await user.keyboard("burn");
     expect(field).toHaveValue("burn");
 
     await user.tab();
 
-    expect(screen.queryByLabelText("New tag")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("New label")).not.toBeInTheDocument();
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 

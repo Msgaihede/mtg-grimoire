@@ -584,11 +584,12 @@ const MELD_COMPONENTS: [&str; 2] = ["meld_part", "meld_result"];
 /// **`artist` is on this struct, and it is not a convenience.** The pane swaps the *picture*
 /// to the melded card while keeping the open card's facts on screen, and Scryfall's image
 /// policy requires the credit to name the illustrator whose art is being shown. Without this
-/// field the pane would print the open card's artist under a different card's picture — the
+/// field the open card would print its own artist under a different card's picture — the
 /// wrong name under the right image, which is the one failure that policy is about.
-/// `CardDetailPane.tsx` already carries that rule in prose for double-faced cards, where the
+/// `CardDetailModal.tsx`'s `artistOf` already carries that rule for double-faced cards, where the
 /// same swap happens between two faces of one row; this field is what lets it hold across two
-/// *rows*, which is what a meld is.
+/// *rows*, which is what a meld is. (It was `CardDetailPane.tsx`'s until that file was deleted on
+/// 2026-09-03; the helper was lifted verbatim.)
 ///
 /// It costs one indexed lookup per relation and there are at most two or three of them —
 /// [`meld_parts`] measures that bound rather than assuming it.
@@ -724,6 +725,112 @@ pub async fn card_meld_parts(
     tauri::async_runtime::spawn_blocking(move || meld_parts(&lock_db_read(&state), &id))
         .await
         .map_err(|e| format!("meld parts could not be read: {e}"))?
+}
+
+// ---------------------------------------------------------------------------------------
+// What the reader holds of this card — the pane's "In your grimoire" block, in one read
+// ---------------------------------------------------------------------------------------
+
+/// The three figures the card pane's **In your grimoire** block states.
+///
+/// **Facts and not a sentence** — this module's own header, applied to a block that used to be
+/// assembled in the page. Three zeros is a real answer about a card nobody holds, never an
+/// error and never a null; whether the block draws at all, and what it reads when every figure
+/// is zero, is TypeScript's.
+///
+/// **All three are at the oracle grain, because that is what "in your grimoire" means.** A
+/// reader who owns the Alpha Bolt and opens the M10 one owns *Lightning Bolt*. The per-printing
+/// question — how many of *this* printing sit in a binder, which is what the pane's stepper
+/// writes to — is a different one and is not answered here.
+#[derive(Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardHoldings {
+    /// Copies in the collection, **every printing, every finish and every folder together** —
+    /// [`crate::collection_source::copies_of_oracle`] under
+    /// [`crate::collection_source::Availability::Everything`], which is the scope every reader
+    /// outside the deck builder asks for. A copy on a locked shelf or sleeved into a deck is
+    /// still a copy the reader owns.
+    pub owned: i64,
+    /// Copies the wishlist asks for, every wish for the card together — see
+    /// [`crate::wishlist::wished_copies`]. The grain makes a foil wish and a nonfoil wish two
+    /// rows for one card, so this is a sum across rows rather than a lookup.
+    pub wished: i64,
+    /// How many **decks** play the card — decks, not copies: a deck playing four counts once,
+    /// and so does a deck listing it in two piles.
+    pub decks: i64,
+}
+
+/// The three figures, in three statements against the read-only connection.
+///
+/// **Each half is the crate's existing rule called rather than re-spelled**, which is the whole
+/// reason this is worth being one command: [`crate::collection_source::copies_of_oracle`],
+/// [`crate::wishlist::wished_copies`] and [`crate::deck::decks_playing`]. Three round trips
+/// from the page became one, and no fourth definition of "owned", "wished" or "played" was
+/// created on the way — a figure here that disagreed with the wall it sits beside would be two
+/// numbers about one card, which is exactly the failure the shared fragments exist to prevent.
+///
+/// **The deck census is `live` only, and that is the app's answer everywhere rather than a
+/// choice made here.** [`crate::deck::decks_playing`] fences on the variant because a plan
+/// holds no cards ([`crate::collection_alloc::THEORY_HOLDS_NOTHING`]), and it is the same read
+/// the copies page and the collection's filing rule already ask — so a deck that has only
+/// *thought about* this card does not appear in the count, exactly as it does not appear in the
+/// `deck_ids_playing` answer the pane used before this command existed. It counts **archived
+/// decks too**, for the same reason: that read has never had a deck filter, and adding one here
+/// would make this figure the odd one out.
+///
+/// **A blank `oracle_id` answers three zeros rather than a refusal.** `cards.oracle_id` is
+/// nullable, and a card with no oracle id is a card nothing can be held *of* — but "the reader
+/// holds none of it" is the honest answer to that, and a card pane must not fail to fill a
+/// block over it. Spliced into SQL the blank would be worse than useless: `slug_norm = ''`'s
+/// lesson one module over, where an empty needle matched a whole taxonomy.
+pub fn holdings(conn: &Connection, oracle_id: &str) -> Result<CardHoldings, String> {
+    if oracle_id.trim().is_empty() {
+        return Ok(CardHoldings::default());
+    }
+    // `?1` rather than a column: the fragment is built to be spliced into a caller's statement,
+    // and a numbered parameter is the one spelling that cannot be captured by the `e` and `k`
+    // aliases it binds inside itself.
+    let owned_sql = crate::collection_source::copies_of_oracle(
+        conn,
+        "?1",
+        crate::collection_source::Availability::Everything,
+    );
+    let owned: i64 = conn
+        .query_row(&format!("SELECT {owned_sql}"), params![oracle_id], |r| {
+            r.get(0)
+        })
+        .map_err(|e| e.to_string())?;
+    let wished = crate::wishlist::wished_copies(conn, oracle_id)?;
+    // The oracle id **is** a play key: `deck::PLAYED_KEY` is
+    // `coalesce(cards.oracle_id, deck_cards.card_id)`, so a deck listing any printing of this
+    // card matches on the first arm. The fallback arm is for a deck row the corpus has lost,
+    // which is a printing id and never an oracle id, so nothing is owed here.
+    let decks = crate::deck::decks_playing(conn, &[oracle_id.to_owned()])?.len() as i64;
+    Ok(CardHoldings {
+        owned,
+        wished,
+        decks,
+    })
+}
+
+/// What the reader holds of one oracle card. Read-only connection, blocking pool — as
+/// [`card_detail`] is, and for the same reason.
+///
+/// **One command for three figures the pane draws in one block.** It replaces
+/// `collection_list`, `wishlist_list` and `deck_ids_playing` fired together on every card open
+/// — three reads that each answered a page of rows to have their `quantity` column summed in
+/// the webview. Takes no `marketplace`: these are counts, and nothing about them moves when the
+/// setting does.
+#[cfg(not(target_family = "wasm"))]
+#[tauri::command]
+pub async fn card_holdings(
+    state: tauri::State<'_, Arc<AppState>>,
+    oracle_id: String,
+) -> Result<CardHoldings, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || holdings(&lock_db_read(&state), &oracle_id))
+        .await
+        .map_err(|e| format!("what you hold of this card could not be read: {e}"))?
 }
 
 // ---------------------------------------------------------------------------------------
@@ -2283,6 +2390,205 @@ mod tests {
             ],
             "credited from the named row; None both when that row has no artist and when \
              there is no such row — and the relationship survives either way"
+        );
+    }
+
+    // ---- what the reader holds ---------------------------------------------------------
+    //
+    // [`holdings`] is three of the crate's existing rules called at once, so what these pin is
+    // the *composition*: that each figure is at the oracle grain, that `decks` counts decks,
+    // that the `live` fence survived the trip, and that nothing here can answer an error where
+    // a zero is the truth.
+
+    /// The one card three ways over, filed so that every figure is a sum somebody would get
+    /// wrong by asking the obvious question.
+    ///
+    /// Copies of **two** printings and two finishes, so `owned` cannot be a per-printing or a
+    /// per-row count. **Two** wishes for the card, so `wished` cannot be a lookup. **Three**
+    /// decks: one listing two printings of it in two piles, one listing a third printing, and
+    /// one that only *plans* it — so `decks` is 2 whether you count rows, piles or printings
+    /// wrong.
+    ///
+    /// `cards` is seeded by [`seeded`] because a fresh database has never synced, and the rows
+    /// go with the in-memory connection — no later measurement is made a fiction by them.
+    fn held() -> Connection {
+        let conn = seeded();
+        conn.execute_batch(
+            "INSERT INTO collection_entries (card_id, set_code, collector_number, lang, finish,
+                                             condition, quantity, created_at, updated_at)
+                  VALUES ('p1','lea','161','en','nonfoil','NM',2,0,0),
+                         ('p1','lea','161','en','foil',   'NM',1,0,0),
+                         ('p3','m10','146','en','nonfoil','NM',3,0,0);
+
+             INSERT INTO wishlist_entries (oracle_id, card_id, name, quantity, preferred_finish,
+                                           created_at, updated_at)
+                  VALUES ('o1', NULL, 'Lightning Bolt', 2, NULL,   0, 0),
+                         ('o1', 'p2', 'Lightning Bolt', 1, 'foil', 0, 0);
+
+             INSERT INTO decks (id, name, created_at, updated_at)
+                  VALUES (1, 'Burn', 0, 0), (2, 'Storm', 0, 0), (3, 'Someday', 0, 0);
+
+             INSERT INTO deck_categories (id, deck_id, name, kind, sort_order,
+                                          created_at, updated_at)
+                  VALUES (11, 1, 'Main deck', 'main', 0, 0, 0),
+                         (12, 1, 'Sideboard', 'side', 1, 0, 0),
+                         (13, 2, 'Main deck', 'main', 0, 0, 0),
+                         (14, 3, 'Main deck', 'main', 0, 0, 0);
+
+             INSERT INTO deck_cards (deck_id, category_id, variant, card_id, set_code,
+                                     collector_number, lang, name, quantity,
+                                     created_at, updated_at)
+                  VALUES (1, 11, 'live',   'p1','lea','161','en','Lightning Bolt',4,0,0),
+                         (1, 12, 'live',   'p3','m10','146','en','Lightning Bolt',1,0,0),
+                         (2, 13, 'live',   'p2','2ed','162','en','Lightning Bolt',3,0,0),
+                         (3, 14, 'theory', 'p1','lea','161','en','Lightning Bolt',4,0,0);",
+        )
+        .unwrap();
+        conn
+    }
+
+    /// The whole block in one assertion — and every one of the three numbers is a figure the
+    /// per-printing question answers differently.
+    #[test]
+    fn holdings_are_read_at_the_oracle_grain() {
+        assert_eq!(
+            holdings(&held(), "o1").unwrap(),
+            CardHoldings {
+                // 2 + 1 of `p1`, 3 of `p3`: two printings, two finishes, one card.
+                owned: 6,
+                // Both wishes, one of them for the foil specifically.
+                wished: 3,
+                // Burn and Storm. Not Someday — see below.
+                decks: 2,
+            }
+        );
+    }
+
+    /// **`decks` counts decks and never copies or rows.** Burn lists four copies of one
+    /// printing in one pile and one of another in a second, which is three ways to read `1`
+    /// as more than one.
+    #[test]
+    fn a_deck_playing_two_printings_in_two_piles_counts_once() {
+        let conn = held();
+        conn.execute("DELETE FROM deck_cards WHERE deck_id <> 1", [])
+            .unwrap();
+        assert_eq!(holdings(&conn, "o1").unwrap().decks, 1);
+    }
+
+    /// **A plan holds no cards**, so a deck that has only thought about this card does not
+    /// play it — `collection_alloc::THEORY_HOLDS_NOTHING`, reached through
+    /// [`crate::deck::decks_playing`]'s own `live` fence rather than re-applied here. Deck 3
+    /// is the whole fixture's reason for existing: with the fence gone it is a third deck and
+    /// nothing else about the answer moves.
+    #[test]
+    fn a_deck_that_only_plans_the_card_is_not_counted() {
+        let conn = held();
+        conn.execute("DELETE FROM deck_cards WHERE variant = 'live'", [])
+            .unwrap();
+        assert_eq!(
+            holdings(&conn, "o1").unwrap().decks,
+            0,
+            "the theory row is still there and still names the card"
+        );
+    }
+
+    /// **Zero is an answer.** A card in the corpus the reader has never owned, never wished
+    /// for and never sleeved, and an oracle id `cards` has never heard of, both answer three
+    /// zeros rather than an error or a null.
+    #[test]
+    fn a_card_nobody_holds_answers_three_zeros() {
+        let conn = held();
+        for id in ["o2", "no-such-oracle-card"] {
+            assert_eq!(
+                holdings(&conn, id).unwrap(),
+                CardHoldings::default(),
+                "{id:?} is held by nobody, which is a fact and not a failure"
+            );
+        }
+    }
+
+    /// **A blank oracle id is short-circuited, and the guard is load-bearing rather than
+    /// tidy.** Both tables this reads can hold a row keyed on the empty string — a
+    /// `wishlist_entries` row satisfies its `oracle_id IS NOT NULL OR card_id IS NOT NULL`
+    /// CHECK with `''`, and `deck.rs`'s `PLAYED_KEY` falls back to `deck_cards.card_id`, which
+    /// is merely `NOT NULL`. So an unguarded blank does not answer nothing; it answers
+    /// *whatever is degenerate*, which is `tags::query`'s `slug_norm = ''` lesson on two more
+    /// tables.
+    ///
+    /// Both rows below are planted for exactly that, and both are counted the moment the guard
+    /// goes.
+    #[test]
+    fn a_blank_oracle_id_answers_zeros_rather_than_matching_a_blank_row() {
+        let conn = held();
+        conn.execute_batch(
+            "INSERT INTO wishlist_entries (oracle_id, card_id, name, quantity,
+                                           created_at, updated_at)
+                  VALUES ('', NULL, 'Nothing in particular', 4, 0, 0);
+
+             INSERT INTO deck_cards (deck_id, category_id, variant, card_id, set_code,
+                                     collector_number, lang, name, quantity,
+                                     created_at, updated_at)
+                  VALUES (3, 14, 'live', '', '', '', 'en', 'Nothing in particular', 1, 0, 0);",
+        )
+        .unwrap();
+
+        for id in ["", "   "] {
+            assert_eq!(
+                holdings(&conn, id).unwrap(),
+                CardHoldings::default(),
+                "{id:?} names no card, so it holds none of one"
+            );
+        }
+    }
+
+    /// A wish pinned to a printing and carrying **no `oracle_id` of its own** still counts —
+    /// `wishlist_entries.oracle_id` is nullable and the table's CHECK allows exactly that row,
+    /// so the fallback through `cards` in [`crate::wishlist::wished_copies`] is the only thing
+    /// that can reach it. Written the obvious way (`w.oracle_id = ?1`) this row is invisible.
+    #[test]
+    fn a_wish_that_names_only_a_printing_still_counts() {
+        let conn = held();
+        conn.execute(
+            "INSERT INTO wishlist_entries (oracle_id, card_id, name, quantity,
+                                           created_at, updated_at)
+                  VALUES (NULL, 'p2', 'Lightning Bolt', 5, 0, 0)",
+            [],
+        )
+        .unwrap();
+        assert_eq!(holdings(&conn, "o1").unwrap().wished, 8);
+    }
+
+    /// **What an orphaned row costs, written down rather than discovered.** `cards` is dropped
+    /// and recreated on every sync and `collection_entries.card_id` is a soft reference, so a
+    /// copy whose printing the corpus has lost joins to nothing and drops out of `owned`. That
+    /// is not new here — `collection_list({oracleId})`, the read this command replaces, filters
+    /// on the joined `cards` row and loses it too — but it is the one figure of the three that
+    /// a resync can change without the reader touching anything.
+    ///
+    /// `decks` is unmoved, because a deck row that loses its printing keeps playing the card
+    /// under a *different* key rather than none: Burn still lists `p1`.
+    #[test]
+    fn a_copy_whose_printing_the_corpus_has_lost_is_not_counted() {
+        let conn = held();
+        conn.execute("DELETE FROM cards WHERE id = 'p3'", [])
+            .unwrap();
+        let after = holdings(&conn, "o1").unwrap();
+        assert_eq!(after.owned, 3, "the three `p3` copies have nothing to join");
+        assert_eq!(after.decks, 2, "and both decks still play the card");
+    }
+
+    /// The wire names, which nothing else in this build compares: a field renamed on one side
+    /// of the IPC boundary is `undefined` at the call site and no type error anywhere.
+    #[test]
+    fn the_holdings_dto_serialises_under_the_names_the_page_reads() {
+        assert_eq!(
+            serde_json::to_value(CardHoldings {
+                owned: 6,
+                wished: 3,
+                decks: 2,
+            })
+            .unwrap(),
+            serde_json::json!({ "owned": 6, "wished": 3, "decks": 2 })
         );
     }
 }

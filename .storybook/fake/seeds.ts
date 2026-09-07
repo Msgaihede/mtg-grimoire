@@ -47,6 +47,8 @@
 import { CARDS, type FakeCard } from "./cards";
 import {
   CLOCK_BASE,
+  TOKEN_ORACLE,
+  TOKEN_PRINTING,
   artTagEdges,
   artTagIllustrations,
   artTagMeta,
@@ -71,7 +73,8 @@ import type {
   FakeDeckCard,
   FakeDeckCategory,
   FakeDeckFolder,
-  FakeDeckTag,
+  FakeDeckLabel,
+  FakeDeckToken,
   FakeEntry,
   FakeWish,
   FakeWishlistFolder,
@@ -340,7 +343,7 @@ function deckCard(
     // reserves no copy, so seeding one would make every count in this file need a caveat.
     variant: "live",
     cardId: card.id,
-    tagId: null,
+    labelId: null,
     quantity,
     name: card.name,
     setCode: card.setCode,
@@ -375,15 +378,17 @@ function emptySeed(): FakeDb {
 /* ------------------------------------------------------------------ starter ------------ */
 
 /**
- * Twelve collection rows over twelve printings, spanning all three finishes and all five
+ * Thirteen collection rows over twelve printings, spanning all three finishes and all six
  * conditions, and every one of them is here for a branch.
  *
- * Counted: nonfoil 8, foil 3, etched 1; NM 8, LP 1, MP 1, HP 1, DMG 1; **20 copies across 12
- * entries**, which is why `collection_summary`'s `totalCards` and `entries` disagree in every
- * story built on this seed — as they must, since a row at zero is still a row.
+ * Counted: nonfoil 9, foil 2, etched 2; NM 8, LP 1, MP 1, HP 1, DMG 1, NONE 1; **21 copies
+ * across 13 entries**, which is why `collection_summary`'s `totalCards` and `entries` disagree
+ * in every story built on this seed — as they must, since a row at zero is still a row.
+ * `uniqueCards` stays **12**, because the thirteenth row is a second grade of a printing already
+ * here rather than a card the reader did not own before.
  *
- * **Four of the twelve sit in binders the reader named, three sit in a deck's group — two in
- * {@link DECK_1_GROUP} and one in {@link DECK_2_GROUP} — and five are at the root.** Filing moves
+ * **Four of the thirteen sit in binders the reader named, three sit in a deck's group — two in
+ * {@link DECK_1_GROUP} and one in {@link DECK_2_GROUP} — and six are at the root.** Filing moves
  * no copies and changes no total: `CollectionQuery.folderId` is absent by default and means
  * *every* folder, so every count above is what it always was and every story that says nothing
  * about folders sees the list it always saw.
@@ -424,10 +429,14 @@ function starterEntries(): FakeEntry[] {
     // a story cannot accidentally file a Japanese printing under `en`.
     entry(next(), printing("sta", "105"), "etched", "NM", 1),
     // **In deck 1's group**, which is what "this card is physically in that deck" looks like
-    // since schema v25 — and the fixture that makes `ownedQuantity`'s oracle match visible: deck
-    // 1 lists four *nonfoil* `mh2 267`, this row is foil, and the deck still reads owned 2. A
-    // Bolt is a Bolt.
-    entry(next(), printing("mh2", "267"), "foil", "NM", 2, { folderId: DECK_1_GROUP }),
+    // since schema v25 — and the fixture that makes `ownedQuantity`'s attribution visible: deck
+    // 1 lists four *nonfoil* `mh2 267`, this row is two of them, and the deck reads owned 2.
+    // **Nonfoil, not foil, since 2026-09-07** — `attribute_owned` matches the exact printing and
+    // finish now, so a foil pair here would be a copy the app's own `release_unclaimed_copies`
+    // sweeps out of the group on sight (and the v36 rung sweeps out of every existing file): a
+    // fixture staging that would depict a state the app actively prevents rather than one this
+    // seed needs to draw.
+    entry(next(), printing("mh2", "267"), "nonfoil", "NM", 2, { folderId: DECK_1_GROUP }),
     // Two Sol Rings, and the pair is the fixture for "same card, different printing": the
     // any-printing wish below is filled by both — wherever either is filed, because
     // `ownedAgainstWish` counts copies and not folders — and the row after it is the unpriced
@@ -478,6 +487,31 @@ function starterEntries(): FakeEntry[] {
       notes: "Cube proxy. The real one is not happening.",
       folderId: 2,
     }),
+    // **The ungraded copy — `NONE`, schema v35's sixth value, and the seed's only row wearing
+    // it.** A state a reader reaches by pressing `+` and saying nothing, which since v35 is
+    // every menu quick-add and an add popup opened and submitted untouched.
+    //
+    // **The same printing and the same finish as the `sta 105` row above**, differing in the
+    // grain's third term alone — which is the whole reason it is a second `sta 105` rather than a
+    // card of its own. The collection table draws the two together, one reading `Etched · Near
+    // mint` and the other `Etched` with nothing after it, so a surface that printed
+    // `Etched · NONE` or `Etched · —` has something on screen to be wrong about. It is the
+    // sort's fixture too: ordering by Finish puts this row **after** the NM one inside the
+    // etched run, because `CONDITION_RANK` ranks `NONE` last while a picker draws it first.
+    //
+    // Deliberately unfiled and deliberately without a price — a reader who fills in an
+    // acquisition story is a reader who picked a grade, so a `NONE` row carrying one would be a
+    // row nobody produces.
+    //
+    // **Last in the array on purpose.** Every id above it is one a story or a test may have
+    // written down (`collection_to_deck({ entryId: 5 })`, a drag payload, a `PickCopies` row),
+    // and inserting beside its twin would have shifted nine of them by one — a rename with no
+    // compiler behind it. `sta 105` is also the one printing here no deck lists and no wish
+    // pins, and this copy is at the root rather than in a group, so no editor badge and no
+    // shortage mark moves: a deck's `ownedQuantity` is what its **own group** physically holds.
+    // What does move is `entries` 12 → 13 and `totalCards` 20 → 21, plus this printing's owned
+    // pip 1 → 2 and the Lightning Bolt oracle's `card_holdings.owned`; `uniqueCards` stays 12.
+    entry(next(), printing("sta", "105"), "etched", "NONE", 1),
   ];
 }
 
@@ -502,6 +536,28 @@ function starterEntries(): FakeEntry[] {
  * that built its tree from the summary rather than from `collection_folder_list` would draw two
  * folders here and never notice, and the empty-folder sentence would be unreachable.
  *
+ * # And one of the three is locked
+ *
+ * **`Someday` is the folder this seed sets aside** (user schema v33) — the drawer with nothing in
+ * it, which is the second job that row now has and the reason it is the right one to carry the
+ * lock. **It is `Trade binder` that reads as issue #365's own example** (cards held for a trade:
+ * owned, not available, today indistinguishable from a binder), and locking *it* was tried and
+ * backed out: it holds the only Black Lotus anywhere in this seed, which `deck_theory_diff`
+ * leans on for "wanted 1, and one spare in the box" — and a locked copy is not spare (spec
+ * §4.2). A seed lock that quietly rewrote another fixture's meaning would be paying for one
+ * story with another.
+ *
+ * **So the lock costs this seed nothing at all**, and that is the property being bought:
+ * `Someday` holds no copies, so no list loses a row, no tile loses a number and no plan loses a
+ * spare, whatever a caller asks. What a story gets is the badge — **at the root, beside an
+ * unlocked sibling**, which is one screen showing both states rather than a level a reader has
+ * to navigate into. A story that wants the *exclusion* presses Lock on `Binder`, and that press
+ * is also what draws the inheritance, since `Trade binder` sits underneath it.
+ *
+ * **Nothing else here is locked**, and nothing that never asks loses anything either way: an
+ * absent `excludeLocked` is every folder there is, so a caller that says nothing sees exactly
+ * the collection it always saw.
+ *
  * `sortOrder` is what `collection_folder_create` writes — `max + 1` **among siblings** — so the
  * two at the root are 0 and 1 while the child starts at 0 again rather than continuing their run.
  *
@@ -525,9 +581,13 @@ function starterEntries(): FakeEntry[] {
  */
 function starterCollectionFolders(decks: FakeDeck[]): FakeCollectionFolder[] {
   return [
-    { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0 },
-    { id: 2, parentId: 1, name: "Trade binder", kind: "user", deckId: null, sortOrder: 0 },
-    { id: 3, parentId: null, name: "Someday", kind: "user", deckId: null, sortOrder: 1 },
+    { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0,
+      locked: false },
+    { id: 2, parentId: 1, name: "Trade binder", kind: "user", deckId: null, sortOrder: 0,
+      locked: false },
+    // The one folder in this seed the reader has set aside — see the note above.
+    { id: 3, parentId: null, name: "Someday", kind: "user", deckId: null, sortOrder: 1,
+      locked: true },
     // Ids 4 through 7, in deck order, which is what {@link DECK_1_GROUP} names.
     ...decks.map((d, i) => ({
       id: 4 + i,
@@ -536,6 +596,8 @@ function starterCollectionFolders(decks: FakeDeck[]): FakeCollectionFolder[] {
       kind: "deck",
       deckId: d.id,
       sortOrder: 0,
+      // The app's own, so the toggle refuses it: a deck's group is already fixed.
+      locked: false,
     })),
     {
       id: 4 + decks.length,
@@ -544,6 +606,8 @@ function starterCollectionFolders(decks: FakeDeck[]): FakeCollectionFolder[] {
       kind: "removed",
       deckId: null,
       sortOrder: 0,
+      // The app's own too, and a holding area is the last thing a lock would mean anything on.
+      locked: false,
     },
   ];
 }
@@ -710,12 +774,12 @@ function starterDecks(): FakeDeck[] {
       formatKey: "modern",
       description: "Sixty legal cards and no plan. The shell every Modern story is cut from.",
       coverCardId: printing("mh2", "138").id,
-      // **The deck whose group holds the most cards** — see {@link starterEntries}: two **foil**
+      // **The deck whose group holds the most cards** — see {@link starterEntries}: two
       // Counterspells (`mh2 267`) and one damaged Ragavan (`mh2 138`) sit in folder 4, this
-      // deck's group, against four *nonfoil* of each on the list. So the Counterspell row reads
-      // owned 2 of 4 off a copy in the other finish, which is `owned_by_oracle`'s "a Bolt is a
-      // Bolt" made visible, and those three copies are unavailable to every other deck — the
-      // whole of what exclusivity means since schema v25.
+      // deck's group, against four of each on the list. Both are matched at `(card_id, finish)`
+      // since 2026-09-07 — nonfoil against nonfoil, exactly as the list names them — so the
+      // Counterspell row reads owned 2 of 4 and the Ragavan row 1 of 4. Those three copies are
+      // unavailable to every other deck — the whole of what exclusivity means since schema v25.
       archived: false,
       updatedAt: CLOCK_BASE - HOUR,
     }),
@@ -939,7 +1003,7 @@ function starterDeckCards(categories: FakeDeckCategory[]): FakeDeckCard[] {
 
 /**
  * Deck 4's two lists — **the only rows in any seed with a `theory` variant**, and the only ones
- * carrying a tag.
+ * carrying a label.
  *
  * Everything schema v8 added is reachable from this one deck, and each piece is here to be seen
  * rather than to be counted:
@@ -960,18 +1024,18 @@ function starterDeckCards(categories: FakeDeckCategory[]): FakeDeckCard[] {
  *   and filed under the inactive "Cut list" it produces no issue at all — the same silence the
  *   Maybeboard gives, from a category with no special kind. Switch it on and the deck reports a
  *   banned card.
- * * **A tagged card.** One label on one row — and since schema v21 that is the *whole* of what
- *   `DeckDetail.tags` describes: a tag belongs to no deck, so what this deck has is a card
- *   wearing one. The labels no card here wears are `deck_tag_all`'s, one section down in the
- *   Tags dialog.
+ * * **A labelled card.** One label on one row — and since schema v21 that is the *whole* of what
+ *   `DeckDetail.labels` describes: a label belongs to no deck, so what this deck has is a card
+ *   wearing one. The labels no card here wears are `deck_label_all`'s, one section down in the
+ *   Labels dialog.
  */
 function testbedDeckCards(
   categories: FakeDeckCategory[],
-  tags: FakeDeckTag[],
+  labels: FakeDeckLabel[],
   startId: number,
 ): FakeDeckCard[] {
   let id = startId;
-  const cut = tags.find((t) => t.name === "Cut candidate")!;
+  const cut = labels.find((l) => l.name === "Cut candidate")!;
   const filed = (
     card: FakeCard,
     name: string,
@@ -984,7 +1048,7 @@ function testbedDeckCards(
     // --- live: what is sleeved up -------------------------------------------------------
     filed(printing("eld", "303"), "Commander", 1, "live"),
     // Two copies in a singleton format, wearing the label that says the reader knows.
-    filed(printing("c21", "263"), "Ramp", 2, "live", { tagId: cut.id }),
+    filed(printing("c21", "263"), "Ramp", 2, "live", { labelId: cut.id }),
     filed(printing("pcy", "45"), "Card advantage", 1, "live"),
     filed(printing("mp2", "8"), "Card advantage", 1, "live"),
     // Banned in Commander, and silent because the pile it is in is switched off.
@@ -1036,25 +1100,110 @@ function testbedDeckCards(
 /**
  * **Three labels, belonging to no deck** — one app-wide list, since schema v21.
  *
- * There were four, two of them a second `Cut candidate` made by a second deck, because a tag was
- * per-deck data and a name used twice was two rows. That is exactly what the app-wide grain
- * refuses now, so the duplicate is gone and what is left is the shape both tag surfaces are
+ * There were four, two of them a second `Cut candidate` made by a second deck, because a label
+ * was per-deck data and a name used twice was two rows. That is exactly what the app-wide grain
+ * refuses now, so the duplicate is gone and what is left is the shape both label surfaces are
  * about: one label a deck's list is **wearing** (`Cut candidate`, on `Rhystic Testbed`'s two
  * Ramp copies), one worn only elsewhere (`Budget swap`), and one worn by nothing at all
  * (`Combo piece`).
  *
- * That third row is the one no `deck_tag_list` can answer and is why `deck_tag_all` exists: a
+ * That third row is the one no `deck_label_list` can answer and is why `deck_label_all` exists: a
  * label the reader made before any card wore it is still a label they own. Between them the
- * three seed every state the Tags dialog's two sections and the "More tags…" dialog draw.
+ * three seed every state the Labels dialog's two sections and the "More labels…" dialog draw.
  */
-function starterTags(): FakeDeckTag[] {
+function starterLabels(): FakeDeckLabel[] {
   return [
     { id: 1, name: "Cut candidate", color: "ember" },
     { id: 2, name: "Budget swap", color: "moss" },
-    // Worn by no row, which is the state the Tags dialog's second section and the "More tags…"
-    // dialog both exist to draw: a label the reader made that no card in the open list wears.
+    // Worn by no row, which is the state the Labels dialog's second section and the
+    // "More labels…" dialog both exist to draw: a label the reader made that no card in the open
+    // list wears.
     // There is no second `Cut candidate` any more — one name is one row, app-wide.
     { id: 3, name: "Combo piece", color: "gold" },
+  ];
+}
+
+/**
+ * The `deck_tokens` overrides — **four rows against a list nothing seeds**, and that asymmetry
+ * is the feature rather than a gap in this seed.
+ *
+ * The tokens a deck needs are derived from its cards on every read (`db.ts`'s `TOKEN_PARTS`), so
+ * the populated panel comes for free: **deck 1 makes five** — a Treasure from Ragavan and from
+ * Smuggler's Copter, a Construct from Urza's Saga, the two same-named Wurms from Elesh Norn in
+ * its *sideboard*, and the emblem from Jace — while deck 2 makes two, deck 4 makes one, and
+ * **deck 3 makes none at all**, which is the empty state a story needs and gets from a real
+ * deck rather than from an empty world. Deck 1's Maybeboard names a Treasure too and must
+ * contribute nothing, because an inactive category counts toward nothing.
+ *
+ * What this table can therefore be is only what the reader *changed*, and the four rows are one
+ * of each thing they can change:
+ *
+ * * **An art and a count on one row** (deck 1's Treasure). The reader kept the older `tafr`
+ *   printing over the one the resolver names and asked for four of them — so the tile draws a
+ *   deviation in both of its controls at once, and the reset affordance has something to undo.
+ * * **A dismissal** (deck 1's lifelink Wurm). `hidden` is still derived and still a row; it is
+ *   simply not drawn until a reader asks to see what they put away, which is the whole of the
+ *   "show dismissed" control. Its twin is left untouched **on purpose**: two tiles that differ
+ *   only in their rules text, one of them dismissed, is the disambiguation case and the
+ *   dismissal case in one screen.
+ * * **A count of zero** (deck 1's Construct). `0` is a value and not an absence — a token the
+ *   reader has decided they need none of while keeping it on the list — and it is the exact
+ *   state `stored || 1` reads as untouched and silently draws as 1.
+ * * **A hand-added token nothing derives** (deck 2's emblem). Deck 2 runs no Jace, so this row
+ *   comes back `derived: false` with an empty `sources` — which is also what a derived token
+ *   becomes when the reader keeps it after cutting the card that made it, and the only state
+ *   `deck_token_add` can produce.
+ *
+ * Two things are deliberately *not* here. **Deck 1's other three rows carry no override at all**,
+ * because a panel where every tile had been touched would never draw the untouched one. And
+ * **nothing is seeded on deck 3**, whose empty panel is the point.
+ */
+function starterDeckTokens(): FakeDeckToken[] {
+  const at = CLOCK_BASE - HOUR;
+  return [
+    {
+      id: 1,
+      deckId: 1,
+      oracleId: TOKEN_ORACLE.treasure,
+      cardId: TOKEN_PRINTING.treasureTafr,
+      quantity: 4,
+      state: "auto",
+      createdAt: at,
+      updatedAt: at,
+    },
+    {
+      id: 2,
+      deckId: 1,
+      oracleId: TOKEN_ORACLE.construct,
+      // No art picked — only the count moved, which is what keeps the two halves of an override
+      // separable on a tile.
+      cardId: null,
+      quantity: 0,
+      state: "auto",
+      createdAt: at,
+      updatedAt: at,
+    },
+    {
+      id: 3,
+      deckId: 1,
+      oracleId: TOKEN_ORACLE.wurmLifelink,
+      cardId: null,
+      quantity: null,
+      state: "hidden",
+      createdAt: at,
+      updatedAt: at,
+    },
+    {
+      id: 4,
+      deckId: 2,
+      oracleId: TOKEN_ORACLE.okoEmblem,
+      // `deck_token_add` names a printing, so a hand-added row always carries one.
+      cardId: TOKEN_PRINTING.okoEmblem,
+      quantity: null,
+      state: "manual",
+      createdAt: at,
+      updatedAt: at,
+    },
   ];
 }
 
@@ -1148,7 +1297,15 @@ function starterAudit(): FakeDeckAudit[] {
     card(4, "quantity", daysAgo(1, 22, 24), "lea", "288", '{"category":"Ramp","from":3,"to":7}', 4),
     card(4, "remove", daysAgo(1, 22, 31), "isd", "51", '{"category":"Ramp","quantity":1}', -1),
 
-    card(4, "tag", daysAgo(0, 11, 4), "c21", "263", '{"tag":"Cut candidate","previous":null}', 0),
+    card(
+      4,
+      "label",
+      daysAgo(0, 11, 4),
+      "c21",
+      "263",
+      '{"label":"Cut candidate","previous":null}',
+      0,
+    ),
     row(
       4,
       "category",
@@ -1278,7 +1435,7 @@ function starterCombos(cards: readonly FakeCard[]) {
 function starterSeed(): FakeDb {
   const decks = starterDecks();
   const deckCategories = starterCategories();
-  const deckTags = starterTags();
+  const deckLabels = starterLabels();
   const migrated = starterDeckCards(deckCategories);
   return makeDb({
     ...starterFeeds(CARDS),
@@ -1291,10 +1448,14 @@ function starterSeed(): FakeDb {
     decks,
     deckFolders: starterFolders(),
     deckCategories,
-    deckTags,
+    deckLabels,
     // One id sequence over both halves, `INTEGER PRIMARY KEY`'s own behaviour: deck 4's rows
     // continue where decks 1–3's stopped rather than starting again and colliding.
-    deckCards: [...migrated, ...testbedDeckCards(deckCategories, deckTags, migrated.length + 1)],
+    deckCards: [
+      ...migrated,
+      ...testbedDeckCards(deckCategories, deckLabels, migrated.length + 1),
+    ],
+    deckTokens: starterDeckTokens(),
     deckAudit: starterAudit(),
   });
 }
@@ -1597,6 +1758,12 @@ function largeCards(): FakeCard[] {
  * Finish is drawn from each card's own `finishes` array rather than cycled blindly: a foil row
  * on a nonfoil-only printing is a state the app cannot produce, and it would price as null and
  * look like a bug in the summary.
+ *
+ * **The condition cycle is the five real grades and deliberately not the six.** `NONE` is the
+ * *absence* of a grade, and a sixth of a 600-row wall wearing it would say the reader left one
+ * card in six ungraded, which is a claim about a reader rather than a shape a screen needs. So
+ * a Condition filter narrowed to `Not set` finds nothing in this world, on purpose: `starter`
+ * is where that row lives, and depth is the only thing this seed is for.
  */
 function largeEntries(cards: FakeCard[]): FakeEntry[] {
   const next = ids();
@@ -1723,6 +1890,7 @@ function bracketMismatchSeed(): FakeDb {
     kind: "deck",
     deckId: BRACKET_DECK,
     sortOrder: 0,
+    locked: false,
   });
   const main = categoryNamed(db.deckCategories, BRACKET_DECK, "Main deck");
   const commander = categoryOf(db.deckCategories, BRACKET_DECK, "commander");

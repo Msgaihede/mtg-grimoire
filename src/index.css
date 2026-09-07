@@ -52,6 +52,50 @@
    `tsc` and the suite both green. See `docs/reference/frontend-design.md` for the grep. */
 @custom-variant coarse (@media (pointer: coarse));
 
+/* **Tailwind's built-in `focus-visible` variant, redefined to require a keyboard.**
+
+   `:focus-visible` does not mean what its name promises. Chromium's heuristic is modality-based
+   rather than navigation-based: any `keydown` arms it and whatever *already* holds focus starts
+   matching, with the focus never moving. So a reader clicked a card, the dialog focused its own
+   `tabIndex={-1}` panel, they pressed `w` — and a gold outline appeared around the whole modal.
+   The measurement, four steps of it, is in `src/lib/keyboardModality.ts`.
+
+   That module publishes `data-kbd` on `<html>` when focus *moved* and the reader's last input was
+   a key. Gating the variant here rather than at the call sites is the whole leverage: **every
+   `focus-visible:` utility in `src/` is covered by this one line without changing, and so is
+   every one written after today.** The alternative — a new variant name spelled out at each of
+   the ~400 sites — is a rule that has to be remembered, and the site that forgets it is a focus
+   outline that flickers on for a keystroke that did nothing.
+
+   The `&:is(…)` shape is `dark`'s directly above, for the same reason: it keeps the whole
+   condition on the element being styled, so the variant composes with the others (`coarse`,
+   `dark`, `[&::-webkit-slider-thumb]`) instead of fighting them for the selector's front.
+
+   **Proved by building, never by reading**, which is `coarse`'s warning above and it applies
+   double to an *override* of a variant Tailwind already ships: a redefinition this version
+   ignores does not warn, it silently leaves the built-in in place — and the app then looks
+   exactly as it does today, with `tsc` and the whole suite green.
+   `src/lib/keyboardModality.test.ts` therefore compiles these declarations against the real
+   Tailwind and reads the selector back, so the check is a build's and not a reader's. */
+@custom-variant focus-visible (&:is(html[data-kbd] *):focus-visible);
+
+/* The same gate for the one control whose focus ring is not painted on the focusable box.
+
+   A range input's ring goes on `::-webkit-slider-thumb` — the input itself is a full-width track
+   with no edges a reader could make sense of, which is `PriceRange`'s own note. That made it the
+   single site in `src/` that spelled the pseudo-class inside an *arbitrary* variant, by hand and
+   in square brackets, where the redefinition above cannot reach it: Tailwind rewrites the variant
+   it owns by name, not a string a component wrote for itself.
+
+   So it gets a name of its own rather than a stack of two. Composing the gate and the
+   pseudo-element at the call site would work, and the reason not to is this file's standing one —
+   a variant Tailwind mis-parses emits nothing, silently, and a thumb whose outline quietly
+   stopped existing looks exactly like a thumb whose outline is correctly suppressed. One name,
+   compiled and asserted in `keyboardModality.test.ts`, cannot fail that way. That test also
+   sweeps `src/` so a second component cannot reintroduce the hand-spelled form — which is why
+   this paragraph describes the shape instead of quoting it. */
+@custom-variant focus-thumb (&:is(html[data-kbd] *):focus-visible::-webkit-slider-thumb);
+
 @theme inline {
   /* The display face. Titles, the first-run hero, section headers — never body text and
        never below 18px, which is the whole of Cinzel's brief. */
@@ -217,6 +261,28 @@
   body {
     @apply bg-background text-foreground;
   }
+  /* **The browser's own focus ring, held to the same rule as ours.**
+
+     The variant at the head of this file gates every `focus-visible:` utility the app writes, but
+     it cannot reach the one rule the app did not write: the user agent's own
+     `:focus-visible { outline: auto }`, which runs off Chromium's heuristic and therefore paints
+     on the exact keystroke this whole change exists to ignore. Without this line the fix would
+     read as a *recolour* — the gold outline replaced by the platform's blue one, on the same
+     press, around the same modal.
+
+     In `base` so that any utility beats it: when `data-kbd` *is* set this selector does not match
+     at all, so the two can never both be live and there is nothing here for a real focus outline
+     to fight. `:where()` on the root keeps the specificity at a single pseudo-class, which is the
+     weakest thing that can still say "only while the reader is not on the keyboard".
+
+     The `::-webkit-slider-thumb` arm is `PriceRange`'s: a range input draws its ring on the thumb
+     pseudo-element rather than on the box, so the selector above sails straight past it. That
+     component gates its own thumb outline through `focus-thumb:` — this is the UA half of the same
+     control. */
+  html:not([data-kbd]) :focus-visible,
+  html:not([data-kbd]) :focus-visible::-webkit-slider-thumb {
+    outline: none;
+  }
   html {
     @apply font-sans;
     /* The app is dark-only, and the controls the platform draws for itself — the format
@@ -292,11 +358,31 @@
   --color-pie-g: #00733e;
   --color-pie-gold: #d9b95c;
   /* The Game Changer banner's stamp, and a deeper gold than `--color-pie-gold` on purpose:
-     a *tag* may be gold, and the two marks can land on the same card in the same 27px strip.
+     a *label* may be gold, and the two marks can land on the same card in the same 27px strip.
      A stamped seal and a label the reader chose must not be one colour. Near-black sits on
      it, exactly as it does on the fills above. */
   --color-pie-gold-deep: #a9873c;
   --color-pie-c: #c8c4bf;
+
+  /* The deckbuilder's two theory marks (2026-09-07). Green where a live row is the printing the
+     plan named, blue where it is the same card in a printing it did not.
+
+     Literal hexes rather than `var(--color-ok)` / `var(--color-pie-u)`, for `LABEL_COLORS`'
+     reason one file over: these are the values a colour picker opens on and the values a reader's
+     own choice replaces, so they cannot be a reference to something the palette decides later.
+     `#56bd78` is `--color-ok`'s `oklch(0.72 0.14 152)` converted to sRGB — in gamut, so exact.
+
+     The `-fg` pair is what is legible printed on each: the banner mark is a filled box with a
+     tick or a signed number on it. `useMarkColors` overwrites all four when the reader has
+     chosen, computing each foreground with `labelFgCss`' luminance formula, so a pale custom
+     green does not swallow the tick.
+
+     Placed after the pie deeps rather than inside them because they are not a sixth identity
+     colour: they say what a mark *means*, and only two of the app's marks wear them. */
+  --color-theory-exact: #56bd78;
+  --color-theory-exact-fg: var(--color-text);
+  --color-theory-name: #0e68ab;
+  --color-theory-name-fg: var(--color-text);
 
   /* Rarity, as a gem dot or tinted text. Nothing bigger — a rarity is a footnote. */
   --color-rarity-common: #9aa0a6;
@@ -530,4 +616,146 @@ html[data-dragging] * {
 html[data-dragging] * {
   user-select: none !important;
   -webkit-user-select: none !important;
+}
+
+/* ---------------------------------------------------------------------------------------
+   And this one is the app's, not the library's — the only rule in this region that dnd-kit does
+   not also write. Added 2026-09-03.
+
+   **The preview is a clone of the element the pointer went down on, drawn at full size and,
+   until now, at full opacity.** On a deck a card tile is ~293px of opaque art, and the thing it
+   covers is the thing the reader is aiming at: the heading they are filing into, the marks
+   saying which piles would take it, the tray at the foot of the window. An affordance the app
+   draws and then hides under the payload is one it may as well not draw.
+
+   **0.75, chosen against the two failures either side of it.** Much above it and a full card
+   tile still occludes what is under it, which is the defect; much below and dark card art goes
+   muddy against a dark window and the reader loses track of what they are carrying. At 0.75 the
+   structure underneath reads through and the card stays unambiguously itself.
+
+   **On the preview and nothing on the source.** The library already leaves a
+   `[data-dnd-placeholder]` behind in the flow, so where the card came *from* is answered; this
+   is only about what the pointer is carrying over everything else.
+
+   It deliberately keeps its own rule rather than joining the `[data-dnd-dragging]` block above,
+   which is a verbatim copy the fence in `lib/dndManager.test.ts` checks the library against. That
+   fence runs one way — every selector and declaration the library injects must appear here — so
+   an extra rule of the app's own is legal, and this is one the app can edit without it reading
+   as drift in a copy it does not own.
+   --------------------------------------------------------------------------------------- */
+
+[data-dnd-dragging] {
+  opacity: 0.75;
+}
+
+/* ---------------------------------------------------------------------------------------
+   A slim scrollbar, for a scroll area **inside** a panel.
+
+   The app draws no scrollbars of its own anywhere else: `color-scheme: dark` up in the base
+   layer is the whole of the treatment, because every other scroller in this app is a *page* or
+   a view filling the window, where the platform's own bar is the right one and a reader already
+   knows it. A column inside a dialog is the case that is not — 15px of opaque native gutter down
+   the side of a 329px list reads as a second window rather than as part of the panel.
+
+   **`::-webkit-scrollbar` rather than `scrollbar-width: thin`, and the two cannot be mixed:**
+   setting the standard property makes Chromium ignore the pseudo-elements entirely, so this
+   block deliberately sets neither `scrollbar-width` nor `scrollbar-color`. `thin` was measured in
+   this webview at **10px** (`src/features/decks/CLAUDE.md`, where it was rejected as a *width*
+   fix for the desk row's arithmetic) and it buys the narrower bar without the rounded thumb or
+   the transparent track — which is most of what makes a bar read as the panel's rather than the
+   platform's. This target is WebView2, so the pseudo-elements are not a progressive enhancement.
+
+   **The visible thumb is 6px inside a 10px track.** The track keeps the full width so the thumb
+   stays a real pointer target; the `border` is transparent and `background-clip: content-box` is
+   what turns the rest of it into breathing room rather than into a stripe. Nothing here reserves
+   space when there is nothing to scroll — an unscrollable box draws no bar at all, which is why
+   this carries no `scrollbar-gutter`.
+
+   Applied by name, at each scroller that wants it, rather than to everything inside a dialog:
+   which boxes scroll is a layout fact those files already state, and a descendant rule here
+   would be a second opinion about it living somewhere nobody reads.
+   --------------------------------------------------------------------------------------- */
+
+.scrollbar-slim::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.scrollbar-slim::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-slim::-webkit-scrollbar-thumb {
+  background-color: var(--color-border);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.scrollbar-slim::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-dim);
+}
+
+/* Where a vertical and a horizontal bar meet. Transparent, or it is a grey square in the
+   corner of a panel that has no other grey squares in it. */
+.scrollbar-slim::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+
+/* ---------------------------------------------------------------------------------------
+   The gold thumb, on **one** scroller: the card modal's printings list.
+
+   Worn together with `.scrollbar-slim` above rather than instead of it — that block owns the
+   geometry (the 10px track, the 6px thumb inside a transparent border, the pill radius) and this
+   one owns nothing but colour. So a change to how slim a slim bar is reaches this one too, and
+   nothing here can drift into a second set of measurements.
+
+   **Only that list, and the restriction is the point.** Gold is this app's mark for *the
+   reader's own* — the owned badge, a deck line's count, `In your grimoire` — and a panel where
+   every scrollbar is gold spends the colour on furniture. The printings list is the one column
+   in the modal a reader is *working* down rather than glancing at, and it is the only scroller
+   in the panel that is routinely long enough to need the bar at all.
+
+   **`::-webkit-scrollbar-track` has to be restated here even though it changes only a colour**:
+   the block above sets it transparent, the two selectors have identical specificity, and this
+   one wins on source order alone. Same for the thumb's `:hover` — the slim block's hover carries
+   a `:hover` and would otherwise outrank this block's base rule on the one state a reader is
+   most likely to be in when they look at it.
+
+   The track is the border grey at just over half strength, so it reads as a channel the thumb
+   runs in rather than as a second border down the column — visible against the panel, and gone
+   the moment there is nothing to scroll, since an unscrollable box draws no bar.
+   --------------------------------------------------------------------------------------- */
+
+.scrollbar-accent::-webkit-scrollbar-track {
+  background-color: color-mix(in oklab, var(--color-border) 22%, transparent);
+  border-radius: 9999px;
+}
+
+/* **The channel comes up under the pointer, and it is the *area's* hover rather than the
+   track's.** `::-webkit-scrollbar-track:hover` fires only across the few pixels of the bar
+   itself, which is the one place a reader is already looking; what is worth answering is the
+   pointer arriving anywhere in the list, when they are about to reach for it. At rest the track
+   is barely a tint, so the gold thumb is the only thing the eye catches.
+
+   **22 → 30 → 36, which is a smaller ladder than it first shipped as.** It was 22 → 45 → 65, and
+   at those numbers the channel arriving under the pointer read as a second control appearing
+   rather than as the one that was already there becoming easier to aim at. The thumb is the
+   thing worth seeing; the track only has to stop being invisible. */
+.scrollbar-accent:hover::-webkit-scrollbar-track {
+  background-color: color-mix(in oklab, var(--color-border) 30%, transparent);
+}
+
+/* And a little further again once they are actually on the bar. */
+.scrollbar-accent::-webkit-scrollbar-track:hover {
+  background-color: color-mix(in oklab, var(--color-border) 36%, transparent);
+}
+
+.scrollbar-accent::-webkit-scrollbar-thumb {
+  background-color: var(--color-accent);
+}
+
+.scrollbar-accent::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in oklab, var(--color-accent) 78%, var(--color-text));
 }

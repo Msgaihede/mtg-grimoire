@@ -19,7 +19,8 @@
  * `MoveOutcome`                                  — `src-tauri/src/collection_alloc.rs`
  * `WishInput`/`WishlistQuery`/`WishRow`/`WishlistPage` — `src-tauri/src/wishlist.rs`
  * `DeckInput`/`DeckPatch`/`DeckViewState`/`DeckRow`/`DeckCardRow`/`DeckDetail`/
- * `FormatSpecRow`                                — `src-tauri/src/deck.rs`
+ * `FormatSpecRow`/`PipCost`/`DeckPipCosts`/
+ * `BracketCardRow`/`DeckBracketRead`              — `src-tauri/src/deck.rs`
  * `CardFilters`, flattened into both list queries — `src-tauri/src/filters.rs`
  * `MarketplaceFeedStatus`                        — `src-tauri/src/marketplace_feed.rs`
  * `CardTags`/`PrintingTags`                     — `src-tauri/src/tags/oracle.rs`
@@ -36,39 +37,55 @@
  * `PairingProgress`/`QrMatrix`/`PairedDevice`      — `src-tauri/src/sync_pair/pairing.rs`,
  *                                                  `.../identity.rs`, `.../invite.rs`
  *
- * **Seven settings carry no struct at all.** Each is one `app_meta` row: two answered as a bare
- * string — `getMarketplace`/`setMarketplace` (`src-tauri/src/marketplace.rs`) and
- * `printingGroupBy`/`setPrintingGroupBy` (`src-tauri/src/card.rs`) — three as a bare map,
+ * **Nine settings carry no struct at all.** Each is one `app_meta` row: three answered as a
+ * bare string — `getMarketplace`/`setMarketplace` (`src-tauri/src/marketplace.rs`),
+ * `printingGroupBy`/`setPrintingGroupBy` (`src-tauri/src/card.rs`) and
+ * `deckSort`/`setDeckSort` (`src-tauri/src/decksort.rs`) — five as a bare map,
  * `cardZoom`/`setCardZoom` (`src-tauri/src/zoom.rs`), `listView`/`setListView`
- * (`src-tauri/src/listview.rs`) and `flattenState`/`setFlattenState`
- * (`src-tauri/src/flatten.rs`), and two as a
- * bare `boolean`: `navCollapsed`/`setNavCollapsed` (`src-tauri/src/nav.rs`) and
- * `deckSearchOpen`/`setDeckSearchOpen` (`src-tauri/src/deck.rs`). All seven are
+ * (`src-tauri/src/listview.rs`), `flattenState`/`setFlattenState`
+ * (`src-tauri/src/flatten.rs`), `markColors`/`setMarkColor`
+ * (`src-tauri/src/markcolors.rs`) and `searchOpen`/`setSearchOpen`
+ * (`src-tauri/src/searchopen.rs`), and one as a
+ * bare `boolean`: `navCollapsed`/`setNavCollapsed` (`src-tauri/src/nav.rs`). All nine are
  * the shape a stored preference has to have: the read falls back on its default for a row that
  * is missing *or* holds a value this build does not recognise, and only the *write* refuses.
  *
- * Five of them are therefore typed loosely here rather than as their unions: the narrowing
+ * Seven of them are therefore typed loosely here rather than as their unions: the narrowing
  * belongs to the module that owns the vocabulary (`@/lib/marketplace`,
- * `@/features/card/printings`, `@/lib/cardZoom`, `@/lib/store` for both of its two rows), and a
+ * `@/features/card/printings`, `@/lib/cardZoom`, `@/lib/store` for both of its two rows,
+ * `@/features/decks/deckSort`, `@/lib/useMarkColors`, `@/features/search/useSearchOpen`), and a
  * row a newer build wrote
- * must reach this side as what it is. **The two booleans are the ones with no narrowing to do**, and that is
+ * must reach this side as what it is. **The deck sort is the one where the *write* refuses
+ * nothing either**, and it is the rule above meeting a vocabulary the backend does not have
+ * rather than an exception to it: three of the six sort keys are computed on this side, so
+ * `deck_sort.rs` has no list to check a word against — see {@link ipc.setDeckSort}. **The one bare boolean left is the one with no narrowing to do**, and that is
  * the same argument arriving at nothing rather than an exception to it: a boolean has no
  * vocabulary for a later build to have widened, so there is no third state a row could come back
- * in. Each far end folds a missing row, a junk row and an unreadable one alike into its own
- * default — `false` for the nav rail, which is expanded, and `true` for the deck editor's search
- * column, which is open — and `boolean` here is the whole of the type, with nothing left for this
- * side to decide. Both store `"1"`/`"0"` and read anything else as that default, so a hand-edit
+ * in. Its far end folds a missing row, a junk row and an unreadable one alike into one
+ * default — `false` for the nav rail, which is expanded — and `boolean` here is the whole of the
+ * type, with nothing left for this
+ * side to decide. It stores `"1"`/`"0"` and reads anything else as that default, so a hand-edit
  * or a spelling a future build invents is already collapsed before it reaches the wire.
  *
- * The zoom row, the list-layout row and the flatten row are the three of the seven whose *shape*
- * is a map, and the
- * difference is worth a sentence: none has a single default to fall back on, because there are
- * seven walls, four lists and two cabinets and each one has been touched or not. So the backend
- * answers only
- * what it has, and a section it says nothing about keeps the default the store was built with.
- * **The flatten row is the one where the keys are a vocabulary and the values are not** — which
+ * **There were two of those booleans until 2026-09-07**, and where the second one went says more
+ * about the split above than either paragraph does. `deckSearchOpen` was one row for one
+ * column; the collection and the wishlist growing the same docked search would have made it
+ * three rows, six commands, three query keys and three prefetches for one fact. It is
+ * {@link ipc.searchOpen} now, a map keyed by section — so the setting moved out of the boolean
+ * paragraph and into the map one without a word of either argument changing.
+ *
+ * The zoom row, the list-layout row, the flatten row, the mark-colour row and the search-column
+ * row are the five of the nine whose *shape* is a map, and the difference is worth a sentence:
+ * none has a single default to fall back on, because there are eight walls, four lists, two
+ * cabinets, three search columns and a handful of marks, and each one has been touched or not. So
+ * the backend answers only what it has, and a section it says nothing about keeps the default the
+ * store was built with — which for the mark colours is the one `index.css` draws, a default this
+ * side does not hold as a value at all.
+ * **The flatten row and the search-column row are the two where the keys are a vocabulary and
+ * the values are not** — which
  * is the two arguments above meeting in one row rather than a third kind of setting: *which*
- * pages file cards is `@/lib/store`'s to say, while a `bool` has no junk state for a later build
+ * pages file cards is `@/lib/store`'s to say and *which* pages carry a search column is
+ * `@/features/search/useSearchOpen`'s, while a `bool` has no junk state for a later build
  * to have widened. So `isFlattenSection` narrows the key, and the only thing `hydrateFlatten`
  * asks of the value is that it really is a boolean — which is a check on the *wire*, not on a
  * vocabulary: this file's `boolean` is a claim about what the far end sends, and a row that has
@@ -254,6 +271,28 @@ export interface SearchRequest {
    */
   owned?: boolean;
   /**
+   * The deck this search is being run **for** — the deck builder's card search tab and nothing
+   * else. Absent everywhere else, and absent means "every copy, wherever it is filed", which is
+   * what this command answered before the field existed.
+   *
+   * **Not a filter over cards.** It changes no row's presence and no row's order; it decides
+   * which of the reader's copies count as *available to this deck*, for {@link owned} and
+   * {@link CardSummary.ownedQuantity} together. A copy sleeved into another deck's group, or
+   * set aside in a locked drawer, stops counting; a copy in this deck's own group, on the desk,
+   * in a binder or in `Recently removed` still does.
+   *
+   * Why the deck builder is the one asker
+   * ([#349](https://github.com/Msgaihede/mtg-grimoire/issues/349)): a badge reading `×4` over a
+   * card whose four copies are all in other decks told the reader they had something they could
+   * not use, while the Collection tab in the same panel — which has sent
+   * `allocation: "unallocated"` since folders landed — showed none of them.
+   *
+   * **The two halves move together.** Narrowing the count and leaving the filter alone would
+   * put a card under the Owned chip wearing `×0`. `Availability` in
+   * `src-tauri/src/collection_source.rs` is the one place the arms are written.
+   */
+  availableForDeck?: number;
+  /**
    * How to order the page: columns in priority order, the first deciding and the rest
    * breaking its ties. Empty or absent is the default — relevance when `text` is set, name
    * order when it is not.
@@ -365,8 +404,9 @@ export interface CardSummary {
    * One of **four** fields in this file with this name, and only one of the other three asks
    * the same question. {@link WishRow.ownedQuantity} is counted against one wish and *is*
    * finish-aware, so a foil wish is not satisfied by the nonfoil in the binder;
-   * {@link DeckCard.ownedQuantity} is neither — it is the copies one deck's allocator
-   * *secured*, oracle-grained and clamped to what the entries still hold. The fourth,
+   * {@link DeckCard.ownedQuantity} is neither — it is what one deck's own collection group
+   * physically holds, matched to the row's exact `(card_id, finish)` since 2026-09-07 rather
+   * than to the oracle card. The fourth,
    * {@link ImportMatch.ownedQuantity}, **is** this number: every copy of one printing,
    * finish-blind, asked per decklist line instead of per search row. Read each against its own
    * row.
@@ -707,6 +747,48 @@ export interface MeldRelation {
   artist: string | null;
 }
 
+/**
+ * What the reader holds of one card — the three figures the card pane's **In your grimoire**
+ * block states, in one read.
+ *
+ * **Every one of them is at the oracle grain**, because that is what "in your grimoire" means: a
+ * reader who owns the Alpha Bolt and opens the M10 one owns *Lightning Bolt*. The per-printing
+ * question — how many of *this* printing are in a binder, which is what the pane's stepper writes
+ * to — is a different one and is not answered here.
+ *
+ * **Facts, not a sentence.** Rust counts; what the block says about the counts, and whether it
+ * draws at all when all three are zero, is this side's. Three zeros is a real answer about a card
+ * nobody holds — never `null`, and never a rejection.
+ */
+export interface CardHoldings {
+  /**
+   * Copies in the collection — **every printing, every finish and every folder together**. A
+   * copy on a locked shelf or sleeved into a deck is still a copy the reader owns, which is the
+   * scope every surface outside the deck builder's own card search asks for.
+   *
+   * A copy whose printing the corpus has lost is **not** counted: the row joins `cards` to find
+   * its oracle card and an orphan joins nothing. That is the same figure `collectionList({
+   * oracleId })` answered before this command existed, so it is a limit rather than a change.
+   */
+  owned: number;
+  /**
+   * Copies the wishlist asks for, every wish for the card together. The wishlist's grain makes a
+   * foil wish and a nonfoil wish two rows for one card, so this is a sum across rows and not a
+   * row count — and it narrows by neither finish nor folder, because "how many are wished for"
+   * is a fact about the card.
+   */
+  wished: number;
+  /**
+   * How many **decks** play the card — decks, not copies: a deck playing four counts once, and so
+   * does a deck listing it in two piles.
+   *
+   * **Live lists only**, which is `deckIdsPlaying`'s own rule rather than a second one: a plan
+   * holds no cards, so a deck that has only *thought about* this card is not one that plays it.
+   * Archived decks count, for the same reason — that read has never had a deck filter.
+   */
+  decks: number;
+}
+
 /** One row of the set picker. */
 export interface SetSummary {
   /** Lowercase, as `cards.set_code` stores it — this is what the filter sends back. */
@@ -827,7 +909,8 @@ export interface EntryInput {
    * rows, never one row that moves. Moving one is {@link ipc.collectionSetFolder} and only that.
    */
   folderId?: number | null;
-  /** Defaults to `NM` — what an unmarked card is assumed to be. */
+  /** Defaults to `NONE` — *not set*. An add that names no grade records that nobody
+   *  named one, which is a fact; `NM` would be a guess dressed as one. */
   condition?: Condition;
   /** What the user's file called that condition, kept because the normalisation is lossy. */
   conditionOriginal?: string;
@@ -1038,6 +1121,27 @@ export interface CollectionQuery extends CardFilters {
    */
   rootOnly?: boolean;
   /**
+   * `true` drops the copies filed in a **locked** folder — a drawer the reader set aside
+   * ({@link CollectionFolder.locked}) — and in every folder underneath one, since the lock
+   * inherits down the tree. Default `false`; **ignored entirely when {@link folderId} names a
+   * folder**, which is what makes "except inside the folder" true: standing in a locked drawer,
+   * or in a sub-folder of one, names it, and a named folder is served whole.
+   *
+   * The default is {@link rootOnly}'s argument verbatim, and here it is the whole of the field's
+   * safety rather than a convenience. **The callers whose silence must go on meaning
+   * "everything" are the plain-text mirror and the export sweep**, both of which page through
+   * this query for a whole-collection backup — `mirror/read.rs` already says in words that such
+   * a read is the one that must never ask the narrowing question. A backup or a CSV that
+   * silently omitted the reader's locked cards, raising nothing, is the worst failure available
+   * in this feature, and an unasked question keeping today's answer is what forecloses it.
+   *
+   * Who sends it: the collection page, and the deck builder's Collection Search tab — that tab
+   * asks "what can I build with today", which is exactly the question a set-aside drawer is not
+   * part of. Who does not, and must not: the mirror, the export sweep, the importer's preview
+   * and the web route's passthrough.
+   */
+  excludeLocked?: boolean;
+  /**
    * Whether copies a deck has taken off the desk are part of the answer.
    *
    * `"all"` — the default, and what every caller written before folders existed sends by
@@ -1139,12 +1243,17 @@ export interface CollectionRow {
    * What state the copy is in — `collection_entries.condition`, straight off the entry, and
    * always one of {@link Condition}.
    *
-   * **Not `| null`, because the column is `TEXT NOT NULL DEFAULT 'NM'`** and no backend write
-   * can leave it unset — an absent condition becomes `NM` before the insert. It carried `| null`
-   * for three releases as a fence around the wire, which cost every reader of the row a branch
-   * that could not be reached. The reader who never stated a grade is not represented by a
-   * missing `condition`; they are represented by `conditionOriginal` being `null`, which is the
-   * field that records what their file actually said.
+   * **Not `| null`, because the column is `TEXT NOT NULL DEFAULT 'NONE'`** and no backend write
+   * can leave it unset — an absent condition becomes `NONE` before the insert. It carried
+   * `| null` for three releases as a fence around the wire, which cost every reader of the row a
+   * branch that could not be reached.
+   *
+   * **A reader who never stated a grade is now represented in the column itself**, as `NONE`,
+   * and that is what schema v35 is for. Until then this doc pointed at `conditionOriginal` being
+   * `null` as the only record of their silence — which was true, and which meant the silence
+   * could not be filtered, sorted or drawn, because it lived in a *provenance* field rather than
+   * in the grade. `conditionOriginal` still answers the question it was built for: what the
+   * reader's own file said before the normalisation flattened it.
    */
   condition: string;
   quantity: number;
@@ -1438,6 +1547,140 @@ export interface WishlistPage {
 }
 
 /**
+ * One printing in an optimise plan — either the one a wish is pinned to now, or the one the
+ * sweep would move it to.
+ *
+ * The three descriptive columns are `cards`', not the wish's: a plan is about printings that
+ * exist today, and the denormalised `setCode`/`collectorNumber`/`lang` a wish carries can
+ * describe a printing Scryfall has since removed. `from` is therefore read off the wish's
+ * printing **through `cards`** — a wish pinned to a vanished id is skipped entirely, because
+ * there is nothing to compare against.
+ */
+export interface OptimizePrinting {
+  cardId: string;
+  setCode: string;
+  collectorNumber: string;
+  lang: string;
+  /**
+   * Per copy, at the plan's marketplace and **at the wish's finish** —
+   * `sorting::row_price_expr` over `w.preferred_finish`, the same expression
+   * {@link WishRow.unitPrice} is. So a foil wish is compared foil-to-foil and never against a
+   * nonfoil rate nobody quoted.
+   *
+   * `null` is *unpriced there*, and it can only ever appear on {@link WishOptimizeMove.from}:
+   * a candidate with no price is not a candidate at all — issue #352's own sentence, "a card
+   * without a price should not be considered the cheapest printing" — so `to.price` is always
+   * a number.
+   */
+  price: number | null;
+}
+
+/**
+ * One row of the preview: a wish, where it is, and where one press would put it.
+ *
+ * **Only pinned wishes are ever here.** An any-printing wish is already drawn and priced at the
+ * cheapest printing of its oracle card by `list_wishes`' join, so there is no saving to find,
+ * and pinning it would take away the very flexibility that makes it cheap. It is counted in
+ * {@link WishlistOptimizePlan.alreadyCheapest} instead.
+ */
+export interface WishOptimizeMove {
+  wishId: number;
+  /** The wish's own name, as the list draws it. */
+  name: string;
+  quantity: number;
+  /** `null` is "the reader has not said", which prices through the `nonfoil → foil → etched`
+   *  chain rather than at the nonfoil rate. Never coalesced — see `row_price_expr`. */
+  preferredFinish: Finish | null;
+  /** Where the wish is filed, so a flattened preview can say which drawer each row is in.
+   *  `null` is the root. */
+  folderId: number | null;
+  from: OptimizePrinting;
+  to: OptimizePrinting;
+  /**
+   * `from.price - to.price`, per copy — and **`null` exactly when `from.price` is**.
+   *
+   * A wish whose current printing this marketplace does not list is still offered as a move,
+   * and counted as no saving: an unlisted printing may be cheap rather than dear, and a figure
+   * invented for it would inflate the headline. The preview draws that row `— → $2.00` and
+   * leaves it unticked.
+   */
+  savedPerCopy: number | null;
+  /** {@link savedPerCopy} times {@link quantity}, or `null` with it. */
+  saved: number | null;
+}
+
+/**
+ * What `wishlist_optimize_plan` answers: every improvement available over **the rows the list is
+ * currently showing**, and an account of the ones it passed over.
+ *
+ * **The plan is taken over the whole query, not over the visible page.** It is handed the same
+ * {@link WishlistQuery} the list drew — folder, flatten switch and every active card filter —
+ * with `limit`/`offset` ignored, so `considered` equals the `total` in the page header and the
+ * preview cannot silently leave out a wish on page two.
+ *
+ * The three counts partition `considered`: `moves.length + alreadyCheapest + skipped`.
+ *
+ * **It does not echo the marketplace back, deliberately.** Every price here was quoted at the
+ * one the query carried, which came from `useMarketplace()`, which is also what the dialog
+ * renders with — and the query is in the caller's key, so a switch refetches rather than
+ * relabels. A second copy of that fact travelling in the answer is one more thing that can
+ * disagree with the hook, which is the rule `src/CLAUDE.md` states for every price surface.
+ */
+export interface WishlistOptimizePlan {
+  moves: WishOptimizeMove[];
+  /** How many wishes the sweep looked at — the list's own `total` for the same query. */
+  considered: number;
+  /** Already on the cheapest priced printing, plus every any-printing wish, which is cheapest
+   *  by construction. */
+  alreadyCheapest: number;
+  /** Passed over: a wish with no oracle id (nothing to find siblings by), a wish pinned to a
+   *  printing `cards` no longer has, and an oracle card **no** printing of which this
+   *  marketplace prices at this wish's finish. */
+  skipped: number;
+}
+
+/**
+ * One ticked row on its way to `wishlist_optimize_apply`.
+ *
+ * **`fromCardId` is a guard, not a description.** Between the preview and the press a sync can
+ * land, or another pane can repoint the same wish; applying regardless would move a printing the
+ * reader never saw. A wish whose `card_id` no longer matches is left exactly as it is and
+ * reported {@link WishOptimizeStatus} `"stale"`.
+ */
+export interface WishOptimizeApplyItem {
+  wishId: number;
+  fromCardId: string;
+  toCardId: string;
+}
+
+/**
+ * What became of one ticked row.
+ *
+ * * `changed` — repointed, the ordinary answer.
+ * * `merged` — the cheaper printing collided with a wish already in the same folder at the same
+ *   finish, so the two quantities summed into that row and this one was deleted.
+ *   {@link ipc.wishlistSetPrinting}'s documented rule rather than a failure, and the saving
+ *   still stands.
+ * * `stale` — the wish had moved on since the preview; nothing was written.
+ * * `missing` — the wish is not on the list any more; nothing was written.
+ */
+export type WishOptimizeStatus = "changed" | "merged" | "stale" | "missing";
+
+export interface WishOptimizeResult {
+  wishId: number;
+  status: WishOptimizeStatus;
+}
+
+/**
+ * The outcome of one press of Apply — **one result per item sent, in the order they were sent**,
+ * so the caller can sum the saving over exactly the rows that actually moved rather than over
+ * the rows it hoped would.
+ */
+export interface WishlistOptimizeOutcome {
+  results: WishOptimizeResult[];
+}
+
+/**
  * What a deck category *is for* — `schema::CATEGORY_KINDS`, which `deck_categories.kind`'s
  * own CHECK is built from.
  *
@@ -1582,40 +1825,40 @@ export interface DeckCategory {
 }
 
 /**
- * A tag's stored colour: `#rrggbb`, the colour itself.
+ * A label's stored colour: `#rrggbb`, the colour itself.
  *
  * **It was a palette token — `gold`, `ember`, … — until 2026-08-20**, and rows written before
- * then still hold one. `features/decks/tagColors.ts` owns both ends of that: what the picker
+ * then still hold one. `features/decks/labelColors.ts` owns both ends of that: what the picker
  * writes, and the six retired words it still reads. Nothing here changed shape, because nothing
  * here ever described one.
  *
  * **Deliberately `string` and not a union**, which is the one place this file declines to
- * narrow a Rust `String`. `deck_tags.color` carries no CHECK — the backend validates only
+ * narrow a Rust `String`. `deck_labels.color` carries no CHECK — the backend validates only
  * that it is non-empty, because picking what a colour *is* belongs to the webview
  * (CLAUDE.md's Rust/TS boundary). A union here would make a colour written by a newer build a
  * **type error at the read**, when the behaviour that was actually designed is a fallback:
- * `tagColorCss` answers the default for any string it cannot read, so an unknown colour is a
+ * `labelColorCss` answers the default for any string it cannot read, so an unknown colour is a
  * visible dot rather than a crash. The alias exists to say all of that at every field that
  * holds one.
  */
-export type TagColor = string;
+export type LabelColor = string;
 
 /**
- * One tag **in use in one list of one deck** — a label a card can carry, at most one per card.
+ * One label **in use in one list of one deck** — a mark a card can carry, at most one per card.
  *
- * The "at most one" is the `deck_cards.tag_id` column itself and nothing else — there is no
+ * The "at most one" is the `deck_cards.label_id` column itself and nothing else — there is no
  * join table and no constraint to relax if that ever changes.
  *
  * **It carried a `deckId` until schema v21 and no longer can**, because there is no such fact:
- * a tag is one app-wide row ({@link GlobalTag}) and what a deck has is not a list of tags but a
- * list of cards, some of which wear one. So this row is a tag *and* a fact about the deck and
- * variant it was read by — which is why `deckTagList` cannot answer a tag nothing is wearing,
- * and why `deckTagAll` exists.
+ * a label is one app-wide row ({@link GlobalLabel}) and what a deck has is not a list of labels
+ * but a list of cards, some of which wear one. So this row is a label *and* a fact about the
+ * deck and variant it was read by — which is why `deckLabelList` cannot answer a label nothing
+ * is wearing, and why `deckLabelAll` exists.
  */
-export interface DeckTag {
+export interface DeckLabel {
   id: number;
   name: string;
-  color: TagColor;
+  color: LabelColor;
   /** Copies carrying it, `sum(quantity)` like {@link DeckCategory.cardCount}, and scoped to
    *  the same deck **and variant** the read asked by. Never zero: a zero would mean the row is
    *  not in this list at all, and then it is not in the answer. */
@@ -1623,23 +1866,25 @@ export interface DeckTag {
 }
 
 /**
- * One tag as a thing in itself — every tag there is, worn or not.
+ * One label as a thing in itself — every label there is, worn or not.
  *
- * **The whole list is app-wide, and that is the feature rather than a convenience.** A tag was
- * per-deck until schema v21: `Cut candidate` in four decks was four rows, four colours and four
- * things to rename. It is one row now, so recolouring it recolours it everywhere, and a name a
- * tag already holds cannot be taken by a second one — compared with
- * {@link tagNameKey}'s normalisation, not by the word.
+ * **The whole list is app-wide, and that is the feature rather than a convenience.** A label
+ * was per-deck until schema v21: `Cut candidate` in four decks was four rows, four colours and
+ * four things to rename. It is one row now, so recolouring it recolours it everywhere, and a
+ * name a label already holds cannot be taken by a second one — compared with
+ * {@link labelNameKey}'s normalisation, not by the word.
  *
  * This replaced `TagSuggestion`, which had a name and a colour and no id, because picking one
- * *copied* it into the deck you were in. Picking one now **uses** that very tag.
+ * *copied* it into the deck you were in. Picking one now **uses** that very label. That name is
+ * left spelled as it was: the type was deleted at schema v21 and never carried the newer word,
+ * so `TagSuggestion` is what a reader digging for it in the history will actually find.
  */
-export interface GlobalTag {
+export interface GlobalLabel {
   id: number;
   name: string;
-  color: TagColor;
-  /** Copies wearing it anywhere — every deck, both variants. `0` for a tag nothing wears,
-   *  which is a row this list can answer and {@link DeckTag} never can. */
+  color: LabelColor;
+  /** Copies wearing it anywhere — every deck, both variants. `0` for a label nothing wears,
+   *  which is a row this list can answer and {@link DeckLabel} never can. */
   cardCount: number;
   /** Decks with at least one card wearing it — what a delete confirmation quotes, because the
    *  reach of that press is the app's and not the open deck's. */
@@ -1769,6 +2014,30 @@ export interface CollectionFolder {
    *  that pair, so the two can never be read apart. */
   deckId: number | null;
   sortOrder: number;
+  /**
+   * A drawer the reader has **set aside** — cards being held for a trade, a display case — so
+   * the app stops *offering* what is in it without ever stopping them reaching it.
+   *
+   * What that split means, concretely: the collection's own lists drop these copies when they
+   * ask ({@link CollectionQuery.excludeLocked}) and `owned_spare` stops counting them as
+   * something a deck could be built from, while every statement about what the reader *has* is
+   * untouched — the owned pip, both owned badges, the Owned/Missing facet, a wish's filled
+   * count and the folder's own tile all still see them. Deleting the folder is the one write
+   * refused, because it would re-file every card inside it to the root and silently undo the
+   * filing the lock was protecting. Moving a card in or out is always allowed.
+   *
+   * **This is the folder's own flag, not the effective answer — the lock inherits down the
+   * tree.** A folder inside a locked folder is locked, computed over ancestry rather than
+   * stored twice (two copies of one fact disagree the first time a folder is moved). Ask
+   * `lockedFolderIds` in `@/lib/folderTree` for the effective answer; it is the single place
+   * that walk is written, and a badge, a greyed menu row or a drag confirmation must never
+   * re-derive it from this field alone.
+   *
+   * **Not the sense `PinnedFolders.tsx` means by *fixed***: those are the app's own folders,
+   * with no rename, no delete, no move and no `⋯` at all. A folder locked here is still the
+   * reader's own drawer — still renameable, still movable, still a drop target both ways.
+   */
+  locked: boolean;
 }
 
 /**
@@ -1867,17 +2136,206 @@ export interface MoveOutcome {
 }
 
 /**
+ * One printing the live list is short of, and every copy on the reader's desk that could fill
+ * it — `deck_pull::PullRow`, the read half of {@link ipc.deckPullPlan}.
+ *
+ * **The shortfall is folded to the printing, never to the pile.** The same card short in two
+ * categories is one row here for the sum, because what a reader is short of is *cardboard* and
+ * custody is a fact about the deck rather than about a column — {@link categories} names the
+ * piles for them to read and is never a term in the arithmetic. That is
+ * `deck_missing_to_wishlist`'s fold, one grain narrower.
+ *
+ * **A row with no candidate is left out entirely**, so {@link candidates} is never empty and a
+ * plan of zero rows means "nothing here can be filled". That is the ordinary answer rather than
+ * an error: the issue this feature came from says in as many words that not every card in a deck
+ * will have a collection option.
+ */
+export interface DeckPullRow {
+  /** The printing the deck lists. Every candidate matches it exactly — see {@link finish}. */
+  cardId: string;
+  /** The deck row's stored name, which is the one name an orphan still has. */
+  name: string;
+  setCode: string;
+  collectorNumber: string;
+  /**
+   * The deck row's finish, where `null` is nonfoil — `deck::normalise_finish`'s translation, so
+   * this reads exactly as {@link DeckCard.finish} does.
+   *
+   * **Candidates match it exactly, and that is the deliberate narrowing this feature took**
+   * (2026-09-03). A deck's owned count is attributed at the *oracle* grain — a LEA Bolt filed in
+   * the group makes an M10 line read as owned — so matching on the printing and the finish fills
+   * strictly fewer holes than the app itself would count. The trade is that nothing is ever
+   * pulled that is not the exact piece of cardboard the list names, and the dialog says so.
+   */
+  finish: DeckFinish;
+  /** Copies of this printing and finish the live list still wants, over its **active** piles. */
+  short: number;
+  /** The piles that are short, in the deck's own order. For the reader; never for the write. */
+  categories: string[];
+  /**
+   * The printing's picture, front face, exactly as {@link CardSummary.imageUris} — one per row
+   * rather than per candidate, because every candidate for a row *is* the same printing.
+   */
+  imageUris?: Partial<Record<ImageVariant, string>> | null;
+  /** Every copy that could fill it, best first — see {@link DeckPullCandidate}. Never empty. */
+  candidates: DeckPullCandidate[];
+}
+
+/**
+ * One collection row that could fill a hole — `deck_pull::PullCandidate`.
+ *
+ * **Nothing filed in a deck's group is ever a candidate**, which is the issue's "only pull cards
+ * that are not already in another deck folder" and is `collection::Allocation::Unallocated`'s
+ * rule verbatim rather than a second spelling of it: the root, a folder the reader made and
+ * `Recently removed` are all cards on their desk. This deck's own group is excluded by the same
+ * clause, and has to be — those copies are already counted in {@link DeckCard.ownedQuantity},
+ * so offering them would be offering to fill a hole with the thing already in it.
+ *
+ * **The order is the pre-pick, and it is chosen rather than incidental**: the root first, then
+ * `Recently removed`, then the reader's own folders in their `sortOrder`, and oldest row first
+ * inside each. It ranks by how little of the reader's filing a pull disturbs — the root is a
+ * decision nobody has made and the holding area is the app's own transient bin, where a named
+ * binder is a decision somebody made on purpose. The tiebreak is `take_copies`' own rule.
+ */
+export interface DeckPullCandidate {
+  /** The `collection_entries` row. What a {@link DeckPullPick} points at. */
+  entryId: number;
+  /** Copies this row holds, whole. A pick may take fewer, never more. */
+  quantity: number;
+  /** Where it sits, or `null` at the root. */
+  folderId: number | null;
+  /** What to call that place, or `null` at the root — which the UI words, not the backend. */
+  folderName: string | null;
+  /** `"user"` or `"removed"`; `null` at the root. Never `"deck"` — see this type's own doc. */
+  folderKind: string | null;
+  /** The copy's own facts, which are what tell two candidates of one printing apart. */
+  condition: string;
+  lang: string;
+  altered: boolean;
+  signed: boolean;
+  proxy: boolean;
+  misprint: boolean;
+  grading: string | null;
+  serialNumber: string | null;
+}
+
+/** Copies to take out of one collection row — `deck_pull::Pick`, the write's whole input. */
+export interface DeckPullPick {
+  entryId: number;
+  /** At least one, and never more than the row holds or the deck is short of. */
+  quantity: number;
+}
+
+/** What a pull moved — `deck_pull::PullOutcome`. */
+export interface DeckPullOutcome {
+  /** Copies that changed folder. */
+  copies: number;
+  /**
+   * Rows of the plan that got at least one copy — so **printings *and* finishes**, at
+   * {@link DeckPullRow}'s own grain, and not distinct printings.
+   *
+   * The distinction is only ever visible for a deck short of one printing in two finishes, which
+   * is two rows in the dialog and counts two here. It is spelled out because the three places
+   * that count this have to agree: the crate's own `wanted.len()`, the Storybook fake's handler,
+   * and `pullPlan.ts`'s `cards` — which is what the dialog's footer previews *before* the press.
+   * A grain mismatch between the preview and this outcome would show up only on that one deck,
+   * as a sentence quoting a number the reader had just been shown a different version of.
+   */
+  cards: number;
+}
+
+/**
+ * One wishlist line a quick add could take copies off — `deck_quick_add::QuickAddWish`, the whole
+ * of what {@link ipc.deckQuickAddWishes} answers.
+ *
+ * **The match is on the printing and the finish, never on the oracle card.** The predicate is
+ * `wishlist::OWNED_SQL`'s own first arm with the any-printing arm dropped — `w.card_id = :cardId
+ * AND (w.preferred_finish IS NULL OR w.preferred_finish = :finish)` — rather than a second
+ * opinion about what fills a wish. So a wish for *any* printing of the card is left standing,
+ * exactly as the pull leaves an Alpha Bolt out of an M10 line and for the same trade: nothing is
+ * ever taken off a shopping list that is not the piece of cardboard the reader just recorded. A
+ * `preferred_finish` of `null` still matches, because the list itself says a wish naming no
+ * finish takes any of them, and excluding it would refuse the commonest wish there is.
+ *
+ * **The order is the pre-pick**, {@link DeckPullCandidate}'s rule one table over: the root first,
+ * then the reader's own folders in their `sortOrder`, oldest row first inside a tie. A dialog
+ * that has to ask opens on the head of the list.
+ */
+export interface DeckQuickAddWish {
+  /** `wishlist_entries.id` — what {@link ipc.deckQuickAddToCollection}'s `wishId` points at. */
+  id: number;
+  /** Copies the wish asks for, whole. A press takes at most this many and deletes the row when
+   *  it takes them all. */
+  quantity: number;
+  /** Where it sits, or `null` at the root. */
+  folderId: number | null;
+  /** What to call that place, or `null` at the root — which the UI words, not the backend. */
+  folderName: string | null;
+}
+
+/**
+ * What a quick add recorded — `deck_quick_add::QuickAddOutcome`.
+ *
+ * **What was written, never the argument that was sent**, which is {@link MoveOutcome}'s rule: a
+ * sentence quotes this. The two numbers are separate halves of one press and either can be zero
+ * without the other being wrong.
+ */
+export interface DeckQuickAddOutcome {
+  /** Copies recorded into the deck's own group. */
+  copies: number;
+  /**
+   * The `collection_entries` row they landed in, **after the grain fold** — so a second press on
+   * one line raises the row already in the group rather than making a second one, and both
+   * presses answer the same id.
+   */
+  entryId: number;
+  /** Copies taken off the wish, and `0` when the press named none. Never more than the wish
+   *  held. */
+  wishCopies: number;
+}
+
+/**
  * One card the plan asks for — {@link ipc.deckTheorySlots}' row, and the whole input to the deck
  * editor's theory tick.
  *
- * The hand-written mirror of `deck_theory::TheorySlot`. Two fields and no third: every column
- * that is *not* here (the name, the set, the price, the pile) is one the mark would have to be
- * told to ignore.
+ * The hand-written mirror of `deck_theory::TheorySlot`. **Three fields since 2026-09-07, and the
+ * third is the name** — the mark grew a second tier and the loose one needs an identity that
+ * survives a different printing. What is still not here is every column the mark would have to be
+ * told to ignore: the set, the price, the pile.
+ *
+ * **This interface was declared twice in this file until 2026-09-07**, identically, and nothing
+ * went red: TypeScript *merges* two interfaces of one name rather than refusing them, so the
+ * duplicate cost the build nothing and the doc comment above it — which described
+ * {@link TheoryDiffRow}, not this — had drifted onto the wrong type. That is the hazard rather
+ * than the merge: a field added to one declaration lands on the merged type either way, so the
+ * comment a reader lands on need not be the one carrying the field, and the only thing merging
+ * refuses is the same member spelled with two different types.
  */
 export interface TheorySlot {
   /** `deck_theory.rs`'s own `group_key` — `` `${cardId}|${finish ?? ""}` ``.
    *  `features/decks/theoryMatch.ts` spells the same string for a **live** row and looks it up. */
   key: string;
+  /**
+   * The card's printed name, exactly as `cards.name` holds it — `null` for an orphan whose
+   * printing has left the corpus and which therefore cannot be matched by name at all.
+   *
+   * **The second grain, and the loose tier's whole input.** {@link TheorySlot.key} above answers
+   * *is this the printing I planned*; this answers *is this the card I planned*, which is the
+   * question a reader holding a different Forest is asking. A name rather than an `oracleId`
+   * because Scryfall omits that field on reversible cards — and an identity with a fallback
+   * chain is two rules for the two sides of a comparison to disagree about.
+   *
+   * **Unfolded, and that is deliberate.** SQLite's `lower()` is ASCII-only and this side's
+   * `toLowerCase()` is not, so a name folded in SQL and a live row folded in JS would spell two
+   * keys for `Lim-Dûl's Vault` and the mark would go dark on exactly the cards whose absence is
+   * hardest to notice. `theoryNameKey` in `features/decks/theoryMatch.ts` folds both sides, in
+   * one language, and is the only place the rule is written.
+   *
+   * **`string | null` and never `string`**: an orphan is a real row of a real plan, so a mirror
+   * that promised a name here would put `.toLowerCase()` on `undefined` in the one case the
+   * feature exists to survive.
+   */
+  nameKey: string | null;
   /** How many copies the plan asks for, summed across every active pile it filed them in. */
   quantity: number;
 }
@@ -1904,22 +2362,6 @@ export interface TheorySlot {
  *
  * **So neither `cardId` nor `finish` is unique on its own**: a list is keyed by the pair.
  */
-/**
- * One card the plan asks for — {@link ipc.deckTheorySlots}' row, and the whole input to the deck
- * editor's theory tick.
- *
- * The Rust mirror of `deck_theory::TheorySlot`. Two fields and no third: every column that is
- * *not* here (the name, the set, the price, the pile) is one the mark would have to be told to
- * ignore.
- */
-export interface TheorySlot {
-  /** `deck_theory.rs`'s own `group_key` — `` `${cardId}|${finish ?? ""}` ``.
-   *  `features/decks/theoryMatch.ts` spells the same string for a **live** row and looks it up. */
-  key: string;
-  /** How many copies the plan asks for, summed across every active pile it filed them in. */
-  quantity: number;
-}
-
 export interface TheoryDiffRow {
   /** The printing **the theory row names**, which is the printing the reader would be buying.
    *  When the same card is filed in two theory categories this is the first row's category.
@@ -2012,15 +2454,15 @@ export interface TheoryDiffRow {
  * `add`/`remove`/`quantity`/`move`/`swap` are about **one card**; `category` and `folder` are
  * about a pile or a filing cabinet; `deck` is about the deck itself.
  *
- * **`tag` is on both sides of that line**, which is the trap: one kind covers a card wearing
+ * **`label` is on both sides of that line**, which is the trap: one kind covers a card wearing
  * a label (`cardId` set) *and* the label itself being created, renamed or deleted (`cardId`
  * `null`, plus an `action` verb in the payload). They share a kind because they share a
- * subject. A renderer that could not see the verb reports "deleted the Cut candidate tag" as
- * "tagged as Cut candidate" — `auditText.ts` switches on `action` first for exactly that
+ * subject. A renderer that could not see the verb reports "deleted the Cut candidate label" as
+ * "labelled as Cut candidate" — `auditText.ts` switches on `action` first for exactly that
  * reason.
  */
 export type DeckAuditKind =
-  "add" | "remove" | "quantity" | "move" | "swap" | "tag" | "category" | "folder" | "deck";
+  "add" | "remove" | "quantity" | "move" | "swap" | "label" | "category" | "folder" | "deck";
 
 /**
  * One line of a deck's history — **what happened, not how to say it.**
@@ -2063,8 +2505,9 @@ export interface DeckAuditEntry {
    * list at all.** `deck_audit.variant` is `NOT NULL` with a CHECK over the two, so every row
    * has to carry *something*, and for four kinds that something is filler.
    *
-   * It is a fact for `add`/`remove`/`quantity`/`move`/`swap`, for the card-side half of `tag`,
-   * and for the one `deck` row that records a theory copy (which deliberately says `theory`).
+   * It is a fact for `add`/`remove`/`quantity`/`move`/`swap`, for the card-side half of
+   * `label`, and for the one `deck` row that records a theory copy (which deliberately says
+   * `theory`).
    * It is **filler for the rest**: a category write, a folder filing, a label being created or
    * deleted and every other `deck` field all record the column's DDL default, `live`, because
    * none of them is a fact about one variant's cards. `deck_audit::DECK_LEVEL` is literally
@@ -2080,7 +2523,8 @@ export interface DeckAuditEntry {
   /**
    * The card the change was about, **softly** referenced like every card id in a user table
    * — and `null` for the three kinds that are about no card at all (`category`, `folder`,
-   * `deck`), and for the half of `tag` that is about the label rather than a card wearing it.
+   * `deck`), and for the half of `label` that is about the label itself rather than a card
+   * wearing it.
    */
   cardId: string | null;
   /** Denormalized at write time, for the reason `deck_cards.name` is: a history line still
@@ -2103,7 +2547,7 @@ export interface DeckAuditEntry {
    * | `quantity` | `{ category, from, to }` |
    * | `move` | `{ from, to }` — category **names**, not ids |
    * | `swap` | `{ category, fromSet, toSet, folded }` |
-   * | `tag` | `{ tag, previous }` on a card; `{ action, tag, previous }` on the label |
+   * | `label` | `{ label, previous }` on a card; `{ action, label, previous }` on the label |
    * | `category` | `{ action, name, previousName, cards }` |
    * | `folder` | `{ action, folder }` — `folder` is `null` for the root |
    * | `deck` | `{ field, from, to }`, or `{ field: "theory", copied }` |
@@ -2124,7 +2568,7 @@ export interface DeckAuditEntry {
   /**
    * Signed **copies**, for the day header's `+7 / −6` roll-up: `+n` on an add, `−n` on a
    * remove, the difference on a quantity change, and **`+n` on the one `deck` row that records
-   * a theory copy** — `deck_theory::copy_from_live` seeds the plan from the live list and
+   * a theory copy** — `deck_theory::copy_from_live` seeds the plan from the actual list and
    * carries the copies it wrote. `0` on everything else.
    *
    * That fourth case is the one worth naming, because it is the exception to the shape of this
@@ -2133,7 +2577,7 @@ export interface DeckAuditEntry {
    * on a row that can move it by ninety-nine.
    *
    * Zero is the common case and means "this changed no card count", never "nothing
-   * happened" — a rename, a reorder, a move, a tag and a printing swap all record `0`.
+   * happened" — a rename, a reorder, a move, a labelling and a printing swap all record `0`.
    */
   delta: number;
 }
@@ -2296,11 +2740,43 @@ export interface DeckPatch {
    */
   theoryEnabled?: boolean;
   /**
+   * Whether this deck draws the **green** theory mark — the live row that is the printing the
+   * plan named. See {@link DeckRow.theoryMarkExact}, where the whole rule is written.
+   *
+   * `decks.theory_mark_exact`, schema v38, and a **reading** preference like
+   * {@link DeckPatch.separateXGroup} below: switching it writes one column and touches not one
+   * `deck_cards` row. Unlike {@link DeckPatch.theoryEnabled} above it moves nothing at all —
+   * every card stays in the list it was in, and only what is drawn over them changes.
+   *
+   * `coalesce(?n, column)` like every other key here, so absent means "leave it" and there is no
+   * third state to spell. A `boolean` has nothing to clear, so unlike
+   * {@link DeckPatch.folderId} that costs this field nothing.
+   */
+  theoryMarkExact?: boolean;
+  /** Whether this deck draws the **blue** theory mark — the same card in a printing the plan did
+   *  not name. See {@link DeckRow.theoryMarkName}, and {@link DeckPatch.theoryMarkExact} above
+   *  for why the two are separate fields here rather than one three-valued one. */
+  theoryMarkName?: boolean;
+  /**
    * Gather this deck's `{X}` spells under a heading of their own instead of counting each at
    * the mana value Scryfall gives it. See {@link DeckRow.separateXGroup} — a **reading**
    * preference, so switching it writes one column and touches not one `deck_cards` row.
    */
   separateXGroup?: boolean;
+  /**
+   * Whether the editor's **Tokens & emblems** area is expanded. See
+   * {@link DeckRow.tokensOpen} — a per-deck reading preference, so switching it writes one
+   * column and touches not one `deck_cards` row.
+   *
+   * **It rides this patch and not {@link ipc.deckSetViewState}**, which is the shape
+   * `separate_x_group` is in and not the one the three `last*` columns are in, even though this
+   * column sits beside all four. The two commands differ in what a write *costs*: this one moves
+   * `updated_at` and writes a history line, and that one deliberately does neither. So the choice
+   * is worth stating rather than inheriting — a disclosure a reader opens once and leaves open is
+   * a handful of audited writes over a deck's life, where the tab, the grouping and the sort are
+   * written on every press and would fill the history with how somebody was looking at the page.
+   */
+  tokensOpen?: boolean;
   /**
    * Which of this deck's categories an add that names none lands in. See
    * {@link DeckRow.defaultCategoryId} — `0` is `AUTO_CATEGORY` and is a **value**, not an
@@ -2502,6 +2978,39 @@ export interface DeckRow {
    */
   theoryEnabled: boolean;
   /**
+   * Whether this deck draws the **green** theory mark — the live row that is the printing the
+   * plan named.
+   *
+   * `decks.theory_mark_exact INTEGER NOT NULL DEFAULT 1`, schema v38. Per **deck**, which is
+   * {@link DeckRow.separateXGroup}'s argument below and {@link DeckRow.theoryEnabled}'s above:
+   * whether a substitute printing is worth a mark is a statement about how *this* deck is being
+   * built, so two decks may disagree and a duplicate must carry the answer across.
+   *
+   * **Off does not mean unmarked.** An exact row on a deck with this off is re-resolved as a
+   * loose one and draws blue, with blue's own number — `features/decks/theoryMatch.ts` carries
+   * that rule, because which mark a row earns is a *conclusion* and conclusions are this side's.
+   * Turning the strict mark off is a reader asking for less precision, not for less information.
+   *
+   * Read on the row as well as written through {@link DeckPatch}, for
+   * {@link DeckRow.theoryEnabled}'s reason exactly: a switch the app can set and never see is a
+   * switch nothing can draw.
+   */
+  theoryMarkExact: boolean;
+  /**
+   * Whether this deck draws the **blue** theory mark — the same card in a printing the plan did
+   * not name. See {@link DeckRow.theoryMarkExact}, whose every rule this shares.
+   *
+   * **Two booleans rather than one three-valued field**, which is the schema's own argument
+   * carried onto the wire: `none | exact | both` cannot spell blue *without* green, and blue
+   * without green is a real answer — a reader who cares that a card is present and not which
+   * printing it is.
+   *
+   * **Both off is a real answer too, and is not a spelling of {@link DeckRow.theoryEnabled}
+   * being off.** A deck with a plan and no marks at all is a reader who wants the two lists side
+   * by side and no colour on either; a deck with no plan has no second list to compare against.
+   */
+  theoryMarkName: boolean;
+  /**
    * Which of the deck's two lists the editor was last reading — the tab the reader left this
    * deck on, restored when they open it again.
    *
@@ -2557,6 +3066,24 @@ export interface DeckRow {
    */
   separateXGroup: boolean;
   /**
+   * Whether the editor's **Tokens & emblems** area is expanded — `decks.tokens_open INTEGER NOT
+   * NULL DEFAULT 0`, schema v35, and `false` on every deck that has never been opened, which is
+   * the state every existing deck is in.
+   *
+   * **Per deck rather than app-wide**, because whether a reader wants the token wall in front of
+   * them is an answer about a particular deck: a Commander list built on Treasure and Wurms
+   * wants it open, and the Modern deck that makes nothing at all cannot use it. A single setting
+   * would make them re-decide every time they changed deck.
+   *
+   * **Collapsed by default is the whole of what the column buys.** The area resolves its list on
+   * every deck open whether or not it is drawn, so this decides one thing: whether a reader who
+   * never sleeves tokens pays one header row for the feature or a wall of them.
+   *
+   * Read on the row as well as written through {@link DeckPatch}, for {@link theoryEnabled}'s
+   * reason — a setting the app can write and never see is a setting nothing can draw.
+   */
+  tokensOpen: boolean;
+  /**
    * Which of this deck's categories an add that names no pile lands in — `decks.default_category_id`,
    * schema v16, and **`AUTO_CATEGORY` (`0`) for "let the card's own text decide"**.
    *
@@ -2600,6 +3127,139 @@ export interface DeckRow {
    * anybody has read at all.
    */
   bracket: number;
+}
+
+/**
+ * One distinct printed cost in one deck, and how many copies are paying it.
+ *
+ * **A cost *string*, not a counted pip, and that is the Rust/TypeScript boundary rather than a
+ * shortcut.** What a `{W/U}` is worth to a colour bar is a display decision — a hybrid is one
+ * pip of each half here because the bar answers *what does this deck want*, and a build that
+ * decided otherwise would be changing a picture rather than a fact — so the counting lives in
+ * `@/lib/mana`'s `countPips`, over the one `{…}` tokeniser this app already has. Rust supplies
+ * the facts; TypeScript draws the conclusions, and a cost string is the fact.
+ *
+ * It is also the cheaper wire. The costs in a deck repeat heavily (every basic is the same
+ * empty cost, every Sol Ring the same `{1}`), so folding by the string before it crosses turns a
+ * row per card into a row per *distinct* cost: 90 rows for the whole of the dev database's four
+ * decks, measured 2026-09-07.
+ */
+export interface PipCost {
+  /**
+   * The printed cost as `cards.mana_cost` holds it — `"{1}{R}"`, `"{2/W}"`, and for a split or
+   * double-faced card the whole one-string form `"{1}{R} // {1}{U}"`, which `countPips` reads
+   * end to end.
+   *
+   * **Never null and never empty**: a cost with no symbols in it is a **land**, it can
+   * contribute no pip, and there is no reason to ship one row per basic. An **orphaned** deck
+   * row is absent for a second reason — the read joins `cards` inwards, so a printing that has
+   * left the corpus has no cost to report and contributes nothing rather than a blank.
+   */
+  cost: string;
+  /** How many copies of cards printing this cost the deck's pile holds, summed — the weight the
+   *  bar gives it. `deck_cards.quantity`, not a row count, so four Lightning Bolts are four red
+   *  pips rather than one. */
+  copies: number;
+}
+
+/**
+ * Every deck's colour bar, in one read — {@link ipc.deckPipCosts}' per-deck entry.
+ *
+ * The pile is `DeckRow.cardCount`'s exactly: the **live** variant, in **active** categories of
+ * kind `main`, `commander` or `maybe`. So the bar and the card count on the tile beside it are
+ * two readings of one list, and a deck the reader has left on **Theory** shows its plan in the
+ * editor and its live list here — the tile is a fact about the deck, the editor a fact about
+ * what is on screen.
+ *
+ * **A deck with nothing to say is absent from the answer rather than present and empty**, which
+ * is what a `GROUP BY` gives and what the caller must be written for: an all-lands pile and a
+ * deck that has never been filled read alike, and both draw no bar at all rather than an empty
+ * rule.
+ */
+export interface DeckPipCosts {
+  deckId: number;
+  /** Folded by cost string with the copies summed, so a cost appears once. Order is the
+   *  backend's and nothing downstream may depend on it — the bar sums the whole list before it
+   *  draws anything. */
+  costs: PipCost[];
+}
+
+/**
+ * One card of a deck, as the bracket estimator needs it and no wider.
+ *
+ * `estimateBracket` (`features/decks/validation/bracket.ts`) reads exactly five fields off a
+ * card and takes the combos as a second argument, so this shape is the *whole* of its input —
+ * which is what makes a gallery-wide bracket affordable at all. The alternative is `deck_get`
+ * per deck, the heaviest read in the feature, for a number that fits in a caption.
+ */
+export interface BracketCardRow {
+  /**
+   * What the estimator dedupes on and what it *names* — a game changer, a mass-land-denial card
+   * or an extra-turn card is disclosed to the reader by this string, because a reader who
+   * disagrees with the estimate has to be able to see which card caused it.
+   *
+   * **`deck_cards.name`, the row's own denormalized column, and not `cards.name`** — the same
+   * one {@link DeckCard.name} carries. Two reasons, and the second is why it matters here: it is
+   * the only name an *orphaned* row has at all, and the editor's own panel dedupes on that same
+   * column, so a gallery reading the live `cards` row would fold a re-worded printing
+   * differently from the editor looking at the same deck.
+   */
+  name: string;
+  /**
+   * `cards.game_changer` — the Commander Format Panel's own list, delivered by a sync and
+   * hardcoded nowhere on this side.
+   *
+   * **A plain `boolean` where {@link DeckCard.gameChanger} is nullable**, because the read
+   * coalesces: a `deck_cards` row whose printing has left the corpus knows nothing about itself,
+   * and "nothing known" and "not a game changer" are the same answer to the only question asked
+   * of this field. The estimator tests `=== true` either way.
+   */
+  gameChanger: boolean;
+  /** The front face's rules text, which the mass-land-denial and extra-turn greps read. `null`
+   *  for an orphaned row, exactly as {@link DeckCard.oracleText} is. */
+  oracleText: string | null;
+  /** `cards.faces`, the raw JSON array — the *back* faces' rules text, which the same two greps
+   *  read after parsing it. A card whose extra turn is printed on face two is still an
+   *  extra-turn card. `null` for a single-faced card and for an orphan alike. */
+  faces: string | null;
+  /**
+   * Whether the pile this row sits in is switched on — and it is **always `true`** on these
+   * rows, because the read filters `cat.is_active = 1` before they cross.
+   *
+   * Carried all the same, because {@link BracketCardRow} is what `estimateBracket`'s
+   * `BracketCardFacts` asks for and that type's first act is to filter on this field. A row
+   * that omitted it would be a *different* type, needing a second shape and an adapter between
+   * them, in exchange for one boolean per card.
+   */
+  categoryActive: boolean;
+}
+
+/**
+ * One deck's whole bracket input — {@link ipc.deckBracketReads}' per-deck entry.
+ *
+ * The pile is **wider than {@link DeckPipCosts}'** and deliberately so: `variant = 'live'` and
+ * `cat.is_active = 1`, in **every** category kind. That is what `DeckBracket` hands the
+ * estimator today, filtered the same way, and the same ids it hands `combos_for_cards` — a
+ * sideboard card is still a card the bracket rules see. (Commander has no sideboard, so a reader
+ * who has filed cards there has filed them somewhere the estimate still has to look.)
+ *
+ * **One entry per requested id, in request order**, which is the half {@link DeckPipCosts} does
+ * *not* share: that read is a `GROUP BY` and omits a deck with nothing to say, this one was
+ * asked about particular decks and answers about each of them. An id with no deck behind it
+ * answers an empty read rather than being dropped — a caller zipping the answer against the ids
+ * it sent must not have the two come apart.
+ */
+export interface DeckBracketRead {
+  deckId: number;
+  /** `DISTINCT` over the pile, so a card in two piles of one deck is one row — which changes
+   *  nothing, because the estimator dedupes by name anyway, and costs a deck's worth of
+   *  duplicate oracle text on the wire. */
+  cards: BracketCardRow[];
+  /** Every combo the deck fully contains, already matched against the same cards — the fourth
+   *  signal, and the one no amount of reading a card's own text could find. Empty on a database
+   *  that has never fetched Commander Spellbook's file, which is a supported state: the estimate
+   *  reads three signals instead of four. See {@link DeckCombo} and {@link ipc.combosForCards}. */
+  combos: DeckCombo[];
 }
 
 /**
@@ -2653,12 +3313,12 @@ export interface DeckCard {
   /** Which of the deck's two lists this row is in. Every row of one read carries the same
    *  value; it is here so a caller holding a row can write it back. */
   variant: DeckVariant;
-  /** The one tag this row carries, resolved so a row can be drawn without a second lookup.
-   *  All three are `null` together — deleting a tag untags its cards rather than deleting
+  /** The one label this row carries, resolved so a row can be drawn without a second lookup.
+   *  All three are `null` together — deleting a label unlabels its cards rather than deleting
    *  them. */
-  tagId: number | null;
-  tagName: string | null;
-  tagColor: TagColor | null;
+  labelId: number | null;
+  labelName: string | null;
+  labelColor: LabelColor | null;
   quantity: number;
   /** Denormalized at write time, and the one name an orphaned row still has. */
   name: string;
@@ -2785,22 +3445,28 @@ export interface DeckCard {
    */
   unitPrice: number | null;
   /**
-   * Copies of this oracle card **this deck physically holds**, attributed to this row in the
-   * read's own order.
+   * Copies of this exact printing and finish **this deck physically holds**, attributed to
+   * this row in the read's own order.
    *
    * **A sum over the rows filed in the deck's own collection group, and no longer a claim.**
    * Schema v25 deleted `deck_allocations` and the allocator with it: a card is in a deck
-   * because its `collection_entries` row sits in that deck's `kind = 'deck'` folder, so this
-   * is `owned_by_oracle` — `sum(quantity)` per `cards.oracle_id` over that one folder — spent
-   * down the rows by `attribute_owned`. There is nothing to clamp any more and nothing that
-   * can be out of date, which is what the old `min(claim, row)` existed for.
+   * because its `collection_entries` row sits in that deck's `kind = 'deck'` folder. **Since
+   * 2026-09-07 the match is the printing, not the oracle card**: this is `owned_by_printing` —
+   * `sum(quantity)` per `(card_id, finish)` over that one folder — spent down the rows by
+   * `attribute_owned`. There is nothing to clamp any more and nothing that can be out of date,
+   * which is what the old `min(claim, row)` existed for.
+   *
+   * **An orphaned printing counts now, where the oracle-grained version read it as 0.** A
+   * `collection_entries` row whose `card_id` is not in `cards` has no oracle id to be grouped
+   * by, so the old map dropped it; at the printing grain there is nothing to look up — the
+   * group's row and this deck's row name the same `card_id` — so the copy counts.
    *
    * The only one of this file's four `ownedQuantity` fields that is about **custody** rather
    * than about the reader's shelves as a whole: {@link CardSummary.ownedQuantity} is every
    * copy of one printing, {@link ImportMatch.ownedQuantity} is that same count taken per
    * decklist line, {@link WishRow.ownedQuantity} is the copies that fill one wish, and this
-   * one is what is in *this box* — oracle-grained (a Bolt is a Bolt), finish-blind,
-   * condition-blind.
+   * one is what is in *this box* — printing-grained (`(card_id, finish)`, not the oracle card
+   * — no more "a Bolt is a Bolt" here), finish-**aware**, still condition-blind.
    *
    * Three things it will not do, all by design:
    *
@@ -2855,9 +3521,119 @@ export interface DeckDetail {
    * there are.
    */
   categories: DeckCategory[];
-  /** Every tag of the deck, alphabetically — the palette a row's label is picked from, which
+  /** Every label of the deck, alphabetically — the palette a row's mark is picked from, which
    *  exists whether or not any row is wearing it. */
-  tags: DeckTag[];
+  labels: DeckLabel[];
+}
+
+/**
+ * Whether a stored token row is a plain override, a dismissal, or a hand-added extra.
+ *
+ * The vocabulary is closed by a `CHECK` on the column rather than by convention, so this union
+ * is the whole of it: `auto` carries an art or a quantity for a token the deck derives anyway,
+ * `hidden` is one the reader dismissed and is still derived, and `manual` is drawn whether
+ * anything derives it or not — a token added by hand, and what a derived one becomes when the
+ * reader wants it kept after cutting the card that made it.
+ */
+export type DeckTokenState = "auto" | "hidden" | "manual";
+
+/**
+ * A deck card that makes a token — the answer to *why is this here*.
+ *
+ * A printing (`cardId`) rather than an oracle id, because that is what the deck holds and what
+ * a surface has to draw or scroll to.
+ */
+export interface TokenSource {
+  cardId: string;
+  name: string;
+}
+
+/**
+ * One token or emblem a deck needs, with the reader's stored override joined on.
+ *
+ * **The list is derived on every deck open and stored nowhere** — Rust inflates the `raw` blob
+ * of each distinct card in the deck's *active* categories and reads `all_parts`. So the first
+ * seven fields are facts about the corpus and the deck, and the last three are the only thing
+ * `deck_tokens` holds: `cardId`, `quantity` and `state` are all `null` together when the reader
+ * has never deviated, because the table stores deviations and nothing else.
+ *
+ * **The effective values are TypeScript's conclusion, not this row's**: `deckTokenViews` in
+ * `@/features/decks/deckTokens` resolves the printing (`cardId ?? defaultCardId`) and the
+ * quantity (`quantity ?? 1`), and this is the fact it draws them from. Read `quantity` with
+ * `??` and never `||` — a stored `0` is a token the reader deliberately zeroed while keeping
+ * the art they picked, which is information, and `||` reads it as absent.
+ *
+ * `defaultCardId` is never null for a derived row and is **deterministic**: the printing the
+ * most deck cards point at, ties broken by the same `released_at DESC, set_code ASC,
+ * collector_number ASC, id ASC` tail `card_printings` orders by. Without that, one deck draws
+ * different art on two opens.
+ */
+export interface DeckTokenRow {
+  /** The grain, with `deckId`. **The oracle card and not a printing**, so the row survives the
+   *  reader changing their mind about the art — the art choice *is* one of the things it
+   *  stores. */
+  oracleId: string;
+  name: string;
+  typeLine: string | null;
+  /** The resolved `cards` row's layout — `token`, `emblem` or `double_faced_token`. **This is
+   *  what says an emblem is an emblem**, not the type line: the layout is a column and the type
+   *  line is prose. */
+  layout: string;
+  /**
+   * The four disambiguation fields. **A token's name does not identify it**: 104 token/emblem
+   * names are shared by more than one `oracle_id` (measured 2026-09-07, debug corpus) —
+   * `Elemental` by 31, `Spirit` by 22, `Soldier` by 13 — and `Wurmcoil Engine` alone makes two
+   * tokens both called `Wurm 3/3`, separated only by Deathtouch against Lifelink. Without these
+   * the panel draws indistinguishable tiles carrying identical accessible names, which is the
+   * one bug a wall of tokens can have that neither suite can see.
+   *
+   * Power and toughness told 8 of 8 apart in both sampled names once colours and the oracle
+   * text were beside them, so all four travel rather than a chosen one.
+   *
+   * **`power` and `toughness` are strings and not numbers**: Scryfall writes `*`, `1+*` and `∞`,
+   * and a mirror that typed them numeric would read `NaN` for every such token.
+   */
+  power: string | null;
+  toughness: string | null;
+  /** The token's colours as **concatenated letters** — `"WU"`, not `["W","U"]` — which is
+   *  {@link DeckCard.colors}' form and for its reason: `card_row` stores the letters, so the
+   *  letters are what comes back, and `JSON.parse` throws on them. `""` is a colourless token,
+   *  which most of them are. */
+  colors: string | null;
+  /** The rules text, which is what separates two same-named, same-statted tokens — the pair
+   *  `Wurmcoil Engine` makes differ in this field and in nothing else a tile could draw. */
+  oracleText: string | null;
+  /** The printing the resolver names. Never null for a derived row. */
+  defaultCardId: string;
+  /** The deck cards that make it. **Empty for a `manual` row nothing derives** — which is the
+   *  state a token is in after the card that produced it was cut. */
+  sources: TokenSource[];
+  /** `false` for a `manual` row this deck's cards produce nothing for. */
+  derived: boolean;
+  /** The printing the reader picked; `null` means "whichever one the resolver names". */
+  cardId: string | null;
+  /** How many copies the reader wants; `null` means "the default", which is 1. Stored absent
+   *  rather than as a 1 so that changing the default later moves every untouched token. */
+  quantity: number | null;
+  state: DeckTokenState | null;
+  /**
+   * Where the **resolved printing's** picture is, per variant.
+   *
+   * The same field, with the same rules and for the same reason, as
+   * {@link CardSummary.imageUris}: the web build and the phone have no `mtgimg://` to ask, so a
+   * token tile draws `imageUris?.[WALL_CARD_VARIANT]` there or draws the no-art frame. On Tauri
+   * it is ignored and the local cache wins. Front face only, `Partial`, and **a missing entry
+   * means "no art"** — never a reason to build a URL of your own, because the backend has
+   * already refused a URI it cannot version or one from a host that does not serve card art.
+   *
+   * **The printing is `cardId ?? defaultCardId`'s**, resolved in Rust, so a reader who has
+   * picked art gets that art's picture and everybody else gets the resolver's — which is why
+   * `deckTokenViews` can fold it to one URL without going back for a second row.
+   *
+   * Mirrors `DeckTokenRow::image_uris` in `src-tauri/src/deck_tokens.rs`; `ipc.test.ts`'s
+   * field-name pin is the only fence.
+   */
+  imageUris?: Partial<Record<ImageVariant, string>> | null;
 }
 
 /**
@@ -3099,31 +3875,31 @@ export interface ImportItem {
    * The label to put on this card — Archidekt's `^Keeper,#4aab08^`, name half.
    *
    * **A name, not an id**, for {@link ImportItem.categoryName}'s reason exactly: an imported list
-   * names labels the app may not have yet. Found-or-created by `schema::tag_name_key`, which is
-   * `deck_tags.name_key`'s own grain — so `keeper` and `Keeper` are one row and the reader's
+   * names labels the app may not have yet. Found-or-created by `schema::label_name_key`, which is
+   * `deck_labels.name_key`'s own grain — so `keeper` and `Keeper` are one row and the reader's
    * capitals win, because the row that is already there is not renamed.
    *
    * **Absent is "say nothing about this card's label"**, and that is load-bearing rather than an
    * encoding detail. It is what an unticked label sends, and it is what makes a `merge` onto a
-   * card the reader already tagged by hand keep their tag: the write is
-   * `tag_id = coalesce(deck_cards.tag_id, excluded.tag_id)`, so a row that has one keeps it and a
-   * row that has none takes the file's.
+   * card the reader already labelled by hand keep their label: the write is
+   * `label_id = coalesce(deck_cards.label_id, excluded.label_id)`, so a row that has one keeps it
+   * and a row that has none takes the file's.
    */
-  tagName?: string;
+  labelName?: string;
   /**
    * That label's colour, `#rrggbb`. Ignored unless the import has to **make** the row.
    *
    * A name the app already knows keeps the colour the reader gave it — {@link ImportItem.inactive}'s
    * rule over a different table, and for the same reason: an import must not reach into a
-   * decision somebody made by hand. `deck_tags.color` has held hex rather than a palette token
-   * since 2026-08-20 (`features/decks/tagColors.ts`), which is what lets Archidekt's own colour be
-   * stored verbatim instead of snapped to a palette of six.
+   * decision somebody made by hand. `deck_labels.color` has held hex rather than a palette token
+   * since 2026-08-20 (`features/decks/labelColors.ts`), which is what lets Archidekt's own colour
+   * be stored verbatim instead of snapped to a palette of six.
    *
-   * Required by the backend whenever {@link ImportItem.tagName} is present, since `deck_tags.color`
-   * is `NOT NULL` and `valid_color` refuses a blank. `toImportItems` sends the two together or
-   * neither.
+   * Required by the backend whenever {@link ImportItem.labelName} is present, since
+   * `deck_labels.color` is `NOT NULL` and `valid_color` refuses a blank. `toImportItems` sends
+   * the two together or neither.
    */
-  tagColor?: string;
+  labelColor?: string;
 }
 
 /**
@@ -3143,14 +3919,14 @@ export interface ImportOutcome {
   categoriesCreated: number;
   /**
    * The labels the import had to make — {@link ImportOutcome.categoriesCreated}'s question over
-   * `deck_tags`, and a number the reader is owed for a sharper reason than that one: a tag is
+   * `deck_labels`, and a number the reader is owed for a sharper reason than that one: a label is
    * **app-wide**, so an import that invents three of them has changed a list every other deck of
    * theirs reads from.
    *
    * A name they already had costs nothing and is not counted, which is the same sentence the
    * picker on the import step prints before the press.
    */
-  tagsCreated: number;
+  labelsCreated: number;
 }
 
 /**
@@ -4340,6 +5116,27 @@ export const ipc = {
    */
   cardMeldParts: (id: string) => invoke<MeldRelation[]>("card_meld_parts", { id }),
   /**
+   * What the reader holds of one oracle card — see {@link CardHoldings}.
+   *
+   * **One read where the pane made three.** The card modal's "In your grimoire" block used to
+   * fire `collectionList({ oracleId })`, `wishlistList({ oracleId })` and `deckIdsPlaying` on
+   * every card open, and summed two pages of rows in the webview to draw two numbers. Rust sums
+   * them, through the same three rules those reads use, so a figure here cannot disagree with the
+   * list it sits beside.
+   *
+   * **It answers counts and nothing addressable**, which is the line between this and the reads it
+   * replaces: a surface that needs a *row* to write to — the stepper, the wishlist's edit — still
+   * asks for the rows. This is for the block that only ever states numbers.
+   *
+   * **No `marketplace`**, unlike every other card read on this object: these are counts, and
+   * nothing about them moves when the setting does. Keying it on the marketplace would refetch a
+   * fixed fact on every switch.
+   *
+   * A blank `oracleId` answers three zeros rather than rejecting — a card with no oracle id is a
+   * card nothing can be held *of*, and a pane must not fail to fill a block over it.
+   */
+  cardHoldings: (oracleId: string) => invoke<CardHoldings>("card_holdings", { oracleId }),
+  /**
    * Warm the image cache for a page of results. Fire-and-forget: it resolves as soon as
    * the work is queued, and an image that fails to prefetch simply fetches when it is
    * rendered. The backend takes the front face only and caps the batch at 100.
@@ -4467,8 +5264,27 @@ export const ipc = {
    * otherwise exactly as they were, and the backend re-files them by hand before the row goes so
    * two copies of one printing landing at the root merge instead of colliding on the grain.
    * Sub-folders *do* go with it. An id that resolves to nothing is a success.
+   *
+   * **A locked folder is refused in words** (`collection_folders::FOLDER_IS_LOCKED`), on the
+   * **effective** lock — so a sub-folder of a locked one is refused too. Re-filing a set-aside
+   * drawer's cards to the root is exactly the undoing the lock exists to prevent; a caller draws
+   * the row greyed with its reason rather than letting the press reach here.
    */
   collectionFolderDelete: (id: number) => invoke<void>("collection_folder_delete", { id }),
+  /**
+   * Set or clear a folder's own lock — a drawer set aside, {@link CollectionFolder.locked}.
+   *
+   * `rename_folder`'s shape exactly: one scalar, fenced to the reader's own folders, answering
+   * the folder re-read. The app's own two — a deck's group and `Recently removed` — are refused
+   * in words, because a group is already fixed and a holding area is not something to set aside.
+   *
+   * **It writes the folder's own flag and nothing else.** The lock inherits down the tree, so
+   * unlocking a folder whose parent is locked changes what this row says and not what the reader
+   * sees; that is why a caller greys the row rather than offering a press that reports success
+   * over an unmoved badge.
+   */
+  collectionFolderSetLocked: (id: number, locked: boolean) =>
+    invoke<CollectionFolder>("collection_folder_set_locked", { id, locked }),
   /**
    * Move one owned row into a folder — `folderId: null` is the root of the collection, a real
    * destination and not an omission.
@@ -4662,14 +5478,74 @@ export const ipc = {
    */
   wishlistSetPrinting: (id: number, cardId: string | null) =>
     invoke<EntryChange>("wishlist_set_printing", { id, cardId }),
+  /**
+   * What re-pricing the list on screen would change, and **nothing is written** — issue #352's
+   * "preview you can verify before committing", which is the whole reason this is two commands
+   * and not one.
+   *
+   * Takes the query the list is currently drawn from, so the folder, the flatten switch and
+   * every active card filter scope the sweep; `limit` and `offset` are ignored, because a
+   * preview that stopped at the end of page one would quietly leave wishes un-optimised.
+   *
+   * The **`marketplace` on the query decides every figure in the answer**, so it belongs in the
+   * caller's query key like every other priced read — see {@link WishlistOptimizePlan}.
+   */
+  wishlistOptimizePlan: (query: WishlistQuery) =>
+    invoke<WishlistOptimizePlan>("wishlist_optimize_plan", { query }),
+  /**
+   * Commit the ticked rows of a plan — **one transaction**, {@link ipc.wishlistImportCommit}'s
+   * rule: a sweep seen half done is a shopping list nobody can reason about.
+   *
+   * Each item names the printing it is coming *from* as well as the one it is going to, and a
+   * wish that has moved since the preview is skipped rather than repointed. Every item gets a
+   * {@link WishOptimizeResult}, in order.
+   */
+  wishlistOptimizeApply: (items: WishOptimizeApplyItem[]) =>
+    invoke<WishlistOptimizeOutcome>("wishlist_optimize_apply", { items }),
   /** The gallery: every deck, archived last, most recently touched first. */
   deckList: () => invoke<DeckRow[]>("deck_list"),
+  /**
+   * Every deck's printed mana costs at once — the colour bar's facts, and the whole of them.
+   *
+   * **No argument, because the gallery draws every tile at once.** A per-deck read would be one
+   * round trip per tile for a bar 4px high, which is the shape `deck_get` already has and the
+   * reason this is not that command: `deck_get` prices every row and rolls up every category,
+   * and none of it is a colour.
+   *
+   * **Cost strings rather than counted pips** — see {@link PipCost}, where the whole argument
+   * is. In one sentence: what a `{W/U}` is worth to a bar is a display decision, so it belongs
+   * on this side with the rest of them, and `@/lib/mana`'s `countPips` is where it is made.
+   *
+   * The pile is {@link DeckRow.cardCount}'s: the **live** variant, active `main|commander|maybe`
+   * categories. So the bar and the count beside it can never disagree, and a deck left on Theory
+   * reads its plan in the editor and its live list on the tile — see {@link DeckPipCosts}.
+   */
+  deckPipCosts: () => invoke<DeckPipCosts[]>("deck_pip_costs"),
+  /**
+   * The bracket estimate's facts, for the decks the caller names.
+   *
+   * **It takes deck ids rather than filtering to Commander in SQL, and that is the boundary
+   * again.** Which formats have a command zone is `format_specs.commanderRule` — a TypeScript
+   * question, asked through `useFormatSpecs` — so a `WHERE format_key = 'commander'` in the
+   * backend would be a second opinion about a table this side is already reading, and it would
+   * be wrong the day a format with a command zone is seeded. The caller decides which decks have
+   * a bracket to estimate and asks about those.
+   *
+   * It is also what keeps the read proportional: 397 distinct cards and 59 KB of oracle text
+   * across the dev database's four decks (measured 2026-09-07), and the gallery asks only about
+   * the tiles that will draw a number.
+   *
+   * Every field `estimateBracket` reads and nothing else — see {@link BracketCardRow} for the
+   * five, and {@link DeckBracketRead} for the pile, which is wider than the colour bar's.
+   */
+  deckBracketReads: (deckIds: number[]) =>
+    invoke<DeckBracketRead[]>("deck_bracket_reads", { deckIds }),
   /**
    * One deck and everything in it, or `null` when no deck has that id — a gallery that has
    * not refreshed since another view deleted it asks for a deck that is not there.
    *
-   * `variant` scopes the **cards, and the two counts on every category and tag row** — it is
-   * threaded into all three reads. What it does *not* scope is which categories and tags come
+   * `variant` scopes the **cards, and the two counts on every category and label row** — it is
+   * threaded into all three reads. What it does *not* scope is which categories and labels come
    * back: every one of them does either way, so switching between the two lists changes the
    * numbers in the column headings and never the columns themselves.
    *
@@ -4679,6 +5555,72 @@ export const ipc = {
    */
   deckGet: (id: number, variant: DeckVariant, marketplace: MarketplaceId) =>
     invoke<DeckDetail | null>("deck_get", { id, variant, marketplace }),
+  /**
+   * Every token and emblem the deck's cards make, with the reader's overrides joined on.
+   *
+   * **Derived on every call and stored nowhere** — the backend inflates the `raw` blob of each
+   * distinct card in the deck's *active* categories and reads `all_parts`, which is ~5 ms for a
+   * 100-card deck. A stored list would need reconciling on every deck edit *and* would go stale
+   * when a Scryfall sync changed a card's `all_parts`, with nothing to notice.
+   *
+   * `variant` scopes it the way it scopes every other deck read: the derived list is a fact
+   * about the cards in one of the deck's two lists. **The stored override is not scoped by it**
+   * — `deck_tokens` is grained on `(deckId, oracleId)` alone, so an art picked for a deck is
+   * the art in both lists, which is what a reader who picked it means.
+   *
+   * **`[]` is an answer three times over** and never a failure: a deck whose cards make
+   * nothing, a deck with no cards, and every failure shape behind the blob — an unknown id, a
+   * `raw` that will not inflate or parse, a missing or non-array `all_parts`. A deck must not
+   * fail to open over an area most decks use lightly.
+   */
+  deckTokens: (deckId: number, variant: DeckVariant) =>
+    invoke<DeckTokenRow[]>("deck_tokens", { deckId, variant }),
+  /**
+   * Write one token's override — the art, the count, or the dismissal.
+   *
+   * **The state word is renamed on the wire and this is the only place that knows it.** Rust
+   * cannot call the parameter `state`, because `state` is already the managed `tauri::State`
+   * every command takes, so it declares `token_state` and the payload key is `tokenState`.
+   * Callers on this side pass `{ state }`, which is what the column is called.
+   *
+   * **All three keys travel on every call, `null` included.** Tauri fills parameters by name
+   * and an absent one is a refusal rather than a default, so `undefined` is folded to `null`
+   * here — with `??` and never `||`, because a quantity of **0** is a token the reader
+   * deliberately zeroed while keeping the art they picked, and `||` would send it as "leave it
+   * alone".
+   *
+   * A write whose result would carry nothing — `state` back at `auto` with no `cardId` and no
+   * `quantity` — **deletes** the row rather than storing it. The empty override is not
+   * representable, which keeps "no deviation" one state rather than two that have to be kept
+   * in agreement.
+   */
+  deckTokenSet: (
+    deckId: number,
+    oracleId: string,
+    over: { cardId?: string | null; quantity?: number | null; state?: DeckTokenState | null },
+  ) =>
+    invoke<void>("deck_token_set", {
+      deckId,
+      oracleId,
+      cardId: over.cardId ?? null,
+      quantity: over.quantity ?? null,
+      tokenState: over.state ?? null,
+    }),
+  /** Back to the derived defaults: it **deletes** the override row. Not a `deckTokenSet` of
+   *  three nulls — that spelling is the same write, and this one says what the reader pressed.
+   *  A grain that resolves to no row is a success: the caller wanted no override. */
+  deckTokenClear: (deckId: number, oracleId: string) =>
+    invoke<void>("deck_token_clear", { deckId, oracleId }),
+  /**
+   * Add a token by hand — the one of the four that names a **printing** rather than the grain.
+   *
+   * The reader picks out of a printings grid, so a printing is what there is to send; Rust
+   * resolves its `oracleId` and writes `state: "manual"` with that printing as the `cardId`.
+   * A `manual` row is drawn whether or not the deck derives it, which is also what a derived
+   * token becomes when the reader keeps it after cutting the card that made it.
+   */
+  deckTokenAdd: (deckId: number, cardId: string) =>
+    invoke<void>("deck_token_add", { deckId, cardId }),
   /**
    * The format the last deck made on this install was given — or `null` where no deck has ever
    * been made.
@@ -4704,6 +5646,59 @@ export const ipc = {
    */
   deckLastFormat: () => invoke<string | null>("deck_last_format"),
   /**
+   * Every card the deck's **live** list plays, as the keys a copy is matched against — the read
+   * behind the rule that a copy may only be filed into a deck's own collection folder when that
+   * deck already plays it.
+   *
+   * **A key is `coalesce(cards.oracle_id, deck_cards.card_id)`: the oracle card, with the
+   * printing as the fallback for a row the card database has never heard of.** The oracle id is
+   * what makes the rule mean what a reader means — a deck plays *Sol Ring*, not the Commander
+   * 2019 printing of one — so a copy from any set is answered by a deck holding any other.
+   * `cards.oracle_id` is nullable and a `deck_cards` row outlives a printing leaving the corpus,
+   * so the fallback is what keeps an orphaned row addressable at all: matched printing to
+   * printing, which is the strictest thing that can honestly be said about a card whose identity
+   * nothing knows.
+   *
+   * **Build the same key on this side with `playKey`** from `@/features/decks/useDeckPlays` —
+   * every DTO a filing surface holds carries both halves ({@link DeckCard},
+   * {@link CollectionRow}, {@link CardDetail}), and a second spelling of the coalesce is one
+   * rule two files would have to go on agreeing about.
+   *
+   * **The live list, and there is no `variant` argument on purpose.** A theory list is what a
+   * deck is being built *toward* and holds no copies at all, so filing the reader's cardboard
+   * into a group on the strength of a plan would put a physical card in a deck that does not
+   * play it yet.
+   *
+   * `DISTINCT` and sorted by the key, so two runs over one deck answer in one order — a card
+   * sitting in two piles is one entry, and the question is membership rather than a count.
+   * **`[]` is an answer twice over**: a deck with an empty live list reads it, and so does a
+   * `deckId` with no deck behind it — this is a fact about rows, and {@link ipc.deckGet} is
+   * where "is there a deck" is asked.
+   */
+  deckPlayedKeys: (deckId: number) => invoke<string[]>("deck_played_keys", { deckId }),
+  /**
+   * Which decks play **every** one of these cards — {@link ipc.deckPlayedKeys} asked from the
+   * other end, for a menu that has to grey the deck groups a selection may not be filed into.
+   *
+   * **`AND`, never `OR`, and that is the half a caller gets wrong.** A reader with four cards
+   * picked is asking *which group can take this selection*, so a deck playing three of the four
+   * must not offer a row that would refuse half the press. With one key the conjunction is
+   * invisible, which is exactly why it is written down here.
+   *
+   * `keys` are {@link ipc.deckPlayedKeys}' own keys, built by `playKey`. **Sort and dedupe
+   * before calling, and that is a caching rule rather than a correctness one** — the backend
+   * dedupes for itself and the answer does not depend on the order, so what an unsorted list
+   * costs is a second cache entry and a second round trip for one question
+   * (`combosForCardsKey` in `lib/query.ts` states the same rule for the same reason).
+   * `useDecksPlaying` does both for its callers.
+   *
+   * **An empty `keys` answers `[]` rather than every deck**, and that arm is the one worth
+   * holding on to: a conjunction over nothing is vacuously true, so "every deck plays all of no
+   * cards" is the tidy answer and precisely the wrong one for a menu — it would offer every
+   * group for a selection there is nothing to check.
+   */
+  deckIdsPlaying: (keys: readonly string[]) => invoke<number[]>("deck_ids_playing", { keys }),
+  /**
    * Make a deck — **the whole deck, in one INSERT**, with its four predefined categories and
    * its one birth row of history in the same transaction. Every field of {@link DeckInput}
    * travels in this one call rather than as a create followed by a patch and a filing, which
@@ -4721,7 +5716,7 @@ export const ipc = {
    *  is `deckUpdate(id, { archived: true })`, and it is what a gallery's "remove" wants.
    *  An id that resolves to nothing is a success: the caller wanted that deck gone. */
   deckDelete: (id: number) => invoke<void>("deck_delete", { id }),
-  /** Copy the deck: its categories and tags as new rows, its cards in **both** variants
+  /** Copy the deck: its categories and labels as new rows, its cards in **both** variants
    *  remapped onto them — never `archived`. A copy is a draft. */
   deckDuplicate: (id: number) => invoke<DeckRow>("deck_duplicate", { id }),
   /**
@@ -4814,50 +5809,72 @@ export const ipc = {
    */
   deckCategoryDelete: (id: number, moveToCategoryId: number | null) =>
     invoke<void>("deck_category_delete", { id, moveToCategoryId }),
-  /** The tags **this deck's list is wearing**, most-used first — `deckGet` carries the same
+  /** The labels **this deck's list is wearing**, most-used first — `deckGet` carries the same
    *  list. `variant` scopes membership as well as the counts, because the live list and the
    *  theory list are treated as separate decks where labels are concerned. */
-  deckTagList: (deckId: number, variant: DeckVariant) =>
-    invoke<DeckTag[]>("deck_tag_list", { deckId, variant }),
-  /** A new label, **app-wide**. `deckId` is where the reader was standing — it goes in the
-   *  history row and is not stored on the tag. Refuses a name any tag already holds; the
-   *  colour is `#rrggbb` and the backend checks only that it is non-empty — see
-   *  {@link TagColor}. */
-  deckTagCreate: (deckId: number, name: string, color: TagColor) =>
-    invoke<GlobalTag>("deck_tag_create", { deckId, name, color }),
+  deckLabelList: (deckId: number, variant: DeckVariant) =>
+    invoke<DeckLabel[]>("deck_label_list", { deckId, variant }),
+  /**
+   * A new label, **app-wide**. Refuses a name any label already holds; the colour is `#rrggbb`
+   * and the backend checks only that it is non-empty — see {@link LabelColor}.
+   *
+   * **`deckId` is nullable, and `null` is Settings' Appearance panel.** A label has been one
+   * app-wide row since v21, so the deck was never what is being written — it is only what the
+   * *side effects* need: the deck's `updated_at` and its entry in the history drawer. A call
+   * from a page with no deck open has no deck to name, so it makes the label and records no
+   * history and no undo step, which is the honest account of an edit that reaches every deck
+   * wearing it.
+   *
+   * **Every existing caller passes a number and is unchanged** — `number` widens into
+   * `number | null`, so this is the rare wire change with no call site to follow it.
+   */
+  deckLabelCreate: (deckId: number | null, name: string, color: LabelColor) =>
+    invoke<GlobalLabel>("deck_label_create", { deckId, name, color }),
   /** Rename **and** recolour, **in every deck at once**: one command, both arguments required.
-   *  There is no patch shape here, so a caller changing one sends the other back unchanged. */
-  deckTagUpdate: (deckId: number, id: number, name: TagColor, color: TagColor) =>
-    invoke<GlobalTag>("deck_tag_update", { deckId, id, name, color }),
-  /** Delete a label **from the whole app**. It **untags its cards rather than deleting them**
-   *  — `deck_cards.tag_id` is `ON DELETE SET NULL` — in every deck wearing it, which is what
-   *  {@link GlobalTag.deckCount} exists for a confirm dialog to say first. */
-  deckTagDelete: (deckId: number, id: number) => invoke<void>("deck_tag_delete", { deckId, id }),
-  /** Take a label off **this deck's cards in one list**, leaving the tag itself alone —
+   *  There is no patch shape here, so a caller changing one sends the other back unchanged.
+   *  `deckId` is nullable for {@link ipc.deckLabelCreate}'s reason — a rename made from Settings
+   *  names no deck and writes no history. */
+  deckLabelUpdate: (deckId: number | null, id: number, name: string, color: LabelColor) =>
+    invoke<GlobalLabel>("deck_label_update", { deckId, id, name, color }),
+  /** Delete a label **from the whole app**. It **unlabels its cards rather than deleting them**
+   *  — `deck_cards.label_id` is `ON DELETE SET NULL` — in every deck wearing it, which is what
+   *  {@link GlobalLabel.deckCount} exists for a confirm dialog to say first. `deckId` is
+   *  nullable for {@link ipc.deckLabelCreate}'s reason, and a deckless delete still un-labels
+   *  every card: what it costs is the history row, never the write. */
+  deckLabelDelete: (deckId: number | null, id: number) =>
+    invoke<void>("deck_label_delete", { deckId, id }),
+  /** Take a label off **this deck's cards in one list**, leaving the label itself alone —
    *  the row-level act the app-wide list needed and the per-deck one never did. Answers how
    *  many rows lost it; zero is a success. */
-  deckTagRemoveFromDeck: (deckId: number, tagId: number, variant: DeckVariant) =>
-    invoke<number>("deck_tag_remove_from_deck", { deckId, tagId, variant }),
-  /** Every tag there is, most-used first — the only list that can answer a tag no card is
-   *  wearing. Takes no deck id at all; see {@link GlobalTag}. */
-  deckTagAll: () => invoke<GlobalTag[]>("deck_tag_all"),
+  deckLabelRemoveFromDeck: (deckId: number, labelId: number, variant: DeckVariant) =>
+    invoke<number>("deck_label_remove_from_deck", { deckId, labelId, variant }),
+  /** Every label there is, most-used first — the only list that can answer a label no card is
+   *  wearing. Takes no deck id at all; see {@link GlobalLabel}. */
+  deckLabelAll: () => invoke<GlobalLabel[]>("deck_label_all"),
   /**
-   * Put the one tag a deck card carries on it, or take it off with `tagId: null`.
+   * Put the one label a deck card carries on it, or take it off with `labelId: null`.
    *
-   * A **card** write wearing a tag command's name: it addresses the slot by the full grain
-   * `(deckId, cardId, categoryId, variant)` like every other card write, and answers "that
-   * card is not in this deck's category any more" for a row that has since moved, folded or
-   * been stepped to zero. A `tagId` belonging to another deck is refused before anything is
-   * written.
+   * A **card** write wearing a label command's name: it addresses the slot by the full grain
+   * `(deckId, cardId, categoryId, variant, finish)` like every other card write, and answers
+   * "that card is not in this deck's category any more" for a row that has since moved, folded
+   * or been stepped to zero. A `labelId` belonging to another deck is refused before anything
+   * is written.
+   *
+   * **`finish` is the fifth term and was sent here for months without arriving.** The command
+   * declared no such parameter, Tauri drops a payload field a command does not name, and the
+   * writer behind it addressed the row without one — so no foil or etched row in any deck could
+   * be labelled at all. Fixed 2026-09-03; `ipc.test.ts` now pins the crate's parameter list
+   * against the keys sent from here, which is the only place the two spellings meet.
    */
-  deckCardSetTag: (
+  deckCardSetLabel: (
     deckId: number,
     cardId: string,
     categoryId: number,
     variant: DeckVariant,
     finish: DeckFinish,
-    tagId: number | null,
-  ) => invoke<void>("deck_card_set_tag", { deckId, cardId, categoryId, variant, finish, tagId }),
+    labelId: number | null,
+  ) =>
+    invoke<void>("deck_card_set_label", { deckId, cardId, categoryId, variant, finish, labelId }),
   /** Every folder there is, flat — the tree is the reader's to build from `parentId`. No deck
    *  scoping, because a folder belongs to no deck: it files them. */
   deckFolderList: () => invoke<DeckFolder[]>("deck_folder_list"),
@@ -5088,7 +6105,7 @@ export const ipc = {
   deckCategoryClear: (deckId: number, categoryId: number, variant: DeckVariant) =>
     invoke<number>("deck_category_clear", { deckId, categoryId, variant }),
   /**
-   * Empty **one whole list of one deck** — Deck settings' **Clear live list…** and
+   * Empty **one whole list of one deck** — Deck settings' **Clear actual list…** and
    * **Clear theory list…** — and answer the
    * **copies** it removed: `sum(quantity)`, never a count of `deck_cards` rows.
    *
@@ -5217,6 +6234,111 @@ export const ipc = {
    * would be worse than no button.
    */
   deckMissingToWishlist: (deckId: number) => invoke<number>("deck_missing_to_wishlist", { deckId }),
+  /**
+   * What this deck is short of that the reader **already owns** — the read half of the pull, and
+   * the mirror of {@link ipc.deckMissingToWishlist}'s question one grain narrower.
+   *
+   * The two are the same idea read in two directions: what you have not got goes on a shopping
+   * list, what you have got is sitting in a binder and can be moved. Read-only, so it may be
+   * asked whenever a dialog is open and re-asked after any write; it takes no variant and reads
+   * the `live` list only, for that command's reason — a plan holds no cards.
+   *
+   * **An empty array is the ordinary answer**, not an error: a deck that is short of nothing, and
+   * a deck whose shortfall is all cards the reader has never owned, are both zero rows.
+   */
+  deckPullPlan: (deckId: number) => invoke<DeckPullRow[]>("deck_pull_plan", { deckId }),
+  /**
+   * Move owned copies into this deck's group, filling holes the list already has.
+   *
+   * **It writes no `deck_cards` row, and that is the whole difference from
+   * {@link ipc.collectionToDeck}.** That command is "add this card to the deck", so it folds the
+   * quantity into the list (`quantity = quantity + excluded.quantity`) as well as moving the
+   * cardboard — pointing it at a 4-copy line the reader is 3 short of would make the line 7.
+   * This one changes only *where the copies sit*, which is the only half a shortfall is about.
+   *
+   * **All-or-nothing.** One pick the backend re-reads and disagrees with — an entry that has
+   * since moved into a deck, been folded away, or a hole another window has already filled —
+   * refuses the whole batch in words and moves nothing. A half-applied pull is the state worth
+   * refusing over: the copies would be somewhere other than either place the reader was looking
+   * at, and this write files no undo step (see below), so there is no press that takes it back.
+   *
+   * **No undo step, for {@link ipc.deckToCollection}'s reason exactly.** `take_copies` files the
+   * copies *through the merge*, so a source row may have been folded into whatever the group
+   * already held and no longer exists to restore. The way back is the deck editor's Collection
+   * Search tab, a card at a time — and the deck's history says the pull happened, which is what
+   * makes the absence visible rather than silent.
+   *
+   * Answers what actually moved, which is what a sentence should quote.
+   */
+  deckPullFromCollection: (deckId: number, picks: DeckPullPick[]) =>
+    invoke<DeckPullOutcome>("deck_pull_from_collection", { deckId, picks }),
+  /**
+   * Which wishlist lines a quick add of this printing could take copies off — the read half of
+   * {@link ipc.deckQuickAddToCollection}'s second arm.
+   *
+   * **It names no deck**, and that is the shape rather than an omission: a wish is a fact about
+   * the reader's shopping list and about a printing, never about which deck the press came from.
+   * The deck is what the *write* files the copies into.
+   *
+   * **Fetched imperatively at the press, not by a mounted hook.** A right-click that fired a
+   * wishlist read per menu open would ask this question once per card the reader hovered past;
+   * `useDeck`'s `quickAddWishesQuery` is the options factory both the press and any test build
+   * the key from, so the two cannot disagree about it.
+   *
+   * **An empty array is the ordinary answer** — most cards a reader records are on no shopping
+   * list — and one row is the answer that needs no dialog at all. See {@link DeckQuickAddWish}
+   * for the predicate, which is deliberately narrower than what fills a wish.
+   */
+  deckQuickAddWishes: (cardId: string, finish: DeckFinish) =>
+    invoke<DeckQuickAddWish[]>("deck_quick_add_wishes", { cardId, finish }),
+  /**
+   * Record the copies a deck row is short of, filed straight into that deck's own group — and,
+   * where `wishId` names one, take them off that wish in the same transaction.
+   *
+   * **The first of the four deck-boundary crossings that _creates_ cardboard rather than moving
+   * it.** `collection_to_deck`, `deck_to_collection` and {@link ipc.deckPullFromCollection} all
+   * move a row that already exists; this one writes a `collection_entries` row that was never
+   * there. That is the whole reason its caller takes `query.ts`'s `OWNED_WRITE_KEYS` rather than
+   * the narrower collection root the three movers share: `CardSummary.ownedQuantity` moves from
+   * 0 to N on the very tile the press was made on.
+   *
+   * **`collection_add` refuses a `deck` folder outright and must go on refusing.** Filing into a
+   * group asserts *this deck holds these copies*, which only a write that can answer for the
+   * `deck_cards` row behind them may say — so this command is fenced on the deck playing the
+   * card (`NOT_IN_DECK`) and passes `collection::DECK_WRITE_FOLDERS` to the private door the
+   * deck importer already uses.
+   *
+   * **The live list only.** A plan holds no cards, so a theory row is refused with no fence of
+   * its own to explain it — the menu greys the row instead, which is where a reader can read the
+   * reason.
+   *
+   * **`finish` is the deck row's** — `null` is the regular copy, {@link DeckFinish}'s
+   * translation — and the collection word it is recorded under is `nonfoil`. `condition` is the
+   * one decision this press makes for the reader — or rather the one it now declines to make,
+   * because `MENU_CONDITION` is *not set*. Passed as that constant rather than as a second
+   * spelling of whatever it currently holds.
+   *
+   * **One transaction, so a wish that has moved on rolls the copies back too.** The backend
+   * re-reads the named wish against the same predicate {@link ipc.deckQuickAddWishes} used —
+   * the dialog's answer is a round trip old — and refuses in words (`WISH_GONE`,
+   * `WISH_WRONG_CARD`) rather than recording copies against a wish it could not find.
+   */
+  deckQuickAddToCollection: (
+    deckId: number,
+    cardId: string,
+    finish: DeckFinish,
+    condition: string,
+    quantity: number,
+    wishId: number | null,
+  ) =>
+    invoke<DeckQuickAddOutcome>("deck_quick_add_to_collection", {
+      deckId,
+      cardId,
+      finish,
+      condition,
+      quantity,
+      wishId,
+    }),
   /**
    * Every name in a decklist, resolved to a printing this app has. **Read-only**, and one call
    * for the whole list rather than one per line — ~100 names is six prepared statements and a
@@ -5373,7 +6495,9 @@ export const ipc = {
   /**
    * How large each wall of cards was last left drawn, as section name → multiplier.
    *
-   * The third `app_meta` setting and the only one whose shape is a map — see this file's header.
+   * The third `app_meta` setting and the **first** whose shape is a map — see this file's header,
+   * and {@link listView}, {@link flattenState} and {@link markColors}, each of which copies the
+   * contract below.
    * **A section is absent rather than defaulted**: the ladder's stops are this side's
    * (`@/lib/cardZoom`), so a missing entry means the reader has never zoomed that wall, and the
    * backend does not invent a number it does not own. A whole unreadable row answers `{}`.
@@ -5399,7 +6523,7 @@ export const ipc = {
    * they left it.
    *
    * The **fourth** `app_meta` setting and the first that is a bare `boolean` — see this file's
-   * header. It is also one of the two that need no narrowing on this side: the other three carry
+   * header. It is also one of the two that need no narrowing on this side: the other seven carry
    * a vocabulary a newer build could have widened, and `true`/`false` has none, so there is no
    * third state to fall back from. **The far end is infallible**: a missing row, a row holding
    * something that is not a boolean, and a row that cannot be read at all all answer `false` —
@@ -5476,22 +6600,137 @@ export const ipc = {
   setFlattenState: (section: string, flattened: boolean) =>
     invoke<void>("set_flatten_state", { section, flattened }),
   /**
-   * Whether the deck editor's card search column was last left open.
+   * What colour the reader has each card mark drawn in, as mark name → `#rrggbb`.
    *
-   * The **fifth** `app_meta` setting and the second bare `boolean`, arriving on the same day as
-   * {@link navCollapsed} above and answering the same way — see this file's header. Its default
-   * is the other one's mirror image and both are the state the reader has never asked about:
-   * `true`, the column open, which is issue #183's reversal of a disclosure that used to open
-   * shut. `true` again for a row holding anything but the `"1"`/`"0"` the backend writes.
+   * The **ninth** `app_meta` setting and the fourth whose shape is a map — see this file's
+   * header, and {@link listView} beside it, whose contract this copies whole. **A mark is absent
+   * rather than defaulted**: what an uncustomised mark is drawn in lives in `index.css`, so a
+   * missing entry means the reader has never chosen and the backend does not invent a colour the
+   * stylesheet owns. **Infallible by signature** — a whole unreadable row answers `{}`, and a
+   * single hand-edited entry costs that one mark its colour and leaves the others standing.
+   *
+   * `Record<string, string>` and not a keyed record, for {@link listView}'s reason on the key
+   * half: which marks are customisable is this side's vocabulary, so `isMarkColorKey` narrows it
+   * in `@/lib/useMarkColors`. The **values** are checked at the far end, which is where a hex has
+   * a shape worth refusing — the split `markcolors.rs` states as "the frontend owns which marks
+   * exist and this crate owns only the shape a colour may have".
+   *
+   * `app_meta` is not a synced table, so these colours are **this device's** — which is the
+   * whole family's rule and not this row's exception.
    */
-  deckSearchOpen: () => invoke<boolean>("deck_search_open"),
+  markColors: () => invoke<Record<string, string>>("mark_colors"),
   /**
-   * Remember the answer. Nothing to refuse — a `bool` cannot carry a value the row could not
-   * hold — so unlike {@link setPrintingGroupBy} this one's only failure is the BUSY every write
-   * command takes while a sync holds the write connection, which costs the reader the next
-   * launch's starting state and nothing this session.
+   * Remember one mark's colour — or, with `null`, **forget it**, which is what Reset means.
+   *
+   * `null` rather than writing the default hex, deliberately: a reader who has never chosen and
+   * one who has reset must end in the same state, and a default written into the row would freeze
+   * today's palette into the database — the cost `features/decks/labelColors.ts` records for a
+   * stored label colour, paid for no reason.
+   *
+   * Two arguments where most of its neighbours take one, and Tauri matches by name: **`mark` and
+   * `color`**, not `key` and `value`. Rejects a blank mark and anything that is not `#rrggbb` —
+   * six digits and a hash, with no shorthand, because `markcolors.rs` expects
+   * `features/decks/labelColors.ts`' `normalizeLabelColor` to have expanded `#f00` on this side
+   * first. So `app_meta` cannot collect entries every later read would discard. Uppercase is
+   * accepted and stored folded, so one colour has one spelling in the row.
+   *
+   * **Unlike its neighbours a refusal here is worth surfacing.** {@link setNavCollapsed} and
+   * {@link setListView} swallow a BUSY because the reader cannot see what was lost until the next
+   * launch; here they are standing in front of a swatch, so the panel says the write did not land
+   * rather than leaving them to discover it at the next launch.
    */
-  setDeckSearchOpen: (open: boolean) => invoke<void>("set_deck_search_open", { open }),
+  setMarkColor: (mark: string, color: string | null) =>
+    invoke<void>("set_mark_color", { mark, color }),
+  /**
+   * Whether the deck editor's card search column was last left open.
+  /**
+   * Whether each of the app's docked card-search columns was last left open, as section name →
+   * open.
+   *
+   * It stands exactly where `deckSearchOpen` stood, having replaced it on 2026-09-07, and its
+   * shape is a map. See this file's header,
+   * and {@link flattenState} beside it, whose contract this copies whole down to the value type.
+   * **A section is absent rather than defaulted**: which pages have a search column at all is
+   * this side's (`@/features/search/useSearchOpen`), so a missing entry means the reader has
+   * never touched that disclosure and the backend does not invent a preference it does not own.
+   * **Infallible by signature** — a whole unreadable row answers `{}`, which is every column
+   * drawn the way `DEFAULT_SEARCH_OPEN` says.
+   *
+   * **What it replaced was a bare `boolean` for the deck editor alone**, and the swap is the
+   * header's paragraph in one line: one row, one command pair and one query key now answer for
+   * three columns. The deck's old `deck_search_open` row is carried across by `searchopen.rs`'s
+   * *read* rather than by a schema rung, so nothing on this side has ever heard of it.
+   *
+   * `Record<string, boolean>` and not `Record<SearchSection, boolean>`, for {@link listView}'s
+   * reason on the key half only: the keys are whatever some build of this app wrote, so
+   * `useSearchOpen` narrows them. The **values** have no vocabulary to narrow, which is why the
+   * type says `boolean` — and that hook still checks it, because the word is a promise about
+   * the far end rather than a fact about the row.
+   */
+  searchOpen: () => invoke<Record<string, boolean>>("search_open"),
+  /**
+   * Remember one column's disclosure, leaving the other entries in the row alone.
+   *
+   * Two arguments where some of its neighbours take one, and Tauri matches by name. Rejects a
+   * blank section and nothing else: a `bool` off the IPC boundary has no junk state for a
+   * validation to catch, so unlike {@link setListView} there is no word to refuse —
+   * {@link setFlattenState}'s asymmetry exactly, on a row whose *keys* also belong to this side.
+   *
+   * Answers `collection::BUSY` under a running sync, like every other write, and the caller
+   * deliberately does not put the column back when it does — {@link setNavCollapsed}'s trade,
+   * for its reason: a refusal costs the reader nothing they can see this session and only the
+   * next launch's starting state for that column.
+   */
+  setSearchOpen: (section: string, open: boolean) =>
+    invoke<void>("set_search_open", { section, open }),
+  /**
+   * How the deck gallery was last ordered — one `app_meta` row holding `"<key>:<direction>"`,
+   * e.g. `"updated:desc"`.
+   *
+   * The **eighth** `app_meta` setting and the third answered as a bare string — see this file's
+   * header. **Its value is opaque to Rust on purpose, and that is the strongest version of
+   * {@link printingGroupBy}'s split rather than an exception to it**: the sort keys are
+   * `features/decks/deckSort.ts`' vocabulary — `updated`, `name`, `colors`, `bracket`, `cards`,
+   * `format` — and three of those six are *computed on this side* (a deck's colours come from
+   * `deck_pip_costs` through `countPips`, its bracket from `estimateBracket`), so there is no
+   * list in the backend to check a word against and inventing one would be a second opinion
+   * about a table the webview owns.
+   *
+   * So the narrowing is entirely this side's, and it has to be: a database outlives the app, and
+   * a key a *future* build stops offering must degrade to the default rather than leaving the
+   * gallery ordered by something nothing can draw. The backend answers its default
+   * (`decksort::DEFAULT`, `"updated:desc"` — the same words `deckSort.ts` spells, because the two
+   * halves cannot share a constant across a wire) for a row that is missing, unreadable **or
+   * blank**, and hands anything else back verbatim. So a key a newer build wrote reaches this
+   * side as itself, and a word *this* build does not know becomes the default order here.
+   *
+   * **Only the sort is remembered, and no filter is.** A filter is a thing a reader is doing
+   * right now; a gallery that opened already narrowed, with no memory of having asked for it, is
+   * a gallery that looks like it has lost decks.
+   */
+  deckSort: () => invoke<string>("deck_sort"),
+  /**
+   * Remember the gallery's order.
+   *
+   * **One refusal and it is a blank**, where {@link setPrintingGroupBy} refuses every word it
+   * does not know. That is not leniency: the value has a vocabulary and the *backend does not
+   * have it*, so any wider refusal could only be the backend guessing about a list this side
+   * owns. A blank is refusable without a vocabulary — it is an order in nobody's — and it is
+   * the one value the read discards, so storing it would be a write that reported success and
+   * read back as the default for ever. Everything else survives the round trip, which is what
+   * makes the *read* the thing that protects the reader: an unrecognised key degrades to the
+   * default order here and costs them their ordering, never the gallery.
+   *
+   * **The argument is `sort`, not `value`** — `invoke` fills parameters by name and
+   * `decksort::set_deck_sort` calls its one parameter `sort`, so a mismatch is a rejection at
+   * run time with nothing red in either build. `ipc.test.ts` pins it, which is what that half
+   * of the mirror is for.
+   *
+   * Answers `collection::BUSY` under a running sync like every other write, and the caller
+   * deliberately does not put the picker back when it does — {@link setNavCollapsed}'s trade,
+   * for its reason: a refusal costs the next launch's starting order and nothing this session.
+   */
+  setDeckSort: (sort: string) => invoke<void>("set_deck_sort", { sort }),
   /**
    * Download one marketplace's price feed and rewrite its rows. Answers the feed's state
    * afterwards.

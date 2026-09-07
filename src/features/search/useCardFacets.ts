@@ -21,8 +21,22 @@ import { facetsOrUndefined } from "./facets";
  * oracle id and there is nothing left for the builder to omit. The `SearchRequest` field and its
  * Rust implementation are untouched — the search contract still carries it — but no frontend
  * caller reaches it.
+ *
+ * **`availableForDeck` is omitted for a different reason from the three page fields**, and it is
+ * the price-band's reason one field over. `CardIndex` has a single global `owned` bitset — one
+ * bit per card the reader owns a copy of, anywhere — and no deck-relative dimension, so the
+ * Owned/Missing counts in the deck builder's filter row are taken as if every copy were
+ * reachable. They therefore read **high** there, which is the direction this row is built to
+ * fail in: `facets.ts` greys only what would change nothing, so an over-read count offers an
+ * option that turns out thin, where an under-read one would hide cards nobody would report
+ * missing. Those two numbers reach a `title` and never a greying, so the cost is a tooltip that
+ * can exceed the wall under it, and the fix — a per-deck bitset rebuilt on every folder lock,
+ * move and deck-group write — buys a tooltip.
  */
-export type FacetRequest = Omit<SearchRequest, "sort" | "collapse" | "limit" | "offset">;
+export type FacetRequest = Omit<
+  SearchRequest,
+  "sort" | "collapse" | "limit" | "offset" | "availableForDeck"
+>;
 
 /**
  * How often to ask again while the answer is **not ready**, and nothing at all once it is.

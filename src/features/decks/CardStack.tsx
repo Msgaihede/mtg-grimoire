@@ -34,6 +34,7 @@ import {
   deckCardPress,
   deckCardProps,
   deckCardSelectedProps,
+  deckCardShort,
   DeckCardControls,
   LandedMark,
   revealedWhenOpen,
@@ -42,7 +43,7 @@ import {
   type DeckCardActions,
 } from "./cardControl";
 import { deckCardSlot } from "./dnd";
-import { theoryMatchDelta } from "./theoryMatch";
+import { theoryMatchMark, type TheoryMark, type TheoryPlan } from "./theoryMatch";
 import { ruleBreak } from "./violations";
 import type { ValidationIssue } from "./validation/types";
 
@@ -357,8 +358,8 @@ export function stackLiftRoom(zoom: number = DEFAULT_ZOOM): number {
  * characters of a card's name buys nothing and costs the one thing the strip is for.
  *
  * What changed is what is in the corner. {@link QuantityTag} is not a chip — it is the card's
- * tag, in the tag's colour, with the copy count printed on it, cut to a banner rather than a
- * box. Down a fifteen-card stack that column of colour *is* the structure of the pile, and a
+ * label, in the label's colour, with the copy count printed on it, cut to a banner rather than
+ * a box. Down a fifteen-card stack that column of colour *is* the structure of the pile, and a
  * reader scans it before they read a single name. Putting it where the eye starts is what makes
  * the scan work; putting it on the right made it a footnote to fifteen names.
  *
@@ -560,11 +561,11 @@ export interface CardStackProps {
    */
   violations?: Map<string, ValidationIssue[]>;
   /**
-   * What the deck's plan says about each row, as `theoryMatch.ts`'s map of slot → how far the
-   * live list is from the planned count — handed in whole for `violations`' reason, and
-   * `undefined` for a deck that keeps no plan or a reader looking at the plan itself.
+   * The deck's plan, as `theoryMatch.ts`'s two lookups and the deck's own two mark switches —
+   * handed in whole for `violations`' reason, and `undefined` for a deck that keeps no plan or
+   * a reader looking at the plan itself.
    */
-  theoryMatches?: ReadonlyMap<string, number>;
+  theoryPlan?: TheoryPlan;
   /**
    * Open this card. The whole row is passed rather than an id, because the pane needs the
    * slot: the same printing sits in two categories often enough that "which one was pressed"
@@ -663,7 +664,7 @@ export function CardStack({
   label,
   currency,
   violations,
-  theoryMatches,
+  theoryPlan,
   onSelect,
   actions,
   zoom = DEFAULT_ZOOM,
@@ -723,7 +724,7 @@ export function CardStack({
           onRelease={release}
           transition={reduced ? STILL : stackCard}
           ruleBreakText={ruleBreak(violations?.get(card.cardId))}
-          theoryDelta={theoryMatchDelta(theoryMatches, card)}
+          theoryMark={theoryMatchMark(theoryPlan, card)}
           onSelect={onSelect}
           actions={actions}
         />
@@ -747,8 +748,8 @@ export function CardStack({
  * ## What the app says, and where it says it
  *
  * Two places, and the split is the whole shape of this component. **Over** the picture go the
- * facts about the *deck* — how many copies, which tag, whether a rule is broken — because they
- * are answers to "what is this card doing in this pile" and belong on the pile's own reveal
+ * facts about the *deck* — how many copies, which label, whether a rule is broken — because
+ * they are answers to "what is this card doing in this pile" and belong on the pile's own reveal
  * strip ({@link CARD_MARKS_STRIP}). **Under** it goes the data line, which is facts about the
  * *printing* — the rarity, the set, the finish, the price, the shortage — because those are
  * answers about the object, and covering the card's printed text box to state them was a bad
@@ -756,7 +757,7 @@ export function CardStack({
  *
  * Not `CardArt`, which is the 5:7 box with its own no-art fallback and retry: the height here is
  * a constant the stack's arithmetic depends on, and the fallback has to fill exactly it. It
- * borrows `FoilOverlay`'s sheen, which is the same trade the card detail pane's main art makes
+ * borrows `FoilOverlay`'s sheen, which is the same trade `CardModalArt`'s main art makes
  * and for the same reason — what the surfaces must agree on is the marking — and says the
  * *word* on the data line rather than in a chip, which is `FoilOverlay`'s own rule for a
  * surface with room for it.
@@ -778,7 +779,7 @@ function StackedCard({
   onRelease,
   transition,
   ruleBreakText,
-  theoryDelta,
+  theoryMark,
   onSelect,
   actions,
 }: {
@@ -806,11 +807,11 @@ function StackedCard({
   transition: Transition;
   /** The sentence the `RULE BREAK` mark carries, or `null` when there is nothing wrong. */
   ruleBreakText: string | null;
-  /** What the deck's plan says about this row — `theoryMatch.ts`'s `theoryMatchDelta`, resolved by
-   *  the stack so this card is handed an answer rather than a map to look itself up in. `null` is
-   *  a card the plan does not ask for, `0` the card it asks for exactly, and a signed number is
-   *  how far the live list is from the planned count. */
-  theoryDelta: number | null;
+  /** What the deck's plan says about this row — `theoryMatch.ts`'s `theoryMatchMark`, resolved by
+   *  the stack so this card is handed an answer rather than a plan to look itself up in. `null` is
+   *  a card the plan does not ask for; otherwise the tier it is in and how far the live list is
+   *  from the plan **at that tier's own grain**, where `0` is the card the plan asks for exactly. */
+  theoryMark: TheoryMark | null;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
 }) {
@@ -835,10 +836,11 @@ function StackedCard({
   // What that copy is *called*, if anything — the same reading the deck's other three views
   // make, so one card is not marked two ways on one screen.
   const treatments = finishTreatments(card.promoTypes, finish);
-  // The allocator claims no copy for an inactive category, so every row in one reads 0 owned
-  // by construction — a shortage mark there would report one the reader does not have. The
-  // switch, never the kind: a Maybeboard switched *on* is short of copies like any other pile.
-  const short = card.categoryActive && card.ownedQuantity < card.quantity;
+  // {@link deckCardShort}, which is also what `deckCardName` says this card's shortage in words
+  // from — an inactive pile and the theory list each read 0 owned for a reason that is not an
+  // empty shelf. The **switch**, never the kind: a Maybeboard switched *on* is short of copies
+  // like any other pile.
+  const short = deckCardShort(card);
   // There is a URL and it has not failed. Not "the bytes have arrived" — nothing here can know
   // that, and nothing needs to: the frame underneath is what shows while they are on their way.
   const drawing = face.src !== null && !face.failed;
@@ -935,7 +937,7 @@ function StackedCard({
         type="button"
         // Every mark below is `aria-hidden`, so this string is the whole of what a keyboard
         // reader gets — including the red shortage figure, which nothing else would say.
-        aria-label={deckCardName(card, ruleBreakText, theoryDelta)}
+        aria-label={deckCardName(card, ruleBreakText, theoryMark)}
         // How the card pane hands the caret back after a printing swap replaces this card.
         {...deckCardProps(card)}
         {...deckCardPress(card, onSelect, actions)}
@@ -1054,7 +1056,7 @@ function StackedCard({
               has the whole of why. The scrim is what keeps a mark legible over art of any
               brightness. */}
           <span className={cn(CARD_MARKS_STRIP, "bg-gradient-to-b from-bg/70 to-transparent")}>
-            <QuantityTag quantity={card.quantity} name={card.tagName} color={card.tagColor} />
+            <QuantityTag quantity={card.quantity} name={card.labelName} color={card.labelColor} />
             {/* Gold, spelled out, tucked under the tag's tail. The `RULE BREAK` mark is red,
                 boxed and in the card's opposite corner — see `CardMarks.tsx` for why the pair is
                 drawn once and what keeps the two from being confusable. */}
@@ -1075,7 +1077,9 @@ function StackedCard({
                 stack is the one surface where that is not a collision: it draws the overlay with
                 `mark={false}` and says the finish in its foot instead, which is why this corner
                 was free for the `RULE BREAK` mark to have held until now. */}
-            {theoryDelta !== null && <TheoryMatchMark delta={theoryDelta} className="ml-auto" />}
+            {theoryMark !== null && (
+              <TheoryMatchMark tier={theoryMark.tier} delta={theoryMark.delta} className="ml-auto" />
+            )}
           </span>
 
           {/* **Bottom-left, moved out of the top-right corner on 2026-08-20**, and the move is

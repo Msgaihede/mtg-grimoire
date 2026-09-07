@@ -148,6 +148,7 @@ const COLLECTION_FOLDER: CollectionFolder = {
   kind: "user",
   deckId: null,
   sortOrder: 3,
+  locked: false,
 };
 
 const WISH_FOLDER: WishlistFolder = { id: 4, name: "Buy next", parentId: null, sortOrder: 4 };
@@ -162,6 +163,22 @@ function wishNode(): FolderNode<WishlistFolder> {
 
 const ROW_MENU = { onContextMenu: vi.fn(), onKeyDown: vi.fn(), onClick: vi.fn() };
 
+/**
+ * A folder card whose name is **not** being edited, which is the state both walls are in here.
+ *
+ * The rename field replaces the card's own button with an `<input>` and marks its `<form>`
+ * `data-no-drag` — a different set of elements, and one press the sensor refuses — where every
+ * measurement in this file is about the element a registration lands on. That element is the
+ * `<li>` either way, so a renaming card would answer the same question with more moving parts.
+ * The field's own drag guard is `CollectionFolderCard.test.tsx`'s.
+ */
+const RESTING_RENAME = {
+  active: false,
+  pending: false,
+  onSubmit: vi.fn(),
+  onCancel: vi.fn(),
+};
+
 async function renderCollectionWall() {
   render(
     <ul aria-label="Folders">
@@ -171,6 +188,7 @@ async function renderCollectionWall() {
         currency="usd"
         onOpen={vi.fn()}
         rowMenu={ROW_MENU}
+        rename={RESTING_RENAME}
         canDrop={() => true}
         onDropCard={vi.fn()}
         canDropFolder={() => true}
@@ -190,6 +208,7 @@ async function renderWishWall() {
         currency="usd"
         onOpen={vi.fn()}
         rowMenu={ROW_MENU}
+        rename={RESTING_RENAME}
         canDrop={() => true}
         onDropWish={vi.fn()}
         canDropFolder={() => true}

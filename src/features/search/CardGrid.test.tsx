@@ -13,9 +13,26 @@ import { boxed, recordDrags, startPointerDrag } from "@/test-drag";
 // in jsdom is a rejected promise about a missing Tauri runtime rather than a call anything
 // here could read.
 const wishlistAdd = vi.hoisted(() => vi.fn());
+// **The three reads below are not decoration — the tile's `+` opens `AddToCollectionButton`,
+// and since that popup grew a purchase-price field it asks for three things this wall never
+// did.** `useMarketplace` reads `getMarketplace` and `marketplaceFeedStatus` to know whose money
+// the popup is quoting, and the popup itself reads `cardDetail` for the per-finish price it
+// offers as a placeholder. Left off this object they are `undefined`, and calling `undefined()`
+// inside a `queryFn` is an error react-query **swallows into a query state** — so the suite stays
+// green while three requests fail on every render, which is the shape of a mock that has quietly
+// stopped describing the component. They answer the shape and nothing useful: this file is about
+// tiles, columns and gutters, and a real price here would be a fixture nobody is asserting on.
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { collectionAdd: vi.fn(), wishlistAdd },
+  ipc: {
+    collectionAdd: vi.fn(),
+    wishlistAdd,
+    getMarketplace: vi.fn().mockResolvedValue("tcgplayer"),
+    marketplaceFeedStatus: vi.fn().mockResolvedValue([]),
+    cardDetail: vi.fn().mockResolvedValue({
+      finishPrices: { nonfoil: null, foil: null, etched: null },
+    }),
+  },
 }));
 
 // Which build the wall is drawing in. It is a `define` folded away at build time, so mocking
@@ -2086,5 +2103,51 @@ describe("the chin and the tile key", () => {
     // can be checked here.
     expect(strip.classList.contains("pointer-events-none")).toBe(true);
     expect(strip.classList.contains("[&>*]:pointer-events-auto")).toBe(true);
+  });
+
+  /**
+   * **The right-margin column** (issue #348) — the deck stack's position for a card's stepper,
+   * and the slot the collection's and the wishlist's walls moved theirs into.
+   *
+   * Two things are pinned and the second is the one that would go wrong silently. It is over the
+   * art like the strip, so it costs the wall no height; and **its `pointer-events` follow its
+   * reveal**, which is where it deliberately differs from the strip above. The strip keeps its
+   * control pressable while invisible — affordable across 20px — and this column is ~99px tall
+   * against a 238px face, so the same trade would put an invisible stepper under the right-hand
+   * third of every card. A mouse loses nothing (the pointer that reaches the column has already
+   * revealed it by being on the tile); a touch screen gets back the press that opens the card.
+   *
+   * `pointer-events` is inherited, so gating the box gates what it holds — which is why there is
+   * no `[&>*]` arm here and why its absence is not the strip's rule forgotten.
+   *
+   * **jsdom does no hit testing and applies no `:hover`**, so the classes are the whole of what
+   * can be checked; the behaviour is a live-window question.
+   */
+  it("stands the tile's column in the right margin, and gates it with the reveal", () => {
+    render(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={vi.fn()}
+        column={() => <button type="button">More</button>}
+        {...base}
+      />,
+    );
+
+    const more = screen.getByRole("button", { name: "More" });
+    // In the tab order at all times, for the strip's reason: "visible on hover" is not a state a
+    // keyboard has.
+    expect(more).not.toHaveAttribute("tabindex", "-1");
+
+    const art = screen.getByRole("button", { name: "Lightning Bolt" });
+    const column = more.parentElement!;
+    expect(column.parentElement).toBe(art.parentElement);
+    expect(column.classList.contains("absolute")).toBe(true);
+
+    expect(column.classList.contains("pointer-events-none")).toBe(true);
+    expect(column.classList.contains("group-hover:pointer-events-auto")).toBe(true);
+    expect(column.classList.contains("group-focus-within:pointer-events-auto")).toBe(true);
+    // The strip's arrangement is the one this must *not* have: an `[&>*]` escape here would put
+    // the invisible stepper back under the pointer.
+    expect(column.classList.contains("[&>*]:pointer-events-auto")).toBe(false);
   });
 });

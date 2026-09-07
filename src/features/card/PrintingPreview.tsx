@@ -134,13 +134,30 @@ export function usePrintingDwell(): PrintingDwell {
   const [shown, setShown] = useState<Shown | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  /**
+   * What is on screen, mirrored into a ref so {@link cancel} can tell "nothing to take down"
+   * without going through `setState` to find out.
+   *
+   * **React's bail-out is not free, and this file said it was.** `setShown(null)` on state that
+   * is already `null` does not commit — but React may still *render* the component once before
+   * discovering that, and one commit is enough to matter: `CardModalPrintings` calls `cancel`
+   * from an effect keyed on its rows, so a list re-rendering while a write is in flight got an
+   * extra pass, and `CardDetailModal`'s grimoire counts — which refresh on the falling edge of
+   * `useIsMutating` — stopped seeing the edge. Found 2026-09-04 by a counts test going red on a
+   * change that had nothing to do with counts.
+   */
+  const shownRef = useRef<Shown | null>(null);
+  useEffect(() => {
+    shownRef.current = shown;
+  }, [shown]);
+
   const cancel = useCallback(() => {
     if (timer.current !== null) {
       clearTimeout(timer.current);
       timer.current = null;
     }
-    // A no-op when nothing is shown: React bails out of a re-render on identical state, so
-    // every pointer crossing the list costs one comparison rather than one commit.
+    // Genuinely nothing to do, and it returns before asking React anything — see `shownRef`.
+    if (shownRef.current === null) return;
     setShown(null);
   }, []);
 
@@ -148,11 +165,23 @@ export function usePrintingDwell(): PrintingDwell {
     (printingId: string, anchor: HTMLElement) => {
       cancel();
       // Not over a layer the reader already opened. The trigger's own two attributes say so
-      // ({@link OPEN_POPUP}), read off the pane rather than out of state the popup keeps to
-      // itself — one query over one docked pane, on the enter and nowhere else. See the second
-      // half of this hook's doc for the case it is here for, and `OPEN_POPUP` for why it is
-      // not the bare `aria-expanded`.
-      if (anchor.closest(`[${PREVIEW_FRAME_ATTR}]`)?.querySelector(OPEN_POPUP)) return;
+      // ({@link OPEN_POPUP}), read off the document rather than out of state the popup keeps to
+      // itself — one query, on the enter and nowhere else. See the second half of this hook's
+      // doc for the case it is here for, and `OPEN_POPUP` for why it is not the bare
+      // `aria-expanded`.
+      //
+      // **The document, not the frame** — and that changed on 2026-09-04 with the surface. In
+      // the docked pane the frame was the whole pane, so a frame-scoped query and "any popup
+      // over this list" were the same sentence. In the card modal the frame is the *rows*
+      // scroller alone: the list's own `Group printings by` sits in the head above it, and the
+      // category and label pickers are in another column entirely — every one of them opens a
+      // panel that lands over these rows, and none of them is inside the frame. A query scoped
+      // to the frame therefore stopped suppressing anything at all, silently, while still
+      // reading as a guard.
+      //
+      // Widening it costs nothing here: the modal is `aria-modal`, so a popup anywhere else in
+      // the app is one the reader cannot be using.
+      if (document.querySelector(OPEN_POPUP)) return;
       timer.current = setTimeout(() => {
         timer.current = null;
         // The row can leave while the quarter second runs — a refetch that replaces the list,

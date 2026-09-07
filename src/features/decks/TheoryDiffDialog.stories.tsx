@@ -273,7 +273,7 @@ export const Unpriced: Story = {
  * A refused read, in the backend's own words, where the rows would have been.
  *
  * `deckMeta` is the fault for the reads a deck screen makes *beside* the deck — its categories,
- * its tags, the folder tree, its history and this. The deck itself read fine, which is why there
+ * its labels, the folder tree, its history and this. The deck itself read fine, which is why there
  * is a dialog open over it at all. No retry button: the query re-runs the next time the dialog
  * opens, and every deck write invalidates its key.
  */

@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
-import { Copy, Minus, Square, X } from "lucide-react";
+import { Copy, Keyboard, Minus, Square, X } from "lucide-react";
 import { GrimoireMark } from "@/components/GrimoireMark";
+import { KEY_MAP_LABEL, KeyMap } from "@/components/KeyMap";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { LAYER } from "@/lib/layers";
+import { useAppStore } from "@/lib/store";
 import {
   SNAP_BUTTON_ID,
   closeWindow,
@@ -40,6 +42,7 @@ function CaptionButton({
   id,
   danger = false,
   forceHover = false,
+  expanded,
 }: {
   label: string;
   Icon: typeof Minus;
@@ -49,6 +52,16 @@ function CaptionButton({
   danger?: boolean;
   /** Draw the hover state regardless of the pointer — see {@link TitleBar}'s snap overlay. */
   forceHover?: boolean;
+  /**
+   * Whether what this button opens is open — `aria-expanded`, and the same wash `forceHover`
+   * draws.
+   *
+   * **The open state reuses that branch rather than adding a third styling path**, and the two
+   * really are one thing: "this button is lit for a reason that is not the pointer". Left
+   * `undefined` by default, not `false`, because `aria-expanded="false"` on Minimize would
+   * announce a button that opens something and never does.
+   */
+  expanded?: boolean;
 }) {
   const tip = useTooltip();
   return (
@@ -57,6 +70,7 @@ function CaptionButton({
       id={id}
       onClick={onSelect}
       aria-label={label}
+      aria-expanded={expanded}
       // `describes: false`: `label` is this button's whole `aria-label` already, so a wired
       // `aria-describedby` would have a screen reader hear "Minimize, Minimize". This is also
       // the one anchor in the app pinned to the window's top edge, so its tooltip is the one
@@ -70,8 +84,10 @@ function CaptionButton({
         // The same two declarations the `hover:` variants carry, applied by state instead of
         // by the pointer. Tailwind cannot express "hover, or this flag", so the flag restates
         // them — and they are restated rather than extracted because a shared constant would
-        // put the danger/normal branch in two places.
-        forceHover && (danger ? "bg-destructive text-white" : "bg-accent/10 text-accent"),
+        // put the danger/normal branch in two places. Two flags reach it now and there is still
+        // one branch: the snap overlay's hover, and a panel this button has open.
+        (forceHover || expanded === true) &&
+          (danger ? "bg-destructive text-white" : "bg-accent/10 text-accent"),
       )}
     >
       <Icon className="size-4" aria-hidden="true" />
@@ -100,9 +116,23 @@ function CaptionButton({
  * grab area. The row carries it (that is the empty middle), and so do the lockup's wrapper
  * and the wordmark inside it. The buttons deliberately do not — a drag region swallows the
  * click.
+ *
+ * **A fourth button, and it is not a window verb.** {@link KeyMap} is here because the caption
+ * is the one row on screen in every view, in the editor, and over every modal — the same
+ * argument `LAYER.caption` makes about the rung — so the list of what the keyboard does is
+ * reachable from wherever a reader wondered. It sits *before* Minimize rather than after Close:
+ * the three window verbs are a run the reader's hand knows from every other window on the
+ * desktop, and inserting anything into it or after it would put a non-destructive button where
+ * Close has always been. The 46px square, the missing radius and the missing press-scale all
+ * stay — a rounded chip in a row of three square full-height buttons reads as foreign, and the
+ * coherence of the row outranks a corner rule written about Fitts's law.
  */
 export function TitleBar() {
   const [maximized, setMaximized] = useState(false);
+  // Shared with `AppShell`, which binds `F1`, because the key and the panel are in two
+  // components — see the store's own note on the flag.
+  const keyMapOpen = useAppStore((s) => s.keyMapOpen);
+  const setKeyMapOpen = useAppStore((s) => s.setKeyMapOpen);
   // Whether the pointer is inside the native Snap Layouts overlay. See `SNAP_HOVER_EVENTS`:
   // on Windows 11 the maximize button is underneath a transparent Win32 child window, so its
   // CSS `:hover` never fires and this is the only signal that the pointer is on it.
@@ -220,6 +250,17 @@ export function TitleBar() {
       </div>
 
       <div className="flex h-full shrink-0">
+        {/* The panel is rendered inside `KeyMap`'s own box, immediately after the button it
+            belongs to — which is what makes the pair a disclosure rather than a dialog, and
+            what gives the placement something to measure. See {@link KeyMap}. */}
+        <KeyMap>
+          <CaptionButton
+            label={KEY_MAP_LABEL}
+            Icon={Keyboard}
+            expanded={keyMapOpen}
+            onSelect={() => setKeyMapOpen(!keyMapOpen)}
+          />
+        </KeyMap>
         <CaptionButton label="Minimize" Icon={Minus} onSelect={() => void minimizeWindow()} />
         {/* `id` is read by the native overlay, which finds this button by DOM id and parks
             itself over its rectangle. The constant is shared with the Rust side through

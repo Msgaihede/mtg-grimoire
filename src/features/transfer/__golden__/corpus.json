@@ -31,8 +31,8 @@
           "rarity": "mythic",
           "typeLine": "Legendary Creature — Angel",
           "unitPrice": 4.31,
-          "tagName": null,
-          "tagColor": null,
+          "labelName": null,
+          "labelColor": null,
           "legalities": "{\"commander\":\"legal\",\"legacy\":\"legal\",\"standard\":\"not_legal\"}"
         },
         {
@@ -63,8 +63,8 @@
           "rarity": "rare",
           "typeLine": "Legendary Creature — Cat Nightmare",
           "unitPrice": 2.5,
-          "tagName": null,
-          "tagColor": null,
+          "labelName": null,
+          "labelColor": null,
           "legalities": "{\"commander\":\"legal\",\"modern\":\"banned\",\"historic\":\"legal\"}"
         },
         {
@@ -95,8 +95,8 @@
           "rarity": "common",
           "typeLine": "Instant",
           "unitPrice": 380,
-          "tagName": null,
-          "tagColor": null,
+          "labelName": null,
+          "labelColor": null,
           "legalities": "{\"historic\":\"banned\",\"timeless\":\"legal\",\"standard\":\"not_legal\"}"
         },
         {
@@ -127,8 +127,8 @@
           "rarity": "common",
           "typeLine": "Instant",
           "unitPrice": 380,
-          "tagName": null,
-          "tagColor": null,
+          "labelName": null,
+          "labelColor": null,
           "legalities": "{\"historic\":\"banned\",\"timeless\":\"legal\",\"standard\":\"not_legal\"}"
         },
         {
@@ -159,8 +159,8 @@
           "rarity": "common",
           "typeLine": "Instant",
           "unitPrice": 380,
-          "tagName": null,
-          "tagColor": null,
+          "labelName": null,
+          "labelColor": null,
           "legalities": "{\"historic\":\"banned\",\"timeless\":\"legal\",\"standard\":\"not_legal\"}"
         },
         {
@@ -191,8 +191,8 @@
           "rarity": "uncommon",
           "typeLine": "Artifact",
           "unitPrice": 1.75,
-          "tagName": null,
-          "tagColor": null,
+          "labelName": null,
+          "labelColor": null,
           "legalities": "{\"commander\":\"legal\",\"modern\":\"not_legal\"}"
         },
         {
@@ -223,8 +223,8 @@
           "rarity": "uncommon",
           "typeLine": "Artifact",
           "unitPrice": 1.75,
-          "tagName": null,
-          "tagColor": null,
+          "labelName": null,
+          "labelColor": null,
           "legalities": "{\"commander\":\"legal\",\"modern\":\"not_legal\"}"
         },
         {
@@ -255,8 +255,8 @@
           "rarity": "rare",
           "typeLine": "Land // Land",
           "unitPrice": 6.5,
-          "tagName": null,
-          "tagColor": null,
+          "labelName": null,
+          "labelColor": null,
           "legalities": "{\"commander\":\"legal\",\"modern\":\"legal\"}"
         },
         {
@@ -287,8 +287,8 @@
           "rarity": "rare",
           "typeLine": "Sorcery",
           "unitPrice": 12.99,
-          "tagName": "Cut candidate",
-          "tagColor": "#4aab08",
+          "labelName": "Cut candidate",
+          "labelColor": "#4aab08",
           "legalities": "{\"commander\":\"legal\",\"modern\":\"legal\"}"
         },
         {
@@ -319,8 +319,8 @@
           "rarity": "rare",
           "typeLine": "Artifact",
           "unitPrice": 54.5,
-          "tagName": "Keeper",
-          "tagColor": null,
+          "labelName": "Keeper",
+          "labelColor": null,
           "legalities": "{\"commander\":\"legal\",\"modern\":\"legal\"}"
         },
         {
@@ -351,8 +351,8 @@
           "rarity": "uncommon",
           "typeLine": "Artifact",
           "unitPrice": 28.4,
-          "tagName": null,
-          "tagColor": null,
+          "labelName": null,
+          "labelColor": null,
           "legalities": "{\"commander\":\"legal\",\"modern\":\"legal\"}"
         },
         {
@@ -383,8 +383,8 @@
           "rarity": "mythic",
           "typeLine": "Artifact",
           "unitPrice": 89.99,
-          "tagName": null,
-          "tagColor": null,
+          "labelName": null,
+          "labelColor": null,
           "legalities": "{\"commander\":\"banned\",\"legacy\":\"legal\"}"
         },
         {
@@ -415,8 +415,8 @@
           "rarity": "mythic",
           "typeLine": "Artifact",
           "unitPrice": 175,
-          "tagName": null,
-          "tagColor": null,
+          "labelName": null,
+          "labelColor": null,
           "legalities": "{\"commander\":\"banned\",\"legacy\":\"legal\"}"
         }
       ]
@@ -452,8 +452,8 @@
           "rarity": "rare",
           "typeLine": "Enchantment",
           "unitPrice": 9.99,
-          "tagName": null,
-          "tagColor": null,
+          "labelName": null,
+          "labelColor": null,
           "legalities": "{\"vintage\":\"not_legal\",\"commander\":\"not_legal\"}"
         },
         {
@@ -484,8 +484,8 @@
           "rarity": "uncommon",
           "typeLine": "Artifact",
           "unitPrice": 1.2,
-          "tagName": null,
-          "tagColor": null,
+          "labelName": null,
+          "labelColor": null,
           "legalities": "{\"commander\":\"legal\",\"modern\":\"not_legal\"}"
         },
         {
@@ -516,8 +516,8 @@
           "rarity": "common",
           "typeLine": "Instant",
           "unitPrice": 380,
-          "tagName": null,
-          "tagColor": null,
+          "labelName": null,
+          "labelColor": null,
           "legalities": "{\"historic\":\"banned\",\"timeless\":\"legal\",\"standard\":\"not_legal\"}"
         },
         {
@@ -548,8 +548,8 @@
           "rarity": "common",
           "typeLine": "Instant",
           "unitPrice": 380,
-          "tagName": null,
-          "tagColor": null,
+          "labelName": null,
+          "labelColor": null,
           "legalities": "{\"historic\":\"banned\",\"timeless\":\"legal\",\"standard\":\"not_legal\"}"
         },
         {
@@ -580,8 +580,8 @@
           "rarity": "rare",
           "typeLine": "Artifact",
           "unitPrice": 25000,
-          "tagName": null,
-          "tagColor": null,
+          "labelName": null,
+          "labelColor": null,
           "legalities": "{\"vintage\":\"restricted\",\"commander\":\"banned\"}"
         },
         {
@@ -612,8 +612,8 @@
           "rarity": "rare",
           "typeLine": "Creature — Dragon",
           "unitPrice": 310.5,
-          "tagName": null,
-          "tagColor": null,
+          "labelName": null,
+          "labelColor": null,
           "legalities": "{\"commander\":\"legal\",\"vintage\":\"legal\"}"
         },
         {
@@ -644,8 +644,8 @@
           "rarity": "common",
           "typeLine": "Instant",
           "unitPrice": 0.35,
-          "tagName": null,
-          "tagColor": null,
+          "labelName": null,
+          "labelColor": null,
           "legalities": "{\"commander\":\"legal\",\"modern\":\"legal\"}"
         }
       ]
@@ -681,8 +681,8 @@
           "rarity": "rare",
           "typeLine": "Artifact",
           "unitPrice": 55,
-          "tagName": null,
-          "tagColor": null,
+          "labelName": null,
+          "labelColor": null,
           "legalities": "{\"commander\":\"legal\",\"legacy\":\"legal\"}"
         },
         {
@@ -713,8 +713,8 @@
           "rarity": "common",
           "typeLine": "Enchantment",
           "unitPrice": 32,
-          "tagName": null,
-          "tagColor": null,
+          "labelName": null,
+          "labelColor": null,
           "legalities": "{\"commander\":\"legal\",\"modern\":\"not_legal\"}"
         },
         {
@@ -745,8 +745,8 @@
           "rarity": "uncommon",
           "typeLine": "Instant",
           "unitPrice": 90,
-          "tagName": null,
-          "tagColor": null,
+          "labelName": null,
+          "labelColor": null,
           "legalities": "{\"commander\":\"legal\",\"legacy\":\"legal\"}"
         },
         {
@@ -777,8 +777,8 @@
           "rarity": "rare",
           "typeLine": "Legendary Creature — Human",
           "unitPrice": 3,
-          "tagName": null,
-          "tagColor": null,
+          "labelName": null,
+          "labelColor": null,
           "legalities": "{\"commander\":\"legal\",\"standard\":\"legal\"}"
         }
       ]
@@ -818,8 +818,8 @@
           "rarity": "uncommon",
           "typeLine": "Artifact",
           "unitPrice": 1.75,
-          "tagName": null,
-          "tagColor": null,
+          "labelName": null,
+          "labelColor": null,
           "legalities": "{\"commander\":\"legal\",\"modern\":\"not_legal\"}"
         },
         {
@@ -850,8 +850,8 @@
           "rarity": "mythic",
           "typeLine": "Artifact",
           "unitPrice": 45,
-          "tagName": "Cut candidate",
-          "tagColor": "#4aab08",
+          "labelName": "Cut candidate",
+          "labelColor": "#4aab08",
           "legalities": "{\"commander\":\"legal\",\"legacy\":\"legal\"}"
         }
       ]

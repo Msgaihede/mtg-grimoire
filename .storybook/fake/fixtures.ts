@@ -30,7 +30,7 @@ import { CARDS, type FakeCard } from "./cards";
 import { finishPrice } from "@/lib/finish";
 import { buildGroups, type GroupBy } from "@/features/decks/grouping";
 import type { SortBy } from "@/features/decks/sorting";
-import { theoryMatchPlan } from "@/features/decks/theoryMatch";
+import { theoryMatchPlan, type TheoryPlan } from "@/features/decks/theoryMatch";
 import type { ValidationIssue } from "@/features/decks/validation/types";
 import type {
   CategoryKind,
@@ -201,10 +201,10 @@ export function deckCard(card: FakeCard, over: Partial<DeckCard> = {}): DeckCard
     // The deck as it is sleeved. A `theory` row is a plan: it counts on no tile and reserves
     // no copy, which is a different story from this one.
     variant: "live",
-    // All three together — a row is untagged, or it wears one tag with a name and a colour.
-    tagId: null,
-    tagName: null,
-    tagColor: null,
+    // All three together — a row is unlabelled, or it wears one label with a name and a colour.
+    labelId: null,
+    labelName: null,
+    labelColor: null,
     quantity: 1,
     // Denormalised on the row, like the collection's — the one name an orphaned row still has.
     name: card.name,
@@ -300,9 +300,9 @@ export function orphanDeckCard(over: Partial<DeckCard> = {}): DeckCard {
     // The row's own, and among the four that survive an orphaning for the same reason: a finish
     // is what the reader said they play, not something read back off a card that has gone.
     finish: null,
-    tagId: null,
-    tagName: null,
-    tagColor: null,
+    labelId: null,
+    labelName: null,
+    labelColor: null,
     quantity: 1,
     name: "Sword of the Meek",
     setCode: "dst",
@@ -435,9 +435,9 @@ export function deckGroups(
       ramp,
       deckCard(printing("mh2", "138"), {
         ownedQuantity: 1,
-        tagId: 1,
-        tagName: "Wincon",
-        tagColor: "gold",
+        labelId: 1,
+        labelName: "Wincon",
+        labelColor: "gold",
       }),
     ),
     inPile(ramp, deckCard(printing("lea", "161"), { ownedQuantity: 1, gameChanger: true })),
@@ -455,9 +455,9 @@ export function deckGroups(
       removal,
       deckCard(printing("isd", "51"), {
         ownedQuantity: 1,
-        tagId: 2,
-        tagName: "Cut candidate",
-        tagColor: "ember",
+        labelId: 2,
+        labelName: "Cut candidate",
+        labelColor: "ember",
       }),
     ),
     inPile(removal, deckCard(printing("gtc", "148"), { quantity: 2, ownedQuantity: 2 })),
@@ -507,7 +507,7 @@ export function deckViolations(): Map<string, ValidationIssue[]> {
  *   the rule break down to get.
  * * `lea 161` (Lightning Bolt) is the **game changer**, so the mark sits under the crown chip on
  *   the Grid tile and at the other end of the gold ribbon on the stacked card.
- * * `mh2 138` (Ragavan) carries a **tag**, so the stack's quantity tag is drawn in a colour and
+ * * `mh2 138` (Ragavan) carries a **label**, so the stack's quantity tag is drawn in a colour and
  *   the mark at the far end of the same strip has to hold its own against it.
  * * `gtc 148` (Boros Charm) is a plain 2-of no other mark touches — the control.
  *
@@ -525,15 +525,21 @@ export function deckViolations(): Map<string, ValidationIssue[]> {
  * **The printings are named rather than the cards**, for {@link deckViolations}' reason: `CARDS`
  * is generated and may be regenerated against a newer sync, and a hardcoded name would go on
  * reading as true while pointing at whatever printing that slot had become.
+ *
+ * **Every slot answers a real name** (2026-09-07), taken off the same fixture printing the key is
+ * built from. `nameKey` is `string | null` and `null` is an *orphan* — a printing that has left
+ * the corpus — so a fixture answering it for a card that plainly exists would make the mark's
+ * blue tier dead in every story that draws this deck, silently and in exactly the surface the
+ * tier was added for.
  */
-export function deckTheoryMatches(): ReadonlyMap<string, number> {
+export function deckTheoryMatches(): TheoryPlan {
   const slots = [
     // A plan asking for **twice** what is sleeved up, on the card that also breaks a rule: the
     // `-2` and the `RULE BREAK` are the two marks in opposite corners, one of them now a number.
     { card: printing("lea", "288"), quantity: 4 },
     // Exactly what the plan asks for — the tick, beside the gold crown chip.
     { card: printing("lea", "161"), quantity: 1 },
-    // The tick again, at the far end of a strip whose other mark is a coloured tag.
+    // The tick again, at the far end of a strip whose other mark is a coloured quantity tag.
     { card: printing("mh2", "138"), quantity: 1 },
     // **A surplus**, on the one card in the plan that no other mark touches, so `+1` is read
     // against a bare card face. A 2-of the plan wants one of is a cut the reader has not made.
@@ -543,15 +549,24 @@ export function deckTheoryMatches(): ReadonlyMap<string, number> {
     // rather than through `theorySlot` — a fixture generating the key with the same function
     // the code looks it up with would pass whatever separator either happened to use.
     // `deckCard` builds every fixture row with `finish: null`, so these are the regular
-    // copies, which is the case the grain is strictest about.
-    .map((slot) => ({ key: `${slot.card.id}|`, quantity: slot.quantity }));
+    // copies, which is the case the grain is strictest about. The name is answered raw, as the
+    // `LEFT JOIN c` does: `theoryNameKey` is the only place the fold is written.
+    .map((slot) => ({ key: `${slot.card.id}|`, nameKey: slot.card.name, quantity: slot.quantity }));
   // Through the real function over the real fixture deck, so the three states a story shows are
   // the three the shipped arithmetic produces rather than three numbers typed here — the same
-  // argument `deckGroups` makes for building its groups with `buildGroups`.
-  return theoryMatchPlan(
-    slots,
-    deckGroups().flatMap((group) => group.cards),
-  ) as ReadonlyMap<string, number>;
+  // argument `deckGroups` makes for building its groups with `buildGroups`. Both switches on,
+  // which is what every deck is born with; a story about a deck that has turned one off passes
+  // its own `marks`.
+  // **The cast is a narrowing and not a shortcut.** `theoryMatchPlan` answers
+  // `TheoryPlan | undefined` because `undefined` is its own statement — *there is no question
+  // here*, a deck with no plan — and it is reached only when `slots` is `undefined`, which the
+  // array literal above never is. TypeScript cannot see that, and this function promises a plan
+  // because a story wants one rather than a maybe. It is the one `as` in this feature's surface;
+  // removing it is a signature change, not a tidy-up.
+  return theoryMatchPlan(slots, deckGroups().flatMap((group) => group.cards), {
+    exact: true,
+    name: true,
+  }) as TheoryPlan;
 }
 
 /* ------------------------------------------------------------------- the updater ------- */

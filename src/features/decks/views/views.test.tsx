@@ -25,6 +25,12 @@ import { pricesAsOf } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { dndManager } from "@/lib/dndManager";
 import { boxed, pointerDrag, startPointerDrag } from "@/test-drag";
+import {
+  THEORY_MATCH_ATTR,
+  THEORY_MATCH_LABEL,
+  THEORY_MATCH_NAME_LABEL,
+} from "../CardMarks";
+import type { TheoryPlan } from "../theoryMatch";
 import { card } from "../validation/fixtures";
 import type { ValidationIssue } from "../validation/types";
 import { stackCardWidth, stackLiftRoom } from "../CardStack";
@@ -227,9 +233,9 @@ const CARDS: DeckCard[] = [
   card({
     name: "Arcane Signet",
     unitPrice: 0.99,
-    tagId: 1,
-    tagName: "Ramp piece",
-    tagColor: "moss",
+    labelId: 1,
+    labelName: "Ramp piece",
+    labelColor: "moss",
   }),
   { ...card({ name: "Serah Farron", categoryKind: "commander" }), unitPrice: 4.93 },
   {
@@ -276,6 +282,9 @@ interface ViewProps {
   groups: readonly CardGroup[];
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
+  /** The deck's plan, for the tier sweep below. Optional here as it is on all four views: a
+   *  deck that keeps none is what every other case in this file is about. */
+  theoryPlan?: TheoryPlan;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
   /** The two marks a card can carry beside its own facts — see the sweep that asserts them. */
@@ -297,6 +306,110 @@ const TWO_PILES: CardGroup[] = buildGroups(
   "category",
   "alphabetical",
 );
+
+/* ------------------------------------------------------- the plan's two tiers ------- */
+
+/**
+ * The printing the plan named, and **another printing of that same card** — the only fixture
+ * shape that can tell the theory mark's two tiers apart.
+ *
+ * A name-only match needs one thing and exactly one: the same `name` under a different `cardId`.
+ * `fixtures.ts` derives the id from the name, so the second row overrides it by hand — two rows
+ * differing only by `finish` would be a different question, since the finish is part of the
+ * **exact** grain rather than something a name match reaches over.
+ *
+ * Kept out of {@link GROUPS} for {@link TWO_PILES}' reason: every count in this file is a claim
+ * about that fixture, and a second Sol Ring in it would have rewritten all of them.
+ */
+const PLANNED_PRINTING: DeckCard = card({ name: "Sol Ring" });
+const OTHER_PRINTING: DeckCard = { ...card({ name: "Sol Ring" }), cardId: "c-Sol Ring-alt" };
+
+/**
+ * **A planned card in an _active_ command zone, which is the row this fixture existed without and
+ * the reason a real bug reached the shipped window.**
+ *
+ * `StackView` draws three runs — the command zone, the flow and the rail — and threads each one's
+ * props separately. `theoryPlan` reached the flow and the rail and **not** the command zone, so
+ * the commander and the companion were the only cards in a Commander deck that never said whether
+ * they matched the plan: the two cards the deck is *built around*. Every prop on that box is
+ * optional, so nothing in the type system had anything to say, and the tier sweep below could not
+ * see it because its deck had no command zone at all.
+ *
+ * Measured in the shipped window before the fix (`tauri dev`, debug build, a copy of the real
+ * database, deck "Bruna"): 73 live cards, **69** marks — 36 `exact`, 33 `name`. Of the four
+ * unmarked cards three were genuinely unplanned and the fourth was the commander, whose live and
+ * theory rows are the same `card_id` at the same finish, one copy each, in an active `commander`
+ * pile. Named after that card so the fixture and the report say the same thing.
+ *
+ * **The other two boxes are covered by construction rather than by a case each**: the rail's piles
+ * and the flow's go through the same `StackGroup`, and the flow is what every other tier
+ * assertion here already renders.
+ */
+const PLANNED_COMMANDER: DeckCard = card({
+  name: "Bruna, the Fading Light",
+  categoryKind: "commander",
+  typeLine: "Legendary Creature — Angel",
+});
+
+const TIER_GROUPS: CardGroup[] = buildGroups(
+  [PLANNED_COMMANDER, PLANNED_PRINTING, OTHER_PRINTING],
+  [COMMANDER, RAMP],
+  "category",
+  "alphabetical",
+);
+
+/**
+ * A plan that puts one of those rows in each tier, **spelled rather than computed**.
+ *
+ * `theoryMatchPlan`'s arithmetic has a suite of its own; what the cases below are about is
+ * whether a view draws the tier it was *handed*, so running the fixture through that function
+ * first would put the thing under test on the far side of the thing it is tested against.
+ *
+ * **Both deltas are `0` on purpose.** Each row therefore draws a tick, and the tier is the only
+ * difference between the two marks on screen — which is exactly the failure these exist for. A
+ * draw site with its tier hardcoded is invisible to a human reading the rendering and to every
+ * other assertion in this file, because TypeScript makes `tier` *present* and can say nothing
+ * at all about it being *right*.
+ *
+ * The name key is folded, because `theoryNameKey` is what the lookup goes through; the exact key
+ * is `deck_theory.rs`' wire format, spelled out for `CardStack.test.tsx`'s reason — a fixture
+ * built with the same function the code looks it up with agrees by construction.
+ */
+const TIER_PLAN: TheoryPlan = {
+  exact: new Map([
+    [`${PLANNED_PRINTING.cardId}|`, 0],
+    [`${PLANNED_COMMANDER.cardId}|`, 0],
+  ]),
+  // The commander is in both grains, as a plan built by `theoryMatchPlan` would have it — so the
+  // assertion that it reads `exact` is a discrimination between the two tiers rather than between
+  // a mark and none, which is the stronger of the two claims and the one that catches a command
+  // zone quietly resolving one tier down.
+  byName: new Map([
+    ["sol ring", 0],
+    ["bruna, the fading light", 0],
+  ]),
+  marks: { exact: true, name: true },
+};
+
+/** Where {@link DECK_CARD_ATTR} says a row is — the handle the tier cases scope by. */
+const slotOf = (row: DeckCard) => deckCardSlot(row.categoryId, row.cardId, row.finish);
+
+/**
+ * Every theory mark on screen, as the slot it belongs to → the tier its attribute reads.
+ *
+ * Through `closest` rather than by position, because *which row is this mark about* is the half a
+ * count cannot answer — and returned as a whole object to be asserted in one `toEqual`, so a view
+ * that drew no mark at all fails rather than passing an empty loop.
+ */
+function tiersBySlot(): Record<string, string | null> {
+  const found: Record<string, string | null> = {};
+  for (const mark of document.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)) {
+    const row = mark.closest(`[${DECK_CARD_ATTR}]`);
+    found[row?.getAttribute(DECK_CARD_ATTR) ?? "(not inside a card)"] =
+      mark.getAttribute(THEORY_MATCH_ATTR);
+  }
+  return found;
+}
 
 /**
  * A deck with **both** command zones in it, and every mana value and type in it chosen so that
@@ -365,6 +478,47 @@ describe.each(VIEWS)("$name", ({ render: renderView }) => {
     // The Maybeboard holds four copies of one unpriced card, so it quotes no number at all.
     expect(screen.getByText("4 cards")).toBeInTheDocument();
     expect(screen.getAllByText("—").length).toBeGreaterThan(0);
+  });
+
+  /**
+   * **Which tier the mark is in, on every view that draws one** — and the value is what is
+   * asserted, never the presence.
+   *
+   * The type makes `tier` a required prop, so a draw site cannot *omit* it; nothing in the type
+   * system says the site passes the **row's** tier rather than a literal. A hardcoded
+   * `tier="exact"` in one of these four files compiles, renders, and ships green through every
+   * other case in this suite — and *which colour appears* is the whole of what the two tiers are
+   * for. So this is written as a sweep: four views, one claim, and the claim is about the value.
+   *
+   * {@link TIER_PLAN} makes both rows draw a tick, so the tier is the only thing that differs
+   * between the two marks. **Never a colour assertion** — the tiers differ by a custom property
+   * and jsdom resolves no stylesheet, so reading one would pass against the wrong tier just as
+   * happily. `THEORY_MATCH_ATTR` carries the tier as its value precisely to be this handle.
+   *
+   * `violations: undefined` because {@link VIOLATIONS} bans Sol Ring and two of these rows are
+   * one: rule breaks drawn over the very corner this is about, for no gain.
+   *
+   * **{@link PLANNED_COMMANDER} is the third row and it is not decoration.** `StackView` draws
+   * its command zone through a call site of its own, so a fact threaded to the flow and the rail
+   * can miss it with nothing going red — which is exactly what happened, and what a deck with no
+   * command zone in it could never have caught.
+   */
+  it("says which tier each row is in, on the mark's own attribute", () => {
+    setup({ groups: TIER_GROUPS, theoryPlan: TIER_PLAN, violations: undefined });
+
+    expect(tiersBySlot()).toEqual({
+      [slotOf(PLANNED_COMMANDER)]: "exact",
+      [slotOf(PLANNED_PRINTING)]: "exact",
+      [slotOf(OTHER_PRINTING)]: "name",
+    });
+  });
+
+  /** And a deck that keeps no plan draws no mark at all, which is the `undefined` half of
+   *  `theoryMatchPlan`'s own distinction: no plan is not a plan that matches nothing. */
+  it("draws no tier mark at all when the deck keeps no plan", () => {
+    setup({ groups: TIER_GROUPS, violations: undefined });
+
+    expect(tiersBySlot()).toEqual({});
   });
 
   /** A price is never shown without saying when it was true, and whose it is. */
@@ -2370,7 +2524,7 @@ describe("GridView tiles", () => {
 
   /**
    * The tile publishes the reader's zoom as the two custom properties every mark drawn on it sizes
-   * itself against — the copy count, the tag dot, the rule break, the gem in the foot and the
+   * itself against — the copy count, the label dot, the rule break, the gem in the foot and the
    * stepper laid over it. It is a variable rather than a prop because three of those five are also
    * drawn in this view's table and text siblings, where nothing zooms and the `, 1` fallback is the
    * answer. See `MARK_SCALE_VAR` in `lib/cardZoom.ts`.
@@ -2723,6 +2877,47 @@ describe("the deck's two views and their one zoom section", () => {
 });
 
 describe("TableView", () => {
+  /**
+   * **The badge and its `sr-only` twin are two elements that must agree, and nothing but this
+   * makes them.**
+   *
+   * This view is the one that says the mark in words as well as drawing it — a row is not an
+   * `aria-label`-ed button, so a cell's text is really read. That means the tier is spelled at
+   * *two* sites in one file (`TheoryMatchBadge`'s `tier` prop and `theoryMatchLabel`'s first
+   * argument), and the two disagreeing is a state the type system cannot see: both take a
+   * `TheoryTier`, and either one hardcoded still compiles.
+   *
+   * So each row is scoped by its own slot and both halves are read out of it. The two sentences
+   * are imported rather than typed out — they are Task 8's wording and free to change — and what
+   * is asserted is that the **longer** one lands on the name row and the base one on the exact
+   * row. `getByText` is a full-string match, so `THEORY_MATCH_LABEL` cannot be satisfied by
+   * `THEORY_MATCH_NAME_LABEL`, which is what makes the pair a real discrimination.
+   */
+  it("says the tier in words beside the badge, and the two halves agree", () => {
+    render(
+      <TooltipProvider>
+        <TableView groups={TIER_GROUPS} marketplace={TCG} theoryPlan={TIER_PLAN} />
+      </TooltipProvider>,
+    );
+
+    for (const [row, tier, words] of [
+      [PLANNED_PRINTING, "exact", THEORY_MATCH_LABEL],
+      [OTHER_PRINTING, "name", THEORY_MATCH_NAME_LABEL],
+    ] as const) {
+      const line = document.querySelector<HTMLElement>(
+        `[${DECK_CARD_ATTR}="${slotOf(row)}"]`,
+      );
+      expect(line).not.toBeNull();
+      // The badge…
+      expect(line?.querySelector(`[${THEORY_MATCH_ATTR}]`)).toHaveAttribute(
+        THEORY_MATCH_ATTR,
+        tier,
+      );
+      // …and the twin beside it, in the same row, saying the same tier in words.
+      expect(within(line as HTMLElement).getByText(words)).toHaveClass("sr-only");
+    }
+  });
+
   const setup = () => {
     render(
       <TableView groups={GROUPS} marketplace={TCG} violations={VIOLATIONS} onSelect={vi.fn()} />,
@@ -2737,7 +2932,7 @@ describe("TableView", () => {
       "Mana cost",
       "Type",
       "Owned",
-      "Tags",
+      "Labels",
       "Rarity",
       "Printing",
     ]) {
@@ -2757,7 +2952,7 @@ describe("TableView", () => {
    *
    * Measured in the shipped window before this: seven fixed columns took 696px of an 843px
    * grid, so the two flexible ones split 147px and the card name got **84px** — about ten
-   * characters — while the usually-empty Tags column held 112. A deck list whose card names are
+   * characters — while the usually-empty Labels column held 112. A deck list whose card names are
    * unreadable is not a deck list.
    *
    * The template is an inline style, so this is one of the few layout facts jsdom really can
@@ -3682,3 +3877,4 @@ describe("the deck grid's art", () => {
     expect(src).not.toContain("scryfall.io");
   });
 });
+

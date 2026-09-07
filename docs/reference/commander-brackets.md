@@ -1,7 +1,9 @@
 # Commander brackets: the floor, the four signals, and the combo feed
 
 What the bracket readout on a Commander deck's header says, what it is allowed to conclude, and
-where the one signal that is not in a card's own text comes from.
+where the one signal that is not in a card's own text comes from. **Since 2026-09-07 the same
+answer is drawn on the deck _tile_ as well**, over a read of its own — the last section is what
+is different about asking a whole gallery at once.
 
 The rules are the Commander Format Panel's and the combo classifications are Commander
 Spellbook's editors'. Both were verified live on **2026-08-27** and are recorded in
@@ -455,17 +457,115 @@ deliberately neither of the format check's two colours, because a bracket 2 deck
 bracket 4 combo is not *broken* and is not *clean* either. It is two answers about one deck that
 do not agree, and the honest way to draw that is to show both of them.
 
+## The gallery asks the same question about forty decks at once (2026-09-07, issue #387)
+
+The bracket left the deck header and joined the deck **tile**: every Commander deck on the wall
+now carries `Bracket 3` or `Bracket ~3` in its caption. Nothing about the estimate changed — it
+is literally the same `estimateBracket`, over the same rules and the same combo table — so this
+section is only about the three things that are different when the question is asked of a
+gallery instead of of the deck that is open.
+
+### The vocabulary is `DeckBracket.tsx`'s and may not diverge
+
+`bracketLabel` in `useDeckBrackets.ts` is written against `DeckBracket.tsx:223-224`. **`Bracket
+3` is the reader's own answer; `Bracket ~3` is a reading.** The `~` is the whole of the visible
+difference between the two and it means the same thing on a tile as on the editor's button — one
+glyph a reader learns once. A tile that spelled a reading differently would be teaching a second
+dialect of a distinction the app has already made.
+
+**The editor's third form is deliberately not copied.** That button also draws `Bracket 2 · ~4`
+when a set bracket sits below the floor, because it is a *control*: pressing it opens the
+advisory that names the card responsible, so the second number is a question the reader can
+immediately ask. A tile is not a control and has no room to explain a mismatch, and **a number a
+reader cannot interrogate is worse than the one they chose** — it says "something disagrees with
+you" and gives them nowhere to go. So a deck with a set bracket shows that bracket on the wall,
+full stop, and the mismatch stays where `bracketWarning` can be acted on.
+
+`null` is drawn as no bracket segment at all, and it covers both halves of "there is nothing to
+say": a format with no command zone, and a deck on Auto whose estimate has not arrived or whose
+read failed. **Never a placeholder** — no `Bracket ?`, no skeleton, no dash — because a tile that
+flickered a placeholder into a real number on every gallery load would be drawing attention to a
+query rather than to a deck.
+
+### The tile reads the **live** list; the editor reads the tab you are standing on
+
+This is the one way the two surfaces can honestly print different numbers about one deck, and it
+is by design. `deck_bracket_reads` is `variant = 'live'`, always. The editor estimates over the
+variant the reader is looking at, so **a deck left on the Theory tab reads its _plan_ in the
+editor and its live list on the tile.** The tile is a fact about the deck; the editor is a fact
+about what is on screen. A reader who has half-built a plan and sees the wall disagree with the
+window they just closed is seeing that, and not a bug.
+
+### `BracketCardFacts` — the narrowing `CardFacts` was refused, earning its way in
+
+`estimateBracket` now takes `readonly BracketCardFacts[]`, which is
+`Pick<CardFacts, "categoryActive" | "name" | "gameChanger" | "oracleText" | "faces">`. Those five
+are exactly what it reads and there is no sixth: `categoryActive` is the filter, `name` is what
+it dedupes and *names* by, `gameChanger` is the synced column, and `oracleText` plus `faces` are
+the two greps' whole input. It never looks at a legality, a colour identity, a quantity or a
+category kind — which is why a bracket can be read from a card list that has none of them.
+
+`CardIdentity`'s own doc comment in `types.ts` already explains why `CardFacts` **itself** was
+deliberately not narrowed to *it*, and
+nothing about that has changed: the validation engine really does read `categoryKind`,
+`categoryActive` and `quantity`, so narrowing the type every rule shares would be claiming a card
+in a deck is no more than a card. What changed is that a **second surface** now asks the bracket
+question, and a parameter typed `CardFacts` would have made `deck_bracket_reads`' five-field row
+illegal at the type level while being perfectly sufficient at the value level. So the narrowing
+is the shape of *one function's appetite*, not a claim about what a deck card is. A `DeckCard[]`
+still satisfies it, so the deck editor's call site is untouched.
+
+### What the whole-gallery read costs, and where it refuses
+
+Measured on the dev database under `tauri dev` (a **debug** build), 2026-09-07 — 4 decks, 611
+`deck_cards` rows: **397 distinct cards, 59 KB of oracle text** for one gallery. The SQL, the
+pile it reads and the request-order contract are in
+[decks-storage.md](decks-storage.md); two consequences belong here because they are about the
+estimate rather than about the query:
+
+- **A deck listing more than `combos::MAX_CARD_IDS` (1 000) distinct printings fails the whole
+  call**, with `combos::TOO_MANY_CARDS`. That is `combos_for_cards`' behaviour propagated rather
+  than caught, and it is the right refusal: a silently truncated id list would answer a *wrong*
+  combo set, and `estimateBracket`'s own doc says the combos handed to it are **not re-checked**,
+  so nothing downstream could tell. Against a Commander deck's hundred cards the bound is not
+  close.
+- **Which decks are asked about is a TypeScript decision.** `useDeckBrackets` takes the ids, and
+  which formats have a command zone is `useFormatSpecs`' `commanderRule` — so a gallery of Modern
+  decks asks for nothing and the query is `enabled: false`, costing no IPC call at all rather
+  than a round trip that answers `[]`.
+
+The query key is `["decks", "brackets", <ids, deduped and numerically sorted>]`, **under the
+`["decks"]` root every deck write already invalidates** — so adding a card, moving one between
+piles or switching a category off refreshes every tile's estimate for free, and no mutation has
+to learn the key exists. Sorting the ids before they enter the key is `combosForCardsKey`'s rule
+one feature over: the answer does not depend on the order, so two renders that arrived at the
+same set of decks by different routes must ask one question and pay for one round trip. Only
+`BracketEstimate.floor` is kept per deck — the Game Changer names, the denial, the extra turns
+and both halves of the combo split have no room on a tile, and holding them would be a per-deck
+object nothing reads for as long as the gallery is on screen.
+
+**The gallery's `bracket` sort key ranks the set bracket and the estimate together**, through
+`effectiveBracket` — the set number where the reader gave one, the floor otherwise, `null` where
+there is neither. The two are one ladder on purpose: a reader ordering a wall by bracket is
+asking *which of these are my heavier decks*, and answering with two separate ladders, the
+declared ones and the estimated ones, would split the wall on a distinction they did not ask
+about. The `~` in the caption is where that distinction is drawn, and it costs one glyph. A deck
+with neither number sorts **last in the key's natural direction** and first when the direction is
+reversed — `deckSort.ts` carries that rule and why it differs from `sorting.ts`' `nullsLast`.
+
 ## Where each piece lives
 
 | File | Holds |
 | --- | --- |
 | `src-tauri/src/combos.rs` | The feed: client, streaming parse, staged write, the match query, three commands, `combos:progress` |
 | `src-tauri/src/schema.rs` | The v26 rung — `decks.bracket`, `combos`, `combo_cards`, `combo_meta`, the two indexes, and the staging twins |
-| `src-tauri/src/deck.rs` | `AUTO_BRACKET`, `valid_bracket`, `BAD_BRACKET`, the column on `DeckRow`/`DeckPatch`/`DeckBefore` and the audit line |
-| `src/lib/ipc.ts` | `AUTO_BRACKET`, `ComboBracketTag`, `DeckCombo`, `ComboStatus`, `ComboProgress`, and the three calls |
+| `src-tauri/src/deck.rs` | `AUTO_BRACKET`, `valid_bracket`, `BAD_BRACKET`, the column on `DeckRow`/`DeckPatch`/`DeckBefore` and the audit line — **and `deck_bracket_reads`**, with `BRACKET_CARDS_SQL` and `BRACKET_IDS_SQL` behind it |
+| `src/lib/ipc.ts` | `AUTO_BRACKET`, `ComboBracketTag`, `DeckCombo`, `ComboStatus`, `ComboProgress`, and the three calls — plus `BracketCardRow`/`DeckBracketRead` and `deckBracketReads` |
 | `src/lib/query.ts` | `COMBOS_KEY`, `COMBOS_STATUS_KEY`, `combosForCardsKey` — one root, so a refresh in Settings refills an open deck's advisory |
+| `src/features/decks/validation/types.ts` | `BracketCardFacts` — the five fields, and why the narrowing lives there and not on `CardFacts` |
 | `src/features/decks/validation/bracket.ts` | The floor, the two greps, `COMBO_FLOOR`, `describeReason`, `bracketWarning` |
 | `src/features/decks/DeckBracket.tsx` | The readout, the picker, the combo list, and the four states of the combo read |
+| `src/features/decks/useDeckBrackets.ts` | The gallery's read, `deckBracketsKey`, `bracketLabel` and `effectiveBracket` — the wall's whole share of this document |
 | `src/features/settings/CombosPanel.tsx` | What is ingested, how old, the Refresh and its progress line |
 
 ## Sources

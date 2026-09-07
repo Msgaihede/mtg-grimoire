@@ -1330,3 +1330,73 @@ describe("useCardSearch, reading tagger syntax out of the box", () => {
     await waitFor(() => expect(result.current.unfiltered).toBe(false));
   });
 });
+
+/**
+ * `CardSearchOptions.availableForDeck` — the caller-owned narrowing that is **not** a filter.
+ *
+ * It changes no row's presence and no row's order: it decides what the word *owned* means for
+ * this request, on the badge every tile draws and on the Owned/Missing chip together. Only the
+ * deck builder's panel sends one, which is why every assertion here about its absence is about
+ * the search page and the Tags page keeping exactly the request they always had.
+ */
+describe("the deck a search counts copies for", () => {
+  beforeEach(() => {
+    qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    searchCards.mockReset().mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
+    facetCards.mockReset().mockResolvedValue(READY);
+  });
+
+  it("sends nothing at all when the caller names no deck", async () => {
+    renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    // Absent rather than `null`: the backend's default is every copy, and a value sent to say
+    // so would make the payload lie about intent the way an empty `text` would.
+    expect(lastSearchRequest().availableForDeck).toBeUndefined();
+  });
+
+  /**
+   * The facet request deliberately does not carry it, and `useCardFacets` states why from the
+   * other side: `CardIndex` has one global `owned` bitset and no deck-relative dimension, so
+   * those two counts read **high** in the deck builder. Over-reading only ever leaves a control
+   * live, which is the direction the whole filter row fails in.
+   */
+  it("sends the deck the caller named, and keeps it off the facet request", async () => {
+    renderHook(() => useCardSearch({ availableForDeck: 7 }), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    await waitFor(() => expect(facetCards).toHaveBeenCalled());
+
+    expect(lastSearchRequest().availableForDeck).toBe(7);
+    expect(lastFacetRequest().availableForDeck).toBeUndefined();
+  });
+
+  /**
+   * **The assertion the query-key segment exists for.** Two decks are two answers to identical
+   * filters, so a key that left the deck out would serve the second deck opened out of the
+   * first one's cached pages — no request, no spinner, and a wall of numbers about somebody
+   * else's deck. The rerender keeps the same `QueryClient`, so a shared key would answer from
+   * cache and never call `searchCards` again.
+   */
+  it("is a query-key segment, so one deck is never answered out of another's cache", async () => {
+    const { rerender } = renderHook(
+      ({ deck }: { deck: number }) => useCardSearch({ availableForDeck: deck }),
+      { initialProps: { deck: 1 }, wrapper },
+    );
+    await waitFor(() => expect(lastSearchRequest().availableForDeck).toBe(1));
+    const before = searchCards.mock.calls.length;
+
+    rerender({ deck: 2 });
+
+    await waitFor(() => expect(lastSearchRequest().availableForDeck).toBe(2));
+    expect(searchCards.mock.calls.length).toBeGreaterThan(before);
+  });
+
+  /** `null` and absent are one state — a caller holding a `number | null` should not have to
+   *  translate, and two spellings of absent would mint two keys for one search. */
+  it("reads null as no deck", async () => {
+    renderHook(() => useCardSearch({ availableForDeck: null }), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    expect(lastSearchRequest().availableForDeck).toBeUndefined();
+  });
+});

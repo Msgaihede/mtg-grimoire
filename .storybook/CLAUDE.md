@@ -30,19 +30,19 @@ deliberately**: no screenshots are stored.
 - **Seeds and faults are state, not response stubs**: `parameters: { fake: { seed, fault } }`.
   **Seven** seeds
   (`empty`/`starter`/`needsReview`/`large`/`bracketMismatch`/`combosMissing`/`paired`),
-  **twenty-three** faults
+  **twenty-four** faults
   (`busy`/`syncing`/`syncError`/`imageFailures`/`gone`/`indexCold`/`deckMeta`/`updateAvailable`/
   `updateError`/`errorLog`/`feedFetchError`/`oracleTagsMissing`/`oracleTagsFetchError`/
   `artTagsMissing`/`artTagsFetchError`/`imageUrisMissing`/`exportWriteError`/
   `mirrorRootUnwritable`/`combosFetchError`/`pairingReadError`/`patreonDeclined`/
-  `patreonLapsed`/`patreonGroupEntitled`); saying
+  `patreonLapsed`/`patreonGroupEntitled`/`wishGone`); saying
   nothing gets `starter` with no fault. A
   fault is set on the _world_, so a story shows what the **app** does with a refusal rather than
   what one mocked call returns. **`syncing` is `busy`'s neighbour and reaches exactly one
   command**: `cache_clear` refuses outright while a card update is in flight, because
   `data/tmp/` is where the corpus download puts 77 MB the ingest then reads back — and it is
   checked *before* the write connection is asked for, which is why it is not `busy`.
-  **Seven of the twenty-three are not failures at all** — `indexCold` is
+  **Seven of the twenty-four are not failures at all** — `indexCold` is
   the search index mid-build; `oracleTagsMissing` is the Oracle tag taxonomy having never
   been ingested, which is every install's first launch and the state the type-line fallback
   exists for; `artTagsMissing` is the same thing one dataset over, where the honest floor is a
@@ -101,11 +101,11 @@ deliberately**: no screenshots are stored.
   `bracketMismatch` is `starter` plus a fifth deck the reader has told `Bracket 2` whose cards
   force the estimate's floor to 4. `starter` seeds the combo catalogue itself, exactly as it
   seeds the price feeds and both taxonomies — **seven combos, two of them live-verified against
-  Commander Spellbook on 2026-08-27 and five constructed**, because the 52-printing corpus can
-  make only two real ones and neither reaches the `R`/`P`/`C`/`E` letters the advisory has to
-  draw. `COMBO_FIXTURES` in `db.ts` says which is which, per row.
+  Commander Spellbook on 2026-08-27 and five constructed**, because the corpus's playable half
+  can make only two real ones and neither reaches the `R`/`P`/`C`/`E` letters the advisory has
+  to draw. `COMBO_FIXTURES` in `db.ts` says which is which, per row.
 - **`starter` seeds both tag taxonomies too**, derived from the corpus the same way. Oracle: **32
-  oracle cards, covering 42 of the 52 printings** (measured by `db.test.ts`, which fails rather
+  oracle cards, covering 42 of the 59 printings** (measured by `db.test.ts`, which fails rather
   than letting this line rot), closed over their ancestors as `oracle_tag_cards` stores them, so
   a deck story shows real piles rather than everything falling back to card type. Art: **eleven
   tagged printings over thirteen tags and four roots**, keyed on `illustration_id` because an art
@@ -117,7 +117,7 @@ deliberately**: no screenshots are stored.
   that answered only the matches would look right in Storybook and break every caller that
   matches by id.
 - **Every art tag in the fixture is true of the picture it is on**, which is why there is no
-  `dog` in it: nobody in these 52 printings is a dog, and a wall of cats filed under "Dog"
+  `dog` in it: nobody in these printings is a dog, and a wall of cats filed under "Dog"
   would teach a reader that the Tags page's whole subject is decorative. The crate's own fixture
   (`tags/query.rs`'s tests) is where the `dog`/`hound`/`bulldog` branch lives. What the seed does
   carry is the *shape* every story needs: a category with no direct taggings of its own
@@ -195,10 +195,37 @@ deliberately**: no screenshots are stored.
   accident: `fixtures.ts`'s `deckGroups` puts a second mana-value-3 card beside it, so switching
   the split on moves it **out of a bucket that survives** — a curve whose `3` column vanished
   with the card would leave a reader unable to tell a re-filing from a disappearance.
+- **The corpus carries tokens as of 2026-09-07, and they are ordinary rows of `cards`** —
+  **two Treasures**, a Construct, an emblem, a double-faced token and **two Wurms sharing a name**
+  (`t2xm 29` and `30`, Deathtouch against Lifelink), which is the fixture for the whole reason
+  a token tile draws a subtitle. They are legal in nothing, cost nothing and are paper, so
+  every count over the paper corpus moved by seven and the playable one did not move at all —
+  which is what the real `search.rs` does too, since nothing there filters a token out. The
+  double-faced one is the only row in the fixture with **no top-level `image_uris`**: all 120
+  such rows in the corpus carry them on `card_faces[0]` alone, so it is what pins the
+  generator's face-first resolution. **The two Treasures are one oracle card over two printings**
+  — `tafr 15` (2021-07-23) against `thob 13` (2026-08-14) — which is what makes an art *choice* a
+  thing at all and gives `card::list_printings`' `released_at DESC, set_code ASC, collector_number
+  ASC, id ASC` an unambiguous winner. **`db.ts`'s `TOKEN_ORACLE`/`TOKEN_PRINTING` name these rows**
+  and hand-write nothing about them; before they did, both maps minted ids in a `7…` block that
+  resolved in neither `cards` nor `@/lib/images`, so every token tile drew the unknown-card
+  placeholder and the art picker's grid was empty. `db.test.ts` fails if one of those ids stops
+  resolving.
 - **Art is synthetic by default**, with a Live toolbar switch, so a checkout with no network
   renders every story exactly as one with it. **No card image bytes are committed.**
-- Note for searching: ripgrep treats `.storybook/fake/db.ts` as binary, so "no matches" there is a
-  lie — Read it instead.
+- **Searching `.storybook/fake/db.ts` works, and this line said the opposite for over a year of
+  commits.** ripgrep classified it as **binary** — so Grep answered "no matches" for strings
+  plainly in it, and a session acted on that once, adding handlers the file already had until
+  `tsc -p .storybook` caught it with `TS1117`. **The cause was never the size**: it was a single
+  NUL byte, from `deck_tag_suggestions` building a group key as `` `${t.name}\0${t.color}` ``.
+  Schema v21 replaced that function with `deck_label_all` (`deck_tag_all` until v33 renamed the
+  deck card's mark) and the byte went with it on 2026-08-22.
+  Verified 2026-09-03 — zero NULs in the file (733 KB) and Grep returns real counts.
+  **The rule that outlives the fix**: a NUL is invisible in every editor, eslint and `tsc` stay
+  green over one, and a `\0` separator in a template literal is the plausible way one gets in.
+  So if Grep ever calls a file here binary again, suspect that rather than the length —
+  `python -c "print(open(p,'rb').read().count(b'\x00'))"` finds it, and Bash `grep` saying
+  "Binary file … matches" is the tell.
 
 ## Rules for stories
 

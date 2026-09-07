@@ -197,8 +197,9 @@ export const Nonfoil: Story = {
 };
 
 /**
- * A named treatment replaces the finish's glyph **and** its word — a Surge Foil is not "a foil",
- * which is issue #160 read off a wall where three such rows sit side by side.
+ * A named treatment replaces the finish's **word** and not its glyph — a Surge Foil is not "a
+ * foil" (issue #160, read off a wall where three such rows sit side by side), but it *is* foil,
+ * so it draws the app's one foil icon (issue #353).
  */
 export const SurgeFoil: Story = {
   args: { finish: "foil", treatments: finishTreatments('["surgefoil"]', "foil") },

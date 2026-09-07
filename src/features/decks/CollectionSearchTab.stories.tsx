@@ -76,10 +76,17 @@ const meta = {
           "entry first. So a copy another deck is holding is still never taken silently. A foil " +
           "and a played nonfoil are two objects at two prices, so they stay two tiles, each " +
           "quoting its own price in the chin.\n\n" +
-          "Driven end to end by `.storybook/fake/`. The `starter` seed was built with this screen " +
-          "in mind: deck 1's group holds three copies (drawn as **already in this deck**), and " +
-          "exactly one row sits in **deck 2's** group — the one press on this page that takes a " +
-          "card off a deck the reader is not looking at.",
+          "**It is assign-only since issue #358**: it answers *which copies I own back this " +
+          "deck's list*. A tile whose card the open deck's live list does not play is drawn " +
+          "**greyed**, with a reason naming the **Card search** tab beside it — the tile stays " +
+          "because the reader can see the card in their binder, and one that vanished would read " +
+          "as a search that lost it. `collection_alloc::NOT_IN_DECK` refuses the same press at " +
+          "the backend; the greying is that refusal said early.\n\n" +
+          "Driven end to end by `.storybook/fake/`. The `starter` seed carries all three answers " +
+          "at once, across two decks: **deck 1** (Modern Goodstuff) plays no Black Lotus, so the " +
+          "proxy in `Trade binder` is the greyed tile; **deck 2** (Kenrith Two-Drops) plays " +
+          "Ragavan and the reader's only copy sits in deck 1's group, which is the one press on " +
+          "this page that takes a card off a deck they are not looking at.",
       },
     },
   },
@@ -141,8 +148,14 @@ export const Default: Story = {
  * This is the state the confirmation exists for: with the spoken-for copies on screen, one of the
  * rows is a card another deck is physically holding, and pressing Add on it would take that card
  * off that deck's list.
+ *
+ * **Deck 2 rather than deck 1, and the assign-only fence is why** (issue #358). The seed's one
+ * cross-deck row is Ragavan in `Modern Goodstuff`'s group, and a cross-deck press only means
+ * anything on a deck that *plays* the card: deck 2 lists `mh2 138`, deck 1 does not. Opened on deck
+ * 1 the same tile is greyed instead, which is what {@link NotInTheDeck} shows.
  */
 export const EveryCopy: Story = {
+  args: { deckId: 2 },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
@@ -157,13 +170,13 @@ export const EveryCopy: Story = {
     // scroll container, so a play may assert the presence of a tile *near the top* and never a
     // count — and with every copy shown, the seed's one cross-deck row is well down the list. The
     // text box is how a reader would reach it too.
-    await userEvent.type(await canvas.findByRole("searchbox"), "Sol Ring");
+    await userEvent.type(await canvas.findByRole("searchbox"), "Ragavan");
 
     // The `starter` seed's one row filed under a deck the reader is **not** standing in, found by
     // what its Add button promises: since the wall folds copies, "which deck this would take from"
     // is a fact about the *press* and is said in that button's name.
     await expect(
-      await canvas.findByRole("button", { name: /taking it from Kenrith Two-Drops$/ }),
+      await canvas.findByRole("button", { name: /taking it from Modern Goodstuff$/ }),
     ).toBeInTheDocument();
   },
 };
@@ -171,9 +184,13 @@ export const EveryCopy: Story = {
 /**
  * **The press this whole PR is about, stopped one step short of the write.**
  *
- * The copy is in `Kenrith Two-Drops`. Confirming would move it into this deck's group *and* take
+ * The copy is in `Modern Goodstuff`. Confirming would move it into this deck's group *and* take
  * it off that deck's live list — a side effect landing on a deck the reader is not looking at — so
  * the question is asked first and it **names the deck**.
+ *
+ * Opened on **deck 2** for {@link EveryCopy}'s reason: since issue #358 a cross-deck press is only
+ * reachable on a deck that already plays the card, and Kenrith Two-Drops is the seed's deck that
+ * plays Ragavan.
  *
  * This app's confirmations carry **no** `dialog` or `alertdialog` role: the box is a
  * `role="group"` that takes the caret (`useConfirmFocus`), because the reader has not decided yet
@@ -185,23 +202,60 @@ export const EveryCopy: Story = {
  * is what makes the position survivable.
  */
 export const CrossDeckConfirm: Story = {
+  args: { deckId: 2 },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
     await userEvent.click(await openTray(canvas));
     // Narrowed for {@link EveryCopy}'s reason — the wall virtualises and this row is not near the
     // top of the whole binder.
-    await userEvent.type(await canvas.findByRole("searchbox"), "Sol Ring");
+    await userEvent.type(await canvas.findByRole("searchbox"), "Ragavan");
 
     await userEvent.click(
-      await canvas.findByRole("button", { name: /taking it from Kenrith Two-Drops$/ }),
+      await canvas.findByRole("button", { name: /taking it from Modern Goodstuff$/ }),
     );
 
     const question = await canvas.findByRole("group", { name: /^Move / });
-    await expect(within(question).getByText(/Kenrith Two-Drops/)).toBeInTheDocument();
+    await expect(within(question).getByText(/Modern Goodstuff/)).toBeInTheDocument();
     await expect(
       within(question).getByRole("button", { name: "Move it here" }),
     ).toBeInTheDocument();
+  },
+};
+
+/**
+ * **The tab is assign-only** ([#358](https://github.com/Msgaihede/mtg-grimoire/issues/358)), and
+ * this is what that looks like on the wall.
+ *
+ * `Modern Goodstuff` plays no Black Lotus, and the reader's proxy sits loose in `Trade binder` — so
+ * nothing about the *copy* is refusing this press. What refuses it is the deck's own list: filing
+ * the card here would put cardboard into that deck's collection group for a card the deck has never
+ * played, and that group is the ledger of where the reader's cards physically **are**.
+ *
+ * The tile is still drawn, because the reader can see the card in their binder and one that
+ * vanished under a search that found it would read as the search losing rows. The button greys with
+ * the reason in its accessible **name** — `aria-disabled` rather than `disabled`, so the tab stop
+ * and therefore the sentence survive for a keyboard reader — and the sentence **names the route**:
+ * the `Card search` tab is one press away, and adding the card there un-greys this tile with no
+ * reload, because `useDeckPlays` sits under the `["decks"]` key every deck write invalidates.
+ *
+ * No press is needed to reach it: the proxy is loose, so it is in the wall's default
+ * **`Not in a deck`** state.
+ */
+export const NotInTheDeck: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    // Narrowed for {@link EveryCopy}'s reason — the wall virtualises.
+    await userEvent.type(await canvas.findByRole("searchbox"), "Black Lotus");
+
+    // The tile is drawn: `CardGrid` names a tile's own button after the card.
+    await expect(await canvas.findByRole("button", { name: "Black Lotus" })).toBeInTheDocument();
+
+    const add = await canvas.findByRole("button", {
+      name: /^Black Lotus is not in this deck .* add it from the Card search tab first$/,
+    });
+    await expect(add).toHaveAttribute("aria-disabled", "true");
   },
 };
 

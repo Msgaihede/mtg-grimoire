@@ -191,19 +191,67 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   setting `src` resets `complete` and `naturalWidth` while the old frame stays painted, so
   `naturalWidth === 0` is true in both the healthy and the broken case. What a test can see
   is _element identity_, which is what `CardImage.test.tsx` and the two integration tests
-  assert; what a person can see is a screenshot. `PrintingPreview` reached the same answer
-  independently by keying its whole `Preview` on the printing.
+  assert; what a person can see is a screenshot. `PrintingPreview` had reached the same answer
+  independently, by keying its whole `Preview` on the printing — that file was deleted with the
+  docked card pane on 2026-09-03.
 - **An `art` crop has no printed frame, so wherever one is shown the illustrator must be
-  credited.** Scryfall's image policy, quoted in full at
-  `docs/superpowers/plans/2026-08-04-02-images-card-browsing.md:55`: use the art crop and the
-  artist's name must appear elsewhere in the same interface. A `grid`/`thumb`/`display` image
-  carries the printed credit itself and needs nothing; the 626×457 `art` variant does not.
-  This has been ruled on twice and is written here because four surfaces cite it as living
+  identifiable — and the rule has _two_ arms, only one of which this page had ever written
+  down.** Corrected **2026-09-07**, against both pages fetched live that day.
+  **Where it lives, first, because the obvious page is the wrong one.** The rule is on
+  **`https://scryfall.com/docs/api`**, in the list introduced by *"When using images from
+  Scryfall, you must adhere to the following guidelines"*. It is **not** on
+  `https://scryfall.com/docs/api/images` — which is where anybody looking for an *image* rule
+  goes first, and where a swept 2026-09-07 check found no file in this repo had actually sent
+  them, because until then no file named a URL at all. The Card Imagery page carries no artist
+  rule at all —
+  the word "artist" does not appear on it — and is now a table of image variants and their
+  statuses, which is precisely and only what
+  [the Scryfall research](../superpowers/research/2026-08-04-scryfall-api.md) cites it for.
+  (That table is also where the `art` row reads *"Replaces `art_crop`"*, so the guideline's
+  `art_crop` and the variant this app actually stores are the same picture under two names —
+  `art`, 626 × 457, WEBP.) Verbatim, the two lines that bind:
+
+  > When using the art_crop, list the artist name and copyright elsewhere in the same interface
+  > presenting the art crop, or use the full card image elsewhere in the same interface.
+  >
+  > Users should be able to identify the artist and source of the image somehow.
+
+  **The `or` is the arm this page never carried, and it is the whole of what changed.** An
+  interface complies by naming the artist **or** by showing the full card image somewhere in it,
+  and the sentence under it says what both arms are for: a reader must be able to identify the
+  artist *somehow*. So a permanent credit **line** under every picture was never the requirement
+  — it was one way of meeting it — and taking one off a surface is a legitimate move rather than
+  a violation, for exactly as long as the artist stays reachable there.
+  `docs/superpowers/plans/2026-08-04-02-images-card-browsing.md:55` has quoted both arms since
+  the beginning; the paraphrase on *this* page kept the first and dropped the second, and since
+  this is the page four surfaces cite, a design decision has read as a fixed requirement ever
+  since.
+  **The neighbouring guidelines are unchanged and still binding**: never cover, crop or clip off
+  the copyright or artist name; never distort, skew or stretch; never blur, sharpen, desaturate
+  or colour-shift; never add watermarks; never imply the images belong to another game. The page
+  ends by naming what non-compliance costs — *"Repeated mishandling or misrepresentation of data
+  or images in your project may result in Scryfall restricting or blocking your API access."*
+  **Wizards' Fan Content Policy requires no artist credit whatsoever**, which was checked the
+  same day (`https://company.wizards.com/en/legal/fancontentpolicy`) and is worth writing down
+  because the answer surprises: what it requires is the disclaimer notice, and that Wizards' own
+  logos and trademarks inside artwork are not removed. **Every artist-credit rule in this app is
+  Scryfall's**, so Scryfall's `docs/api` is the one page to re-read when one is questioned, and a
+  reader who goes looking in the fan-content policy will find nothing and conclude the wrong
+  thing.
+  A `grid`/`thumb`/`display` image carries the printed credit itself and needs nothing — which is
+  the second arm, met by construction — and the 626×457 `art` variant does not, which is why
+  every surface drawing one owes an answer. It has been ruled on three times (2026-08-11,
+  2026-08-31, 2026-09-07) and is written here because four surfaces cite it as living
   here. One consequence holds everywhere a **cover** is drawn — the gallery's deck tiles, its
-  folder strips and `DeckCoverPicker`'s `CoverPreview`, all three of which print the
-  artist: **a card cover whose artist is unknown is not drawn at all** (`DeckRow.coverArtist`
-  is `null` when `cards` has no row for that printing; the orphan heals on the next sync rather
-  than being shown uncredited).
+  folder strips and `DeckCoverPicker`'s `CoverPreview`: **a card cover whose artist is unknown is
+  not drawn at all** (`DeckRow.coverArtist` is `null` when `cards` has no row for that printing;
+  the orphan heals on the next sync rather than being shown uncredited).
+  **That guard survived 2026-09-07 unchanged, and reading it as a rule about the _line_ is the
+  mistake to avoid.** The deck tile's and the folder card's credit lines were deleted that day
+  and the illustrator moved onto the pictures as a tooltip, so the name is still shown and
+  `hasCover`/`coverUrl` still mean exactly what they said: a crop is drawn only where this app
+  can say who painted it. `CoverPreview` keeps a visible credit rather than a tooltip, because it
+  is one large crop with nothing else on screen to compete with a line of type.
   **There were two, and the second went with the custom cover on 2026-08-31.** It read: *a
   custom cover carries no artist and needs none*, because the rule is Scryfall's and a user's own
   file is not Scryfall's — which was also why a folder strip dropped custom covers rather than
@@ -259,14 +307,36 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   claim `soleFinish` above already refuses to make; a trait outlives the finish, which is what
   lets **1 718 printings that draw nothing today** carry a mark at all. `oilslick` + `raisedfoil`
   collapses to the one name a player says.
-  **The glyph is `Aperture` and it replaces the finish's**, so the corner chip still holds at
-  most a crown and one finish mark — the rule in `src/CLAUDE.md` that a third mark wanting that
-  corner means the corner is full. Iris blades because they have to be told from `Sparkles` and
-  `Gem` at 12px, where `Sparkle` is `Sparkles` minus two points and `Diamond` is `Gem` without
-  its facets. The **words** follow the same rule the chip already had: joined with ` · ` where
+  **A treatment renames the mark and never redraws it** (2026-09-03, issue #353 — the
+  correction to how this shipped). The glyph is the **finish**, always: `Sparkles` for foil,
+  `Gem` for etched, and a Surge Foil is the same `Sparkles` as an ordinary one. It was
+  `Aperture` for every named copy for a fortnight, and that was the bug — the glyph swap only
+  reached the surfaces that pass `treatments`, so one Surge Foil was an `Aperture` on the
+  printings wall and a `Sparkles` in the card pane's foil toggle, the deck card menu and the
+  theory diff, which draw a finish and have never seen a promo type. One fact, two pictures,
+  and no way for a reader to know they meant the same thing. Standardising on the finish is
+  what makes the icon standardisable at all: there are three finishes and a treatment table
+  that grows whenever Scryfall names a promo type, so only the finish can have a picture each,
+  and what #160 actually asked for — tell a Halo Foil from a plain one — is the word's job on
+  every surface anyway.
+  **`Aperture` survives in exactly one slot**: a **nonfoil** copy with a trait, where there is
+  no finish glyph to keep and the alternative is the 1 718 unusual-but-not-shiny printings
+  drawing nothing at all. Iris blades because it has to be told from `Sparkles` and `Gem` at
+  12px, where `Sparkle` is `Sparkles` minus two points and `Diamond` is `Gem` without its
+  facets. At most one glyph either way, so the corner chip still holds at most a crown and one
+  finish mark — the rule in `src/CLAUDE.md` that a third mark wanting that corner means the
+  corner is full.
+  Two call sites moved with it. The **collection table's** mark was gated on the copy having a
+  treatment name, which was right while a treatment had its own glyph and became the same
+  one-fact-two-pictures defect inside one table once it did not — it is ungated now, and
+  `FinishMark`'s own `null` for a plain copy is what keeps the unmarked case unmarked. The
+  **deck card menu's** finish row drew `Sparkles` even when it read `Set as etched`; it takes
+  the same two glyphs the marks do, with `Sparkles` standing for the control itself on the
+  regular row and the submenu head, since nonfoil has no glyph anywhere in the app.
+  The **words** follow the same rule the chip already had: joined with ` · ` where
   there is room for a sentence (a tooltip, an accessible name — "Double Rainbow Foil ·
   Serialized"), and the first one alone where there is room for a column (the pane's per-finish
-  price rows, which read `Halo Foil  $95.79`). The collection table keeps the glyph in its
+  price rows, which read `Halo Foil  $95.79`). The collection table keeps the mark in its
   **Name** cell rather than lengthening `Finish · condition`, which is 5.5rem and truncates
   "Nonfoil · NM" as it stands.
 - **`mix-blend-mode: overlay` is invisible over card art, and only a screenshot says so.**
@@ -341,7 +411,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 - **The printing count is the deck editor's quantity tag now, and it dropped its `×`**
   (2026-08-14). It was `×N` in the wall's own `bg-bg/85` chip; it is `components/CountTag` — the
   filled banner cut off at a slant that the deck stack has drawn copies-in-a-pile with since
-  2026-08-13 — in the neutral grey, because a printing count has no tag to take a colour from.
+  2026-08-13 — in the neutral grey, because a printing count has no label to take a colour from.
   One object for both statements: a mark the eye finds before it reads the card only works if the
   two are the same shape, and a number laid on a card had been drawn two ways in one app. The
   `×` went with the chip — a banner in a corner already says "this many", and the sign was a
@@ -350,8 +420,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   tells a count from a set number. `CardGrid`'s `topLeft` is consequently the one corner with no
   backing under it — a chip behind a banner frames a frame — while `badge` (bottom-left) keeps
   the wall's felt, so the wall still owns the _corner_ and owns nothing about the paint.
-  **`UNTAGGED_COLOR` moved with the shape**, from `features/decks/tagColors.ts` to `CountTag`'s
-  own `NEUTRAL_COUNT_PAINT`: the search wall draws this over cards that have no tags at all, so
+  **`UNTAGGED_COLOR` moved with the shape**, from `features/decks/labelColors.ts` to `CountTag`'s
+  own `NEUTRAL_COUNT_PAINT`: the search wall draws this over cards that have no labels at all, so
   the neutral fill is a fact about the mark rather than about that palette.
   **Driven in the shipped window 2026-08-14** (`npm run tauri dev`, a **debug** build at
   1280×800, against the real 116 703-card corpus): a tile's corner computed `background-color:
@@ -359,19 +429,19 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   `clip-path: polygon(0px 0px, 100% 0px, calc(100% - 10px) 100%, 0px 100%)`,
   `aria-hidden="true"`, and text `2` / `4` with **no `×`**. It measures **25 × 22** inset **4px**
   top and left of a **170 × 238** tile, overflowing neither edge, and its wrapper computed
-  `background-color: rgba(0, 0, 0, 0)` with `pointer-events: auto`. The deck editor's own tags on
-  the same build measured **25 × 22**, the same fill and the same clip, `position: relative` and
+  `background-color: rgba(0, 0, 0, 0)` with `pointer-events: auto`. The deck editor's own labels
+  on the same build measured **25 × 22**, the same fill and the same clip, `position: relative` and
   `z-index: 1` — the two surfaces are one box, which is the claim the whole change rests on and
   the only one a screenshot could not settle. **The name coverage did not move**: 25px plus the
   4px inset against the old chip's ~28px for `×2`, so the tile's printed name loses what it
-  always lost. **One arm was not driven** — the _coloured_ tag, since the deck to hand carried no
-  tagged cards; `CardStack.test.tsx` and `CountTag`'s `Painted` story are what hold that path.
+  always lost. **One arm was not driven** — the _coloured_ label, since the deck to hand carried
+  no labelled cards; `CardStack.test.tsx` and `CountTag`'s `Painted` story are what hold that path.
 - **And the printing count stopped being that tag the next day — it says the word now**
   (2026-08-15). `132 printings`, in the wall's own `bg-bg/85` chip, at `text-[10px]`. The bullet
   above is the record of the shape it replaced and every figure in it was true of that shape; what
   it got wrong is the half it argued hardest for. "One object for both statements" is right about
   the _drawing_ and wrong about the _statement_: the deck stack's bare number is printed **on a
-  tag**, so the thing beside it says which quantity is being counted, and the search wall's bare
+  label**, so the thing beside it says which quantity is being counted, and the search wall's bare
   number had nothing beside it at all. Both earlier shapes put the meaning somewhere the eye is
   not — `×132` in a tooltip, `132` in a silhouette shared with "copies in this pile" and told
   apart only by which surface you were looking at. A search tile has room for the word, so it
@@ -408,12 +478,17 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   the card pane never move. What changed is what those listeners write. `useAppStore`'s `cardZoom`
   is a `Record<ZoomSection, number>` keyed by `ZOOM_SECTIONS` (`src/lib/cardZoom.ts`, which is the
   list — no count is written here, because a count is a fact about a tree and the constant already
-  answers it): `search`, `collection` and `wishlist`, the three list walls; `deckSearch`, the deck
-  editor's docked search column, which is a fourth `CardGrid`; `deck`, the editor's desk — **one key
-  for both deck views**, because Stacks and Grid are two drawings of the same pile and switching
-  between them must not resize the cards the reader just settled on; `deckGallery`, the decks page's
-  wall of deck tiles and folder cards; and `printings`, the modal's wall, which opens *over* a wall
-  the reader has already sized. `useCardZoomGesture(ref, section)` names the section it is stepping.
+  answers it): `search`, `tags`, `collection` and `wishlist`, the page-sized list walls;
+  `deckSearch`, `collectionSearch` and `wishlistSearch`, the three **docked search columns**, each
+  of which is a second `CardGrid` on a page that already has one; `deck`, the editor's desk — **one
+  key for both deck views**, because Stacks and Grid are two drawings of the same pile and
+  switching between them must not resize the cards the reader just settled on; `deckGallery`, the
+  decks page's wall of deck tiles and folder cards; and `printings`, the modal's wall, which opens
+  *over* a wall the reader has already sized. `useCardZoomGesture(ref, section)` names the section
+  it is stepping. **`collectionSearch` and `wishlistSearch` are 2026-09-07's**, and they are their
+  own keys for `deckSearch`'s reason exactly: a sidebar's tiles and the page wall's tiles are on
+  screen at once and are two different questions — *how big are the cards I am shopping through*
+  against *how big is the binder I am filing*.
   **The wishlist joined the list on 2026-08-20**, when it gained a card view of its own; until then
   it was `VirtualTable` only and had no card section to zoom.
 - **The decks gallery joined on 2026-08-26, and it is the one section whose tiles are not cards.**
@@ -433,7 +508,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
     is remembered across restarts by the machinery that was already there.
 - **What is drawn _on_ a card scales with it, through two inherited custom properties**
   (2026-08-17). Until then the zoom sized the tile and nothing else: the finish chip, the crown, the
-  owned badge, the printings count, the rarity gem, the caption, the deck's copy count and tag dot,
+  owned badge, the printings count, the rarity gem, the caption, the deck's copy count and label dot,
   the quantity tag, the Game Changer banner, the rule break, the printed no-picture frame and the
   quick-add and stepper controls were all fixed Tailwind literals, so a doubled card carried
   hundred-percent chrome. `SearchPage`'s own comment had already recorded the consequence — its
@@ -444,7 +519,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
     table's stepper has. Both live in `src/lib/cardZoom.ts` and are published by `cardScaleVars()`.
   - **Three elements set them and nothing else has to be touched**: `CardGrid`'s tile, `GridView`'s
     tile and `CardStack`'s card. **A variable rather than a prop because the marks are shared.**
-    `RarityGem`, `OwnedBadge`, `FinishMark`, `TagDot`, `CountTag` and `QuantityStepper` are each
+    `RarityGem`, `OwnedBadge`, `FinishMark`, `LabelDot`, `CountTag` and `QuantityStepper` are each
     drawn on a card face _and_ in one of the three tables or the card pane, so a prop would have to
     be threaded to every one and defaulted at the ones that must hold still — "does this scale?"
     answered fifteen times by whoever adds the newest call site. Every mark reads
@@ -697,6 +772,137 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
     against **`none`** under `prefers-reduced-motion: reduce` (with `transition-duration` still
     reading `0.15s`, which is the false failure this file's harness rule warns about, reproduced
     again).
+- **That column is three columns since 2026-09-07, and every number above is now
+  `features/search/CardSearchPanel.tsx`'s rather than the deck editor's.** The collection page and
+  the wishlist page each grew a docked, collapsible card search of their own
+  ([issue #356](https://github.com/Msgaihede/mtg-grimoire/issues/356)), because both pages' empty
+  states said in as many words that the way to add a card was to leave the page. The chrome is
+  **extracted, not copied**: `CardSearchPanel.tsx` is the shell — the three-state `<section>`, the
+  36px rail, the disclosure and its `NO_ROOM` tooltip, the vertical rail heading, `ResizeHandle`,
+  the width `useState` and the clamp split, the `open`/`shown`/`over`/`overlaid` derivations and
+  the caret hand-back — and `CardSearchBody.tsx` is the wall and its furniture in the order the
+  deck panel always drew them. Copying it twice would have been the mistake this repo has made and
+  undone twice already (`CollectionSearchTab`'s own filter row, the deck Grid view's inline card
+  frame): **a resemblance is N independent decisions that happen to agree today.**
+  `DeckSearchPanel` went **1595 → 778 lines on the day** and kept every deck-shaped thing — the tab
+  strip, `CollectionSearchTab`, `categories`/`targetCategoryId`/`AUTO_CATEGORY`, the landed glow,
+  `availableForDeck`, the format seed. **The proof of a faithful extraction is that nothing
+  changed**: its whole test file and its whole story file stayed green with **no edit to either**,
+  which is why they were the acceptance criterion rather than a new suite — and an edit either of
+  them seemed to need was the signal that behaviour had moved. (No count of them is written here on
+  purpose. A test total is a fact about a *tree*, every open branch has a different one, and this
+  repo deleted its Storybook totals after they conflicted on five consecutive merges of `main`.)
+  - **Three gates, not two, and they must stay three.** `open` *mounts* the body, so a page nobody
+    searched from issues no `search_cards`; `shown` merely *hides* it, so a window narrowing keeps
+    the reader's typed query, filters and fetched pages; `overlaid` decides position and width
+    source. Folding `open` and `roomy` into one gate throws a reader's search away on a **resize**,
+    and that is the single most load-bearing assertion in `DeckSearchPanel.test.tsx`. The `hidden`
+    **attribute** rides beside the `hidden` class, because jsdom loads no stylesheet.
+  - **`data-search-over` is reused rather than tripled.** Its own doc warns that a second element
+    answering `[data-search-over]` would make the deck's probes ambiguous — but the three panels
+    live on three routes and can never be on screen together, and the attribute's *value*
+    (`"deck"` | `"collection"` | `"wishlist"`) already discriminates. `"deck"` keeps every meaning
+    it had. The *argument* is reused word for word from `DeckEditor`'s old `PANE_OVER_ATTR`: the
+    difference between the two placements is a `position` and a width, both of which jsdom reads as
+    nothing, so the **choice** is stamped where a suite and a CDP pass can both ask about it and
+    the geometry stays a live-window question. ⚠️ **`PANE_OVER_ATTR` itself no longer exists** — it
+    went with the docked card pane on 2026-09-03, when the pane became `CardDetailModal` — so it is
+    a precedent to reason from and not an attribute to grep for. `CardSearchPanel.tsx`'s own doc
+    comment still describes it in the present tense.
+  - **No tab strip on the two new panels.** The deck's `Collection` / `All cards` pair exists
+    because a deck is built out of cards you already have; on the collection page the first tab
+    would search the very list on screen, and on the wishlist it would search a list the reader is
+    not filling. These panels **are** the `All cards` tab, which also gives back the **141px** the
+    strip costs at the panel's 206px floor.
+  - **The destination is locked and the switch is not drawn.** `AddToCollectionButton`'s
+    `Collection` / `Wishlist` chip pair is right on the search page, where a reader genuinely is
+    choosing; here the page has already answered. `lockMode` pins it, and that is what keeps the
+    folder default unambiguous — the two folder trees are different tables, so a popup that could
+    flip lists mid-form would need two defaults and a picker that swapped trees under the reader's
+    hand. The override is a `Folder` row in the popup that swaps the panel body **in place** for
+    `MoveToFolder` in its `inline` mode — the shape `EditWish`'s folder row and `PickCopies`
+    already use, and deliberately not a nested popup, so there is **one Escape rung** rather than
+    two.
+  - ⚠️ **The `+`'s accessible name changed on every card surface in the app, not just here.** It
+    is `Add {name} ({SET} {num}) to {destination}` — the deck panel's own rule
+    (`Add Ancient Tomb to Land`) applied — where the destination is the folder's name when there is
+    one and **`Collection` / `Wishlist` at the root**. That last word was lowercase (`to
+    collection`) until 2026-09-07, and because the new props are all optional the *name* change
+    still reaches the Search page, the Tags page and the printings modal, which pass none of them
+    and go on filing at the root. **A probe matching the old lowercase form finds nothing**, which
+    is the kind of break a prose-only doc cannot go red for — it is written here so a stale
+    `getByRole("button", { name: /to collection/ })` has somewhere to be looked up.
+  - **Each surface invents its own bookkeeping and none of it is shared.** `ZoomSection`
+    (`collectionSearch` / `wishlistSearch`, added to the `DEFAULT_SECTION_ZOOMS` literal so a new
+    section is a compile error until somebody says what it starts at), `selectionScope`
+    (`collection-panel` / `wishlist-panel` — two walls on one screen must pass different scopes or
+    picking in the sidebar puts the binder's selection down), `FilterLabels.idStem`
+    (`collection-add` / `wishlist-add`, because two mounted filter rows would otherwise share
+    `id`s) and the section `aria-label` (`Add cards to your collection` / `…your wishlist`, so two
+    panels' probes do not answer to one name). The filter box keeps the app-wide name
+    `Search cards`, which is unique on each page because the page's own box is
+    `Search your collection` / `Search your wishlist`.
+  - **The dock's height is imperative and now shared.** CSS cannot say *"the scroller's visible
+    height, less however much of the page sits above this row"*, so `DeckEditor` had sized its dock
+    in a `useLayoutEffect`. That is `src/lib/useDockHeight.ts` now, and it finds the *nearest
+    scrolling ancestor* rather than assuming one — the deck editor's own page section is
+    `overflow-y-auto` while these two pages scroll in `AppShell`'s `main`. All three sites call it.
+  - **The row's arithmetic is `src/lib/useDeskWidth.ts`**, and it was two byte-identical copies for
+    about a day before it was one. `maxPanelWidth = min(⌊viewport / 2⌋, deskWidth − DESK_GAP −
+    floor)`, `roomy = deskWidth === 0 || maxPanelWidth >= MIN_PANEL_WIDTH_PX`, and an `overWidth`
+    of the whole row for a desk that cannot hold both. `viewport` is
+    `document.documentElement.clientWidth` and **never `innerWidth`**, which counts the page
+    scrollbar and caps the panel 8px too wide (632 against 640, measured on the deck editor);
+    `deskWidth === 0` reads as **roomy**, which is what keeps jsdom and the first paint out of the
+    way. **`DeckEditor` is deliberately not a caller**: its `panelOverWidth` carries an extra
+    `selectedCardId === null` clause, its desk mounts only once `deck_get` has answered, and it
+    measures a desk holding a deck rather than a list — three differences, none cosmetic.
+  - **The floor is the _view's_, not the page's, and that is a measurement rather than a
+    refinement.** Driven 2026-09-07 (`npm run tauri dev`, a **debug** build, against a real
+    276-copy collection and 89-wish list) at viewport widths of 1584, 1384, 1264, 1134, 1118, 1008,
+    884, 784, 544, 414 and 374.
+    - **The card wall really does hold at 192.** Its `scrollWidth` never exceeded its `clientWidth`
+      at any width, and it went on drawing tiles down to a 192px list — four of them at 360, five
+      at 192. `CARD_FLOOR` is the deck's `DECK_FLOOR` borrowed, confirmed.
+    - **The table does not, and it failed at a window nobody would call narrow.**
+      `CollectionTable`'s five fixed columns measure **464** and its gaps another **~101**, so its
+      name column is `list − 565` — linear, checked at three widths: a 936px list gives **371**,
+      736 gives **171**, and **616 gives 51**. 616 is what this page's list got at the app's own
+      **1280×800** with the panel at its 384 opening width, so the shipped default put card names
+      in a 51px column. Below a 486px list the name column is *gone* and the table scrolls sideways
+      inside its own root — **no page-wide scrollbar, because `min-w-0` holds**, which is exactly
+      why neither suite nor a screenshot of the whole window would ever have caught it.
+    - **`TABLE_FLOOR` is 680 on the collection and 610 on the wishlist**, and the two differ because
+      the two tables draw different columns: `WishlistTable`'s name column reads 335 / **122** / 25
+      at the same three rungs where the collection's reads 371 / 51 / gone. Agreeing on one number
+      would be the two pages agreeing on a figure neither measured.
+    - **After the fix, at 1280×800: list 680, panel 320, name column 115.** The panel gives up 64px
+      and stays comfortably docked. Switching back to the card view returns it to 384 — the clamp
+      split working, since the cap clamps what is *drawn* and only a drag clamps what is *stored*.
+    - **Not folded into one number for both views.** A single floor at the table's figure would push
+      the panel to its overlay at 1024 on the card view, where a 360px list was measured drawing
+      four tiles with no overflow at all — a working layout refused because a different view could
+      not have used it. `useDeskWidth` takes `floor` as a parameter for exactly this.
+  - **The overlay ships too**, and it is the half a phone needs. Below the floor the shell already
+    knows how to draw itself *over* the list at the full row width, so the plumbing is one more
+    number from the page. Without it a narrow window would offer a sidebar that is only ever a
+    greyed chevron.
+  - **The two lists open _railed_ where the deck opens open, and the overlay is why.** These pages
+    have no docked card pane to suppress the overlay, so `roomy === false` always implies an
+    `overWidth` — measured, the panel is `data-search-over` at **544px and below** and there is no
+    rail state to fall back to. A default of open therefore meant arriving at your own wishlist to
+    find a card search drawn over it. The second reason is desktop-side and independent: these
+    pages already draw a `FilterBar` of their own, so opening open puts two filter rows on screen
+    before the reader has asked for either. Neither argument touches a *deck*, which has no second
+    filter row and no list being covered, so `DEFAULT_SEARCH_OPEN` is `{ deck: true, collection:
+    false, wishlist: false }`. A rail is not an absence — 36px of chevron with `Search cards` turned
+    on its side — and the press is remembered per section forever after.
+  - **One overflow at 414px is _not_ this column's, and it was checked rather than assumed.** At a
+    414px window the nav rail is still 208px (`PHONE_PX` is 390, so `BottomTabBar` has not taken
+    over) and `main` overflows horizontally by **105px**. Collapsing the panel to its rail leaves
+    **90** of that, so 90px is the wishlist's own figure-row actions and 15px is the rail. The page
+    was already broken at that width; at a true phone width (374, tab bar engaged) `main` overflows
+    by **0**.
 - **A scaled budget floors rather than scales only while the chrome inside it is unscaled — and
   since 2026-08-17 almost none of it is.** The rule was `max(base, scaled(base, zoom))` and three
   surfaces landed on it independently: `CardGrid`'s 28px caption was set by the 24px quick-add
@@ -735,7 +941,12 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   drawn with no chrome whatever. Two things did **not** have to change and each is a rule worth
   keeping: `DROP_RING`/`DROP_OVER` are `ring-2 ring-accent` and `bg-accent/10`, and a ring is a box
   shadow **outside** the border box, so the drag highlight never read the border it appears to sit
-  on; and the border is transparent rather than absent, for the arithmetic above. `opacity-60` also
+  on; and the border is transparent rather than absent, for the arithmetic above.
+  **Both of those values changed on 2026-09-03, and the second half of that first clause is now
+  the opposite of what it says**: the ring is `ring-1 ring-inset ring-accent/45` and the wash
+  `bg-accent/15`, and an inset ring is painted *within* the border box. What stands above is what
+  was measured on the day and is left as measured — the marks section below carries the change and
+  the reader report behind it. `opacity-60` also
   makes that `<ul>` a stacking context, and the `<ul>` is what takes `LAYER.raised` when a card
   opens — the first thing to check if the lift ever regresses in inactive piles alone.
   **All of it is now measured in the shipped window — 2026-08-14, `npm run tauri dev`, a debug
@@ -1053,8 +1264,9 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   one grid of cards to get bigger. The same `preventDefault` is what suppresses trackpad pinch,
   which arrives with `ctrlKey` set and nobody touching a key.
 - **Escape closes one layer per press, and the protocol is a handshake, not a z-index.** An
-  inner dismissible layer (popup, listbox, menu) listens on `window` in the **capture**
-  phase and calls `preventDefault()`; an outer one (the card detail pane) listens in the
+  inner dismissible layer (popup, listbox, menu, and every `Dialog`) listens on `window` in the
+  **capture** phase and calls `preventDefault()`; an outer one (`KeyMap`'s shortcuts panel —
+  the docked card detail pane until 2026-09-03) listens in the
   bubble phase and returns early on `e.defaultPrevented`. Capture is load-bearing: two
   `window` listeners for one event run in _registration_ order, and the outer layer was
   mounted first, so in the bubble phase it would act before the popup and read
@@ -1063,6 +1275,21 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
 - A layer that Escape dismissed hands focus back to whatever opened it, _before_ React
   flushes the close (the element is still mounted). An outside-click deliberately does not
   — the reader is already somewhere else.
+  **One kind of layer breaks that parenthetical without breaking the rule, and it arrived on
+  2026-09-03 with the folder wall's naming tiles.** Where a layer *replaces* its own opener —
+  `New folder`'s tile becoming the field it used to raise, a folder card becoming the field its
+  `⋯` used to raise — the opener is **not** still mounted, so focusing the remembered element is
+  a call on a detached node: a silent no-op, with nothing on screen and nothing in the console to
+  say the caret went to `<body>`. The element that should take it is the one React has just
+  rendered in the opener's place, and only the host knows which that is; `useFolderFieldReturn`
+  in `components/FolderNameField.tsx` refs it and restores on the close. **What keeps that from
+  becoming an exception to the second sentence as well is a test on
+  `document.activeElement`** — it restores only where the caret is `null` or `document.body`,
+  which is exactly the state Escape, the ✕ and a committed write all leave behind, so an outside
+  click that landed on something else keeps its own. **That last clause is reasoned and not
+  observed**: the last section on this page measured the tiles' geometry over the built CSS, but
+  where the caret actually lands after each of the four exits is one of the three things it still
+  owes, and only the shipped window can answer it.
 - **Z-indexes come from `LAYER` in `src/lib/layers.ts`, and `src/lib/layers.test.ts` sweeps
   `src/` to keep it the only place they are written.** The bug it closed is worth the
   paragraph: the search view's set picker (`absolute z-20`) was painted over by the results
@@ -1077,8 +1304,12 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   _below_ the header — a row has to scroll under one. Variant spellings
   (`has-[[aria-expanded=true]]:z-10`) are their own entries, written out: Tailwind scans
   source text for whole class names, so a class built by interpolation emits no rule at all.
-- **The ladder is `raised 10 < header 20 < popup 30 < dragTray 40 < overlay 45 < tooltip 46 <
-  gate 50 < caption 60`**, and `layers.test.ts` asserts every link of it.
+- **The ladder is `raised 10 < header 20 < popup 30 < dragTray 40 < overlay 45 <
+  overlayStacked 46 < tooltip 47 < gate 50 < caption 60`**, and `layers.test.ts` asserts every
+  link of it. **`overlayStacked` was added on 2026-09-03 and pushed `tooltip` up one**, when the
+  card detail modal grew nested overlays that open over it: two `fixed inset-0` scrims at one
+  number, neither inside the other, is the document-order bug `layers.ts` opens with, and a
+  tooltip has to clear the highest rung a *dialog* is drawn at rather than a particular number.
   **`caption` was added on 2026-08-22 to fix a bug that had shipped, and the bug is the reason
   to keep it.** `TitleBar` draws the window's frame because `tauri.conf.json` sets
   `decorations: false`, and it is a **flex item at `z-auto`** — while both of the app's
@@ -1097,7 +1328,7 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   buttons are the app's only anchors on the window's top edge, and `placeTooltip` already flips
   those downward, so their panels are drawn below the row and never inside it. **`overlay` is one rung for every full-window
   surface, deliberately, where two looks more careful**: the deck editor's **six** — Import,
-  Categories, Tags, History, Theory diff, Deck settings — are held in **one** piece of
+  Categories, Labels, History, Theory diff, Deck settings — are held in **one** piece of
   state (`DeckEditor`'s `Layer` union) because `useDismissOnEscape` orders exactly two rungs, and
   two `"inner"` peers open at once are not ordered at all. At most one of the six is ever
   mounted,
@@ -1111,7 +1342,7 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
 - **A surface opened from a view is a centred modal, not a docked column, unless the reader works
   out of it while editing beside it** (2026-08-14). The deck editor's two right-hand drawers
   became dialogs: `AuditDrawer` → `DeckHistoryDialog`, and `CategoriesPanel` split into
-  `CategoriesDialog` and `TagsDialog` — two sections of one drawer that each cost a press and a
+  `CategoriesDialog` and `LabelsDialog` — two sections of one drawer that each cost a press and a
   scroll are two dialogs one press apart, each sized for what it draws. All of them and
   `DeckSettingsDialog` are now built on **one shell, `src/components/Dialog.tsx`**, so
   "the style of Deck settings" is a component rather than a resemblance: `LAYER.overlay`, the
@@ -1547,12 +1778,17 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
   a second line inside the panel and is unchanged in the two full-width filter bars, where it
   already fitted. After it, `scrollWidth === clientWidth` at both widths and the document had no
   sideways scroller at all. **The general rule this is an instance of**: a row of fixed-width
-  controls is sized by the _narrowest_ surface that draws it, and in this app that is the 384px
-  docked panel — never the filter bar it was designed in. Nothing goes red when a tenth chip is
+  controls is sized by the _narrowest_ surface that draws it, and in this app that is a **docked
+  search panel** — never the filter bar it was designed in. That surface is a *range* rather than
+  384: the panel is draggable from its left edge and its floor is `MIN_PANEL_WIDTH_PX`, **206**, so
+  the narrowest content box a filter control has to survive is ~193 rather than ~371. **And since
+  2026-09-07 there are three of them** — the deck editor's, the collection's and the wishlist's,
+  all one `CardSearchPanel` — so a control that overflows now overflows on three pages rather than
+  one. Nothing goes red when a tenth chip is
   added, so `FilterChips.test.tsx` now holds the arithmetic beside the wrap.
 - **The search filter row lays out by its own width and not the window's, in four bands — and
   the mechanism is `@container`, not a media query.** The same component is the search page's bar
-  across a maximised window and the deck editor's docked panel, which is draggable from 206px, so
+  across a maximised window and a docked search panel, which is draggable from 206px, so
   a viewport query would be answering a question about the wrong box. The container is named
   (`@container/fb`) rather than anonymous, because container variants bind to the nearest
   ancestor container and an unnamed one here would be claimed by any future `@container` inside a
@@ -1767,8 +2003,11 @@ figure in it that came from a run of text is exposed and should be re-read befor
   a card usually is — and in the frame it read as an *extension of the Game Changer banner*: two
   gold marks in one 27px strip meaning two unrelated things. `--color-ok`, the green the format
   check draws its clean-deck `CircleCheck` in, is legible and says the one sentence a tick must
-  not ("nothing is wrong here"). The neutral count paint was no distinction at all — a grey chip
-  at each end of the strip. Azure is none of those. It **is** one of the six tag colours, which is
+  not ("nothing is wrong here"). **That third refusal is reversed since 2026-09-07** — green is
+  the *exact* tier now, and *this is the printing you planned* **is** that sentence; the
+  subsection at the foot of this section carries the reversal, and the other two refusals stand.
+  The neutral count paint was no distinction at all — a grey chip
+  at each end of the strip. Azure is none of those. It **is** one of the six label colours, which is
   the accepted cost: the quantity tag at the other end draws a *number*, so the two are still told
   apart by content and position.
 - **The slant is mirrored** — `COUNT_TAG_SLANT_MIRRORED`. `CountTag`'s cut takes its bite out of
@@ -1932,6 +2171,79 @@ Before and after in one pass, backing the change out through `element.style`:
   and it was run at `--mark-scale` 1 only. The two ends of the zoom ladder were re-driven for #182
   and nothing here changes how any of these terms scale — `1ch` follows the font size, which is
   already scaled — but that is an argument rather than a reading.
+
+### The tiers, and the green this section had ruled out (2026-09-07)
+
+**This one is not a photograph, which is why it is not numbered with the seven above it.** It is
+a colour decision reversed by a change in what the mark *means*, and the pass that would settle it
+is owed — the foot of this subsection says what is unmeasured.
+
+The mark answers two questions now instead of one — **green** where a Live row is the exact
+printing the plan named, **blue** where it is that same card in a printing the plan did not name.
+The rule, the two per-deck switches and the arithmetic are in
+[`src/features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md). What belongs here is the
+**colour**, because the first bullet of this section ruled green out and that finding is now
+reversed. **It is left standing above rather than deleted**: it was right about what it was
+looking at, and knowing why it stopped applying is the whole of the argument.
+
+**Two of the three refusals stand word for word.** Gold still puts two gold marks in one 27px
+strip meaning two unrelated things, and still reads as an extension of the Game Changer banner.
+The neutral count paint is still no distinction at all — a grey chip at one end of the strip and
+a grey chip at the other.
+
+**The third was a finding about a different mark.** `--color-ok` was ruled out in these words:
+*it is this app's "nothing is wrong here" colour, which is the one reading a tick must not have.*
+That was true of a mark meaning **this card is in the plan** — a *fact*, not a verdict — and it
+held for exactly as long as the mark said only that. Green is now the **exact** tier, and *this is
+the printing you planned* **is** a "nothing is wrong here" verdict: it is the reading the mark
+should have rather than the one it must not. Azure keeps the looser tier, where the original
+argument still applies unchanged, because *this is that card in another printing* is a fact again
+rather than a verdict. One pass, one sentence, two marks — and the sentence went to the mark it
+was true of.
+
+**The default green is `#56bd78`, and it is `--color-ok` itself rather than a colour picked to
+look like it.** `src/index.css` defines `--color-ok: oklch(0.72 0.14 152)`; converted to sRGB that
+is `#56bd78`, and the conversion is **in gamut** — the linear components come out at
+`0.0931 / 0.5103 / 0.1870`, all inside `[0, 1]` — so the hex is the exact colour rather than one
+clamped to the nearest displayable point. Blue is `#0e68ab`, today's azure, unchanged. Both are
+**literal hexes** in the stylesheet rather than `var(--color-ok)` / `var(--color-pie-u)`, for
+`LABEL_COLORS`' reason: these are the values a colour picker opens on and a reader's own choice
+replaces, so they cannot be a reference to something the palette decides later.
+
+⚠️ **The duplication has no fence, and that is worth knowing precisely because the six labels
+do have one.** `labelColors.test.ts` reads `src/index.css` through Vite's `?raw` and holds
+`LABEL_COLORS` to the declarations it finds; nothing does that for these two. `MARK_COLOR_DEFAULTS`
+in `src/lib/useMarkColors.ts` spells `#56bd78` and `#0e68ab` a second time — an
+`<input type="color">` cannot take a `var()`, so the picker needs a literal to open on — and
+`useMarkColors.test.ts` asserts those same two literals, which pins the constant to itself. A
+palette edit that moved `--color-theory-exact` and left the constant alone would ship a picker
+opening on a colour the mark is not drawn in, with nothing red anywhere. One test in
+`labelColors.test.ts`' shape closes it; it is **owed rather than done** (2026-09-07), and this
+paragraph said the fence existed before it was checked.
+
+**Azure is one of the six label colours and the green is not**, which means the split's one
+accepted cost stayed on the tier that was already paying it. A card wearing an Azure label draws
+an azure `QuantityTag` at the *other* end of this strip; the two are still told apart by content
+and position, because one of them is a number. The exact tier pays nothing there at all.
+
+**The four separations still hold, and the colour is the one of them a reader can now defeat.**
+Place (this corner against the rule break's, which moved to the opposite one on 2026-08-20
+precisely so), colour, shape (a filled banner against a hairline box) and the card's own edge.
+Since 2026-09-07 both colours are the reader's — Settings → Appearance writes
+`--color-theory-exact` and `--color-theory-name` onto the app root — so nothing stops somebody
+choosing the destructive red for one of them. That is theirs to do and not this app's to prevent;
+the other three separations are structural and hold whatever is picked, which is exactly why there
+are four of them rather than one.
+
+**What has not been done is a photograph, and this section is the reason that matters.** Every
+sentence above is an argument. The tiers have been driven in jsdom and in Storybook and in neither
+of the two frames that have ever settled anything here: no `file://` page over the built
+stylesheet, no shipped WebView2 pass. Unmeasured, and each of them is the kind of thing this
+section was written by: green over real card art beside the gold banner; green and blue on one
+wall of tiles, where the question is whether two filled marks read as two statements or as noise;
+either colour at `--mark-scale` 0.5 and 1.75; and a custom colour a reader has picked against the
+`-fg` the luminance formula chose for it. #158 and #182 were both reported by a reader off one
+screenshot after a green suite; that is the standing record of what a green suite is worth here.
 
 ## The two marks a deck card carries: picked, and just landed
 
@@ -2139,6 +2451,14 @@ everything drawn outside its own border box painted in the clipped region:
 | `FOCUS` (`outline-2 outline-offset-2`) | 2px of outline standing 2px off the edge | the whole side, gone |
 | `DROP_OVER` (`bg-accent/10`)           | inside                                   | untouched            |
 
+**The first row stopped being true on 2026-09-03**, and the table is left as it was because it is
+the record of the defect rather than a description of today. `DROP_RING` is `ring-1 ring-inset
+ring-accent/45` now, and an inset ring is painted *within* the border box — so it joins
+`DROP_OVER` in the "untouched" column and cannot be clipped by a scroller at all. **`DROP_MARK_ROOM`
+did not change and must not**: the middle row is the one that always asked for the larger number,
+a clipped focus indicator is a WCAG 2.4.7 failure rather than a cosmetic one, and 6px is still
+`FOCUS`'s 4 plus two to spare.
+
 Three surfaces, one defect, and the shape of it differs by view: Stacks loses the left edge of the
 first pile in every line and the right edge of the rail, Text the same plus the top of its first
 line, and **Grid loses the ring down both sides of every group at once** — a group there is as wide
@@ -2170,6 +2490,86 @@ rect is zero, and a rendering assertion passes just as happily against a view th
 padding again. `views.test.tsx` sweeps the class pair instead — `overflow-x-auto` **and**
 `DROP_MARK_ROOM` on each of the three roots — because the padding is only load-bearing on account
 of the `overflow`.
+
+## The drop marks, made quiet and made to agree (2026-09-03)
+
+**The report.** Three sentences from the reader, and they turned out to be one defect and two
+consequences of it: the highlights are "huge bulky outlines", they "often overlap with other
+content", and they "don't align with the dotted outline and faint highlight appearing when
+actually hovering over a dropzone in most cases". A fourth, separate: a dragged card "occludes a
+lot of content".
+
+**The cause of the first three.** `DROP_RING` was `ring-2 ring-accent`, and a Tailwind ring is a
+box shadow painted **outside** the border box. It went up on *every* eligible target for the whole
+length of a drag, so a wall of drawers became a dozen hard 2px rectangles each intruding 2px into
+its neighbour's gap — bulk and overlap from one property. The misalignment was the same fact seen
+from the third side: on all four folder cards the ring was on the wrapping `<li>` and the card's
+dashed border and `DROP_OVER` wash were on the `<button>` inside, so the gold stood 2px proud of a
+dash it never touched. `features/decks/FolderCard.tsx` was the worst case — a ring on the `<li>`
+for the deck drag, a second on an inner `<div>` for the folder drag, and the button's dash inside
+both: **three concentric outlines for one landing**.
+
+**The fix, in three parts.**
+
+| | before | after |
+| --- | --- | --- |
+| `DROP_RING` — borderless targets | `ring-2 ring-accent` | `ring-1 ring-inset ring-accent/45` |
+| `DROP_EDGE` — targets with an edge | *(did not exist)* | `border-accent/45 transition-none` |
+| `DROP_OVER` | `bg-accent/10` | `bg-accent/15 ring-accent transition-none` |
+
+`ring-inset` is the load-bearing word: an inset ring is painted *within* the border box, so the
+overlap is impossible by construction rather than tuned away. `DROP_EDGE` is the alignment fix and
+it works by removing the second line rather than by lining two up — a card that already owns a
+dashed outline turns *that* outline gold, so there is no pair of edges left to disagree. And the
+over state escalates by **colour, never by width**: both tokens land in one `cn()`, so a `ring-2`
+here would sit in the same `tailwind-merge` width group as the other's `ring-1` and the mark's
+thickness would depend on argument order. Width lives in one token; this one raises
+`ring-accent/45` to `ring-accent` in the ring-*colour* group, where overriding is the point.
+
+**The `transition-none` on two of them is not tidiness.** Those buttons already tween their
+colours over 150ms for hover, and moving the mark onto the button would have put a drop affordance
+behind that tween — the rule `DROP_RING` gets for free by being a box shadow. It costs nothing,
+since the class is only applied during a drag and `:hover` does not update while the pointer is
+holding something. It also keeps the two marks arriving *together*, which matters now that they
+share an element: a border that snapped while its wash faded would be a second misalignment, in
+time rather than in space, introduced by the fix for the first.
+
+**The occlusion is a separate, one-line change.** There was no `opacity` anywhere on
+`[data-dnd-dragging]` — the preview is a clone of the source drawn at full size and full opacity,
+and on a deck that is ~293px of card art laid over the heading the reader is aiming at.
+`src/index.css` now carries `[data-dnd-dragging] { opacity: 0.75 }` as an **app-owned rule kept
+separate from the copied library block**, which is a verbatim copy the fence in
+`lib/dndManager.test.ts` checks the library against; that fence runs one way (library ⊆ ours), so
+an extra rule of the app's own is legal and does not read as drift in a copy the app does not own.
+
+**Verified against the built stylesheet, not the source** — `dist/assets/index-BDP3Px9q.css`,
+2026-09-03, because a mistyped Tailwind utility emits **nothing** and source still reads correctly.
+All five present: `.border-accent\/45`, `.bg-accent\/15`, `.ring-accent\/45`,
+`.ring-inset{--tw-ring-inset:inset}` and `[data-dnd-dragging]{opacity:.75}`. Then photographed
+lock-free — a `file://` page against that sheet, headless Edge at `--force-device-scale-factor=2`,
+with the **old** `ring-2 ring-accent` drawn in the same frame for comparison. The old ring reads
+visibly wider than the element it is on; the new hairline hugs the inside of the rounded rect; the
+folder card's three states are one dash going grey → warm → solid-gold-with-wash; and a
+`data-dnd-dragging` tile is plainly faded beside an identically-classed one. The app lock was held
+by another worktree, which is what the dist-CSS route is for.
+
+**What did not change, and must not.** `DROP_MARK_ROOM` stays `p-1.5`. The ring no longer needs it
+— it cannot be clipped — but `FOCUS` still stands 4px proud, and half a focus indicator is a WCAG
+2.4.7 failure rather than a cosmetic one. The 6px was always sized for `FOCUS` rather than for the
+ring, so the number is unchanged and only its justification narrowed. `TableView` had reached the
+inset answer on its own long before, for rows absolutely positioned inside a virtualiser; its
+local `ring-inset` is now a duplicate of what the token says and was removed.
+
+**Three test holes the change opened, all of which would have gone green.** Worth recording
+because each is the same shape: an assertion written against a literal that no longer exists
+anywhere passes for *every* state. `CollectionPage`/`WishlistPage` had eight
+`classList.contains("ring-2")` refusal checks — the ones proving a target that lights up never
+then refuses the drop — replaced by a `wearsDropMark` subtree helper. `DecksPage`'s `ringed`/
+`washed` helpers hardcoded `ring-2`/`bg-accent/10` against **`FolderTree`** rows, and now ask for
+the ring's *width*, since the two tokens deliberately share the colour group and an all-classes
+test would call a correctly marked row unringed at exactly the moment it is most marked. And
+`AppShell` had four `not.toHaveClass("ring-accent")` absence checks: `toHaveClass` matches whole
+tokens, so an entry wrongly armed with `ring-accent/45` would have sailed through.
 
 ## The format check that changed width with the deck
 
@@ -2315,7 +2715,7 @@ live pass found one defect behind all three, plus one the suite could not see.
 
 ### One cause, three surfaces: the walk was exactly one press long
 
-`CardDetailPane` renders `<Body key={cardId}>` and that body's mount effect focuses the pane —
+`CardDetailPane` rendered `<Body key={cardId}>` and that body's mount effect focused the pane —
 "focus moves in when it opens, and Escape hands it back to whatever opened it", which is the right
 contract for a card a reader *pressed*. The arrow keys make the same store write for a different
 reason, so **every** press re-keyed the body and pulled the caret out of whatever was being walked:
@@ -2332,8 +2732,8 @@ page under the scrim, and the modal's own keydown never fired again.
 
 The fix is `src/lib/caretWalk.ts`: a note saying *this selection was walked to, so the caret is
 already where it belongs*, written by the three walkers immediately before their store write and
-read by the pane's mount effect. The pane still records the opener — during a walk the active
-element **is** the right thing for Escape to hand back to — and skips only the focus.
+read by the pane's mount effect. The pane still recorded the opener — during a walk the active
+element **is** the right thing for Escape to hand back to — and skipped only the focus.
 
 **The first spelling of that note was wrong in a way only a debug build could show.** It cleared
 itself on read, the way `handover` does one screen up in the same file; `main.tsx` wraps the app in
@@ -2343,6 +2743,24 @@ fix looked like a fix. It is idempotent now — the same card answers the same w
 it is asked, and any *other* card discards the note. Worth carrying because the asymmetry runs the
 wrong way: **a release build would have passed a test this could not**, StrictMode's double
 invocation being development-only.
+
+> **The reader went away on 2026-09-03 and the note is now dormant — the defect above is *not*
+> back.** `CardDetailPane.tsx` was deleted when the card became `CardDetailModal`, and the mount
+> effect that asked `consumeCaretNote(cardId)` went with it, so `consumeCaretNote` has no caller
+> outside the suite while `keepCaretForCard` is still written by all three walkers.
+>
+> This paragraph first said the walk was "one press long again". **That was wrong, and it is worth
+> saying why, because the mistake is the kind that gets a guard re-added against a defect that
+> cannot happen.** Two things have to be true for the pane's failure to recur, and neither is:
+> the surface must take the caret *per card* — `Dialog`'s panel-focus effect has `[]` deps, so it
+> fires once when the modal opens, and the body it re-keys focuses nothing — and the walk must be
+> able to run at all, which it cannot, because the panel is `aria-modal` with `trapTab` and the
+> wall behind the scrim never receives the press. Card-to-card movement is the modal's own `‹ ›`
+> flanks now, and they keep the caret on the chevron.
+>
+> So nothing goes red for it and nothing should: the tests assert the note is *written*, which is
+> still true and still correct. A future surface that draws a card **without covering the list**
+> would need the reader back.
 
 ### The wall's tile parked 2px past its own scrollport
 
@@ -2615,12 +3033,15 @@ this rule has to be stated rather than left to a linter: neither would go red.
 `position: absolute` and transformed, which caps every `z-index` inside it *and* makes that row
 the containing block for a `position: fixed` descendant.** A panel anchored inside a row inherits
 both traps at once; a panel whose DOM node lives outside the whole tree, at `LAYER.tooltip`
-(`z-46`, above `overlay`'s 45 because a hint can be shown over the deck editor's dialogs, below
+(`z-47` since 2026-09-03, above every dialog rung because a hint can be shown over the deck
+editor's dialogs — and over a nested overlay, which is what moved it off 46 — below
 `gate`'s 50 because `SyncProgress` covers the window and a hint floating over it would describe
 something the reader cannot see), needs neither raised further nor clipped by an
-`overflow-hidden` scroller. `PrintingPreview` is what paying the alternative costs today: it
-places its own preview with `frame.scrollTop`/`clientLeft` arithmetic instead of `fixed`, because
-it has to stay inside its scroller's transform. `TooltipProvider` mounts in `src/App.tsx` and
+`overflow-hidden` scroller. `PrintingPreview` was what paying the alternative cost: it
+placed its own preview with `frame.scrollTop`/`clientLeft` arithmetic instead of `fixed`, because
+it had to stay inside its scroller's transform. That file was deleted with the docked card pane on
+2026-09-03 and **nothing in the app does that arithmetic now**, so the comparison is a record
+rather than a live example. `TooltipProvider` mounts in `src/App.tsx` and
 `.storybook/preview.tsx`, both above `ContextMenuProvider`, for that provider's own reason — its
 panel is a sibling of `children`, so a context nested inside it would wrap every view and none of
 the menu's own rows.
@@ -4244,6 +4665,13 @@ is a proposal — the last paragraph of this section is the point of it.
 Line numbers are a fact about a tree, so every row names the symbol or the string beside the line
 and the line is the convenience rather than the identifier.
 
+**Two of the files named below have since been deleted, recorded 2026-09-03 rather than edited
+out.** `features/card/CardDetailPane.tsx` and `features/card/PrintingPreview.tsx` went when the
+docked card surface became `CardDetailModal`. What that costs the census is stated at each row:
+the hover-only `+` is one site fewer, and the printings dwell preview is **gone with no
+equivalent** — the printings wall is a `CardGrid` of art tiles now, where the art is the tile and
+there is nothing to preview. So the "four dwell timers" below are three.
+
 ### The sweeps, and what each one costs
 
 The plan's own three greps, run first:
@@ -4302,8 +4730,9 @@ The shape `src/CLAUDE.md` describes is the shape the tree is in.
 **One correction worth recording before it is repeated: `touch-action` is not absent from this
 tree.** Two sites carry it — `src/index.css:434`, inside the block mirroring the rules
 `@dnd-kit/dom` injects at runtime, applying `touch-action: none` to whatever is mid-drag; and
-`features/decks/DeckSearchPanel.tsx:1072`, where the panel's resize strip carries Tailwind's
-`touch-none` with a comment saying why. Neither is a designed touch affordance and neither
+`features/search/CardSearchPanel.tsx:747`, where the panel's resize strip carries Tailwind's
+`touch-none` with a comment saying why. (That was `features/decks/DeckSearchPanel.tsx:1072` until
+2026-09-07, when the shell was extracted and three panels started drawing it.) Neither is a designed touch affordance and neither
 changes what follows, but a later sweep for "does anything here think about touch" will find them
 and should know what they are. `(pointer: coarse)` really is nowhere: every `coarse` in the tree
 is prose about something else.
@@ -4315,12 +4744,12 @@ is prose about something else.
 | `components/AppShell.tsx:614` — `{...tip(narrow && label, { side: "right", describes: false })}` | The nav entry's word while the rail is collapsed to `w-17`/68px. The label is `sr-only` there, so the button's accessible name is unchanged and a screen reader still has it; the eye has the icon and nothing else. | The expanded rail — `useNavCollapsed` persists the state in `app_meta`. At 390px the expanded rail is 208px of the window. |
 | `components/AppShell.tsx:822` — the same spread over a pinned deck or folder's name | Which deck or folder each pinned art crop is. | The same, and nothing else. |
 | `components/Ribbon.tsx:96` (`dataDir`) and `:97–98` (`imageStoreFailures`), bound at `:176` on the `role="status"` line | Which data folder is live, and how many card images could not be written to the cache. | **Nothing.** Each field reaches the UI at exactly one place, and it is this tooltip: `imageStoreFailures` is drawn in no other string and `dataDir` in no other expression. Settings names neither — `features/settings/SettingsPage.tsx:154` reads "Data folder and import. Coming in a later plan.", and `features/settings/DangerZonePanel.tsx:117` records that the folder is named nowhere on Settings. |
-| `features/collection/AddToCollection.tsx:36–38` — `REVEAL_ON_HOVER`, spread at 11 sites: `features/card/CardDetailPane.tsx:2034`, `features/collection/CollectionTable.tsx:349`, `features/decks/DeckTile.tsx:387`, `features/decks/FolderTree.tsx:581`, `features/search/CardGrid.tsx:1485`, `features/search/SearchPage.tsx:180` and `:637`, `features/tags/TagResults.tsx:301`, `features/wishlist/WishlistGrid.tsx:440`, `features/wishlist/WishlistTable.tsx:180` and `:290` | Where the quick-add `+` is, on every card surface in the app. | **The control is not gone; it is unaimable.** `opacity-0`, never `hidden` — deliberately, so it keeps its tab stop — and `CardGrid.tsx:1474` states in as many words that an `opacity-0` element is still a hit target. A finger that lands on it presses it. Nothing on screen says it is there. |
+| `features/collection/AddToCollection.tsx:41` — `REVEAL_ON_HOVER`. **No count is written here; `grep -rn REVEAL_ON_HOVER src` is the census** — this row said *11 sites* with line numbers and every one of them had moved by 2026-09-07. The files, which drift far more slowly: `collection/CollectionTable.tsx`, `collection/CollectionSearchPanel.tsx` **(new 2026-09-07)**, `decks/DeckTile.tsx`, `decks/FolderTree.tsx`, `search/CardGrid.tsx` (×2), `search/SearchPage.tsx` (×2), `tags/TagResults.tsx`, `wishlist/WishlistGrid.tsx`, `wishlist/WishlistSearchPanel.tsx` **(new 2026-09-07)**, `wishlist/WishlistTable.tsx` (×2). `card/CardDetailPane.tsx` was on this list until **that file was deleted 2026-09-03; the modal that replaced it draws no quick-add** | Where the quick-add `+` is, on every card surface in the app — **including the two docked search sidebars since 2026-09-07**, whose tiles are the newest place this `+` appears. | **The control is not gone; it is unaimable.** `opacity-0`, never `hidden` — deliberately, so it keeps its tab stop — and `CardGrid.tsx` states in as many words that an `opacity-0` element is still a hit target. A finger that lands on it presses it. Nothing on screen says it is there. |
 | `features/decks/cardControl.tsx:933–936` — `REVEALED_ON_CARD` | The deck card's control bar on the three views that draw a card as a picture. | The same `opacity-0` answer. The stack has a second door: `revealedWhenOpen` (`cardControl.tsx:955–963`) drives the same bar off **which card is open** rather than off the pointer — see the flip-through row. |
 | `components/CardArt.tsx:210–213` — `group-hover:scale-[1.02]`, given `hoverZoom` by `features/search/CardGrid.tsx:1374` and `features/decks/views/GridView.tsx:404`; `features/decks/DeckTile.tsx:531–534` for a deck tile | Which tile the pointer is over. | Nothing equivalent, and nothing is missing: the lift answers a question a finger does not ask. The caret's answer is `FOCUS`, which is a different thing. |
-| `features/decks/DeckSearchPanel.tsx:1072` (`cursor-col-resize`) and `:1082–1086` (an `opacity-0 … group-hover:opacity-100` grip) | That the docked search panel's left edge can be dragged at all. Both signals belong to a pointer: a cursor a touchscreen does not have, and a grip revealed by `group-hover`. | The drag itself is pointer-based and the strip already carries `touch-none` (`:1072`); the keyboard reaches the same resize through arrows, Home and End (`:1055–1061`). Nothing **visible** reaches it without a pointer. |
+| `features/search/CardSearchPanel.tsx:747` (`cursor-col-resize`) and `:755–762` (an `opacity-0 … group-hover:opacity-100` grip) — `DeckSearchPanel.tsx:1072`/`:1082–1086` until the shell was extracted on 2026-09-07, and **three** docked panels draw it now rather than one | That a docked search panel's left edge can be dragged at all. Both signals belong to a pointer: a cursor a touchscreen does not have, and a grip revealed by `group-hover`. | The drag itself is pointer-based and the strip already carries `touch-none` (`:747`); the keyboard reaches the same resize through arrows, Home and End (`:724–736`). Nothing **visible** reaches it without a pointer. |
 | `features/decks/CardStack.tsx:851` — `onPointerEnter={() => onArm(index)}`, `STACK_OPEN_DWELL_MS` 80 (`:271`); released at `:703` after `STACK_CLOSE_DELAY_MS` 180 (`:287`) | The deck builder's signature interaction: running a pointer down a pile to fan it. | **Yes, and by design.** The open card resolves to `openIndex ?? selectedIndex` (`CardStack.tsx:653–655`), so a card that was *pressed* stays lifted after the pointer has gone. A tap therefore fans one card. What a tap cannot do is fan the pile. |
-| `features/card/PrintingPreview.tsx:182–183` — `onMouseEnter`/`onMouseLeave`, `PREVIEW_DWELL_MS` 250 (`:25`) | One printing's art without swapping to that printing. | `onFocus` arms the same dwell when focus arrives in the row (`:185–187`), which is the keyboard's door. On touch, `onPointerDown: cancel` (`:201`) takes down whatever the tap's compatibility `mouseenter` armed. |
+| ~~`features/card/PrintingPreview.tsx:182–183`~~ — `onMouseEnter`/`onMouseLeave`, `PREVIEW_DWELL_MS` 250 (`:25`). **Deleted 2026-09-03 with the docked card pane.** | One printing's art without swapping to that printing. | `onFocus` armed the same dwell when focus arrived in the row (`:185–187`), which was the keyboard's door. On touch, `onPointerDown: cancel` (`:201`) took down whatever the tap's compatibility `mouseenter` armed. **Nothing replaces it**, and nothing needs to: the printings list is `AllPrintingsDialog`'s wall of art tiles now, so the art is the tile and looking at one costs no hover. |
 | `components/menu/ContextMenu.tsx:730` — `onPointerOver`, `SUBMENU_HOVER_MS` 120 (`:48`) | Opening a submenu by resting on its row. | **Yes, at the site**: the submenu row's own `onClick` toggles it (`components/menu/Submenu.tsx:163`). Opening the parent menu is the gestures table's problem, not this one's. |
 | The other **98** `{...tip(…)}` spreads, across 53 shipped files | Everything this app says only in a hint. Two kinds, unequally lost: **11** pass `whenClipped: true`, where the words are the anchor's own truncated text — complete in the DOM and therefore in the accessibility tree, so only the *paint* is cut off; the rest are descriptions, and the ~57 lines passing `describes: false` are the ones whose words are the element's own name or already-visible text, drawn `aria-hidden`. | Nothing generic. Each of the 98 is its own question, and the two kinds have to be told apart before any of them is counted as lost. |
 | The marks on a card face — `components/CardArt.tsx:402`, `components/FinishMark.tsx:104`, `components/GameChangerMark.tsx:68`, `components/CountTag.tsx:212`, `components/OwnedBadge.tsx:55`, `components/RarityGem.tsx:54`, `features/decks/CardMarks.tsx:73`/`:319`/`:424`/`:458`/`:519`/`:578` | What a glyph means. Each binds `describes: false` because the panel carries the mark's *name* and the mark itself is `aria-hidden`. | Nothing on the card. The same facts are set in type in the card pane and in the three tables — a different surface, not the same one reached twice. |
@@ -4334,7 +4763,7 @@ is prose about something else.
 | **Ctrl/⌘-click** | `readModifiers` (`lib/multiSelect.ts:70–79`) sets `toggle` from `ctrlKey \|\| metaKey`; `applySelect` (`:80` onward) toggles that one key in or out of the set. It reaches a surface through `useCardSelection`'s `pick` (`lib/useCardSelection.ts:79`, `:125`), which returns whether the press was a selection. | **Nothing.** There is no "Select all", no checkbox column and no selection mode anywhere in the tree — `grep -rni "select all\|selectAll\|selectRange"` outside tests and stories returns no lines. `CardGrid`'s arrow walk returns early on **any** modifier (`features/search/CardGrid.tsx:969`), so the wall's keyboard path offers no chord either. |
 | **Shift-click** | The same `readModifiers`, setting `range` from `shiftKey`; `applySelect` replaces the set with the run from the anchor, and Ctrl+Shift adds that run instead. Four cases and no others, Shift outranking Ctrl (`lib/multiSelect.ts:80–110`). | As above. |
 | **Right-click** | `useContextMenu`'s `menu(build)` (`components/menu/useContextMenu.ts:151`), spread as `onContextMenu` at 14 shipped attachments over 9 handler factories, above a document-level suppressor at `components/menu/ContextMenuProvider.tsx:67`. It is how a card, a table row, a folder, a deck tile, a pile heading and the card pane are acted on. | **Two doors, and neither belongs to touch.** `menuKey` answers Shift+F10 and the ContextMenu key (`useContextMenu.ts:153–162`) — a keyboard. `menuClick` opens the same menu from a plain click on a `⋯` trigger (`:182–185`) — and it exists at exactly **two** surfaces, the collection's and the wishlist's folder cards (`features/collection/CollectionPage.tsx:1322` and `features/wishlist/WishlistPage.tsx:862`, drawn at `CollectionFolderCard.tsx:244` and `WishFolderCard.tsx:229`). Every other menu in the app has no plain-click door. |
-| **Resting a pointer** | Four dwell timers, each keyed on a pointer that arrives and does not leave: `TOOLTIP_OPEN_MS` 400 (`components/tooltip/TooltipProvider.tsx:17`), `SUBMENU_HOVER_MS` 120 (`components/menu/ContextMenu.tsx:48`), `PREVIEW_DWELL_MS` 250 (`features/card/PrintingPreview.tsx:25`), `STACK_OPEN_DWELL_MS` 80 (`features/decks/CardStack.tsx:271`). | Per site, in the table above. **The tooltip's own mechanics deserve stating precisely, and they were not measured on hardware for this census.** The binding is `onPointerEnter`, not `onMouseEnter` (`components/tooltip/useTooltip.ts:113`), and a touch tap *does* dispatch `pointerenter` — so the 400ms timer is armed. What happens next has three parts: the provider's document-level `pointerdown` handler calls `hideNow` (`TooltipProvider.tsx:190–195`), which clears the *close* timer and hides what is open but does **not** clear the open timer; `pointerleave` at lift-off calls `leave`, which does clear it (`:155–160`); and the `focus` door is fenced on `anchor.matches(":focus-visible")` (`:141`), which a pointer press makes false. Whether a deliberate press-and-hold past 400ms puts a panel up is therefore a **reading somebody owes on a device**, and not a conclusion this census may draw from source. |
+| **Resting a pointer** | Four dwell timers, each keyed on a pointer that arrives and does not leave: `TOOLTIP_OPEN_MS` 400 (`components/tooltip/TooltipProvider.tsx:17`), `SUBMENU_HOVER_MS` 120 (`components/menu/ContextMenu.tsx:48`), ~~`PREVIEW_DWELL_MS` 250 (`features/card/PrintingPreview.tsx:25`)~~ — **deleted 2026-09-03, so three** — and `STACK_OPEN_DWELL_MS` 80 (`features/decks/CardStack.tsx:271`). | Per site, in the table above. **The tooltip's own mechanics deserve stating precisely, and they were not measured on hardware for this census.** The binding is `onPointerEnter`, not `onMouseEnter` (`components/tooltip/useTooltip.ts:113`), and a touch tap *does* dispatch `pointerenter` — so the 400ms timer is armed. What happens next has three parts: the provider's document-level `pointerdown` handler calls `hideNow` (`TooltipProvider.tsx:190–195`), which clears the *close* timer and hides what is open but does **not** clear the open timer; `pointerleave` at lift-off calls `leave`, which does clear it (`:155–160`); and the `focus` door is fenced on `anchor.matches(":focus-visible")` (`:141`), which a pointer press makes false. Whether a deliberate press-and-hold past 400ms puts a panel up is therefore a **reading somebody owes on a device**, and not a conclusion this census may draw from source. |
 
 ### The zoom is the one with no other door
 
@@ -4355,8 +4784,10 @@ gesture library, nowhere in `src/`.
 
 **So on a phone `cardZoom` is frozen at whatever the last session left.** `ZOOM_STEPS` is
 **sixteen** stops from 0.5 to 2, ten points apart, written out as literals
-(`lib/cardZoom.ts:79–81`), walked independently for **eight** sections (`ZOOM_SECTIONS`, `:125–134`
-— `search`, `tags`, `collection`, `wishlist`, `deckSearch`, `deck`, `deckGallery`, `printings`).
+(`lib/cardZoom.ts:79–81`), walked independently per section (`ZOOM_SECTIONS`, `:129–140` — the
+constant is the census and no total is written here; it was **eight** when this paragraph was
+written and `collectionSearch` and `wishlistSearch` joined on 2026-09-07, which is the drift a
+written-down count buys).
 The value a phone opens on comes from `hydrateCardZoom` (`lib/store.ts:1029–1037`), called once
 from `lib/useCardZoomPersistence.ts:80` with whatever `ipc.cardZoom()` answered: it snaps each
 value to the ladder through `snapZoom`, **drops any key this build does not draw** (`isZoomSection`),
@@ -4658,3 +5089,722 @@ tab through `http://localhost:9333/json/close/<id>` before reloading, and take t
 **And `vite preview` needs `--host`.** Without it the PC gets 200 and the phone gets `000` through
 `adb reverse` — the server binds too narrowly for the tunnel to reach, and the failure looks like
 a broken tunnel rather than a bound socket.
+
+---
+
+## Settings became a rail and a pane, and the two flex numbers are lopsided on purpose
+
+**Written 2026-09-03 as arithmetic off the class strings, and driven the same day.** The section
+was drafted before any of it had been in front of a window, and the subsection at its foot said so
+in those words. It has since been driven over CDP under `tauri dev` (debug build, Windows,
+2026-09-03) and **every calculated figure came back exact** — including the tight one. The figures
+below are now measurements; where a number is still only arithmetic it says so at its own site,
+and the foot of this section records what the pass could not settle.
+
+### The shape: a rail of entries over a page of panels
+
+The page was one scroll of twelve panels, ordered by what a press costs. That ordering is a real
+rule and is still the rule *inside* a group, but an ordering only helps a reader who already knows
+what they are scrolling towards. It is now a left rail of **seven** entries and a pane drawing only
+the selected entry's panels, with a search box above the rail that filters panels across every
+group. (Twelve was the panel count on 2026-09-03 and is not one now; `Object.keys(PANELS)` is the
+answer, and this page deliberately stops writing that number down — `nav.ts`' own module comment
+makes the same refusal for the same reason. The rail's own count is written in the build, on
+`GroupId`, so it is repeated here and nowhere else.)
+
+**`src/features/settings/nav.ts` is the whole of the decision and neither component that draws it
+decides anything.** `SettingsNav` draws the rail, `SettingsPage` draws the pane, and both of the
+things worth getting wrong here — which panels a group holds, and which panels a query matches —
+are decidable with no DOM in front of them.
+
+| Rail entry | Panels under it, in drawing order |
+| --- | --- |
+| Updates | `updates` |
+| Card data | `prices`, `combos` |
+| Sync — badge: the `Needs review` queue | `sync`, `review` |
+| Tags | `hidden-tags` |
+| Appearance | `theory-marks`, `labels` |
+| Storage and data | `data-folder`, `backup`, `cache`, `web-storage` (web build only), `danger` |
+| Errors — badge: the error count | `errors` |
+
+**Where two panels answer one question they share an entry**, and where a panel is the only answer
+to its own question it gets one to itself. `Prices` and `Combos` are both optional bulk feeds of
+card facts; `Needs review` is what sync asks *of* a reader; `Theory marks` and `Labels` are both
+"what a mark on a card looks like", which is why **Appearance** is one entry and not two (added
+2026-09-07). A rail as long as the page it indexes would be a second scroll rather than a way
+through the first, and that is the whole argument — a new entry has to earn itself against it.
+
+**Labels sits under Appearance and emphatically not under Tags.** A *tag* in this app is one of
+Scryfall's two tagger datasets; a *label* is the deckbuilder's coloured per-card mark. The two
+words must never trade places, and a rail is the one surface where a reader would take a shared
+heading as a claim that they are the same thing.
+
+**`Clear data` has no entry of its own and sits at the foot of `Storage and data`.** The three
+clears empty the part of the app the data folder holds, so that is the question they answer — and
+`DangerZonePanel`'s distance from everything else is kept *inside* the pane, where it has always
+been, rather than turned into a rail row that would put "delete my collection" one press from
+every visit to Settings.
+
+**The panel ids are the panels' own `SettingsSection` stems, character for character, and that
+claim now has a fence.** The stem is a `string` prop, so a `PanelId` no heading answers to
+type-checks perfectly and costs the reader a rail entry that scrolls to nothing.
+`src/features/settings/nav.test.ts` sweeps `/src/**/*.{ts,tsx}` through Vite's `?raw` — the
+`layers.test.ts` trick, for its reason: no `@types/node`, so no `node:fs` — and asserts the set of
+drawn stems against `Object.keys(PANELS)`. Two things the sweep has to get right and a naive one
+would not: it **strips comments first**, because this repo keeps its reasoning in prose and the
+prose quotes markup freely, so a doc comment containing `<SettingsSection id="…">` would otherwise
+read as a panel that nothing draws (proved by mutation — with the stripper
+disarmed, a tag quoted in one of `nav.ts`'s own comments turns the sweep red); and it **reports a tag carrying
+no literal `id` by name** rather than skipping it, so a dynamic id makes the sweep fail loudly
+instead of quietly under-reporting. `BackupPanel` draws `id="backup"` at two sites — the folder
+variant and the archive variant — and those are one panel, which is why the sweep collects a set.
+
+### The row, and why 999 against 1
+
+The page root is `mx-auto flex max-w-4xl flex-wrap items-start gap-8 py-2`. The rail is
+`flex-[1_1_232px]` and the pane `flex-[999_1_480px]`, so with the 32px gap **the row holds both
+only while the content box is at least 744px** (232 + 32 + 480) and wraps below that. There is no
+`sm:`/`md:`/`lg:` anywhere in it: `src/lib/viewports.ts` forbids a viewport branch outside
+`AppShell`, and none is needed, because plain flex already puts the rail above the pane when there
+is no room beside it.
+
+**The grow ratio is what makes the wrap legible to the rail itself.** Free space is
+`C − 744`, split by grow factor, so at any content box `C`:
+
+| `C` | Where it comes from | Rail | Pane |
+| --- | --- | --- | --- |
+| 744 | The wrap point exactly | 232.0 | 480.0 |
+| 761 | 1024px window, sidebar expanded, `main` scrolling | 232.0 | 497.0 |
+| 776 | The same, with no scrollbar | 232.0 | 512.0 |
+| 896 | `max-w-4xl`'s ceiling | 232.2 | 631.8 |
+| 1024 | The imported design's 64rem, for comparison | 232.3 | 759.7 |
+
+The rail sits at its 232px basis at every width the page can reach, to within a third of a pixel.
+That is the point: **the rail decides whether it is beside the pane or wrapped above it by running
+a container query off its own inline size**, and it can only do that if "beside" is one width and
+"wrapped" — where the rail is the full width of the page — is always a much larger one. The
+threshold is `@min-[260px]/rail`, and 260 rather than 233 because a threshold sitting a pixel off a
+computed value flips the moment a scrollbar appears; there is nothing between 232 and the narrowest
+page this app supports for it to catch by mistake.
+
+**The imported design file's 1-against-3 would have broken that, and not only at the extremes.**
+With a 3:1 split the rail is `232 + (C − 744)/4`, which reaches the 260px threshold at
+**`C` = 856** — a content box the page has at roughly a **1119px** window with the sidebar
+expanded, and at the **1024px** desktop floor itself with the sidebar collapsed (`w-17`, 68px,
+leaves 901 and the `max-w-4xl` cap takes it to 896, where the rail would be **270px**). So on any
+ordinary window the rail would have drawn as the *wrapped* chip strip while standing beside the
+pane: not a state the query answers wrongly at one width, but a state it cannot tell from the
+other one at all. At the design's own 64rem the rail would be **302px**.
+
+**This is the first thing a reviewer will want to change back**, which is why the arithmetic is
+written out here rather than left as a magic number.
+
+### Why the container query is on the `<nav>` and never on the settings root
+
+`container-type: inline-size` — what every `@container` in this app compiles to — applies **layout
+containment**, and a layout-contained box is the containing block for every `position: fixed`
+descendant under it, exactly as a `transform` is. This document already records that trap from the
+other end: `FilterBar.tsx:1286` explains why that component's root is a **fragment**, so the
+phone's filter sheet is the container box's sibling rather than its child.
+
+Settings meets it from the inside. **Its panels mount their dialogs inline, and there is no
+`createPortal` anywhere in `src/`** — verified 2026-09-03: `grep -rn createPortal src/` matches
+nothing, and neither does `from "react-dom"`. The chain is `ConfirmDialog` → `Dialog` →
+**`Dialog.tsx:333`**, which is a bare `fixed inset-0` scrim that corrects for nothing. No settings
+file writes `fixed inset-0` itself, so grepping for that class in `src/features/settings/` finds
+zero and is the wrong grep; **`ConfirmDialog` is the census**, and today it names four sites in
+three panels — `CachePanel.tsx:54`, `DangerZonePanel.tsx:169`, `SyncPanel.tsx:1527` and
+`SyncPanel.tsx:1552`. `SettingsNav.tsx`'s own comment names two of the four and the plan this
+change came from named three, which is the usual reason not to write a list down: **the grep is
+the fact, and a fifth panel that grows a confirm step joins it without anybody editing a
+sentence.**
+
+So a container box wrapped around the settings root would size every one of those scrims to the
+**page box** instead of the window — a scrim covering the panel it came out of, and a confirm
+dialog clamped to a column. The container therefore goes on the `<nav>`, which no panel is a
+descendant of. **jsdom applies no stylesheet and computes no containment**, so nothing in the suite
+can go red for the failure; what a test can pin is the structure — the container is that element,
+and the panels are outside it.
+
+The container is **named** (`@container/rail`) for `FilterBar`'s reason: `@container` variants bind
+to the nearest ancestor container, so an unnamed one here would be what any future `@container`
+inside a panel resolved against.
+
+### Why not `useNarrowWindow()`
+
+`src/lib/viewports.ts` demands a reason at the site of any viewport branch, and `useNarrowWindow`'s
+own doc comment states the test to apply: **name the box the question is about, and if it is not
+the window, this is not the mechanism.** `AppShell` passes that test because the shell *is* the
+window. The rail does not — its question is whether the pane is beside it, which is a fact about
+the rail's own box and about the page's flex bases, and a window-width branch would be a different
+question that happens to agree today and stops agreeing the moment those bases move.
+
+There is a second, blunter reason: `useNarrowWindow` is `(max-width: 390px)`, built from `PHONE_PX`.
+It is a phone question and could not have answered this one at any width.
+
+### `max-w-4xl`, and not the imported design's 64rem
+
+The pane's measure is what decided it. At **64rem** the pane draws **760px** and these panels'
+prose runs to about **106 characters** a line; at **`max-w-4xl`** (56rem, 896px) it draws about
+**632px**, within **40px** of the `max-w-2xl` (42rem, 672px) column every one of these panels was
+written for and drawn in until this change. The rail took width from the row, so the pane must not
+also grow into it. The character figure is a typographic estimate from average character width at
+the panels' body size — like everything else in this section, computed rather than measured.
+
+### Driven in the shipped window, 2026-09-03 (debug build, `tauri dev`, Windows)
+
+**The desktop floor clears the wrap point, and by half as much as the obvious sum suggests.** This
+was the section's flagged risk and it is now read off the window. At a 1024px window with the
+sidebar expanded (`w-52`, 208px): `main` is **816px**, its scrollbar **15px**, `clientWidth`
+**801px**, and the content box **761px** after `main`'s `p-5`. The wrap point is 744, so the
+clearance is **17px** and `wrapped` is false. The naive 776px sum — the one that ignores the
+scrollbar — would have promised 32px. **17px is the true margin on the narrowest window this app
+allows**, so anything that widens the sidebar, `main`'s padding or the rail's basis wraps the rail
+on a desktop at the floor. It is the first number to re-measure after any of those.
+
+| Measured | At | Result |
+| --- | --- | --- |
+| Rail width | 1920px window, `max-w-4xl` reached | **232.16px** (calculated 232.2) |
+| Rail width | 1024px floor, content box 761px | **232.02px** (calculated 232.0) |
+| Pane width | 1920px window | **632px** (calculated 631.8) |
+| Wrap | 1024px floor | **not wrapped**, 17px to spare |
+| Strip | 390×844 viewport | rail **335px**, `flex-direction: row`, `overflow-x: auto` |
+| Strip scrolls | the same | `scrollWidth` **492** against `clientWidth` **335** |
+
+**The container-query placement is confirmed by the failure it was chosen to avoid.** With the
+Storage group open, `Clear cache`'s `ConfirmDialog` — mounted *inside* `main`, inside the settings
+tree, with no portal — measured its scrim at **1280×800 at (0, 0)** against a 1280×800 window. It
+covers the window exactly. Had the container gone on the settings root instead, layout containment
+would have clamped that scrim to the 896px page box. This is the one claim in the section that
+could only ever have been settled live, and it is the reason the `<nav>` carries the query.
+
+**The strip costs 167px above the pane on a phone, which is more than the sketch promised.** At
+390×844 the rail is **127px** tall — a 34px search box, a 53px strip, and the `Import.` footnote —
+and `gap-8` adds 32 before the pane, so the first panel starts **167px** below the top of the page.
+The wrapped full-width column this replaced would have been roughly **280px**. The strip is the
+right call and it is not the ~90px a sketch suggested; the footnote and the gap are what the sketch
+left out.
+
+**Also driven, and correct — but this pass is 2026-09-03's, and the rail had six entries that
+day.** **Appearance and its two panels landed on 2026-09-07 and have not been driven in the window
+at all**, so nothing below was measured about them. What the pass confirmed: the six entries and
+their panel sets, `web-storage` absent on desktop, `aria-current` on exactly one entry at rest and on **none** while the box has words in it,
+the query cleared and `main.scrollTop` back to 0 on a group press, `Escape` clearing the field, a
+cross-group search (`dropbox` typed while standing on Updates draws `backup-heading` and nothing
+else — a word that appears nowhere in that panel's own text, so it is the keyword registry
+answering), the `Nothing in Settings matches that.` line on a query that matches none, and both
+badges with the written accessible name (`Sync (1)`, `Errors (2)`, forced through the live query
+cache since this database has neither).
+
+**Still not driven:** the sticky rail's behaviour under a long pane's scroll was not stepped
+frame by frame, and nothing here was read on Android or in the browser build.
+
+## The folder wall names its own folders (2026-09-03) — measured over the built CSS, not in the window
+
+The Collection and Wishlist walls were rearranged from a Claude Design mock, and **the geometry it
+promised was measured the same day**: 2026-09-03, in **headless Edge** (`msedge --headless=new`)
+over the **built stylesheet** — `dist/assets/*.css` from an `npx vite build` — on a `file://` page
+reproducing the wall's real markup. That is this repo's lock-free method, and it is what was
+available: the app lock was held by another worktree for the whole session.
+
+**So say the honest half first. This is not the shipped WebView2 window.** Nobody has driven the
+change in the real app. What headless Edge over the real CSS *can* settle is what the boxes do,
+and it settled it; what it cannot touch is anything with a reader's hand in it. A live pass still
+owes this section three things, and only three:
+
+- **Where the caret actually is** after each of the four ways out of the field — Escape, the ✕, a
+  committed write, and an outside click that lands on something else. `useFolderFieldReturn`'s
+  `document.body` test is reasoned, not observed.
+- **The blur discard against a real pointer**, rather than against a synthesised `relatedTarget`.
+- **A name long enough to need the truncation**, and how the field behaves under one.
+
+### The wall does not reflow, and that is the central claim
+
+The scroller was set at a **1032px content column** with `p-1.5` and the wall's own
+`grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-2` — five columns of ~197.6px — with one row
+holding all four states side by side: the resting `New folder` tile, that tile naming, a resting
+folder card, and a folder card renaming.
+
+| Read back | Figure |
+| --- | --- |
+| Height, all four tiles | **62px** |
+| `top`, all four | **30** |
+| Width, all four | **197.59** (the resting folder card reads 197.61 — sub-pixel rounding of its own content) |
+| The single-row scroller | **74px** — 62 plus `p-1.5` either side |
+
+A tile becoming a field, and a card becoming a field, each keep the track and the row height
+**exactly**. The 74px agrees with the rule `WishlistPage.tsx` already states about the band around
+the wall — `max-h-44` is a **ceiling and not a height**, which is what lets a wall holding one row
+be one row tall.
+
+### The corner pair lands where the `⋯` lands
+
+The folder card's `⋯` and both `✓ / ✕` pairs sit at **y = 34** — 4px down from the tile's own top,
+which is `right-1 top-1` resolving against the `<li>` and not against the form. The pair is
+**58px** wide (28 + a 2px gap + 28) against the `⋯`'s 28.
+
+**And a name stops short of the tick rather than running under it**, on both shapes and by the
+same margin: on the naming tile the input's right edge reads **366.19** against the tick's left
+edge at **371.19**, and on the renaming card **777.39** against **782.39** — **5px** clear each
+time. That is what `pr-[4.125rem]` buys: 66px = `right-1`'s 4 + 28 + 2 + 28 + 4. It is the figure
+that would go wrong first if anyone rewrote that literal as arithmetic, which Tailwind would
+answer by emitting no rule at all.
+
+### The vocabulary rule holds in computed style, not only in source
+
+`border-style` computes **`solid`** on the resting `New folder` tile *and* on the naming tile, and
+**`dashed`** on the resting folder card *and* on the renaming card. The dashed-means-provisional
+rule is therefore a fact about the built CSS rather than about the classes somebody wrote.
+
+Two utilities were confirmed to **emit**, by grepping the built CSS: `caret-accent` resolves to
+the gold `oklch(0.75 0.12 85)`, and `pr-[4.125rem]` emits `padding-right:4.125rem`. Worth
+recording only because a Tailwind utility that emits nothing fails completely silently — which is
+this page's standing reason for checking `dist/` rather than source.
+
+### What it replaced, and why the old arrangement was wrong
+
+Both pages used to answer `New folder` and `⋯ → Rename…` in a **bordered strip under the
+breadcrumb**: a box with its own edge and its own background, an input, `Create folder` and
+`Cancel` spelled out in words, and — on a create — a line reading *in Collection* (or
+*in Wishlist*) to say which level the strip was about.
+
+Every one of those pieces re-established a context the reader could already see. The level is the
+wall they are looking at; the thing being named is going to appear in it; the thing being renamed
+is a tile with its name printed on it. So the strip spent a second panel's worth of screen saying
+what the wall says by being on screen — and it said it **somewhere else**, one navigation band
+away from the tile the press came from. It could also outlive its own subject: a create panel
+opened at one level survived a walk into another, and both pages already carried a
+`flatten ? null : panel` clause precisely because the same staleness had been found once before.
+
+### The tile says it by being the tile
+
+`components/FolderNameField.tsx` is the one field, drawn **as** the tile. The name is typed on the
+line the folder's name will occupy; `⋯`'s corner takes ✓ and ✕, which is the one place on a card a
+reader has been taught to find its controls; nothing above the wall opens and nothing in the wall
+moves. Neither shape draws a heading, a hint or a word on its buttons — an input on a folder tile
+with a tick beside it is not a sentence that needs writing out — and the *in …* line is gone
+because the wall the field is drawn in **is** that sentence.
+
+**Two shapes, and the border is the whole of what tells them apart.** The app's
+dashed-means-provisional rule decides which: `create` stays **solid**, because the tile is still a
+control and holds no folder yet; `rename` stays **dashed**, because the thing being renamed is
+already a container. Both wear `border-accent` while open, and that colour is the whole of what
+says *this tile is live*. A rename also keeps its **figures line** under the field, which is why a
+rename is not simply the create tile with a different label: a reader renaming *Trade binder* is
+looking at the drawer holding 240 cards, and a box that dropped the count would make them check
+they had the right one.
+
+### The footprint is inherited, and the row above is what re-proved it
+
+`FOLDER_CARD_HEIGHT` — `min-h-[calc(3.75rem+2px)]` — **moved out of `NewFolderCard.tsx` into
+`FolderNameField.tsx`**, because the naming tile needs it too: a tile that shrank the moment it
+became a field would reflow the wall on every press, which is the one thing the whole arrangement
+promises not to do. Its derivation is the older measurement and is unchanged — a folder card's
+button computes **62px** in headless Chromium over Tailwind's compiled utilities at the wall's
+real track, and `calc(3.75rem + 2px)` rather than a flat `3.875rem` because the two 1px borders
+are the one term in that sum that does not scale. The four-state row above is that number read
+back a second time, in a second browser, with the field open — which is the reading the move
+needed. The constant travels **to** the field rather than from it because the tile renders the
+field, so the other direction would be a cycle.
+
+Two geometry decisions ride on it and the same pass settled both. The ✓ / ✕ pair is absolute
+against the **`<li>`** rather than against the form, since a `<form>` with no positioning
+establishes no containing block — and the pair lands at the same `y = 34` on a naming tile as on a
+renaming card, whose boxes are different heights, which is the thing that would have failed had it
+resolved against the form. And `h-full` is on the **create** shape alone: the `<li>` is the grid
+item and stretches to the tallest card in its row, so a naming tile sized only by its own floor
+would shrink beside a card with a long wrapped name, while a rename must *not* stretch, because
+the folder card it replaces is content-height. The row's four equal heights are that arrangement
+holding at one row's worth of content; a **wrapped** name in the row is one of the things the
+pass did not put in front of it.
+
+### What it costs
+
+**A layer whose opener does not survive it**, which is the focus-return entry earlier on this page
+and the one genuinely new mechanism here.
+
+**A level clause on both pages' `openPanel`.** `flatten ? null : panel` became
+`flatten || (panel?.kind === "newFolder" && panel.parentId !== folderId) ? null : panel`. Without
+it, walking into another folder with the field open leaves a layer with no field on screen at all
+— invisible, and still swallowing the Escape that should have walked the reader back out. Where
+the strip was merely *confusing* about which level it meant, nothing is worse.
+
+**A drag source that has to stop being one while it is a field.** The renaming card's `<li>` is a
+folder drag source, so the field's `<form>` carries `data-no-drag` on its root — `NOT_A_DRAG` is
+matched with `closest()`, so one mark covers the input, the tick and the cross. Without it,
+pressing into the name and moving five pixels files the folder somewhere instead of placing the
+caret, and the press that was meant is never delivered. The card's **drop** targets are left
+registered on purpose: a copy dropped onto a folder whose name is being edited files perfectly
+well, and tearing the targets down would make the wall answer a drag differently depending on a
+state the dragger cannot see.
+
+**And the strip does not go away.** It survives for `Move to folder…` and `Delete…`, which is the
+right residue rather than a leftover: the answer to "into which folder" is a list of the *other*
+folders, and the answer to "delete this?" is a sentence about what happens to the cards inside.
+Neither is a name typed on a line, neither has a tile of its own, and neither fits on a 62px card.
+
+## One quantity control on a card face, on all three surfaces (2026-09-03, issue #348)
+
+The report was that the wishlist's stepper "does not match the style or location of the
+corresponding control in the deck builder", and that the collection had none at all. **The second
+half had been fixed the day before the issue was filed** — the walls grew steppers on 2026-09-01
+(issue #284) and shipped in **v0.19.0**, so the reporter was on v0.18.0 or earlier. The first half
+was still true on `main`, and this is what it was.
+
+### What actually differed
+
+Driven in Storybook (2026-09-03, 1400×900, dark) across `decks-editor--four-views`,
+`wishlist-page--copies-from-a-tile` and `collection-page--stepping-from-the-wall`. All four
+surfaces already drew the same `QuantityStepper`; what differed was the arrangement.
+
+| Surface | Size | Orientation | Where |
+| --- | --- | --- | --- |
+| Deck — Stacks (the default view) | `card`, 36px | vertical, `+ / n / −` | the card's right margin, `top-9` |
+| Deck — Grid | `xs`, 20px | horizontal | a centred bar directly above the chin |
+| Wishlist wall | `xs`, 20px | horizontal | right-aligned in the bottom strip, beside the pencil |
+| Collection wall | `xs`, 20px | horizontal | right-aligned in the bottom strip |
+| Wishlist / collection **tables** | `sm`, 28px | horizontal | the Copies cell |
+| Deck table | `xs`, 20px | horizontal | the Qty cell |
+
+**One thing this survey corrected in a claim made mid-task**: the walls were described as drawing
+their stepper *always*, against the deck grid's hover reveal. They do not — `CardGrid`'s action
+strip has carried `REVEAL_ON_HOVER` since it was built, so every wall stepper was already revealed
+on hover and on `:focus-within`. Measured on an unhovered tile: `opacity` **0**, and **1** on the
+focused one. The reveal was never a difference and nothing about it changed.
+
+### What was done
+
+The two walls took the deck stack's arrangement: `size="card"`, `orientation="vertical"`, over art,
+standing in the tile's right margin. `CardGrid` grew a **`column`** slot for it — its own slot
+rather than a second thing hung in `action`, because the strip is a `justify-end` *row* at the foot
+(the wishlist still has its pencil in it) and a column up the right-hand side is different geometry
+with a different collision list. Both tables moved `sm` → `xs`, which is the app's size for a
+stepper in a dense row and what the deck's own table and text views draw; both tables are 44px rows
+(`TABLE_ROW_HEIGHT`) and the stepper is 80px in a 112px cell, against the deck table's 80 in 104.
+
+### The geometry, measured
+
+Read off the live boxes rather than computed:
+
+- **The column rests at 30.6 × 98.6px** on a 170px tile whose art box is 238px (5:7) — three 36px
+  boxes and two 4px gutters, times `CONTROL_SHRINK`'s 0.85. That is **18 % of the tile's width and
+  41.4 % of its height**, starting **24px** down with a **4px** right gutter and **115.4px** of
+  clearance above the chin. On the deck's own 210×293 card the same column is 15 % and 34 %.
+- **Both percentages are constants across the whole ladder, not readings at 1×.** At 0.5× / 1× / 2×
+  the art box is 85×119 / 170×238 / 340×476 and the column 15.3×49.3 / 30.6×98.6 / 61.2×197.2 —
+  18 % and 41.4 % at every stop, because the tile, the art and the column are each linear in the
+  same zoom. At `PHONE_TILE_WIDTH`'s 141 it is 22 % of the width, which is the first figure to check
+  if the column is ever made bigger.
+- **It clears the finish chip at every stop, and that is why the offset is on `--mark-scale` rather
+  than flat.** The chip is 8 / 16 / 32px tall at those three stops and the column starts at
+  12 / 24 / 48, so the gap is **1 / 3 / 7px** — narrowest at the bottom of the ladder and incapable
+  of inverting. The deck stack's own offset is a flat `top-9`, which is right *there* because that
+  card's title bar does not scale either.
+- **It never reaches the pencil.** 45.5 / 91 / 182px of clear air between the column's foot and the
+  wishlist's `EditWishButton` at the three stops.
+
+### `pointer-events` follow the reveal, and here that is load-bearing
+
+The action strip's arrangement is `pointer-events-none` on the box with `[&>*]:pointer-events-auto`
+on what it holds — so the *control* stays pressable while invisible, which that file's own comment
+records as a known cost and an open question on a touch screen. That trade is affordable across a
+20px strip and is **not** across this column: at ~99px tall on a 238px face it would put an
+invisible stepper under the right-hand third of every card, and a finger has no hover to reveal it
+with. So the column gates the whole box instead —
+`pointer-events-none group-hover:pointer-events-auto group-focus-within:pointer-events-auto`. A
+mouse loses nothing, because the pointer that reaches the column has already revealed it by being on
+the tile; a touch screen gets back the press that opens the card, which is the only gesture it had
+there. `pointer-events` is inherited, so gating the box gates the column inside it and no `[&>*]`
+arm is needed — its **absence** is asserted in `CardGrid.test.tsx`, so a later tidy-up cannot
+restore the strip's recipe by resemblance.
+
+**jsdom does no hit testing and applies no `:hover`**, so nothing in the suite can go red for any of
+this; the classes are pinned and the numbers come from a browser.
+
+### What was left alone, and why
+
+- **The deck's Grid view still draws `tone="panel"` over art**, so its two buttons are a 1px outline
+  with the illustration showing through — the exact failure `BUTTON_OVER_ART` exists for. It is a
+  real defect and it is in the deck builder, which is the *reference* this issue asked the walls to
+  be measured against, so fixing it belongs to its own change rather than to one about the walls.
+- **Issue #348's other three asks** — add/remove cards on the collection, changing a printing, and
+  locking a folder that a deck's live list is linked to — are separate features. Stepping to zero
+  already deletes a collection entry, so "remove" exists there without a named route on the wall.
+
+
+## The focus outline that appeared on any keystroke (2026-09-03)
+
+Reported as: *"whenever we click a button, the app seems to highlight / focus random elements on
+the page — this is almost no matter the button (wasd, space, other letters etc.)"*, with five
+screenshots — the card detail modal ringed in gold, the printings modal, the sidebar's `Search`
+row, and the deck editor outlined right down past the fold.
+
+### `:focus-visible` is modality-based, not navigation-based
+
+The name promises "focused, and the reader got here by keyboard". It does not mean that. Chromium
+arms the pseudo-class on **any** `keydown` and from that moment whatever *already* holds focus
+matches — the focus never has to move. Measured in Chromium 2026-09-03 against a two-element page,
+one `<button>` and one `tabIndex={-1}` `<div>`, reading `activeElement.matches(":focus-visible")`:
+
+| step | action | matches |
+| --- | --- | --- |
+| A | mouse click on the button | `false` |
+| B | programmatic `.focus()` on the `tabIndex={-1}` div | `false` |
+| C | **press `w`** — focus never moved | **`true`** |
+| D | mouse click again | `false` |
+
+Step C is the entire bug, and it explains every screenshot: a reader clicks a card, the dialog
+opens and focuses its own `tabIndex={-1}` panel (step B), then presses any key at all (step C).
+Nothing in `src/` was at fault — the app had **no** `focus:` variants anywhere, only
+`focus-visible:`, which is the correct spelling and was already the fix for the mouse case.
+
+### The rule that replaced it
+
+**Focus is keyboard-driven when it *moved* and the reader's most recent input was a key.**
+`src/lib/keyboardModality.ts` decides that at one moment — `focusin` — rather than continuously
+off a flag any keystroke can flip, and publishes `data-kbd` on `<html>`.
+
+Two things fall out of it that a key allowlist does not give:
+
+- **No list to maintain.** `Shift+F10` onto a context menu's first row and `F1` onto the key map's
+  button both move focus, so both are covered without an entry; so is any shortcut added later.
+  The first key forgotten from an allowlist would be a reader arrow-keying a menu with no visible
+  caret — a WCAG 2.4.7 failure, which is the direction worth engineering against.
+- **No timer.** An earlier draft opened a "steering window" on `keydown` and closed it a frame
+  later so a focus React committed after its passive effects still counted. That is a number that
+  has to be right; the modality simply persisting until the reader's next input is not.
+
+### One line gates every outline in the app
+
+`src/index.css` redefines Tailwind's own `focus-visible` variant rather than introducing a new
+name at the call sites. Confirmed against the built stylesheet — **every** `focus-visible:` utility
+the app emits is rewritten, including the composed `group-focus-visible:` form nobody edited. Grep
+`dist/assets/*.css` for `data-kbd` for the current set; a count here would be a fact about one tree:
+
+```
+.focus-visible\:outline-2:is(html[data-kbd] *):focus-visible
+.focus-visible\:ring-accent:is(html[data-kbd] *):focus-visible
+.group-focus-visible\:opacity-100:is(:where(.group):is(html[data-kbd] *):focus-visible *)
+```
+
+Two things the variant cannot reach, both handled beside it:
+
+- **The user agent's own `:focus-visible { outline: auto }`** runs off the browser heuristic and no
+  Tailwind rewrite touches it. Without the `html:not([data-kbd])` base rule the fix would have read
+  as a *recolour* — the gold outline swapped for the platform's blue one, on the same keystroke.
+- **`PriceRange`'s thumb**, which spells the pseudo-class inside an arbitrary variant — a string
+  the component wrote, not the variant Tailwind owns. It gets the named `focus-thumb` variant, and
+  `keyboardModality.test.ts` sweeps `src/` so a second component cannot reintroduce the shape.
+
+**A `@custom-variant` this Tailwind mis-parses emits nothing, silently, with `tsc` and the whole
+suite green** — the standing warning at the head of `index.css`, and it applies double to an
+*override*, where the built-in simply stays and the bug returns looking exactly like the fix. So
+the suite compiles the declarations out of `index.css` against real Tailwind through its `compile`
+API and reads the selectors back. Both halves were mutation-tested: writing the attribute on
+`keydown` reds *"stays quiet when a key moves no focus"*, and dropping `[data-kbd]` from the
+variant reds *"makes every focus-visible: utility require the keyboard attribute"*.
+
+### Eleven landing pads lost their outline outright
+
+The second half, and it is a different question from *when*: some elements should carry no focus
+outline in **any** modality. A `tabIndex={-1}` container that exists only so focus can be *put*
+somewhere — instead of dropped on `<body>`, where the next Tab restarts the tab order — is a
+landing pad, not a control. A reader can neither Tab nor arrow onto one, so the ring states
+nothing, and what it draws is the whole modal or the whole editor ringed in gold.
+
+`Dialog`'s panel, `CardDetailPane`, the deck editor's root, `AnchoredPopup`, `DeckBracket`,
+`ValidationPanel`, `MoveToFolder`, `PickCopies`, and the delete confirmations on `DeckTile`,
+`DecksPage` and `CollectionPage`.
+
+**Ten of them by the end of the same day**, and the heading is left at eleven because that is what
+was measured: `CardDetailPane` was deleted for the card modal hours later. Nothing was undone by
+that — the modal is drawn by `Dialog`, whose panel is the first name above, so the pane's entry
+was absorbed rather than lost.
+
+**The line is drawn at "can the caret move *from* here", not at `tabIndex`.** A deck pile's section
+(`deckGroupProps`) and the printings dialog's rows are `tabIndex={-1}` too and keep their marks,
+because the caret landing on one is a fact the *next* keypress depends on. Menu rows, table rows,
+cards in a wall and grid tiles are all roving targets and all keep theirs.
+
+### Driven in a browser, against the built stylesheet
+
+The app lock was held by another worktree, so this was verified lock-free: a `file://` page over
+the real `dist/assets/*.css` and the real module through `esbuild`, driven with real mouse and key
+events. `getComputedStyle(el).outlineStyle` on four elements after each step — a real control, a
+roving target, the shipped panel, and a copy of the panel still carrying the old class string:
+
+| step | action | `data-kbd` | control | roving | panel | panel *(old class)* |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | mouse click on the control | `false` | — | — | — | — |
+| 2 | **press `w`** (the report) | `false` | — | — | — | — |
+| 3 | click a card → dialog focuses its panel | `false` | — | — | — | — |
+| 4 | **press space** inside that modal | `false` | — | — | — | — |
+| 5 | press `Tab` | `true` | **ring** | — | — | — |
+| 6 | arrow onto a card | `true` | — | **ring** | — | — |
+| 7 | click the control the caret was already on | `false` | — | — | — | — |
+
+Step 4 is the reported flow and paints nothing. The pair worth reading twice is the panel columns
+under a keyboard-driven caret: identical conditions, ring on the old class string and nothing on
+the shipped one — which is the eleven-site half doing work the modality gate alone does not.
+
+### What was deliberately left alone
+
+`TooltipProvider.focus()` guards on `anchor.matches(":focus-visible")` in JS and still asks the
+browser rather than the new attribute. It was checked rather than assumed: both answers key off
+"was the reader's last input a key", and a `pointerdown` resets both, so they agree in every
+reachable case — the divergence is only *when* the answer is applied, and that guard runs on a
+`focus` event, which is the one moment they cannot differ. Rewriting it would have destabilised a
+well-tested subsystem for no behaviour change.
+
+## The deck gallery gained a colour bar and a filter row (2026-09-07, issue #387)
+
+The wall said four things about a deck — its art, its name, what format it is, how big it is —
+and one thing about its illustrator. The two facts a reader actually browses a wall of decks by,
+**what colours it is** and **what bracket it is**, were reachable only by opening it. Both are on
+the tile now, the credit line came off it in the same pass (the art-crop bullet above carries the
+policy reading that made that legitimate), and the wall gained a way to be narrowed and ordered.
+
+`docs/superpowers/plans/2026-09-07-deck-gallery-overview.md` is the design.
+[decks-storage.md](decks-storage.md) has the two reads behind the bar and the bracket;
+[commander-brackets.md](commander-brackets.md) has what the gallery's estimate can and cannot
+see. This section is the drawing.
+
+### The bar: five pixels, six tokens, and two silences
+
+`DeckColorBar` sits **inside the tile's `<button>`**, between the crop and the name, which is the
+order the tile is drawn in and the order an eye reads it — art, colours, name, caption. Being
+inside the button is also what puts its accessible name into the button's own, in that same
+position.
+
+- **Height 5px at 100%, `margin-top` 4px, both written as
+  `calc(<rem> * var(--mark-scale, 1))`** — the arrangement the tile's other four sizes already
+  use, and `cardZoom.ts`'s reason for it: the variable is set once on the tile's root and every
+  mark inside inherits it, so nothing is threaded down. 5px is between Tailwind's `h-1` and
+  `h-1.5`, which is why it is spelled as a number rather than as a utility: **4px is lost against
+  the rounded edge of the crop above it** and **6px starts to read as a band competing with the
+  deck's name** rather than as a rule belonging to the picture. The 4px above the bar is half the
+  8px below it for the same reason — the bar is a fact about the cards, drawn as part of the
+  picture, so it hugs the art and leaves the name its own air.
+- **The fills are `--color-pie-w/u/b/r/g/c` and nothing else.** These are the same deeps
+  `DeckStats`' identity pips draw with (`PIP_COLOR` plus its `COLORLESS`), keyed over all six of
+  `MANA_KEYS` rather than the five of the mana *line*. **A colour in this app is a `--color-*`
+  custom property and nothing invents one**, so the bar and the same deck's identity pie are two
+  drawings of one fact and could not come apart without somebody editing `index.css`. The table
+  is a `Record` with `var(…)` spelled out per key, **never a class built from the key**: Tailwind
+  scans source text for whole class names, so an interpolated `bg-pie-${key}` emits no rule at
+  all and the bar would draw six transparent segments with nothing going red.
+- **Segments are in `MANA_KEYS` order — WUBRG then colourless — and sized as a percentage of the
+  deck's total pips**, so the bar is correct at every width the zoom ladder produces without
+  anything measuring a box. `overflow-hidden` and `rounded-full` on the parent are what make the
+  pill's ends belong to the *bar* rather than to the first and last colour.
+- **A colour with no pips draws no element, not a zero-width one.** The two are the same pixels
+  and they are not the same DOM: a zero-width `<span>` is something a test can find, a
+  `querySelectorAll` counts and a later `:first-child` rule can style, standing for a colour that
+  is not in the deck.
+- **`null` and an all-zero record both draw nothing at all.** `null` is the read still out; all
+  zeroes is a pile of lands, or of nothing but generic costs. An empty grey rule says "this deck
+  has no colours" in the same vocabulary a full bar uses to say what they are, and a reader
+  cannot tell that from a rendering fault or from a bar still loading. The tile simply sits 9px
+  shorter, which is what every tile looked like before this component existed — the same argument
+  the theory badge and the caption's `Any` row already make about a mark that would sit on nearly
+  every deck.
+
+**`role="img"`, and the accessible name is the colours and nothing else** — `White, Green`, in
+printed order, which is how a player says a deck's colours out loud. The arithmetic goes in the
+tooltip (`White 11, Green 8`), one vocabulary at two depths rather than two ways of saying one
+thing. The tooltip is bound `describes: false`, and that is a fact about where the element sits
+rather than a preference: the span is not focusable and lives inside a button whose name is
+computed from its contents, so an `aria-describedby` wired here would be announced to nobody.
+(Note the trap this repo has recorded — a `describes: false` tooltip carries no `role="tooltip"`,
+so probing for that role finds nothing on a tooltip that is working.)
+
+**The test handle is an attribute, `data-deck-color`, and it carries the colour key as its
+value.** `FolderDropLine`'s `FOLDER_DROP_LINE_ATTR` and `DropIndicator`'s `DROP_LINE_ATTR` are
+the shape it borrows, and the value is load-bearing rather than convenient: jsdom applies no
+stylesheet, so a class assertion would be a check on source text, and **which** colour a segment
+is drawn for is the fact under test — a segment in the wrong place is the bar telling a reader
+their mono-blue deck is green.
+
+### The caption gained a fourth segment, and it still truncates
+
+`{format} [· {game}] [· {bracket}] · {n} cards` — `Commander · Bracket ~3 · 100 cards`. The
+bracket obeys the caption's existing rule from the other end: drawn only where there *is* one,
+which is a format with a command zone whose number has arrived. A `null` covers both "this deck
+cannot have a bracket" and "nothing has answered yet", and the caption treats them alike, because
+a placeholder for the second would be a segment appearing a beat after the wall does.
+
+**The truncation in a narrow column is the existing behaviour and is correct.** A fourth segment
+makes it likelier, and the answer is neither a shorter format name nor a wider tile: the caption
+is the tile's least important line, it truncates from the end, and the deck's name above it is
+what a reader is scanning.
+
+### The filter row: five controls, and one of them is not a filter
+
+Beneath the heading row, wrapping, reading left to right as one sentence about the wall below it:
+everything that decides **which** decks are on it, then — past an `ml-auto` — the pair that
+decides **what order** they are in. That is the division `FilterBar` draws with a hairline on its
+own row, borrowed without the hairline, because a divider is the one item in a wrapping row that
+can end up alone on a line saying nothing.
+
+- **`flex-wrap` is not optional.** The wall's column is `flex-1` beside the 208px folder rail, so
+  at the app's own 1024px floor the row has far less width than its contents. The source's
+  `~548px` was arithmetic off the shipped widths when it was written; **it has since been driven
+  and is the measured figure** — 2026-09-07, `npm run tauri dev`, a debug build at 1024 × 700
+  against the real corpus, three decks on the wall: the row's column read **548px** exactly, the
+  row itself laid out on **one** line at `y = 192` (the heading row above it at `y = 140`), the
+  name box `x = 456, w = 352`, the `Sort decks` trigger `x = 823, w = 126` and the direction
+  arrow `x = 953, w = 36` — a right edge of **989** inside the column's **1004**. And the thing
+  the wrap exists to prevent was absent: `documentElement.scrollWidth` **1024** against a
+  `clientWidth` of **1024**, so no horizontal scrollbar at the floor. A flex item cannot shrink below its own min-content,
+  and the column is `overflow-y-auto`, which computes `overflow-x` to `auto` — so an unwrapped
+  row would hang out of the column and turn into a horizontal scrollbar across the whole gallery.
+  Wrapping makes the row's min-content one control.
+- **The name box is `FILTER_FIELD` and never `FILTER_CONTROL`.** The chips dip 3% under a press
+  and a box the reader types into must not, or the native ✕ of an `<input type="search">` slides
+  out from under the pointer clearing it and the box bounces without emptying — issue #179, whose
+  whole measurement lives on the constant. It is labelled **`Filter decks by name`** and never a
+  bare `Filter`: the deck editor already owns a box called *Filter this deck*, and two controls
+  with one name cannot be addressed unambiguously by a screen reader, by voice, or by a
+  `getByLabelText`. Escape empties it while there is something in it and falls through when there
+  is not, which is load-bearing on this view rather than a courtesy — the gallery binds Escape at
+  the `"navigation"` rung to walk one folder up, so without the guard one press in a filled box
+  would clear the filter *and* take the reader out of the drawer they were narrowing.
+- **The format chips are faceted, and drawn only where there is more than one.** A chip for a
+  format no deck on the wall is in is a control whose only possible outcome is an empty wall; a
+  *lone* chip can do exactly two things, leave the wall as it is or empty it, so it is a control
+  whose only effect is the bad one. The count rides `title`, which `ToggleChip` makes both the
+  tooltip and the accessible name, so a chip reads *"Modern, 3 decks"* while still beginning with
+  the word printed on it (WCAG 2.5.3) — the search's Owned chip's arrangement.
+- **The `Archived` chip replaces the disclosure's own button and is still a disclosure.** It
+  carries `aria-expanded`, not `aria-pressed`, which is why it is built out of the chip family's
+  recipes instead of being a `ToggleChip`: "this filter is on" and "the thing below is open" are
+  two different sentences, and a reader told the wrong one goes looking for a wall that is not
+  there. It keeps its turning chevron for the same reason — every other chip in the row narrows,
+  this one *reveals*. The second wall stays exactly where it was, a `<ul aria-label="Archived
+  decks">` under the first. The chip is gated on whether the drawer holds filed decks **at all**
+  rather than on how many survive the filter, so it cannot vanish out from under a reader
+  narrowing the wall — `features/search/facets.ts`' rule, that an option which disappears reads
+  as a control that broke — while the number *on* it counts the tiles actually behind it.
+- **`Sort decks`, and never shortened to `Sort`.** The deck editor's toolbar already has a
+  `Sort`, and it sorts the cards *in* a deck. `FilterBar.tsx:928-944` writes that argument out in
+  full about `Sort results`; this is the same call. The picker is **never gold**: accent on a
+  picker means "this is not where the control opens", which is a state a *filter* can be in — a
+  wall is always in some order, so a gold sort picker would claim a filter is on about the one
+  control in the row that is not one. Picking a key also sets its direction from `NATURAL_DESC`
+  rather than carrying the previous key's over, which would open `Name` at Z.
+- **One arrow, turned half a turn — never `ArrowDown` swapped in for `ArrowUp`.**
+  `SortableHeader.tsx:51-55`'s rule and `FilterBar.tsx:975`'s reason: a different element in the
+  same slot is unmounted and remounted, so the indicator *teleports*, and the whole of what the
+  press means is that the order reversed. `initial={false}`, so a wall that opens descending —
+  which is the default — draws its arrow already turned rather than spinning on first paint.
+  `rotate` is a transform prop, so `MotionConfig reducedMotion="user"` reaches it and no
+  `useReducedMotion` opt-out is owed ([motion.md](motion.md) — that trap is about the
+  *non*-positional properties, and this animates none). The `flex` on the animated span is
+  load-bearing rather than decoration: a bare `<span>` is a non-replaced inline box, a transform
+  does not apply to one at all, and the rotation would silently do nothing.
+
+**The sort is remembered across restarts and the filter is not**, which is the one thing about
+this row that is a product decision rather than a drawing one. An order is how a reader likes to
+read their gallery and it is visible in the toolbar the moment they open it; a filter is a thing
+they are doing *right now*, and a gallery that opened already narrowed, with no memory of having
+asked for it, is a gallery that looks like it has lost decks.

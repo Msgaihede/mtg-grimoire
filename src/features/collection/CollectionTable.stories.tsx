@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID } from "@/components/tooltip/TooltipProvider";
-import { CONDITION_LABEL } from "@/lib/conditions";
+import { CONDITION_LABEL, CONDITION_NOT_SET } from "@/lib/conditions";
 import { finishPrice, type Finish } from "@/lib/finish";
 import type { CollectionRow } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
@@ -60,6 +60,11 @@ function entry(card: FakeCard, finish: Finish, over: Partial<CollectionRow> = {}
     typeLine: card.typeLine,
     layout: card.layout,
     finish,
+    // A grade the reader **stated**, and deliberately not the column's own default — which is the
+    // `NONE` sentinel since schema v35. Every story below is about a column, a price or a mark
+    // rather than about a grade, and a fixture on the default would take the second half of the
+    // `Finish · condition` cell off all of them at once. `UngradedCopy` is where the default is
+    // drawn, and it draws a graded row beside it for exactly this contrast.
     condition: "NM",
     quantity: 1,
     tradelistQuantity: 0,
@@ -411,6 +416,44 @@ export const EveryFinish: Story = {
     await expect(panel).toHaveTextContent(CONDITION_LABEL.LP);
     await expect(panel).not.toHaveAttribute("role", "tooltip");
     await userEvent.unhover(abbr);
+  },
+};
+
+/**
+ * A copy whose grade the reader never stated, drawn beside one whose grade they did.
+ *
+ * **The ordinary row rather than the odd one.** Schema v35 moved `condition`'s default onto the
+ * `NONE` sentinel, so this is what the add popup left alone writes, what either menu's one press
+ * writes, and what an import line whose file has no Condition column becomes. The cell prints the
+ * finish and stops — not `Nonfoil · NONE`, which is a storage token in a column a reader scans,
+ * and not `Nonfoil · —`, which is the dash this table spends on a *value* it does not have.
+ *
+ * The graded row is here because an absence proves nothing on its own: the `<abbr>` and the
+ * `sr-only` word are still drawn one row down, on the copy that claimed a grade.
+ */
+export const UngradedCopy: Story = {
+  args: {
+    rows: [
+      entry(printing("sta", "105"), "nonfoil", { condition: CONDITION_NOT_SET }),
+      entry(printing("sta", "105"), "foil", { condition: "LP" }),
+    ],
+    total: 2,
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // The cell, and the control's name that quotes it — `Quantity of Lightning Bolt (Nonfoil)`,
+    // with neither a trailing comma nor a grade nobody chose inside the parenthesis.
+    await expect(canvas.getByText("Nonfoil")).toBeInTheDocument();
+    await expect(canvas.queryByText(CONDITION_NOT_SET)).toBeNull();
+    await expect(canvas.queryByText(`(${CONDITION_LABEL.NONE})`)).toBeNull();
+    await expect(
+      canvas.getByRole("spinbutton", { name: "Quantity of Lightning Bolt (Nonfoil)" }),
+    ).toBeInTheDocument();
+    // One `<abbr>` on the page and it belongs to the foil, which is the other half of the claim:
+    // the arm that was dropped is the one with nothing to expand.
+    await expect(canvasElement.querySelectorAll("abbr")).toHaveLength(1);
+    const abbr = canvas.getByText("LP").closest("abbr") as HTMLElement;
+    await expect(abbr.nextElementSibling).toHaveTextContent(CONDITION_LABEL.LP);
   },
 };
 

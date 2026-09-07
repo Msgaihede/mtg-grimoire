@@ -61,6 +61,9 @@ function Form({
       // drawn there at all: a deck that does not exist has no piles to offer. `useDeck(null)`
       // answers `[]`, and an empty *array* would draw the row over nothing but `Auto`.
       categories={deckId === null ? undefined : deck.categories}
+      // The same split, for the same reason: a deck that does not exist has no row for either
+      // theory mark to be written to, so the create shape draws neither switch.
+      canSetTheoryMarks={deckId !== null}
       foldersUnread={foldersUnread}
       onChange={onChange}
       onCommit={onCommit}
@@ -74,6 +77,7 @@ function Body({
   row,
   cards,
   categories,
+  canSetTheoryMarks,
   foldersUnread,
   onChange,
   onCommit,
@@ -82,6 +86,7 @@ function Body({
   row: DeckRow | null;
   cards: readonly DeckCard[];
   categories: readonly DeckCategory[] | undefined;
+  canSetTheoryMarks: boolean;
   foldersUnread: string | null;
   onChange: (patch: Partial<DeckSettingsValue>) => void;
   onCommit: (patch: Partial<DeckSettingsValue>) => void;
@@ -98,6 +103,10 @@ function Body({
     description: row?.description ?? "",
     notes: row?.notes ?? "",
     theoryEnabled: row?.theoryEnabled ?? false,
+    // Both on for a deck that does not exist, which is the columns' own `DEFAULT 1`. The two
+    // rows they draw appear only under a switched-on theory list.
+    theoryMarkExact: row?.theoryMarkExact ?? true,
+    theoryMarkName: row?.theoryMarkName ?? true,
     folderId: row?.folderId ?? null,
     // `AUTO_CATEGORY` for a deck that does not exist — the column's own `DEFAULT 0`, and the
     // only answer a deck with no categories could honestly give.
@@ -164,6 +173,7 @@ function Body({
           pending: false,
         }}
         categories={categories}
+        canSetTheoryMarks={canSetTheoryMarks}
         cover={coverProps}
         idPrefix={id}
       />

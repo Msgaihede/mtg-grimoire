@@ -43,6 +43,15 @@ const meta = {
       error: null,
       data: undefined,
     },
+    // The other half of the shortfall line: what the deck is short of *and the reader owns*,
+    // which is a dialog rather than a command — so the strip is handed the press and never the
+    // write. `fn()` at the meta level so every story on this page draws both buttons; the
+    // absent case is one list rather than one deck, and it is {@link OnTheTheoryList}'s.
+    //
+    // **The cast is what lets that story exist.** `StoryObj<typeof meta>` takes each argument's
+    // type from the value written here, so a bare `fn()` would type this arg as a mock and make
+    // `null` — the prop's other half, and the one with a rule behind it — unwritable.
+    onPull: fn() as (() => void) | null,
   },
   // The strip wraps rather than truncates — at 1024px with the card pane docked beside the editor
   // this row is a few hundred pixels wide — so a story is rendered at the editor's own width
@@ -344,10 +353,11 @@ export const TypeBreakdown: Story = {
  * be a number rounded down by however much those cards are worth. The as-of sentence rides as the
  * figure's `title`, because a 36px row has nowhere to write it.
  *
- * The shortfall line is the other half: 8 of 29 copies are not covered by the collection, so the
- * one button this strip has appears. It is absent when nothing is missing — a control that spends
- * its life offering to do nothing teaches the reader to stop looking at the line it is in — and
- * every other story on this page shows the sentence that replaces it.
+ * The shortfall line is the other half: 8 of 29 copies are not covered by the collection, so both
+ * of this strip's buttons appear — the shortfall's two answers, in the order they should be tried.
+ * They are absent together when nothing is missing — a control that spends its life offering to do
+ * nothing teaches the reader to stop looking at the line it is in — and every other story on this
+ * page shows the sentence that replaces them.
  */
 export const Price: Story = {
   args: {
@@ -361,6 +371,40 @@ export const Price: Story = {
       deckCard(printing("tmp", "315"), { quantity: 2 }),
       deckCard(printing("lea", "288"), { quantity: 12, ownedQuantity: 12 }),
     ],
+  },
+};
+
+/**
+ * The same shortfall on the **theory** list, where one of the two answers to it does not exist.
+ *
+ * `onPull` is `null` and the `Pull from collection` button is simply not drawn. It is a fact
+ * about the *list* rather than about the feature: since schema v25 a deck holds a card because a
+ * collection row sits in its group, and a theory row holds no cards at all — so there is nothing
+ * on that tab to pull copies into, and `deck_pull_plan` does not take a variant for that reason.
+ *
+ * The wishlist button stays, because wanting a card you do not own is exactly what a plan is
+ * for. Absent rather than greyed, by the same rule that takes both buttons away when nothing is
+ * missing: a control that spends a whole tab refusing teaches the reader to stop looking at the
+ * line it is in.
+ */
+export const OnTheTheoryList: Story = {
+  args: {
+    onPull: null,
+    cards: [
+      deckCard(printing("mh2", "138"), { quantity: 4, ownedQuantity: 1 }),
+      deckCard(printing("fut", "153"), { quantity: 4, ownedQuantity: 4 }),
+      deckCard(printing("lea", "288"), { quantity: 12, ownedQuantity: 12 }),
+    ],
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // The shortfall is real and its own button is there, so the absence below is this prop and
+    // not an empty deck.
+    await expect(canvas.getByText("3 of 20 missing")).toBeInTheDocument();
+    await expect(
+      canvas.getByRole("button", { name: "Send missing to wishlist" }),
+    ).toBeInTheDocument();
+    await expect(canvas.queryByRole("button", { name: "Pull from collection" })).toBeNull();
   },
 };
 
@@ -390,6 +434,10 @@ export const EmptyDeck: Story = {
     // Neither half of the shortfall line: no button offering to wish for nothing, and no "All 0
     // owned." either, which would be a cheerful sentence about an empty deck.
     await expect(canvas.queryByRole("button", { name: "Send missing to wishlist" })).toBeNull();
+    // Neither of the pair, and this one is handed a live `onPull` at the meta level — so its
+    // absence is the shortfall gate rather than the prop. A deck short of nothing has no hole
+    // for a pull to fill, and the plan behind it would answer zero rows by construction.
+    await expect(canvas.queryByRole("button", { name: "Pull from collection" })).toBeNull();
     await expect(canvas.queryByText(/owned\./)).toBeNull();
   },
 };

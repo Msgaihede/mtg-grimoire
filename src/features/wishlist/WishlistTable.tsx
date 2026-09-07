@@ -230,7 +230,11 @@ function columnsFor({
       interactive: true,
       cell: (row) => (
         <QuantityStepper
-          size="sm"
+          // The deck editor's table draws `xs` and this drew `sm`, which was the two lists
+          // disagreeing about one control in the one place they are the same shape (issue #348).
+          // `xs` is the app's size for a stepper in a dense row — the deck's table and text views
+          // both — and this row is 44px like theirs (`TABLE_ROW_HEIGHT`).
+          size="xs"
           value={row.quantity}
           min={0}
           label={`Copies wanted of ${wishLabel(row)}`}

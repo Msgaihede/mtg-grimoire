@@ -60,8 +60,8 @@ export function auditBand(entry: DeckAuditEntry): AuditBand {
       return "moves";
     case "swap":
       return "swaps";
-    // The deck's shape rather than its contents: a category, a tag, a folder, a deck field.
-    case "tag":
+    // The deck's shape rather than its contents: a category, a label, a folder, a deck field.
+    case "label":
     case "category":
     case "folder":
     case "deck":
@@ -191,7 +191,7 @@ export function DeckHistoryDialog({ deckId, open, onDismiss, onClose }: DeckHist
       open={open}
       title="History"
       closeLabel="Close history"
-      width="w-[48rem]"
+      size="w-[48rem]"
       onDismiss={onDismiss}
       onClose={onClose}
     >

@@ -17,6 +17,7 @@ is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) a
 | `commanders.ts` | Eligibility, partners, colour identity                                         |
 | `companions.ts` | Companion rules                                                                |
 | `bracket.ts`    | The Commander bracket **floor**. **Advisory only — `engine.ts` does not import it** |
+| `types.ts`      | `CardFacts` and the two `Pick`s off it — `CardIdentity`, and `BracketCardFacts`, which is what `estimateBracket` takes |
 
 - **`validateDeck` answers for the deck and `validateForMarks` answers for every card drawn**, and
   which one a surface calls is the whole of issue #134 — see the second bullet of **The category
@@ -68,7 +69,19 @@ Full record, with every measurement and the provenance of each rung:
 - **The card ids sent to `combosForCards` must be the same pile `estimateBracket` counts.** Both
   drop an inactive category; the combos handed to the estimate are *not* re-checked there, so a
   query built off an unfiltered list would report a combo out of a switched-off Maybeboard and
-  nothing downstream could tell.
+  nothing downstream could tell. **That rule crossed into Rust on 2026-09-07**:
+  `BRACKET_IDS_SQL` builds the gallery read's id list over the same pile `BRACKET_CARDS_SQL`
+  reads, which is `DeckBracket.tsx:117-121` written in SQL, and it has to be for this bullet's
+  reason.
+- **The gallery asks the same question about every deck on the wall** (2026-09-07, issue #387),
+  through `deck_bracket_reads` and `useDeckBrackets` rather than through `deck_get` per tile.
+  Two things bind an implementer here. **The estimator takes `BracketCardFacts`** — the five
+  fields it actually reads — which is what makes a five-field row per card legal at the type
+  level; a `DeckCard[]` still assigns, so nothing in the editor moved. And **the tile estimates
+  over the _live_ list while the editor estimates over the tab the reader is standing on**, so a
+  deck left on Theory prints its plan in one place and its actual list in the other. That is the
+  one honest divergence between the two surfaces and it is by design — the tile is a fact about
+  the deck, the editor a fact about what is on screen.
 
 ## The category model
 
@@ -279,7 +292,7 @@ reader to configure the deck they had just made; it now asks all of them.
   it sits are arguments rather than placements** (2026-09-01, issue #281). It is the dialog's own
   section — `ClearDeck.tsx` hosted by `DeckSettingsDialog`, never by `DeckSettingsForm`. **Not the
   form**, because the bullet above is what the form is: `CreateDeckDialog` draws it over a deck
-  that does not exist yet, where "empty the live list" is a question about nothing, and a
+  that does not exist yet, where "empty the actual list" is a question about nothing, and a
   destructive control is the one thing that cannot follow a component whose whole guarantee is
   that it reaches no backend. **Not the editor's toolbar**, because that row is full — `ACTIONS`
   already gives up its longest word at `SETTINGS_ICON_PX` and the rest of them at
@@ -374,12 +387,25 @@ reader to configure the deck they had just made; it now asks all of them.
   improves the settings dialog for free. `collapse: false` because different printings are
   different art and collapsing hides the choice being made; `playableOnly: false` because art
   series and tokens are some of the best crops and a cover is not a card you cast.
-- **The tiles do not credit the illustrator, and that is the documented exception, not an
-  oversight.** `CardSummary` carries no `artist`; `CardStack`, `GridView`, `TheoryDiffDialog` and
-  the original `ChoiceTile` all draw the same crop uncredited, justified by every crop sitting
-  inside a control that names its card. The **preview** is strict at both surfaces: no artist, no
-  picture. At create there is no `DeckRow` to read one from, so the host fetches it with
-  `card_detail` — the credit arrives with the picture and never before it.
+- **The editor's card tiles do not credit the illustrator, and that is the documented exception —
+  which as of 2026-09-07 has a better justification than the one written here for a month.**
+  Scryfall's guideline has **two arms**: name the artist in the same interface, *or show the full
+  card image in it* ([frontend-design.md](../../../docs/reference/frontend-design.md) carries the
+  correction, the verbatim quotation and where the rule actually lives — it is on
+  `scryfall.com/docs/api` and not on `docs/api/images`). `CardStack` and `views/GridView` draw
+  `DECK_CARD_VARIANT`, which is **`display`** — a whole printed card, carrying its own printed
+  credit — so the deck editor satisfies the **second** arm outright and owes nothing extra. This
+  bullet said all four surfaces drew "the same crop uncredited"; two of them stopped when they
+  went to whole cards, and it was not corrected here. The two still drawing a bare `art` crop
+  uncredited are `TheoryDiffDialog`'s rows and `DeckCoverPicker`'s `ChoiceTile`, both sitting
+  inside a control that names the card, and both blocked on the same missing column —
+  `CardSummary` and `DeckCardRow` carry no per-row `artist`. The **preview** is strict at both
+  cover surfaces: no artist, no picture. At create there is no `DeckRow` to read one from, so the
+  host fetches it with `card_detail` — the credit arrives with the picture and never before it.
+  **The gallery tile is not an inconsistency with any of this.** It draws a crop and shows no
+  full card anywhere, so it has to take the **first** arm — and it does, as a tooltip on the
+  picture rather than as a line of type under it. Two surfaces answering one rule by its two
+  different arms is the rule working, not the app disagreeing with itself.
 - **A cover is a card id, and the create is one write again** (2026-08-31). The reader-picked
   *file* cover is deleted whole — `deck_set_cover_image`, the `/cover/<deckId>` route, the
   encoder and the `data/covers/` directory — and a migration flips every `cover_kind = 'custom'`
@@ -406,13 +432,13 @@ reader to configure the deck they had just made; it now asks all of them.
 - **A write to what is _in_ a deck goes through a `useDeck` mutation — but the refused-write family
   stopped being all of one hook's on 2026-08-14.** `DeckEditor`'s `newestWrite([...])` takes
   **every `useDeck` mutation but `rememberView`** — update (rename, cover, format, the
-  `Split X` chip), add-card, set-quantity, move, set-tag, missing-to-wishlist, swap-printing — and
-  **the `useDeckMeta` writes a right-click can now reach**, which are the tag create and a
+  `Split X` chip), add-card, set-quantity, move, set-label, missing-to-wishlist, swap-printing — and
+  **the `useDeckMeta` writes a right-click can now reach**, which are the label create and a
   category's rename, switch and delete. Read the array rather than a number here; a count stood in
   this bullet and went stale twice. The X chip is a **deck-row** write riding the same `update` as
   the other three, so it is not a mutation of its own and it touches not one `deck_cards` row.
   `rememberView` is the one exclusion, for the reason stated on its definition. **The menus are
-  what grew the family**: `setTag` sat outside it for as long as nothing in the app could reach it,
+  what grew the family**: `setLabel` sat outside it for as long as nothing in the app could reach it,
   and `useDeckMeta`'s writes had no control in this view at all — they were the Categories dialog's,
   which draws its own sentence for its own observer. A write a reader can now make from a card's
   menu or a pile's heading is a write whose refusal has to be said somewhere, and **the menu that
@@ -439,6 +465,82 @@ reader to configure the deck they had just made; it now asks all of them.
   never owned, and `useDeck` fires `["collection"]` only when copies actually moved. `query.ts`
   caches 30 s, so a missing invalidation there is a ghost row on the collection page rather than a
   stale one.
+- **`Collection ▸` is the card menu's one write to the reader's _binder_ rather than to their
+  list, and it is three rows** (issue #350, 2026-09-03). `Quick add N copies`, `Quick add N and
+  remove from wishlist`, then — under a separator — `Pull N from your collection`. The first two
+  **record** cardboard the reader has just bought and file it straight into the deck's group; the
+  third **moves** copies they already own loose, which is `deck_pull`'s per-card entrance and the
+  whole of what the separator marks. `deckCardMenu.tsx`'s `collectionItems` builds it, placed
+  after `Move to` and before the zone rows because filing is what `Move to` does and a zone row is
+  a claim. The storage side is in
+  [decks-storage.md](../../../docs/reference/decks-storage.md#the-quick-add-recording-cardboard-nobody-had-written-down).
+  - **All three deps or none.** `quickAdd`, `quickAddAndUnwish` and `pullCard` are optional
+    callbacks and one missing drops the whole submenu — `cardMenu.tsx`'s `moveItem` absence rule,
+    because these are three answers to one question (how do the copies this row is short of get
+    here) and offering two of them reads as the third being *impossible* rather than unwired.
+  - **A submenu rather than three flat rows.** This menu is already long, and three more on every
+    card of the surface a reader spends the longest in is a menu that has to be read instead of
+    scanned.
+  - **All three stay singular under a picked set**, which is `finishItem`'s argument reached from
+    the other side. Every label names a **count**, and the count is one row's shortfall —
+    `quickAddShort`, `max(0, quantity − ownedQuantity)`, imported from `quickCollection.ts` rather
+    than respelled because it is exactly the `3/4` `CardStack` draws in the card's chin. A set of
+    four rows short by four different amounts has no one number to name, so a plural row could
+    only quote a total no card on screen is wearing.
+  - **Greyed _with_ a reason, where this menu's other two refusals are silent** — `a plan holds no
+    cards` for a theory row, `this pile is switched off` for a row in an inactive category,
+    `nothing missing` for a live one that is not short, all three in `QUICK_ADD_REASON` and keyed
+    by `quickAddBlock`'s union so a new arm is a red build rather than a row greyed with
+    `undefined`. The split from `zoneItem` and `finishItem` is a test rather than a drift: those
+    two grey on facts the reader can check against the card in front of them, and *a plan holds no
+    cards* is a rule about the list they are standing in that nothing on the card says. **The
+    three rows grey and the parent stays live**, which is the whole of how a reason gets read — a
+    greyed submenu cannot be opened, so its sentences would be written where nobody can reach them.
+  - **The inactive arm is the one a live pass added, and it is the reason this feature owes one**
+    (2026-09-03, debug build, real database). `attribute_owned` hands a switched-off pile nothing
+    out of the deck's group — `category_active` is checked before the row is allowed to draw on its
+    `(card_id, finish)` pool, which since 2026-09-07 is the grain the whole count is kept at — so
+    **every** row in one reads `0` owned whatever the folder holds. Without the arm that `0` read
+    as a shortfall: the submenu offered *Quick add 1 copy* on a Maybeboard line, the press was
+    legal (the deck plays the card, so `NOT_IN_DECK` passes), the copies were recorded, **and the
+    row still read `0/1`** — a control whose own number never moves is one a reader presses again,
+    and two presses put two copies into one folder. Every suite fixture used an active category,
+    so nothing here could go red for it; `deckCardShort` guards on `categoryActive` for the same
+    reason and is the precedent rather than a coincidence. It greys rather than being made to
+    work, because a shortfall computed against a number the backend refuses to count would put
+    two answers on one screen.
+    **That sentence is also `quickAddBlock`'s own doc in `quickCollection.ts`, and the pair drifts
+    together or not at all.** Both said "before the **oracle total** is spent" until 2026-09-07 and
+    both were wrong the moment the grain narrowed — there is no oracle total left to spend. One was
+    corrected and the other was not, which is how the phrase survived a sweep; reword them in the
+    same commit.
+  - **The pure half is `quickCollection.ts` and the name is load-bearing on Windows.** It was
+    planned as `quickAdd.ts`, and `QuickAdd.tsx` already sits in this folder: a case-insensitive
+    file system resolves `./quickAdd` and `./QuickAdd` to whichever the resolver reaches first, so
+    the import took the toolbar component for one run and answered *"quickAddShort is not a
+    function"* — `folderTree.ts` beside `FolderTree.tsx` a second time. tsc refuses the program
+    outright (TS1149), which is the only reason it is not a silent wrong answer.
+  - **The prompt is only for the ambiguous half**, `quickCollection.ts`'s `chooseWish` and
+    `choosePull`. One matching wish is taken with no dialog and several open
+    `QuickUnwishDialog`; one pull candidate is pulled and several — **or none** — open
+    `PullFromCollectionDialog`, which already words the empty case. Ambiguity is `candidates.length >= 2` and nothing else: a lone candidate
+    holding fewer copies than the shortfall is still unambiguous, so it is taken. Both reads are
+    `queryClient.fetchQuery` at the press rather than hooks, so a right-click fires nothing — and
+    both query-options factories live in `useDeck.ts`, because a second spelling of either key is
+    a fetch that never shares the dialog's cache.
+  - **The quick add is this hook's one write that can _create_ a collection row**, so it fires
+    `query.ts`'s `OWNED_WRITE_KEYS` and not the `["collection"]` root the four movers share — that
+    is exactly the case the comment left where the deleted `own` add's invalidation stood said
+    would come back. The set already carries `["wishlist"]`, which this write needs on its own
+    account and not only for owned progress: the second row can delete a wish outright.
+  - **`QuickUnwishDialog`'s Cancel does nothing at all, the add included.** The reader asked for
+    both halves and gets neither, which is the only answer a cancel can honestly give — the same
+    rule the backend applies when the wish has moved on and rolls the copies back with the
+    refusal.
+  - **Not the same thing as `## The quick add` further down**, which is `QuickAdd.tsx`, the
+    toolbar field that adds a card to the deck's **list**. One writes a list and the other writes
+    a binder; the word does two jobs in this feature, and the two file names are the whole of what
+    keeps them apart.
 - **A deck card names a finish, and the grain says so** (schema v19, 2026-08-17). This reverses
   "a deck names a printing and never a finish", which was true for as long as Scryfall's model
   went unread: foil is a **finish of a printing** rather than a printing, so 53 224 of 107 337
@@ -454,11 +556,23 @@ reader to configure the deck they had just made; it now asks all of them.
   the reader moved a card or chose a printing, not an object.
   **Two rules did not change and both look as though they should have.** `engine.ts` counts
   copies by card **name** and sums across rows, so `1 foil + 3 regular` is four copies — the
-  rules have never heard of a finish, and `engine.test.ts` pins it. And owned/missing matches
-  on oracle id and has always ignored finish, condition and language, so a foil row is answered
-  by whatever copies of that card the deck's group holds. **The undo `Cell` is deliberately finish-blind** too: a finish change
-  moves quantity *between* two rows of one printing, so a scope naming one would restore half of
-  what it read — `deck_undo::CardRow` is what grew the column instead.
+  rules have never heard of a finish, and `engine.test.ts` pins it. **The undo `Cell` is
+  deliberately finish-blind** too: a finish change moves quantity *between* two rows of one
+  printing, so a scope naming one would restore half of what it read — `deck_undo::CardRow` is
+  what grew the column instead (`deck_undo.rs`'s "A cell names no finish, on purpose").
+  **A third claim stood in this paragraph until 2026-09-07 and it is the one that did change.**
+  It read that owned/missing "matches on oracle id and has always ignored finish, condition and
+  language, so a foil row is answered by whatever copies of that card the deck's group holds" —
+  true for as long as `owned_by_oracle` was the read, and false now. It is `owned_by_printing`:
+  `attribute_owned` matches a deck row against the group at exactly **`(card_id, finish)`**, so a
+  foil row is answered only by foil copies of *that* printing and an Alpha Bolt in the group no
+  longer counts toward an M10 line. **Condition and language are still ignored**, so that half of
+  the old sentence survives intact. What the narrowing closed is a disagreement inside one screen:
+  `deck_pull::CANDIDATE_SQL` already matched at this grain, so a deck could read *N missing* with
+  nothing its own pull dialog could fill. **What it costs is in
+  [`src-tauri/CLAUDE.md`](../../../src-tauri/CLAUDE.md)** — a collection filed under the wrong
+  printing reads as missing until the reader drags or swaps — and `deck::release_unclaimed_copies`
+  plus the schema v36 rung are what keep a group honest at the new grain.
 - **`Set as foil` is one row with three shapes, and it greys _silently_.** `deckCardMenu.tsx`'s
   `finishItem` follows `cardMenu.tsx`'s `collectionItem`: sold in two finishes it is a toggle
   (one press, `Set as foil` / `Set as regular`), in three a `Finish ▸` submenu in Scryfall's own
@@ -481,8 +595,31 @@ reader to configure the deck they had just made; it now asks all of them.
   could be pressed once and never pressed back. `swapPrinting` met this one axis over and answered
   it the same way — `openCardFromDeck` is both "which card is open" and "which row it came from".
   **The fold needs no arm**: two rows becoming one leaves the survivor at the target finish, which
-  is where the context lands either way. **`move` and `refile` change the third part and have the
-  same hole**; they are not fixed and the mark goes out there too.
+  is where the context lands either way.
+- **Every write that moves a row's address re-anchors, through that one helper** (2026-09-03).
+  This bullet said `move` and `refile` "change the third part and have the same hole; they are not
+  fixed", and that stopped being true with issue "detached modal": `moveCard`, `refileCard`,
+  `swapPrinting` and `setCardFinish` all call `reanchorPane` on their own mutation now, and the
+  guard is unchanged — the **whole** five-part address is compared, so only the row that was
+  actually written moves and a card open from another pile, another deck or the other list is left
+  alone. Two things came with the generalisation. **`swapPrinting`'s re-anchor moved off its call
+  site**, where it had been justified by the docked pane being its only presser and carrying a
+  `handover` only the pane could build — the pane is gone, `AllPrintingsDialog` is the presser, and
+  the `handover` it holds is a *caret* note rather than a context, so for a while nothing
+  re-anchored a swap at all and a card open on the row went on addressing the printing the deck
+  had stopped playing. And **a category name travels with a move**, because `PaneDeckContext`
+  carries `categoryName` beside `categoryId` and the word is not derivable from the id where the
+  context is read; `refileCard` has it in its own answer, `moveCard` reads it out of the cached
+  `deck_get`, and the one caller that can outrun that read — the card modal's `Create new…` —
+  passes the name it was just handed as `toName`.
+- **Stepping to zero has no address to re-anchor to, so it _clears_ the context** — `unanchorPane`,
+  which calls `setSelectedCardId(cardId)`: the card stays open and stops being a deck row. Leaving
+  it was not available (`deck_set_card_quantity` answers `card_gone` for a slot with no row, and
+  the card modal draws no error state for the deck's mutations, so its stepper would become a `+`
+  that could only be refused in silence), and closing the modal was refused as answering a question
+  the reader had not asked. **`clearCategory` and `clearDeck` are deliberately not wired to it**:
+  a context lives exactly as long as the card modal is open on a deck row, and both of those are
+  pressed from behind that modal's scrim, so neither can orphan one.
 - **What a deck card is drawn as is `playedFinish(card.finish, card.finishes)`** — the reader's
   own statement first, `soleFinish`'s second. The order carries the argument: `soleFinish` says
   what the *object* is and deliberately says nothing about a printing sold in both (a sheen on
@@ -513,11 +650,12 @@ reader to configure the deck they had just made; it now asks all of them.
     clicked is one press from a deck the reader did not mean to edit. It goes through
     `setQuantityAt(…, 0)` like every other removal here; there is still no remove mutation.
   - **The card menu goes plural for the writes and stays singular for what cannot mean anything
-    else.** `Add N cards to`, `Move N cards to`, `Tag N cards`, `Remove N cards` act on the set;
+    else.** `Add N cards to`, `Move N cards to`, `Label N cards`, `Remove N cards` act on the set;
     `Copy card name`, `Copy card image`, `Open on`, `View all printings`, `Set as commander`,
-    `Set as companion` and `Finish` stay about the one card that was right-clicked. A finish
-    belongs to a *printing* — the toggle, the submenu and the greyed row are three shapes decided
-    by what that printing is sold in — and a deck has one commander. **The set travels into
+    `Set as companion`, `Finish` and `Collection ▸`'s three stay about the one card that was
+    right-clicked. A finish belongs to a *printing* — the toggle, the submenu and the greyed row
+    are three shapes decided by what that printing is sold in — a deck has one commander, and
+    every `Collection ▸` label names a count that is one row's shortfall. **The set travels into
     `buildCardMenu` too**: it did not for one build, and the menu read `Move 2 cards to` under a
     singular `Add to`, which is one menu answering the same question two ways.
   - **The cost this accepts rather than solves: undo is per-audit-entry.** A four-card move writes
@@ -672,7 +810,7 @@ reader to configure the deck they had just made; it now asks all of them.
 - **The printings modal steps along the deck, and the order reaches it through the store because
   it cannot be recomputed anywhere else.** `AllPrintingsDialog` is drawn at `App` level, outside
   this editor, and the order depends on three things that are the editor's own — `groupBy` and
-  `sortBy` are `useState` here, and the rows are `shown`, narrowed by a live text box and tag
+  `sortBy` are `useState` here, and the rows are `shown`, narrowed by a live text box and label
   chips. So `DeckEditor` **publishes** `deckWalkStops(groups, deckId)` as `store.deckWalk` and the
   modal reads it; `deckWalk.ts` derives the order through the same `splitRail`, so the desk's own
   arrow keys and the modal's chevrons are one answer rather than two that agree today. A row with
@@ -703,13 +841,25 @@ reader to configure the deck they had just made; it now asks all of them.
     into this fence for free: they are drawn in a box of their own that carries the width, exactly
     as the rail is, so `flowWidth` is absent on both and neither draws a grip. **Their drop target
     is untouched** — a pile whose *place* is fixed is still a pile a card can be dragged into.
-  - **The drop target is a wrapper `<div>` inside the section, not the section**, and that is
-    pdnd's constraint rather than a layout choice: one drop target per element, and the section is
-    already the card one. Because the wrapper is an **ancestor** of the heading and of every card,
-    a card drag hits it, is refused by `canDrop`, and pdnd walks to `element.parentElement` — the
-    section — exactly as before; a category drag is accepted anywhere in the pile. So the whole
-    column is the target with no monitor, no overlay and no z-index. The section's own 6px rim is
-    outside it and is the one dead spot.
+  - **The drop target is a wrapper `<div>` inside the section, not the section**, and that
+    **was** pdnd's constraint rather than a layout choice. ⚠️ **The constraint is gone and the
+    arrangement stayed — corrected 2026-09-07, and this page was the last place in the repo still
+    asserting the old rule.** `@atlaskit/pragmatic-drag-and-drop` kept one drop target per element:
+    `makeDropTarget`'s registry is a `WeakMap` keyed by the node, so a second
+    `dropTargetForElements` silently *replaced* the first. **`@dnd-kit/dom` keys its registry by
+    entity id**, so two `Droppable`s on one element both register and both compete, and what
+    separates them is `accepts()` — `computeCollisions` asks it before it measures anything. Two
+    boxes here would now be legal, and so would one. Do not "fix" this by merging them: what the
+    two boxes buy is unchanged by the migration — the wrapper is an **ancestor** of the heading and
+    of every card, so a card drag hits it, is refused by `canDrop`, and the library walks to
+    `element.parentElement` — the section — exactly as before; a category drag is accepted anywhere
+    in the pile. So the whole column is the target with no monitor, no overlay and no z-index. The
+    section's own 6px rim is outside it and is the one dead spot. Where two *accepting* targets
+    overlap, `collisionPriority` decides them, and without one they are separated by distance —
+    which is why an element with no measured rectangle in jsdom can win a drop the pointer never
+    went near. `frontend-design.md`'s dnd-kit section is the measured version, and
+    `CollectionFolderCard.tsx`, `ParentFolderCard.tsx`, `dnd.ts` and `StackView.tsx` each carry it
+    at their own site.
   - **The heading is the draggable and the grip only says where the press may start** — the
     dialog's `mousedown`-in-capture plus `canDrag` arrangement, kept verbatim. **It is a choice
     about the drag preview, not a constraint**: a pdnd `draggable` on the grip `<button>` starts a
@@ -774,7 +924,8 @@ reader to configure the deck they had just made; it now asks all of them.
   views, and `TheoryMatchBadge` is the same fact for the two that draw no art.
   **Since 2026-08-26 it says *how far off* the count is as well** (issue #212): a card the plan
   asks for a different number of draws `+2` or `-8` in place of the tick, in the same box and the
-  same azure, and the tick is what the **matching** card wears. The two are never drawn together —
+  mark's own colour — which was *the* colour, one azure, until the tiers below split it in two —
+  and the tick is what the **matching** card wears. The two are never drawn together —
   a tick beside a `-8` is two clauses of one sentence in a 25px box. Two rules carry it and both
   live in `theoryMatch.ts`: the difference is `live − planned` at the **slot's** grain, with both
   sides summed across their piles before they are subtracted (per-row arithmetic draws `-1` and
@@ -786,7 +937,58 @@ reader to configure the deck they had just made; it now asks all of them.
   over a `min-w` of one digit's advance plus `COUNT_TAG_BOX`'s own paddings — the quantity tag's
   width holding a single digit, by construction. Paddings alone could not settle it, because the
   content is a glyph on one card and two characters on the next.
-  **The grain is `(cardId, finish)` and deliberately not the category**: a card planned as Ramp and
+  **Since 2026-09-07 the mark answers in two tiers, and the whole rule is that the number's grain
+  follows the tier.** Every Live row resolves to exactly one mark or to none:
+
+  | The row | Tier | Colour | The number it carries |
+  | --- | --- | --- | --- |
+  | Its `(cardId, finish)` is a slot in the plan | `exact` | green | `live − planned` at the `(cardId, finish)` grain — the number this mark always carried |
+  | Its **name** is in the plan, but this `(cardId, finish)` is not | `name` | blue | `live − planned` with **every** printing and finish of that name summed on both sides |
+  | Neither | — | — | no mark |
+
+  `0` draws the tick and anything else the signed number, exactly as before. A green mark is a
+  statement about the *printing* the plan named; a blue one is a statement about the *card*. The
+  reader was shown the case it costs the most in — a plan asking for 8 Forests of one printing
+  against 8 Forests over four printings, which reads **green −6** on two rows and **blue 0** on
+  the other six — and chose it over one name-grain number on both tiers. Both numbers are true at
+  their own grain, and the two colours are what says which question is being answered. Green and
+  blue are **defaults**: both are `--color-theory-*` custom properties and the reader's to change
+  in Settings → Appearance, which is why no component here holds a hex.
+  **The name key is `cards.name` lowercased, and the fold is written in TypeScript only** —
+  `theoryNameKey`, one `trim().toLowerCase()`. SQLite's `lower()` is ASCII-only and JavaScript's
+  is not, so a plan folded in SQL against a live row folded here spells two keys for
+  `Lim-Dûl's Vault` and `Æther Vial`, and the mark goes dark on exactly the names nobody thinks to
+  check. Rust answers `cards.name` **verbatim**, through a **`LEFT JOIN`** so that a printing which
+  has left the corpus keeps its exact key and simply has no name tier: `nameKey` is `null`, an
+  orphan, and an orphan never enters `byName` at all — a `null` folded to `""` and used as a key
+  would make every unnamed live row match every orphan in the plan. Not `oracle_id`, because
+  Scryfall omits it on reversible cards and an identity with a fallback chain is two rules for two
+  sides to disagree about; what that costs is a blue tick on two distinct oracle cards sharing a
+  printed name, a pair no constructed deck holds both of.
+  **Two per-deck switches, both defaulting on, and their off states are not symmetric.**
+  `decks.theory_mark_exact` / `theory_mark_name` (user schema v38) ride `DeckPatch` and are drawn
+  indented under the theory switch in `DeckSettingsForm`, each beside a swatch painted from the
+  mark's own custom property. **Green off re-resolves an exact row as a name row** — blue, with
+  blue's number — because an exact match *is* a name match and what the switch turns off is the
+  finer statement: turning the strict mark off asks for less precision, not less information, and
+  a reader who saw the row go blank would read the control as broken. Blue off silences a
+  name-only row and leaves green untouched. Both off is a real answer and is not a second spelling
+  of the theory switch above being off — which is why this is two booleans rather than one
+  three-valued field: `none | exact | both` cannot spell blue *without* green. **All of that logic
+  is in `theoryMatchMark` and none of it is in the four views**, which is what keeps the fallback
+  from being re-derived four times: a view asks for a mark and draws what it gets.
+  **The maps are built once and read, never consumed, and that is the property the land case turns
+  on.** Every one of those eight Forests carries a mark. A lookup that deleted an entry as it
+  served it would mark one row and pass every other case in the file, so the eight-Forest test is
+  there to say the property out loud rather than to check an arithmetic. It was already how the
+  exact tier worked; the name tier inherits it rather than needing it.
+  **`DIFFERENCE_FLOOR` applies per tier, at that tier's own sums**, which is the same sentence as
+  the grain following the tier: a Commander singleton is a 1-of at both grains and meets no number
+  on either, while a card the plan names two printings of can clear the floor loosely and not
+  exactly.
+  **The grain is `(cardId, finish)` and deliberately not the category** — the exact tier's, and
+  the name tier drops the category for the same reason and sums every pile on each side before
+  subtracting: a card planned as Ramp and
   sleeved into Main deck is still the card that was planned, and a mark that went dark because a
   pile was renamed is a mark nobody can learn to trust. `finish` is read **raw**, never through
   `playedFinish` — that helper falls back to `soleFinish`, which would match a plan's explicit
@@ -811,9 +1013,12 @@ reader to configure the deck they had just made; it now asks all of them.
   `theoryEnabled && variant === "live"`, so a deck with no plan and the whole Theory tab pay
   nothing at all.
   `undefined` rather than an empty map is the other distinction `theoryMatchPlan` keeps: no plan
-  is not the same statement as a plan that wants none of this — and `null` rather than `0` is the
-  same distinction one level down, in `theoryMatchDelta`, where `0` is the card that matches and
-  draws the tick.
+  is not the same statement as a plan that wants none of this — and `null` rather than a delta of
+  `0` is the same distinction one level down, in **`theoryMatchMark`**, where `0` is the card that
+  matches and draws the tick. (That function was `theoryMatchDelta` and answered a bare
+  `number | null` until 2026-09-07, when a number stopped being enough to say which tier it was
+  about; this page named the old one for as long as a prose-only edit can, which is until somebody
+  greps for it.)
   **That `enabled` is a statement about _cost_ and never about the mark, and reading it as both
   was issue #159.** A disabled `useQuery` still serves whatever sits in the cache under its key,
   and the key is `["decks", "theorySlots", deckId]` — the **deck's**, deliberately, so both tabs
@@ -1176,6 +1381,18 @@ price | type`). An **inactive category stays its own group in all three grouping
     group is offered only under a confirmation that names that deck, because the press takes the
     card off that deck's list too. Full rules:
     [collection-folders.md](../../../docs/reference/collection-folders.md).
+  - **The `All cards` tab counts owned copies for the open deck too** (2026-09-03,
+    [#349](https://github.com/Msgaihede/mtg-grimoire/issues/349)) — `useCardSearch`'s
+    `availableForDeck`, the open deck's id, straight through to `SearchRequest.availableForDeck`.
+    Until it rode, the two tabs of one panel disagreed about the same card: the Collection tab
+    hid a playset sleeved into other decks and this one badged it `×4`. It is **not a filter** —
+    no row is narrowed and nothing is reordered — it decides what *owned* means for the request,
+    on every tile's `×N` and on the Owned/Missing chip **together**, because a count narrowed
+    while its chip was left alone offers a row the badge then marks `×0`. The open deck's own
+    group still counts, which keeps the number and the deck row's *you own 2 of 4* one story.
+    The facet counts behind that chip's tooltip deliberately do not follow — the index has no
+    deck axis — and read high there; `useCardFacets` and
+    [search-faceting.md](../../../docs/reference/search-faceting.md) carry the argument.
   - **The Collection tab draws `FilterBar`, and since 2026-08-25 that is the *same component* the
     `All cards` tab draws.** It had a filter row of its own for two days — built out of
     `@/components/FilterChips`, which is the sanctioned reuse and is still how
@@ -1296,7 +1513,7 @@ price | type`). An **inactive category stays its own group in all three grouping
   **`listNames.ts`'s `listName` is a second answer to a second question and the two must not be
   merged** (2026-09-01). `variantName` names the **tabs a reader picks between** and answers
   `Actual` / `Theory`; `listName` names the **list a sentence talks about** and answers
-  `live list` / `theory list`, lowercased into prose and without an article so each caller writes
+  `actual list` / `theory list`, lowercased into prose and without an article so each caller writes
   its own `the`. They take the same argument and would collapse into one three-line function that
   read wrongly on one of the two surfaces. It became a module when it reached three callers —
   `ClearCategory` and `ClearDeck` each held a private copy, cheap to keep in step one press apart,
@@ -1309,6 +1526,24 @@ price | type`). An **inactive category stays its own group in all three grouping
   submenu's *order* — it still ranks Theory first as a guess at which list a card is for, which
   happens to agree with the tabs again and is not derived from them — and `deck_theory_diff`, which
   still counts plan → reality, that being what the shopping list *means*.
+  **Five more surfaces were still saying `live` a week later, which is what issue #357 reported
+  and what 2026-09-03 swept** — and the reporter had only seen one of them, the deck tile's
+  badge. The rest were reached by grepping for the *rendered* word rather than by following the
+  report: `listNames.ts`'s `listName` (so both Clear confirmations and the history log's
+  whole-list line), Deck settings' `Clear actual list…`, the theory switch's own caption, the
+  Categories dialog's "both the theory and actual lists" clause, and `LabelsDialog`'s section
+  heading. **Nothing about the stored variant moved**, exactly as the tab rename did not move it:
+  `live` is still the column, the IPC argument and `DeckVariant`'s member, and the two prose
+  helpers above are the whole of the join. A sixth surface would be found the same way — grep the
+  word a reader sees, not the value the database holds.
+  **The tile's badge is the one that lost a state rather than a word.** It read
+  `LIVE | LIVE + THEORY | THEORY ONLY` and reads `THEORY + ACTUAL | THEORY ONLY` over `null`,
+  because the one-list deck's badge was the caption's `Any` row in different type: one list is
+  what every deck is born with, so a word for it sat on nearly every tile in the gallery and told
+  the reader nothing about any of them. `deckBadge` answers `DeckBadge | null` for it, which is
+  what took the dim-bordered arm out of the badge's own classes — every badge left is a deck that
+  keeps two lists, so accent is unconditional and the dash still means the plan has nothing
+  standing in for it yet.
   **No hairline between the two tabs**, unlike {@link TRANSFER}'s joined pair: one of them is
   always pressed, so the filled half's own edge is the divider. The pair needed one while `Compare`
   sat between them and carried it.
@@ -1543,7 +1778,7 @@ price | type`). An **inactive category stays its own group in all three grouping
   it is still a row, still in `DeckEditor`'s `categories`, still listed in the Categories dialog
   with its name, its order and its switch — it draws no heading until a card is in it again.
 - **A filter decides nothing about which headings exist, and the rule that said it did has been
-  deleted.** `EmptyGroupRules.narrowed` reported whether the toolbar's text field or a tag chip was
+  deleted.** `EmptyGroupRules.narrowed` reported whether the toolbar's text field or a label chip was
   running, and while one was, `isPredefined` was the test for an empty pile — so that typing three
   letters could not answer with twenty headings over three cards. **The auto rule subsumes it: that
   wall was always auto piles** (Removal, Ramp, Draw and the type buckets), and a pile the filter
@@ -1658,7 +1893,15 @@ price | type`). An **inactive category stays its own group in all three grouping
   shorthand before the `padding-bottom` longhand (`.p-1\.5` at 29 557 against `.pb-2` at 31 795 in
   the built sheet), whatever order the two classes are written in. **`TableView` needs none of it**
   — its rows are absolutely positioned inside a virtualiser, so it draws `ring-inset` and always
-  has. Photographed before and after against the built stylesheet; the sweep that keeps it is
+  has.
+  **`TableView` was right first, and on 2026-09-03 its answer became everybody's**: `DROP_RING` is
+  `ring-1 ring-inset ring-accent/45` now, so the ring is painted *within* the border box and the
+  clip described above cannot reach it on any of the three roots either. `DROP_MARK_ROOM` stays on
+  all three regardless — the paragraph's own arithmetic says why, and it is `FOCUS`'s 4px rather
+  than the ring's 2 that set the number. What prompted the change was a reader reporting the marks
+  as bulky and as overlapping neighbouring content, which is this same defect seen from the other
+  side: a ring painted outside its box intrudes on whatever is next to it whether or not a scroller
+  clips it. `src/lib/dropMarks.ts` carries it in full. Photographed before and after against the built stylesheet; the sweep that keeps it is
   `views.test.tsx`'s `leaves its drop marks room inside the box that clips them`, written as a
   class assertion because **jsdom has no layout engine and therefore no clip at all**.
   **`TableView` is the exception and is a difference in kind, not a case to tidy away.**
@@ -1696,6 +1939,18 @@ price | type`). An **inactive category stays its own group in all three grouping
   `sticky bottom-0` for the length of a drag, so the remove tray drawn on it stays at the foot of
   the window instead of at the foot of a 7 000px deck. Every figure, at 1280×800 and 1024×600:
   [frontend-design.md](../../../docs/reference/frontend-design.md).
+  **That measured height is `src/lib/useDockHeight.ts` since 2026-09-07 and the editor is one of
+  three callers.** The `useLayoutEffect` here was written against the editor's *own* page section,
+  which is `overflow-y-auto`; the collection and the wishlist scroll in `AppShell`'s `main`
+  instead, so the hook finds the **nearest scrolling ancestor** rather than assuming one —
+  `CardGrid`'s `nearestScroller` already answered that question. Nothing about the arithmetic
+  moved; it is the same `scroller.clientHeight − (anchor.top − scroller.top)`, floored at 0,
+  `requestAnimationFrame`-coalesced, with a passive listener and a `ResizeObserver` on both boxes.
+  **`useDeskWidth` is the sibling extraction and `DeckEditor` deliberately does not call it** — its
+  `panelOverWidth` carries an extra `selectedCardId === null` clause, its desk mounts only once
+  `deck_get` has answered (so its effect names `[hasRow]` where the hook's can name nothing), and
+  it measures a desk holding a deck rather than a list. Three differences, none cosmetic; do not
+  fold it in.
 - **`Stacks` and `Text` wrap downward — neither view grows sideways any more**
   (changed 2026-08-14). Both lay a deck out in fixed-width boxes —
   `stackColumnWidth(zoom)`, 224px at 1×, and the text view's 300px — and both used to open the
@@ -1993,6 +2248,118 @@ price | type`). An **inactive category stays its own group in all three grouping
   — no second rule, so the cycle fence, the already-there refusal and `reorderedLevel`'s no-op all
   hold. It draws no strip of member art: a strip is what a folder is *recognised* by, and this tile
   is the way out rather than a folder to pick out of a wall.
+- **The tile says what colours the deck is and what bracket it reads as, and it no longer says
+  who painted the cover** (2026-09-07, issue #387). Three facts changed on one element and each
+  has its own rule below; the design is
+  `docs/superpowers/plans/2026-09-07-deck-gallery-overview.md`, the drawing is in
+  [frontend-design.md](../../../docs/reference/frontend-design.md), and the two reads behind it
+  are in [decks-storage.md](../../../docs/reference/decks-storage.md). What is worth stating
+  here, once: **the tile asks nothing for itself.** `DecksPage` runs `useDeckPips` and
+  `useDeckBrackets` for the whole wall and hands each tile a `PipCounts | null` and a
+  `string | null`; forty tiles each fetching their own would be forty queries for one screen,
+  which is `zoom`'s arrangement on this component and the same argument.
+- **`hasCover`/`coverUrl`'s refusal to draw a cover whose artist is unknown _stays_, and reading
+  it as a rule about the deleted credit line is the mistake to avoid.** The line went; the name
+  did not — it is the tooltip on `Cover`'s frame now — so the condition means exactly what it
+  always said: a crop is drawn only where this app can say who painted it. The two cannot come
+  apart, because they are one test on one field (`deck.coverArtist`), and `useTooltip` refuses
+  falsy content, so a deck with no artist is a frame with no hint *and* no picture.
+  **The credit tooltip is always shown and never `whenClipped`**, which is the one binding on this
+  tile that is not a convenience. That option opens a tooltip only when the anchor's own text is
+  genuinely cut off — right for a truncating cell repeating itself, and exactly wrong on a picture
+  frame, where there is no text to clip, so the hint would open for nobody and the artist would be
+  unreachable on every tile in the gallery. `describes` is left at its default for the same
+  reason: the four controls in the tray pass `describes: false` because they already say their
+  words in an `aria-label`, and this frame says the artist nowhere else. The `alt` stays empty —
+  the crop is decorative and the deck's name is two lines down, so putting the illustrator into
+  the tile's accessible name would announce a painter before the deck on every tile on the wall.
+  **`FolderCard`'s strip got the strictly better end of this.** Its old line comma-joined up to
+  three artists into one string with no way to tell which crop belonged to whom, and that file's
+  own comment had rejected "a credit that names artists for some tiles and not others" for
+  exactly that reason. Each `MemberArt` now carries its own painter's name, which is the
+  arrangement that objection was really asking for. `DeckCoverPicker`'s `CoverPreview` keeps a
+  **visible** credit: it is one large crop with nothing else on screen.
+- **`DeckColorBar` draws a record it is handed and computes nothing but percentages.** Rust
+  answers cost strings (`deck_pip_costs`), `mana.ts`'s `addPips` decides what a pip *is* over the
+  one `SYMBOL` tokeniser, and `deckPips.ts` folds. A component that did its own tokenising would
+  be a second answer to "what is a pip", and `{W/U}` is exactly the symbol two implementations
+  disagree about — it counts as **one pip of each half**, because the bar answers *what does this
+  deck want* rather than what will be spent. Twobrid and Phyrexian are their colour, `{C}` is a
+  pip, and generic is not.
+  **Three silences, and none of them is a placeholder.** A colour with no pips draws **no
+  element**, not a zero-width one — the same pixels, a different DOM, and a zero-width `<span>` is
+  something a test can find and a later `:first-child` rule can style, standing for a colour the
+  deck does not have. `null` (the read still out) and an all-zero record (an all-lands pile) both
+  draw **no bar at all**: an empty grey rule says "no colours" in the same vocabulary a full bar
+  uses to say what they are, and a reader cannot tell that from a rendering fault. And **a deck
+  absent from `useDeckPips`' map is not a deck with no pips** — it is also a deck the read has not
+  reached, one still in flight and one whose read failed, three states that are indistinguishable
+  from the tile and that the two consumers treat alike (no bar, and last in a colour sort).
+  Its accessible name is **the colours and nothing else** (`White, Green`), because the span sits
+  inside the tile's `<button>` and joins that button's name — a reader walking the wall wants the
+  deck's colours between the picture and the name, not its arithmetic. The counts are in the
+  tooltip.
+- **`bracketLabel`'s vocabulary is `DeckBracket.tsx`'s and may not diverge from it.** `Bracket 3`
+  is the reader's own answer, `Bracket ~3` is a reading, and the `~` means the same thing on a
+  tile as on the editor's button — one glyph a reader learns once. **The editor's third form
+  (`Bracket 2 · ~4`, the mismatch) is deliberately not copied**: that button is a control, and
+  pressing it opens the advisory that names the card responsible, so the second number is a
+  question the reader can immediately ask. A tile has no room to explain one, and a number a
+  reader cannot interrogate is worse than the one they chose. `null` is drawn as no bracket
+  segment at all and covers both "this format has no command zone" and "nothing has answered
+  yet"; never `Bracket ?`, never a skeleton, never a dash.
+  **The tile estimates over the _live_ list and the editor over the tab the reader is standing
+  on**, which is the one way the two surfaces can honestly print different numbers about one
+  deck. A deck left on **Theory** reads its plan in the editor and its live list on the tile. The
+  tile is a fact about the deck; the editor is a fact about what is on screen.
+- **The sort is remembered and the filter is not**, and that split is the rule rather than an
+  omission. `useDeckSort` keeps one `app_meta` row; `deckFilter.ts` holds no state and reads no
+  storage. An order is how a reader likes to read their gallery and it is visible in the toolbar
+  the moment they open it; a filter is a thing they are doing right now, and **a gallery that
+  opened already narrowed, with no memory of having asked for it, looks like a gallery that has
+  lost decks.** `useDeckSort` is also a **call-it-once** hook — the press is held in local state,
+  so a second mount would be a second copy that never hears about the first one's press. There is
+  one sort control on one page, so the constraint costs nothing and is worth stating rather than
+  discovering.
+- **The deck comparators are written in their own natural direction, and `sortDecks` negates only
+  when the reader's direction differs from `NATURAL_DESC[key]`.** This is the one shape decision
+  in `deckSort.ts` and a test caught the alternative: write them all ascending and negate on
+  `desc`, and the **tiebreak turns round with the primary term** — `cards` reads biggest-first by
+  default, so its name tiebreak would run Z→A and two hundred-card decks would list *Zur* above
+  *Atraxa* for no reason a reader could see. Negating the whole comparator also keeps a tie at
+  exactly `0`, so stability survives the flip and the reverse of a list is that list upside down.
+  **Two rules follow that are _not_ `sorting.ts`'s, and the difference is a control.**
+  - **"Unknowns last" holds in the key's natural direction only, not in both.** `nullsLast` pins
+    nulls at the foot whichever way it runs, and it *can*, because the card sorts have no
+    direction toggle — their `descending` flag describes one fixed order. This wall has a toggle,
+    and a block of tiles that visibly refused to move through a reversal reads as a toggle that
+    did not take. So a deck whose bracket or pips have not arrived sorts last the moment the
+    reader picks that key, and first when they press the arrow.
+  - **`colors` has three ranks, not two**: coloured decks, then a deck with real `{C}` pips (it
+    draws a bar, and Eldrazi has an identity), then a deck with no pips at all — an all-lands
+    pile, a deck of nothing but generic costs, and a read still in flight, which are
+    indistinguishable from here and all draw nothing.
+- **`deckFilter` folds accents and lowercases with a _pinned_ locale, and the pin is not
+  theoretical.** `"I".toLocaleLowerCase()` is `"ı"` under `tr`, so a deck named *Izzet Storm*
+  would stop answering to a typed `izzet` on a Turkish desktop — silently, and only there. The
+  fold is NFD plus a strip of U+0300–U+036F, spelled as escapes and never as the characters
+  themselves, because a regex written with invisible combining marks is a regex nobody can check.
+  **Not `compareLabels`**, which already folds case and accents the same way but is an
+  `Intl.Collator` and has no substring API at all; asking it this question means sliding a window
+  across the name and comparing every slice of the needle's length.
+  **Empty `formats` means _no format filter_, not _no formats_.** The bug shape is a
+  `formats.includes(deck.formatKey)` with no empty check in front of it, which empties the wall
+  the moment the chip row appears and reads as the gallery having lost every deck at once.
+- **Two test traps this feature's suites were written around, both general enough to expect
+  again.**
+  - **jsdom never fires `unhandledrejection`**, so a dropped `.catch()` on a fire-and-forget IPC
+    write is invisible to vitest: the test passes *against* the defect. `useDeckSort`'s write is
+    exactly that shape, and the only assertion that can see it is a mock returning a thenable
+    with a spied `catch`.
+  - **A fold test that puts every case in one row cannot see per-row accumulation.** `deckPips`'
+    "folds several costs" test stayed green when the accumulator was replaced by a fresh record
+    per row, because the mutation only bites *across* rows. If the code accumulates over a list,
+    the fixture has to be a list.
 
 - **A deck card is the whole card, and the app's marks are overlays on it.** The picture _is_ the
   card, so `deckCardName` on the button is the **only** name a screen reader gets — but the app
@@ -2001,20 +2368,21 @@ price | type`). An **inactive category stays its own group in all three grouping
   The frame is the same thing that says "No image", "Retrying…" or "No card".
 - **The marks go left, and they used to go right** (changed 2026-08-13). Over the art go facts
   about the _deck_ — the quantity tag, the Game Changer banner, `RULE BREAK`. Under it goes the
-  data line with facts about the _printing_. `QuantityTag` merges the tag and the copy count into
-  one mark: the count printed on the tag's own colour, grey when there is no tag, so gold stays
-  something a tag says. `TagDot` is unchanged on the other three views. It costs ~34px of printed
+  data line with facts about the _printing_. `QuantityTag` merges the label and the copy count
+  into one mark: the count printed on the label's own colour, grey when there is no label, so gold
+  stays something a label says. `LabelDot` is unchanged on the other three views. It costs ~34px of printed
   name, knowingly; the app-drawn frame insets its own name band by exactly that width so a name
   _this app_ wrote is never clipped.
   **The box that mark is drawn in is `components/CountTag.tsx` and no longer this folder's**
   (2026-08-14): the slant, the 22px height, the mono face, the `aria-hidden` and the bare number.
   The grey went with it — `NEUTRAL_COUNT_PAINT` is what `UNTAGGED_COLOR` became, and
-  `QuantityTag` now passes `paint` for a tagged card and nothing at all for an untagged one. What
-  stayed here is what makes this one a _tag_: the colour, the two-fact sentence in its `title`,
+  `QuantityTag` now passes `paint` for a labelled card and nothing at all for an unlabelled one.
+  What stayed here is what makes this one a _label_: the colour, the two-fact sentence in its
+  `title`,
   and `LAYER.overlappingMark`.
   **The move was made for a second caller that has since left, and the box stays where it is**
   (2026-08-15). The search wall counted printings with this same object for a day; it says
-  `132 printings` in its own corner chip now, because a bare number is honest here — the tag it
+  `132 printings` in its own corner chip now, because a bare number is honest here — the label it
   is printed on says what is being counted — and was not honest there. So `QuantityTag` is the
   one caller again. `components/` is still the right shelf for the geometry, and
   [`src/CLAUDE.md`](../../CLAUDE.md) carries the rule both halves came out of.
@@ -2024,13 +2392,33 @@ price | type`). An **inactive category stays its own group in all three grouping
   its square ones.
 - **Every mark carries a `title`, and that is a second contract from the accessible name.**
   `deckCardName` is the whole of what a screen reader gets; a pointer user sees a 6px gem, a
-  slanted colour tag and a crown, none of which is a word. Six sentences, pinned by
-  `CardStack.test.tsx`: the tag (`"Fast mana · 2 in this pile"` — the tag and the count are one
-  mark, so one title says both), `"Game changer"`, the rule break's own finding, the rarity
+  slanted tag in a label's colour and a crown, none of which is a word. Six sentences, pinned by
+  `CardStack.test.tsx`: the label (`"Fast mana · 2 in this pile"` — the label and the count are
+  one mark, so one title says both), `"Game changer"`, the rule break's own finding, the rarity
   (`RarityGem` grew a `title` for this; the stack draws no rarity text), the shortage, and the
   finish through `FinishMark`'s SVG `<title>`. **The seventh is missing on purpose**: the canvas
   wants the set _name_ behind the printing code, and `DeckCard` carries only `setCode` —
   `cards.set_name` exists but `deck_card_select` does not select it.
+- **The shortage is a mark of the _live_ list only, and `deckCardShort` is the whole of the rule**
+  (2026-09-03, [issue #354](https://github.com/Msgaihede/mtg-grimoire/issues/354)). The red `3/4`
+  in a stacked card's chin, and the `you own 3 of 4` clause `deckCardName` says on all four views,
+  are one predicate in `cardControl.tsx` — because a figure and the words it is announced by must
+  never disagree about whether there is a shortage at all. It guards on **two** ways
+  `ownedQuantity` reads `0` without the shelf being empty, and the second is new: an inactive
+  category (`attribute_owned` passes a switched-off pile over rather than letting it draw on the
+  pool — there has been no allocator to claim anything since schema v25) and **the theory list**, where
+  `deck.rs`'s rule 2 is that _a plan holds nothing_ — the copies in the deck's group belong to what
+  is sleeved up, so a theory row reads 0 owned however full the collection is. That drew `0/1` on
+  **every card of a plan**: a hundred red marks all saying the same untrue thing, which is what was
+  reported. **The comparison a plan can honestly make is the shopping list's** —
+  `deck_theory_diff` subtracts _quantities_ and is one press away on `Compare` — and the
+  **deck-level figure is untouched**: `DeckLedger`'s `Owned` term is a fact about the whole list
+  and was explicitly kept.
+  **The other three views needed no change, and it is worth knowing why rather than assuming they
+  were missed.** `GridView` and `TextView` draw `card.quantity` alone, which is the deck's own
+  count and no comparison; `TableView`'s `Owned` column hands `OwnedBadge` a theory row's `0`, and
+  that component's own guard (`owned <= 0 && !wishlisted`) already returned `null`. So the column
+  was blank on a plan before this and is blank after it, for a reason of its own.
 - **A card carries two marks beyond its own facts — _picked_ and _landed_ — and they are one
   vocabulary across all four views** (`cardControl.tsx`, 2026-08-14). Picked is the card the detail
   pane is open on: `SELECTED_CARD`, which is `ring-2 ring-accent`, character for character
@@ -2283,7 +2671,7 @@ price | type`). An **inactive category stays its own group in all three grouping
 - **The two that were drawers are centred modals, and the search column deliberately is not**
   (changed 2026-08-14). **Two** surfaces were right-hand drawers and **three** dialogs came out of
   them: History was `AuditDrawer` and is `DeckHistoryDialog`; the piles and the labels were two
-  sections of one `CategoriesPanel` drawer and are `CategoriesDialog` and `TagsDialog` now, each
+  sections of one `CategoriesPanel` drawer and are `CategoriesDialog` and `LabelsDialog` now, each
   one press away instead of a press and a scroll, with `metaRows.tsx` as the shared row grammar
   the two of them draw with. Those three and `DeckSettingsDialog` are built on one shell,
   `Dialog.tsx`, and so is every full-window surface added since — the export dialog, the quick
@@ -2308,90 +2696,146 @@ price | type`). An **inactive category stays its own group in all three grouping
   the deck 202px. That row is gone: the card pane is an overlay over one of these two columns now
   and takes no width from either, so the desk the panel is measured against is the full one and
   `roomy` is the only thing that still rails it. The memory is the other half and the two ship
-  together — `app_meta.deck_search_open` behind `useDeckSearchOpen`, written on the **press** and
+  together — written on the **press** and
   never on the drawn state, because a railing is a measurement about a narrow window and not
-  something the reader asked for. **Its body is mounted on the reader's press and merely _hidden_ when the
+  something the reader asked for. **Since 2026-09-07 that memory is `app_meta.search_open` behind
+  `useSearchOpen("deck")`**, one JSON map of section → bool that the deck editor now shares with
+  the collection's and the wishlist's own docked columns; it was `deck_search_open` behind
+  `useDeckSearchOpen` while this panel was the only one. Nothing about the *rule* moved — three
+  columns asking the same question a row each would have been three rows, six commands, three query
+  keys and three prefetches for one fact. **No schema rung was spent on the change**: `app_meta` is
+  schema v6's key/value table, and `searchopen::stored` reads the old `deck_search_open` row when
+  the map has no `deck` entry — a bridge that decays, because nothing writes the legacy row again
+  and the first press stores the map. **`usePrefetchSearchOpen` is still mounted in `AppShell` and
+  nowhere else, and that is a measurement rather than tidiness**: asked by the panel instead, the
+  read queues behind the page's own query and lands ~700ms after the column has been drawn the
+  other way round, which is how a reader who had shut it watched it thrown open and yanked closed
+  on every deck they opened. The write is optimistic and deliberately **not** rolled back — a
+  refused write costs the memory, not the column snapping shut under the reader's hand.
+  **Its body is mounted on the reader's press and merely _hidden_ when the
   editor rails it for want of width**, and those two must not be folded into one gate: `open` is a
   choice and `roomy` is a measurement, so mounting on both threw the reader's typed query,
   filters and format away on a _resize_ — opening the card pane at 1024 was enough. Never opened
   is still nothing mounted, which is what keeps the search off a deck nobody searched from.
   The app-wide form of this rule is in [`src/CLAUDE.md`](../../CLAUDE.md).
-- **A tag is the reader's, not a deck's, and every tag surface was rebuilt around that**
-  (2026-08-20, schema v21 — issue #185). `deck_tags` has no `deck_id`: one row per name, app-wide,
-  keyed on `schema::tag_name_key`. The storage half is
+- **A label is the reader's, not a deck's, and every label surface was rebuilt around that**
+  (2026-08-20, schema v21 — issue #185). `deck_labels` has no `deck_id`: one row per name,
+  app-wide, keyed on `schema::label_name_key`. The storage half is
   [`src-tauri/CLAUDE.md`](../../../src-tauri/CLAUDE.md); what this folder owns is what a reader
   sees, and it is six decisions:
-  - **"This deck's tags" is derived from the cards, and `variant` scopes it.** There is no deck on
-    a tag row to filter by, so what a deck has is a list of cards, some of which wear a label —
-    which is also exactly what the right-click menu wants to offer. One definition of "in use",
-    serving the menu, the Tags dialog's first section and the counts. The live list and the theory
-    list are treated as **separate decks** where labels are concerned, so switching the editor
-    between them genuinely changes which tags are there.
-  - **The order is use, and `deckCardTagRows` therefore stopped calling `sortOptions`** — which
-    reverses a fix made on 2026-08-14 whose premise is gone. That fix was right: `deck_tag_list`
+  - **"This deck's labels" is derived from the cards, and `variant` scopes it.** There is no deck
+    on a label row to filter by, so what a deck has is a list of cards, some of which wear a label
+    — which is also exactly what the right-click menu wants to offer. One definition of "in use",
+    serving the menu, the Labels dialog's first section and the counts. The live list and the
+    theory list are treated as **separate decks** where labels are concerned, so switching the
+    editor between them genuinely changes which labels are there.
+  - **The order is use, and `deckCardLabelRows` therefore stopped calling `sortOptions`** — which
+    reverses a fix made on 2026-08-14 whose premise is gone. That fix was right: `deck_label_list`
     answered `ORDER BY t.name` over a `TEXT` column with no `COLLATE NOCASE`, which is byte order,
     so `Cut, Ramp, budget` and a reader looking for "budget" under B found it last. The list is
     most-used-first now, which is the first of the two exemptions this app grants — **an order
     that *is* the information** — and re-sorting it here would throw away a fact the backend went
     and counted.
-  - **The context menu offers only what this list wears; "More tags…" is where the rest went.**
-    That row was "New tag…" and opened a create form; it opens `AddTagDialog`, a pick-or-create
-    with **one field doing both jobs** — typing narrows the list *and* is the name a new tag would
-    get, because those are the same question. The chain is untouched and must stay untouched:
-    `createTagFor` is the editor's, `mutateAsync` rather than a `mutate`-scoped `onSuccess`,
-    because those callbacks belong to an *observer* and TanStack drops them when it unmounts — a
-    create started in the dialog and chained there loses its attach to an Escape landing during
-    the round trip, leaving the label made and silently never worn. The `addTag` layer carries the
-    **slot** (`cardId`, `categoryId`, `finish`) and the card's name, frozen.
-  - **The Tags dialog is two sections and two *different* destructive acts.** A row the list wears
-    offers **Remove** (untags this deck's cards in the variant on screen, tag survives); a row
-    under "Your other tags" offers **Delete** (app-wide, and the confirmation says how many cards
-    in how many decks). They were one press while a tag belonged to a deck, and conflating them
-    now would mean a reader tidying one deck stripping a label off nine others. A tag in use here
-    that they want gone everywhere is removed first, then deleted — two presses, and the
+  - **The context menu offers only what this list wears; "More labels…" is where the rest went.**
+    That row was "New label…" and opened a create form; it opens `AddLabelDialog`, a
+    pick-or-create with **one field doing both jobs** — typing narrows the list *and* is the name a
+    new label would get, because those are the same question. The chain is untouched and must stay
+    untouched: `createLabelFor` is the editor's, `mutateAsync` rather than a `mutate`-scoped
+    `onSuccess`, because those callbacks belong to an *observer* and TanStack drops them when it
+    unmounts — a create started in the dialog and chained there loses its attach to an Escape
+    landing during the round trip, leaving the label made and silently never worn. The `addLabel`
+    layer carries the **slot** (`cardId`, `categoryId`, `finish`) and the card's name, frozen.
+  - **The Labels dialog is two sections and two *different* destructive acts.** A row the list
+    wears offers **Remove** (unlabels this deck's cards in the variant on screen, label survives);
+    a row under "Your other labels" offers **Delete** (app-wide, and the confirmation says how many
+    cards in how many decks). They were one press while a label belonged to a deck, and conflating
+    them now would mean a reader tidying one deck stripping a label off nine others. A label in use
+    here that they want gone everywhere is removed first, then deleted — two presses, and the
     app-wide one is never a single click from the deck they are editing.
-  - **The duplicate guard is a courtesy, and the index is the fence.** `tagNames.ts` is a
-    deliberate second copy of `schema::tag_name_key`, walked by the same table of spellings on
+  - **The duplicate guard is a courtesy, and the index is the fence.** `labelNames.ts` is a
+    deliberate second copy of `schema::label_name_key`, walked by the same table of spellings on
     both sides, and it exists for one reason: a reader who types a name that exists has not made a
-    mistake, they have found the tag they wanted — so the dialogs disable the button and point at
-    the row rather than spending a round trip on a refusal. Uniqueness itself is a table property
-    and stays the `UNIQUE INDEX`'s: two windows racing one new name is what an index is for.
-  - **The header's second line says the tags are shared**, because that is the fact nothing on
-    screen can show. It said "Deleting a tag keeps its cards", which is still true and is now the
+    mistake, they have found the label they wanted — so the dialogs disable the button and point
+    at the row rather than spending a round trip on a refusal. Uniqueness itself is a table
+    property and stays the `UNIQUE INDEX`'s: two windows racing one new name is what an index is
+    for.
+  - **The header's second line says the labels are shared**, because that is the fact nothing on
+    screen can show. It said "Deleting a label keeps its cards", which is still true and is now the
     *less* surprising half.
-- **A tag's colour is the reader's own, stored as `#rrggbb`, and `tagColors.ts` is the only file
-  that knows it** (2026-08-20). It was one of **six token words** — `gold`, `ember`, … — and the
-  argument for that was real and is written down where it was made: a stored hex outlives the
-  theme that chose it, so a tag picked against last year's palette comes back as a colour this app
-  no longer uses. What overruled it is that a label is the one thing on a deck screen whose meaning
-  is the reader's rather than the game's, and six words cannot say what a reader means. Four
-  consequences, none of them optional. **The six are still the quick row of the picker** and are
-  still `--color-pie-*`, so the common answer is unchanged and no new colour entered the palette;
-  they are **literal hexes** in `TAG_COLORS` now rather than `var()`s, because these strings are
-  written to a column and a `var()` in a column is a colour with no value outside this build —
-  `tagColors.test.ts` compares them against `index.css` and is the only thing that would catch a
-  palette edit leaving the picker behind. **Rows written before the change still read**, through
-  `LEGACY_TOKENS`, which is a read path that does not expire: a database is not migrated by a build
-  being newer than it, and `CardStack.test.tsx` holds a legacy row on purpose. **`tagFgCss` is
-  computed rather than tabulated** — the quantity tag prints a count *on* the colour, and once the
-  reader picks it no table can hold the answer in advance; the formula is the sRGB luma the retired
-  table's own six answers were built from, and those six are pinned so a "more correct" curve
-  cannot flip one silently. And **nothing in Rust changed**: `deck_tags.color` never had a CHECK,
-  because picking what a colour *is* is the webview's job. **Since v21 that colour is the same in
-  every deck**, which is what the issue asked for and what makes the recolour worth finding: the
-  audit log gained a `recolour` verb it had rendered and never been written, because a hex that
-  moves nine decks is a change a reader may come back looking for.
-- **The Tags dialog opens on the act of making one, and the swatch is the recolour** (2026-08-20).
+- **A label's colour is the reader's own, stored as `#rrggbb`, and `labelColors.ts` is the only
+  file that knows it** (2026-08-20). It was one of **six token words** — `gold`, `ember`, … — and
+  the argument for that was real and is written down where it was made: a stored hex outlives the
+  theme that chose it, so a label picked against last year's palette comes back as a colour this
+  app no longer uses. What overruled it is that a label is the one thing on a deck screen whose
+  meaning is the reader's rather than the game's, and six words cannot say what a reader means.
+  Four consequences, none of them optional. **The six are still the quick row of the picker** and
+  are still `--color-pie-*`, so the common answer is unchanged and no new colour entered the
+  palette; they are **literal hexes** in `LABEL_COLORS` now rather than `var()`s, because these
+  strings are written to a column and a `var()` in a column is a colour with no value outside this
+  build — `labelColors.test.ts` compares them against `index.css` and is the only thing that would
+  catch a palette edit leaving the picker behind. **Rows written before the change still read**,
+  through `LEGACY_TOKENS`, which is a read path that does not expire: a database is not migrated by
+  a build being newer than it, and `CardStack.test.tsx` holds a legacy row on purpose.
+  **`labelFgCss` is computed rather than tabulated** — the quantity tag prints a count *on* the
+  colour, and once the reader picks it no table can hold the answer in advance; the formula is the
+  sRGB luma the retired table's own six answers were built from, and those six are pinned so a
+  "more correct" curve cannot flip one silently. And **nothing in Rust changed**:
+  `deck_labels.color` never had a CHECK, because picking what a colour *is* is the webview's job.
+  **Since v21 that colour is the same in every deck**, which is what the issue asked for and what
+  makes the recolour worth finding: the audit log gained a `recolour` verb it had rendered and
+  never been written, because a hex that moves nine decks is a change a reader may come back
+  looking for.
+- **The Labels dialog opens on the act of making one, and the swatch is the recolour**
+  (2026-08-20).
   Three moves, each with a reason that outlives the redesign that made it. The **add field went to
-  the top**: a reader with no tags is who this screen is hardest for, and the control that fixes
+  the top**: a reader with no labels is who this screen is hardest for, and the control that fixes
   that sat below the list *and* below a four-line paragraph. That **paragraph became a subtitle and
   two section headings**. And the **colour left the rename**, which had made a reader who wanted a
   different red open the control for changing the word. Both halves still send the other back,
-  because `deck_tag_update` renames **and** recolours in one command with no patch shape — the
-  rename sends `tag.color`, the picker sends `tag.name`, and `TagsDialog.test.tsx` has a case for
-  each. **The picker holds a draft and Done is the write**: `input[type=color]` fires all the way
-  down a drag through the OS dialog, so a row writing on every change would be a `deck_tag_update`
-  per pixel of travel.
+  because `deck_label_update` renames **and** recolours in one command with no patch shape — the
+  rename sends `label.color`, the picker sends `label.name`, and `LabelsDialog.test.tsx` has a case
+  for each. **The picker holds a draft and Done is the write**: `input[type=color]` fires all the
+  way down a drag through the OS dialog, so a row writing on every change would be a
+  `deck_label_update` per pixel of travel.
+- ⚠️ **The panel's chrome is not this folder's any more, and every rule below is now
+  `features/search/CardSearchPanel.tsx`'s** (2026-09-07,
+  [issue #356](https://github.com/Msgaihede/mtg-grimoire/issues/356)). The collection and the
+  wishlist each grew a docked card search of their own, so the two thirds of `DeckSearchPanel` that
+  were never about a deck were **extracted**: `CardSearchPanel.tsx` is the shell (the three-state
+  `<section>` and its rail, the disclosure and its `NO_ROOM` tooltip, the title row and the
+  vertical rail heading, `ResizeHandle`, the width `useState` and the clamp split, the
+  `open`/`shown`/`over`/`overlaid` derivations, the caret hand-back) and `CardSearchBody.tsx` is
+  the wall and its furniture. `MIN_PANEL_WIDTH_PX` and `SEARCH_OVER_ATTR` are re-exported from
+  `DeckSearchPanel.tsx`, so nothing that imported them from here had to change.
+  **What stays deck-shaped stays here** and is what the rest of this section is about: the tab
+  strip, `CollectionSearchTab`, `categories`/`targetCategoryId`/`AUTO_CATEGORY`/`autoCategoryFor`,
+  `deck_add_card`, the landed glow, `availableForDeck` and the format seed. **The proof the
+  extraction was faithful is that this panel's whole test file and whole story file stayed green
+  with no edit to either** — an edit one of them seemed to need was defined as the signal that
+  behaviour had moved, and none was needed.
+  **Reading this section, read every rule below as a rule about the shared shell**, and change one
+  of them in `features/search/` rather than here — a fix applied to the deck's copy alone is now a
+  fix two other pages do not get. Where the two new surfaces *differ* is written up in
+  [`src/CLAUDE.md`](../../CLAUDE.md) and
+  [frontend-design.md](../../../docs/reference/frontend-design.md); the short version is that they
+  draw no tab strip, lock the add's destination list, and pass their own `ZoomSection`,
+  `selectionScope`, `FilterLabels.idStem` and `data-search-over` value.
+- **There is a second labels surface since 2026-09-07, and what it does not have is a deck.**
+  Settings → Appearance → Labels draws the same app-wide list — add, rename, recolour, delete —
+  and calls the same commands `LabelsDialog` does, with **no `deckId`**. It therefore draws no
+  "worn by this list" section, because that split is a fact about a deck and this panel is
+  standing in none; what a deckless write skips, and why, is in
+  [decks-storage.md](../../../docs/reference/decks-storage.md). **The dialog is untouched** and
+  stays the deck's answer. It sits under Appearance rather than under Tags on purpose: a *tag* in
+  this app is one of Scryfall's two tagger datasets and a *label* is this coloured per-card mark,
+  and the rail must not blur the two words.
+  **`useDestructiveFocus` is duplicated rather than lifted, and that is a decision rather than an
+  oversight.** It is eight lines — a ref pair and one effect that hands the caret back to the
+  button a cancelled confirmation came from — and it is private to `LabelsDialog.tsx`, where its
+  own comment already credits `CategoriesDialog`'s. The panel carries its own copy with a comment
+  saying whose it is. **A third caller is where that stops being the cheaper answer**: lift it into
+  `src/components/` then, and not before, because a shared hook whose only users are two spellings
+  of one dialog buys nothing and costs an indirection.
 - **The docked panel's width is the reader's, dragged from its left edge** (2026-08-14).
   `ResizeHandle` is an ARIA window splitter — `role="separator"`, `aria-orientation="vertical"`, a
   `tabIndex`, `aria-valuenow`/`min`/`max` in **px**, arrows and Home/End for the keyboard — bounded
@@ -2456,10 +2900,12 @@ longer-form record of the two hand-rolled comboboxes and their shared panel is
   `debouncedText`: clearing the field changes the key to `""`, which the query is `enabled: false`
   for, so the last five rows would hang under an empty box for the rest of the session.
 - **The Escape rung is `enabled: listOpen`, never `enabled: open`.** With the caret in a quick add
-  whose list is closed, the press belongs to the card detail pane, which listens on `window` in the
-  bubble phase — a capture-phase listener here would consume it and close nothing at all.
-  `DeckEditor.test.tsx`'s "lets Escape through to the card pane when no layer of its own is open"
-  focuses this very field and asserts the press arrives with `defaultPrevented` false. Escape here
+  whose list is closed, the press belongs to whatever layer is open over the desk — the card
+  modal, and otherwise the editor's own `"navigation"` floor, which closes the deck (it was the
+  docked card pane's, on the `"outer"` rung, until 2026-09-03). A capture-phase listener here would
+  consume it and close nothing at all. `DeckEditor.test.tsx`'s "lets Escape reach the window from
+  every field, where the deck's own floor takes it"
+  focuses this very field and asserts the press reaches `window`. Escape here
   closes the list and hands focus to nobody: the field is not unmounting and is what the caret was
   in the whole time, so the hook's focus-hand-back clause has nothing to do.
 - **The list is one more `"inner"` peer on this screen and deliberately outside the `Layer` union
@@ -2536,6 +2982,144 @@ longer-form record of the two hand-rolled comboboxes and their shared panel is
   measured, so this would be re-measuring a shared component rather than this one. And the
   freshness guard is **unit-tested only**: reproducing a stale list live means winning a 300ms
   race by hand, which is what a test with a controlled clock is for.
+
+## Tokens & emblems
+
+`DeckTokensPanel.tsx` (the band), `TokenArtPicker.tsx` (the printings dialog),
+`useDeckTokens.ts` (the query and the four writes) and `deckTokens.ts` (every conclusion), landed
+2026-09-07 for [issue #388](https://github.com/Msgaihede/mtg-grimoire/issues/388). The Rust half —
+the union keep rule, the `deck_tokens` table, the four commands and every measurement — is
+[docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md).
+
+**Rust supplies the facts and `deckTokens.ts` draws every conclusion**, which is this feature's
+copy of the boundary the rest of the builder keeps. Rust resolves each deck card's `all_parts`
+against the corpus and joins on whatever the reader stored; which printing to draw, how many
+copies the stepper starts at, whether a dismissed token is on screen and the order the wall reads
+in are all decisions, and they live in one function with one test file so that changing a rule is
+one edit and not four components disagreeing.
+
+- **The naming rule, and it is the reason this section is not called "Tokens".** The area is
+  **"Tokens & emblems"** — `TOKENS_HEADING` in `DeckTokensPanel.tsx`, one constant because three
+  things say it: the region's `aria-label`, the disclosure's visible text, and every test and
+  story that addresses either.
+  `autoCategory.ts:130` already uses the bare word *Tokens* for an auto-category
+  of cards that **make** tokens, driven by the `repeatable-token-generator` oracle tag. Those are
+  opposite meanings of one word, and **the auto-category is deliberately not renamed** — renaming
+  it would silently regroup every existing deck — so the two strings are kept apart instead. Same
+  discipline as *tag* versus *label*: this repo does not let words trade places.
+- **Four placement constraints, each already documented at its site and one of which has cost a
+  session.** A **`<section>`, never an `<aside>`** — a second complementary landmark broke five of
+  `App.test.tsx`'s pane assertions. **`shrink-0` is mandatory** — the editor's root is the only
+  box with a height, and `shrink-0` on the bands below the desk "is the whole of why this editor
+  scrolls now", so without it the band is squeezed to nothing on exactly the decks the feature is
+  for. **Below the Deck stats band, never between `PriceStrip` and it** — the strip's drag-remove
+  tray sits at `-top-3`, reaching up into the column's `gap-3`, so splitting that pair would leave
+  a reader dragging a card the height of four charts to reach the drop that removes it.
+  **Collapsed by default**, driven by `decks.tokens_open`, so a reader who never sleeves tokens
+  pays one header row.
+- **The read runs whether or not the wall is drawn**, and that is deliberate. The header has to
+  say how many tokens the deck makes — that number *is* the reason to open the area — and the
+  resolve is ~5 ms for a 100-card deck against the corpus the app already has. Gating the query on
+  `open` would trade that for a header that could only say "press to find out".
+- **`??` and never `||`, in both fallbacks.** Effective printing is `cardId ?? defaultCardId` and
+  effective quantity is `quantity ?? DEFAULT_TOKEN_QUANTITY`. The two operators agree on every
+  value the reader can produce except one — **a quantity of 0**, which is a token they zeroed on
+  purpose while keeping the art they picked — and `stored || 1` is the natural way to write this
+  and is wrong. `overridden` compares `quantity !== null` for the same reason, so the reset
+  affordance does not vanish on the most easily lost deviation.
+- **`DEFAULT_TOKEN_QUANTITY` is a floor and never a guess.** Reading *"create two 1/1 white
+  Soldier tokens"* out of oracle text is defeated by `create X`, by *for each*, by copy-tokens and
+  by repeatable makers like Krenko, and a number the reader has to correct is worse than one they
+  raise. It is typed `number` rather than left as the literal `1`, or a consumer seeding a
+  `useState` from it would get a state of type `1`.
+- **Emblems last, then by name with `localeCompare(name, "en")`.** An emblem is a one-off a deck
+  may make once in a game; a pile of Treasures is what a reader reaches for, so the things they
+  touch sit where they can be touched. The locale is pinned for the reason every `Intl` call in
+  this app pins it — a wall that reorders itself on a different machine is one two readers cannot
+  compare. `isEmblem` tests **`layout === "emblem"`**, the column and not the type line: a type
+  line is prose, and `"Emblem — Elspeth"` is one shape of it.
+- **A token's name does not identify it, so every control folds the subtitle into its own name.**
+  104 token and emblem names are carried by more than one `oracle_id` (debug corpus, 2026-09-07) —
+  `Elemental` by 31, `Spirit` by 22, `Soldier` by 13 — and `Wurmcoil Engine` alone puts two tokens
+  both called `Wurm`, both 3/3, both colourless artifacts, on one deck's wall, separated only by
+  Deathtouch against Lifelink. **Deduping by `oracleId` is not enough to make a name unique.** Two
+  tiles announcing one accessible name is a bug that has already shipped here, on the collection
+  wall, where a 2X2 and an LEA Lightning Bolt both announced *"Copies of Lightning Bolt"* —
+  neither suite caught it, because both names were **correct** and merely not unique.
+  - `tokenSubtitle` is `<colours> <power>/<toughness> · <oracle text>`, and **all three terms are
+    needed**: text alone cannot separate the corpus's colourless 1/1 Soldier from its white one,
+    and colours and size alone cannot separate the two Wurms. Dropping a term to shorten the line
+    re-opens exactly one of those two cases.
+  - **`power` and `toughness` are strings and must never be parsed to numbers** — Scryfall writes
+    `*`, `1+*` and `∞`, and there is a real `*`-over-`*` Elemental. `colors` is Scryfall's letters,
+    where `""` is genuinely colourless and `null` is *not known*, which is why the type is nullable
+    rather than defaulted.
+  - **The subtitle is clamped in CSS and never in the string.** Oracle text is the term that
+    separates the two Wurms, so a truncation short enough to fit a 150px tile would fold them back
+    together in the one case this exists for.
+  - **The name and the subtitle are two elements, and every accessible name is spelled rather than
+    assembled.** Two flex children with a `gap` between them compute to a name with the words run
+    together (`"Missing2"`), so every control on a tile goes through one `tileName(verb, view)` —
+    `Quantity of <name>, <subtitle>`, `Change the art for …`, `Dismiss …`, `Restore …`,
+    `Reset …` — rather than being left to the DOM to concatenate. One helper, so a control added
+    later cannot be the one that forgets the subtitle.
+  - It returns `null` for an emblem: the type line already names the planeswalker, so a second
+    line would repeat what the tile is drawing.
+- **`TOKEN_TILE_WIDTH` is 150 and is a third constant rather than an import, on purpose.**
+  `GridView`'s `TILE_WIDTH` and `DeckSearchPanel`'s `TILE_BASE` are both a *base* that a zoom then
+  multiplies for their own card section; neither the token wall nor the picker is a zoom section,
+  so importing one would be importing a number that means "the size before the reader's zoom" and
+  using it as the size. What the two walls here must agree about is **each other** — a reader who
+  presses a tile has to meet the same picture at the same size, or the swap does not read as a
+  swap — which is why the number is declared once for the pair, in `TokenArtPicker.tsx`, so the
+  import runs the way a panel opening a picker does.
+- **The picker passes no `playableOnly`, because `cardPrintings` does not take one.** That flag is
+  `searchCards`', which is what `DeckCoverPicker.tsx:148` passes it to; `card_printings`' predicate
+  is `oracle_id = ?1 AND is_paper = 1` with no legality term at all. Reading the two as one command
+  is how this picker would come back empty for every token in the game — and the symptom of
+  "fixing" it later is a compile error rather than a wrong result, which is why it is written down.
+  Treasure answers 97 paper printings across 70 distinct arts, so it is a grid with a scroller and
+  never a dropdown, and `token !== null` is what opens it rather than a flag beside it.
+- **The query key is `["decks", "tokens", deckId, variant]`, under the `["decks"]` root on
+  purpose.** `useDeck`'s own `invalidate` fires that root for every write to what is *in* a deck,
+  so adding a card, moving one between piles or switching a category off already refreshes this
+  list — and it should, because all three change what the deck makes. **No `staleTime`**:
+  `query.ts` caches 30 s app-wide, and a second one here could only make a missing invalidation
+  invisible. **No `marketplace` in the key** either — nothing this answers is priced.
+  Invalidation drops one segment (`["decks", "tokens", deckId]`) because the override is not
+  grained on variant while the derived list is, so a dismissal made on the Actual list has to reach
+  the plan's tab too.
+- **Every write sends the whole triple, and `storedOverride` reads the *stored* columns rather
+  than the effective ones.** `deck_token_set` has no `coalesce` — the row it upserts is defined by
+  what it carries and is deleted outright when it would carry nothing — so a caller sending only
+  the field it changed would silently clear the other two: picking a different art for a token set
+  to 4 copies would put the count back to 1. And reading `view.printingId` back would pin a reader
+  who only changed the count to whatever art the resolver named today, so the next deck edit that
+  moved the default would find that token no longer following it. An untouched field stays
+  untouched.
+- **`restore` chooses `auto` or `manual` by whether the deck still derives the token**, because
+  `state` is one column and `hidden` therefore costs a `manual` row its manual-ness. A token the
+  deck makes goes back to `auto` and follows the deck again — and if that leaves the row carrying
+  nothing the backend deletes it, which is exactly right. A token nothing derives can only be on
+  the wall as `manual`, so restoring it to `auto` would take it off the wall a second time, in the
+  one press whose whole meaning is the opposite.
+- **`showDismissed` is plain `useState` with the views a `useMemo` over it** — never state synced
+  in an effect, which fails lint only at `npm run verify`. There are two facts and one derivation
+  rather than three facts that have to be kept in agreement, and it is deliberately not persisted:
+  a reader who revealed a dismissed token in order to put it back has finished with the switch by
+  the time they close the deck. `NO_ROWS` is a module-level constant for the same reason —
+  `query.data ?? []` is a fresh array every render, so the views would be re-sorted on every
+  keystroke anywhere in the editor.
+- **A deck that derives nothing is a supported state and never an error**, and it depends on
+  nothing optional: this feature reads the corpus the app already has, so unlike the Tagger
+  datasets, the price feeds or the relay there is no never-fetched floor to fall back to. The
+  header says so and the area stays collapsed. The hook's `loading` is gated on `deckId !== null`
+  as well as on the query, because an `enabled: false` query is `pending` for ever and a gallery
+  with no deck open must not report a spinner.
+- **`tokensOpen` reached `useDeck`'s `update` with no edit at all**, exactly as `separateXGroup`
+  and `bracket` did: that mutation takes a whole `DeckPatch` and names no field, which is what
+  makes a new column free. A per-field arm would be a second definition of what the command already
+  accepts.
 
 ## Known open bugs
 

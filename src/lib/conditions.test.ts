@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { CONDITIONS, normalizeCondition } from "./conditions";
+import {
+  CONDITIONS,
+  CONDITION_LABEL,
+  CONDITION_NOT_SET,
+  MENU_CONDITION,
+  normalizeCondition,
+} from "./conditions";
 
 describe("normalizeCondition", () => {
   it("maps every spelling in the research doc's synonym table", () => {
@@ -47,16 +53,71 @@ describe("normalizeCondition", () => {
    *  the only place the difference still exists. */
   it("keeps what it was given, and says when it did not recognise it", () => {
     expect(normalizeCondition("Poor-ish")).toEqual({
-      condition: "NM",
+      condition: "NONE",
       original: "Poor-ish",
       matched: false,
     });
-    expect(normalizeCondition(null)).toEqual({ condition: "NM", original: null, matched: true });
+    expect(normalizeCondition(null)).toEqual({ condition: "NONE", original: null, matched: true });
     expect(normalizeCondition("  near mint  ").original).toBe("near mint");
   });
 
-  it("has five grades, worst last", () => {
-    expect(CONDITIONS).toEqual(["NM", "LP", "MP", "HP", "DMG"]);
+  /**
+   * Silence is not a grade, and since schema v35 it does not have to be read as one.
+   *
+   * All four spellings of nothing answer the same way — `null`, `undefined`, an empty string
+   * and a cell of spaces — and `matched: true`, because a file that said nothing is a file this
+   * app read correctly. Only `matched: false` draws the preview's warning row, so a blank
+   * Condition column must never light one up on every line.
+   */
+  it("reads every spelling of silence as the not-set sentinel, with nothing to warn about", () => {
+    for (const raw of [null, undefined, "", "   "] as const) {
+      expect(normalizeCondition(raw), String(raw)).toEqual({
+        condition: CONDITION_NOT_SET,
+        original: null,
+        matched: true,
+      });
+    }
+  });
+
+  /**
+   * A file that spells the absence out loud lands where an empty cell lands.
+   *
+   * These three are in `SYNONYMS` rather than being read as unknown grades, and the difference
+   * is the warning row: `Not set` is a word this app understands, so a re-import of its own
+   * export must not flag every ungraded copy as a condition it could not read.
+   */
+  it("recognises the words for no grade at all", () => {
+    for (const raw of ["None", "NONE", "unset", "Not set", "  not set  "]) {
+      expect(normalizeCondition(raw), raw).toMatchObject({
+        condition: CONDITION_NOT_SET,
+        matched: true,
+      });
+    }
+  });
+
+  it("has six values, the absence first and the worst grade last", () => {
+    expect(CONDITIONS).toEqual(["NONE", "NM", "LP", "MP", "HP", "DMG"]);
+    // First because it is the default a picker opens on, not because it is the best of
+    // anything — the scale itself is the five entries behind it, in order. The database sorts
+    // the other way (`NM 0 … DMG 4, NONE 5`); that order is `COLLECTION_SORTS`' and is not
+    // derived from this one.
+    expect(CONDITIONS[0]).toBe(CONDITION_NOT_SET);
+    expect(CONDITIONS.slice(1)).toEqual(["NM", "LP", "MP", "HP", "DMG"]);
+  });
+
+  /**
+   * The one decision a menu used to make on the reader's behalf, and no longer does.
+   *
+   * Asserted as *the sentinel* rather than as `"NONE"`: this is the statement that a quick add
+   * records no grade, and it would still be that statement if the sentinel were ever respelled.
+   * Every value in the picker needs a label, so the census is asserted too — a sixth entry with
+   * no `CONDITION_LABEL` row would draw a blank option rather than fail to compile.
+   */
+  it("records no grade for a menu add, and labels every value it can hold", () => {
+    expect(MENU_CONDITION).toBe(CONDITION_NOT_SET);
+    expect(CONDITION_LABEL[CONDITION_NOT_SET]).toBe("Not set");
+    expect(Object.keys(CONDITION_LABEL)).toHaveLength(CONDITIONS.length);
+    for (const c of CONDITIONS) expect(CONDITION_LABEL[c], c).toBeTruthy();
   });
 
   /**
@@ -79,7 +140,7 @@ describe("normalizeCondition", () => {
     for (const raw of ["constructor", "__proto__", "Constructor", "  __proto__  "]) {
       const result = normalizeCondition(raw);
       expect(result.matched, raw).toBe(false);
-      expect(result.condition, raw).toBe("NM");
+      expect(result.condition, raw).toBe("NONE");
       expect(CONDITIONS, raw).toContain(result.condition);
     }
   });

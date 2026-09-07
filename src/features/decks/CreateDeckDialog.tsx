@@ -34,6 +34,19 @@ const BLANK: DeckSettingsValue = {
   description: "",
   notes: "",
   theoryEnabled: false,
+  // **Both marks on, and the create sends neither.** `decks.theory_mark_exact` and
+  // `theory_mark_name` are `NOT NULL DEFAULT 1`, so this pair is the schema's own answer written
+  // where the draft can read it — a `deck_create` that carried them would be a second opinion
+  // about a default the table already owns, and `DeckInput` deliberately has no field for either.
+  // **And the two switches are not drawn here at all** — this dialog passes no
+  // `canSetTheoryMarks`, which is `defaultCategoryId`'s arrangement one field over: the question
+  // is not answerable yet rather than answerable and skipped. A reader who turned the plan on in
+  // *this* dialog would otherwise get a pair of switches whose presses reach nothing, and a
+  // control that cannot take effect teaches them something false about the deck they are making.
+  // Both marks are a *reading* preference, one press away in Deck settings on the deck that opens
+  // the moment Create is pressed.
+  theoryMarkExact: true,
+  theoryMarkName: true,
   folderId: null,
   // **The one field this dialog never asks about**, and the only honest answer it could give:
   // a deck being created has no categories — `deck_create` seeds the four zones in the same
@@ -208,7 +221,7 @@ export function CreateDeckDialog({
       open={open}
       title="New deck"
       closeLabel="Close"
-      width="w-[55rem]"
+      size="w-[55rem]"
       onDismiss={onDismiss}
       onClose={onClose}
     >

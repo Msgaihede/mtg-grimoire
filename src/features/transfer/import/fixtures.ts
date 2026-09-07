@@ -168,11 +168,11 @@ SB: 1 Path to Exile`;
 
 /**
  * Archidekt's full text export: a heading per category, and every line carrying its category in
- * brackets, its printing, and often a `^Tag,#colour^`.
+ * brackets, its printing, and often a `^Label,#colour^`.
  *
- * **This is `REFERENCE_LIST`'s deck**, with printings, categories and tags added — same 105 card
+ * **This is `REFERENCE_LIST`'s deck**, with printings, categories and labels added — same 105 card
  * lines, same 117 copies — which is what makes the two fixtures check each other. 14 headings,
- * 44 tagged lines, 3 `*F*` markers, 7 `//` split names, and **17 lines whose first bracket entry
+ * 44 labelled lines, 3 `*F*` markers, 7 `//` split names, and **17 lines whose first bracket entry
  * carries `{noDeck}`**: Archidekt's word for a pile that counts toward nothing, which is this
  * app's `is_active = 0`.
  *
@@ -328,14 +328,14 @@ Maybeboard
  * * **Five distinct labels** — `Keeper`, `Fence`, `Replace Art`, `Getting`, `Fence (flavor)` —
  *   each with its own hex.
  * * **`Fence` and `Fence (flavor)` are two labels**, not one and its restatement. They fold to
- *   different `tagNameKey`s, which is the case a `startsWith` or a loose comparison would get
+ *   different `labelNameKey`s, which is the case a `startsWith` or a loose comparison would get
  *   wrong.
  * * **A label on the commander line**, so the "does a label survive the commander choice"
  *   question has a card to ask it about.
  * * **A label on a `{noDeck}` maybeboard line**, because a pile that counts toward nothing is
  *   still a pile whose cards wear labels.
  * * **`28x Snow-Covered Plains`**, so a label's copy count is visibly copies rather than lines.
- * * **Untagged lines throughout**, which is what most of any list is.
+ * * **Unlabelled lines throughout**, which is what most of any list is.
  *
  * Every one of those numbers is asserted in `parse.test.ts` and `destinations/deck.test.ts`
  * rather than remembered here.
@@ -480,7 +480,7 @@ export const ARCHIDEKT_FLAT = `1x Aerith, Last Ancient (fic) 76 [Creature]
  * rest. What fails today is the *parse* — `LINE`'s set group is `\w{1,10}`, so `()` leaves the
  * whole tail inside the name.
  *
- * 88 lines, 100 copies, no headings, no tags, no brackets, no `//`.
+ * 88 lines, 100 copies, no headings, no labels, no brackets, no `//`.
  */
 export const EMPTY_HINT_LIST = `1 Aerith, Last Ancient () 76
 1 Animist's Might (MAT) 20

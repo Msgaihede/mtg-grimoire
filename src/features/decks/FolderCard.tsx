@@ -13,7 +13,7 @@ import { ParentFolderCard } from "@/components/ParentFolderCard";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { cardScaleVars } from "@/lib/cardZoom";
 import { plural } from "@/lib/counts";
-import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
+import { DROP_EDGE, DROP_OVER } from "@/lib/dropMarks";
 import { useFolderDropTarget, type FolderDrag, type FolderEdge } from "@/lib/folderDrag";
 import { FOCUS } from "@/lib/focus";
 import { cardArtSrc, cardImageUrl } from "@/lib/images";
@@ -125,7 +125,6 @@ export function FolderCard({
   const ref = useRef<HTMLLIElement>(null);
   const folderRef = useRef<HTMLDivElement>(null);
   const menu = rowMenu(node.folder);
-  const tip = useTooltip();
   const over = useDeckDropTarget({ ref, canDrop, onDrop: onDropDeck });
   useFolderDragSource(folderRef, node.folder);
   const { armed, edge } = useFolderDropTarget({
@@ -138,15 +137,25 @@ export function FolderCard({
   const eligible = drag !== null && canDrop(drag);
 
   // Scryfall's image policy, applied to a strip exactly as it is to a cover: an `art` crop has
-  // no printed frame, so a cover this app cannot name an illustrator for is not drawn.
+  // no printed frame, so a cover this app cannot name an illustrator for is not drawn. The rule
+  // is on `https://scryfall.com/docs/api` under the image guidelines — see `DeckTile`'s
+  // {@link Cover}, which quotes it in full and is where this card's credit went.
   //
   // **This excludes a custom cover, and that is deliberate — do not "fix" it.** A deck wearing
   // the reader's own picture therefore contributes its *card* art here (or nothing, if it has
   // none), which is a small inconsistency with its own tile and the cheaper of the two
-  // mistakes. The strip is a sample of member card art under **one** credit line; letting an
-  // uploaded picture in would make that line cover something it cannot speak for, and the
-  // alternative — a credit line that names artists for some tiles in the strip and not others —
-  // is worse than the inconsistency. Ruled 2026-08-11 rather than left as an oversight.
+  // mistakes.
+  //
+  // **The filter stays exactly as it is, and 2026-09-07 is what makes it load-bearing rather
+  // than merely tidy.** Both fields are required, so every crop this strip draws has a name to
+  // put on it — which is precisely what lets the credit move onto the pictures. The version of
+  // this comment that stood until then argued the strip was a sample under **one** credit line
+  // and that the alternative, "a credit line that names artists for some tiles in the strip and
+  // not others", was worse than the inconsistency. That was true of a line; it is not true of
+  // three tooltips. Each picture now carries its own painter's name, which is the arrangement
+  // that objection was really asking for — and it is strictly better than what it replaced,
+  // since the old line comma-joined up to three names with no way to tell which crop belonged
+  // to whom. Ruled 2026-08-11 and re-ruled 2026-09-07, rather than left as an oversight.
   const arts = members
     .flatMap((deck) =>
       deck.coverCardId !== null && deck.coverArtist !== null
@@ -164,16 +173,15 @@ export function FolderCard({
         : [],
     )
     .slice(0, FOLDER_ARTS);
-  const artists = [...new Set(arts.map((art) => art.artist))].join(", ");
 
   return (
     <li
       ref={ref}
       // The wall's two scale variables, set here for the reason `DeckTile` sets them: everything
-      // inside the card inherits them, so the strip, the name, the count and the credit follow
-      // one number and nothing has to be threaded down.
+      // inside the card inherits them, so the strip, the name and the count follow one number and
+      // nothing has to be threaded down.
       style={cardScaleVars(zoom)}
-      className={cn("group relative rounded-xl", eligible && DROP_RING)}
+      className="group relative rounded-xl"
     >
       {/* **Two boxes for two drags, and it is the drag library that insists.**
           `dropTargetForElements` keeps one registration per element — a second one replaces the
@@ -182,11 +190,24 @@ export function FolderCard({
           is picked up, so a single element is the whole of what the folder gesture reads and
           writes. The two are the same rectangle, which matters because this one is *measured*:
           `folderEdge` divides its box into the three landings.
-          The marks are the deck drag's, borrowed rather than reinvented — only one drag is ever in
-          the air, and `armed` and an `inside` landing are the same two claims about the other
-          payload. The third landing is what a deck has no equivalent of, and it is the line
-          below. */}
-      <div ref={folderRef} className={cn("relative rounded-xl", armed && DROP_RING)}>
+          **Neither box wears a mark any more, and that is 2026-09-03's change.** They are
+          wrappers *around* the card rather than the card, and a Tailwind ring is a box shadow
+          painted **outside** the border box — so what shipped was a ring on the `<li>` for the
+          deck drag, a second one here for the folder drag, and the button's own dashed edge
+          inside both: three concentric outlines for one landing, none of them touching. This card
+          was the worst case in the app, and it is what the reader's report about affordances
+          being bulky, overlapping their neighbours and not lining up with the dotted outline was
+          made against. Both marks moved onto the `<button>` below — the element that already
+          carries the card's own edge — so the dash a folder card draws all day is the thing that
+          changes colour, and there is no second outline left to fail to line up with. The
+          registrations stayed exactly where they are and had to: they are the boxes the two drags
+          are read and measured against, and only the `className` moved.
+          **`eligible` and `armed` collapse onto that one mark**, which is sound rather than a
+          shortcut and is already the arrangement the sibling folder cards use: only one drag is
+          ever in the air, so the two are the same claim — *this card could take what you are
+          holding* — about different payloads, and no card can be answering both at once. The
+          third landing is what a deck has no equivalent of, and it is the line below. */}
+      <div ref={folderRef} className="relative rounded-xl">
         <button
           type="button"
           // Starts with the visible label, then says the two things the card's marks say — WCAG
@@ -199,6 +220,11 @@ export function FolderCard({
             "block w-full rounded-xl border border-dashed border-border text-left",
             "p-[calc(0.625rem*var(--mark-scale,1))]",
             "transition-colors duration-150 hover:border-accent motion-reduce:transition-none",
+            // Both drags' *eligible* mark, on the card's own dash rather than around it — and it
+            // has to be written **before** the line below, because `tailwind-merge` resolves the
+            // border colour by argument order: the card the pointer is actually over would
+            // otherwise have its full-strength edge pulled back down to 45% by the wider claim.
+            (eligible || armed) && DROP_EDGE,
             (over || edge === "inside") && cn("border-accent", DROP_OVER),
             FOCUS,
           )}
@@ -222,7 +248,14 @@ export function FolderCard({
                 {node.count === 0 ? "Empty" : "No cover art"}
               </span>
             ) : (
-              arts.map((art) => <MemberArt key={art.id} cardId={art.cardId} artUrl={art.artUrl} />)
+              arts.map((art) => (
+                <MemberArt
+                  key={art.id}
+                  cardId={art.cardId}
+                  artUrl={art.artUrl}
+                  artist={art.artist}
+                />
+              ))
             )}
           </span>
           {/* The same four sizes a deck tile scales, in the same order and off the same variable —
@@ -256,25 +289,14 @@ export function FolderCard({
           </span>
         </button>
 
-        {/* The price of the crop, per folder card, exactly as it is per tile: an art crop carries
-            no printed frame, so every illustrator whose work is on this card is named. */}
-        {artists && (
-          <p
-            className={cn(
-              "mt-[calc(0.125rem*var(--mark-scale,1))] truncate text-dim",
-              "text-[calc(0.7rem*var(--mark-scale,1))] leading-[calc(1rem*var(--mark-scale,1))]",
-            )}
-            {...tip(artists, { whenClipped: true })}
-          >
-            Art by {artists}
-          </p>
-        )}
-
         {/* Drawn straight off `edge`, which is `null` both when the pointer is elsewhere and when
             it is over a part of this card that would refuse — so no line means no drop, rather than
             a mark leading to a write that never happens. It is `absolute` against the box above,
-            which is why that box is `relative`; it spans the credit line too, because what it
-            marks is the *slot* the folder would take rather than the picture. */}
+            which is why that box is `relative`; it spans the whole card rather than the strip of
+            art, because what it marks is the *slot* the folder would take rather than the
+            picture. (It used to span a credit line under the card as well — that line was
+            deleted on 2026-09-07 and the artists moved onto the crops themselves, which changes
+            the box's height and nothing about what this line is for.) */}
         <FolderDropLine edge={edge} axis="horizontal" />
       </div>
     </li>
@@ -345,22 +367,49 @@ export function ParentDeckFolderCard({
   );
 }
 
-/** One member cover in a folder card's strip. Its own component because {@link useImageRetry}
- *  is a hook and a strip is a loop.
+/**
+ * One member cover in a folder card's strip. Its own component because {@link useImageRetry}
+ * is a hook and a strip is a loop.
  *
- *  **Both candidates go to `cardArtSrc`, which is the whole of the desktop/web branch and is
- *  written nowhere else.** `mtgimg://` is a Tauri custom protocol and wasm cannot register a URL
- *  scheme with a browser, so on web the picture is whatever `deck_list` put on that member's own
- *  row — and `null` when it put none. A `null` draws the empty `bg-surface` cell below, which is
- *  the same thing this frame shows while the bytes are on their way: the strip keeps its
- *  geometry either way, and no broken `<img>` is ever left in it. */
-function MemberArt({ cardId, artUrl }: { cardId: string; artUrl: string | null }) {
+ * **Both candidates go to `cardArtSrc`, which is the whole of the desktop/web branch and is
+ * written nowhere else.** `mtgimg://` is a Tauri custom protocol and wasm cannot register a URL
+ * scheme with a browser, so on web the picture is whatever `deck_list` put on that member's own
+ * row — and `null` when it put none. A `null` draws the empty `bg-surface` cell below, which is
+ * the same thing this frame shows while the bytes are on their way: the strip keeps its
+ * geometry either way, and no broken `<img>` is ever left in it.
+ *
+ * **The illustrator's name is this frame's since 2026-09-07, and it is the reason the strip's
+ * credit could leave the card.** Scryfall's image guidelines require an `art` crop's artist to be
+ * identifiable in the interface presenting it — `https://scryfall.com/docs/api`, quoted in full
+ * over `DeckTile`'s `Cover`, and *not* `docs/api/images`, which carries no artist rule any more —
+ * and a tooltip per picture satisfies that better than the line it replaced: `Art by A, B, C`
+ * under three crops named three painters and said nothing about which had painted which. Each
+ * picture now answers for itself.
+ *
+ * Its own `useTooltip` rather than a binder threaded down from the card, because a hook is what a
+ * hook is: the strip is a loop and each crop is a separate anchor, which is the same reason this
+ * component exists at all.
+ */
+function MemberArt({
+  cardId,
+  artUrl,
+  artist,
+}: {
+  cardId: string;
+  artUrl: string | null;
+  /** Never `null`: the `arts` builder above requires both `coverCardId` and `coverArtist`, so a
+   *  crop with nobody to credit is not in the strip to begin with. */
+  artist: string;
+}) {
+  const tip = useTooltip();
   const image = useImageRetry(cardArtSrc(cardImageUrl(cardId, 0, "art"), artUrl));
   return (
-    <span className="min-w-0 flex-1 overflow-hidden bg-surface">
+    <span {...tip(`Art by ${artist}`)} className="min-w-0 flex-1 overflow-hidden bg-surface">
       {image.src && (
         <CardImage
-          // Decorative: the folder's name is under it, and the credit is its own line.
+          // Decorative: the folder's name is under it, and the illustrator is the tooltip on
+          // the frame around it — an `alt` here would put a painter's name into the folder
+          // card's accessible name three times over.
           alt=""
           src={image.src}
           loading="lazy"

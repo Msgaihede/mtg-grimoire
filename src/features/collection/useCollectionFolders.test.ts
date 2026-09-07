@@ -10,6 +10,7 @@ const collectionFolderRename = vi.hoisted(() => vi.fn());
 const collectionFolderMove = vi.hoisted(() => vi.fn());
 const collectionFolderReorder = vi.hoisted(() => vi.fn());
 const collectionFolderDelete = vi.hoisted(() => vi.fn());
+const collectionFolderSetLocked = vi.hoisted(() => vi.fn());
 const collectionFolderSummary = vi.hoisted(() => vi.fn());
 // `useCollectionFolders` reads `useMarketplace()`, which is the real hook here rather than a
 // fake — so its own queries need answers too. `marketplaceFeedStatus` is never asserted on; it
@@ -25,6 +26,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     collectionFolderMove,
     collectionFolderReorder,
     collectionFolderDelete,
+    collectionFolderSetLocked,
     collectionFolderSummary,
     getMarketplace,
     marketplaceFeedStatus,
@@ -42,6 +44,7 @@ const BINDER: CollectionFolder = {
   kind: "user",
   deckId: null,
   sortOrder: 0,
+  locked: false,
 };
 const FOILS: CollectionFolder = {
   id: 2,
@@ -50,6 +53,7 @@ const FOILS: CollectionFolder = {
   kind: "user",
   deckId: null,
   sortOrder: 0,
+  locked: false,
 };
 
 /** One summary row per folder above — direct per folder, never recursive, and copies rather than
@@ -76,6 +80,8 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue([{ ...FOILS, parentId: null, sortOrder: 0 }, { ...BINDER, sortOrder: 1 }]);
   collectionFolderDelete.mockReset().mockResolvedValue(undefined);
+  // The folder re-read, `rename`'s shape: the row as it now stands, with its own flag written.
+  collectionFolderSetLocked.mockReset().mockResolvedValue({ ...BINDER, locked: true });
   collectionFolderSummary.mockReset().mockResolvedValue([BINDER_SUMMARY, FOILS_SUMMARY]);
   // Matches `DEFAULT_MARKETPLACE`, so a test that does not care about marketplace settles with no
   // observable change from the hook's own initial guess.
@@ -186,7 +192,7 @@ describe("useCollectionFolders", () => {
    * **A refused write re-reads too**, and the rule lives on the mutation definition rather than on
    * a call site.
    *
-   * Every refusal here is a busy database, one of the cabinet's three refusals in words, or a
+   * Every refusal here is a busy database, one of the cabinet's four refusals in words, or a
    * folder another surface has already deleted — and the last must not leave a tree drawing a node
    * that is gone.
    */
@@ -285,7 +291,7 @@ describe("useCollectionFolders", () => {
    * failures are worth catching at once.
    *
    * Dropping the invalidation leaves a tree drawing yesterday's order. Widening it to
-   * `["collection"]` — which is what the other four folder writes take, and rightly, since a
+   * `["collection"]` — which is what the other five folder writes take, and rightly, since a
    * delete re-files copies — refetches the table, the header and `collection_folder_summary`, a
    * `GROUP BY` over every entry carrying a price expression, to redraw a row of folder cards.
    * And adding `["decks"]` — which {@link useSetCollectionFolder} takes, and rightly, because
@@ -319,5 +325,66 @@ describe("useCollectionFolders", () => {
     await waitFor(() =>
       expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection", "folders"] }),
     );
+  });
+
+  /** Both ways round, by id, and the flag is the argument rather than a toggle the hook works
+   *  out for itself — the row the reader pressed is not always the row the badge is drawn from,
+   *  because the lock inherits. */
+  it("sets and clears a folder's own lock by id", async () => {
+    const { result } = renderHook(() => useCollectionFolders(), { wrapper });
+    await waitFor(() => expect(result.current.folders).toHaveLength(2));
+
+    await result.current.setLocked.mutateAsync({ id: 1, locked: true });
+    expect(collectionFolderSetLocked).toHaveBeenCalledWith(1, true);
+
+    await result.current.setLocked.mutateAsync({ id: 1, locked: false });
+    expect(collectionFolderSetLocked).toHaveBeenLastCalledWith(1, false);
+  });
+
+  /**
+   * **The whole `["collection"]` root, and the exact call list is the assertion** — because the
+   * plausible mistake here is the narrow settle beside it rather than no settle at all.
+   *
+   * A reorder settles on `["collection", "folders"]` alone, and rightly: it moves no
+   * `collection_entries.folder_id`, so every number counted from entries is still true. A lock
+   * moves none either, and yet it is the opposite case — the collection page asks its list with
+   * `excludeLocked`, so setting a folder aside changes **which rows come back**, and with them
+   * the header's totals and the count. A `settleOrder` here would leave the table drawing the
+   * copies the reader has just put away, and `lib/query.ts`'s `staleTime: 30_000` means a
+   * mounted observer that is merely stale never refetches on its own.
+   *
+   * **`["cards", "search"]` is the second root and joined on 2026-09-03** (issue #349). The deck
+   * builder's card search counts *what a deck can use* and reads the **effective** lock, so this
+   * is the one folder write that moves an `×N` without moving a quantity. The exact call list
+   * still is the assertion, now naming both — a third root appearing here would mean a folder
+   * write had quietly started claiming to change something else.
+   */
+  it("refreshes every collection query and the card search after a lock", async () => {
+    const { result } = renderHook(() => useCollectionFolders(), { wrapper });
+    await waitFor(() => expect(result.current.folders).toHaveLength(2));
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await result.current.setLocked.mutateAsync({ id: 1, locked: true });
+
+    expect(invalidate.mock.calls).toEqual([
+      [{ queryKey: ["collection"] }],
+      [{ queryKey: ["cards", "search"] }],
+    ]);
+  });
+
+  /** A refused lock re-reads too, `writes`' rule: the refusal is a busy database or a folder
+   *  another surface has already deleted, and the second must not leave a tree drawing a node
+   *  that is gone. */
+  it("re-reads when a lock is refused", async () => {
+    collectionFolderSetLocked.mockRejectedValue("That folder belongs to the app.");
+    const { result } = renderHook(() => useCollectionFolders(), { wrapper });
+    await waitFor(() => expect(result.current.folders).toHaveLength(2));
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await expect(result.current.setLocked.mutateAsync({ id: 1, locked: true })).rejects.toBe(
+      "That folder belongs to the app.",
+    );
+
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection"] }));
   });
 });

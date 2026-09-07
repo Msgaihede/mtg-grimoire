@@ -210,18 +210,18 @@ fn write_line(card: &Card, fields: &[FieldId], spec: LineSpec) -> String {
     // before `*F*`.
     //
     // **No per-format test here**, exactly as there is none for the bracket or the finish: only
-    // `archidekt` lists `Tag` in its format fields, so a set reaching this function with `Tag`
-    // in it is a set a caret group belongs in. The colour is read off the card rather than off
-    // a second field, because in this syntax it is part of the tag rather than a channel beside
-    // it. A label whose colour this build cannot read writes the name alone, which the parser
-    // reads straight back as a label with no colour.
-    if fields.contains(&FieldId::Tag) {
-        if let Some(tag) = card.tag_name.as_deref().filter(|t| !t.is_empty()) {
-            let colour = match card.tag_color.as_deref() {
+    // `archidekt` lists `Label` in its format fields, so a set reaching this function with
+    // `Label` in it is a set a caret group belongs in. The colour is read off the card rather
+    // than off a second field, because in this syntax it is part of the label rather than a
+    // channel beside it. A label whose colour this build cannot read writes the name alone,
+    // which the parser reads straight back as a label with no colour.
+    if fields.contains(&FieldId::Label) {
+        if let Some(label) = card.label_name.as_deref().filter(|l| !l.is_empty()) {
+            let colour = match card.label_color.as_deref() {
                 Some(c) => format!(",{c}"),
                 None => String::new(),
             };
-            line.push_str(&format!(" ^{tag}{colour}^"));
+            line.push_str(&format!(" ^{label}{colour}^"));
         }
     }
     line
@@ -485,8 +485,8 @@ mod tests {
             rarity: None,
             type_line: None,
             unit_price: None,
-            tag_name: None,
-            tag_color: None,
+            label_name: None,
+            label_color: None,
             legalities: None,
         }
     }

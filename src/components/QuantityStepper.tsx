@@ -68,22 +68,43 @@ export function QuantityStepper({
   focus = "outside",
   orientation = "horizontal",
   tone = "panel",
+  fill = false,
 }: {
   value: number;
   onChange: (next: number) => void;
   min?: number;
   max?: number;
+  /**
+   * Span the width the caller gives it, the number box taking whatever the two buttons leave.
+   *
+   * **Off everywhere else, and it has to be.** Every other surface draws this inside a *row* of
+   * controls — a deck line, a wall tile, a card's right margin — where the stepper is one item
+   * among several and an `inline-flex` sized to its own three boxes is what keeps it from
+   * elbowing the rest of the row. The card modal's controls column is the one place it is a
+   * **row of its own**, in a stack where every other control fills the column, and there an
+   * intrinsically-sized stepper reads as a stray fragment against four full-width boxes.
+   *
+   * The buttons keep their square geometry at every size — they are touch targets, and a `+`
+   * stretched to 120px is a worse control, not a bigger one. Only the number grows.
+   */
+  fill?: boolean;
   /** The accessible name of the number itself — "Quantity of Lightning Bolt", not "Quantity". */
   label: string;
   /**
    * `xs` is the deck's row scale: a stepper inside a 150px grid tile or a 22px text row, where
    * `sm`'s 28px does not fit.
    *
-   * `card` is the **36px** column drawn over a card face in the deck stack, and it is still the
-   * one size larger than the default rather than smaller than `sm`. Everything else in this file
-   * sits in a *row* of controls and is sized by the row; this one stands alone in a 210px card's
-   * right margin, over an illustration, and is the whole of what a reader presses to change how
-   * many copies a deck holds.
+   * `card` is the **36px** column drawn over a card face, and it is still the one size larger
+   * than the default rather than smaller than `sm`. Everything else in this file sits in a *row*
+   * of controls and is sized by the row; this one stands alone in a card's right margin, over an
+   * illustration, and is the whole of what a reader presses to change how many copies they hold.
+   *
+   * **Three surfaces draw it, not one** — the deck stack's 210px card, and since issue #348 the
+   * collection's and the wishlist's 170px wall tiles, where it replaced an `xs` bar tucked into
+   * the tile's bottom corner. That report was that the walls matched the deck builder in neither
+   * style nor location, and one control on one kind of object is what closes it. The figures
+   * below are the deck card's; a wall tile's are at each caller's own site, because what the
+   * ratio is held against differs and the argument for the ratio does not.
    *
    * **It was 24px until 2026-08-15 and 48px until 2026-08-20**, and each move was a correction of
    * the one before. 24 made it the smallest control in the app in the place with the most room
@@ -169,7 +190,10 @@ export function QuantityStepper({
       : size === "sm"
         ? "h-7 w-12"
         : "h-9 w-14";
-  const field = cn(vertical ? box : wide, text);
+  // `fill` trades the fixed width for whatever the row has left. `min-w-0` beside it because a
+  // flex item's floor is its content, and `w-14`'s replacement has to be allowed to shrink below
+  // the digits it holds when the column is narrow.
+  const field = cn(vertical ? box : wide, fill && !vertical && "w-auto min-w-0 flex-1", text);
   // The glyph is a fixed fraction of its button — 7/12 at `card`, held through both resizes of
   // that box, so a button is never a small sign in the middle of an empty square. That fraction
   // is what makes the two card sizes scale here too: a glyph left at 12px inside a box the zoom
@@ -298,6 +322,8 @@ export function QuantityStepper({
       className={cn(
         "inline-flex items-center gap-[calc(0.25rem*var(--control-scale,1))]",
         vertical && "flex-col",
+        // `flex` rather than `inline-flex`, so the span is a block that takes the row.
+        fill && !vertical && "flex w-full",
       )}
     >
       {vertical ? (

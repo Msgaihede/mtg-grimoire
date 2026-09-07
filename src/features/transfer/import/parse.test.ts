@@ -113,7 +113,7 @@ describe("parseDecklist", () => {
     expect(out.lines.map((l) => l.name)).toEqual(["Llanowar Elves", "Lightning Bolt", "Duress"]);
   });
 
-  it("strips a foil marker and a trailing tag off the name", () => {
+  it("strips a foil marker and a trailing hashtag off the name", () => {
     const out = parseDecklist("1 Sol Ring *F*\n1 Shock [Foil]\n1 Bolt #Removal");
     expect(out.lines.map((l) => l.name)).toEqual(["Sol Ring", "Shock", "Bolt"]);
   });
@@ -174,71 +174,71 @@ describe("parseDecklist", () => {
     expect(lines[0]).toMatchObject({ name: "Erase (Not the Urza's Legacy One)", setCode: null });
   });
 
-  it("strips an Archidekt tag whose hash follows a comma", () => {
+  it("strips an Archidekt label whose hash follows a comma", () => {
     // `MARKERS`' `#` arm needs whitespace in front of the hash; this one has a comma, which is
     // why the whole tail used to stay inside the name.
     const { lines } = parseDecklist("1x Sol Ring (fic) 358 [Ramp] ^Keeper,#4aab08^");
     expect(lines[0]).toMatchObject({ name: "Sol Ring", setCode: "FIC", collectorNumber: "358" });
   });
 
-  it("strips a tag whose own text has spaces and parentheses", () => {
+  it("strips a label whose own text has spaces and parentheses", () => {
     const { lines } = parseDecklist(
       "1x Mona Lisa, Science Geek (tmt) 123 ^Fence (flavor),#fa890d^",
     );
     expect(lines[0]!.name).toBe("Mona Lisa, Science Geek");
   });
 
-  it("reads an Archidekt tag's name and colour, not just strips them", () => {
+  it("reads an Archidekt label's name and colour, not just strips them", () => {
     const { lines } = parseDecklist("1x Sol Ring (fic) 358 [Ramp] ^Keeper,#4aab08^");
-    expect(lines[0]).toMatchObject({ tagName: "Keeper", tagColor: "#4aab08" });
+    expect(lines[0]).toMatchObject({ labelName: "Keeper", labelColor: "#4aab08" });
   });
 
-  it("splits a tag at its LAST comma, so a comma in the name survives", () => {
+  it("splits a label at its LAST comma, so a comma in the name survives", () => {
     // `/^([^,]+),(#.+)$/` — the obvious spelling — would answer `Cut` here and lose the rest.
     const { lines } = parseDecklist("1x Sol Ring ^Cut, maybe,#d00dfa^");
-    expect(lines[0]).toMatchObject({ tagName: "Cut, maybe", tagColor: "#d00dfa" });
+    expect(lines[0]).toMatchObject({ labelName: "Cut, maybe", labelColor: "#d00dfa" });
   });
 
   it("keeps the name when the group carries no colour", () => {
     // Not a shape Archidekt writes; a hand-edited list is what this parser exists to keep
     // reading, and a label with no colour is still a label.
     const { lines } = parseDecklist("1x Sol Ring ^Keeper^");
-    expect(lines[0]).toMatchObject({ tagName: "Keeper", tagColor: null });
+    expect(lines[0]).toMatchObject({ labelName: "Keeper", labelColor: null });
   });
 
   it("reads a tail that is not a hex as part of the name", () => {
     const { lines } = parseDecklist("1x Sol Ring ^Buy, later^");
-    expect(lines[0]).toMatchObject({ tagName: "Buy, later", tagColor: null });
+    expect(lines[0]).toMatchObject({ labelName: "Buy, later", labelColor: null });
   });
 
   it("expands a three-digit colour, so one colour has one spelling", () => {
     const { lines } = parseDecklist("1x Sol Ring ^Keeper,#F00^");
-    expect(lines[0]!.tagColor).toBe("#ff0000");
+    expect(lines[0]!.labelColor).toBe("#ff0000");
   });
 
-  it("carries no tag on a line that has none, and on every other format", () => {
+  it("carries no label on a line that has none, and on every other format", () => {
     expect(parseDecklist("1x Sol Ring (fic) 358 [Ramp]").lines[0]).toMatchObject({
-      tagName: null,
-      tagColor: null,
+      labelName: null,
+      labelColor: null,
     });
-    expect(parseDecklist(ARENA_LIST).lines.every((l) => l.tagName === null)).toBe(true);
+    expect(parseDecklist(ARENA_LIST).lines.every((l) => l.labelName === null)).toBe(true);
   });
 
-  it("keeps the rightmost tag when a line writes two", () => {
-    // `deck_cards.tag_id` holds one label, so a choice has to be made; the nearer naming is the
+  it("keeps the rightmost label when a line writes two", () => {
+    // `deck_cards.label_id` holds one label, so a choice has to be made; the nearer naming is the
     // one on the line, exactly as it is for the bracket.
     const { lines } = parseDecklist("1x Sol Ring ^Fence,#fffc19^ ^Keeper,#4aab08^");
-    expect(lines[0]).toMatchObject({ name: "Sol Ring", tagName: "Keeper" });
+    expect(lines[0]).toMatchObject({ name: "Sol Ring", labelName: "Keeper" });
   });
 
-  it("reads the labelled export's five distinct tags, on the right lines", () => {
+  it("reads the labelled export's five distinct labels, on the right lines", () => {
     const { lines, issues, totalCards } = parseDecklist(ARCHIDEKT_LABELLED);
     expect(issues).toEqual([]);
     expect(lines).toHaveLength(19);
     expect(totalCards).toBe(46);
-    const labelled = lines.filter((l) => l.tagName !== null);
+    const labelled = lines.filter((l) => l.labelName !== null);
     expect(labelled).toHaveLength(13);
-    expect([...new Set(labelled.map((l) => `${l.tagName}${l.tagColor}`))]).toEqual([
+    expect([...new Set(labelled.map((l) => `${l.labelName}${l.labelColor}`))]).toEqual([
       "Keeper#4aab08",
       "Fence#fffc19",
       "Replace Art#d00dfa",
@@ -250,12 +250,12 @@ describe("parseDecklist", () => {
       name: "Bruna, the Fading Light",
       section: "commander",
       finish: "foil",
-      tagName: "Keeper",
+      labelName: "Keeper",
     });
     // And a `{noDeck}` line does too: a pile that counts toward nothing still holds labelled
     // cards.
     const arkenstone = lines.find((l) => l.name.startsWith("The Arkenstone"));
-    expect(arkenstone).toMatchObject({ excluded: true, tagName: "Getting" });
+    expect(arkenstone).toMatchObject({ excluded: true, labelName: "Getting" });
   });
 
   it("reads a bracket as the line's category", () => {
@@ -303,7 +303,7 @@ describe("parseDecklist", () => {
     expect(lines[0]).toMatchObject({ name: "Sol Ring", categoryName: null });
   });
 
-  it("peels a bracket, a foil marker and a tag off one line", () => {
+  it("peels a bracket, a foil marker and a label off one line", () => {
     const { lines } = parseDecklist(
       "1x Skrelv, Defector Mite (one) 33 *F* [Protection] ^Keeper,#4aab08^",
     );
@@ -518,31 +518,50 @@ describe("a CSV", () => {
   /** A CSV says a label in two columns where Archidekt says it in one group — and both are
    *  read, because a column this app writes and cannot read back loses something silently. */
   it("reads the label out of its own two columns", () => {
-    const list = parseDecklist("Quantity,Name,Tag,Tag colour\n1,Sol Ring,Keeper,#4aab08\n");
-    expect(list.lines[0]).toMatchObject({ tagName: "Keeper", tagColor: "#4aab08" });
+    const list = parseDecklist("Quantity,Name,Label,Label colour\n1,Sol Ring,Keeper,#4aab08\n");
+    expect(list.lines[0]).toMatchObject({ labelName: "Keeper", labelColor: "#4aab08" });
   });
 
   it("takes a colour cell with or without its hash, and expands a short one", () => {
     // Looser than the `^…^` arm on purpose: inside a caret group the hash is what tells the
     // colour from the name, and a column has nothing to disambiguate from.
-    const bare = parseDecklist("Quantity,Name,Tag,Tag colour\n1,Sol Ring,Keeper,4aab08\n");
-    expect(bare.lines[0].tagColor).toBe("#4aab08");
-    const short = parseDecklist("Quantity,Name,Tag,Tag colour\n1,Sol Ring,Keeper,#F00\n");
-    expect(short.lines[0].tagColor).toBe("#ff0000");
+    const bare = parseDecklist("Quantity,Name,Label,Label colour\n1,Sol Ring,Keeper,4aab08\n");
+    expect(bare.lines[0].labelColor).toBe("#4aab08");
+    const short = parseDecklist("Quantity,Name,Label,Label colour\n1,Sol Ring,Keeper,#F00\n");
+    expect(short.lines[0].labelColor).toBe("#ff0000");
   });
 
   it("keeps the label when the colour cell is empty or unreadable", () => {
-    const blank = parseDecklist("Quantity,Name,Tag,Tag colour\n1,Sol Ring,Keeper,\n");
-    expect(blank.lines[0]).toMatchObject({ tagName: "Keeper", tagColor: null });
-    const junk = parseDecklist("Quantity,Name,Tag,Tag colour\n1,Sol Ring,Keeper,greenish\n");
-    expect(junk.lines[0]).toMatchObject({ tagName: "Keeper", tagColor: null });
+    const blank = parseDecklist("Quantity,Name,Label,Label colour\n1,Sol Ring,Keeper,\n");
+    expect(blank.lines[0]).toMatchObject({ labelName: "Keeper", labelColor: null });
+    const junk = parseDecklist("Quantity,Name,Label,Label colour\n1,Sol Ring,Keeper,greenish\n");
+    expect(junk.lines[0]).toMatchObject({ labelName: "Keeper", labelColor: null });
   });
 
-  /** `Tag` and the collection's `Tags` are two different columns for two different facts, and
-   *  `HEADER_TO_FIELD` matches the whole header — so neither can be read as the other. */
+  /**
+   * **A deck CSV an older build wrote still reads its labels back.** That build's columns said
+   * `Tag` and `Tag colour`; the registry's say `Label` and `Label colour`, so without
+   * `LEGACY_CSV_HEADERS` those two columns would map to nothing at all — the cards would come
+   * back and the labels would silently not, which is the one thing a round trip may never do.
+   *
+   * The second parse is the same file shouted, because the alias goes through `normalizeHeader`
+   * like every other header and is not a second matching rule.
+   */
+  it("still reads a label out of an older build's Tag columns", () => {
+    const list = parseDecklist("Quantity,Name,Tag,Tag colour\n1,Sol Ring,Keeper,#4aab08\n");
+    expect(list.lines[0]).toMatchObject({ labelName: "Keeper", labelColor: "#4aab08" });
+
+    const shouted = parseDecklist("Quantity,Name,TAG,TAG COLOUR\n1,Sol Ring,Keeper,#4aab08\n");
+    expect(shouted.lines[0]).toMatchObject({ labelName: "Keeper", labelColor: "#4aab08" });
+  });
+
+  /** `Label` and the collection's `Tags` are two different columns for two different facts, and
+   *  `HEADER_TO_FIELD` matches the whole header — so neither can be read as the other. **Nor can
+   *  the `Tag` alias reach this one**: `normalizeHeader` lowercases and collapses whitespace and
+   *  does nothing else, so `tag` and `tags` are two keys and the alias shadows nothing. */
   it("does not read the collection's Tags column as a deck label", () => {
     const list = parseDecklist("Quantity,Name,Tags\n1,Sol Ring,traded from Ada\n");
-    expect(list.lines[0].tagName).toBeNull();
+    expect(list.lines[0].labelName).toBeNull();
     expect(list.lines[0].extra).toMatchObject({ tags: "traded from Ada" });
   });
 

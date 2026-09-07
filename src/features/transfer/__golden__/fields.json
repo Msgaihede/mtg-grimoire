@@ -8,8 +8,8 @@
       "collectorNumber",
       "category",
       "finish",
-      "tag",
-      "tagColor",
+      "label",
+      "labelColor",
       "lang",
       "setName",
       "rarity",
@@ -129,7 +129,7 @@
       "collectorNumber",
       "category",
       "finish",
-      "tag"
+      "label"
     ],
     "archidekt.collection": [
       "quantity",
@@ -170,8 +170,8 @@
       "collectorNumber",
       "category",
       "finish",
-      "tag",
-      "tagColor",
+      "label",
+      "labelColor",
       "lang",
       "setName",
       "rarity",
@@ -291,7 +291,7 @@
       "collectorNumber",
       "category",
       "finish",
-      "tag"
+      "label"
     ],
     "archidekt.collection": [
       "quantity",

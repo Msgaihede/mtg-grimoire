@@ -648,7 +648,7 @@ export const DropTargetsLive: Story = {
       });
       await expect(wishlist).toHaveClass(DROP_RING);
       await expect(canvas.getByRole("button", { name: "Collection" })).not.toHaveClass(
-        "ring-accent",
+        DROP_RING,
       );
 
       await held.over(decks);
@@ -666,7 +666,7 @@ export const DropTargetsLive: Story = {
       // belongs in a `waitFor`: the thing it is waiting on is the removal itself.
       await held.cancel();
       await waitFor(async () => {
-        await expect(decks).not.toHaveClass("ring-accent");
+        await expect(decks).not.toHaveClass(DROP_RING);
       });
     } finally {
       await held.cancel();
@@ -701,7 +701,7 @@ export const DecksDropTargetInert: Story = {
       await waitFor(async () => {
         await expect(canvas.getByRole("button", { name: "Wishlist" })).toHaveClass(DROP_RING);
       });
-      await expect(decks).not.toHaveClass("ring-accent");
+      await expect(decks).not.toHaveClass(DROP_RING);
       await expect(decks).toHaveAttribute("title", "Open a deck to drop cards into it");
 
       // And it refuses the card as well as declining to advertise for it: `canDrop` asks the same

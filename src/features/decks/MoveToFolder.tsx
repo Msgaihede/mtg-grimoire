@@ -165,7 +165,9 @@ export function MoveToFolder({
           ? "w-full p-1"
           : "absolute right-0 top-8 w-56 rounded-lg border border-border bg-surface p-1 shadow-lg",
         !inline && LAYER.popup,
-        FOCUS,
+        // No focus outline: a landing pad, not a control — `tabIndex={-1}` only so the caret has
+        // somewhere to go while the panel is open, and neither Tab nor an arrow reaches it. The
+        // rows inside keep theirs. `src/lib/focus.ts` has the rule.
       )}
       onBlur={(e) => {
         if (pending) return;

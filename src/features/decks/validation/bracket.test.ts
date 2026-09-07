@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { DeckCombo } from "@/lib/ipc";
 import { card, gameChanger, islands, resetRowIds } from "./fixtures";
 import { bracketWarning, describeReason, estimateBracket } from "./bracket";
-import type { CardFacts } from "./types";
+import type { BracketCardFacts, CardFacts } from "./types";
 
 /**
  * The bracket estimate is an **advisory**, and these tests are written to say so: they assert
@@ -991,5 +991,89 @@ describe("bracketWarning", () => {
 
     expect(message).not.toMatch(/illegal|invalid|error|must not|not allowed|violat/i);
     expect(message).toContain("worth a word with the table");
+  });
+});
+
+/**
+ * The deck **gallery** asks this same question about every tile on the wall, and it cannot hand
+ * over a `DeckCard`: `deck_bracket_reads` sends five fields per card so that one read can answer
+ * for every deck at once, where `deck_get` sends forty and answers for one. `BracketCardFacts` is
+ * that shape, and these tests are the fence on the claim `types.ts` makes about it — **that the
+ * five are the whole of what the estimator reads**. A sixth field creeping into a rule shows up
+ * here as a bare row and a whole row disagreeing about one deck.
+ */
+describe("estimating from the gallery's five-field row", () => {
+  /** Exactly the {@link BracketCardFacts} projection of a whole row, which is what Rust sends. */
+  function narrow(cards: readonly CardFacts[]): BracketCardFacts[] {
+    return cards.map((c) => ({
+      categoryActive: c.categoryActive,
+      name: c.name,
+      gameChanger: c.gameChanger,
+      oracleText: c.oracleText,
+      faces: c.faces,
+    }));
+  }
+
+  /**
+   * All three text-and-column signals at once — a Game Changer, mass land denial and an extra
+   * turn — so the two readings have to agree about every list on the estimate and not merely
+   * about the digit at the top of it.
+   */
+  const DECK = [ARMAGEDDON, gameChanger("Rhystic Study"), TIME_WARP, GRIZZLY_BEARS, islands(60)];
+
+  it("reads the same estimate as the equivalent whole DeckCard", () => {
+    expect(estimateBracket(narrow(DECK))).toEqual(estimateBracket(DECK));
+    expect(estimateBracket(narrow(DECK)).floor).toBe(4);
+  });
+
+  it("takes the combos the same way", () => {
+    const combos = [combo({ bracketTag: "R", cards: ["Thassa's Oracle", "Demonic Consultation"] })];
+
+    expect(estimateBracket(narrow([GRIZZLY_BEARS, islands(60)]), combos)).toEqual(
+      estimateBracket([GRIZZLY_BEARS, islands(60)], combos),
+    );
+  });
+
+  /** `categoryActive` is one of the five because the estimator's filter is the first thing it
+   *  does, and a row that omitted it would be a different type rather than a smaller one. */
+  it("still drops a switched-off pile", () => {
+    const switchedOff = narrow([{ ...ARMAGEDDON, categoryActive: false }, GRIZZLY_BEARS]);
+
+    expect(estimateBracket(switchedOff).massLandDenial).toEqual([]);
+    expect(estimateBracket(switchedOff).floor).toBe(2);
+  });
+
+  /** `faces` is the fifth, and the only one of the five that is JSON: a double-faced card's back
+   *  is where half of these greps' evidence lives, and a row without it would silently read a
+   *  transform as a vanilla front face. */
+  it("still reads the back face out of faces", () => {
+    const transform: BracketCardFacts = {
+      categoryActive: true,
+      name: "Front // Back",
+      gameChanger: false,
+      oracleText: "Draw a card.",
+      faces: JSON.stringify([
+        { oracle_text: "Draw a card." },
+        { oracle_text: "Take an extra turn after this one." },
+      ]),
+    };
+
+    expect(estimateBracket([transform]).extraTurns).toEqual(["Front // Back"]);
+  });
+
+  /** A bare object literal satisfies the parameter — the whole point of the narrowing, and what
+   *  keeps the gallery from having to invent an `id`, a `quantity` and thirty-four other fields
+   *  it was never sent. */
+  it("accepts an object that has the five fields and nothing else", () => {
+    const row: BracketCardFacts = {
+      categoryActive: true,
+      name: "Sol Ring",
+      gameChanger: null,
+      oracleText: null,
+      faces: null,
+    };
+
+    expect(estimateBracket([row]).floor).toBe(2);
+    expect(estimateBracket([row]).reasons).toEqual([]);
   });
 });

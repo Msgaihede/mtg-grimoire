@@ -162,7 +162,7 @@ export const NothingYet: Story = {
  * A read the app could not make.
  *
  * `deckMeta` is the fault for the reads a deck screen makes *beside* the deck — its categories,
- * its tags, the folder tree, the theory diff and this one. The deck itself read fine, which is
+ * its labels, the folder tree, the theory diff and this one. The deck itself read fine, which is
  * why there is a dialog open over it at all.
  *
  * The failure is reported **before** the emptiness, and that ordering is the whole point: a failed

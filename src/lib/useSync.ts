@@ -35,9 +35,10 @@ export function mergeStatus(prev: SyncStatus | null, next: SyncStatus): SyncStat
     bulkUpdatedAt: prev?.bulkUpdatedAt ?? null,
     lastError: prev?.lastError ?? null,
     // Carried like the rest. Nothing rendered it when this function was written, so its
-    // absence was invisible; the card detail pane and the settings view will render it,
-    // and a count that blinked to "unknown" on an unreadable poll would read as an
-    // ingest that suddenly stopped skipping lines.
+    // absence was invisible — and nothing renders it yet: it was the card detail pane and the
+    // settings view that were going to, and the pane was deleted on 2026-09-03. It is carried
+    // anyway, because a count that blinked to "unknown" on an unreadable poll would read as an
+    // ingest that suddenly stopped skipping lines the moment anything does draw it.
     lastIngestSkipped: prev?.lastIngestSkipped ?? null,
   };
 }

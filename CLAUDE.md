@@ -17,6 +17,9 @@ _shows_ (`forest`, `dragon`, `dog`), which is what the Tags page browses by; a d
 has never fetched them has a Tags page that says so and still answers from the oracle side.
 ~5.85 MB and ~12.5 MB — [the oracle research](docs/superpowers/research/2026-08-14-scryfall-oracle-tags.md)
 and [the art one](docs/superpowers/research/2026-08-20-scryfall-art-tags.md).
+**A _tag_ in this app is one of those two and nothing else.** The deckbuilder's own coloured
+per-card mark is a **label** — `deck_labels`, `deck_cards.label_id`, the `Labels` dialog — and the
+collection's free-text `tags` column is a third thing again. Never let the words trade places.
 
 **Both files regenerate _daily_; _weekly_ is this app's refresh interval, and the two must not be
 blurred.** Scryfall's `docs/api/tags` says the bulk files are updated daily, and both `updated_at`
@@ -189,7 +192,7 @@ number to compare against.
 | [web-target.md](docs/reference/web-target.md) | The browser build — the module map, the single Worker and what it costs, the measured browse and facet, and **why two wasm instances in one Worker read as an out-of-memory** |
 | [android-target.md](docs/reference/android-target.md) | The Android build — the toolchain and what it cost, what is gated and what merely never runs, the `content://` file seam, and every figure taken on the phone |
 | [pwa-shell.md](docs/reference/pwa-shell.md) | The installable web shell — the manifest, the two caches, the update flow driven end to end with both build ids, why the service worker attaches no isolation headers, and **why one missing `ignoreVary` made the offline shell a blank page** |
-| [decks-storage.md](docs/reference/decks-storage.md) | Deck tables, the card commands, how owned/missing is answered, the audit log, the decklist import |
+| [decks-storage.md](docs/reference/decks-storage.md) | Deck tables, the card commands, how owned/missing is answered, the audit log, the decklist import, the token resolver and its union keep rule |
 | [commander-brackets.md](docs/reference/commander-brackets.md) | The bracket table as it stands, why the estimate is a floor and never 5, what the four signals can and cannot see, and Commander Spellbook's combo feed measured |
 | [import-export.md](docs/reference/import-export.md) | The seven formats, the field registry, the fold rule, the four import destinations |
 | [text-mirror.md](docs/reference/text-mirror.md) | The plain-text mirror — the layout, the dirty map, why the pruner reads a manifest instead of guessing, the measured cost of a pass, and the bugs still open |
@@ -197,14 +200,15 @@ number to compare against.
 | [collection-folders.md](docs/reference/collection-folders.md) | The collection's cabinet — the eleventh grain term, the deck groups and `Recently removed` that made it the ledger of where every card sits, the v25 conversion, and what a zero quantity now costs |
 | [decks-live-findings.md](docs/reference/decks-live-findings.md) | What driving the shipped window found — **including the bugs still open** |
 | [tags-live-findings.md](docs/reference/tags-live-findings.md) | The Tags page in the shipped window — the art ingest timed, both performance gates settled, and the bugs still open |
-| [frontend-design.md](docs/reference/frontend-design.md) | The ribbon, card images, foil, layers, tables |
+| [frontend-design.md](docs/reference/frontend-design.md) | The ribbon, card images, foil, layers, tables, the Settings rail and its two lopsided flex numbers |
+| [keyboard-shortcuts.md](docs/reference/keyboard-shortcuts.md) | The chord catalogue — the fence and the four rows outside it, exact modifier matching and the two chords it narrowed away, where the text-field yield lives, and the live pass that proved the panel needs no `LAYER` rung |
 | [motion.md](docs/reference/motion.md) | `motion@13.1.0` — the timing scale, reduced motion, and **two forbidden APIs** |
 | [storybook.md](docs/reference/storybook.md) | The workbench and its fake, in full |
 | [live-ui-verification.md](docs/reference/live-ui-verification.md) | The CDP harness contract — `scripts/cdp.mjs` and its traps |
 | [tauri-mcp-bridge.md](docs/reference/tauri-mcp-bridge.md) | The other way to drive the window — its four pieces, three permissions, and the one tool that cannot reach an app command |
 | [ci-and-releases.md](docs/reference/ci-and-releases.md) | Both workflows, in full |
 | [hosted-relay-deploy.md](docs/reference/hosted-relay-deploy.md) | The deploy runbook — what exists and what does not, how to ask the host rather than a document, the order, and the things only a live deploy can settle |
-| [sync.md](docs/reference/sync.md) | Pairing **and** the relay — the protocol step by step, the six digits, the twelve synced tables, how a row is named across devices, §7.3's five rules against the test that proves each, the envelope measured, the auth gate and the two routes that stand outside it, the group door, the rewrap hop that carries a removal to every device, and what is not built |
+| [sync.md](docs/reference/sync.md) | Pairing **and** the relay — the protocol step by step, the six digits, the thirteen synced tables, how a row is named across devices, §7.3's five rules against the test that proves each, the envelope measured, the auth gate and the two routes that stand outside it, the group door, the rewrap hop that carries a removal to every device, and what is not built |
 | [test-coverage.md](docs/reference/test-coverage.md) | What both suites reach, and why the Rust figure needs a correction |
 
 ## Running and verifying

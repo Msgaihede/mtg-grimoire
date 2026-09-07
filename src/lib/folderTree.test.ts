@@ -4,8 +4,10 @@ import {
   flattenFolders,
   folderDescendants,
   folderLevel,
+  lockedFolderIds,
   type FolderLike,
 } from "./folderTree";
+import type { CollectionFolder } from "./ipc";
 
 const folder = (id: number, parentId: number | null, name: string, sortOrder = 0): FolderLike => ({
   id,
@@ -142,6 +144,71 @@ describe("folderDescendants", () => {
 
   it("terminates on a cycle", () => {
     expect([...folderDescendants([folder(1, 2, "A"), folder(2, 1, "B")], 1)]).toEqual([2]);
+  });
+});
+
+describe("lockedFolderIds", () => {
+  /** One collection folder, the reader's own — `locked` last because it is the field under test
+   *  and every other one here is scenery. */
+  const drawer = (
+    id: number,
+    parentId: number | null,
+    name: string,
+    locked = false,
+  ): CollectionFolder => ({ id, parentId, name, kind: "user", deckId: null, sortOrder: 0, locked });
+
+  /**
+   * **The whole of the inheritance, in one tree.** `Trade binder` is locked; `Foils` sits inside
+   * it and `Signed` inside that, so both are locked without a flag of their own. `Modern` is a
+   * second root and is not — an ancestry walk that answered "every folder once one is locked"
+   * would pass every other assertion in this block and fail only this one.
+   */
+  const cabinet = () => [
+    drawer(1, null, "Trade binder", true),
+    drawer(2, 1, "Foils"),
+    drawer(3, 2, "Signed"),
+    drawer(4, null, "Modern"),
+  ];
+
+  it("locks a child of a locked folder", () => {
+    expect(lockedFolderIds(cabinet()).has(2)).toBe(true);
+  });
+
+  /** Two levels down, which is what separates the walk from a single `parentId` lookup. */
+  it("locks a grandchild of a locked folder", () => {
+    expect(lockedFolderIds(cabinet()).has(3)).toBe(true);
+  });
+
+  it("leaves a sibling of the locked folder alone", () => {
+    const locked = lockedFolderIds(cabinet());
+
+    expect(locked.has(4)).toBe(false);
+    expect([...locked].sort()).toEqual([1, 2, 3]);
+  });
+
+  /**
+   * **The inheritance runs downward only.** A reader who locks one drawer inside a binder has
+   * set aside that drawer, not the binder — the opposite reading would take a whole cabinet out
+   * of the collection's lists on one press.
+   */
+  it("does not lock a folder just because something inside it is", () => {
+    const locked = lockedFolderIds([drawer(1, null, "Trade binder"), drawer(2, 1, "Foils", true)]);
+
+    expect(locked.has(1)).toBe(false);
+    expect([...locked]).toEqual([2]);
+  });
+
+  /** Nothing set aside is the ordinary case, and it is an empty set rather than a miss. */
+  it("answers nothing when no folder is locked", () => {
+    expect(lockedFolderIds(cabinet().map((f) => ({ ...f, locked: false }))).size).toBe(0);
+  });
+
+  /** `folderDescendants`' rule: the backend refuses a cycle and only a hand-edited database could
+   *  hold one, but a walk that hung the window over it would be worse than the corruption. */
+  it("terminates on a cycle", () => {
+    const locked = lockedFolderIds([drawer(1, 2, "A", true), drawer(2, 1, "B")]);
+
+    expect([...locked].sort()).toEqual([1, 2]);
   });
 });
 

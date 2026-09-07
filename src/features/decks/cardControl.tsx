@@ -43,6 +43,7 @@ import type { ImageVariant } from "@/lib/images";
 import type { DeckCard } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { theoryMatchLabel } from "./CardMarks";
+import type { TheoryMark } from "./theoryMatch";
 import {
   cardDraggable,
   deckCardSlot,
@@ -312,6 +313,30 @@ export function keepsSelection(target: EventTarget | null): boolean {
 }
 
 /**
+ * Whether this row is short of the copies the deck wants — the one fact the red `3/4` figure in a
+ * stacked card's chin draws, and the one clause {@link deckCardName} says in words.
+ *
+ * Two guards, and each is about an `ownedQuantity` that reads `0` for a reason other than an empty
+ * shelf:
+ *
+ * - **An inactive category.** The allocator claims no copy for a switched-off pile, so every row
+ *   in one reads 0 owned by construction — a shortage there is one the reader does not have.
+ * - **The theory list.** `deck.rs`'s rule 2 is that *a plan holds nothing*: the copies in the
+ *   deck's group belong to what is sleeved up, so a theory row reads 0 owned however full the
+ *   shelf is. That drew `0/1` on **every card of a plan** — a hundred red marks all saying the
+ *   same untrue thing, which is
+ *   [issue #354](https://github.com/Msgaihede/mtg-grimoire/issues/354). The comparison a plan
+ *   *can* honestly make is the shopping list's (`TheoryDiffDialog`), which subtracts quantities
+ *   and is one press away on `Compare`; the deck-level figure in `DeckLedger` is untouched.
+ *
+ * One predicate rather than two spellings, because the mark and the name it is announced by must
+ * never disagree about whether there is a shortage at all.
+ */
+export function deckCardShort(card: DeckCard): boolean {
+  return card.categoryActive && card.variant !== "theory" && card.ownedQuantity < card.quantity;
+}
+
+/**
  * What a deck card's control is called.
  *
  * It begins with the card's **name**, which is the visible label — WCAG 2.5.3 asks that of any
@@ -320,7 +345,7 @@ export function keepsSelection(target: EventTarget | null): boolean {
  *
  * **This is the whole of what a keyboard reader gets, and that is why it is one function.** An
  * `aria-label` *replaces* an element's content for naming purposes, so every `sr-only` span
- * inside one of these buttons is announced to nobody: the tag chip, the `GC` badge, the
+ * inside one of these buttons is announced to nobody: the label chip, the `GC` badge, the
  * `RULE BREAK` mark, the theory tick and the red shortage figure are all decoration once the
  * button is named, and each of them is a fact somebody needs. They are said here instead, once,
  * so no surface can be the one that forgets.
@@ -333,20 +358,24 @@ export function deckCardName(
   card: DeckCard,
   ruleBreakText: string | null,
   /**
-   * What the deck's plan says about this row — `theoryMatch.ts`'s `theoryMatchDelta`, and `null`
-   * for every card of a deck that keeps no plan. `0` is the card the plan asks for exactly, and a
-   * signed number is how far the live list is from it.
+   * What the deck's plan says about this row — `theoryMatch.ts`'s `theoryMatchMark`, and `null`
+   * for every card of a deck that keeps no plan. Otherwise **which of the two tiers** the row is
+   * in and how far the live list is from the plan at that tier's own grain, where `0` is the card
+   * the plan asks for exactly and a signed number is the difference.
    *
-   * The mark itself is `TheoryMatchMark`, which is a tick or two characters of type and therefore
-   * says nothing at all to a reader who cannot see it. **`null` and `0` are not the same
-   * statement** and the clause below turns on the difference: absent draws no mark and says
-   * nothing, `0` says the sentence, and anything else says it with the count on the end.
+   * **The tier is said in words here and nowhere else on three of the four views.** The mark
+   * itself is `TheoryMatchMark`, whose whole statement of *which* tier is a colour — green for
+   * the printing the plan named, blue for another printing of a planned card — and a colour says
+   * nothing at all to a reader who cannot see it, so `theoryMatchLabel` is handed the tier below
+   * rather than the delta alone. **`null` and `0` are still not the same statement** and the
+   * clause turns on the difference: absent draws no mark and says nothing, `0` says the tier's
+   * sentence, and anything else says it with the count on the end.
    */
-  theoryDelta: number | null = null,
+  theoryMark: TheoryMark | null = null,
 ): string {
-  // The allocator claims no copy for an inactive category, so every card in one reads 0 owned
-  // by construction — announcing a shortage there would report one the reader does not have.
-  const short = card.categoryActive && card.ownedQuantity < card.quantity;
+  // Both of {@link deckCardShort}'s guards, said in words exactly where the figure is drawn —
+  // one predicate, so the name and the mark cannot come to disagree.
+  const short = deckCardShort(card);
   // Which object this row plays. Three of the four views draw it as `FoilOverlay`'s chip and
   // the text columns as a glyph, and on every one of them it is decoration once the button is
   // named — so this is where it is said. `null` for the regular copy, which is the finish a
@@ -366,7 +395,7 @@ export function deckCardName(
     card.quantity > 1 ? `${card.quantity} copies` : null,
     short ? `you own ${card.ownedQuantity} of ${card.quantity}` : null,
     named?.toLowerCase() ?? (finish === null ? null : FINISH_LABEL[finish].toLowerCase()),
-    card.tagName,
+    card.labelName,
     card.gameChanger === true ? "game changer" : null,
     // Before the rule break, because it is the milder fact and this list runs from what the card
     // *is* to what is wrong with it — and lowercased like every other clause here, since the
@@ -374,8 +403,12 @@ export function deckCardName(
     //
     // `theoryMatchLabel` is the same sentence the mark's own tooltip and the table's `sr-only`
     // twin say, so a reader who cannot see the `-8` still gets "8 fewer than planned" rather than
-    // the bare "in the theory list" this said before issue #212.
-    theoryDelta === null ? null : theoryMatchLabel(theoryDelta).toLowerCase(),
+    // the bare "in the theory list" this said before issue #212 — and, since the mark grew a
+    // second tier, the same sentence names **which** tier, because that half of the mark is drawn
+    // as a colour and a colour is the one thing a screen reader is told nothing about.
+    theoryMark === null
+      ? null
+      : theoryMatchLabel(theoryMark.tier, theoryMark.delta).toLowerCase(),
     ruleBreakText === null ? null : `rule break: ${ruleBreakText}`,
   ]
     .filter((part): part is string => part !== null)
@@ -383,11 +416,11 @@ export function deckCardName(
 }
 
 /**
- * What a card's own control spreads so the card pane can find it again.
+ * What a card's own control spreads so the printings modal can find it again.
  *
- * The pane is not in the deck's tree and owns none of its elements — and least of all this one,
+ * That modal is not in the deck's tree and owns none of its elements — and least of all this one,
  * whose whole story is that a printing swap replaces it: the card it was drawn from is deleted
- * and the new printing's card is a different React key, so a ref taken when the pane opened
+ * and the new printing's card is a different React key, so a ref taken when the modal opened
  * points at something unmounted by the time Escape is pressed. A slot is a question the DOM can
  * answer after the fact, and `dnd.ts` owns both ends of the spelling.
  *
@@ -533,7 +566,7 @@ export interface DeckCardActions {
    * exists at all: it goes three components deep — the view, the group, the card — and a bag
    * passed on whole cannot be passed on incompletely. And it is the *handlers* rather than the
    * items because only `DeckEditor` knows what a deck card's menu offers: the deck's
-   * categories, its format spec and its tags are three facts no view has, and four views
+   * categories, its format spec and its labels are three facts no view has, and four views
    * assembling them would be four copies of one rule.
    *
    * Absent is a view with no menu — a story, a read-only mount — and the reader gets the app's

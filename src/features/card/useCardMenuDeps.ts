@@ -22,6 +22,7 @@ import {
   useSetCollectionFolder,
 } from "@/features/collection/useCollectionFolders";
 import { useWishlistFolderList } from "@/features/wishlist/useWishlistFolders";
+import { MENU_CONDITION } from "@/lib/conditions";
 import type { Finish } from "@/lib/finish";
 import { ipc, ipcError } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
@@ -33,18 +34,6 @@ import {
   type CardMenuDeps,
   type CardMenuTarget,
 } from "./cardMenu";
-
-/**
- * The condition a menu add records.
- *
- * Near Mint, always, and stated here rather than left to the backend's default so that the one
- * decision the menu makes on the reader's behalf is visible at the place it is made. A
- * collection row's identity includes its condition, so something has to choose; an unmarked
- * card is assumed NM everywhere else in this app (the quick-add popup opens on it), and the
- * menu is the fast path rather than the careful one — the popup is still there for a played
- * copy.
- */
-const MENU_CONDITION = "NM" as const;
 
 export interface CardMenuWiring {
   /** One object for the whole page. Hand it to `buildCardMenu` with each row's own target. */
@@ -118,9 +107,25 @@ export function useCardMenuDeps(): CardMenuWiring {
    * **The app's own drawers are part of the collection's cabinet, and a deck group is the one
    * that is not a folder write.** `collection_folders::set_entry_folder` refuses a `deck`
    * destination in words, because filing into one by hand would claim the deck holds these copies
-   * without writing the `deck_cards` row that makes it true. The deck's own add does both halves
-   * in one transaction, so the row routes there — which makes it exactly the write
-   * "Add to → Deck" makes, reached from the cabinet the reader was already looking at.
+   * without writing the `deck_cards` row that makes it true. So the row routes to the deck's own
+   * add instead — which makes it exactly the write "Add to → Deck" makes, reached from the
+   * cabinet the reader was already looking at.
+   *
+   * **What that write actually does, correcting the sentence that stood here.** This paragraph
+   * claimed the deck's add "does both halves in one transaction", and it does not: `deck_add_card`
+   * writes a `deck_cards` row and files no copies at all — `useDeck.ts`'s `addCard` says so at its
+   * own site (*"this write touches `deck_cards` and nothing else"*), and the command that moves
+   * custody is `collection_alloc::collection_to_deck`, which the Collection Search tab presses and
+   * this row does not. So the press records an **intention** — the deck now lists one more of this
+   * card — and every `collection_entries` row stays filed exactly where the reader put it. The
+   * deck group in the cabinet does not gain a copy, and the deck reads the card as *missing* until
+   * something moves one.
+   *
+   * **Which is why the row is fenced as of issue #358.** A card the deck's live list does not
+   * already play is greyed in that picker (`cardMenu.tsx`'s `appSection`), so the only press this
+   * row can make is one more copy of a card the deck demonstrably plays — never a card walked into
+   * a deck by pointing at its drawer. The fence is a read and lives inside a `lazy` row; nothing
+   * here fetches anything.
    *
    * **{@link useOptionalAddCardToDeck} and not `useAddCardToDeck`**, whose throw would fire on
    * every surface that mounts this hook — and their suites render those pages under

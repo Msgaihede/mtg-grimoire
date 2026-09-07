@@ -21,87 +21,100 @@
  * load. `FolderPlus` is the glyph the deck tree already presses to make a folder
  * (`FolderTree.tsx`), so the wall and the sidebar say one thing one way.
  *
+ * **Pressing it opens the field *here*, and that is what changed on 2026-09-03.** The tile used to
+ * raise a bordered strip under the breadcrumb — an input, `Create folder` and `Cancel` in words,
+ * and a line reading *in Collection* to say which level the strip was about — every piece of which
+ * re-established a context the wall on screen already carried. Now the tile becomes the field:
+ * the name is typed on the line the folder's name will occupy, at the same track and the same
+ * footprint, so nothing above the wall opens and nothing in the wall reflows. `FolderNameField`
+ * carries the shape and the argument; this file's job is the two states and the caret between
+ * them.
+ *
  * **Drawn as an `<li>`, so a caller drops it straight into the existing `<ul aria-label="Folders">`**
  * — the shape all three folder cards use, and a row of folders genuinely is a list. It carries no
  * drop target and no `⋯`: nothing can be filed into a folder that does not exist yet.
  */
 import type { ReactElement } from "react";
 import { FolderPlus } from "lucide-react";
+import {
+  FOLDER_CARD_HEIGHT,
+  FolderNameField,
+  useFolderFieldReturn,
+} from "@/components/FolderNameField";
 import { FOCUS } from "@/lib/focus";
 import { cn } from "@/lib/utils";
 
 /**
- * A folder card's intrinsic height, so the tile stands at the right size when it is the **only**
- * thing in the wall — a cabinet with no folders in it yet, which is the state every reader meets
- * first. Beside a folder card `h-full` already matches it (the `<li>` is the grid item and grid
- * items stretch to the row), so this floor is what answers the *empty* case rather than what does
- * the matching.
- *
- * **Measured rather than reasoned**, in headless Chromium over Tailwind's own compiled utilities
- * at the wall's real `grid-cols-[repeat(auto-fill,minmax(180px,1fr))]` track: a folder card's
- * button computes **62px** — `p-2.5` (10 × 2) + a `text-sm` line (20) + `mt-1` (4) + a `text-xs`
- * line (16) + two 1px borders. This tile's own content reaches the same 62 by a different route
- * (20 + a `size-4` glyph + `gap-1` + a `text-sm` line + 2), which is two type scales agreeing
- * today rather than a guarantee — so the floor is written down, and changing the glyph or the gap
- * cannot silently shorten the tile out from under the wall.
- *
- * **`calc(3.75rem + 2px)` rather than a flat `3.875rem`, because the two hairlines are the one
- * part that does not scale.** Everything else in that sum is `rem` — the padding, both line
- * heights, the gap — and a 1px border is a hairline at every size, which is this app's standing
- * rule about what a zoom or a root font size may move. Written that way the floor stays exactly a
- * folder card's height rather than 2px of drift past it.
- *
- * It is a floor on a **block child of the grid item**, not on a flex item, so it grows the box
- * rather than capping it — the failure a past session recorded, where a `min-h` replaced a flex
- * item's `min-height: auto` and the content spilled two elements away. Driven at the narrowest
- * real track (180px) with a label long enough to take two lines, the button measured 82px with
- * `scrollHeight === clientHeight` and the label's rect inside the button's on all four sides:
- * it wraps and grows, and clips nothing.
- */
-const FOLDER_CARD_HEIGHT = "min-h-[calc(3.75rem+2px)]";
-
-/**
- * @param onClick Handed **the button element itself**, because both callers anchor a naming
- *   panel's focus return on the trigger (`open({ kind: "newFolder", … }, opener)`) — a
- *   `MouseEvent` would make every call site dig `currentTarget` out of it, and `currentTarget` is
- *   null by the time an async handler reads it.
+ * @param naming Whether the tile is currently *being* the field. The page owns it, because one
+ *   field is open at a time across the whole wall — pressing a folder's `Rename…` has to close
+ *   this one, and a tile holding its own flag could not know that had happened.
+ * @param pending The create is in flight. Holds the field open rather than closing it optimistically.
+ * @param onClick Handed **the button element itself**, kept from when this raised a panel that
+ *   anchored its focus return on the trigger. The caret's way back is {@link useFolderFieldReturn}
+ *   now — the trigger unmounts while the field is open, so an element remembered by the page is a
+ *   detached node by the time the page focuses it — but the element is still what a caller wants
+ *   for anything anchored on the press, and `currentTarget` is null by the time an async handler
+ *   reads it off the event.
  * @param label What the tile says, and therefore its accessible name — visible label and name are
  *   one string here (WCAG 2.5.3), never an `aria-label` that replaces it. A caller overrides it to
- *   name the level: "New binder", "New drawer".
+ *   name the level: "New binder", "New drawer". The field's own accessible name is built from it,
+ *   so "New binder" is typed into a box called "New binder name" and the two cannot drift.
  */
 export function NewFolderCard({
+  naming,
+  pending,
   onClick,
+  onSubmit,
+  onCancel,
   label = "New folder",
 }: {
+  naming: boolean;
+  pending: boolean;
   onClick: (trigger: HTMLElement) => void;
+  onSubmit: (name: string) => void;
+  onCancel: () => void;
   label?: string;
 }): ReactElement {
-  // The bare `<li>`, where the folder cards' is `relative rounded-xl`, is deliberate: both of those
-  // classes exist on those cards to carry the **drop ring**, which is drawn on the `<li>` so it
-  // stands outside the button's own edge. This tile takes no drop — nothing can be filed into a
-  // folder that does not exist yet — so the wrapper paints nothing and positions nothing, and two
-  // inert classes copied across for the resemblance would be two things a reader has to check for
-  // a meaning they do not have.
+  const tileRef = useFolderFieldReturn<HTMLButtonElement>(naming);
+
+  // `relative`, and nothing else: the field's ✓ / ✕ pair is absolute against this `<li>`, which is
+  // the same corner a folder card's `⋯` resolves against — so the two answers land in the same
+  // place on a naming tile as the menu does on the card beside it. The `rounded-xl` the folder
+  // cards carry here is theirs alone: it exists to clip a **drop ring**, and this tile takes no
+  // drop, so copying it across would be an inert class a reader has to check for a meaning it
+  // does not have.
   return (
-    <li>
-      <button
-        type="button"
-        onClick={(e) => onClick(e.currentTarget)}
-        className={cn(
-          // `h-full` matches the tallest card in the row; the floor below answers the empty wall.
-          "flex h-full w-full flex-col items-center justify-center gap-1 rounded-xl",
-          FOLDER_CARD_HEIGHT,
-          // Solid, where every folder card beside it is dashed. See this file's header — the one
-          // property that must not be copied from the cards it stands with.
-          "border border-border p-2.5 text-center text-sm",
-          "transition-colors duration-150 hover:border-accent hover:bg-surface",
-          "motion-reduce:transition-none",
-          FOCUS,
-        )}
-      >
-        <FolderPlus className="size-4 flex-none text-dim" aria-hidden="true" />
-        {label}
-      </button>
+    <li className="relative">
+      {naming ? (
+        <FolderNameField
+          mode="create"
+          label={`${label} name`}
+          submitLabel="Create folder"
+          pending={pending}
+          onSubmit={onSubmit}
+          onCancel={onCancel}
+        />
+      ) : (
+        <button
+          ref={tileRef}
+          type="button"
+          onClick={(e) => onClick(e.currentTarget)}
+          className={cn(
+            // `h-full` matches the tallest card in the row; the floor below answers the empty wall.
+            "flex h-full w-full flex-col items-center justify-center gap-1 rounded-xl",
+            FOLDER_CARD_HEIGHT,
+            // Solid, where every folder card beside it is dashed. See this file's header — the one
+            // property that must not be copied from the cards it stands with.
+            "border border-border p-2.5 text-center text-sm",
+            "transition-colors duration-150 hover:border-accent hover:bg-surface",
+            "motion-reduce:transition-none",
+            FOCUS,
+          )}
+        >
+          <FolderPlus className="size-4 flex-none text-dim" aria-hidden="true" />
+          {label}
+        </button>
+      )}
     </li>
   );
 }

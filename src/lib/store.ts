@@ -6,7 +6,7 @@ import {
   stepZoom,
   type ZoomSection,
 } from "./cardZoom";
-import type { Condition } from "./conditions";
+import { CONDITION_NOT_SET, type Condition } from "./conditions";
 import type { Finish } from "./finish";
 import { applySelect, EMPTY_SELECTION, type Selection, type SelectModifiers } from "./multiSelect";
 import { defaultFields } from "@/features/transfer/fields";
@@ -72,8 +72,8 @@ export interface PaneDeckContext {
    * answer.
    *
    * Written by whichever surface opened the card, because that surface is the one that knows
-   * which list it is drawing; read at `CardDetailPane`'s `useSwapFromPane` call, which is the
-   * only place the swap is pressed.
+   * which list it is drawing; read at `AllPrintingsDialog`'s `useSwapFromPane` call, which is the
+   * only place the swap is pressed (it was the docked pane's until 2026-09-03).
    */
   variant: DeckVariant;
   /**
@@ -198,11 +198,39 @@ export interface ExportPrefs {
   fields: TransferFieldId[];
   /** Leave out cards MTG Arena does not have. Read by the `arena` format alone. */
   arenaOnly: boolean;
+  /**
+   * Write the piles the reader has switched off — issue #390. Read only on a surface that has
+   * piles (`SURFACE_HAS_PILES`) and only by the five formats that do not already answer the
+   * question for themselves (`export/format.ts`'s `dropsInactive`).
+   *
+   * **Named for what ticking it does rather than for what leaving it does**, unlike `arenaOnly`
+   * beside it, and the two therefore default off for opposite reasons — see the initial state,
+   * where the behaviour change this cost is written down.
+   */
+  includeInactive: boolean;
 }
 
 interface AppState {
   activeView: ViewId;
   setActiveView: (view: ViewId) => void;
+  /**
+   * Whether the keyboard map is showing.
+   *
+   * **Here because its two halves are in different components.** `F1` is bound in `AppShell`'s
+   * one `keydown` effect — the shortcut is live wherever the caret is, so it cannot belong to
+   * the thing it opens — while the panel it opens is drawn by `TitleBar`, which is the shell's
+   * child rather than the effect's. A `useState` in either is unreachable from the other, and
+   * lifting it to the one component they share is this store with a prop drilled through the
+   * caption row: `AppShell` has no other reason to hold the flag, and would be passing it
+   * straight back down.
+   *
+   * **In memory only, like every other field here**, and it opens `false` on every launch for a
+   * sharper reason than most of them: a panel that answers "what can I press *here*" is asked
+   * and then dismissed, so a window that came back with it up would be remembering an answer
+   * rather than a preference.
+   */
+  keyMapOpen: boolean;
+  setKeyMapOpen: (open: boolean) => void;
   searchView: SearchView;
   setSearchView: (view: SearchView) => void;
   /** How the collection is laid out. Separate from `searchView` on purpose — the search is
@@ -672,6 +700,34 @@ interface AppState {
   /** Close it. */
   closeAllPrintings: () => void;
   /**
+   * Which overlay the card detail modal has open **over itself**, or `null` for none.
+   *
+   * **One field, so at most one is ever open** — the same shape {@link printingsRequest} uses one
+   * line up, and it is load-bearing twice over. All three are opened from one options rail on one
+   * modal, so a reader is asking exactly one of these questions at a time and a field apiece
+   * would only be somewhere for two of them to disagree; and `LAYER.overlayStacked` is one rung
+   * for the three *because* of it — a rung is only allowed to serve surfaces that cannot overlap
+   * each other, which this field is what guarantees.
+   *
+   * **It carries nothing but which one**, unlike `printingsRequest`, which carries a question:
+   * that one names the printing the reader asked *from* and the row a press would rewrite, and it
+   * is opened from card menus all over the app rather than from this modal alone. These three are
+   * read-only surfaces about {@link selectedCardId} and there is nothing else for them to say —
+   * so the printings modal keeps its own field rather than becoming a fourth value here.
+   *
+   * **It goes with the card, and every writer that changes which card is open clears it.** An
+   * overlay outliving the card under it is a legality grid for a card nobody has open, or — worse,
+   * because it looks right — a grid that silently re-answers about whichever card the store
+   * moved on to. That is structural here for {@link setSelectedCardId}'s reason one field over:
+   * the clear lives in each `set` rather than in the surfaces, so it is true by construction
+   * instead of by five call sites remembering.
+   */
+  cardOverlay: CardOverlay | null;
+  /** Open one over the card modal. Writes one field — see {@link cardOverlay} for why. */
+  openCardOverlay: (overlay: CardOverlay) => void;
+  /** Close it. */
+  closeCardOverlay: () => void;
+  /**
    * **The list the reader is standing in**, in the order it is drawn — the open deck's cards,
    * the search results, the collection, the wishlist — or an empty walk when whatever is on
    * screen has no list of cards on it.
@@ -715,11 +771,11 @@ interface AppState {
    * collection export wants a CSV with a condition column, and one remembered setting would
    * make each of them wrong half the time.
    *
-   * `arenaOnly` rides along rather than being local dialog state, so it is remembered the way
-   * the two beside it are — and it deliberately **survives a format switch**, unlike `fields`,
-   * which is re-derived from each format's defaults. A field set chosen for CSV means nothing
-   * to Arena; "leave out what Arena does not have" is the same answer whatever else the reader
-   * tries in between, and only the Arena format reads it at all.
+   * `arenaOnly` and `includeInactive` ride along rather than being local dialog state, so they
+   * are remembered the way the two beside them are — and both deliberately **survive a format
+   * switch**, unlike `fields`, which is re-derived from each format's defaults. A field set
+   * chosen for CSV means nothing to Arena; "leave out what Arena does not have" and "write my
+   * switched-off piles" are the same answers whatever else the reader tries in between.
    */
   exportPrefs: Record<TransferSurface, ExportPrefs>;
   setExportPrefs: (surface: TransferSurface, prefs: ExportPrefs) => void;
@@ -729,13 +785,28 @@ interface AppState {
    * this app's collection-only vocabulary).
    *
    * **One shared pair rather than one per surface**, unlike {@link exportPrefs}: a reader who has
-   * just told the collection's import "assume Near Mint, foil" is answering a question about
-   * *their box*, not about the collection screen — so a wishlist import opened next re-reads the
-   * same answer rather than asking again. `NM` matches Rust's `DEFAULT_CONDITION`.
+   * just told the collection's import "assume nothing about the grade, and foil" is answering a
+   * question about *their box*, not about the collection screen — so a wishlist import opened
+   * next re-reads the same answer rather than asking again. `NONE` matches Rust's
+   * `DEFAULT_CONDITION`.
    */
   importDefaults: { condition: Condition; finish: DeckFinish };
   setImportDefaults: (defaults: { condition: Condition; finish: DeckFinish }) => void;
 }
+
+/**
+ * Which surface the card detail modal has open over itself — see {@link AppState.cardOverlay},
+ * the only field of this type and where the single-field design is argued.
+ *
+ * A union of three names rather than three booleans, which is the same statement the field makes
+ * about there being at most one: three flags can all be true at once and one of them would then
+ * have to be declared the winner somewhere, by a reader rather than by the type.
+ *
+ * **The printings modal is deliberately not a fourth name** — it carries a question
+ * ({@link PrintingsRequest}) and is opened from card menus that have nothing to do with this
+ * modal, so it keeps the field it already has.
+ */
+export type CardOverlay = "legality" | "oracleTags" | "cardText";
 
 /**
  * The question the printings modal is open on — see {@link AppState.printingsRequest}, which is
@@ -865,6 +936,10 @@ export const useAppStore = create<AppState>((set) => ({
       return {
         activeView,
         selectedCardId: null,
+        // And whatever the card modal had open over itself. It is a question *about* the card on
+        // the line above, so it cannot outlive it — a legality grid left standing over an empty
+        // Settings page would be a popup with no card behind it and no modal to close back to.
+        cardOverlay: null,
         cardSelection: null,
         paneDeckContext: null,
         paneFromDeckSearch: false,
@@ -892,6 +967,14 @@ export const useAppStore = create<AppState>((set) => ({
         returnToDeckId: null,
       };
     }),
+  // Closed on launch, and deliberately not cleared by `setActiveView` above the way the card
+  // pane and the open deck are: those two are *about* the view that is going away, while this
+  // panel's whole subject is the view being arrived at. A reader who pressed `Ctrl+3` with the
+  // map up is looking at the map to find out what `Ctrl+3` did, and shutting it would take the
+  // answer away in the same frame it became true. See the interface for why the flag is in the
+  // store at all rather than in either of the two components that use it.
+  keyMapOpen: false,
+  setKeyMapOpen: (keyMapOpen) => set({ keyMapOpen }),
   // Art by default: this is a card app, and the table is the view you switch to when you
   // are comparing prices rather than looking at cards.
   //
@@ -1046,8 +1129,20 @@ export const useAppStore = create<AppState>((set) => ({
   // **And which finish the last card was opened as**, for the identical reason one field along:
   // a search tile, a wishlist row and the pane's own close each open something no surface has
   // named a finish for, and `openCardAsFinish` is the one that does.
+  //
+  // **And whatever the modal had open over itself**, which covers both halves of this setter at
+  // once: `null` is the modal closing, and any other id is a *different* card — and the three
+  // overlays read `selectedCardId` themselves, so one left open across a card change would not
+  // close, it would quietly re-answer about the new card. Every other opener below clears it in
+  // its own `set` for the same reason.
   setSelectedCardId: (selectedCardId) =>
-    set({ selectedCardId, paneDeckContext: null, paneFromDeckSearch: false, paneFinish: null }),
+    set({
+      selectedCardId,
+      cardOverlay: null,
+      paneDeckContext: null,
+      paneFromDeckSearch: false,
+      paneFinish: null,
+    }),
   cardSelection: null,
   // A press in a scope the held set does not name starts a new set rather than adding to one the
   // reader made on another surface — see the field's doc for why that is the whole scoping rule.
@@ -1062,6 +1157,8 @@ export const useAppStore = create<AppState>((set) => ({
     set({
       selectedCardId: paneDeckContext.cardId,
       paneDeckContext,
+      // A different card is a different question — see `setSelectedCardId`.
+      cardOverlay: null,
       // The two openers exclude each other in one `set` apiece, which is what makes "the pane
       // came from one side" a fact about one write rather than an agreement between two.
       paneFromDeckSearch: false,
@@ -1071,11 +1168,29 @@ export const useAppStore = create<AppState>((set) => ({
     }),
   paneFromDeckSearch: false,
   openCardFromDeckSearch: (selectedCardId, paneFinish = null) =>
-    set({ selectedCardId, paneDeckContext: null, paneFromDeckSearch: true, paneFinish }),
+    set({
+      selectedCardId,
+      cardOverlay: null,
+      paneDeckContext: null,
+      paneFromDeckSearch: true,
+      paneFinish,
+    }),
   paneFinish: null,
   openCardAsFinish: (selectedCardId, paneFinish) =>
-    set({ selectedCardId, paneFinish, paneDeckContext: null, paneFromDeckSearch: false }),
+    set({
+      selectedCardId,
+      paneFinish,
+      cardOverlay: null,
+      paneDeckContext: null,
+      paneFromDeckSearch: false,
+    }),
   // Deliberately not touching `paneDeckContext` or `paneFinish` — see the interface doc.
+  //
+  // **Nor `cardOverlay`**, which is the one opener that leaves it alone and is worth saying out
+  // loud beside the four that clear it: this verb means "another printing of the card that is
+  // already open", and all three overlays are about the *card* rather than the printing — a
+  // legality table, an oracle-tag list and an oracle text are the same answer for every printing
+  // of one card. Clearing here would shut a popup for a change it does not see.
   viewPrinting: (selectedCardId) => set({ selectedCardId }),
   // Decks opens on the gallery: a deck is something the reader picks, and reopening the last
   // one would be a decision made for them by the previous session.
@@ -1113,6 +1228,12 @@ export const useAppStore = create<AppState>((set) => ({
   // here has an opinion about the view, the open card or the open deck behind it.
   openAllPrintings: (printingsRequest) => set({ printingsRequest }),
   closeAllPrintings: () => set({ printingsRequest: null }),
+  cardOverlay: null,
+  // One field, exactly like the pair above and for the same reason — see the interface. Nothing
+  // here has an opinion about the open card: this write says *which question*, and the card it is
+  // a question about is `selectedCardId`, which every opener already owns.
+  openCardOverlay: (cardOverlay) => set({ cardOverlay }),
+  closeCardOverlay: () => set({ cardOverlay: null }),
   // No walk until a surface with a list of cards on it publishes one, and back to this the
   // moment that surface unmounts.
   cardWalk: NO_WALK,
@@ -1133,13 +1254,48 @@ export const useAppStore = create<AppState>((set) => ({
   // `arenaOnly` opens **off** everywhere: the Arena export has written every card handed to it
   // since it shipped, and a filter that starts on would quietly change what an existing reader's
   // next export contains. The dialog's own count line is how they find the box.
+  //
+  // **`includeInactive` opens off too, and that argument is spent on the other side** — issue
+  // #390 is a reader reporting the maybeboard turning up in a deck they exported, so leaving it
+  // on by default would ship the fix with the bug still in it. It is worth naming what that
+  // costs: the five formats that wrote a switched-off pile before this shipped — plain,
+  // Moxfield, Archidekt, TCGplayer, CSV — stop writing one unless the reader ticks the box, so an
+  // existing reader's next deck export **does** change. The dialog's own count line is how they
+  // find the box, and Arena and MTGO are untouched because `dropsInactive` already answers for
+  // them. `false` on the two pile-less surfaces is the value `SURFACE_HAS_PILES` makes
+  // unreachable rather than a decision about them.
   exportPrefs: {
-    deck: { format: "plain", fields: defaultFields("plain", "deck"), arenaOnly: false },
-    collection: { format: "csv", fields: defaultFields("csv", "collection"), arenaOnly: false },
-    wishlist: { format: "plain", fields: defaultFields("plain", "wishlist"), arenaOnly: false },
+    deck: {
+      format: "plain",
+      fields: defaultFields("plain", "deck"),
+      arenaOnly: false,
+      includeInactive: false,
+    },
+    collection: {
+      format: "csv",
+      fields: defaultFields("csv", "collection"),
+      arenaOnly: false,
+      includeInactive: false,
+    },
+    wishlist: {
+      format: "plain",
+      fields: defaultFields("plain", "wishlist"),
+      arenaOnly: false,
+      includeInactive: false,
+    },
   },
   setExportPrefs: (surface, prefs) =>
     set((s) => ({ exportPrefs: { ...s.exportPrefs, [surface]: prefs } })),
-  importDefaults: { condition: "NM", finish: null },
+  // The condition opens on the sentinel since schema v35: an import line that says nothing about
+  // a grade records that it said nothing, rather than the app writing the best grade on the scale
+  // on the reader's behalf.
+  //
+  // **Nothing converts a value already in hand, and today there is none to convert** — this pair
+  // is in-memory session state with no `app_meta` row and no persist middleware behind it, so
+  // this literal is what every launch opens on. If it is ever given a stored home, the migration
+  // to write is *none*: a reader whose stored answer is `NM` either chose it or lived with it,
+  // and silently changing what their next import records is worse than the inconsistency it
+  // would tidy away.
+  importDefaults: { condition: CONDITION_NOT_SET, finish: null },
   setImportDefaults: (importDefaults) => set({ importDefaults }),
 }));

@@ -3,7 +3,11 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { transferCard } from "../fixtures";
 import type { TransferCard } from "../TransferCard";
-import { EXPORT_FORMATS, EXPORT_FORMAT_LABEL } from "./format";
+// `dropsInactive` rather than a hand-written list of the two formats it names: the sweep in
+// "the inactive-category filter" asks the module which answer to expect for each format, so a
+// writer entering or leaving `ACTIVE_ONLY` shows up as a red test rather than as a comment here
+// that stopped being true.
+import { dropsInactive, EXPORT_FORMATS, EXPORT_FORMAT_LABEL } from "./format";
 
 const exportWriteFile = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
@@ -200,6 +204,22 @@ describe("ExportDialog", () => {
     // about the format on screen, so it has to go with it.
     await user.click(screen.getByRole("radio", { name: "Moxfield" }));
     expect(screen.queryByText(/not written in this format/)).not.toBeInTheDocument();
+
+    // **The tick is what keeps this test's original claim the claim it is making** (issue #390).
+    // "Moxfield leaves nothing out" is still true of the *format* — it has a maybeboard and drops
+    // nothing of its own accord, which is what the line above asserts — but the dialog now opens
+    // with `Include inactive categories` off, so the same six copies are held back by the
+    // reader's own default instead. Without the press below this test would have gone on passing
+    // while the file under it was short a whole pile, which is the shape of an assertion that
+    // outlives its meaning: the sentence it looks for is gone for the reason it always was, and
+    // a different one has quietly taken the place on screen. The reader's own line is the
+    // `describe` below's subject in full; what is asserted here is that ticking the box is what
+    // empties both of them.
+    expect(
+      screen.getByText("6 cards in inactive categories are not written."),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("checkbox", { name: "Include inactive categories" }));
+    expect(screen.queryByText(/not written/)).not.toBeInTheDocument();
   });
 
   it("says it in the singular for one card", async () => {
@@ -222,11 +242,6 @@ describe("ExportDialog", () => {
   });
 
   /**
-   * The Arena filter — issue #192. `arena.ts` owns which cards Arena has and has its own tests;
-   * these are about the control: that it draws for one format, that ticking it changes the file,
-   * and that what it left out is said out loud before Copy is pressed.
-   */
-  /**
    * The deck label's checkboxes, in the dialog — because a field can be perfectly declared in
    * `fields.ts`, perfectly written by `format.ts`, and unreachable from the one surface a reader
    * has. The field row is `availableFields(format, surface)` and nothing else, so what these
@@ -238,19 +253,19 @@ describe("ExportDialog", () => {
       quantity: 2,
       setCode: "lea",
       collectorNumber: "161",
-      tagName: "Keeper",
-      tagColor: "#4aab08",
+      labelName: "Keeper",
+      labelColor: "#4aab08",
     });
-    const tagBox = () => screen.getByRole("checkbox", { name: "Tag" });
+    const labelBox = () => screen.getByRole("checkbox", { name: "Label" });
 
     it("is ticked on Archidekt and offers no colour box of its own", async () => {
       const user = userEvent.setup();
       render(<ExportDialog {...props} cards={[KEEPER]} />);
 
       await user.click(await screen.findByRole("radio", { name: "Archidekt" }));
-      expect(tagBox()).toBeChecked();
+      expect(labelBox()).toBeChecked();
       // The colour rides inside `^Keeper,#4aab08^`, so a box for it here would change nothing.
-      expect(screen.queryByRole("checkbox", { name: "Tag colour" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("checkbox", { name: "Label colour" })).not.toBeInTheDocument();
     });
 
     it("writes the label into the Archidekt preview, and stops when it is unticked", async () => {
@@ -261,7 +276,7 @@ describe("ExportDialog", () => {
 
       expect(screen.getByText(/\^Keeper,#4aab08\^/)).toBeInTheDocument();
 
-      await user.click(tagBox());
+      await user.click(labelBox());
       expect(screen.queryByText(/\^Keeper/)).not.toBeInTheDocument();
     });
 
@@ -270,15 +285,15 @@ describe("ExportDialog", () => {
       render(<ExportDialog {...props} cards={[KEEPER]} />);
       await user.click(await screen.findByRole("radio", { name: "CSV" }));
 
-      const colourBox = screen.getByRole("checkbox", { name: "Tag colour" });
+      const colourBox = screen.getByRole("checkbox", { name: "Label colour" });
       // CSV's defaults are a deliberate core; the label and its colour are both opt-in there.
-      expect(tagBox()).not.toBeChecked();
+      expect(labelBox()).not.toBeChecked();
       expect(colourBox).not.toBeChecked();
 
-      await user.click(tagBox());
+      await user.click(labelBox());
       await user.click(colourBox);
       await showList(user);
-      expect(screen.getByText(/Tag,Tag colour/)).toBeInTheDocument();
+      expect(screen.getByText(/Label,Label colour/)).toBeInTheDocument();
       expect(screen.getByText(/Keeper,#4aab08/)).toBeInTheDocument();
     });
 
@@ -287,11 +302,23 @@ describe("ExportDialog", () => {
       render(<ExportDialog {...props} cards={[KEEPER]} />);
       for (const format of ["Plain text", "MTGO", "Arena", "Moxfield", "TCGplayer"]) {
         await user.click(await screen.findByRole("radio", { name: format }));
-        expect(screen.queryByRole("checkbox", { name: "Tag" }), format).not.toBeInTheDocument();
+        expect(
+          screen.queryByRole("checkbox", { name: "Label" }),
+          format,
+        ).not.toBeInTheDocument();
       }
     });
   });
 
+  /**
+   * The Arena filter — issue #192. `arena.ts` owns which cards Arena has and has its own tests;
+   * these are about the control: that it draws for one format, that ticking it changes the file,
+   * and that what it left out is said out loud before Copy is pressed.
+   *
+   * (This comment sat above `describe("the deck label")` until 2026-09-07, one block too high —
+   * moved rather than left, because the `describe` below it is written as this one's twin and a
+   * misfiled doc is what makes a reader believe the wrong pair belong together.)
+   */
   describe("the Arena filter", () => {
     /** In Arena (Timeless) and not in Arena (paper-only), as the real blobs read. */
     const IN_ARENA = '{"timeless":"legal","historic":"banned"}';
@@ -456,6 +483,307 @@ describe("ExportDialog", () => {
 
       await user.click(arenaBox());
       expect(screen.queryByText("Copied.")).not.toBeInTheDocument();
+    });
+  });
+
+  /**
+   * `Include inactive categories` — issue #390, and the Arena box's twin one row down.
+   * `format.ts` owns what each writer does with a switched-off pile and has its own tests for it;
+   * these are about the control, in the same four parts the block above is: that it draws exactly
+   * where the question can be asked, that it opens off, that ticking it changes the file, and
+   * that what it holds back is said out loud in copies before Copy is pressed.
+   *
+   * **Every assertion here that matters is about the _file_ rather than about the checkbox**, and
+   * that is the whole reason this block is as long as it is. The default is a real change to what
+   * an existing reader's next deck export contains: plain, Moxfield, Archidekt, TCGplayer and CSV
+   * all wrote a switched-off pile before #390 shipped and none of them does now unless the box is
+   * ticked. A suite that pinned only the control's presence and its `checked` state would leave
+   * the whole of what changed uncovered — and a dialog quietly dropping rows looks exactly
+   * correct from the outside, which is the failure mode the golden fence exists for one floor
+   * down and this block is the dialog's own version of.
+   */
+  describe("the inactive-category filter", () => {
+    /**
+     * One switched-on pile and one switched off — the shape every assertion below is about.
+     *
+     * **Six copies on the `Cuts` row rather than one**, for `omittedCount`'s own reason: six
+     * Forests on one row are six cards missing from the file, so a fixture that gave every row
+     * `quantity: 1` would let a row count pass as a copy count and the two lines this dialog
+     * draws would both read correctly while counting the wrong thing.
+     */
+    const CUTS: readonly TransferCard[] = [
+      exportCard({ name: "Sol Ring", categoryName: "Ramp" }),
+      exportCard({ name: "Forest", quantity: 6, categoryName: "Cuts", categoryActive: false }),
+    ];
+    const inactiveBox = () =>
+      screen.getByRole("checkbox", { name: "Include inactive categories" });
+    /** The box, or `null` where the dialog does not offer it — the two fence tests want both. */
+    const boxIfDrawn = () =>
+      screen.queryByRole("checkbox", { name: "Include inactive categories" });
+
+    /**
+     * **The sweep is the point of this one.** `dropsInactive` is `ACTIVE_ONLY` read from outside,
+     * and a format entering or leaving that set is exactly the change that should show up here
+     * rather than in a reviewer's head — so this walks `EXPORT_FORMATS` and asks the module which
+     * answer to expect, instead of naming Arena and MTGO by hand and going quietly stale beside
+     * them. The radio row maps the same array, so what is swept is also everything the reader can
+     * press: an eighth writer arrives in both places at once or fails here.
+     */
+    it("draws for every format that has not already answered the question", async () => {
+      const user = userEvent.setup();
+      render(<ExportDialog {...props} cards={CUTS} />);
+      for (const format of EXPORT_FORMATS) {
+        const label = EXPORT_FORMAT_LABEL[format];
+        await user.click(await screen.findByRole("radio", { name: label }));
+        if (dropsInactive(format)) {
+          // Arena and MTGO have nowhere to put a maybeboard whatever anybody asks of them, so a
+          // box here could never move a byte — the furniture `src/CLAUDE.md` forbids — and
+          // `omittedCount`'s own line under those two already says what it cost.
+          expect(boxIfDrawn(), label).not.toBeInTheDocument();
+        } else {
+          expect(boxIfDrawn(), label).toBeInTheDocument();
+        }
+      }
+    });
+
+    /**
+     * The surface fence, which closes a different hole from the format one: a collection row and
+     * a wishlist row carry `categoryActive: null`, so there is no pile for the box to be about
+     * and a control over nothing is the same furniture by another route. `transferCard()`'s own
+     * defaults are that shape — this file's `exportCard` is what adds the three deck facts on top
+     * — so the cards passed here are the ones those two pages really hand the dialog.
+     */
+    it("is absent on a surface that has no piles", async () => {
+      const user = userEvent.setup();
+      for (const surface of ["collection", "wishlist"] as const) {
+        const { unmount } = render(
+          <ExportDialog {...props} surface={surface} cards={[transferCard()]} />,
+        );
+        // The format it opens on…
+        await screen.findByRole("radio", { name: "Plain text" });
+        expect(boxIfDrawn(), surface).not.toBeInTheDocument();
+        // …and CSV, which is a format that *does* offer the box on a deck — so a fence written
+        // on the format alone would be caught here rather than passing on the opening format.
+        await user.click(screen.getByRole("radio", { name: "CSV" }));
+        expect(boxIfDrawn(), surface).not.toBeInTheDocument();
+        unmount();
+      }
+    });
+
+    /**
+     * **Off on a first open, and what is asserted is the file rather than the checkbox.** This is
+     * the half of #390 that is a behaviour change rather than a new control: Moxfield has a
+     * maybeboard and wrote that pile into it until the day this shipped, so the sentence worth
+     * pinning is "those cards are not in the text", not "the box is unticked".
+     *
+     * The whole copied text rather than a line of the preview, for the Arena filter's reason —
+     * two cards write two lines into one text node and `getByText` is a whole-node match — and
+     * the absent `Maybeboard` heading is the half that a filter applied in the wrong place would
+     * get wrong: `formatExport` writing a heading over no rows is the other way this could fail
+     * and would be invisible to a test that only counted cards.
+     */
+    it("opens off, so a switched-off pile is not in the first export", async () => {
+      const user = userEvent.setup();
+      const copy = vi.mocked(copyTextMock);
+      render(<ExportDialog {...props} cards={CUTS} />);
+      await user.click(await screen.findByRole("radio", { name: "Moxfield" }));
+      expect(inactiveBox()).not.toBeChecked();
+
+      await user.click(screen.getByRole("button", { name: /Copy/ }));
+      expect(copy).toHaveBeenLastCalledWith("Deck\n1 Sol Ring (LTC) 285\n");
+    });
+
+    /**
+     * **Archidekt is the strongest case, which is why it is the one spelled out in full.** It is
+     * the only format here that can say a pile counts toward nothing — `{noDeck}` on the first
+     * bracket entry, which `parse.ts` reads straight back as `is_active = 0` — so with the box on
+     * this is the round trip that flag exists for rather than merely a longer file. A build that
+     * put the cards back and lost the marker would hand a reader an Archidekt import in which
+     * their maybeboard had become part of the deck, and the copies would all be present.
+     *
+     * Moxfield's `Maybeboard` heading is the same statement in the other vocabulary, pressed for
+     * in the same session, because the filter is one gate in front of seven writers: a fix that
+     * reached one writer's rows and not the other's is exactly the drift one format's test cannot
+     * see. It also crosses a format with the box on, which is the trip below asserted in passing.
+     */
+    it("puts the pile back when it is ticked, {noDeck} and all", async () => {
+      const user = userEvent.setup();
+      const copy = vi.mocked(copyTextMock);
+      render(<ExportDialog {...props} cards={CUTS} />);
+      await user.click(await screen.findByRole("radio", { name: "Archidekt" }));
+      await user.click(screen.getByRole("button", { name: /Copy/ }));
+      expect(copy).toHaveBeenLastCalledWith("Ramp\n1x Sol Ring (ltc) 285 [Ramp]\n");
+
+      await user.click(inactiveBox());
+      await user.click(screen.getByRole("button", { name: /Copy/ }));
+      expect(copy).toHaveBeenLastCalledWith(
+        "Ramp\n1x Sol Ring (ltc) 285 [Ramp]\n\nCuts\n6x Forest (ltc) 285 [Cuts{noDeck}]\n",
+      );
+
+      await user.click(screen.getByRole("radio", { name: "Moxfield" }));
+      await user.click(screen.getByRole("button", { name: /Copy/ }));
+      expect(copy).toHaveBeenLastCalledWith(
+        "Deck\n1 Sol Ring (LTC) 285\n\nMaybeboard\n6 Forest (LTC) 285\n",
+      );
+    });
+
+    /**
+     * Copies rather than rows, and on screen before Copy is pressed — the two rules the Arena
+     * line beside it holds, held here for the reader's own filter. And it is **absent** once
+     * nothing is being held back, which is what stops it from becoming a permanent fixture beside
+     * the format radios that nobody reads by the third export.
+     */
+    it("says how many copies it is holding back, counted in copies", async () => {
+      const user = userEvent.setup();
+      render(<ExportDialog {...props} cards={CUTS} />);
+      expect(
+        await screen.findByText("6 cards in inactive categories are not written."),
+      ).toBeInTheDocument();
+
+      // `/not written/` rather than `/inactive categor/`: the checkbox's own label carries those
+      // two words too, so the looser pattern would match the control that is still on screen and
+      // this assertion could never fail.
+      await user.click(inactiveBox());
+      expect(screen.queryByText(/not written/)).not.toBeInTheDocument();
+    });
+
+    it("says it in the singular for one card", async () => {
+      render(
+        <ExportDialog
+          {...props}
+          cards={[
+            exportCard({ name: "Sol Ring", categoryName: "Ramp" }),
+            exportCard({ name: "Mox Amber", categoryName: "Cuts", categoryActive: false }),
+          ]}
+        />,
+      );
+      expect(
+        await screen.findByText("1 card in an inactive category is not written."),
+      ).toBeInTheDocument();
+    });
+
+    /**
+     * **The double-count test's twin, and the most valuable one in this block.** The two
+     * sentences say the same thing about the same copies in two different vocabularies — one
+     * names the *format*'s rule, one names the reader's own box — so a build that drew both would
+     * tell a reader twice that six copies are missing and send them looking for a control that is
+     * not on screen under Arena at all.
+     *
+     * They cannot both fire, and it is a property rather than an accident: `omitted` is non-zero
+     * only where `dropsInactive` is true and `heldBackInactive` only where it is false, which are
+     * complementary halves of one set. Asserted from **both** sides on purpose — a fence that
+     * only ever gets tested on the side it currently happens to be right about is a fence nobody
+     * has tested, and each half here is one deleted `queryByText` away from being that.
+     */
+    it("never shares the screen with the format's own omission line", async () => {
+      const user = userEvent.setup();
+      render(<ExportDialog {...props} cards={CUTS} />);
+      await user.click(await screen.findByRole("radio", { name: "Arena" }));
+      expect(
+        screen.getByText("6 cards in switched-off piles are not written in this format."),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/inactive categories are not written/)).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole("radio", { name: "Moxfield" }));
+      expect(
+        screen.getByText("6 cards in inactive categories are not written."),
+      ).toBeInTheDocument();
+      expect(screen.queryByText(/not written in this format/)).not.toBeInTheDocument();
+    });
+
+    /**
+     * `arenaOnly`'s rule read across: a field set chosen for CSV means nothing to Arena and is
+     * re-derived on every format press, while "write my switched-off piles" is the same answer
+     * whatever the reader passed through on the way back.
+     *
+     * **Arena is the right format to pass through**, because there the flag is neither drawn nor
+     * read — so one trip pins both halves of the fence at once: the preference survives a format
+     * that ignores it, and a reader who ticked the box on CSV does not find Arena's own rule
+     * quietly overridden on the way past. That second half is the mirror of the Arena filter's
+     * "does not narrow another format's export", and it is the one a filter fenced on the flag
+     * alone would fail.
+     */
+    it("survives a trip through another format", async () => {
+      const user = userEvent.setup();
+      const copy = vi.mocked(copyTextMock);
+      render(<ExportDialog {...props} cards={CUTS} />);
+      await user.click(await screen.findByRole("radio", { name: "CSV" }));
+      await user.click(inactiveBox());
+
+      await user.click(screen.getByRole("radio", { name: "Arena" }));
+      expect(boxIfDrawn()).not.toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: /Copy/ }));
+      // Arena's own rule stands whatever the reader ticked elsewhere: the pile is out of the file
+      // and the format's sentence — not the reader's — is what says so.
+      expect(copy).toHaveBeenLastCalledWith("Deck\n1 Sol Ring (LTC) 285\n");
+
+      await user.click(screen.getByRole("radio", { name: "CSV" }));
+      expect(inactiveBox()).toBeChecked();
+      await user.click(screen.getByRole("button", { name: /Copy/ }));
+      expect(copy).toHaveBeenLastCalledWith(
+        "Quantity,Name,Set,Collector number,Category,Finish\n" +
+          "1,Sol Ring,ltc,285,Ramp,\n6,Forest,ltc,285,Cuts,\n",
+      );
+    });
+
+    /** Same claim, same reason as the format radios and the Arena box above: the preview redraws,
+     *  the clipboard does not, so "Copied." would sit beside text it is no longer true of. */
+    it("clears the Copied status", async () => {
+      const user = userEvent.setup();
+      render(<ExportDialog {...props} cards={CUTS} />);
+      await user.click(screen.getByRole("button", { name: /Copy/ }));
+      expect(await screen.findByText("Copied.")).toBeInTheDocument();
+
+      await user.click(inactiveBox());
+      expect(screen.queryByText("Copied.")).not.toBeInTheDocument();
+    });
+
+    /**
+     * **A switched-off pile exported on its own is an empty file with the box off, and that is a
+     * decision rather than a bug.** A category heading's `Export cards…` passes exactly that
+     * pile's rows and nothing else, so a pile the reader has switched off arrives here as a list
+     * every one of whose cards the default is holding back — and `formatExport` answers `""` for
+     * an empty list in every format, CSV's header included.
+     *
+     * What makes that defensible is that the dialog says so twice before anything is written, and
+     * both halves are asserted because either alone would let a silent empty file through. The
+     * disclosure's label counts the lines of the **file** rather than the cards the reader
+     * pointed at, so it reads `0 lines`; the count line names the copies; and the box sitting
+     * above them both is the thing to untick, which is the last assertion here. A reader who
+     * exports a pile and gets nothing has been told three times what happened and given the
+     * control that undoes it.
+     */
+    it("exports a switched-off pile on its own as an empty file, and says why", async () => {
+      const user = userEvent.setup();
+      render(
+        <ExportDialog
+          {...props}
+          subject="Cuts"
+          suggestedFileName="Cuts"
+          cards={[
+            exportCard({
+              name: "Forest",
+              quantity: 6,
+              categoryName: "Cuts",
+              categoryActive: false,
+            }),
+            exportCard({ name: "Mox Amber", categoryName: "Cuts", categoryActive: false }),
+          ]}
+        />,
+      );
+      expect(await screen.findByRole("button", { name: /decklist/ })).toHaveTextContent(
+        "Show decklist (0 lines)",
+      );
+      expect(
+        screen.getByText("7 cards in inactive categories are not written."),
+      ).toBeInTheDocument();
+
+      await user.click(inactiveBox());
+      expect(screen.getByRole("button", { name: /decklist/ })).toHaveTextContent(
+        "Show decklist (2 lines)",
+      );
+      await showList(user);
+      expect(screen.getByText(/6 Forest/)).toBeInTheDocument();
     });
   });
 

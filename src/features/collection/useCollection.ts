@@ -357,6 +357,18 @@ export function useCollection() {
     queryFn: ({ pageParam }) =>
       ipc.collectionList({
         ...filters,
+        // **Here and on the summary below, and deliberately NOT on `filters`.** A drawer the
+        // reader has locked is one they have set aside, so the wall stops offering it — but
+        // `useExportScope` reads `filters` and hands that same object to `ipc.collectionList`
+        // on the **filtered** export arm (`export/scope.ts`), and a flag riding along there
+        // would drop those copies out of a CSV the reader asked for. That is the failure the
+        // design is shaped around: a backup or an export that is quietly short, with nothing
+        // raised. `everythingFilters` strips the folder fields but would not strip this one,
+        // because it strips by name and this is not one of the two it knows.
+        //
+        // Rust ignores it whenever `folderId` names a folder, so standing in a locked drawer
+        // still lists it and no second condition is needed on this side.
+        excludeLocked: true,
         // Absent rather than `[]` when nothing is sorted, so an untouched table produces
         // exactly the payload it always did.
         sort: sort.length > 0 ? sort : undefined,
@@ -370,7 +382,12 @@ export function useCollection() {
 
   const summary = useQuery({
     queryKey: ["collection", "summary", filterKey],
-    queryFn: () => ipc.collectionSummary({ ...filters, limit: 0, offset: 0 }),
+    // `excludeLocked` matches the list above it, and matching is the point rather than a
+    // tidiness: `collection::scope` is one predicate list and the header is the count of the
+    // rows underneath it, so a summary that asked a wider question would price a wall the
+    // reader is not looking at.
+    queryFn: () =>
+      ipc.collectionSummary({ ...filters, excludeLocked: true, limit: 0, offset: 0 }),
     placeholderData: keepPreviousData,
   });
 

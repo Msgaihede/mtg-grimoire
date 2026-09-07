@@ -549,7 +549,7 @@ fn fold_wish_into_existing(
 /// in the Maybeboard is two intentions, and one tried out in Theory against the Live copy is
 /// two more. A merge is not a reason to collapse any of them into one.
 ///
-/// `tag_id` does not move: the row that survives keeps its own label, `deck::move_card`'s fold
+/// `label_id` does not move: the row that survives keeps its own label, `deck::move_card`'s fold
 /// rule and `deck_category_delete`'s. Nothing else moves either, because a deck card holds
 /// nothing else the user typed — no price, no acquisition story. The quantities add, exactly
 /// as `deck.rs`'s own `ON CONFLICT` adds them when the same printing is added to a category

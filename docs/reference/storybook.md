@@ -24,10 +24,10 @@ another's total — that has been wrong here more than once, and no side of a me
 predicted the merge.
 
 **`autodocs` is declared per file in the meta**, and
-`CategoriesDialog`/`TagsDialog`/`TheoryDiffDialog` do not carry it, so those three have stories
+`CategoriesDialog`/`LabelsDialog`/`TheoryDiffDialog` do not carry it, so those three have stories
 and no docs page. It read `CategoriesPanel`/`TheoryDiffDialog` until 2026-08-14: that panel is
 two files now, and neither half declares it any more than the whole did. The other surfaces of
-that change went the other way — `DeckDialog`, the shell `CategoriesDialog` and `TagsDialog` are
+that change went the other way — `DeckDialog`, the shell `CategoriesDialog` and `LabelsDialog` are
 drawn in (`TheoryDiffDialog` is not: it still carries its own chrome), and `DeckHistoryDialog`,
 which was `AuditDrawer`, both carry it. A new story file gets neither unless
 it says `tags: ["autodocs"]`.
@@ -77,7 +77,7 @@ it says `tags: ["autodocs"]`.
   worth of drift, because a prose-only edit routes to neither CI job and nothing goes red.
   **`deckMeta` is the one that refuses
   _reads_** — the six a deck screen makes _beside_ the deck (`deck_category_list`,
-  `deck_tag_list`, `deck_tag_suggestions`, `deck_folder_list`, `deck_audit_list`,
+  `deck_label_list`, `deck_label_all`, `deck_folder_list`, `deck_audit_list`,
   `deck_theory_diff`), each in its own Rust sentence, and deliberately not `deck_get`/
   `deck_list`: a screen that could not read the deck would not be showing a panel about it.
   **`feedFetchError` is the network at the far end of a price feed**, added 2026-08-12 with
@@ -124,15 +124,15 @@ it says `tags: ["autodocs"]`.
   **stays**, and the reason goes to `error_log` — a refusal a story has to be able to show
   without the screen behind it changing at all, because nothing about categorising a card may
   fail a deck add.
-- **`starter` seeds the taxonomy as well as both price feeds** — **32 oracle cards, covering 38
-  of the 43 printings**, closed over their ancestors exactly as `oracle_tag_cards` stores them,
+- **`starter` seeds the taxonomy as well as both price feeds** — **32 oracle cards, covering 42
+  of the 59 printings**, closed over their ancestors exactly as `oracle_tag_cards` stores them,
   so a deck story shows real piles rather than everything falling back to card type. Both counts
   are measured by `db.test.ts` rather than asserted here, because every count on this page has
   drifted at least once. Five printings are deliberately left untagged (both basic lands, Delver
   of Secrets, Tarmogoyf, Little Girl) so a `starter` deck holds cards on both sides of the
   fallback at once; `empty` and `large` go without a taxonomy entirely, `large` for the reason it
   goes without price feeds. The one anchor slug the corpus cannot reach is `sacrifice-outlet`:
-  no card in these 43 printings is one, and tagging one that is not would be worse than the hole.
+  no card in these 59 printings is one, and tagging one that is not would be worse than the hole.
   Both reads answer **one entry per requested id, in request order, deduped, `slugs: []` for
   anything unknown** — a fake that answered only the matches, or that reordered, would look fine
   in Storybook and break every caller that matches by id.
@@ -144,8 +144,9 @@ it says `tags: ["autodocs"]`.
   Ancestral Recall is the mirror case and is deliberately left untagged — `lea` and `2ed` share
   one illustration, so `db.test.ts` proves that join against a store built for it rather than by
   inventing a motif for a picture nobody has looked at. **Every tag in the fixture is true of the
-  picture it is on**, which is why there is no `dog` and no `hound`: nobody in these 43
-  illustrations is a dog, and the `dog`/`hound`/`bulldog` branch lives in the crate's own fixture
+  picture it is on**, which is why there is no `dog` and no `hound`: nobody in these 59
+  printings' illustrations is a dog, and the `dog`/`hound`/`bulldog` branch lives in the crate's
+  own fixture
   in `tags/query.rs`. What the seed carries instead is the shape every story needs — `animal`
   with no direct taggings of its own (reached only through `cat` and `monkey`, the same shape as
   the real `removal`, which has zero of its own and answers 6 686 cards), `forest` under **two**
@@ -168,8 +169,7 @@ it says `tags: ["autodocs"]`.
   three unit-testable layers, each proven by breaking it.
 - **`useAppStore` is the one global that cannot be made per-story from `.storybook/`** —
   zustand's `create` does not expose its initializer, and the actions close over that one
-  store's `set`. So the four story files that write it during render (`AppShell`,
-  `CardDetailPane`, `SearchPage`, `CollectionPage`) carry
+  store's `set`. So the story files that write it during render carry
   `docs: { story: { inline: false, height } }`, which gives each of their docs stories its own
   **frame** and with it its own module graph. `DeckDialog`, `DeckSettingsDialog`,
   `CreateDeckDialog` and `import/ImportDialog` — **four** files — carry the same parameter for
@@ -201,6 +201,11 @@ it says `tags: ["autodocs"]`.
   writing down is the list above, which a grep settles in a second, and the rule it exists for.
   A new story file that writes the store needs the same parameter or its docs
   page shows one story's view under every heading.
+  **And the list went the same way the count did, which is the joke this paragraph did not see
+  coming.** Re-checked 2026-09-03: `CardDetailPane.stories.tsx` was deleted with the docked card
+  surface, and by then the store-writing side had grown well past four. So the names above are the
+  2026-08-14 reading and nothing more. `grep -rl "useAppStore" src --include=*.stories.tsx` is the
+  live answer, and `grep -rl "inline: false" src --include=*.stories.tsx` is the other one.
 - **`images.ts` is handed the installed world's corpus** (`installWorld` → `installCorpus`),
   because the `large` seed mints ~5,200 synthetic printings that a module-load snapshot of
   `CARDS` cannot see — they all drew the "Unknown card" placeholder, which is the affordance

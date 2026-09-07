@@ -35,9 +35,14 @@ export const FOLDER_DROP_LINE_ATTR = "data-folder-drop-line";
  * about two different data models.
  *
  * **The third landing has no line, on purpose.** `inside` is not a position between two folders,
- * it is a folder taking the drag, and the app already has one mark for that: `DROP_RING` in
- * `lib/dropMarks.ts`, which every folder-shaped target in the window wears. Drawing a second
- * vocabulary for it here would make one meaning wear two marks. So this component's answer to
+ * it is a folder taking the drag, and the app already has a mark for that: `DROP_OVER` in
+ * `lib/dropMarks.ts`, which is what every folder-shaped target in the window draws for an
+ * `inside` landing — beside a solid `border-accent` on the cards that have an edge of their own.
+ * Drawing a second vocabulary for it here would make one meaning wear two marks. (This named
+ * `DROP_RING` until 2026-09-03. That was the wrong half of the pair even then: the ring says
+ * *this could take it* about every eligible target at once, and `inside` is the narrower claim
+ * that it is **this** one. The pass that moved both marks onto each target's own edge is what
+ * made the difference legible enough to notice.) So this component's answer to
  * `inside` — and to `null`, the pointer being nowhere this folder would take — is to render
  * nothing, and taking the whole {@link FolderEdge} rather than only its two positional words is
  * what keeps the three call sites from each writing the same ternary around it.

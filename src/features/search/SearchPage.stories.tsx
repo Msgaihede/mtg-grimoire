@@ -83,20 +83,25 @@ const meta = {
           "**The corpus is 52 printings and the caption says 37, down three steps.** " +
           "`SearchRequest.paperOnly` is omitted-means-true and the fixture holds two digital " +
           "printings (`Black Lotus vma`, `A-Vivi Ornitier fin` — `.storybook/fake/seeds.ts:620` " +
-          "names the same two), which is **52 → 50**; the search view sends `playableOnly` and " +
-          "four paper printings are legal in none of Scryfall's formats, which is **50 → 46** " +
+          "names the same two), which is **59 → 57**; the search view sends `playableOnly` and " +
+          "eleven paper printings are legal in none of Scryfall's formats, which is **57 → 46** " +
           "({@link Unplayable} is that step in one row); and the page opens **collapsed**, one " +
           "row per card, where nine of the survivors are further printings of a card already in " +
           "the list (four Lightning Bolts, three Elesh Norns, three Swords to Plowshares, two " +
           "Sol Rings, two Ancestral Recalls) — **46 → 37**. " +
           "So `37 cards` is what every play below waits for; picking `Any card` in the format " +
-          "select gets 41 and All printings asks for the whole 50 " +
+          "select gets 47 and All printings asks for the whole 57 " +
           "({@link CollapsedPrintings}). Measured " +
           '2026-08-10 by calling `readHandlers(seed("starter")).search_cards` with the page\'s ' +
           "own request, re-measured 2026-08-14 after the playable filter landed — the two " +
-          "middle steps did not exist for the first measurement — and again on 2026-08-22, when " +
+          "middle steps did not exist for the first measurement — again on 2026-08-22, when " +
           "five layout fixtures joined the corpus for the card pane's turn controls and the " +
-          "`planar` one became the fourth printing no format allows.\n\n" +
+          "`planar` one became the fourth printing no format allows, and again on 2026-09-07, " +
+          "when seven token and emblem rows joined it for the deck editor's Tokens & emblems " +
+          "band. **`37` did not move that last time and that is the point of the chain**: a " +
+          "token is legal in no format, so all seven fall at the `playableOnly` step, and only " +
+          "the two figures either side of it — the paper total and the `Any card` count — " +
+          "change.\n\n" +
           "**Two states this page can show have no story here, for two different reasons.** A " +
           "sync in flight is unreachable through the fake at all — its `sync_status` answers " +
           "`syncing: false` and its `sync_run` resolves at once — and nothing on this page reads " +
@@ -240,7 +245,7 @@ export const Unplayable: Story = {
     await userEvent.click(format);
     await userEvent.click(await canvas.findByRole("option", { name: "Any card" }));
 
-    await canvas.findByText("41 cards");
+    await canvas.findByText("47 cards");
     // The widest row is where the picker was moved to, so the word on the closed trigger is the
     // one thing saying this wall has art cards in it.
     await expect(format).toHaveTextContent("Any card");

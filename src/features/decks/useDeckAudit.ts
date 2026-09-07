@@ -28,7 +28,7 @@ const LIMIT = 500;
  * change rolled back is a state the backend makes impossible. This hook only asks.
  *
  * `["decks", "audit", deckId]`, under the `["decks"]` root: **every** deck write records a row,
- * so the invalidation that already follows a rename, an add or a tag change is exactly what
+ * so the invalidation that already follows a rename, an add or a label change is exactly what
  * refreshes the dialog open over the deck. That is why no mutation anywhere needs to know this
  * key exists.
  *

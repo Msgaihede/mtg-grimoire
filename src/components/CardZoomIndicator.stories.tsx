@@ -46,7 +46,7 @@ const STEP_BUTTON =
  * real search wall is `CardGrid`'s stories.
  *
  * The starting size is written **during render** rather than in an effect (the lever
- * `CardDetailPane.stories.tsx` uses, for its reason): an effect runs after the first paint, so a
+ * `CardDetailModal.stories.tsx` uses, for its reason): an effect runs after the first paint, so a
  * story that cleared the previous story's pulse there would flash a badge on its way to showing
  * none. Writing it before the indicator below has mounted is also what makes this story start in
  * the state the app starts in — silent. `zoomSection` is cleared with the pulse for the same

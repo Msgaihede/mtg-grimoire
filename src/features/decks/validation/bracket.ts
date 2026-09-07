@@ -83,7 +83,7 @@
  * Full record: `docs/superpowers/research/2026-08-27-commander-brackets-and-combos.md`.
  */
 import type { DeckCombo } from "@/lib/ipc";
-import type { CardFacts } from "./types";
+import type { BracketCardFacts } from "./types";
 
 /**
  * One rule that set the floor, and what it read.
@@ -157,7 +157,7 @@ export interface BracketEstimate {
  * faces at all rather than a thrown error, because a bracket estimate must not be the thing
  * that breaks a deck screen.
  */
-function textOf(card: CardFacts): string {
+function textOf(card: BracketCardFacts): string {
   const parts = [card.oracleText ?? ""];
   if (card.faces !== null) {
     let parsed: unknown;
@@ -343,9 +343,21 @@ const BASE_FLOOR = 2;
  * pile gets back a combo this deck does not really play — and this module cannot tell. The
  * card ids passed to `combosForCards` must come from the same active-category filter applied
  * to `cards` below.
+ *
+ * **`cards` is {@link BracketCardFacts} rather than the whole `CardFacts` row**, which is a
+ * narrowing of the *parameter* and not a change to anything this function does — it already
+ * read exactly these five fields and no other. What it buys is a second caller: the deck
+ * gallery estimates a floor for every tile on the wall, and `deck_bracket_reads` sends it five
+ * fields per card instead of forty, which is a read it can afford to make for every deck at
+ * once. `types.ts` carries the whole argument, including why `CardFacts` itself stays wide.
+ * A `DeckCard[]` still satisfies this, so the deck editor's call site is untouched.
+ *
+ * `readonly`, because the array reaching this is React Query's cached one on the gallery side
+ * and the editor's own `deck.cards` on the other. Nothing here needs to be told twice — the
+ * one thing this function does to the array is `filter`, which builds a new one.
  */
 export function estimateBracket(
-  cards: CardFacts[],
+  cards: readonly BracketCardFacts[],
   combos: readonly DeckCombo[] = [],
 ): BracketEstimate {
   const deck = cards.filter((card) => card.categoryActive);

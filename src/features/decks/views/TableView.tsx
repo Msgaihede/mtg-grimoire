@@ -2,7 +2,7 @@
  * The deck as a table: one row per card, under a band naming its group.
  *
  * The view to reach for when the question is comparative — what is dearest, what is not
- * owned, what is tagged. It is the app's one `VirtualTable` and not a fourth table of its
+ * owned, what is labelled. It is the app's one `VirtualTable` and not a fourth table of its
  * own, which is what keeps the row pitch, the sticky header, the focus ring and the
  * interactive-cell guards identical to the collection's and the wishlist's.
  *
@@ -31,8 +31,8 @@ import { cn } from "@/lib/utils";
 import {
   DeckFinishMark,
   GameChangerBadge,
+  LabelDot,
   rowMarkColor,
-  TagDot,
   theoryMatchLabel,
   TheoryMatchBadge,
 } from "../CardMarks";
@@ -51,7 +51,7 @@ import {
 } from "../cardControl";
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
-import { theoryMatchDelta } from "../theoryMatch";
+import { theoryMatchMark, type TheoryMark, type TheoryPlan } from "../theoryMatch";
 import { ruleBreak } from "../violations";
 import type { ValidationIssue } from "../validation/types";
 import { GroupHeader } from "./GroupHeader";
@@ -70,10 +70,11 @@ type Row =
       group: CardGroup;
       card: DeckCard;
       ruleBreakText: string | null;
-      /** What the deck's plan says about this row — `theoryMatch.ts`'s `theoryMatchDelta`.
+      /** What the deck's plan says about this row — `theoryMatch.ts`'s `theoryMatchMark`.
        *  Resolved into the row rather than looked up in the cell, so the memo below is the one
-       *  place the map is read. `null` is a card the plan does not ask for. */
-      theoryDelta: number | null;
+       *  place the plan is read. `null` is a card the plan does not ask for; otherwise the tier
+       *  it is in and the difference at that tier's own grain. */
+      theoryMark: TheoryMark | null;
     };
 
 /**
@@ -99,7 +100,7 @@ export function TableView({
   groups,
   marketplace,
   violations,
-  theoryMatches,
+  theoryPlan,
   onSelect,
   actions,
   selectedSlot,
@@ -111,10 +112,9 @@ export function TableView({
    *  the whole view, so a band and the rows under it cannot name two currencies. */
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
-  /** What the deck's plan says about each row — `theoryMatch.ts`'s map of slot → how far the
-   *  live list is from the planned count, handed in whole like `violations` beside it.
-   *  `undefined` for a deck with no plan. */
-  theoryMatches?: ReadonlyMap<string, number>;
+  /** The deck's plan — `theoryMatch.ts`'s two lookups and the deck's own two mark switches,
+   *  handed in whole like `violations` beside it. `undefined` for a deck with no plan. */
+  theoryPlan?: TheoryPlan;
   onSelect?: (card: DeckCard) => void;
   /**
    * What may be done to a card here — see {@link DeckCardActions}.
@@ -145,10 +145,10 @@ export function TableView({
           group,
           card,
           ruleBreakText: ruleBreak(violations?.get(card.cardId)),
-          theoryDelta: theoryMatchDelta(theoryMatches, card),
+          theoryMark: theoryMatchMark(theoryPlan, card),
         })),
       ]),
-    [groups, violations, theoryMatches],
+    [groups, violations, theoryPlan],
   );
 
   const columns = useMemo<TableColumn<Row>[]>(
@@ -188,7 +188,7 @@ export function TableView({
          *
          * Measured in the shipped window: seven fixed columns took 696px of an 843px grid, so
          * the two flexible ones split 147px in a 2:1.5 ratio and the card name got **84px** —
-         * about ten characters — while the usually-empty Tags column held 112px. A deck list
+         * about ten characters — while the usually-empty Labels column held 112px. A deck list
          * whose card names are unreadable is not a deck list.
          *
          * Two changes, and they work together. The fixed columns lost 72px between them (every
@@ -229,10 +229,12 @@ export function TableView({
               {/* The plan's tick, and the `sr-only` twin the other three views cannot have:
                   a cell's text is really read, so this is the surface where the badge's word is
                   said rather than folded into `deckCardName`. */}
-              {row.theoryDelta !== null && (
+              {row.theoryMark !== null && (
                 <>
-                  <TheoryMatchBadge delta={row.theoryDelta} />
-                  <span className="sr-only">{theoryMatchLabel(row.theoryDelta)}</span>
+                  <TheoryMatchBadge tier={row.theoryMark.tier} delta={row.theoryMark.delta} />
+                  <span className="sr-only">
+                    {theoryMatchLabel(row.theoryMark.tier, row.theoryMark.delta)}
+                  </span>
                 </>
               )}
               {row.ruleBreakText !== null && (
@@ -286,16 +288,16 @@ export function TableView({
           ) : null,
       },
       {
-        key: "tag",
-        // A dot and a truncated label; empty in most decks, and it was holding 112px while the
+        key: "label",
+        // A dot and a truncated name; empty in most decks, and it was holding 112px while the
         // card name held 84.
         width: "5rem",
-        header: "Tags",
+        header: "Labels",
         cell: (row) =>
-          row.kind === "card" && row.card.tagName !== null ? (
+          row.kind === "card" && row.card.labelName !== null ? (
             <span className="flex min-w-0 items-center gap-1.5">
-              <TagDot name={row.card.tagName} color={row.card.tagColor} />
-              <span className="min-w-0 truncate text-xs">{row.card.tagName}</span>
+              <LabelDot name={row.card.labelName} color={row.card.labelColor} />
+              <span className="min-w-0 truncate text-xs">{row.card.labelName}</span>
             </span>
           ) : null,
       },
@@ -493,10 +495,15 @@ function DeckTableRow({
         props.onKeyDown?.(e);
         menu?.onKeyDown(e);
       }}
-      // The shared pair, as in the other three views. `ring-inset` on top of it because a row
-      // here is absolutely positioned inside a scroller and an outset ring is drawn over its
-      // neighbours; the colour and the weight are `AppShell`'s.
-      className={cn(props.className, eligible && DROP_RING, "ring-inset", over && DROP_OVER)}
+      // The shared pair, as in the other three views.
+      //
+      // **This view carried `ring-inset` of its own until 2026-09-03, and it was right first.**
+      // Its reason — a row here is absolutely positioned inside a scroller, and an outset ring is
+      // drawn over its neighbours — turned out to be the general case rather than this table's
+      // special one: a reader reported exactly that overlap across the whole app, and `DROP_RING`
+      // is inset for everybody now. So the extra class is gone as a duplicate of what the token
+      // already says, and nothing about what this row draws changed.
+      className={cn(props.className, eligible && DROP_RING, over && DROP_OVER)}
     >
       {props.children}
       {/* The table's own drop mark, which it alone was missing — the same line the other three

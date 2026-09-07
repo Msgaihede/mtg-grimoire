@@ -6,13 +6,19 @@ import {
   type DeckDetail,
   type DeckFinish,
   type DeckPatch,
-  type DeckTag,
+  type DeckLabel,
+  type DeckPullPick,
   type DeckVariant,
   type DeckViewState,
   type MoveOutcome,
 } from "@/lib/ipc";
 import { useAppStore, type PaneDeckContext } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
+// The condition every menu add in this app records a copy at, imported rather than respelled: the
+// card menu's collection add and this hook's quick add have to agree, and two spellings of a
+// default drift the first time either changes.
+import { MENU_CONDITION } from "@/lib/conditions";
+import { OWNED_WRITE_KEYS } from "@/lib/query";
 import { autoCategoryFor } from "./autoCategory";
 
 /**
@@ -35,7 +41,7 @@ const NONE: readonly DeckCard[] = [];
 
 /** The same, for the two lists a deck read now also answers with. */
 const NO_CATEGORIES: readonly DeckCategory[] = [];
-const NO_TAGS: readonly DeckTag[] = [];
+const NO_LABELS: readonly DeckLabel[] = [];
 
 /**
  * The variant every surface that has no opinion reads.
@@ -93,43 +99,45 @@ interface Slot {
 }
 
 /**
- * Move the card pane's context onto the finish a row has just been set to.
+ * The row a write named, as this file can always spell one — `useDeck`'s own `id` and `variant`,
+ * and the mutation's {@link Slot}.
  *
- * **A deck row is addressed by `(deck, category, card, variant, finish)`**, and `set_card_finish`
- * changes the fifth part — so a context left pointing at the finish that was *left* names a row
- * that no longer exists. Three things break at once when it does, and all three were reported as
- * one on 2026-08-18: the editor's `selectedSlot` matches nothing, so the picked card is silently
- * unpicked while the pane stays open beside it; `CardDetailPane`'s `deckControlFor` finds no
- * control to hand the caret back to on close; and the pane's own foil button sends
- * `null → null` on its next press, which the backend refuses as `SAME_FINISH` — a toggle that
- * could be pressed once and never pressed back.
- *
- * `swapPrinting` met exactly this one axis over and answered it the same way, with
- * `openCardFromDeck({ ...deckRow, cardId })` — the store action is both "which card is open" and
- * "which row it came from" in one write. This is that, for the finish.
- *
- * **It lives on the mutation rather than at a call site**, which is the one design decision
- * here: two surfaces press this write — the deck card menu's `Set as foil` and the pane's own
- * button — and a rule about what a write does to the address it wrote is not something two
- * callers should have to remember separately. `swapPrinting`'s re-anchor is at its call site
- * because the pane is its only presser and it carries a `handover` only the pane can build.
- *
- * **Only the row that was written**, hence the whole address is compared: a reader can have the
- * pane open on one row and right-click another, and a card open from a different deck, a
- * different pile or the other variant must not be dragged along. Nothing to move is the common
- * case — most finish writes happen with no pane open at all.
- *
- * The **fold** needs no arm of its own: setting a row to a finish the pile already holds turns
- * two rows into one, and the surviving row is the one at `to`. That is where the context lands
- * either way.
+ * A `null` `deckId` is a hook nothing can write through, and equals no context's `deckId`, so it
+ * needs no arm of its own.
  */
-function reanchorPane(
-  /** The row the write named — `useDeck`'s own `id` and `variant`, and the mutation's {@link Slot}.
-   *  A `null` id is a hook nothing can write through, and equals no context's `deckId`. */
-  wrote: Slot & { deckId: number | null; variant: DeckVariant },
-  to: DeckFinish,
-) {
-  const { paneDeckContext: pane, openCardFromDeck } = useAppStore.getState();
+type WrittenRow = Slot & { deckId: number | null; variant: DeckVariant };
+
+/**
+ * Which parts of the address a write moved — every field of {@link PaneDeckContext} that names
+ * *where the row is* rather than which deck or which list it is in.
+ *
+ * `deckId` and `variant` are deliberately absent: no write in this hook moves a row between decks
+ * or between the live list and the plan, so a patch that could say so would be a shape nothing can
+ * produce. `categoryName` rides beside `categoryId` because a category is a row the reader named
+ * (schema v8) — the word is not derivable from the id anywhere the context is *read*, which is why
+ * {@link PaneDeckContext} carries both, and a move that updated only the id would leave the card
+ * modal's `4× in Burn spells` line naming the pile the card has just left.
+ *
+ * **A key left out keeps the context's own value; a key present must never be `undefined`.** The
+ * patch is spread over the context, so an explicit `undefined` would erase a field rather than
+ * leave it — every site below builds the object without one.
+ */
+type PaneMove = Partial<Pick<PaneDeckContext, "categoryId" | "categoryName" | "cardId" | "finish">>;
+
+/**
+ * The open card's deck context, if it is the row that was written — the guard every re-anchor
+ * shares, and the reason it is a function of its own.
+ *
+ * **Only the row that was written**, hence the whole address is compared: a reader can have a card
+ * open on one row and right-click another, and a card open from a different deck, a different pile
+ * or the other variant must not be dragged along. Nothing to move is the common case — most of
+ * these writes happen with no card open at all.
+ *
+ * It answers the context rather than a boolean because both callers need it: one spreads a patch
+ * over it and the other reads its `cardId`.
+ */
+function anchoredOn(wrote: WrittenRow): PaneDeckContext | null {
+  const pane = useAppStore.getState().paneDeckContext;
   if (
     pane === null ||
     pane.deckId !== wrote.deckId ||
@@ -138,9 +146,86 @@ function reanchorPane(
     pane.cardId !== wrote.cardId ||
     pane.finish !== wrote.finish
   ) {
-    return;
+    return null;
   }
-  openCardFromDeck({ ...pane, finish: to });
+  return pane;
+}
+
+/**
+ * Move the open card's deck context onto the row a write has just made.
+ *
+ * **A deck row is addressed by `(deck, category, card, variant, finish)`**, and every write below
+ * that changes one of those five leaves a context naming a row that no longer exists. Three things
+ * break at once when it does, and all three were reported as one on 2026-08-18, when the card was
+ * still a docked pane and `set_card_finish` was the only write that had been fixed: the editor's
+ * `selectedSlot` matches nothing, so the picked card is silently unpicked while the card surface
+ * stays open; `deckControlFor` — the pane's, now `deckControl.ts`'s — finds no control to hand the
+ * caret back to on close; and the card's own foil button sends `null → null` on its next press,
+ * which the backend refuses as `SAME_FINISH` — a toggle that could be pressed once and never
+ * pressed back. `openCardFromDeck` is the answer to all of it, because the store action is both
+ * "which card is open" and "which row it came from" in one write.
+ *
+ * **It lives on the mutations rather than at their call sites, and since 2026-09-03 that is true of
+ * every one of them.** It was `setCardFinish`'s alone, on the argument that two surfaces press that
+ * write and a rule about what a write does to the address it wrote is not something two callers
+ * should have to remember separately — while `swapPrinting`'s re-anchor was said to be at its call
+ * site "because the pane is its only presser and it carries a `handover` only the pane can build".
+ * **Both halves of that sentence expired with the pane.** The presser is `AllPrintingsDialog` now,
+ * which is not the pane and is not the only surface that swaps — the card modal's own Printing
+ * picker is the other — and the `handover` it builds is a **caret** note (`swapped.current`, for
+ * `handBackToDeckCard`), not a context: that dialog never re-anchored `paneDeckContext` at all, so
+ * a swap made from it left the modal underneath addressing the printing the deck had stopped
+ * playing. The rule the finish arm was written under is the general one, so it is applied
+ * generally, and `move` and `refile` — which change the *third* part and had the identical hole —
+ * come in with it.
+ *
+ * The **fold** needs no arm of its own on either write that can cause one. Setting a row to a
+ * finish the pile already holds, or swapping onto a printing it already holds, turns two rows into
+ * one — and the surviving row is the one at the address being moved *to*. That is where the context
+ * lands either way.
+ */
+function reanchorPane(wrote: WrittenRow, to: PaneMove): void {
+  const pane = anchoredOn(wrote);
+  if (pane === null) return;
+  useAppStore.getState().openCardFromDeck({ ...pane, ...to });
+}
+
+/**
+ * Let the open card go, for the one write that leaves **no** address to re-anchor to.
+ *
+ * Stepping a deck row to zero *deletes* it (see {@link useDeck}'s `setQuantity`), so there is no
+ * `to` — and the three answers were: leave the context, clear it, or close the modal.
+ *
+ * **Leaving it is the one that is not available**, because the controls it feeds stop being able to
+ * do anything and say nothing about it. `deck_set_card_quantity` answers `card_gone` for a slot
+ * with no row, so the modal's own stepper — the very control the reader has just pressed — becomes
+ * a `+` that can only be refused, and the modal draws no error state for the deck's mutations, so
+ * the refusal is *silent*. The category and label pickers address the same dead row.
+ *
+ * **Closing the modal is not it either.** This write reaches here from the modal's stepper and, in
+ * principle, from every other removal in the editor (`DeckEditor`'s `setQuantityAt` is one path for
+ * the tray, the menu row and the `Delete` key), and a surface that vanished under a reader who was
+ * looking at a card would be answering a question they had not asked. They may well want to press
+ * `Add to deck` and put it back.
+ *
+ * So the context is **cleared** and the card stays open, which is exactly the state
+ * `setSelectedCardId` means everywhere else in this app — *opened from somewhere that is not a deck
+ * row*. What that costs is stated rather than hidden: the deck stepper and the two deck pickers go
+ * (the card is not in the deck any more, so none of them has anything to address), the modal leaves
+ * a deck walk (a removed row is not a stop on it), and `setSelectedCardId` also clears
+ * `cardOverlay`, so a legality or oracle-text popup open over the card shuts. All three are the
+ * honest reading of *this card is no longer one of the deck's rows*.
+ *
+ * **`clearCategory` and `clearDeck` delete rows too and are deliberately not wired to this**, which
+ * is a reachability fact rather than an oversight: `paneDeckContext` lives exactly as long as the
+ * card modal is open on a deck row (`setSelectedCardId(null)` clears it, and both of `Dialog`'s
+ * doors go through it), and both clears are pressed from behind that modal's scrim — a heading's
+ * right-click and Deck settings. There is no state in which one of them can orphan a live context.
+ */
+function unanchorPane(wrote: WrittenRow): void {
+  const pane = anchoredOn(wrote);
+  if (pane === null) return;
+  useAppStore.getState().setSelectedCardId(pane.cardId);
 }
 
 /**
@@ -302,13 +387,33 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
   };
 
   /**
+   * What the deck calls one of its piles, or `null` — the word a {@link reanchorPane} needs
+   * beside a category id, read at the moment the write succeeded.
+   *
+   * **The cache rather than `query.data`**, which is the same value one render older: a mutation's
+   * `onSuccess` fires after a round trip, and the entry this reads is the one every observer of
+   * this deck is drawing from. A category is a row the reader named (schema v8), so there is no
+   * table to translate an id through and this list is the only place the word lives.
+   *
+   * `null` is *the cached read cannot name it*, which is a real state rather than a defensive one:
+   * a pile created a beat ago from the card modal's `Create new…` is a row the refetch behind it
+   * has not answered with yet. That is what `moveCard`'s optional `toName` is for — the caller who
+   * made the pile is holding its name — and a `null` here leaves the context's own word alone
+   * rather than replacing it with a guess.
+   */
+  const categoryNameFor = (categoryId: number): string | null =>
+    queryClient
+      .getQueryData<DeckDetail | null>(detailKey)
+      ?.categories.find((c) => c.id === categoryId)?.name ?? null;
+
+  /**
    * The whole `["decks"]` root, not this one detail: a card write can move every
    * `ownedQuantity` in the deck, and the gallery tile's `cardCount` and `updatedAt` with them.
    *
    * **And, for most writes, nothing wider than that.** Owned/missing is a sum over the rows
    * sitting in this deck's collection group, so a write that only changes the *list* — an add, a
-   * move between piles, a finish, a tag — provably leaves `collection_entries` where it was, and
-   * firing the collection's root as well would be a refetch per press of the stepper that can
+   * move between piles, a finish, a label — provably leaves `collection_entries` where it was,
+   * and firing the collection's root as well would be a refetch per press of the stepper that can
    * only answer what is already on screen. `missingToWishlist` takes `["wishlist"]` on top,
    * because it is the one command here that actually writes wishes.
    *
@@ -329,7 +434,7 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    * the shape PR 2 shipped a ghost row for: the collection's list, its summary, both folder
    * cards and the folder tree are all now wrong, and the deck root reaches none of them.
    *
-   * **Three writes here call it, and each is as precise as its own answer allows.** All three
+   * **Four writes here call it, and each is as precise as its own answer allows.** All four
    * only *move* a row between folders, so the total the reader owns cannot have changed — which is
    * why this is narrower than `query.ts`'s `OWNED_WRITE_KEYS` rather than a smaller version of it. The
    * one write in this hook that could create a binder row went with the `own` add on 2026-08-25;
@@ -355,6 +460,15 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    * more — a `theory` clear moves nothing (the backend's release is fenced on `live`), and a
    * clear that answered `0` emptied nothing to move — and it is deliberately **not** written as
    * a claim that a positive answer means copies changed folders. It only means they might have.
+   *
+   * The **pull** ({@link pullFromCollection}) is the fourth, and it is the one that needs no
+   * gate at all — the other three are precise about *when* copies moved because their commands
+   * can honestly answer "none". This one cannot: `deck_pull_from_collection` is all-or-nothing
+   * and refuses in words, so a resolved promise means every pick landed and rows changed folder
+   * by construction. It is also the only one of the four that moves copies **into** the group
+   * rather than out of it, which changes nothing here: a row leaving the root for a deck group,
+   * and possibly being folded into what the group already held and deleted, is the same edit to
+   * the same four surfaces read the other way round.
    */
   const invalidateCollection = () => {
     void queryClient.invalidateQueries({ queryKey: ["collection"] });
@@ -373,6 +487,13 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
 
   /**
    * The deck itself: its name, its format, its cover, whether it is archived.
+   *
+   * **It takes a whole {@link DeckPatch} and names no field, which is what makes a new column
+   * free here.** `tokensOpen` — whether the editor's Tokens & emblems area is expanded — was
+   * added to that struct and reached this mutation with no edit at all, exactly as
+   * `separateXGroup` and `bracket` did; a per-field arm would be a second definition of what the
+   * command already accepts, and the one thing this mutation does branch on (`theoryEnabled`,
+   * below) is a *cache* consequence rather than a field being forwarded.
    *
    * `useDecks.update`, narrowed to the deck that is open — it takes a patch and no id,
    * because an editor has exactly one deck and cannot be given the wrong one. Both write the
@@ -656,6 +777,13 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
         { cardId, categoryId, finish },
         result.removed ? null : (card) => ({ ...card, quantity: result.quantity }),
       );
+      // **The one write here that leaves no address to re-anchor to.** Zero deletes the row, so
+      // an open card that came out of it is left addressing nothing — see {@link unanchorPane},
+      // which carries the argument for clearing the context rather than closing the modal.
+      // `result.removed`, never the `quantity` that was asked for: the two commands this
+      // mutation can send answer the same field, and it is the row's fate rather than the
+      // argument — which is the same reason the `patchSlot` above reads it.
+      if (result.removed) unanchorPane({ deckId: id, variant, cardId, categoryId, finish });
       invalidate();
       // **The outcome, not the argument.** A cut of a card nobody owned moves nothing, and
       // refetching the collection for it would answer exactly what is already on screen — see
@@ -699,7 +827,7 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
   });
 
   /**
-   * Empty **one whole list** of this deck — Deck settings' **Clear live list…** and
+   * Empty **one whole list** of this deck — Deck settings' **Clear actual list…** and
    * **Clear theory list…** — and answer the copies
    * it removed.
    *
@@ -733,11 +861,18 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
     },
   });
 
-  /** Move every copy from one category to another. It moves no copy out of the deck's group —
-   *  the cards are still in this deck, one pile over — but a pile can be switched off, and an
-   *  inactive pile is handed nothing from that group, so every `ownedQuantity` in the deck can
-   *  move even though nothing was added or removed. `["decks"]` like the rest, and nothing
-   *  wider. */
+  /**
+   * Move every copy from one category to another. It moves no copy out of the deck's group —
+   * the cards are still in this deck, one pile over — but a pile can be switched off, and an
+   * inactive pile is handed nothing from that group, so every `ownedQuantity` in the deck can
+   * move even though nothing was added or removed. `["decks"]` like the rest, and nothing wider.
+   *
+   * **It changes the third part of the row's address, so it re-anchors** — see
+   * {@link reanchorPane}, whose doc carries the whole argument. This was the reported half of
+   * issue "detached modal": a category picked in the card modal landed the write (`categoryId: 5
+   * "Draw"` on the row afterwards) and left `paneDeckContext` on `categoryId: 1 "Commander"`, so
+   * the picker went on reading **Commander** over a card the deck had filed under Draw.
+   */
   const moveCard = useMutation({
     mutationFn: ({
       cardId,
@@ -751,8 +886,31 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
       /** Addresses the row and is carried across, never written: moving the foil copy to
        *  another pile leaves it the foil copy. */
       finish: DeckFinish;
+      /**
+       * What the destination pile is **called**, where the caller knows and this hook's cache
+       * might not — the one argument here that reaches no command.
+       *
+       * `deck_move_card` answers the category id and nothing else, and {@link categoryNameFor}
+       * covers every ordinary press: the destination came out of the deck's own list, so the word
+       * is in the cache already. What it cannot cover is a pile *made by the same gesture* — the
+       * card modal's `Create new…` chains a create into this move, and the refetch behind the
+       * create is racing the move rather than ordered before it. That caller has the name in hand
+       * from `deck_category_create`'s own answer, so it says it. Optional, because no other caller
+       * has anything to add and a required field would be a question every drag had to answer.
+       */
+      toName?: string;
     }) => ipc.deckMoveCard(opened(id), cardId, from, to, null, variant, finish),
-    onSuccess: invalidate,
+    onSuccess: (_categoryId, { cardId, from, to, finish, toName }) => {
+      const name = toName ?? categoryNameFor(to);
+      reanchorPane(
+        { deckId: id, variant, cardId, categoryId: from, finish },
+        // Built in two shapes rather than one with a possibly-`undefined` key: the patch is
+        // spread over the context, so `categoryName: undefined` would erase the word rather than
+        // leave it. See {@link PaneMove}.
+        name === null ? { categoryId: to } : { categoryId: to, categoryName: name },
+      );
+      invalidate();
+    },
   });
 
   /**
@@ -769,7 +927,7 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
     mutationFn: ({ cardId, categoryId, finish, to }: Slot & { to: DeckFinish }) =>
       ipc.deckSetCardFinish(opened(id), cardId, categoryId, variant, finish, to),
     onSuccess: (_result, { cardId, categoryId, finish, to }) => {
-      reanchorPane({ deckId: id, variant, cardId, categoryId, finish }, to);
+      reanchorPane({ deckId: id, variant, cardId, categoryId, finish }, { finish: to });
       invalidate();
     },
   });
@@ -850,14 +1008,36 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
     // **Only when something moved.** The two no-op answers touched no row, so re-reading the
     // deck for them would be a round trip and a re-render for a press that changed nothing —
     // and "press it again" is the common case this path is built for.
-    onSuccess: (result) => {
-      if (result.moved) invalidate();
+    //
+    // **The re-anchor is gated on the same answer and for a stronger reason than the refetch is**
+    // ({@link reanchorPane}): a card that did not move is a card whose address did not change, so
+    // moving the open card's context would be this hook re-pointing it at where it already is.
+    // `categoryId` is non-null exactly when `moved` is — the mutation's own doc says so — and the
+    // name comes off `result.category`, which is the word the rule produced, so this arm never
+    // needs {@link categoryNameFor}: `deck_move_card`'s name arm finds-or-creates, and a pile it
+    // has just created is one the cached read cannot name.
+    onSuccess: (result, { cardId, from, finish }) => {
+      if (!result.moved) return;
+      if (result.categoryId !== null) {
+        reanchorPane(
+          { deckId: id, variant, cardId, categoryId: from, finish },
+          { categoryId: result.categoryId, categoryName: result.category },
+        );
+      }
+      invalidate();
     },
   });
 
   /**
-   * Swap a deck card to another printing of the same card — the card pane's "Use this
-   * printing", pressed from outside this editor.
+   * Swap a deck card to another printing of the same card — `AllPrintingsDialog`'s press on a
+   * tile, and the card modal's own **Printing** picker, both from outside this editor.
+   *
+   * **It changes the fourth part of the row's address, so it re-anchors** — see
+   * {@link reanchorPane}, and read that doc before moving this back to a call site: it was at one
+   * until 2026-09-03, on an argument about a docked pane that no longer exists, and in the
+   * meantime *nothing* re-anchored at all. A card open on the row a swap rewrites went on
+   * addressing the printing the deck had stopped playing, which is what a reader reports as the
+   * modal detaching.
    *
    * **No optimistic patch**, where the stepper above has one, and it is the fold that decides
    * it: a category holds a printing at most once per variant, so a swap onto a printing it
@@ -899,7 +1079,18 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
        *  foil copy of the new one. The reader is choosing a printing, not an object. */
       finish: DeckFinish;
     }) => ipc.deckSwapPrinting(opened(id), fromCardId, toCardId, categoryId, variant, finish),
-    onSuccess: invalidate,
+    // The **fold** needs no arm: a swap onto a printing the pile already holds turns two rows
+    // into one, and the survivor is the row at `toCardId` — which is where this lands either
+    // way. `AllPrintingsDialog` still says the fold in words, because a merged count is the one
+    // outcome of that press nothing on screen explains; what it no longer has to do is re-point
+    // the card underneath it.
+    onSuccess: (_result, { fromCardId, toCardId, categoryId, finish }) => {
+      reanchorPane(
+        { deckId: id, variant, cardId: fromCardId, categoryId, finish },
+        { cardId: toCardId },
+      );
+      invalidate();
+    },
     onError: invalidate,
   });
 
@@ -928,21 +1119,125 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
   });
 
   /**
-   * Put the deck's one tag on a card, or take it off with `tagId: null`.
+   * Copies the reader already owns, moved into this deck's group — the write half of the pull.
+   *
+   * {@link missingToWishlist} read in the other direction, and that is not a resemblance: the
+   * two commands ask one question about the same shortfall. What the deck has *not* got goes on
+   * a shopping list; what it *has* got is sitting in a binder and only needs moving. So where
+   * that one takes `["wishlist"]` on top of the deck root, this one takes `["collection"]`.
+   *
+   * **It writes no `deck_cards` row**, which is worth stating here because it decides what
+   * `["decks"]` is doing. Nothing about the *list* changes — a 4-copy line the reader is 3 short
+   * of is still a 4-copy line — so the deck root is fired for `ownedQuantity` alone, which is a
+   * sum over the collection rows sitting in this deck's group and is exactly what this moved.
+   * The shortfall line, every card's owned/missing mark and the gallery tile all read off it.
+   *
+   * **{@link invalidateCollection} unconditionally**, unlike the three writes that gate on their
+   * own answer: a pick the backend re-reads and disagrees with refuses the whole batch, so there
+   * is no "succeeded and moved nothing" state to tell apart. Read that function's doc before
+   * touching this — a row that leaves the root for a deck group can be folded into what the
+   * group already held and deleted outright, which is four collection surfaces wrong at once and
+   * none of them under `["decks"]`.
+   *
+   * **And `["cards", "search"]`, which is not optional.** The backend runs this through
+   * `collection_source::with_write_owned`, which rebuilds the facet index's `owned` dimension —
+   * so a search wall left on screen behind the dialog is drawing a stale `owned` facet, over
+   * tiles whose printings really have changed hands. The same key {@link missingToWishlist}
+   * takes and for the same shape of reason: this is a write that is visibly wrong on a surface
+   * the reader can see rather than stale in a field nothing draws.
+   *
+   * **No optimistic patch, and none to write.** Every number this could move is a sum the
+   * backend computes over rows in another table, so there is nothing in the cached `DeckDetail`
+   * this file could correct without re-deriving the allocator in TypeScript.
+   */
+  const pullFromCollection = useMutation({
+    mutationFn: (picks: DeckPullPick[]) => ipc.deckPullFromCollection(opened(id), picks),
+    onSuccess: () => {
+      invalidate();
+      invalidateCollection();
+      void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+    },
+  });
+
+  /**
+   * Record the copies this row is short of, straight into the deck's own group — and, where the
+   * press named a wish, take them off it in the same transaction.
+   *
+   * **The one write in this hook that can _create_ a collection row**, which is the whole of why
+   * it takes `query.ts`'s {@link OWNED_WRITE_KEYS} rather than the {@link invalidateCollection}
+   * the three movers share. That function's own doc says the narrower set is right *because* all
+   * four of its callers only move a row between folders, so the total the reader owns cannot have
+   * changed — and it names the write that went with the deleted `own` add as the one that could
+   * do otherwise. **This is that case coming back.** `CardSummary.ownedQuantity` moves from 0 to
+   * N on the very tile the press was made on, and a 30 s `staleTime` over a missing root is a
+   * number that goes on saying what it said before the press for half a minute.
+   *
+   * **`["wishlist"]` is in that set already, and here it is load-bearing rather than incidental.**
+   * The other member of the constant takes it because a recorded copy changes what a wish counts
+   * as owned; this write can go further and **delete the wish outright**, so the shopping list's
+   * own rows move and not just their progress.
+   *
+   * **`["decks"]` is the fourth member**, so {@link invalidate} is not called beside this: it
+   * would be a second spelling of a root the set already carries. Nothing about the deck's *list*
+   * changes — no `deck_cards` row is written — and the root is owed for `ownedQuantity` alone,
+   * exactly as it is on the pull.
+   *
+   * **`MENU_CONDITION` rather than a second spelling of whatever it holds.** A quick add records
+   * a copy at the condition every other menu add in this app records one at, and two constants
+   * holding that decision drift the first time either moves — which it has: the constant was
+   * `"NM"` until schema v35 gave the column a grade meaning "the reader did not say", and every
+   * site that had spelled the letters out would have gone on recording Near Mint for a reader who
+   * never claimed it.
+   *
+   * **The card is passed whole rather than a `(cardId, finish)` pair**, because the row is the
+   * thing the reader right-clicked and its finish is part of its address — a caller assembling
+   * the pair by hand is a caller that can send the regular copy's word for a foil line. The
+   * `quantity` is the caller's for the same reason it is not derived here: `quickAddShort` reads
+   * the row, and a mutation that re-derived it would answer for a `DeckCard` a beat older than
+   * the menu label the reader pressed.
+   *
+   * **No optimistic patch, for {@link pullFromCollection}'s reason**: every number this moves is
+   * a sum the backend computes over rows in another table.
+   */
+  const quickAddToCollection = useMutation({
+    mutationFn: ({
+      card,
+      quantity,
+      wishId,
+    }: {
+      card: DeckCard;
+      quantity: number;
+      wishId: number | null;
+    }) =>
+      ipc.deckQuickAddToCollection(
+        opened(id),
+        card.cardId,
+        card.finish,
+        MENU_CONDITION,
+        quantity,
+        wishId,
+      ),
+    onSuccess: () => {
+      for (const queryKey of OWNED_WRITE_KEYS) void queryClient.invalidateQueries({ queryKey });
+    },
+  });
+
+  /**
+   * Put the deck's one label on a card, or take it off with `labelId: null`.
    *
    * A **card** write, addressed by the same slot as the stepper and the move — which is why it
-   * lives here rather than in `useDeckMeta` beside the tag CRUD. The label is per-deck data; a
+   * lives here rather than in `useDeckMeta` beside the label CRUD. The label is app-wide data; a
    * card *wearing* one is a fact about a row of `deck_cards`, and a stale editor pointing at a
    * row that has since moved, folded or been stepped to zero is answered in words.
    *
-   * **No optimistic patch, and no reallocation to wait for.** A tag changes what a row is
+   * **No optimistic patch, and no reallocation to wait for.** A label changes what a row is
    * *called* and nothing about what is in the deck — the backend does not run the allocator for
    * it — so there is no number on screen that this could get wrong for a beat. It still takes
-   * the `["decks"]` root on the way out, because the tag counts on every `DeckTag` row moved.
+   * the `["decks"]` root on the way out, because the card counts on every `DeckLabel` row moved.
    */
-  const setTag = useMutation({
-    mutationFn: ({ cardId, categoryId, finish, tagId }: Slot & { tagId: number | null }) =>
-      ipc.deckCardSetTag(opened(id), cardId, categoryId, variant, finish, tagId),
+  const setLabel = useMutation({
+    mutationFn: ({ cardId, categoryId, finish, labelId }: Slot & { labelId: number | null }) =>
+      ipc.deckCardSetLabel(opened(id), cardId, categoryId, variant, finish, labelId),
     onSuccess: invalidate,
     onError: invalidate,
   });
@@ -959,8 +1254,8 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
      *  editor's columns are this list, not the categories that happen to hold a card. The list
      *  is the same in both variants; only the counts on each row are scoped. */
     categories: query.data?.categories ?? NO_CATEGORIES,
-    /** Every tag of the deck, alphabetically — the palette a row's label is drawn from. */
-    tags: query.data?.tags ?? NO_TAGS,
+    /** Every label this list is wearing — the palette a row's mark is drawn from. */
+    labels: query.data?.labels ?? NO_LABELS,
     /** Which of the two lists this hook is reading and writing. Handed back so a caller that
      *  took the default does not have to know what it was. */
     variant,
@@ -978,13 +1273,113 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
     refileCard,
     swapPrinting,
     setCardFinish,
-    setTag,
+    setLabel,
     missingToWishlist,
+    /** The mirror of the line above — what the deck is short of **and the reader owns**, moved
+     *  into its group. See the mutation's own doc for the three roots it invalidates, and for
+     *  why the third of them is not optional. */
+    pullFromCollection,
+    /** Record the copies one row is short of into this deck's group, and optionally clear a
+     *  wish with them. **The one write here that creates a collection row**, so it takes all
+     *  four of `OWNED_WRITE_KEYS` — see the mutation's own doc. */
+    quickAddToCollection,
   };
 }
 
 /** The whole of what the editor consumes, named so the view and the hook agree. */
 export type Deck = ReturnType<typeof useDeck>;
+
+/**
+ * What the deck is short of that the reader **already owns** — the read half of the pull, and
+ * the whole of what the dialog draws.
+ *
+ * **Its own hook rather than a member of {@link useDeck}, because it is the one read here that
+ * nobody wants by default.** Everything that hook answers is what the editor is drawing right
+ * now; this is a plan over every unallocated collection row that could fill a hole, asked once,
+ * by one dialog, when a reader presses one button. Folding it in would mean either a `deck_pull_plan`
+ * behind every mounted editor — the card pane's `useSwapFromPane` included — or an `enabled`
+ * flag threaded through a hook whose other fifteen members have no use for it.
+ *
+ * **Keyed under the `["decks"]` root** so `useDeck`'s own `invalidate` reaches it, which is the
+ * whole reason the key is shaped this way: every write in that hook can move the shortfall this
+ * answers, and the pull itself moves the *candidates* as well as the holes — a plan left in the
+ * cache after a successful pull offers copies that are now in the deck's own group and are
+ * therefore excluded from it by definition. `["decks", "pullPlan", deckId]` is
+ * `["decks", "theorySlots", deckId]`'s shape, which is this folder's shape for a read that is
+ * about one deck and is not the deck itself: the root, the question, the id.
+ *
+ * **No `variant` and no `marketplace` in the key, and neither is an omission.** The command
+ * reads the live list only — a plan holds no cards, so there is nothing there to be short of —
+ * and nothing it answers is priced. A key carrying either would be two cached answers to one
+ * question, refetched on a switch that cannot change it.
+ *
+ * **`enabled` is the caller's, and what it means is "the dialog is open".** `DeckEditor`'s
+ * `Layer` doc is explicit that a surface nobody opened has no business asking for anything, and
+ * this is the widest read that surface makes. It is a gate on a mounted query rather than a
+ * conditionally mounted hook for the ordinary reason — the answer stays in the cache across an
+ * open and a close, so a reader who shuts the dialog and reopens it pays nothing.
+ *
+ * `deckId` is nullable for {@link useDeck}'s reason: a caller with no deck open mounts an idle
+ * query rather than branching around one, and a `null` id can never satisfy the gate.
+ */
+export function usePullPlan(deckId: number | null, enabled: boolean) {
+  return useQuery({ ...pullPlanQuery(deckId), enabled: enabled && deckId !== null });
+}
+
+/**
+ * The pull plan's key and fetcher, as options both readers build from.
+ *
+ * **Two things ask for this plan and they must not spell the key twice.** {@link usePullPlan}
+ * mounts it for the dialog; the deck card menu's per-card pull *fetches* it imperatively at the
+ * press (`queryClient.fetchQuery`) so that a right-click costs nothing and only a chosen row
+ * pays. A second spelling here would be a fetch that never shares the dialog's cache — the two
+ * would each hold their own answer to one question, and the silent half is that both would still
+ * work: the menu's press would simply always miss, and every press would be a fresh
+ * `deck_pull_plan` behind a dialog that already had one.
+ *
+ * The key is unchanged from what the hook spelled: `["decks", "pullPlan", deckId]`, under the
+ * root {@link useDeck}'s own `invalidate` reaches, which is what keeps a plan from outliving the
+ * write that filled its holes. See {@link usePullPlan} for why it carries neither a variant nor a
+ * marketplace.
+ *
+ * `deckId` is nullable so the hook can pass what it was given; the fetcher throws through
+ * {@link opened} rather than answering for a deck that is not open, and the hook's `enabled` is
+ * what keeps that unreachable.
+ */
+export function pullPlanQuery(deckId: number | null) {
+  return {
+    queryKey: ["decks", "pullPlan", deckId],
+    queryFn: () => ipc.deckPullPlan(opened(deckId)),
+  };
+}
+
+/**
+ * The wishes a quick-add-and-unwish press would clear, as query options rather than as a hook.
+ *
+ * **Deliberately not a hook, and that is the whole design of it.** A deck card's right-click has
+ * to be free: a mounted query per drawn card, or even per opened menu, would ask the wishlist
+ * about every card a reader hovered past. So the editor fetches this at the **press**, through
+ * `queryClient.fetchQuery(quickAddWishesQuery(...))`, and the answer lands in the same cache
+ * anything else reading it would find — which is what the factory is for. A key written out at
+ * the call site is the one this file cannot keep in step.
+ *
+ * **`["wishlist", "forPrinting", cardId, finish ?? ""]`.** Under the `["wishlist"]` root, so
+ * `quickAddToCollection`'s own invalidation reaches it — that write can delete the very wish this
+ * answered, and a cached list offering a row that is gone is a picker whose confirm is refused.
+ * The finish is part of the key because it is part of the *question*: the predicate matches the
+ * row's own finish, so the foil line and the regular line of one printing have two answers.
+ * `""` for the regular copy, `pullKey`'s translation and safe for its reason — no finish is the
+ * empty string, so `null` cannot collide with `"foil"` or `"etched"`.
+ *
+ * It names no deck, because a wish does not: which deck the press came from decides where the
+ * *copies* are filed and says nothing about which shopping lines could be cleared.
+ */
+export function quickAddWishesQuery(cardId: string, finish: DeckFinish) {
+  return {
+    queryKey: ["wishlist", "forPrinting", cardId, finish ?? ""],
+    queryFn: () => ipc.deckQuickAddWishes(cardId, finish),
+  };
+}
 
 /**
  * The printing swap, for the surface that presses it: the card pane's printings rows.

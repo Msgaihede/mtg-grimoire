@@ -40,7 +40,7 @@ type Story = StoryObj<typeof meta>;
  * The deck as the app's one `VirtualTable`, with a band per group.
  *
  * Nine columns, and the comparative questions are the ones it is for: what is dearest, what
- * is not owned, what is tagged. Its headers deliberately do **not** sort — the deck's order is
+ * is not owned, what is labelled. Its headers deliberately do **not** sort — the deck's order is
  * the toolbar's one Group by and one Sort, and a header that re-sorted would give one list two
  * orders with no way to see which was in force.
  */
@@ -90,7 +90,7 @@ export const ByType: Story = { args: { groups: deckGroups("type", "type") } };
  * a label replaces everything inside the control it names. `CardMarks.tsx` has the rule.
  */
 export const TheoryMatches: Story = {
-  args: { theoryMatches: deckTheoryMatches() },
+  args: { theoryPlan: deckTheoryMatches() },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     // Four rows carry the badge, and each one says the words beside it — the pairing this view

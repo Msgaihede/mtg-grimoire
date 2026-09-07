@@ -35,6 +35,15 @@ export interface DeckSettingsValue {
   description: string;
   notes: string;
   theoryEnabled: boolean;
+  /**
+   * Whether this deck draws the **green** theory mark — a live row that is the printing the plan
+   * named. See `theoryMatch.ts` for what "off" does, which is not "nothing": an exact row on a
+   * deck with this off draws the blue mark instead.
+   */
+  theoryMarkExact: boolean;
+  /** Whether this deck draws the **blue** theory mark — the same card in a printing the plan did
+   *  not name. */
+  theoryMarkName: boolean;
   folderId: number | null;
   /**
    * Which pile an add that names none lands in — `AUTO_CATEGORY` (`0`) for "by what the card
@@ -125,6 +134,33 @@ export interface DeckSettingsFormProps {
    * not answerable yet, rather than answerable and skipped.
    */
   categories?: readonly DeckCategory[];
+  /**
+   * Whether an answer about the deck's two theory marks has anywhere to be **written** — absent
+   * (or `false`) for a host asking about a deck that does not exist yet, and then the two rows
+   * under the theory switch are not drawn at all.
+   *
+   * **This is {@link DeckSettingsFormProps.categories}' rule reaching a second field**, and the
+   * argument is that one word for word: at create the question is *not answerable yet* rather
+   * than answerable and skipped. `DeckInput` carries neither `theoryMarkExact` nor
+   * `theoryMarkName` — the columns are `NOT NULL DEFAULT 1` and the schema owns a new deck's
+   * answer — so a reader who switched the plan on inside "New deck" and then switched a mark off
+   * would be answering a question nothing could write down: the deck would be born with both
+   * marks on, and nothing on screen would say the press was dropped. **A control that cannot take
+   * effect is worse than no control**, because it teaches the reader something false about their
+   * deck. Both marks are a *reading* preference, one press away in Deck settings on the deck that
+   * opens the moment Create is pressed.
+   *
+   * **A prop of its own rather than `categories`' absence read a second time.** The two hosts
+   * happen to answer both the same way today, and they are two questions — "has this deck any
+   * piles to file into" against "is there a deck row for a mark to be written to" — so one prop
+   * standing for both would take the marks away the day a host has a deck and passes no piles.
+   * `src/features/decks/CLAUDE.md`'s "three independent questions" rule, one field over.
+   *
+   * **The two fields stay required on {@link DeckSettingsValue} whatever this says**, which is
+   * that value's own rule: a shape that changed with its host would be two shapes. The create
+   * draft holds `true` for both and sends neither.
+   */
+  canSetTheoryMarks?: boolean;
   cover: DeckCoverPickerProps;
   idPrefix: string;
 }
@@ -179,6 +215,8 @@ export function DeckSettingsForm({
   formats,
   folders,
   categories,
+  // Absent is a host that cannot write the answer, which is the create dialog — see the prop.
+  canSetTheoryMarks = false,
   cover,
   idPrefix,
 }: DeckSettingsFormProps): JSX.Element {
@@ -214,6 +252,22 @@ export function DeckSettingsForm({
             onChange={(theoryEnabled) => onChange({ theoryEnabled })}
             id={idPrefix}
           />
+          {/* **Two gates, and they are two different questions.** `theoryEnabled` is *is there a
+              plan to compare against* — both marks are drawn by reading the live list against the
+              theory list, so with no plan a switch here would change what is on screen not at all
+              and nothing on screen would say why. {@link DeckSettingsFormProps.canSetTheoryMarks}
+              is *can this host write the answer down* — `false` at create, where `DeckInput`
+              carries neither column. Neither is a greyed pair: a control that changes nothing and
+              a control that cannot take effect are both worse than no control. */}
+          {value.theoryEnabled && canSetTheoryMarks && (
+            <TheoryMarkSwitches
+              exact={value.theoryMarkExact}
+              name={value.theoryMarkName}
+              onExact={(theoryMarkExact) => onChange({ theoryMarkExact })}
+              onName={(theoryMarkName) => onChange({ theoryMarkName })}
+              id={idPrefix}
+            />
+          )}
           <FolderRow
             folderId={value.folderId}
             paths={folders.paths}
@@ -491,31 +545,156 @@ function TheorySwitch({
         </p>
         <p className="mt-0.5 text-[0.6875rem] leading-snug text-dim">
           A second list you are building towards. Turning it on makes the deck you have the plan
-          and starts the live list empty; turning it off hides the Theory/Live switch and the
+          and starts the actual list empty; turning it off hides the Theory/Actual switch and the
           difference list and keeps every row.
         </p>
       </div>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={on}
-        // Named by the heading beside it *and* by its own word, in that order: `aria-label`
-        // would replace the visible "Enabled" with something that does not contain it, which
-        // is the WCAG 2.5.3 failure a control labelled by its own text exists to avoid.
-        aria-labelledby={`${id}-theory ${id}-theory-state`}
-        onClick={() => onChange(!on)}
-        className={cn(
-          "h-8 shrink-0 rounded-md border px-2.5 text-xs",
-          "transition-colors duration-150 motion-reduce:transition-none",
-          on
-            ? "border-accent text-accent"
-            : "border-border text-dim hover:border-accent hover:text-accent",
-          FOCUS,
-        )}
-      >
-        <span id={`${id}-theory-state`}>{on ? "Enabled" : "Disabled"}</span>
-      </button>
+      <SwitchButton on={on} headingId={`${id}-theory`} onChange={onChange} />
     </div>
+  );
+}
+
+/**
+ * Which of the live list's two theory marks this deck draws.
+ *
+ * **Drawn only under a switched-on {@link TheorySwitch}**, and indented under it, because these
+ * three are one subject: a mark is the live list read *against* the plan, so a deck with no plan
+ * has nothing for either of them to compare against. The gate is at the call site rather than
+ * here, beside the switch it depends on.
+ *
+ * **Two switches and not one three-way picker**, which is `DeckRow.theoryMarkName`'s argument
+ * carried up to the control: `none | exact | both` cannot spell blue *without* green, and blue
+ * without green is a real answer — a reader who cares that the card is there and not which
+ * printing it is. Both off is a real answer too, and is not a second spelling of the theory
+ * switch above being off.
+ *
+ * **The swatch is the point of the row's first line.** "Green" and "blue" are the words, and the
+ * colours are the reader's own — `useMarkColors` writes `--color-theory-exact` and
+ * `--color-theory-name` at the app root once they have chosen in Settings — so a reader who has
+ * recoloured a mark and then comes here would be reading two words about colours they no longer
+ * have. The swatch is what makes the sentence true again, and it is drawn from the same property
+ * the mark on the card is filled from rather than from a copy of the default.
+ */
+function TheoryMarkSwitches({
+  exact,
+  name,
+  onExact,
+  onName,
+  id,
+}: {
+  exact: boolean;
+  name: boolean;
+  onExact: (on: boolean) => void;
+  onName: (on: boolean) => void;
+  id: string;
+}) {
+  return (
+    // The rule is the indent: it says these belong to the switch above them, which two rows of
+    // padding alone would leave to the reader to infer.
+    <div className="ml-1 space-y-2.5 border-l border-border pl-3.5">
+      <MarkSwitch
+        id={`${id}-theory-mark-exact`}
+        swatch="var(--color-theory-exact)"
+        heading="Matching printing"
+        caption="A green mark on a card that is the exact printing your plan names."
+        on={exact}
+        onChange={onExact}
+      />
+      <MarkSwitch
+        id={`${id}-theory-mark-name`}
+        swatch="var(--color-theory-name)"
+        heading="Different printing"
+        // The second sentence is the half a reader cannot see coming: turning the strict mark
+        // off does not leave the card unmarked, it re-resolves the row one tier down. Unsaid, a
+        // reader who switches green off and still sees marks reads the control as broken.
+        caption="A blue mark on a card your plan asks for in a different printing. Turning the green one off draws this one instead."
+        on={name}
+        onChange={onName}
+      />
+    </div>
+  );
+}
+
+/** One mark's row: its colour, its name, what it means, and the switch that draws it or not. */
+function MarkSwitch({
+  id,
+  swatch,
+  heading,
+  caption,
+  on,
+  onChange,
+}: {
+  id: string;
+  /** The custom property the mark itself is filled from — a `var()`, never a hex, so the
+   *  reader's own colour is what this sample shows. */
+  swatch: string;
+  heading: string;
+  caption: string;
+  on: boolean;
+  onChange: (on: boolean) => void;
+}) {
+  return (
+    <div className="flex items-center gap-3">
+      <div className="min-w-0 flex-1">
+        <p id={id} className="flex items-center gap-1.5 text-sm">
+          {/* `aria-hidden`, so the heading's accessible name is the words alone — the colour is
+              already named in them, and a swatch cannot be read out. An inline style rather than
+              an arbitrary Tailwind class for `TheoryMatchMark`'s two reasons: the property name
+              has to be greppable, and a mistyped arbitrary value emits no rule at all. */}
+          <span
+            aria-hidden="true"
+            className="size-2.5 shrink-0 rounded-[2px]"
+            style={{ backgroundColor: swatch }}
+          />
+          {heading}
+        </p>
+        <p className="mt-0.5 text-[0.6875rem] leading-snug text-dim">{caption}</p>
+      </div>
+      <SwitchButton on={on} headingId={id} onChange={onChange} />
+    </div>
+  );
+}
+
+/**
+ * The switch this panel draws three times — the theory list, and each of its two marks.
+ *
+ * One definition rather than three copies, because three controls that look alike today are
+ * three independent decisions that agree today: the deck editor has already paid for that with
+ * two scrim darknesses and three panel heights.
+ *
+ * **`aria-labelledby` naming the heading beside it *and* its own state word, in that order.**
+ * Never `aria-label`, which would replace the visible "Enabled" with something that does not
+ * contain it — the WCAG 2.5.3 failure a control labelled by its own text exists to avoid.
+ */
+function SwitchButton({
+  on,
+  /** The id of the heading this switch is about. Its own state word is `${headingId}-state`, so
+   *  a caller spells one id rather than two that have to agree. */
+  headingId,
+  onChange,
+}: {
+  on: boolean;
+  headingId: string;
+  onChange: (on: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-labelledby={`${headingId} ${headingId}-state`}
+      onClick={() => onChange(!on)}
+      className={cn(
+        "h-8 shrink-0 rounded-md border px-2.5 text-xs",
+        "transition-colors duration-150 motion-reduce:transition-none",
+        on
+          ? "border-accent text-accent"
+          : "border-border text-dim hover:border-accent hover:text-accent",
+        FOCUS,
+      )}
+    >
+      <span id={`${headingId}-state`}>{on ? "Enabled" : "Disabled"}</span>
+    </button>
   );
 }
 

@@ -39,6 +39,7 @@ import {
 } from "./CardStack";
 import { LANDED_ATTR, SELECTED_ATTR } from "./cardControl";
 import { deckCardSlot } from "./dnd";
+import type { TheoryPlan } from "./theoryMatch";
 import { card } from "./validation/fixtures";
 import type { ValidationIssue } from "./validation/types";
 
@@ -1077,12 +1078,37 @@ describe("CardStack cards", () => {
   });
 
   /**
-   * **The tag and the copy count are one mark now**, and this is what says so: there is no
-   * second element carrying the tag, the count is drawn on it, and both facts are in the one
+   * **The theory list is the second reason a row reads 0 owned without the shelf being empty**
+   * ([issue #354](https://github.com/Msgaihede/mtg-grimoire/issues/354)). `deck.rs`'s rule 2 is
+   * that a plan holds nothing — the copies in the deck's group belong to what is sleeved up — so
+   * every card of a plan drew `0/N` in red, however full the collection was. Both halves go: the
+   * figure and the clause in the name, which is the whole of what a keyboard reader hears.
+   *
+   * The row is otherwise identical to `SOL_RING`, which draws `1/2` and says "you own 1 of 2" in
+   * the test above; only the variant differs, so this cannot pass for want of a shortage.
+   */
+  it("never calls a theory row short of copies", () => {
+    render(
+      <CardStack
+        cards={[
+          card({ name: "Sol Ring", quantity: 2, ownedQuantity: 0, variant: "theory" }),
+        ]}
+        label="Ramp"
+        currency="usd"
+      />,
+    );
+
+    expect(screen.queryByText("0/2")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sol Ring, 2 copies" })).toBeInTheDocument();
+  });
+
+  /**
+   * **The label and the copy count are one mark now**, and this is what says so: there is no
+   * second element carrying the label, the count is drawn on it, and both facts are in the one
    * `title`. A stack's reveal strip is 34px and was spending it twice to say two things a
    * reader takes in as one.
    */
-  it("shows a tag as the colour of the copy count, with both facts behind it", async () => {
+  it("shows a label as the colour of the copy count, with both facts behind it", async () => {
     render(
       <TooltipProvider>
         <CardStack
@@ -1091,9 +1117,9 @@ describe("CardStack cards", () => {
               name: "Sol Ring",
               quantity: 3,
               ownedQuantity: 1,
-              tagId: 1,
-              tagName: "Wincon",
-              tagColor: "moss",
+              labelId: 1,
+              labelName: "Wincon",
+              labelColor: "moss",
             }),
           ]}
           label="Ramp"
@@ -1102,7 +1128,7 @@ describe("CardStack cards", () => {
       </TooltipProvider>,
     );
 
-    // One mark, carrying the count as its text and the tag as its colour. Found by its own
+    // One mark, carrying the count as its text and the label as its colour. Found by its own
     // text rather than `getByTitle` — `QuantityTag` forwards to `components/CountTag`, which
     // now binds `useTooltip()` (`describes: false`) rather than a native `title`.
     const tag = screen.getByText("3");
@@ -1110,8 +1136,8 @@ describe("CardStack cards", () => {
     expect(await openTooltip(tag)).toHaveTextContent("Wincon · 3 in this pile");
     await closeTooltip(tag);
     // **The fixture's `"moss"` is a colour written by a build older than this one**, and the
-    // assertion is what proves such a row still draws: `deck_tags.color` held one of six token
-    // words until 2026-08-20 and holds `#rrggbb` now, so `tagColorCss` maps the six retired
+    // assertion is what proves such a row still draws: `deck_labels.color` held one of six token
+    // words until 2026-08-20 and holds `#rrggbb` now, so `labelColorCss` maps the six retired
     // words through `LEGACY_TOKENS` rather than falling them to gold. jsdom normalises the hex,
     // which is why this reads as an `rgb()` where it used to read as the `var()` the token
     // resolved to.
@@ -1123,9 +1149,9 @@ describe("CardStack cards", () => {
     ).toBeInTheDocument();
   });
 
-  /** An untagged card still needs a colour under its count, and it is the colourless deep —
-   *  never the gold a missing token falls to, or gold would stop being something a tag says. */
-  it("draws an untagged card's count on the colourless deep", async () => {
+  /** An unlabelled card still needs a colour under its count, and it is the colourless deep —
+   *  never the gold a missing token falls to, or gold would stop being something a label says. */
+  it("draws an unlabelled card's count on the colourless deep", async () => {
     render(
       <TooltipProvider>
         <CardStack cards={[card({ name: "Sol Ring" })]} label="Ramp" currency="usd" />
@@ -1151,9 +1177,9 @@ describe("CardStack cards", () => {
             quantity: 2,
             ownedQuantity: 0,
             gameChanger: true,
-            tagId: 1,
-            tagName: "Fast mana",
-            tagColor: "ember",
+            labelId: 1,
+            labelName: "Fast mana",
+            labelColor: "ember",
           }),
         ]}
         label="Ramp"
@@ -1219,9 +1245,9 @@ describe("CardStack tooltips", () => {
               ownedQuantity: 0,
               rarity: "mythic",
               gameChanger: true,
-              tagId: 1,
-              tagName: "Fast mana",
-              tagColor: "ember",
+              labelId: 1,
+              labelName: "Fast mana",
+              labelColor: "ember",
               finishes: JSON.stringify(["foil"]),
             }),
           ]}
@@ -1300,9 +1326,9 @@ describe("CardStack tooltips", () => {
     await closeTooltip(setCode);
   });
 
-  /** An untagged card still answers the question the colour raises — the count alone, with no
-   *  tag name invented for it. */
-  it("says only the count on an untagged card", async () => {
+  /** An unlabelled card still answers the question the colour raises — the count alone, with no
+   *  label name invented for it. */
+  it("says only the count on an unlabelled card", async () => {
     render(
       <TooltipProvider>
         <CardStack cards={[card({ name: "Sol Ring", quantity: 4 })]} label="Ramp" currency="usd" />
@@ -1342,6 +1368,22 @@ describe("CardStack tooltips", () => {
 });
 
 describe("CardStack marks", () => {
+  /**
+   * A plan whose only tier is the **exact** one, built from the wire keys the cases below spell
+   * by hand.
+   *
+   * Both switches on, which is what every deck is born with, and `byName` empty — so a row that
+   * is not in `exact` matches nothing at all and the cases here are about the green mark alone.
+   * The blue one is {@link theoryMatchMark}'s own suite's subject and the views' new stories'; a
+   * fixture here that quietly carried it would make every "one mark of two cards" count below
+   * depend on a tier this file is not testing.
+   */
+  const exactPlan = (exact: ReadonlyMap<string, number>): TheoryPlan => ({
+    exact,
+    byName: new Map(),
+    marks: { exact: true, name: true },
+  });
+
   const banned: ValidationIssue = {
     severity: "error",
     code: "banned",
@@ -1382,7 +1424,7 @@ describe("CardStack marks", () => {
           // The wire format `deck_theory_slots` answers with — `${cardId}|${finish ?? ""}`, which
           // is `deck_theory.rs`'s `group_key`. Spelled out rather than built with `theorySlot`, so
           // this notices the grain changing under it instead of agreeing with it by construction.
-          theoryMatches={new Map([[`${planned.cardId}|`, 0]])}
+          theoryPlan={exactPlan(new Map([[`${planned.cardId}|`, 0]]))}
         />
       </TooltipProvider>,
     );
@@ -1479,13 +1521,13 @@ describe("CardStack marks", () => {
           cards={[short, over]}
           label="Ramp"
           currency="usd"
-          theoryMatches={
+          theoryPlan={exactPlan(
             new Map([
               // Four planned against two sleeved up, and one planned against four.
               [`${short.cardId}|`, -2],
               [`${over.cardId}|`, 3],
-            ])
-          }
+            ]),
+          )}
         />
       </TooltipProvider>,
     );

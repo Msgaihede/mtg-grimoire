@@ -115,6 +115,35 @@ export const SnapOverlayHover: Story = {
 };
 
 /**
+ * The fourth button, which opens something instead of doing something to the window.
+ *
+ * It sits **before** Minimize rather than after Close: the three window verbs are a run every
+ * other window on the desktop has taught the reader's hand, and a non-destructive button
+ * inserted into it — or worse, put where Close has always been — is a misclick waiting at the
+ * screen's edge. The panel is drawn inside the button's own box so that it follows its trigger
+ * in DOM order, which is what makes the pair a disclosure and not a dialog.
+ *
+ * The story is framed rather than inline for the reason `.storybook/CLAUDE.md` gives about
+ * `useAppStore`: the flag the press writes is a module singleton, and a docs page does not reset
+ * it between stories — so without the frame this press would leave the panel hanging off every
+ * caption above and below it on this page.
+ */
+export const KeyboardShortcuts: Story = {
+  parameters: { docs: { story: { inline: false, height: "420px" } } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const button = await canvas.findByRole("button", { name: "Keyboard shortcuts" });
+    await expect(button).toHaveAttribute("aria-expanded", "false");
+
+    await userEvent.click(button);
+    await waitFor(async () =>
+      expect(await canvas.findByRole("heading", { name: "Everywhere" })).toBeInTheDocument(),
+    );
+    await expect(button).toHaveAttribute("aria-expanded", "true");
+  },
+};
+
+/**
  * Each button reaching its window verb. Minimize and close change nothing on screen — a story
  * cannot be minimized, and one that closed itself would take the workbench with it — so the
  * fake counts them and this asserts the count.

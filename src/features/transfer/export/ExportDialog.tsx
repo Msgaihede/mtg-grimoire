@@ -64,6 +64,17 @@
  * beside the two failure lines. {@link omittedCount} counts **copies** rather than rows, because
  * six basic lands on one row are six cards missing from the file.
  *
+ * **`Include inactive categories` is the reader's own answer to the question those two formats
+ * answer for themselves** (issue #390), and it opens **off**, which is a real change to what an
+ * existing reader's next deck export contains: the five formats that wrote a switched-off pile
+ * before it shipped — plain, Moxfield, Archidekt, TCGplayer, CSV — no longer do unless the box is
+ * ticked. That is the reported bug rather than a side effect of fixing it, and the argument
+ * `arenaOnly` makes for its own default (a filter that starts on changes an export silently) is
+ * answered here by the count line, which says in copies what the tick would put back. It is
+ * fenced twice — `SURFACE_HAS_PILES`, because a collection row has no pile to be in, and
+ * `dropsInactive`, because Arena and MTGO have nowhere to put one — and, like `arenaOnly`, it
+ * rides in `exportPrefs` and survives a format switch where `fields` is re-derived.
+ *
  * **The Copied status is a claim about the clipboard's contents, and it is cleared the moment
  * that claim could go stale** (2026-08-14, code review). Switching format redraws the preview
  * but does nothing to the clipboard, which still holds whatever text was on screen at the last
@@ -101,6 +112,7 @@ import {
   ALWAYS,
   availableFields,
   defaultFields,
+  SURFACE_HAS_PILES,
   TRANSFER_FIELDS,
   type TransferFieldId,
 } from "../fields";
@@ -108,10 +120,13 @@ import type { TransferSurface } from "../fields";
 import type { TransferCard } from "../TransferCard";
 import { isInArena, notInArenaCopies } from "./arena";
 import {
+  dropsInactive,
   EXPORT_FORMATS,
   EXPORT_FORMAT_EXTENSION,
   EXPORT_FORMAT_LABEL,
   formatExport,
+  inactiveCopies,
+  isActivePile,
   omittedCount,
   type ExportFormat,
 } from "./format";
@@ -190,7 +205,7 @@ export function ExportDialog({
       open={open}
       title={`Export "${subject}"`}
       closeLabel="Close export"
-      width="w-[40rem]"
+      size="w-[40rem]"
       onDismiss={onDismiss}
       onClose={onClose}
     >
@@ -237,7 +252,7 @@ function Body({
    *  `exportPrefs`, keyed by `surface` so a deck export is never dragged into the collection's. */
   const prefs = useAppStore((s) => s.exportPrefs[surface]);
   const setPrefs = useAppStore((s) => s.setExportPrefs);
-  const { format, fields, arenaOnly } = prefs;
+  const { format, fields, arenaOnly, includeInactive } = prefs;
   /** The fields this format and this surface share — the whole of what decides which checkboxes
    *  draw, `ALWAYS` excluded (see the row below). */
   const available = useMemo(() => availableFields(format, surface), [format, surface]);
@@ -247,9 +262,10 @@ function Body({
    *  would silently drop most of it anyway. */
   const chooseFormat = useCallback(
     (next: ExportFormat) => {
-      // `arenaOnly` is spread through rather than re-derived: a field set chosen for CSV means
-      // nothing to Arena, but "leave out what Arena does not have" is the same answer whatever
-      // format the reader passed through on the way back.
+      // `arenaOnly` and `includeInactive` are spread through rather than re-derived: a field set
+      // chosen for CSV means nothing to Arena, but "leave out what Arena does not have" and
+      // "write my switched-off piles" are the same answers whatever format the reader passed
+      // through on the way back.
       setPrefs(surface, { ...prefs, format: next, fields: defaultFields(next, surface) });
       // The preview redraws for the new format; the clipboard does not. Left standing,
       // "Copied." would sit beside text it is no longer an honest claim about.
@@ -277,8 +293,32 @@ function Body({
     setCopied(false);
   }, [prefs, setPrefs, surface]);
 
+  const toggleIncludeInactive = useCallback(() => {
+    setPrefs(surface, { ...prefs, includeInactive: !prefs.includeInactive });
+    // Same claim, same reason: the preview redraws, the clipboard does not.
+    setCopied(false);
+  }, [prefs, setPrefs, surface]);
+
   /**
-   * The Arena filter, applied **before** the writer rather than inside it.
+   * Whether `Include inactive categories` is a question this dialog can ask — issue #390.
+   *
+   * **Two fences and each closes a different hole.** `SURFACE_HAS_PILES` is the surface's: a
+   * collection row and a wishlist row carry `categoryActive: null`, so the box there would be a
+   * control over nothing. `dropsInactive` is the format's: Arena and MTGO leave a switched-off
+   * pile out whatever anybody asks, because a maybeboard in an Arena file is an illegal import
+   * at the other end — a box there could never move a byte, which is the furniture `src/CLAUDE.md`
+   * forbids, and `omittedCount`'s line under those two already says what it cost.
+   *
+   * It gates the **filter** as well as the checkbox, which is the Arena row filter's rule read
+   * across: a preference the reader cannot see must not be silently narrowing the file, and on
+   * these two formats the honest sentence is the format's own rather than the reader's.
+   */
+  const offersInactive = SURFACE_HAS_PILES[surface] && !dropsInactive(format);
+  /** Switched-off piles are being held back — the flag read through the fence above. */
+  const excludesInactive = offersInactive && !includeInactive;
+
+  /**
+   * The two row filters, applied **before** the writer rather than inside it.
    *
    * `formatExport` stays `(cards, format, fields) => string` — `export/`'s whole boundary, and
    * the reason `decklists.test.ts` can drive it — so which cards go in is the dialog's question
@@ -287,13 +327,23 @@ function Body({
    * list is what stops a card that is both outside Arena and in a switched-off pile being
    * reported by both lines at once.
    *
-   * Fenced on the format, not just on the flag. The checkbox only draws for `arena`, but a
-   * reader who ticked it and then moved to CSV must not find their CSV quietly short of rows.
+   * **The two can never both fire**, and that is a property rather than an accident: the Arena
+   * filter is fenced on `format === "arena"` and the inactive one on `!dropsInactive(format)`,
+   * which excludes exactly `arena` and `mtgo`. They are written as one chain anyway, because the
+   * day a format leaves `ACTIVE_ONLY` is not the day to discover the order was never decided —
+   * and the order that would then be right is this one, for `formatExport`'s own reason: filter
+   * before anything folds, so nothing held back survives to be merged into a row that is kept.
+   *
+   * Both are fenced on the format, not just on the flag. A reader who ticked `Include inactive
+   * categories` on CSV and moved to Arena must not find Arena's own rule quietly overridden, and
+   * one who ticked the Arena box and moved to CSV must not find their CSV short of rows.
    */
-  const exported = useMemo(
-    () => (format === "arena" && arenaOnly ? cards.filter(isInArena) : cards),
-    [arenaOnly, cards, format],
-  );
+  const exported = useMemo(() => {
+    let rows: readonly TransferCard[] = cards;
+    if (format === "arena" && arenaOnly) rows = rows.filter(isInArena);
+    if (excludesInactive) rows = rows.filter(isActivePile);
+    return rows;
+  }, [arenaOnly, cards, excludesInactive, format]);
 
   const text = useMemo(() => formatExport(exported, format, fields), [exported, format, fields]);
   /** Copies this format will not write — see `omittedCount`. Recomputed with the format, because
@@ -304,6 +354,14 @@ function Body({
   const notInArena = useMemo(
     () => (format === "arena" && arenaOnly ? notInArenaCopies(cards) : 0),
     [arenaOnly, cards, format],
+  );
+  /** Copies the reader's own `Include inactive categories` answer is holding back, or 0 when it
+   *  is not the one holding anything. Counted over `cards` for `notInArena`'s reason — `exported`
+   *  is the list this has already emptied — and it can never be non-zero at the same time as
+   *  `omitted`, since the two are fenced on complementary halves of `dropsInactive`. */
+  const heldBackInactive = useMemo(
+    () => (excludesInactive ? inactiveCopies(cards) : 0),
+    [cards, excludesInactive],
   );
   /**
    * Lines of the **file**, which is what the toggle names while the preview is shut.
@@ -438,6 +496,26 @@ function Body({
         </label>
       )}
 
+      {/* `Include inactive categories` — issue #390. The Arena box's twin one row down, and it
+          is not a *field* for the same reason: it changes which cards are written, never what a
+          line says about one. **Named for what ticking it does**, where the box above is named
+          for what ticking that one leaves out — the reader's question here is "is my maybeboard
+          in this file", and a box called `Leave out…` answers it inverted. Drawn only where the
+          question can be asked: `offersInactive` is the surface fence and the format fence
+          together, so it is absent on the collection and the wishlist (no piles) and on Arena
+          and MTGO (already answered, and not by a preference). */}
+      {offersInactive && (
+        <label className="flex w-fit items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={includeInactive}
+            onChange={toggleIncludeInactive}
+            className={cn("size-4 accent-accent", FOCUS)}
+          />
+          Include inactive categories
+        </label>
+      )}
+
       {/* The filter's own omission line, and `omitted`'s twin in every respect that matters:
           not a `role="alert"` because nothing has failed, on screen before Copy is pressed
           rather than after, and counted in **copies** — four copies of a card Arena has never
@@ -449,6 +527,22 @@ function Body({
           {notInArena === 1
             ? "1 card is not in MTG Arena and is"
             : `${notInArena} cards are not in MTG Arena and are`}{" "}
+          not written.
+        </p>
+      )}
+
+      {/* The inactive filter's own omission line, and the twin of both lines above: not a
+          `role="alert"` because nothing failed, on screen before Copy is pressed, and counted in
+          **copies** — six Forests on one cut row are six cards missing from the file. It says
+          `inactive categories` because that is the box the reader just pressed, where the line
+          below says `switched-off piles` because there is no box under those two formats and the
+          pile is the only thing to name. The two can never be on screen together: `omitted` is
+          non-zero only where `dropsInactive` is true and this only where it is false. */}
+      {heldBackInactive > 0 && (
+        <p className="text-sm text-dim">
+          {heldBackInactive === 1
+            ? "1 card in an inactive category is"
+            : `${heldBackInactive} cards in inactive categories are`}{" "}
           not written.
         </p>
       )}

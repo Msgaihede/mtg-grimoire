@@ -36,15 +36,17 @@ function Picker({
 }
 
 /**
- * The picker with an **outer** dismissible layer behind it — a stand-in for the card detail pane.
+ * The picker with an **outer** dismissible layer behind it — a stand-in for one.
  *
  * Built on the real `useDismissOnEscape` rather than on a `keydown` handler of its own, because
  * the whole subject of {@link EscapeClosesOneLayer} is which phase each rung listens in, and a
  * hand-written outer layer would be a second implementation of exactly the thing under test.
  *
- * A stand-in and not `CardDetailPane`: that component takes a card id and talks to the backend,
- * and what this needs from it is the one line it shares with every future outer layer — bubble
- * phase, and an early return on `defaultPrevented`, both of which live in the hook.
+ * **It stood in for `CardDetailPane` until 2026-09-03, when the docked card surface was
+ * deleted**; the app's `"outer"` occupant is `KeyMap`'s shortcuts panel now. A stand-in either
+ * way: a real one takes state this story has no use for, and what this needs from it is the one
+ * line every outer layer shares — bubble phase, and an early return on `defaultPrevented`, both
+ * of which live in the hook.
  */
 function WithOuterLayer({ children }: { children: ReactNode }) {
   const [open, setOpen] = useState(true);
@@ -120,8 +122,10 @@ const meta = {
           "the six rows rather than the thousand — a fact about the card, not about this " +
           "control.\n\n" +
           "**Four of its states cannot be reached from the story corpus, and none is faked " +
-          "here.** The fake backend derives `list_sets` from the 52 fixture printings, which is " +
-          "**36 sets with a paper printing** (measured by the `Open` story's own assertion): " +
+          "here.** The fake backend derives `list_sets` from the 59 fixture printings, which is " +
+          "**42 sets with a paper printing** (measured by the `Open` story's own assertion; it " +
+          "was 36 over 52 printings until the seven token and emblem rows joined the corpus for " +
+          "the deck editor's Tokens & emblems band, which brought six token sets with them): " +
           "too few for the `Showing N of M` footer *and the `Show 50 more` button beside it* — " +
           "they appear and disappear together — which need more than the 100 options " +
           "`MAX_OPTIONS` renders, and far too few for the ceiling sentence, which needs " +
@@ -225,7 +229,7 @@ export const Open: Story = {
 
     const list = canvas.getByRole("listbox");
     const options = within(list).getAllByRole("option");
-    await expect(options).toHaveLength(36);
+    await expect(options).toHaveLength(42);
     await expect(within(list).queryByText("Vintage Masters")).toBeNull();
     await expect(within(list).queryByText("Final Fantasy")).toBeNull();
     await expect(within(list).getByText("Final Fantasy: Through the Ages")).toBeInTheDocument();
@@ -244,10 +248,10 @@ export const Open: Story = {
  * The list is a page of 100 out of ~1 050, and a picked set that sorted past the end of it would
  * be a filter the reader can see counted on the button and cannot see, reach or switch off. So
  * "picked" is the first grouping key and the alphabet is the last — Limited Edition Alpha and
- * Modern Horizons 2 sit at the top here, above Amonkhet, which is where the A-Z
- * would otherwise start.
+ * Modern Horizons 2 sit at the top here, above Adventures in the Forgotten Realms Tokens, which
+ * is where the A-Z would otherwise start.
  *
- * The second half of the assertion is that the rule is a *partition* and not a shuffle: the 34
+ * The second half of the assertion is that the rule is a *partition* and not a shuffle: the 40
  * rows below the two picked ones are still in alphabetical order, so ticking a set moves exactly
  * one row and leaves the list the reader had learned to scan.
  */
@@ -264,7 +268,7 @@ export const PickedFirst: Story = {
     await expect(names.slice(0, 2)).toEqual(["Limited Edition Alpha", "Modern Horizons 2"]);
 
     const rest = names.slice(2);
-    await expect(rest[0]).toBe("Amonkhet");
+    await expect(rest[0]).toBe("Adventures in the Forgotten Realms Tokens");
     await expect(rest).toEqual([...rest].sort(compareLabels));
   },
 };

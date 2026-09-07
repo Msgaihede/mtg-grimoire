@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { EXPORT_FORMATS, formatExport, omittedCount } from "./format";
+import {
+  dropsInactive,
+  EXPORT_FORMATS,
+  formatExport,
+  inactiveCopies,
+  isActivePile,
+  omittedCount,
+} from "./format";
 import { defaultFields } from "../fields";
 import { transferCard } from "../fixtures";
 import type { TransferCard } from "../TransferCard";
@@ -284,6 +291,129 @@ describe("formatExport", () => {
 });
 
 /**
+ * The switched-off pile, asked about from **outside** the writer — issue #390's half of this
+ * file.
+ *
+ * `formatExport` is unchanged by that issue and this section is why: the reader's own
+ * `Include inactive categories` box is a **row filter applied in the dialog**, exactly as the
+ * Arena one is, so the writer keeps its `(cards, format, fields) => string` shape, the golden
+ * corpus needs no new bytes and `src-tauri/src/transfer/` needs no new port. What the dialog
+ * needed instead was three answers this file already knew privately — is this format going to
+ * decide for itself, is this row in a switched-off pile, and how many copies are — and the whole
+ * of the change is that each is now a named export with a test under it.
+ *
+ * **The three are tested here rather than through the dialog because they are the part that can
+ * be wrong quietly.** A checkbox drawn in the wrong place is visible; a count that describes a
+ * different file than the one Copy puts on the clipboard is not.
+ */
+describe("the switched-off pile, from outside the writer", () => {
+  /**
+   * Exactly two formats answer this for themselves, and the pair is asserted **by name** rather
+   * than by a count — `decklists.test.ts`'s `READABLE` pin, one directory over, for the same
+   * reason. A format leaving or joining `ACTIVE_ONLY` is a decision about what a reader's file
+   * contains, so it should arrive as a red build naming the format rather than as `3` where `2`
+   * used to be, which reads as arithmetic and gets updated without being read.
+   *
+   * The consequence the dialog turns on: these two are the formats where the box is **not
+   * drawn**. Arena and MTGO have no maybeboard, so writing one produces an illegal import at the
+   * other end, and no preference may turn that back on — a checkbox that cannot move the file is
+   * furniture.
+   */
+  it("names arena and mtgo as the formats that answer for themselves", () => {
+    expect(EXPORT_FORMATS.filter(dropsInactive)).toEqual(["mtgo", "arena"]);
+  });
+
+  /**
+   * `isActivePile` is `categoryActive !== false`, and the arm worth writing a test for is the
+   * **`null`** one.
+   *
+   * `null` is not a third answer to "is this pile switched on" — it is a row from a surface that
+   * has no piles at all, where the question was never asked. **`categoryActive === true` is the
+   * spelling that looks equivalent and is not**, and the two are indistinguishable on the only
+   * surface anybody would think to check: every deck row carries a real boolean, so both answer
+   * identically on all of them.
+   *
+   * Where they differ is a collection or a wishlist, and the reader gets there without touching
+   * a checkbox at all — `written` filters by this same predicate for Arena and MTGO, whatever
+   * anybody asked, so the wrong spelling makes an Arena export of a collection the empty string
+   * with every row silently gone. The last assertion here is that path rather than the
+   * predicate, because it is the one that ships.
+   */
+  it("counts a pile-less row as active, because nothing there was ever switched off", () => {
+    const pileless = card({ categoryName: null, categoryKind: null, categoryActive: null });
+    expect(isActivePile(card({ categoryActive: true }))).toBe(true);
+    expect(isActivePile(card({ categoryActive: false }))).toBe(false);
+    expect(isActivePile(pileless)).toBe(true);
+    expect(formatExport([pileless], "arena", defaultFields("arena", "collection"))).toBe(
+      "1 Sol Ring (LTC) 285\n",
+    );
+  });
+
+  /**
+   * **Copies, never rows.** Six basic lands on one cut row are six cards that will not be in the
+   * file, and "1 card" would be a true statement about the array and a false one about the deck
+   * — which is the sentence the reader is actually owed, since they are about to paste this
+   * somewhere and count it.
+   *
+   * Two rows carrying eight copies, so the two implementations answer different numbers: a
+   * `reduce` over `quantity` says 8 and a `filter(...).length` says 2. A one-copy fixture would
+   * pass under both, which is how this rule gets tidied away.
+   */
+  it("counts copies rather than rows", () => {
+    const cards = [
+      card({ name: "Forest", quantity: 6, categoryName: "Cuts", categoryActive: false }),
+      card({ name: "Mox Amber", quantity: 2, categoryName: "Cuts", categoryActive: false }),
+    ];
+    expect(inactiveCopies(cards)).toBe(8);
+  });
+
+  it("answers zero over a list with nothing switched off", () => {
+    expect(inactiveCopies([BOLT, PATHWAY, card({ quantity: 4 })])).toBe(0);
+  });
+
+  /** And zero over a surface that has no piles — the `null` arm above read at list scale. A
+   *  collection export can never hold anything back this way, which is the same fact
+   *  `SURFACE_HAS_PILES` states one file up and the reason the box is not drawn there. */
+  it("answers zero over rows from a surface with no piles", () => {
+    const rows = [
+      card({ quantity: 4, categoryName: null, categoryKind: null, categoryActive: null }),
+      card({ quantity: 9, categoryName: null, categoryKind: null, categoryActive: null }),
+    ];
+    expect(inactiveCopies(rows)).toBe(0);
+  });
+
+  /**
+   * **`omittedCount` is `inactiveCopies` behind the `dropsInactive` gate, and that lifting is
+   * the entire reason `inactiveCopies` is a function at all.**
+   *
+   * The dialog computes its own held-back count from `inactiveCopies` behind the *complementary*
+   * half of the same gate — the reader's box is offered only where the format has not already
+   * decided — so the two numbers are one piece of arithmetic read through two fences. Written
+   * twice they could drift, and the failure would be a line under the format radios that
+   * describes a different file from the one Copy puts on the clipboard: silent, plausible, and
+   * wrong in exactly the direction a reader would not check.
+   *
+   * The expectation is spelled with the format **names** and a literal 8 rather than with
+   * `dropsInactive` and `inactiveCopies` themselves. Reading the implementation's own two
+   * expressions back at it would make this pass over any pair of broken halves that happened to
+   * agree; the test above pins which formats those names are.
+   */
+  it("is inactiveCopies behind the dropsInactive gate, so the two cannot drift", () => {
+    const cards = [
+      card({ name: "Forest", quantity: 6, categoryName: "Cuts", categoryActive: false }),
+      card({ name: "Mox Amber", quantity: 2, categoryName: "Cuts", categoryActive: false }),
+      card({ name: "Sol Ring", quantity: 1 }),
+    ];
+    expect(inactiveCopies(cards)).toBe(8);
+    for (const format of EXPORT_FORMATS) {
+      expect(omittedCount(cards, format), format).toBe(
+        format === "arena" || format === "mtgo" ? 8 : 0,
+      );
+    }
+  });
+});
+
+/**
  * The field-selection layer: which fields land on the line, over the six formats' own shapes.
  *
  * **The whole point of `defaultOn`.** If the first test here goes red, a default moved and every
@@ -335,11 +465,12 @@ describe("field selection", () => {
    * The deck label, out — Archidekt's `^Keeper,#4aab08^`.
    *
    * The test above still passes over `card()`, which wears none, so it says nothing about this
-   * even though `tag` is now among Archidekt's defaults. That is the vacuous half, and these are
+   * even though `label` is now among Archidekt's defaults. That is the vacuous half, and these
+   * are
    * what close it.
    */
   it("writes an Archidekt label at that format's defaults, colour and all", () => {
-    const keeper = card({ tagName: "Keeper", tagColor: "#4aab08" });
+    const keeper = card({ labelName: "Keeper", labelColor: "#4aab08" });
     expect(formatExport([keeper], "archidekt", defaultFields("archidekt", DECK))).toBe(
       "Main deck\n1x Sol Ring (ltc) 285 [Main deck] ^Keeper,#4aab08^\n",
     );
@@ -351,8 +482,8 @@ describe("field selection", () => {
     );
   });
 
-  it("drops the label when the reader unticks Tag", () => {
-    const keeper = card({ tagName: "Keeper", tagColor: "#4aab08" });
+  it("drops the label when the reader unticks Label", () => {
+    const keeper = card({ labelName: "Keeper", labelColor: "#4aab08" });
     expect(formatExport([keeper], "archidekt", ["quantity", "name", "category"])).toBe(
       "Main deck\n1x Sol Ring [Main deck]\n",
     );
@@ -361,8 +492,8 @@ describe("field selection", () => {
   /** A colour this build cannot read is not a reason to lose the name — and the parser reads the
    *  group straight back as a label with no colour. */
   it("writes the name alone when the label has no colour", () => {
-    const keeper = card({ tagName: "Keeper", tagColor: null });
-    expect(formatExport([keeper], "archidekt", ["quantity", "name", "tag"])).toBe(
+    const keeper = card({ labelName: "Keeper", labelColor: null });
+    expect(formatExport([keeper], "archidekt", ["quantity", "name", "label"])).toBe(
       "Main deck\n1x Sol Ring ^Keeper^\n",
     );
   });
@@ -370,7 +501,7 @@ describe("field selection", () => {
   /** **The label goes last on the line**, after the bracket and after `*F*`, which is where
    *  Archidekt puts it and the order `stripDecorations` peels from the end. */
   it("puts the label after every other decoration", () => {
-    const keeper = card({ finish: "foil", tagName: "Keeper", tagColor: "#4aab08" });
+    const keeper = card({ finish: "foil", labelName: "Keeper", labelColor: "#4aab08" });
     expect(formatExport([keeper], "archidekt", defaultFields("archidekt", DECK))).toBe(
       "Main deck\n1x Sol Ring (ltc) 285 [Main deck] *F* ^Keeper,#4aab08^\n",
     );
@@ -379,13 +510,13 @@ describe("field selection", () => {
   /** A CSV spends a column per value, so the colour is its own field there — and its own
    *  checkbox, off by default. */
   it("gives CSV a column each for the label and its colour", () => {
-    const keeper = card({ tagName: "Keeper", tagColor: "#4aab08" });
-    expect(formatExport([keeper], "csv", ["quantity", "name", "tag", "tagColor"])).toBe(
-      "Quantity,Name,Tag,Tag colour\n1,Sol Ring,Keeper,#4aab08\n",
+    const keeper = card({ labelName: "Keeper", labelColor: "#4aab08" });
+    expect(formatExport([keeper], "csv", ["quantity", "name", "label", "labelColor"])).toBe(
+      "Quantity,Name,Label,Label colour\n1,Sol Ring,Keeper,#4aab08\n",
     );
     // Ticking one and not the other is the reader's business; neither implies the other.
-    expect(formatExport([keeper], "csv", ["quantity", "name", "tag"])).toBe(
-      "Quantity,Name,Tag\n1,Sol Ring,Keeper\n",
+    expect(formatExport([keeper], "csv", ["quantity", "name", "label"])).toBe(
+      "Quantity,Name,Label\n1,Sol Ring,Keeper\n",
     );
   });
 
@@ -405,18 +536,19 @@ describe("field selection", () => {
 
   /**
    * The label is an ordinary keyed field in the fold, and it needs no `DISCRIMINATOR` entry
-   * because it is not structural: with Tag on, two differently-labelled rows are two lines; with
-   * it off, the file cannot tell them apart and folding them is the fold doing its job.
+   * because it is not structural: with Label on, two differently-labelled rows are two lines;
+   * with it off, the file cannot tell them apart and folding them is the fold doing its job.
    *
-   * The pair really is one grain in a deck — one printing, one pile, one finish, two tags — which
+   * The pair really is one grain in a deck — one printing, one pile, one finish, two labels —
+   * which
    * `deck_cards` cannot hold, but a *collection* can and a caller can hand this function
    * anything. Asserted rather than assumed, because "it cannot happen" is how a fold key goes
    * missing.
    */
-  it("keeps two labels apart while Tag is on, and folds them when it is off", () => {
-    const keeper = card({ name: "Bolt", quantity: 2, tagName: "Keeper", tagColor: "#4aab08" });
-    const cut = card({ name: "Bolt", quantity: 1, tagName: "Cut", tagColor: "#d3202a" });
-    expect(formatExport([keeper, cut], "archidekt", ["quantity", "name", "tag"])).toBe(
+  it("keeps two labels apart while Label is on, and folds them when it is off", () => {
+    const keeper = card({ name: "Bolt", quantity: 2, labelName: "Keeper", labelColor: "#4aab08" });
+    const cut = card({ name: "Bolt", quantity: 1, labelName: "Cut", labelColor: "#d3202a" });
+    expect(formatExport([keeper, cut], "archidekt", ["quantity", "name", "label"])).toBe(
       "Main deck\n2x Bolt ^Keeper,#4aab08^\n1x Bolt ^Cut,#d3202a^\n",
     );
     expect(formatExport([keeper, cut], "archidekt", ["quantity", "name"])).toBe(

@@ -160,10 +160,13 @@ const DECK: DeckRow = {
   archived: false,
   folderId: null,
   theoryEnabled: false,
+  theoryMarkExact: true,
+  theoryMarkName: true,
   lastVariant: "live",
   lastGroupBy: "category",
   lastSortBy: "alphabetical",
   separateXGroup: false,
+  tokensOpen: false,
   defaultCategoryId: 0,
   bracket: 0,
   updatedAt: 1_800_000_000,
@@ -188,9 +191,9 @@ function deckCard(over: Partial<DeckCard> & { quantity: number }): DeckCard {
     categoryActive: true,
     finish: null,
     variant: "live",
-    tagId: null,
-    tagName: null,
-    tagColor: null,
+    labelId: null,
+    labelName: null,
+    labelColor: null,
     name: "Sol Ring",
     setCode: "lea",
     setName: "Limited Edition Alpha",
@@ -225,12 +228,12 @@ const DETAIL: DeckDetail = {
   deck: DECK,
   cards: [deckCard({ quantity: 40 }), deckCard({ id: 2, cardId: "bolt", quantity: 2 })],
   categories: [],
-  tags: [],
+  labels: [],
 };
 
 const MADE: DeckRow = { ...DECK, id: 12, name: "Burn", formatKey: "modern" };
 
-const OUTCOME: ImportOutcome = { added: 6, removed: 0, categoriesCreated: 2, tagsCreated: 0 };
+const OUTCOME: ImportOutcome = { added: 6, removed: 0, categoriesCreated: 2, labelsCreated: 0 };
 
 const IDLE: SyncStatus = {
   cardCount: 116_695,

@@ -608,6 +608,12 @@ mod tests {
             folder_id: None,
             notes: None,
             theory_enabled: false,
+            // Schema v38's pair, `true` because that is the columns' own `DEFAULT 1` and this
+            // builder's contract is "what a fresh deck would carry". The layout reads neither —
+            // a theory mark is a colour in the editor and the mirror writes plain text — so
+            // these are here for `bracket`'s reason: `DeckRow` has no `Default`.
+            theory_mark_exact: true,
+            theory_mark_name: true,
             separate_x_group: false,
             default_category_id: 0,
             last_variant: "live".to_owned(),
@@ -618,6 +624,10 @@ mod tests {
             // way. It is here because `DeckRow` has no `Default`, which is the whole of what
             // this builder is for.
             bracket: 0,
+            // Schema v35's column, and `false` is what a fresh deck carries. Here for
+            // `bracket`'s reason one comment up — the layout reads five fields and not this
+            // one, and `DeckRow` has no `Default`.
+            tokens_open: false,
             // The cover printing's picture, and `None` for `cover_card_id`'s reason one line
             // per field up: a deck with no cover has none. The mirror writes plain text and can
             // draw nothing, so this is here only because the struct has no `Default`.
@@ -642,6 +652,11 @@ mod tests {
             kind: "user".to_owned(),
             deck_id: None,
             sort_order: 0,
+            // **Every fixture here is unlocked, and that is the assertion rather than a
+            // shortcut.** A locked folder is still mirrored and still backed up in full
+            // (spec §4.1), so no plan in this module may depend on the flag — a fixture that
+            // set it would be claiming a difference that must not exist.
+            locked: false,
         }
     }
 

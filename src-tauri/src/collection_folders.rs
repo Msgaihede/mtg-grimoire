@@ -73,6 +73,27 @@ use std::sync::Arc;
 /// `CHECK constraint failed: collection_folders`, which names the table and not the mistake.
 pub const FOLDER_NOT_YOURS: &str = "That folder is the app's own and is not yours to change.";
 
+/// What [`delete_folder`] says about a drawer the reader has **set aside** — locked by its own
+/// flag, or by any folder above it.
+///
+/// **A sentence rather than a CHECK, and rather than a constraint failure**, which is
+/// [`FOLDER_NOT_YOURS`]' reasoning one column over: nothing in the DDL knows what a lock is
+/// *for*, and a `CHECK` that could refuse this would reach the reader as
+/// `CHECK constraint failed: collection_folders` — the table's name, not the drawer they meant
+/// to keep.
+///
+/// **Only the delete says it.** Rename and move disturb no card, so a locked folder answers both
+/// exactly as an unlocked one does; deleting re-files the whole sub-tree to the root
+/// ([`delete_folder`]), which is precisely the filing a lock is protecting. It refuses on the
+/// **effective** lock — [`effectively_locked`] — because a subfolder inside a locked parent
+/// scatters cards on the same press.
+///
+/// **The menu greys the row with this reason before the press can happen**, so this is the fence
+/// and not the teaching: a control whose only outcome is a sentence explaining that it does not
+/// work is `PinnedFolders.tsx`'s own complaint, and a refusal nobody can reach is still what a
+/// second caller meets.
+pub const FOLDER_IS_LOCKED: &str = "That folder is locked. Unlock it before deleting it.";
+
 /// What [`set_entry_folder`] says about the row it was **given**, when that row is sitting in a
 /// deck's group.
 ///
@@ -131,6 +152,19 @@ pub struct CollectionFolder {
     pub kind: String,
     pub deck_id: Option<i64>,
     pub sort_order: i64,
+    /// Whether the reader has set this drawer aside — schema v33's
+    /// `locked INTEGER NOT NULL DEFAULT 0`, where any non-zero is locked.
+    ///
+    /// **This folder's own flag, and never the inherited one.** A folder inside a locked folder
+    /// is locked ([`LOCKED_FOLDER_IDS`]), but storing that here would be a second copy of a fact
+    /// the parent already holds, and the two disagree the first time a folder is moved. Every
+    /// refusal in this module asks [`effectively_locked`]; the page walks ancestry for the same
+    /// answer in `src/lib/folderTree.ts`.
+    ///
+    /// **A `bool` where [`EntryGrain`]'s four booleans are `i64`**, and the difference is what
+    /// the value is for: those are read to be handed straight back to a probe, and this one is
+    /// *interpreted* — see [`folder_row`] for what a hand-edited `2` means here.
+    pub locked: bool,
 }
 
 /// What one folder tile is drawn from — the two numbers, per folder, in one round trip.
@@ -184,12 +218,16 @@ fn folder_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<CollectionFolder> {
         kind: r.get(3)?,
         deck_id: r.get(4)?,
         sort_order: r.get(5)?,
+        // Read as `i64` and compared, rather than left to rusqlite's `bool`: the column is
+        // `INTEGER` with no CHECK, so a hand-edited database can hold a 2 — and a 2 is locked,
+        // which is the only reading of a non-zero that is not a refusal.
+        locked: r.get::<_, i64>(6)? != 0,
     })
 }
 
 fn read_folder(conn: &Connection, id: i64) -> Result<Option<CollectionFolder>, String> {
     conn.query_row(
-        "SELECT id, parent_id, name, kind, deck_id, sort_order
+        "SELECT id, parent_id, name, kind, deck_id, sort_order, locked
            FROM collection_folders WHERE id = ?1",
         params![id],
         folder_row,
@@ -225,7 +263,7 @@ fn user_folder(conn: &Connection, id: i64) -> Result<CollectionFolder, String> {
 pub fn list_folders(conn: &Connection) -> Result<Vec<CollectionFolder>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, parent_id, name, kind, deck_id, sort_order
+            "SELECT id, parent_id, name, kind, deck_id, sort_order, locked
                FROM collection_folders ORDER BY sort_order, id",
         )
         .map_err(|e| e.to_string())?;
@@ -308,6 +346,81 @@ pub fn rename_folder(conn: &Connection, id: i64, name: &str) -> Result<Collectio
     )
     .map_err(|e| e.to_string())?;
     read_folder(conn, id)?.ok_or_else(|| FOLDER_GONE.to_owned())
+}
+
+/// Set a folder aside, or bring it back — [`rename_folder`]'s shape over one other scalar.
+///
+/// **[`user_folder`] first, like every other folder write here.** A deck's group and
+/// `Recently removed` refuse with [`FOLDER_NOT_YOURS`]: a lock says *the reader has set this
+/// drawer aside*, and neither of those two is theirs to set aside — the group belongs beside its
+/// deck and the holding area is where cards wait to be filed, which is the opposite of a drawer
+/// nobody is offering from.
+///
+/// **The folder's own flag only.** Nothing is written to the children — a folder inside a locked
+/// folder is locked by [`LOCKED_FOLDER_IDS`] rather than by a row of its own, and a write that
+/// stamped the sub-tree would be a second copy of the parent's fact, wrong the first time either
+/// end moves. Unlocking is therefore not always visible: a child of a locked parent whose own
+/// flag is cleared is still locked, which is why the menu greys that row rather than reporting a
+/// success the badge contradicts.
+///
+/// **`bool` at the boundary, `INTEGER` in the table** — rusqlite binds it as 0 or 1, so this
+/// write can never be the source of the hand-edited 2 [`folder_row`] reads for.
+pub fn set_folder_locked(
+    conn: &Connection,
+    id: i64,
+    locked: bool,
+) -> Result<CollectionFolder, String> {
+    user_folder(conn, id)?;
+    conn.execute(
+        "UPDATE collection_folders SET locked = ?2, updated_at = unixepoch() WHERE id = ?1",
+        params![id, locked],
+    )
+    .map_err(|e| e.to_string())?;
+    read_folder(conn, id)?.ok_or_else(|| FOLDER_GONE.to_owned())
+}
+
+/// Every folder that is locked, its own flag or an ancestor's — a **self-contained `SELECT`**,
+/// so it drops straight into an `IN (…)` and binds nothing.
+///
+/// **Spelled once, here, because [`crate::collection`] and [`crate::deck_theory`] are the other
+/// readers** and a second copy in either is how the page's list and the spare count would come
+/// to disagree about which drawers are set aside. `collection::scope` pushes it as
+/// `(e.folder_id IS NULL OR e.folder_id NOT IN (…))` and `deck_theory`'s `OWNED_SPARE_SQL` adds
+/// the same arm beside its deck one — both in this exact shape, which is why this is the whole
+/// statement rather than a bare `WITH` clause somebody has to finish. Do not tidy a copy of it
+/// into either module.
+///
+/// **`UNION` and never `UNION ALL`**, [`delete_folder`]'s reason for the same word: the
+/// duplicate-row check is what makes a `parent_id` cycle — a hand-edited database, a restored
+/// backup, the loop [`move_folder`] refuses to write — converge instead of running forever.
+///
+/// `locked <> 0` rather than `locked = 1`, [`folder_row`]'s reading of the same column: any
+/// non-zero is locked.
+pub(crate) const LOCKED_FOLDER_IDS: &str = "WITH RECURSIVE locked_folders(id) AS (
+             SELECT id FROM collection_folders WHERE locked <> 0
+             UNION
+             SELECT f.id FROM collection_folders f
+               JOIN locked_folders l ON f.parent_id = l.id
+         )
+         SELECT id FROM locked_folders";
+
+/// Is that one folder locked — its own flag, or anything above it?
+///
+/// [`LOCKED_FOLDER_IDS`] in the same `?1 IN (…)` shape the two query modules use, rather than a
+/// Rust walk up `parent_id`: one statement, one answer, and the fence a press meets is then
+/// literally the same SQL as the term that drops the folder's copies out of a list.
+///
+/// `pub(crate)` for the same two readers the fragment has. An id nothing answers to is `false`,
+/// which is what makes [`delete_folder`]'s "an id that is not there is a success" survive the
+/// check being the first thing it does.
+pub(crate) fn effectively_locked(conn: &Connection, id: i64) -> Result<bool, String> {
+    conn.query_row(
+        &format!("SELECT ?1 IN ({LOCKED_FOLDER_IDS})"),
+        params![id],
+        |r| r.get::<_, i64>(0),
+    )
+    .map(|found| found != 0)
+    .map_err(|e| e.to_string())
 }
 
 /// The cycle walk itself, in one place because [`move_folder`] and [`reorder_folders`] both owe
@@ -453,8 +566,13 @@ pub fn reorder_folders(
 /// nowhere, still exactly as they were. Sub-folders go with it. Like
 /// [`crate::deck_meta::delete_folder`] and [`crate::deck::delete_deck`], an id that resolves to
 /// nothing is a success: the caller wanted that folder gone, and it is gone. A folder the **app**
-/// owns is the one id that is not — [`FOLDER_NOT_YOURS`], because a deck's folder disappears
+/// owns is one id that is not — [`FOLDER_NOT_YOURS`], because a deck's folder disappears
 /// when its deck does and the removed-cards folder is the app's own drawer.
+///
+/// **And a folder the reader has set aside is the other** — [`FOLDER_IS_LOCKED`], on the
+/// *effective* lock, checked before anything below happens. Everything this function does after
+/// that is the un-filing described here, which is what a lock exists to prevent: rename and move
+/// disturb no card and are allowed on a locked folder for exactly that reason.
 ///
 /// # Why the un-filing is written out and not left to the cascade
 ///
@@ -491,6 +609,15 @@ pub fn reorder_folders(
 /// One transaction throughout: mid-delete the cards are all re-filed and the folder is gone, or
 /// none of it happened.
 pub fn delete_folder(conn: &Connection, id: i64) -> Result<(), String> {
+    // **Before anything else, including the transaction**: this press re-files the whole
+    // sub-tree to the root, which is exactly the filing a lock is protecting, so a locked
+    // folder is refused in words ([`FOLDER_IS_LOCKED`]) rather than allowed to scatter cards.
+    // The **effective** lock, because a subfolder inside a locked parent scatters them the same
+    // way — and `effectively_locked` answers `false` for an id nothing answers to, so the
+    // "a folder that is not there is a success" rule below is untouched.
+    if effectively_locked(conn, id)? {
+        return Err(FOLDER_IS_LOCKED.to_owned());
+    }
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     // Not [`user_folder`]: an id that is not there is a **success** here, so the two halves of
     // that helper come apart. Only a folder that exists and is the app's is refused.
@@ -585,6 +712,15 @@ pub fn set_entry_folder(
 ) -> Result<EntryChange, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     if let Some(folder) = folder_id {
+        // **A locked folder gains nothing here, on either side, and that is the requirement
+        // rather than an omission.** Issue #365 asks that copies can always be moved into and
+        // out of a folder that is set aside: a lock is about what the app *offers* — a search
+        // result, an availability figure — and never about what the reader can reach. The
+        // refusal that looks missing would make a locked drawer a place cards cannot leave,
+        // which is a lock on the reader rather than on the app. The warning is the page's, and
+        // it is a confirmation on a *drag* (a rectangle a pointer lands on by accident) rather
+        // than on a menu pick the reader just named. Nothing about the destination's lock is
+        // asked below, and nothing about the source's is either.
         user_folder(&tx, folder)?;
     }
     // `optional()`, and a `None` falls through on purpose: it is the root, an entry that is not
@@ -970,6 +1106,28 @@ pub async fn collection_folder_rename(
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         with_write(&state, |c| rename_folder(c, id, &name))
+    })
+    .await
+    .map_err(unfinished)?
+}
+
+/// Lock a folder, or unlock it — see [`set_folder_locked`], and [`FOLDER_IS_LOCKED`] for the one
+/// press a lock refuses.
+///
+/// **`with_write` and not `with_write_owned`**, [`collection_folder_reorder`]'s reasoning: this
+/// touches no `collection_entries` row at all, so no card moves in or out of the reader's
+/// ownership and the facet index's `owned` dimension already holds the answer. A lock changes
+/// what the app *offers*, never what the reader has.
+#[cfg(not(target_family = "wasm"))]
+#[tauri::command]
+pub async fn collection_folder_set_locked(
+    state: tauri::State<'_, Arc<AppState>>,
+    id: i64,
+    locked: bool,
+) -> Result<CollectionFolder, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        with_write(&state, |c| set_folder_locked(c, id, locked))
     })
     .await
     .map_err(unfinished)?
@@ -1577,6 +1735,254 @@ mod tests {
     fn delete_folder_is_a_success_for_an_id_that_is_not_there() {
         let conn = open();
         assert_eq!(delete_folder(&conn, 404), Ok(()));
+    }
+
+    // -- the lock (issue #365) ----------------------------------------------------------------
+
+    /// **The inheritance, and that it is computed rather than stored.** A reader locks a drawer
+    /// and gets the drawer, including whatever they have nested inside it — so
+    /// [`effectively_locked`] answers for the whole sub-tree while only the folder the press
+    /// named carries the flag. Both halves are asserted, because a write that stamped the
+    /// children would pass the first half and be a second copy of a fact the parent already
+    /// holds: the two disagree the first time either end is moved.
+    #[test]
+    fn locking_a_folder_locks_the_folders_inside_it() {
+        let conn = open();
+        let binder = create_folder(&conn, None, "Binder").unwrap();
+        let rares = create_folder(&conn, Some(binder.id), "Rares").unwrap().id;
+        let deep = create_folder(&conn, Some(rares), "Duals").unwrap().id;
+        let elsewhere = create_folder(&conn, None, "Trades").unwrap().id;
+
+        assert!(
+            !binder.locked,
+            "a new folder is a folder nobody has set aside"
+        );
+
+        let locked = set_folder_locked(&conn, binder.id, true).unwrap();
+
+        assert!(
+            locked.locked,
+            "the answer is the re-read row, not the request"
+        );
+        for (id, what) in [
+            (binder.id, "the folder itself"),
+            (rares, "its drawer"),
+            (deep, "and the drawer inside that"),
+        ] {
+            assert!(
+                effectively_locked(&conn, id).unwrap(),
+                "{what} is inside the lock"
+            );
+        }
+        assert!(
+            !effectively_locked(&conn, elsewhere).unwrap(),
+            "a folder outside the sub-tree is not"
+        );
+
+        // Only the folder the press named carries the column.
+        assert_eq!(
+            (
+                read_folder(&conn, rares).unwrap().unwrap().locked,
+                read_folder(&conn, deep).unwrap().unwrap().locked,
+            ),
+            (false, false),
+            "the inheritance is computed, never written down"
+        );
+        // And the census carries the flag out to the page, which walks the same ancestry.
+        let listed: Vec<(i64, bool)> = list_folders(&conn)
+            .unwrap()
+            .iter()
+            .map(|f| (f.id, f.locked))
+            .collect();
+        assert!(listed.contains(&(binder.id, true)));
+        assert!(listed.contains(&(rares, false)));
+
+        // One press back, and the sub-tree comes with it.
+        assert!(!set_folder_locked(&conn, binder.id, false).unwrap().locked);
+        assert!(!effectively_locked(&conn, deep).unwrap());
+    }
+
+    /// The column is `INTEGER` with no CHECK, so a hand-edited database can hold a 2 — and a 2
+    /// is locked, which is the only reading of a non-zero that is not a refusal. Both readers
+    /// have to agree about it: [`folder_row`]'s `i64` compare for the badge, and
+    /// [`LOCKED_FOLDER_IDS`]' `locked <> 0` for every fence and every query term.
+    #[test]
+    fn a_lock_flag_that_is_not_one_is_still_a_lock() {
+        let conn = open();
+        let binder = create_folder(&conn, None, "Binder").unwrap().id;
+        let inner = create_folder(&conn, Some(binder), "Rares").unwrap().id;
+        conn.execute(
+            "UPDATE collection_folders SET locked = 2 WHERE id = ?1",
+            params![binder],
+        )
+        .unwrap();
+
+        assert!(read_folder(&conn, binder).unwrap().unwrap().locked);
+        assert!(effectively_locked(&conn, binder).unwrap());
+        assert!(
+            effectively_locked(&conn, inner).unwrap(),
+            "and it is inherited like any other lock"
+        );
+        assert_eq!(delete_folder(&conn, binder).unwrap_err(), FOLDER_IS_LOCKED);
+    }
+
+    /// **Deleting is the one folder write a lock refuses**, because it re-files the whole
+    /// sub-tree to the root — precisely the filing the lock was protecting. The cards and the
+    /// folder are both asserted untouched, and the unlock-then-delete at the end is what proves
+    /// the refusal is the *lock's* rather than something else about the folder.
+    #[test]
+    fn a_locked_folder_refuses_to_be_deleted() {
+        let conn = open();
+        let case = create_folder(&conn, None, "Display case").unwrap().id;
+        let card = insert_entry(&conn, "bolt", Some(case), 2);
+        set_folder_locked(&conn, case, true).unwrap();
+
+        assert_eq!(delete_folder(&conn, case).unwrap_err(), FOLDER_IS_LOCKED);
+
+        assert_eq!(
+            user_folders(&conn).iter().map(|f| f.id).collect::<Vec<_>>(),
+            vec![case],
+            "the folder is still standing"
+        );
+        assert_eq!(
+            folder_of(&conn, card),
+            Some(case),
+            "and no card was scattered to the root"
+        );
+
+        set_folder_locked(&conn, case, false).unwrap();
+        delete_folder(&conn, case).unwrap();
+        assert_eq!(
+            folder_of(&conn, card),
+            None,
+            "unlocked, the press goes through"
+        );
+    }
+
+    /// The same refusal one level down, and the case a check on the folder's **own** flag alone
+    /// would sail straight through: `Rares` carries no lock, `Display case` above it does — and
+    /// deleting `Rares` scatters its cards to the root just as surely.
+    #[test]
+    fn a_folder_inside_a_locked_one_refuses_to_be_deleted_too() {
+        let conn = open();
+        let case = create_folder(&conn, None, "Display case").unwrap().id;
+        let rares = create_folder(&conn, Some(case), "Rares").unwrap().id;
+        let card = insert_entry(&conn, "bolt", Some(rares), 1);
+        set_folder_locked(&conn, case, true).unwrap();
+
+        assert!(
+            !read_folder(&conn, rares).unwrap().unwrap().locked,
+            "its own flag is clear -- the lock is the parent's"
+        );
+        assert_eq!(delete_folder(&conn, rares).unwrap_err(), FOLDER_IS_LOCKED);
+        assert_eq!(folder_of(&conn, card), Some(rares), "and it wrote nothing");
+    }
+
+    /// **Rename and move disturb no card, so neither is refused** — a locked folder is still the
+    /// reader's own drawer, and this is the whole difference between #365's word and
+    /// `PinnedFolders.tsx`'s. Both writes that move a folder are asserted, the drag's
+    /// [`reorder_folders`] included, and the lock survives each of them: a folder that quietly
+    /// came unlocked by being renamed would be the worst of both.
+    #[test]
+    fn a_locked_folder_can_still_be_renamed_and_moved() {
+        let conn = open();
+        let shelf = create_folder(&conn, None, "Shelf").unwrap().id;
+        let case = create_folder(&conn, None, "Display case").unwrap().id;
+        set_folder_locked(&conn, case, true).unwrap();
+
+        let renamed = rename_folder(&conn, case, "The glass case").unwrap();
+        assert_eq!(renamed.name, "The glass case");
+        assert!(renamed.locked, "and it is still set aside");
+
+        let moved = move_folder(&conn, case, Some(shelf)).unwrap();
+        assert_eq!((moved.parent_id, moved.locked), (Some(shelf), true));
+
+        let rows = reorder_folders(&conn, None, &[case]).unwrap();
+        assert!(
+            rows.iter()
+                .any(|f| f.id == case && f.parent_id.is_none() && f.locked),
+            "and through the drag's own write too"
+        );
+        assert!(effectively_locked(&conn, case).unwrap());
+    }
+
+    /// **The issue's own requirement, and the reason [`set_entry_folder`] gained nothing.** A
+    /// lock is about what the app *offers* — a search result, an availability figure — and never
+    /// about what the reader can reach, so copies move into and out of a locked drawer exactly
+    /// as they move anywhere else. Both directions, plus a subfolder locked by its parent, which
+    /// is where a fence written on the effective lock would bite hardest.
+    #[test]
+    fn a_card_can_still_be_filed_into_and_out_of_a_locked_folder() {
+        let conn = open();
+        let case = create_folder(&conn, None, "Display case").unwrap().id;
+        let shelf = create_folder(&conn, Some(case), "Top shelf").unwrap().id;
+        set_folder_locked(&conn, case, true).unwrap();
+        let id = insert_entry(&conn, "bolt", None, 2);
+
+        let moved = set_entry_folder(&conn, id, Some(case)).unwrap();
+        assert_eq!((moved.id, moved.quantity), (id, 2));
+        assert_eq!(folder_of(&conn, id), Some(case), "in");
+
+        set_entry_folder(&conn, id, Some(shelf)).unwrap();
+        assert_eq!(
+            folder_of(&conn, id),
+            Some(shelf),
+            "and on into a subfolder locked by its parent"
+        );
+
+        set_entry_folder(&conn, id, None).unwrap();
+        assert_eq!(folder_of(&conn, id), None, "and out again, to the root");
+    }
+
+    /// Every folder write in this module fences on the kind first, and this one is no
+    /// different: a deck's group belongs beside its deck and `Recently removed` is where cards
+    /// wait to be filed, which is the opposite of a drawer nobody is offering from. Both kinds,
+    /// because a fence written for one of them has never met the other — and the stale id, which
+    /// [`user_folder`] answers out of the same read.
+    #[test]
+    fn collection_folder_set_locked_refuses_a_folder_the_app_owns() {
+        let conn = open();
+        for kind in ["deck", "removed"] {
+            let theirs = insert_system_folder(&conn, kind, "The app's");
+            assert_eq!(
+                set_folder_locked(&conn, theirs, true).unwrap_err(),
+                FOLDER_NOT_YOURS,
+                "a {kind} folder"
+            );
+            assert!(
+                !read_folder(&conn, theirs).unwrap().unwrap().locked,
+                "and the refused write wrote nothing to a {kind} folder"
+            );
+        }
+        assert_eq!(
+            set_folder_locked(&conn, 404, true).unwrap_err(),
+            FOLDER_GONE
+        );
+    }
+
+    /// **`UNION` and never `UNION ALL`** in [`LOCKED_FOLDER_IDS`], which is what makes the walk
+    /// converge over a `parent_id` cycle — the loop [`move_folder`] refuses to write and a
+    /// hand-edited database or a restored backup can still hold. `UNION ALL` here is not a wrong
+    /// answer, it is a statement that never returns, inside `spawn_blocking` and holding the
+    /// app-wide write lock.
+    #[test]
+    fn a_cycle_in_the_table_does_not_hang_the_locked_walk() {
+        let conn = open();
+        let a = create_folder(&conn, None, "A").unwrap().id;
+        let b = create_folder(&conn, Some(a), "B").unwrap().id;
+        set_folder_locked(&conn, a, true).unwrap();
+        // Corruption this module cannot produce.
+        conn.execute(
+            "UPDATE collection_folders SET parent_id = ?2 WHERE id = ?1",
+            params![a, b],
+        )
+        .unwrap();
+
+        assert!(
+            effectively_locked(&conn, b).unwrap(),
+            "an answer, not a hang"
+        );
+        assert_eq!(delete_folder(&conn, b).unwrap_err(), FOLDER_IS_LOCKED);
     }
 
     #[test]

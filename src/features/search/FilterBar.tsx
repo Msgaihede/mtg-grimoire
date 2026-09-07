@@ -21,7 +21,12 @@ import {
 } from "@/components/FilterChips";
 import { PriceRange } from "@/components/PriceRange";
 import { useTooltip } from "@/components/tooltip/useTooltip";
-import { CONDITIONS, CONDITION_LABEL, type Condition } from "@/lib/conditions";
+import {
+  CONDITIONS,
+  CONDITION_LABEL,
+  CONDITION_NOT_SET,
+  type Condition,
+} from "@/lib/conditions";
 import { DROP_MARK_ROOM } from "@/lib/dropMarks";
 import { FINISHES, FINISH_LABEL, type Finish } from "@/lib/finish";
 import type { FacetResponse, SearchSortKey } from "@/lib/ipc";
@@ -272,7 +277,9 @@ export interface FilterSurface<SortKey extends string = string> extends TagQuery
  *
  * **Not alphabetical, and this is `sortOptions`' second kind of exemption**: the order *is* the
  * information. Common through mythic is a scale, the same way Near Mint through Damaged is on
- * the collection's condition chips, and sorting it would put mythic between common and rare.
+ * the collection's condition chips — under the ungraded chip that leads them, which is the
+ * default rather than a rung of the scale — and sorting it would put mythic between common and
+ * rare.
  *
  * Scryfall's own lower-case words, which is what `cards.rarity` stores and what the backend's
  * `IN` compares against — SQLite's `=` on text is case-sensitive, so a capitalised value here
@@ -314,6 +321,28 @@ function sortDirectionName(dir: SortDir | undefined): string {
 /** A word with its first letter raised — the rarities and the colours are stored lower-case. */
 function sentence(word: string): string {
   return word.replace(/^./, (c) => c.toUpperCase());
+}
+
+/**
+ * One grade as its chip prints it, and what is left for `ToggleChip`'s `hint` to expand.
+ *
+ * **Five of the six are abbreviations and the sixth is not.** `NM` … `DMG` are stamped on every
+ * marketplace listing the cards came from, so the chip draws the code and speaks the grade —
+ * which is the whole of what `hint` is for, and why the grades spelled out never went on the bar.
+ * `NONE` abbreviates nothing: it is the storage sentinel for a copy whose grade the reader never
+ * stated, no listing anywhere carries it, and a chip reading `NONE` would be the one word in this
+ * row nobody has seen before. It draws {@link CONDITION_LABEL}'s word and has nothing left to
+ * expand, so it carries no hint rather than a hint repeating itself.
+ *
+ * **One function for the tray chip and the summary chip**, which is the rule the Owned and
+ * Fulfilled chips already keep two cells apart: the statement and the control that made it use
+ * one vocabulary, or `Condition: NONE` reads as a different filter from the `Not set` that is
+ * pressed in the tray.
+ */
+function conditionChip(condition: Condition): { label: string; hint?: string } {
+  return condition === CONDITION_NOT_SET
+    ? { label: CONDITION_LABEL[condition] }
+    : { label: condition, hint: CONDITION_LABEL[condition].toLowerCase() };
 }
 
 /**
@@ -426,8 +455,11 @@ function activeChips<SortKey extends string>(
     chips.push({
       // The grades as they are printed, which is what the chips carry — the spelled-out words are
       // the tooltip's, and `Condition: Near Mint, Lightly Played` would be twice the width of the
-      // control that made it.
-      label: `Condition: ${CONDITIONS.filter((c) => conditions.includes(c)).join(", ")}`,
+      // control that made it. The one grade nothing prints is spelled out anyway; `conditionChip`
+      // carries the whole of that difference, so this row and the tray cannot come to disagree.
+      label: `Condition: ${CONDITIONS.filter((c) => conditions.includes(c))
+        .map((c) => conditionChip(c).label)
+        .join(", ")}`,
       remove: () => conditions.forEach((c) => toggleCondition(c)),
     });
   }
@@ -1459,18 +1491,19 @@ export function FilterBar<SortKey extends string>({
           // answer to say "Filters".
           title="Filters"
           closeLabel="Close filters"
-          // **Full width, and the height is the shell's existing clamp rather than a new prop.**
-          // 9a is right that `width` is this shell's only geometry prop — and the height rule it
-          // would be reaching for is already written: the panel's `max-h-full` against the
-          // scrim's `grid-rows-[minmax(0,1fr)]`, the pair `Dialog.tsx` spells out and
-          // `src/CLAUDE.md` names, which bounds the panel to the scrim's content box and hands
-          // the overflow to the body's own scroller below. On a 696px phone viewport that is
-          // 664px of panel over a tray measured at 922, so the clamp *is* the full height here
-          // and a `h-full` would buy nothing but a half-empty sheet on a surface with three
-          // cells in it. A prop or a panel class would therefore be a second answer to a
+          // **Full width, and the height is the shell's existing clamp rather than a class of its
+          // own.** `size` carries a height as readily as a width since it was renamed from
+          // `width` on 2026-09-03 — so this sheet *could* name one, and deliberately does not:
+          // the height rule it would be reaching for is already written as the panel's
+          // `max-h-full` against the scrim's `grid-rows-[minmax(0,1fr)]`, the pair `Dialog.tsx`
+          // spells out and `src/CLAUDE.md` names, which bounds the panel to the scrim's content
+          // box and hands the overflow to the body's own scroller below. On a 696px phone
+          // viewport that is 664px of panel over a tray measured at 922, so the clamp *is* the
+          // full height here and a `h-full` would buy nothing but a half-empty sheet on a surface
+          // with three cells in it. A height class here would therefore be a second answer to a
           // question this shell has already settled, on a file every dialog in the app is drawn
           // by — which is exactly what folding the last three copies in on 2026-08-16 was for.
-          width="w-full"
+          size="w-full"
           onDismiss={() => setTrayOpen(false)}
           onClose={() => setTrayOpen(false)}
         >
@@ -1788,29 +1821,48 @@ function FilterTray<SortKey extends string>({
     ) : null,
 
     /* The grades as they are printed on every listing the cards came from. Spelled out in the
-       accessible name and the tooltip, because `DMG` is vocabulary — and five spelled-out grades
+       accessible name and the tooltip, because `DMG` is vocabulary — and six spelled-out grades
        are 400px of chrome, which is what put this cell in the tray rather than on the bar.
+       `conditionChip` is what excuses the sixth from that treatment: `NONE` is printed on no
+       listing, so it is drawn as its word and has no abbreviation left to expand.
 
-       Three to a line below 640 and one line above it, the rarity cell's arrangement for its
-       reason: five chips do not fit one column of a narrow tray, and a chip that cannot shrink
-       hangs out of it. */
+       Three to a line below 640 and a flow above it, the rarity cell's arrangement for its
+       reason: six chips do not fit one column of a narrow tray, and a chip that cannot shrink
+       hangs out of it. Two things the sixth chip changed, and both are `src/CLAUDE.md`'s
+       narrowest-surface rule rather than taste. **The flow above 640 wraps**, because the tray's
+       cell is *narrowest* in its three-column band — a third of the bar at 900 is less than half
+       of it at 640 — and six `flex-1` chips that cannot shrink below `DMG`'s own min-content
+       overhang that cell, which in a `overflow-y-auto` page section is a horizontal scrollbar
+       across the whole view. **And `Not set` takes the whole first row below 640**, where a third
+       of a 206px panel is narrower than the two words are: a flex item cannot shrink below its
+       min-content either, so the alternative is a label wrapping to two lines inside a fixed
+       `h-9` box. `whitespace-nowrap` is what keeps it one line wherever it lands — it is the one
+       label in this row with a space in it, so it is the only one that could break. jsdom applies
+       no container query and lays nothing out, so none of this can go red in the suite. */
     condition: search.toggleCondition ? (
       <TrayField key="condition" label="Condition">
         <div
           role="group"
           aria-label="Condition"
-          className="grid grid-cols-3 gap-1.5 @min-[640px]/fb:flex"
+          className="grid grid-cols-3 gap-1.5 @min-[640px]/fb:flex @min-[640px]/fb:flex-wrap"
         >
-          {CONDITIONS.map((c) => (
-            <ToggleChip
-              key={c}
-              label={c}
-              hint={CONDITION_LABEL[c].toLowerCase()}
-              pressed={search.conditions?.includes(c) ?? false}
-              onClick={() => search.toggleCondition?.(c)}
-              className="@min-[640px]/fb:flex-1"
-            />
-          ))}
+          {CONDITIONS.map((c) => {
+            const { label, hint } = conditionChip(c);
+            return (
+              <ToggleChip
+                key={c}
+                label={label}
+                hint={hint}
+                pressed={search.conditions?.includes(c) ?? false}
+                onClick={() => search.toggleCondition?.(c)}
+                className={cn(
+                  "@min-[640px]/fb:flex-1",
+                  c === CONDITION_NOT_SET &&
+                    "col-span-3 whitespace-nowrap @min-[640px]/fb:col-span-1",
+                )}
+              />
+            );
+          })}
         </div>
       </TrayField>
     ) : null,

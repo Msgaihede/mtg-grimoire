@@ -38,12 +38,12 @@ const outcome = () => screen.getByText(/leaves? the deck and the piles stay/);
 describe("ClearDeck", () => {
   /**
    * **The list is named rather than implied.** "Clear the deck?" over a deck with a plan and a
-   * live list is exactly the ambiguity this question exists to close, so the word appears in the
+   * actual list is exactly the ambiguity this question exists to close, so the word appears in the
    * sentence *and* in the name the group is addressed by — the second being what a screen reader
    * hears when the caret lands in the box.
    */
   it.each<[DeckVariant, string]>([
-    ["live", "live list"],
+    ["live", "actual list"],
     ["theory", "theory list"],
   ])("asks about the %s list by name", (variant, list) => {
     clear({ variant });
@@ -57,7 +57,7 @@ describe("ClearDeck", () => {
    * are filed rather than destroyed — and saying where they land is the reassuring half of a
    * destructive sentence.
    */
-  it("promises the live list's copies to Recently removed", () => {
+  it("promises the actual list's copies to Recently removed", () => {
     clear({ variant: "live" });
 
     expect(outcome()).toHaveTextContent(
@@ -180,6 +180,6 @@ describe("ClearDeck", () => {
   it("puts the caret on the question rather than on either answer", () => {
     clear();
 
-    expect(document.activeElement).toBe(screen.getByRole("group", { name: "Clear the live list" }));
+    expect(document.activeElement).toBe(screen.getByRole("group", { name: "Clear the actual list" }));
   });
 });

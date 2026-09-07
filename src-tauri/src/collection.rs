@@ -22,13 +22,46 @@ use std::collections::BTreeMap;
 #[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
-/// The NA condition scale, in descending order. The EU scale (`M/NM/EX/GD/LP/PL/PO`) is
-/// normalised into this one at the edge — see `src/lib/conditions.ts` — and the string it
-/// arrived as is kept in `condition_original`.
-pub const CONDITIONS: [&str; 5] = ["NM", "LP", "MP", "HP", "DMG"];
+/// The NA condition scale, in descending order, with the **not-set sentinel in front of it**.
+/// The EU scale (`M/NM/EX/GD/LP/PL/PO`) is normalised into this one at the edge — see
+/// `src/lib/conditions.ts` — and the string it arrived as is kept in `condition_original`.
+///
+/// `NONE` leads the list because it is the *default* rather than a grade, and every dropdown
+/// built from this array opens on its first entry. It is deliberately not where it **sorts**:
+/// [`COLLECTION_SORTS`]' `finish` key ranks it last, after `DMG`, so the scale stays a scale and
+/// the ungraded pile lands at the end of it. A list that is neither alphabetical nor its own sort
+/// order is worth the sentence it costs to say why.
+pub const CONDITIONS: [&str; 6] = ["NONE", "NM", "LP", "MP", "HP", "DMG"];
 
-/// What a card is assumed to be when nobody says otherwise.
-pub const DEFAULT_CONDITION: &str = "NM";
+/// What a write records when nobody says otherwise — and it is no longer a guess.
+///
+/// This was `NM` until 2026-09-07, which meant an add stating no grade recorded the **best**
+/// grade on the scale: the app answering a question about a physical card on the reader's behalf,
+/// in their favour, with nothing on the row to say that it had. `NONE` is the answer that says
+/// nothing, so an unmarked card is no longer *assumed* to be anything.
+///
+/// **Existing rows keep the grade they have.** A database full of `NM` stays full of `NM`,
+/// because nothing can tell which of those the reader meant and which the app chose for them —
+/// the v35 rung in `schema.rs` rebuilds the table for the widened `CHECK` and touches no value.
+pub const DEFAULT_CONDITION: &str = "NONE";
+
+/// The stored grade that means *the reader did not say*, for the code that means the sentinel
+/// rather than the default.
+///
+/// The same string as [`DEFAULT_CONDITION`] and not the same idea. That one is what a **write**
+/// lands on when its caller is silent; this one is what a **read** has to recognise on the way
+/// back out — the export mapping turns it into an empty Condition cell, which is what lets a
+/// not-set copy round-trip through a file format that has no word for one. Two constants because
+/// the two come apart the day a default stops being the sentinel, and a bare `"NONE"` spelled at
+/// a call site would belong to neither.
+///
+/// **A sentinel and not NULL**, which is the question this column keeps being asked.
+/// `condition` is the third term of `idx_collection_grain`, and SQLite treats two NULLs in a
+/// unique index as distinct — so a nullable column would make every ungraded add a brand-new row
+/// instead of folding onto the one already there, and a reader pressing `+` four times would end
+/// with four rows of one copy. A string folds correctly and needs no special case in
+/// [`fold_entry`], in `reconcile` or in the sync.
+pub const CONDITION_NOT_SET: &str = "NONE";
 
 /// What an *adjustment* says when the row it names is not there — an edit that could not be
 /// applied, unlike a delete that finds nothing (see [`remove_entry`]).
@@ -286,6 +319,14 @@ fn valid_tags(tags: &str) -> Result<(), String> {
         })
 }
 
+/// The grade a write is about to store, refused in words unless it is one of [`CONDITIONS`].
+///
+/// **An absent one is [`DEFAULT_CONDITION`], which since 2026-09-07 is the sentinel rather than a
+/// grade** — so what comes back out of here is no longer guaranteed to be a state a physical card
+/// can be in. That is the point, and no caller minds: all three ([`add_entry_filed`],
+/// [`set_entry`] and [`update_entry`]) hand the result straight to a bound parameter, and the
+/// column's `CHECK` takes `NONE` from schema v35 on. Nothing here ranks it, prints it or compares
+/// it to another grade.
 fn valid_condition(condition: Option<&str>) -> Result<&str, String> {
     let c = condition.unwrap_or(DEFAULT_CONDITION);
     CONDITIONS.contains(&c).then_some(c).ok_or_else(|| {
@@ -346,20 +387,32 @@ fn folder_named(conn: &Connection, folder_id: Option<i64>, kinds: &[&str]) -> Re
 const READER_FOLDERS: &[&str] = &[USER_KIND];
 
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
-/// …and what a **deck import** may file into, which is the reader's drawers plus the group of
-/// the deck the same press just wrote a list into.
+/// …and what a **deck-driven write** may file into, which is the reader's drawers plus the group
+/// of the deck that same press answers for.
 ///
 /// **The one widening of the fence in the crate, and it is a widening of that fence rather than
 /// a second check.** The argument the paragraph above makes is that a request naming a `deck`
-/// folder asserts something only the app's own writes may make true — and this *is* one of those
-/// writes: `useImport`'s deck arm calls `deck_import_commit` and this command in one press, so
-/// the `deck_cards` rows and the copies backing them are written together or not at all. Filed
-/// at the root instead, the deck would read *missing* on every line the reader had just told the
-/// app they own, and every other deck could still claim the copies.
+/// folder asserts something only the app's own writes may make true — *this deck holds these
+/// copies* — so a caller passing this set has to be able to answer for the `deck_cards` row
+/// behind them. **Two callers do, and each answers in its own way:**
+///
+/// * [`commit_import`], from `useImport`'s deck arm, which calls `deck_import_commit` and this
+///   command in one press: it **wrote the list itself**, so the `deck_cards` rows and the copies
+///   backing them are written together or not at all. Filed at the root instead, the deck would
+///   read *missing* on every line the reader had just told the app they own, and every other
+///   deck could still claim the copies.
+/// * [`crate::deck_quick_add::quick_add`], the per-card menu row, which **checks that the list
+///   already says so** — [`crate::deck::plays_card`] and
+///   [`crate::collection_alloc::NOT_IN_DECK`], issue #358's invariant read from the creating
+///   side.
+///
+/// **It was called `IMPORT_FOLDERS` until 2026-09-03 and the rename came with the second
+/// caller.** A constant named after one press that a different press passes is exactly the rot
+/// this repo greps for: the next reader would have gone looking for an import.
 ///
 /// `removed` stays out. `Recently removed` is where copies go when they *leave* a deck, and a
-/// file naming it would be an import that arrives already discarded.
-const IMPORT_FOLDERS: &[&str] = &[USER_KIND, DECK_KIND];
+/// write naming it would be cardboard that arrives already discarded.
+pub(crate) const DECK_WRITE_FOLDERS: &[&str] = &[USER_KIND, DECK_KIND];
 
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
 /// `COLLECTION_FOLDER_KINDS[1]` — the one folder that stands for a deck.
@@ -392,16 +445,21 @@ pub fn add_entry(conn: &Connection, input: &EntryInput) -> Result<EntryChange, S
     add_entry_filed(conn, input, READER_FOLDERS)
 }
 
-/// [`add_entry`] with the folder fence handed in, for the one caller that files into a folder no
+/// [`add_entry`] with the folder fence handed in, for the two callers that file into a folder no
 /// reader may name themselves.
 ///
-/// **A parameter rather than a second write**, and a private one rather than a widening of the
-/// public door: [`commit_import`] passes [`IMPORT_FOLDERS`] so a deck import can file into that
-/// deck's group, and everything else in the crate — 70-odd call sites, every one of them the
-/// reader's own add — reaches this through [`add_entry`] and keeps [`READER_FOLDERS`]. The
-/// alternative was an add that landed at the root and was then *moved*, which for a printing the
-/// reader already owns is a fold into their root row followed by a move of the whole thing.
-fn add_entry_filed(
+/// **A parameter rather than a second write**, and a `pub(crate)` door rather than a widening of
+/// the public one: [`commit_import`] and [`crate::deck_quick_add::quick_add`] pass
+/// [`DECK_WRITE_FOLDERS`] so a deck-driven write can file into that deck's group, and everything
+/// else in the crate — 70-odd call sites, every one of them the reader's own add — reaches this
+/// through [`add_entry`] and keeps [`READER_FOLDERS`]. The alternative was an add that landed at
+/// the root and was then *moved*, which for a printing the reader already owns is a fold into
+/// their root row followed by a move of the whole thing.
+///
+/// **`pub(crate)` and not `pub`.** `collection_add` refuses a `deck` folder outright and must go
+/// on refusing; this door is reachable from inside the crate, where a caller can be held to
+/// answering for the `deck_cards` row behind the copies, and from nowhere else.
+pub(crate) fn add_entry_filed(
     conn: &Connection,
     input: &EntryInput,
     folders: &[&str],
@@ -700,7 +758,7 @@ pub(crate) fn commit_import(
     // each ask again per item — that is their own door and it stays theirs — but a stale folder
     // id asked about *here* is a sentence rather than a rollback, which is what the mode check
     // above is buying too.
-    folder_named(conn, folder_id, IMPORT_FOLDERS)?;
+    folder_named(conn, folder_id, DECK_WRITE_FOLDERS)?;
     let before: i64 = conn
         .query_row("SELECT count(*) FROM collection_entries", [], |r| r.get(0))
         .map_err(|e| e.to_string())?;
@@ -742,9 +800,9 @@ pub(crate) fn commit_import(
             folder_id,
         };
         if mode == "add" {
-            add_entry_filed(&tx, &input, IMPORT_FOLDERS)?;
+            add_entry_filed(&tx, &input, DECK_WRITE_FOLDERS)?;
         } else {
-            let change = set_entry(&tx, &input, IMPORT_FOLDERS)?;
+            let change = set_entry(&tx, &input, DECK_WRITE_FOLDERS)?;
             if change.quantity == 0 {
                 remove_entry(&tx, change.id)?;
                 removed += 1;
@@ -1209,7 +1267,7 @@ pub async fn collection_remove(
 /// **`folder_id` is absent for every import but one.** A file describes cards, not filing, so the
 /// collection's own import step sends nothing and its rows land at the root. The deck arm of the
 /// import dialog sends the group of the deck it just wrote a list into, so the list and the
-/// copies backing it agree the moment the dialog closes — see [`IMPORT_FOLDERS`], which is the
+/// copies backing it agree the moment the dialog closes — see [`DECK_WRITE_FOLDERS`], which is the
 /// only place in the crate that fence is wider than the reader's own drawers.
 #[cfg(not(target_family = "wasm"))]
 #[tauri::command]
@@ -1323,6 +1381,30 @@ pub struct CollectionQuery {
     /// widens the root to everything, this one narrows everything to the root — because the two
     /// surfaces mean opposite things by an absent folder. Same page control, opposite polarity.
     pub root_only: bool,
+    /// `true` leaves out the copies filed in a **locked** folder — a drawer the reader has set
+    /// aside — and in every folder inside one, because a lock inherits down the tree. Ignored
+    /// entirely when [`Self::folder_id`] names a folder, which is [`Self::root_only`]'s own rule
+    /// applied to a second field: standing in a locked folder, or in a subfolder of one, *names*
+    /// it, and a named folder is served whole.
+    ///
+    /// **Default `false`, and the default is the whole of its safety.** This is
+    /// [`Self::root_only`]'s argument verbatim, one field along: an unasked question keeps
+    /// today's answer, so a caller nobody updated cannot silently lose rows. And the callers
+    /// that must go on reading everything are not hypothetical — **the plain-text mirror and
+    /// the export sweep both page through [`list_entries`]**, and `mirror/read.rs` already says
+    /// in words that a whole-collection backup is "the one read that must never ask" the
+    /// narrowing question. An unconditional term in [`scope`] would make every backup and every
+    /// CSV export silently omit the reader's locked cards while raising nothing: no error, no
+    /// empty page, just a file on disk missing exactly the cards its reader was most careful
+    /// about. That is the worst failure available in this feature, and the default is what
+    /// forecloses it.
+    ///
+    /// Who asks: the collection page, and the deck builder's Collection Search tab — the
+    /// surface whose question is "what can I build with today", which is the one thing a set
+    /// aside drawer is not part of. Who does not: the mirror, the export sweep and the web
+    /// route's passthrough, and `a_query_that_never_asks_still_sees_a_locked_folders_copies` is
+    /// the fence around that silence.
+    pub exclude_locked: bool,
     /// Whether to leave out the copies a deck holds. Absent is [`Allocation::All`], which is
     /// what every caller written before folders existed asked for without saying so.
     pub allocation: Option<Allocation>,
@@ -1388,14 +1470,20 @@ pub struct CollectionRow {
     /// What state the copy is in — `e.condition`, straight off the entry, and always one of
     /// [`CONDITIONS`].
     ///
-    /// **Not `Option`, because the column is `TEXT NOT NULL DEFAULT 'NM'`** (`schema.rs`) and no
-    /// write in the crate can leave it unset: `valid_condition` turns an absent one into
-    /// `DEFAULT_CONDITION` before either insert, and no patch can clear it. It was `Option` for
-    /// three releases as a fence around the wire, which cost every reader of the row a branch
-    /// that could not be reached and a `null` the export layer had to decide about. The reader
-    /// who never stated a grade is not represented by a missing `condition`; they are
-    /// represented by `condition_original` being `None`, which is the column that records what a
-    /// file actually said.
+    /// **Not `Option`, because the column is `TEXT NOT NULL DEFAULT 'NONE'`** (`schema.rs`, from
+    /// the v35 rung) and no write in the crate can leave it unset: [`valid_condition`] turns an
+    /// absent one into [`DEFAULT_CONDITION`] before either insert, and no patch can clear it. It
+    /// was `Option` for three releases as a fence around the wire, which cost every reader of the
+    /// row a branch that could not be reached and a `null` the export layer had to decide about.
+    ///
+    /// **A reader who never stated a grade reads [`CONDITION_NOT_SET`] here**, and that is the
+    /// change of 2026-09-07 rather than a restatement. This paragraph used to point at
+    /// `condition_original` being `None` as the record of an unstated grade — which was always a
+    /// different question and is now not an answer at all. That column records what a *file*
+    /// said, so it is `None` for every copy added by hand, graded or not, and it was `None` on
+    /// exactly the `NM` rows the app had graded on the reader's behalf. The grade itself carries
+    /// the fact now, and a surface that draws this field has a third case to draw: the finish
+    /// alone, never `NONE` and never an em dash beside it.
     pub condition: String,
     pub quantity: i64,
     pub tradelist_quantity: i64,
@@ -1600,6 +1688,31 @@ fn scope(q: &CollectionQuery) -> crate::filters::Predicates {
                 .to_owned(),
         );
     }
+    // The copies the reader has set aside. Three things about this term are each load-bearing.
+    //
+    // **`q.folder_id.is_none()` is what makes "except inside the folder" true.** Standing in a
+    // locked folder — or in a subfolder of one — *names* it, and a named folder is served whole.
+    // That is [`CollectionQuery::root_only`]'s own rule ("ignored entirely when `folder_id`
+    // names a folder") applied to a second field, so the three-state convention above gains no
+    // fourth state and the reader can always reach what they filed.
+    //
+    // **`e.folder_id IS NULL` comes first**, for the arm above's reason: the root is where most
+    // copies are and is not a folder to look up, and a `NOT IN` over a NULL is NULL rather than
+    // true — so the root would drop out of the very list that is mostly root.
+    //
+    // **A correlated lookup and never a join**, for [`from_sql`]'s reason: the page, the count
+    // and the summary all read that one `FROM`, and widening it for a filter two of them do not
+    // use is how a header comes to describe different rows than the list below it. The statement
+    // inside is [`crate::collection_folders::LOCKED_FOLDER_IDS`], spelled once there because
+    // `deck_theory` reads it too — a second copy here would be a second place for the
+    // inheritance rule to drift — and it binds nothing.
+    if q.exclude_locked && q.folder_id.is_none() {
+        p.wheres.push(format!(
+            "(e.folder_id IS NULL
+              OR e.folder_id NOT IN ({locked}))",
+            locked = crate::collection_folders::LOCKED_FOLDER_IDS
+        ));
+    }
     // **Built here rather than in `filters.rs` because the expression is the marketplace's**, and
     // [`crate::sorting::price_expr`] is the one place that mapping is written — the same
     // expression this list reports as `unit_price` and the `price` sort reads, so a copy inside
@@ -1677,7 +1790,12 @@ fn push_in_list(
 /// expensive card"; it has no header and stays reachable from the select.
 ///
 /// `finish` ranks the condition rather than spelling it: `DMG` before `LP` is alphabetical
-/// order, not grade order.
+/// order, not grade order. **`NONE` is spelled out at 5 even though the `ELSE 5` beside it would
+/// catch it anyway** — it is a stored value now rather than one that cannot happen, and an `ELSE`
+/// that happens to be right is not a rule; the next grade appended to [`CONDITIONS`] would land on
+/// it silently. It ranks **last**, because a pile nobody has graded belongs at the end of a scale
+/// it is not on. The dropdowns put it **first**, where it is the default rather than a grade, and
+/// the two orders disagreeing on purpose is why both are written down.
 ///
 /// `value` and `price` are not here — they are the two keys whose SQL depends on the reader's
 /// marketplace, so they live in [`COLLECTION_PRICE_SORTS`] and are appended by
@@ -1696,9 +1814,11 @@ const COLLECTION_SORTS: &[crate::sorting::SortColumn] = &[
     crate::sorting::SortColumn {
         key: "finish",
         asc: "e.finish ASC, CASE e.condition WHEN 'NM' THEN 0 WHEN 'LP' THEN 1 \
-              WHEN 'MP' THEN 2 WHEN 'HP' THEN 3 WHEN 'DMG' THEN 4 ELSE 5 END ASC",
+              WHEN 'MP' THEN 2 WHEN 'HP' THEN 3 WHEN 'DMG' THEN 4 WHEN 'NONE' THEN 5 \
+              ELSE 5 END ASC",
         desc: "e.finish DESC, CASE e.condition WHEN 'NM' THEN 0 WHEN 'LP' THEN 1 \
-               WHEN 'MP' THEN 2 WHEN 'HP' THEN 3 WHEN 'DMG' THEN 4 ELSE 5 END DESC",
+               WHEN 'MP' THEN 2 WHEN 'HP' THEN 3 WHEN 'DMG' THEN 4 WHEN 'NONE' THEN 5 \
+               ELSE 5 END DESC",
     },
     crate::sorting::SortColumn {
         key: "quantity",
@@ -2656,6 +2776,206 @@ mod tests {
         assert!(filed.root_only);
     }
 
+    /// Set a folder aside, straight into the column. `collection_folders::set_folder_locked` is
+    /// the reader's press and that module's to test; these tests want a folder that **is**
+    /// locked rather than the press that locks it — [`filed_in`]'s reason, one table over.
+    ///
+    /// The affected count is asserted rather than discarded, because an `UPDATE` naming an id
+    /// that is not there succeeds and changes nothing, which would make every assertion below
+    /// it a statement about an unlocked folder.
+    fn lock(conn: &Connection, id: i64) {
+        assert_eq!(
+            conn.execute(
+                "UPDATE collection_folders SET locked = 1 WHERE id = ?1",
+                params![id],
+            )
+            .unwrap(),
+            1,
+            "the folder the test means to set aside is there"
+        );
+    }
+
+    /// One folder **inside** another, which [`folder`] cannot make — it builds root siblings, and
+    /// the whole of the inheritance rule needs a child to inherit.
+    fn nested(conn: &Connection, parent: i64, name: &str) -> i64 {
+        conn.query_row(
+            "INSERT INTO collection_folders
+                (parent_id, name, kind, deck_id, sort_order, created_at, updated_at)
+             VALUES (?1, ?2, 'user', NULL, 0, unixepoch(), unixepoch())
+             RETURNING id",
+            params![parent, name],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// **A locked folder's copies leave the flattened list, and the folder inside it goes with
+    /// them.** The flag is stored on the folder the reader pressed Lock on and the *answer* is
+    /// computed over ancestry, so a subfolder is locked while carrying no flag of its own —
+    /// which is the whole reason the term is a recursive CTE rather than an
+    /// `IN (SELECT id FROM collection_folders WHERE locked <> 0)`.
+    ///
+    /// **The summary is asserted beside the page**, which is [`scope`]'s reason for existing:
+    /// the term is pushed there so the page, the count beside it and the header narrow together,
+    /// and a predicate written into [`list_entries`] instead would pass here on the items alone
+    /// while leaving a header counting rows the wall does not draw.
+    ///
+    /// Every row is the same printing at the same finish, condition and language, so they are
+    /// four rows only because `coalesce(folder_id, 0)` is `COLLECTION_GRAIN`'s eleventh term.
+    #[test]
+    fn a_locked_folders_copies_drop_out_of_a_flattened_list() {
+        let conn = seeded();
+        let binder = folder(&conn, "user", "Binder");
+        let case = folder(&conn, "user", "Display case");
+        let shelf = nested(&conn, case, "Top shelf");
+        lock(&conn, case);
+        let at_root = filed_in(&conn, "bolt-lea", None, 2);
+        let in_binder = filed_in(&conn, "bolt-lea", Some(binder), 3);
+        filed_in(&conn, "bolt-lea", Some(case), 4);
+        filed_in(&conn, "bolt-lea", Some(shelf), 5);
+
+        let page = list_entries(
+            &conn,
+            &CollectionQuery {
+                exclude_locked: true,
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            page.items.iter().map(|r| r.id).collect::<Vec<_>>(),
+            vec![at_root, in_binder],
+            "the root and the unlocked binder — and neither the drawer nor the shelf in it"
+        );
+        assert_eq!(
+            page.total, 2,
+            "the caption narrows with the list, not just the items"
+        );
+
+        let header = summarise(
+            &conn,
+            &CollectionQuery {
+                exclude_locked: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            (header.entries, header.total_cards),
+            (2, 5),
+            "and the summary describes the same rows the page draws"
+        );
+    }
+
+    /// **Standing in a locked folder still lists its copies**, which is the half of this feature
+    /// that keeps a lock from being a hiding place: the app stops *offering* what the reader set
+    /// aside without ever stopping them *reaching* it.
+    ///
+    /// The mechanism is `q.folder_id.is_none()` on the term — `root_only`'s own "ignored
+    /// entirely when `folder_id` names a folder" applied to a second field — so an
+    /// `excludeLocked` still set from the render before cannot turn a folder's page into the
+    /// empty intersection: a wall that draws nothing, with no error anywhere.
+    ///
+    /// **The subfolder is the second case and the sharper one.** That folder carries no flag of
+    /// its own and is locked only by ancestry, so a guard that asked "is the *named* folder
+    /// locked?" instead of not asking at all would serve the drawer and refuse the shelf inside
+    /// it — the one place the two readings of the rule come apart.
+    #[test]
+    fn standing_in_a_locked_folder_still_lists_its_copies() {
+        let conn = seeded();
+        let case = folder(&conn, "user", "Display case");
+        let shelf = nested(&conn, case, "Top shelf");
+        lock(&conn, case);
+        filed_in(&conn, "bolt-lea", None, 2);
+        let in_case = filed_in(&conn, "bolt-lea", Some(case), 3);
+        let on_shelf = filed_in(&conn, "bolt-lea", Some(shelf), 4);
+
+        let standing_in = |id: i64| -> CollectionPage {
+            list_entries(
+                &conn,
+                &CollectionQuery {
+                    folder_id: Some(id),
+                    exclude_locked: true,
+                    limit: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+
+        let drawer = standing_in(case);
+        assert_eq!(
+            drawer.items.iter().map(|r| r.id).collect::<Vec<_>>(),
+            vec![in_case],
+            "the folder the reader named is served whole, lock and all"
+        );
+        assert_eq!(drawer.total, 1);
+
+        let inside = standing_in(shelf);
+        assert_eq!(
+            inside.items.iter().map(|r| r.id).collect::<Vec<_>>(),
+            vec![on_shelf],
+            "and so is a subfolder, which is locked by its parent and by nothing of its own"
+        );
+        assert_eq!(inside.total, 1);
+    }
+
+    /// **The most important assertion in this feature, and it is about a question nobody asks.**
+    ///
+    /// The plain-text mirror's `Source::WholeCollection` and the export's paged sweep both fill
+    /// this struct with `..Default::default()` and will never mention the new field, and
+    /// `mirror/read.rs` already says in words that a whole-collection backup is "the one read
+    /// that must never ask" the narrowing question. A default of `true`, or a term in [`scope`]
+    /// that had been "tidied" into an unconditional one, would put a backup on disk holding
+    /// everything except the cards the reader was most careful about — no error, no empty page,
+    /// nothing on any screen to notice.
+    ///
+    /// So the assertion is today's behaviour verbatim, from three directions: the struct's own
+    /// default, the wire's, and the rows an unasked query still answers.
+    #[test]
+    fn a_query_that_never_asks_still_sees_a_locked_folders_copies() {
+        let conn = seeded();
+        let case = folder(&conn, "user", "Display case");
+        let shelf = nested(&conn, case, "Top shelf");
+        lock(&conn, case);
+        let at_root = filed_in(&conn, "bolt-lea", None, 2);
+        let in_case = filed_in(&conn, "bolt-lea", Some(case), 3);
+        let on_shelf = filed_in(&conn, "bolt-lea", Some(shelf), 4);
+
+        let q = CollectionQuery {
+            limit: 50,
+            ..Default::default()
+        };
+        assert!(!q.exclude_locked, "the struct's own default is off");
+        let page = list_entries(&conn, &q).unwrap();
+        assert_eq!(
+            page.items.iter().map(|r| r.id).collect::<Vec<_>>(),
+            vec![at_root, in_case, on_shelf],
+            "an unasked question keeps every copy the reader owns, set aside or not"
+        );
+        assert_eq!(page.total, 3, "and the count is over the same scope");
+
+        let header = summarise(&conn, &CollectionQuery::default()).unwrap();
+        assert_eq!(
+            (header.entries, header.total_cards),
+            (3, 9),
+            "the backup's own header counts them too"
+        );
+
+        // The wire's spelling and its default, which is where this is really decided: the web
+        // route's passthrough hands `scope` whatever JSON arrived, so an omitted field has to
+        // parse to `false` rather than to a narrowing or an error.
+        let bare: CollectionQuery = serde_json::from_str("{}").unwrap();
+        assert!(
+            !bare.exclude_locked,
+            "an omitted `excludeLocked` reads the whole collection — which is what the mirror \
+             and the export sweep send, and what they must go on getting"
+        );
+        let asked: CollectionQuery = serde_json::from_str(r#"{"excludeLocked":true}"#).unwrap();
+        assert!(asked.exclude_locked, "camelCase on the way in, too");
+    }
+
     /// The default query, priced somewhere other than the default.
     fn on(marketplace: crate::sorting::Marketplace) -> CollectionQuery {
         CollectionQuery {
@@ -2781,6 +3101,92 @@ mod tests {
         )
         .unwrap_err();
         assert!(bad_condition.contains("NM"), "{bad_condition}");
+    }
+
+    /// **An add that states no grade records that nobody stated one**, which reverses the rule
+    /// this table shipped with. `condition` defaulted to `NM` until 2026-09-07, so every quick
+    /// add and every silent import line asserted the *best* grade on the scale on the reader's
+    /// behalf — and left nothing on the row to say the app had answered rather than the reader.
+    ///
+    /// The stored value is compared against the **literal** `"NONE"` and never against
+    /// [`DEFAULT_CONDITION`]: an assertion that reads its own constant passes whatever that
+    /// constant happens to say, `"NM"` included, which is precisely the value this test exists
+    /// to rule out. The one constant-to-constant line is a different claim — that the sentinel a
+    /// *read* recognises is the value a silent *write* leaves behind, which is the whole reason
+    /// [`CONDITION_NOT_SET`] may be spelled at a call site and `"NONE"` may not.
+    #[test]
+    fn an_add_that_states_no_condition_records_not_set() {
+        let conn = seeded();
+        let change = add_entry(&conn, &input("bolt-lea", "nonfoil", 3)).unwrap();
+
+        let condition: String = conn
+            .query_row(
+                "SELECT condition FROM collection_entries WHERE id = ?1",
+                [change.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(condition, "NONE");
+        assert_eq!(
+            CONDITION_NOT_SET, condition,
+            "the sentinel a read recognises is the value a silent write stores"
+        );
+    }
+
+    /// [`valid_condition`] is the fence all three writes share, and the sentinel has to pass it:
+    /// `NONE` is a value the column stores from schema v35 on, not a spelling to refuse.
+    ///
+    /// The second line is the one worth having. `valid_condition(None)` is what an add with no
+    /// grade goes through, and what it answers is bound straight into the insert — so this is
+    /// the same fact as the test above, read one layer down where a fixture cannot stand in
+    /// for it.
+    #[test]
+    fn the_not_set_sentinel_passes_the_condition_fence() {
+        assert_eq!(valid_condition(Some(CONDITION_NOT_SET)), Ok("NONE"));
+        assert_eq!(valid_condition(None), Ok("NONE"));
+        assert!(
+            valid_condition(Some("none")).is_err(),
+            "exact, like every other grade: `src/lib/conditions.ts` is where a reader's spelling \
+             becomes a storage code, and this fence is what makes that the only door"
+        );
+    }
+
+    /// **A copy the reader has not graded is not a Near Mint copy**, and the grain is where that
+    /// stops being a matter of opinion: `condition` is its third term, so the two rows can no
+    /// more merge than an `LP` and an `HP` one could.
+    ///
+    /// The second half is the half that argues for a sentinel string rather than a NULL. SQLite
+    /// treats two NULLs in a unique index as **distinct**, so a nullable column would have made
+    /// every ungraded add a brand-new row — four presses of `+`, four rows of one card. `NONE`
+    /// folds like any other value, which is what the last two assertions are for.
+    #[test]
+    fn a_not_set_row_and_a_near_mint_row_of_one_printing_are_two_rows() {
+        let conn = seeded();
+        let ungraded = add_entry(&conn, &input("bolt-lea", "nonfoil", 1)).unwrap();
+        add_entry(
+            &conn,
+            &EntryInput {
+                condition: Some("NM".into()),
+                ..input("bolt-lea", "nonfoil", 1)
+            },
+        )
+        .unwrap();
+
+        let rows: i64 = conn
+            .query_row("SELECT count(*) FROM collection_entries", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            rows, 2,
+            "the sentinel is a grain term like every other grade"
+        );
+
+        let again = add_entry(&conn, &input("bolt-lea", "nonfoil", 1)).unwrap();
+        assert_eq!(again.id, ungraded.id, "a second ungraded add folds");
+        assert_eq!(again.quantity, 2);
+        let rows: i64 = conn
+            .query_row("SELECT count(*) FROM collection_entries", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 2);
     }
 
     /// An id with no card behind it is a bug in the caller, not a card nobody has heard
@@ -3196,7 +3602,7 @@ mod tests {
         let input: EntryInput =
             serde_json::from_str(r#"{"cardId":"bolt-lea","finish":"foil","quantity":2}"#).unwrap();
         assert_eq!(input.card_id, "bolt-lea");
-        assert_eq!(input.condition, None, "absent means the default, NM");
+        assert_eq!(input.condition, None, "absent means the default, NONE");
         assert!(!input.altered && !input.signed && !input.proxy && !input.misprint);
 
         let conn = seeded();
@@ -3564,6 +3970,49 @@ mod tests {
         assert_eq!(s.unpriced, 2);
     }
 
+    /// **The ungraded pile sorts to the end of the scale, and the dropdowns open on it — the two
+    /// orders disagree on purpose.** [`CONDITIONS`] leads with `NONE` because it is the default a
+    /// `<select>` opens on; this sort ends with it because a card nobody has graded is not the
+    /// worst-conditioned card in the binder, it is a card that is not on the scale at all.
+    ///
+    /// The rows are added worst-first, so a sort that did nothing would fail rather than pass by
+    /// accident on insertion order. And the assertion is the whole list rather than `NONE`'s
+    /// position alone: the `CASE` is one expression, and a rung mis-numbered anywhere in it
+    /// reorders two grades a reader *did* state.
+    #[test]
+    fn the_finish_sort_puts_the_ungraded_pile_after_dmg() {
+        let conn = seeded();
+        for c in ["DMG", "NONE", "HP", "MP", "LP", "NM"] {
+            add_entry(
+                &conn,
+                &EntryInput {
+                    condition: Some(c.to_owned()),
+                    ..input("bolt-lea", "nonfoil", 1)
+                },
+            )
+            .unwrap();
+        }
+
+        let graded = |dir: &str| -> Vec<String> {
+            list_entries(
+                &conn,
+                &CollectionQuery {
+                    sort: Some(vec![term("finish", dir)]),
+                    limit: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|r| r.condition)
+            .collect()
+        };
+
+        assert_eq!(graded("asc"), ["NM", "LP", "MP", "HP", "DMG", "NONE"]);
+        assert_eq!(graded("desc"), ["NONE", "DMG", "HP", "MP", "LP", "NM"]);
+    }
+
     /// Collector numbers are TEXT and ~9% of them are not numeric. A plain string sort puts
     /// `100` before `2`; this is the sort a printed binder is in.
     #[test]
@@ -3798,7 +4247,20 @@ mod tests {
     #[test]
     fn an_edit_onto_a_taken_grain_merges_instead_of_refusing() {
         let conn = seeded();
-        let a = add_entry(&conn, &input("bolt-lea", "nonfoil", 2)).unwrap();
+        // **Stated, and it has to be.** This read `add_entry(&input(…))` and patched the other
+        // row to `"NM"`, which worked only because `"NM"` was what an *unstated* grade became —
+        // an assertion resting on `DEFAULT_CONDITION` without ever naming it. Schema v35 moved
+        // that default to `CONDITION_NOT_SET`, the patch stopped landing on the row it was aimed
+        // at, and the merge this test is about simply did not happen. Neither grade here is the
+        // default, so neither may arrive by way of one.
+        let a = add_entry(
+            &conn,
+            &EntryInput {
+                condition: Some("NM".into()),
+                ..input("bolt-lea", "nonfoil", 2)
+            },
+        )
+        .unwrap();
         let b = add_entry(
             &conn,
             &EntryInput {
@@ -4903,7 +5365,7 @@ mod tests {
     /// **The widened fence is widened by exactly one kind**, and the two it still refuses are
     /// refused before the transaction opens.
     ///
-    /// `IMPORT_FOLDERS` is the only place in the crate where a `deck` folder may be *named* by a
+    /// `DECK_WRITE_FOLDERS` is the only place in the crate where a `deck` folder may be *named* by a
     /// caller, so the pair of refusals is what says it is a widening rather than a hole: an id
     /// nothing answers to is still `FOLDER_GONE`, and `Recently removed` is still
     /// `FOLDER_NOT_YOURS` — a file naming it would be an import that arrives already discarded.

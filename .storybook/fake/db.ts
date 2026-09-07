@@ -6,8 +6,10 @@
  * DTOs in `src/lib/ipc.ts` and answers three different questions: on `CardSummary` it is
  * every copy of one *printing* and finish-blind; on `WishRow` it is the copies filling one
  * *wish* and finish-aware; on `DeckCard` it is what this deck's **own group** physically
- * holds — oracle-grained, finish-blind, condition-blind, and attributed neither to a category
- * the user has switched off nor to the `theory` list, whatever the category is called. A fixture that
+ * holds — printing-and-finish-grained, condition-blind, and attributed neither to a category
+ * the user has switched off nor to the `theory` list, whatever the category is called. Since
+ * 2026-09-07 that is the same grain `deck_pull_plan` reads its candidates at, so a deck's
+ * missing count and its Pull dialog finally agree. A fixture that
  * stored DTOs would hard-code all three, they would agree, and every story built on it would
  * teach a reader a model the app does not have. Derived from rows they come out right
  * without anyone deciding that they should.
@@ -100,13 +102,15 @@ import { SPECS } from "@/features/decks/validation/fixtures";
 // and a second hand-typed list here would let the workbench and the window disagree about which
 // four exist. Under Storybook this specifier is aliased to `.storybook/fake/images.ts`, which
 // re-exports it from the real module unchanged — so both programs read the same tuple.
-import { IMAGE_VARIANTS } from "@/lib/images";
+import { IMAGE_VARIANTS, type ImageVariant } from "@/lib/images";
 import type {
   BackupZip,
+  BracketCardRow,
   CardDetail,
   CacheCleared,
   CardFace,
   CardFilters,
+  CardHoldings,
   CardSummary,
   CardTags,
   CategoryKind,
@@ -124,18 +128,28 @@ import type {
   DeckAuditEntry,
   DeckAuditKind,
   ErrorEntry,
+  DeckBracketRead,
   DeckCard,
   DeckCategory,
   DeckCombo,
   DeckCoverKind,
+  DeckPipCosts,
   DeckFinish,
   DeckFolder,
   DeckGame,
   DeckInput,
   DeckPatch,
+  DeckPullCandidate,
+  DeckPullOutcome,
+  DeckPullPick,
+  DeckPullRow,
+  DeckQuickAddOutcome,
+  DeckQuickAddWish,
   DeckRow,
+  DeckTokenRow,
+  DeckTokenState,
   DecksCleared,
-  DeckTag,
+  DeckLabel,
   DeckVariant,
   DeckViewState,
   EntryChange,
@@ -183,17 +197,23 @@ import type {
   TagNamespace,
   TagRef,
   TagStatus,
-  GlobalTag,
+  GlobalLabel,
   TheoryDiffRow,
+  TokenSource,
   TheorySlot,
   TransferImportMode,
   UpdateAsset,
   UpdateStatus,
   WishInput,
+  WishOptimizeApplyItem,
+  WishOptimizeMove,
+  WishOptimizeResult,
   WishRow,
   WishlistFolder,
   WishlistFolderSummary,
   WishlistImportItem,
+  WishlistOptimizeOutcome,
+  WishlistOptimizePlan,
   WishlistQuery,
   WishlistSortKey,
 } from "@/lib/ipc";
@@ -224,7 +244,22 @@ export interface FakeEntry {
   id: number;
   cardId: string;
   finish: "nonfoil" | "foil" | "etched";
-  condition: "NM" | "LP" | "MP" | "HP" | "DMG";
+  /**
+   * The grade, or **`NONE` for nobody said** — schema v35's sixth value, and the column's
+   * `DEFAULT` since it landed. Spelled in the CHECK's own order.
+   *
+   * **A sentinel string rather than a NULL**, and the reason is `idx_collection_grain`:
+   * `condition` is that unique index's third term and SQLite counts two NULLs as distinct in
+   * one, so a nullable column would make every ungraded add a brand-new row instead of folding
+   * onto the one already there — a reader pressing `+` four times would end with four rows of
+   * one copy. A sentinel folds like any other value and costs {@link collectionGrain}, the
+   * reconcile and the sync no special case at all.
+   *
+   * **Existing rows keep the grade they have.** The v35 rebuild changes the CHECK and the
+   * DEFAULT and touches no value, because nobody can tell which `NM` the reader meant and
+   * which the app chose for them — so a seeded world's explicit grades are as real as they were.
+   */
+  condition: "NONE" | "NM" | "LP" | "MP" | "HP" | "DMG";
   quantity: number;
   tradelistQuantity: number;
   /** Denormalised from `cards` at write time, and the identity a row keeps when its
@@ -368,6 +403,25 @@ export interface FakeCollectionFolder {
    *  pair, so the two can never be read apart. */
   deckId: number | null;
   sortOrder: number;
+  /**
+   * User schema v33's column — whether the reader has **set this drawer aside**.
+   *
+   * `INTEGER NOT NULL DEFAULT 0` in the crate and a `bool` here, `CollectionFolder.locked`'s
+   * own split: a column this fake *interprets* is a boolean, where the ones it hands back to a
+   * probe stay numbers. Every non-zero is locked, which is the only reading of a hand-edited
+   * `2` that is not a refusal.
+   *
+   * **Stored on the folder the reader pressed Lock on, and computed over ancestry** — a
+   * folder inside a locked folder is locked, and nothing writes that fact down twice. Storing
+   * the inherited copy would be a second copy of what the parent already holds, and the two
+   * disagree the first time a folder is moved. {@link collectionFolderLocked} is the walk, and
+   * every reader of the *effective* lock goes through it rather than reading this flag.
+   *
+   * Required rather than {@link FakeDeck.gameKey}'s optional-with-a-default, though the column
+   * has one: this flag decides whether a folder's copies are **offered**, so a fixture that
+   * says nothing about it is a fixture whose author has not decided.
+   */
+  locked: boolean;
   /** User schema v29's column — see {@link FakeDeckFolder.needsReview}. */
   needsReview?: string | null;
 }
@@ -409,6 +463,21 @@ export interface FakeDeck {
    *  can set and never see is a switch nothing can draw. */
   theoryEnabled: boolean;
   /**
+   * `decks.theory_mark_exact` and `decks.theory_mark_name` (schema v38): which of the theory
+   * mark's two tiers this deck draws — green for a live row that is the printing the plan
+   * named, blue for the same card in a printing it did not.
+   *
+   * **Optional here and `NOT NULL DEFAULT 1` in the crate**, which is {@link separateXGroup}'s
+   * arrangement three fields down and made for its reason: a seed written before this column
+   * existed must go on behaving as it always did, so {@link toDeckRow} coalesces to `true`
+   * rather than the type demanding every fixture be rewritten. **`true` and not `false`** —
+   * this is the one column pair on this record whose default is *on*, because the migration's
+   * whole argument is that every deck that already exists draws both marks from the first
+   * launch, with no backfill and no group of older decks behaving differently for ever.
+   */
+  theoryMarkExact?: boolean;
+  theoryMarkName?: boolean;
+  /**
    * What the reader was last looking at in this deck's editor: which tab, grouped how, sorted
    * how. Written by {@link writeHandlers.deck_set_view_state} and by nothing else, so that
    * opening a deck again puts them back where they left it.
@@ -445,6 +514,21 @@ export interface FakeDeck {
    * the app would have to think about.
    */
   separateXGroup?: boolean;
+  /**
+   * `decks.tokens_open` (schema v37): whether the editor's **Tokens & emblems** area is
+   * expanded.
+   *
+   * **Optional for {@link separateXGroup}'s reason, and this is the fifth column on that
+   * footing** — `NOT NULL DEFAULT 0`, so a seed that says nothing is a deck whose area is
+   * collapsed rather than a deck missing an answer, and {@link toDeckRow} resolves the absence.
+   *
+   * A **reading** preference like `separateXGroup` beside it, and it rides the ordinary
+   * `deck_update` for the same reason rather than `deck_set_view_state`: the three `last*`
+   * columns are written on every press and deliberately move neither `updated_at` nor the
+   * history, while a disclosure a reader opens once and leaves open is a handful of audited
+   * writes over a deck's whole life.
+   */
+  tokensOpen?: boolean;
   /**
    * `decks.default_category_id` (schema v16): which of this deck's categories an add that names
    * no pile lands in, and `AUTO_CATEGORY` (`0`) for "by what the card does".
@@ -487,7 +571,7 @@ export interface FakeDeck {
  * notion of depth and `deck_folder_list` takes no deck id — a folder belongs to no deck, it
  * files them.
  *
- * **No grain and no unique index**, deliberately mirroring the DDL: unlike a category or a tag,
+ * **No grain and no unique index**, deliberately mirroring the DDL: unlike a category or a label,
  * two sibling folders may share a name, and {@link FOLDER_NAME_TAKEN} does not exist.
  */
 export interface FakeDeckFolder {
@@ -531,13 +615,13 @@ export interface FakeDeckAudit {
   /**
    * Which list the change was made to — **for the kinds that are about a list at all.** The
    * column is NOT NULL with a CHECK over the two, so every row carries something, and for
-   * `category`, `folder`, the label half of `tag` and most `deck` fields that something is the
+   * `category`, `folder`, the deck-level half of `label` and most `deck` fields that something is
    * DDL default (`live`, {@link DECK_LEVEL}) rather than a fact. **Do not filter a history by
    * variant.**
    */
   variant: DeckVariant;
   kind: DeckAuditKind;
-  /** `null` for the three kinds about no card at all, and for the label half of `tag`. */
+  /** `null` for the three kinds about no card at all, and for the deck-level half of `label`. */
   cardId: string | null;
   /** Denormalised at write time: a history line still names its card the day that printing
    *  leaves the card database. */
@@ -546,7 +630,7 @@ export interface FakeDeckAudit {
    *  arrives as a string and `auditText.ts` is the one module that looks inside it. */
   payload: string;
   /** Signed **copies**, for the day header's roll-up. `0` means "this changed no card count",
-   *  never "nothing happened" — a rename, a reorder, a move and a tag all record `0`. */
+   *  never "nothing happened" — a rename, a reorder, a move and a label all record `0`. */
   delta: number;
 }
 
@@ -557,7 +641,7 @@ export interface FakeDeckAudit {
  * twice.** That is a deliberate simplification and not a shortcut around a rule: a step's whole
  * job is "make the deck look like this again", the crate expresses it as ops because SQL has no
  * other way to, and here the rows are JavaScript objects that can simply be copied. A second
- * transcription of `Op::Cards`/`Categories`/`Tags`/`Deck` would be a second implementation of
+ * transcription of `Op::Cards`/`Categories`/`Labels`/`Deck` would be a second implementation of
  * the reversal to keep in step with the first, which is exactly the drift the fake exists under
  * `ipc.ts` to avoid rather than to add.
  *
@@ -584,7 +668,7 @@ export interface FakeDeckState {
   deck: FakeDeck;
   cards: FakeDeckCard[];
   categories: FakeDeckCategory[];
-  tags: FakeDeckTag[];
+  labels: FakeDeckLabel[];
 }
 
 /**
@@ -622,11 +706,11 @@ export interface FakeDeckCategory {
   origin: CategoryOrigin;
 }
 
-/** One row of `deck_tags`: an **app-wide** label, at most one per card row. It carried a
- *  `deckId` until schema v21 and does not any more — a tag belongs to no deck, and what a deck
+/** One row of `deck_labels`: an **app-wide** label, at most one per card row. It carried a
+ *  `deckId` until schema v21 and does not any more — a label belongs to no deck, and what a deck
  *  has is cards that wear one. `color` is `#rrggbb`, or one of the six legacy tokens; the
- *  backend stores what it is handed and `tagColors.ts` decides what it draws as. */
-export interface FakeDeckTag {
+ *  backend stores what it is handed and `labelColors.ts` decides what it draws as. */
+export interface FakeDeckLabel {
   id: number;
   name: string;
   color: string;
@@ -648,8 +732,8 @@ export interface FakeDeckCard {
   categoryId: number;
   variant: DeckVariant;
   cardId: string;
-  /** `ON DELETE SET NULL`: deleting a tag untags its cards rather than deleting them. */
-  tagId: number | null;
+  /** `ON DELETE SET NULL`: deleting a label unlabels its cards rather than deleting them. */
+  labelId: number | null;
   quantity: number;
   /** Denormalised, like the collection's — the one name an orphaned row still has. */
   name: string;
@@ -667,6 +751,45 @@ export interface FakeDeckCard {
    */
   finish: DeckFinish;
   needsReview: string | null;
+}
+
+/**
+ * One row of `deck_tokens` (user schema v37). Grain `(deckId, oracleId)`
+ * (`schema::DECK_TOKEN_GRAIN`), and the reader's **deviation** — never the list itself.
+ *
+ * **The list of tokens a deck needs is derived and stored nowhere**: Rust reads `all_parts` off
+ * each distinct card in the deck's *active* categories on every open. So this table holds only
+ * what the reader changed about one of them — which art, how many, or that they do not want to
+ * see it — and a token nobody has touched has no row at all. That is why all three of
+ * {@link cardId}, {@link quantity} and {@link state} can be absent together, and why
+ * {@link writeHandlers.deck_token_set} *deletes* a row rather than writing one whose three
+ * fields say nothing.
+ *
+ * **`oracleId` and not a card id**, because the row has to survive the reader changing their
+ * mind about the art — the art choice is one of the things it stores.
+ *
+ * **Not grained on `variant`**, unlike {@link FakeDeckCard}. The derived list is per-variant
+ * because deck cards are; the override is not, so a Treasure art chosen for the live list is
+ * the art the theory list draws too.
+ */
+export interface FakeDeckToken {
+  id: number;
+  deckId: number;
+  oracleId: string;
+  /** The printing the reader picked. `null` is "whichever one the resolver names". */
+  cardId: string | null;
+  /**
+   * How many copies the reader wants. `null` is "the default", which is 1 — stored **absent**
+   * rather than as a 1, so that changing the default later moves every untouched token.
+   *
+   * **`0` is a value and not an absence**: a reader who zeroed a token while keeping the art
+   * they picked has said something, which is why every reader of this column uses `??`.
+   */
+  quantity: number | null;
+  /** `auto` | `hidden` | `manual`, closed by a CHECK on the column rather than by convention. */
+  state: DeckTokenState;
+  createdAt: number;
+  updatedAt: number;
 }
 
 /**
@@ -875,6 +998,16 @@ export interface FakeUpdate {
  * something that has gone wrong with a world, it is where a reader arrives after two presses. It
  * is the `paired` **seed** in `seeds.ts`.
  *
+ * **`wishGone`** is the quick add's stale wish, and it is a fault rather than a seed for a
+ * reason no other entry on this list has: the row has to be **there when the read runs and gone
+ * when the write re-reads it**. `deck_quick_add_wishes` answers the dialog and
+ * {@link writeHandlers.deck_quick_add_to_collection} checks the same wish again a round trip
+ * later, so no arrangement of rows can produce {@link QUICK_ADD_WISH_GONE} — a seed either has the wish or
+ * it has not, and both of those are ordinary worlds. What the fault stands in for is the second
+ * window: a reader who ticked the line off their shopping list while this dialog was open. It is
+ * `pairingReadError`'s split — the one refusal in the flow nobody can type — reached from the
+ * other direction, and it lands on the **write** only, so the picker still draws its rows.
+ *
  * **`syncing`** is a card update in flight, and it exists for exactly one command:
  * `cache_clear` refuses outright while one is running, because `data/tmp/` is where the corpus
  * download puts 77 MB that the ingest then reads back. It is **not** `busy` — that fault is the
@@ -905,7 +1038,8 @@ export type Fault =
   | "pairingReadError"
   | "patreonDeclined"
   | "patreonLapsed"
-  | "patreonGroupEntitled";
+  | "patreonGroupEntitled"
+  | "wishGone";
 
 /**
  * What the picture cache costs, as the Settings page's one button sees it.
@@ -1052,8 +1186,16 @@ export interface FakeDb {
   decks: FakeDeck[];
   deckFolders: FakeDeckFolder[];
   deckCategories: FakeDeckCategory[];
-  deckTags: FakeDeckTag[];
+  deckLabels: FakeDeckLabel[];
   deckCards: FakeDeckCard[];
+  /**
+   * `deck_tokens` — the **deviations only**, never the list of tokens a deck needs.
+   *
+   * That list is derived from {@link FakeDb.cards} and {@link TOKEN_PARTS} on every read, which
+   * is what the app does with `all_parts`, so a world with an empty table here still draws a
+   * full panel. See {@link FakeDeckToken} for why an empty override is not representable.
+   */
+  deckTokens: FakeDeckToken[];
   deckAudit: FakeDeckAudit[];
   /** `deck_undo` — one step per deck write, keyed to the history row it reverses. */
   deckUndo: FakeDeckUndo[];
@@ -1171,6 +1313,28 @@ export interface FakeDb {
    */
   flattenState: Record<string, boolean>;
   /**
+   * `app_meta.mark_colors` — what colour the reader has each card mark drawn in, as mark name →
+   * `#rrggbb`.
+   *
+   * The **fourth** row here whose value is an object, and it takes {@link FakeDb.listView}'s
+   * contract rather than {@link FakeDb.flattenState}'s beside it: both halves have a junk state.
+   * The keys are whatever some build wrote — which *marks* exist is TypeScript's vocabulary, and
+   * `isMarkColorKey` is what narrows them — while the values are text a hand-edited row really
+   * can fill with something that is not a colour. `markcolors.rs` owns only that second half, and
+   * says so: *the frontend owns which marks exist and this crate owns only the shape a colour may
+   * have.*
+   *
+   * `{}` for "nothing stored", and here the absence is the feature rather than a starting value:
+   * an uncustomised mark is drawn in what `index.css` gives it, so an entry written back at
+   * today's default would freeze the palette into the database — which is exactly what
+   * `set_mark_color`'s `null` exists to avoid. An absent key is the only way a story can stand in
+   * a mark nobody has chosen.
+   *
+   * **The read drops what it cannot use and the write refuses it** — see
+   * {@link readHandlers.mark_colors} and {@link writeHandlers.set_mark_color}.
+   */
+  markColors: Record<string, string>;
+  /**
    * `app_meta.nav_collapsed` — whether the reader has collapsed the global navigation sidebar
    * down to its icons.
    *
@@ -1193,21 +1357,50 @@ export interface FakeDb {
    */
   navCollapsed: boolean;
   /**
-   * `app_meta.deck_search_open` — whether the deck editor's card search column was last left
-   * open.
+   * `app_meta.search_open` — whether each of the app's docked card-search columns was last left
+   * open, as section name → open.
    *
-   * The sixth row of the same key/value table and the **second** of the two booleans, landing
-   * the same day as {@link FakeDb.navCollapsed} above. Every word of that field's argument
-   * applies here unchanged — `deck_search_open` is infallible at the far end too, folding a
-   * missing row, a hand-edited one and an unreadable one alike into its default — so it is a
-   * plain `boolean` for the same reason and not by imitation.
+   * The sixth row of the same key/value table and the **fourth** whose value is an object, so it
+   * is {@link FakeDb.flattenState}'s field with a different key: the keys are whatever some build
+   * wrote (`Record<string, boolean>` and not `Record<SearchSection, boolean>`, because a page this
+   * build has no column on is a state a story wants) and the values have no junk state at all, a
+   * `bool` off the IPC boundary being one of two things.
    *
-   * What differs is only which way the default points, and the two are worth reading together:
-   * a reader who has never touched either control gets the nav rail **expanded** and this column
-   * **open**. Both are "the app as it comes"; neither is a `false` that happens to be the
-   * language's default.
+   * **It replaced a plain `boolean` called `deckSearchOpen`**, which was the deck editor's column
+   * and only that one; the collection and the wishlist grew the same column on 2026-09-07 and
+   * three rows for one fact became one row keyed by section. What is worth reading across the
+   * change is that the *default* did not move with it: a reader who has never touched any of these
+   * controls gets every column **open**, which is now `DEFAULT_SEARCH_OPEN`'s to say rather than
+   * this field's — and that is exactly why `{}` is the seed.
+   *
+   * `{}` for "nothing stored", and it carries what it carries for {@link FakeDb.flattenState}: an
+   * absent key is the only way a story can stand in a disclosure nobody has pressed, which for
+   * this row is every column of a fresh install.
+   *
+   * **The read drops only what it cannot key and the write refuses only that** — see
+   * {@link readHandlers.search_open} and {@link writeHandlers.set_search_open}.
    */
-  deckSearchOpen: boolean;
+  searchOpen: Record<string, boolean>;
+  /**
+   * `app_meta.deck_sort` — how the deck gallery was last ordered, as `"<key>:<direction>"`.
+   *
+   * A **stored string** and `null` for the row not being there, which is
+   * {@link FakeDb.printingGroupBy}'s shape — but only half of its reasons, and the other half is
+   * what this field is worth reading for. The first state is the same: a fresh install has never
+   * written the row. The second is not "a word *this* build cannot place" but a word **no build
+   * of the backend can place at all** — the sort keys are `features/decks/deckSort.ts`', three of
+   * the six are computed on the frontend (a deck's colours out of `deck_pip_costs`, its bracket
+   * out of `estimateBracket`), and so `decksort.rs` has no list to check one against. It stores
+   * anything non-blank and answers it verbatim.
+   *
+   * So a story can seed a key this build has retired and watch the gallery fall back to its
+   * default order — a state a narrowed field would have put out of reach, and the one the
+   * frontend's narrowing exists for. See {@link readHandlers.deck_sort} and
+   * {@link writeHandlers.set_deck_sort}: the read falls back on a *blank* alone and the write
+   * refuses only that, which is the narrowest version of this table's read-shrugs/write-refuses
+   * split.
+   */
+  deckSort: string | null;
   /**
    * `marketplace_prices` — the table that made a third and fourth marketplace possible.
    *
@@ -1651,6 +1844,24 @@ function isStorableZoom(zoom: number): boolean {
 }
 
 /**
+ * `markcolors::is_hex` — six digits and a hash, and nothing else.
+ *
+ * **Shorthand is refused here even though the picker's own field accepts it**, which is that
+ * module's stated split: `normalizeLabelColor` expands `#f00` on the frontend before anything is
+ * sent, so three digits arriving at this boundary means a caller that skipped it — and a row
+ * holding two spellings of one colour is a row whose entries cannot be compared.
+ *
+ * Written out rather than imported from `@/lib/hexColor`, for `PRINTING_GROUP_BY_MODES`' reason
+ * turned inside out: that constant is imported because the vocabulary is the *frontend's*, and
+ * this one is spelled here because the shape is the **crate's** — `markcolors.rs` is the only
+ * thing in the app that decides what may go in the row, and a fake validating with the
+ * frontend's own normaliser would agree with it by construction rather than by checking.
+ */
+function isStorableHex(color: string): boolean {
+  return /^#[0-9a-f]{6}$/i.test(color);
+}
+
+/**
  * What the `errorLog` fault seeds: one of each shape the panel has to draw.
  *
  * A folded repeat (the ×600 an unreachable image host produces — the case the whole grain
@@ -1803,8 +2014,13 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     decks: [],
     deckFolders: [],
     deckCategories: [],
-    deckTags: [],
+    deckLabels: [],
     deckCards: [],
+    // Empty in every world but the one that seeds a press, and that is the honest default
+    // rather than a shortcut: `deck_tokens` stores **deviations**, so a reader who has never
+    // touched the panel has no rows at all and still sees every token their deck makes. The
+    // derived side comes off {@link TOKEN_PARTS} and needs nothing here.
+    deckTokens: [],
     deckAudit: [],
     // Never seeded, always earned: a step exists only where a *write* made one, so a story's
     // Undo button is about the edit that story made rather than about a fixture.
@@ -1840,16 +2056,30 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // flattened, the wishlist opens on its root. A story that wants a restored session passes the
     // page it cares about and leaves the other out.
     flattenState: {},
+    // Empty a fourth time, and this one is a reader who has chosen no colour at all: both theory
+    // marks are drawn in `index.css`'s own, which is what every story that says nothing about
+    // Appearance is standing in. A colour in here is a **press a story made** — `mutedTags`' rule
+    // one user row over, and for its reason: this panel is where a colour is chosen, so a seeded
+    // one would be a story about a state nobody arrived at.
+    markColors: {},
     // The fifth row, and the first whose default is a *value* rather than an absence: a shell
     // nobody has collapsed. `false` is what the backend answers for the row never having been
     // written and for its holding something unreadable alike, so there is no third state for
     // `null` to stand in — see {@link FakeDb.navCollapsed}. Every story that says nothing about
     // the sidebar is standing in the expanded shell.
     navCollapsed: false,
-    // The sixth, on the same footing and pointing the other way: `deck_search_open` answers
-    // `true` for an editor nobody has told, so every deck story that says nothing about the
-    // search column is standing in the column the app ships open.
-    deckSearchOpen: true,
+    // The sixth, and empty for `flattenState`'s reason a second time — the difference being that
+    // here the three defaults agree rather than differ. `search_open` answers only what it holds,
+    // so an absent section is a disclosure nobody has pressed and the frontend's own
+    // `DEFAULT_SEARCH_OPEN` draws it: every column open, which is what the app ships. A story that
+    // wants one railed passes that one section and leaves the others out.
+    searchOpen: {},
+    // The gallery's order, and a `null` rather than a value again: `deck_sort` answers
+    // `updated:desc` for a wall nobody has re-ordered, so every deck story that says nothing
+    // about the picker is standing in the order the app ships — most recently touched first,
+    // which is what `deck_list` already sorts by and what the gallery drew before there was a
+    // picker at all.
+    deckSort: null,
     // Empty here and filled by a seed, exactly as the card corpus is: a downloaded feed is a
     // table with rows in it, and "no rows" is the honest state of an install that has never
     // chosen Card Kingdom. `starterSeed` fills both from the corpus.
@@ -1925,6 +2155,20 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
  */
 function cmp(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * {@link cmp} over a nullable column, with **NULL first** — SQLite's ordering for an ascending
+ * `ORDER BY`, and the opposite of what a `??` to the empty string would give (`""` sorts before
+ * every real value too, so the two agree by accident until a column holds one).
+ *
+ * Used by the reads whose `ORDER BY` names a `LEFT JOIN`ed column, where a row with nothing
+ * behind it is a state the store really produces.
+ */
+function nullsFirst(a: string | null, b: string | null): number {
+  if (a === null) return b === null ? 0 : -1;
+  if (b === null) return 1;
+  return cmp(a, b);
 }
 
 function parseJson(text: string | null): unknown {
@@ -3156,6 +3400,331 @@ function matchCombos(db: FakeDb, cardIds: readonly string[] | undefined): DeckCo
     );
 }
 
+/* ------------------------------------------------------------- tokens and emblems ----- */
+
+/**
+ * The token oracle ids and printing ids, so a seed, a story or a test can name one without
+ * retyping a UUID — and so that each id is typed **once**, in the one place a typo in it would
+ * be a silently unreachable fixture rather than an error.
+ *
+ * **Real Scryfall ids out of `cards.ts` since 2026-09-07**, where they were minted in a `7…`
+ * block before that. The block cost exactly what an invented id costs: `card_printings` reads
+ * {@link FakeDb.cards} and `@/lib/images` builds its corpus from `CARDS`, so an id in neither
+ * resolved to no printing and no picture — every token tile drew the unknown-card placeholder
+ * and the art picker's grid was empty. Nothing about a token is hand-written here any more;
+ * `db.test.ts` fails if one of these stops resolving against the generated corpus.
+ */
+export const TOKEN_ORACLE = {
+  treasure: "3c549374-6c37-42e0-8d88-a8555d46732d",
+  construct: "f3dd381f-eafa-488e-bdb1-6de85923300d",
+  wurmDeathtouch: "5e3f41f7-9b42-437a-a9f9-f09250b083db",
+  wurmLifelink: "1b9ccdd7-4935-45e2-bb16-b09870dd965d",
+  okoEmblem: "a0864e2f-7cb7-4a57-a0de-90c7acaf4822",
+} as const;
+
+/**
+ * The printings of those five — **six over five oracle cards**, chosen so every shape the panel
+ * has to draw is reachable from one seeded deck. They are ordinary rows of {@link FakeDb.cards};
+ * this is the reading of them.
+ *
+ * * **Two Treasures**, which is what makes an art *choice* a thing at all rather than a control
+ *   with one option — and the common case rather than a corner: across 40 Treasure makers, 12
+ *   distinct Treasure printings were referenced (debug corpus, 2026-09-07). `tafr` 15
+ *   (2021-07-23, Dan Murayama Scott) against `thob` 13 (2026-08-14, Kamila Szutenberg): distinct
+ *   art and distinct release dates, so with both named once below the **tie-break** —
+ *   `released_at DESC, set_code ASC, collector_number ASC, id ASC` — picks `thob` unambiguously
+ *   and a story can assert which art the panel opens on. A *second* card naming `tafr` moves it
+ *   by majority instead, which is what the Maybeboard edge below is for.
+ * * **A 4/4 Construct with rules text.** The ordinary creature token beside the Treasure's empty
+ *   P/T box, so a tile that assumes a token has no body has something to get wrong. The `0` that
+ *   matters to this feature is a *quantity* and lives in `seeds.ts` — a token the reader has
+ *   decided they need none of — not in a power box.
+ * * **Two Wurms sharing a name and a stat line**, separated only by their rules text. This is
+ *   the case a subtitle exists for and the reason grouping is by `oracle_id` and never by name:
+ *   104 token/emblem names are shared by more than one oracle id (debug corpus, 2026-09-07) —
+ *   `Elemental` by 31, `Spirit` by 22, `Soldier` by 13 — and `Wurmcoil Engine` alone puts two
+ *   3/3 colourless Wurms in one deck, one deathtouch and one lifelink. Two tiles announcing one
+ *   accessible name is a bug that has already shipped once on the collection wall, and neither
+ *   suite can see it.
+ * * **An emblem** — Oko's, `layout: "emblem"` with a null power and toughness. The row the
+ *   filter rule's second half exists to keep: an emblem arrives in `all_parts` as a
+ *   `combo_piece`, so a `component == "token"` filter drops it.
+ *
+ * The corpus's **seventh** token row, the `plst` double-faced token, is deliberately absent from
+ * this table: nothing here makes it, and it is in `cards.ts` to pin the generator's face-first
+ * image resolution rather than to reach the panel.
+ */
+export const TOKEN_PRINTING = {
+  treasureTafr: "a3a684b7-27e0-4d9e-a064-9e03c6e50c89",
+  treasureThob: "d1892b78-7663-4cbd-a732-9a4b0b18d4c8",
+  construct: "530c7ad1-1127-40ad-86b4-cb959eb297cb",
+  wurmDeathtouch: "b68e816f-f9ac-435b-ad0b-ceedbe72447a",
+  wurmLifelink: "a6ee0db9-ac89-4ab6-ac2e-8a7527d9ecbd",
+  okoEmblem: "0d9d6611-bc46-4fc1-8e39-460f56236ceb",
+} as const;
+
+/**
+ * The three `cards.layout` words that make a row a token — `deck_tokens`' own filter, and
+ * **the layout is what says an emblem is an emblem** rather than the type line, which is prose.
+ *
+ * A filter over {@link FakeDb.cards} and not a second table, which is the whole of what changed
+ * on 2026-09-07: in the app a token *is* a `cards` row — `set_type = 'token'` joins 2 950 of
+ * them (measured 2026-09-07, debug corpus) — so the resolver, `card_printings` and the image
+ * cache all reach one table. A fake keeping its own token rows beside `cards` was storing a DTO,
+ * and could answer the same question two ways.
+ */
+const TOKEN_LAYOUTS = new Set(["token", "double_faced_token", "emblem"]);
+
+/**
+ * One `all_parts` edge: a card in the corpus, and a token printing it names.
+ *
+ * **The maker is named by card *name*, not by id**, which is {@link COMBO_FIXTURES}' rule and
+ * for its reason twice over: a table of UUIDs is a table nobody can check, and it is the *name*
+ * the self-exclusion tests against — `Krenko, Mob Boss` names a different printing of Krenko as
+ * a relative, so an id-based test leaves the open card in its own list of tokens.
+ * `card::meld_parts` makes the same call one relation over, for the same measured reason.
+ */
+interface TokenPart {
+  maker: string;
+  token: string;
+}
+
+/**
+ * Which cards in this corpus make which tokens — **one real relationship and six constructed**,
+ * and the split is the fixture corpus's fault rather than a shortcut.
+ *
+ * `cards.ts` holds 52 playable printings chosen for the *collection* stories, and among them
+ * exactly **four** name a token in Scryfall's `all_parts` — Ragavan, Urza's Saga, and two more
+ * naming tokens no fixture holds (measured 2026-09-07 over the whole corpus's `all_parts`). Of
+ * those, **one** lands on a token oracle card this fixture carries: Ragavan's Treasure. Urza's
+ * Saga makes a Construct, but a *different* Construct — `tmh2` 16, the 0/0 that grows with your
+ * artifacts, a different `oracle_id` from the `tmsc` 4/4 here — so that edge is real in kind and
+ * constructed in target. There is no `Wurmcoil Engine` and no planeswalker whose emblem is here,
+ * so the pair the disambiguation case needs and the emblem are hung on cards that plausibly
+ * could and demonstrably do not. Each line says which it is, exactly as {@link COMBO_FIXTURES}
+ * does — and adding the real makers is a change to `scripts/gen-storybook-cards.mjs`'
+ * selections, not to this file.
+ *
+ * **An edge names a printing and the app's does too**, which is the second place a real
+ * relationship goes half-constructed: Ragavan's `all_parts` names Treasure `tmh2` 21, a printing
+ * this corpus does not hold, so the edge below points at `tafr` 15 instead. Same oracle card,
+ * different cardboard — and the grain the panel groups by is the oracle card.
+ *
+ * Every edge lands in **deck 1**, which is why that is the deck a token story opens on: four of
+ * them in its main deck, two in its sideboard (active — a Sideboard and a Companion make tokens
+ * like anything else) and one on its **Maybeboard**, which is inactive and must therefore
+ * contribute nothing at all. That last one is the only way a story can watch the `is_active = 0`
+ * rule work: switch the Maybeboard on and a second maker appears under Treasure, taking the
+ * older printing's reference count to 2 and moving the default art with it.
+ */
+const TOKEN_PARTS: readonly TokenPart[] = [
+  // **Real, at the grain that matters.** Ragavan's dash trigger makes a Treasure and Scryfall's
+  // `all_parts` names one — `tmh2` 21, whose `oracle_id` is this fixture's Treasure. The
+  // printing is the corpus's `tafr` 15 rather than that one, because that one is not in it.
+  { maker: "Ragavan, Nimble Pilferer", token: TOKEN_PRINTING.treasureTafr },
+  // **Real in kind, constructed in target.** Urza's Saga's third chapter really does make a
+  // Construct, but it is `tmh2` 16 — a 0/0 that grows with your artifacts, a different oracle
+  // card from the `tmsc` 4/4 flier this corpus holds.
+  { maker: "Urza's Saga", token: TOKEN_PRINTING.construct },
+  // **Constructed.** A second Treasure maker, naming the *other* printing — which is what gives
+  // the Treasure row two `sources` ("why is this here") and leaves both printings tied at one
+  // reference, so the tie-break picks the default rather than a majority.
+  { maker: "Smuggler's Copter", token: TOKEN_PRINTING.treasureThob },
+  // **Constructed**, and the pair is the point: **one** card naming **two** tokens that share a
+  // name, which is `Wurmcoil Engine`'s shape and the case a panel grouping by name gets wrong.
+  // Elesh Norn sits in deck 1's *sideboard*, so this is also the edge that shows an active
+  // non-main category contributing.
+  { maker: "Elesh Norn, Grand Cenobite", token: TOKEN_PRINTING.wurmDeathtouch },
+  { maker: "Elesh Norn, Grand Cenobite", token: TOKEN_PRINTING.wurmLifelink },
+  // **Constructed.** The corpus's one planeswalker stands in for Oko, so that the emblem — whose
+  // whole reason to be here is `layout: "emblem"` — has a maker at all.
+  { maker: "Jace, the Mind Sculptor", token: TOKEN_PRINTING.okoEmblem },
+  // **Constructed, and deliberately on a pile that counts toward nothing.** Ancient Tomb is deck
+  // 1's Maybeboard, which is `isActive: false` — so this edge must contribute **no** source and
+  // **no** reference. An implementation that read every category would show it, and the only
+  // visible symptom would be the Treasure tile quietly drawing the older art.
+  { maker: "Ancient Tomb", token: TOKEN_PRINTING.treasureTafr },
+];
+
+/**
+ * A token printing by id — **a row of {@link FakeDb.cards} whose layout is one of
+ * {@link TOKEN_LAYOUTS}**, and the layout test is load-bearing rather than tidy: it is what
+ * makes `deck_token_add` refuse an ordinary card, which is the feature's one refusal about a row.
+ */
+function tokenById(db: FakeDb, id: string): FakeCard | undefined {
+  return db.cards.find((c) => c.id === id && TOKEN_LAYOUTS.has(c.layout));
+}
+
+/**
+ * `card::list_printings`' tail, which is what makes a default printing **deterministic**:
+ * `released_at DESC, set_code ASC, collector_number ASC, id ASC`.
+ *
+ * Without it one deck draws different art on two opens, and nothing in the app would say why.
+ */
+function byTokenPrintingRank(a: FakeCard, b: FakeCard): number {
+  return (
+    cmp(b.releasedAt, a.releasedAt) ||
+    cmp(a.setCode, b.setCode) ||
+    cmp(a.collectorNumber, b.collectorNumber) ||
+    cmp(a.id, b.id)
+  );
+}
+
+/**
+ * Every **token** printing of one oracle card, in that order.
+ *
+ * `card::PRINTINGS_WHERE` is `oracle_id = ?1 AND is_paper = 1` and this is that read over the
+ * same table the art picker's own `card_printings` uses, so the grid a reader scrolls and the
+ * printing the resolver names cannot disagree about the order or about which rows exist. The
+ * layout test is what the picker's command does **not** have and this one needs: a stored
+ * `manual` row naming an oracle id that is not a token's must come back empty and be dropped,
+ * rather than drawing an ordinary card on a wall of tokens.
+ */
+function tokenPrintings(db: FakeDb, oracleId: string): FakeCard[] {
+  return db.cards
+    .filter((c) => c.oracleId === oracleId && c.isPaper && TOKEN_LAYOUTS.has(c.layout))
+    .sort(byTokenPrintingRank);
+}
+
+/** One token the deck derives, accumulated while walking its cards. */
+interface DerivedToken {
+  token: FakeCard;
+  sources: TokenSource[];
+  /** Printing id -> how many of the deck's cards named it. The most-named one is the default. */
+  refs: Map<string, number>;
+}
+
+/**
+ * `deck_tokens::deck_token_rows` — the list a deck needs, derived and stored nowhere.
+ *
+ * The walk, in the crate's own order:
+ *
+ * 1. The deck's **distinct** cards in this variant whose category is **active**. `is_active = 0`
+ *    is the whole of "counts toward nothing", so the Maybeboard makes no tokens while the
+ *    Sideboard and the Companion do.
+ * 2. Each card's `all_parts` edges ({@link TOKEN_PARTS} here, the gzipped `raw` blob there),
+ *    with the **self-reference dropped by name**.
+ * 3. Grouped by the target's **`oracle_id`, never by its name** — see {@link TOKEN_PRINTING} for
+ *    the two Wurms that is about.
+ *
+ * **The filter rule is a union in the crate and is {@link TOKEN_LAYOUTS} here**: every edge in
+ * {@link TOKEN_PARTS} names a row that passes it, so the workbench cannot show the rule
+ * *failing*. That is `deck_tokens.rs`' tests' job rather than a story's.
+ */
+function derivedTokens(db: FakeDb, deckId: number, variant: DeckVariant): DerivedToken[] {
+  const seen = new Set<string>();
+  const out = new Map<string, DerivedToken>();
+  for (const dc of db.deckCards) {
+    if (dc.deckId !== deckId || dc.variant !== variant) continue;
+    // The join on `deck_categories` is inner and the predicate is `is_active = 1`: a row whose
+    // pile counts toward nothing is not a row here either.
+    if (categoryById(db, dc.categoryId)?.isActive !== true) continue;
+    // `DISTINCT (card_id, name)` — one printing sleeved twice (two finishes, two piles) is one
+    // maker, and the blob is inflated once.
+    if (seen.has(dc.cardId)) continue;
+    seen.add(dc.cardId);
+    const maker = cardById(db, dc.cardId);
+    if (maker === null) continue;
+    for (const part of TOKEN_PARTS) {
+      if (part.maker !== maker.name) continue;
+      const token = tokenById(db, part.token);
+      // An `all_parts` id absent from `cards` is **dropped**, never drawn as a hole.
+      if (token === undefined) continue;
+      // Self, by name. A relationship a card has with a different printing of itself is not a
+      // token, and an id test would not catch it.
+      if (token.name === maker.name) continue;
+      const row: DerivedToken = out.get(token.oracleId) ?? {
+        token,
+        sources: [],
+        refs: new Map(),
+      };
+      row.sources.push({ cardId: dc.cardId, name: maker.name });
+      row.refs.set(token.id, (row.refs.get(token.id) ?? 0) + 1);
+      out.set(token.oracleId, row);
+    }
+  }
+  return [...out.values()];
+}
+
+/** The printing the resolver names for one derived token: the most-referenced, ties broken by
+ *  {@link byTokenPrintingRank}. */
+function defaultTokenPrinting(db: FakeDb, derived: DerivedToken): string {
+  const ranked = tokenPrintings(db, derived.token.oracleId).sort(
+    (a, b) =>
+      (derived.refs.get(b.id) ?? 0) - (derived.refs.get(a.id) ?? 0) || byTokenPrintingRank(a, b),
+  );
+  return (ranked[0] ?? derived.token).id;
+}
+
+/** The override this deck stores for one token, or `undefined` for the reader never having
+ *  deviated — which is what most rows are. */
+function storedToken(db: FakeDb, deckId: number, oracleId: string): FakeDeckToken | undefined {
+  return db.deckTokens.find((t) => t.deckId === deckId && t.oracleId === oracleId);
+}
+
+/**
+ * `image_uri::front_face_map` over a fixture row — the picture the **web target and the phone**
+ * draw, and the one DTO this fake carries it on.
+ *
+ * **Every other DTO here omits `imageUris` and that is still the rule**: a picture under
+ * Storybook comes from the `@/lib/images` alias, so a URL on a row would be one nobody ever
+ * fetches. What earns this one an exception is that `deckTokenViews` *folds* the field — a token
+ * tile's `imageUrl` is `imageUris?.[WALL_CARD_VARIANT] ?? null`, so a row that omitted it would
+ * make the fake the one place that view is always `null` and the panel's own resolution
+ * unexercised. Nothing minted: the two URLs are the fixture's own real Scryfall ones, the same
+ * pair {@link readHandlers.card_image_uri} answers with, and the same two variants
+ * `image_uri::LIST_VARIANTS` names — `display` from `normalUrl` and `art` from `artCropUrl`. The
+ * corpus can answer no others, which is why `thumb` and `grid` are absent here as they are there.
+ *
+ * `null` rather than `{}` for a row with neither, which is `front_face_map`'s own answer, and
+ * the {@link FakeDb.fault} `imageUrisMissing` is every row in that state.
+ */
+function tokenImageUris(db: FakeDb, cardId: string): DeckTokenRow["imageUris"] {
+  if (db.fault === "imageUrisMissing") return null;
+  const card = cardById(db, cardId);
+  if (card === null) return null;
+  const uris: Partial<Record<ImageVariant, string>> = {};
+  if (card.normalUrl !== null) uris.display = card.normalUrl;
+  if (card.artCropUrl !== null) uris.art = card.artCropUrl;
+  return Object.keys(uris).length === 0 ? null : uris;
+}
+
+/** One wire row: the derived facts, with the stored override joined on. */
+function toDeckTokenRow(
+  db: FakeDb,
+  deckId: number,
+  token: FakeCard,
+  defaultCardId: string,
+  sources: TokenSource[],
+  derived: boolean,
+): DeckTokenRow {
+  const over = storedToken(db, deckId, token.oracleId);
+  return {
+    oracleId: token.oracleId,
+    name: token.name,
+    typeLine: token.typeLine,
+    layout: token.layout,
+    power: token.power,
+    toughness: token.toughness,
+    colors: token.colors,
+    oracleText: token.oracleText,
+    defaultCardId,
+    sources,
+    derived,
+    // The three the table actually holds. All `null` together for a token nobody has touched,
+    // which is why they are read with `??` and never with `||`.
+    cardId: over?.cardId ?? null,
+    quantity: over?.quantity ?? null,
+    state: over?.state ?? null,
+    // **The printing the tile addresses**, which is `cardId ?? defaultCardId` and deliberately
+    // not the row the resolver named: those two differ for exactly the tokens somebody has
+    // picked art for, and taking the resolver's would draw the deck's default Treasure on the
+    // tile the reader chose the other Treasure for. `picture_for` in `deck_tokens.rs` is the
+    // same precedence, and `over` is already in hand here so it costs no second lookup.
+    imageUris: tokenImageUris(db, over?.cardId ?? defaultCardId),
+  };
+}
+
 /* ------------------------------------------------------------------ tag reads --------- */
 
 /**
@@ -3416,9 +3985,17 @@ function rarityRank(rarity: string | null): number {
  * `collection::COLLECTION_SORTS`' condition `CASE`: grade order, because `DMG` before `LP`
  * is alphabetical order and not what anybody means by condition.
  *
- * Its `ELSE 5` has no counterpart here and needs none — `collection_entries.condition` is
- * `NOT NULL` with a `CHECK` over exactly these five (`schema.rs`), which is the statement
- * `FakeEntry["condition"]` makes in the type system.
+ * **`NONE` is ranked `5` and sorts last, which is the opposite end from where a picker draws
+ * it** (`lib/conditions.ts`'s `CONDITIONS` leads with it). The two orders are not in conflict
+ * and neither is derived from the other: a sorted column is the scale being read *as* a scale,
+ * so the ungraded pile belongs at the end of it rather than in front of the Near Mints, while a
+ * dropdown opens on its default. One list, two orders.
+ *
+ * The crate's `CASE` carries an `ELSE 5` beside the spelled `WHEN 'NONE' THEN 5`, and the
+ * duplication is deliberate there — an `ELSE` that happens to be right is not a rule. Here it
+ * has no counterpart and needs none: `collection_entries.condition` is `NOT NULL` with a
+ * `CHECK` over exactly these six (`schema.rs`), which is the statement `FakeEntry["condition"]`
+ * makes in the type system.
  */
 const CONDITION_RANK: Record<FakeEntry["condition"], number> = {
   NM: 0,
@@ -3426,6 +4003,7 @@ const CONDITION_RANK: Record<FakeEntry["condition"], number> = {
   MP: 2,
   HP: 3,
   DMG: 4,
+  NONE: 5,
 };
 
 /* ------------------------------------------------------------------ card filters ------ */
@@ -3728,16 +4306,50 @@ function cardById(db: FakeDb, id: string | null): FakeCard | null {
 }
 
 /**
+ * `collection_source::Availability` — **which** of the reader's copies a figure counts.
+ *
+ * `undefined` is `Availability::Everything`, the answer every caller but one asks: a collection
+ * lists what its owner owns, wherever it is filed. A deck id is `ForDeck`, the deck builder's
+ * card search, where the question is *what can this deck use* — issue #349.
+ *
+ * The three arms are the crate's, in the crate's order, and each has to let a row through on
+ * its own:
+ *
+ * * **The root is always available.** Not a folder, so nothing to look up — and in SQL the arm
+ *   is load-bearing rather than tidy, because a `<>` over a NULL is NULL rather than true.
+ * * **This deck's own group counts**, which is the whole difference from {@link ownedSpare}: a
+ *   copy filed into the open deck is a copy that deck has, and the row one column over already
+ *   says so. The theory diff excludes every deck group including its own because its live list
+ *   is counted separately.
+ * * **Anywhere else, unless it is another deck's group or set aside.** `Recently removed` is a
+ *   `kind` of its own and stays counted, exactly as it does in `Allocation::Unallocated`.
+ *
+ * **A folder id nothing answers to is not available**, which mirrors the SQL rather than
+ * guessing: three of its terms go NULL over a missing row and NULL is not true. No live
+ * database can hold one — the column is a cascading foreign key — so this is the arm that says
+ * the fake did not quietly pick the friendlier answer.
+ */
+function availableToDeck(db: FakeDb, e: FakeEntry, forDeck: number | undefined): boolean {
+  if (forDeck === undefined || e.folderId === null) return true;
+  const folder = collectionFolderById(db, e.folderId);
+  if (!folder) return false;
+  if (folder.deckId === forDeck) return true;
+  if (folder.kind === COLLECTION_DECK_KIND) return false;
+  return !collectionFolderLocked(db, e.folderId);
+}
+
+/**
  * `search.rs`'s two correlated subqueries, per result row.
  *
  * `sum(e.quantity)` over *this printing*: finish-blind, condition-blind, and `0` rather than
  * null because "you own none of these" is a fact.
  *
- * **`collection_source::copies_of_printing`.**
+ * **`collection_source::copies_of_printing`**, at {@link availableToDeck}'s scope — which every
+ * caller but the deck builder's search leaves absent, exactly as the request field is.
  */
-function ownedOfPrinting(db: FakeDb, cardId: string): number {
+function ownedOfPrinting(db: FakeDb, cardId: string, forDeck?: number): number {
   return db.collectionEntries
-    .filter((e) => e.cardId === cardId)
+    .filter((e) => e.cardId === cardId && availableToDeck(db, e, forDeck))
     .reduce((n, e) => n + e.quantity, 0);
 }
 
@@ -3750,7 +4362,12 @@ function wishlisted(db: FakeDb, card: FakeCard): boolean {
   );
 }
 
-function toCardSummary(db: FakeDb, c: FakeCard, mp: MarketplaceId): CardSummary {
+function toCardSummary(
+  db: FakeDb,
+  c: FakeCard,
+  mp: MarketplaceId,
+  forDeck?: number,
+): CardSummary {
   // The display **column** at the marketplace the request named: a fallback chain across
   // finishes, never summed, and one number rather than a pair — the backend has already
   // decided whose price this is, so the row carries no second figure to pick between.
@@ -3777,7 +4394,7 @@ function toCardSummary(db: FakeDb, c: FakeCard, mp: MarketplaceId): CardSummary 
     // with itself. A plain boolean, unlike `DeckCard.gameChanger`: a search row came back
     // from `cards`, so it can never be the orphan that field's `null` is for.
     gameChanger: c.gameChanger,
-    ownedQuantity: ownedOfPrinting(db, c.id),
+    ownedQuantity: ownedOfPrinting(db, c.id, forDeck),
     wishlisted: wishlisted(db, c),
     // Uncollapsed, a row *is* a printing: it stands for one, and its "range" is its own
     // price. One shape for both modes, exactly as `search.rs` returns it.
@@ -3813,7 +4430,12 @@ function collapseKey(c: FakeCard): string {
  * * `ownedQuantity` sums copies of **every** printing of the card, because "do I have this
  *   card" is the question a collapsed row asks. Uncollapsed it stays per printing.
  */
-function collapseToCards(db: FakeDb, matched: FakeCard[], mp: MarketplaceId): CardSummary[] {
+function collapseToCards(
+  db: FakeDb,
+  matched: FakeCard[],
+  mp: MarketplaceId,
+  forDeck?: number,
+): CardSummary[] {
   const groups = new Map<string, FakeCard[]>();
   for (const c of matched) {
     const key = collapseKey(c);
@@ -3868,12 +4490,12 @@ function collapseToCards(db: FakeDb, matched: FakeCard[], mp: MarketplaceId): Ca
     // showing up as an absent range rather than as a narrower one.
     const priced = [...prices.values()].filter((p): p is number => p !== null);
     return {
-      ...toCardSummary(db, rep, mp),
+      ...toCardSummary(db, rep, mp, forDeck),
       name: group.reduce((min, c) => (c.name < min ? c.name : min), group[0].name),
       printings: group.length,
       priceLow: priced.length > 0 ? Math.min(...priced) : null,
       priceHigh: priced.length > 0 ? Math.max(...priced) : null,
-      ownedQuantity: group.reduce((n, c) => n + ownedOfPrinting(db, c.id), 0),
+      ownedQuantity: group.reduce((n, c) => n + ownedOfPrinting(db, c.id, forDeck), 0),
       wishlisted: group.some((c) => wishlisted(db, c)),
     };
   });
@@ -4030,17 +4652,24 @@ function collectionFinish(finish: DeckFinish): FakeEntry["finish"] {
  * An **entry**, not a copy: a row emptied to zero is a row the collection keeps and this
  * question counts it.
  */
-function ownsPrinting(db: FakeDb, cardId: string): boolean {
-  return db.collectionEntries.some((e) => e.cardId === cardId);
+function ownsPrinting(db: FakeDb, cardId: string, forDeck?: number): boolean {
+  return db.collectionEntries.some(
+    (e) => e.cardId === cardId && availableToDeck(db, e, forDeck),
+  );
 }
 
 /* ------------------------------------------------------------------ scopes ------------ */
 
 /** `collection::FINISHES`/`CONDITIONS` — a filter value outside the enum is dropped rather
  *  than matched, because it can only come from a stale payload and would empty the list
- *  with no explanation. */
+ *  with no explanation.
+ *
+ *  **`NONE` leads, spelled in `collection::CONDITIONS`' own order** — this list is what
+ *  {@link validCondition}'s refusal names, so an order of its own would put a different
+ *  sentence on the screen than the app's. It is not {@link CONDITION_RANK}'s order and does
+ *  not want to be: membership is all either use of it asks. */
 const FINISHES: FakeEntry["finish"][] = ["nonfoil", "foil", "etched"];
-const CONDITIONS: FakeEntry["condition"][] = ["NM", "LP", "MP", "HP", "DMG"];
+const CONDITIONS: FakeEntry["condition"][] = ["NONE", "NM", "LP", "MP", "HP", "DMG"];
 
 function inList(value: string, picked: string[] | undefined, allowed: string[]): boolean {
   if (!picked) return true;
@@ -4086,15 +4715,35 @@ function collectionScope(db: FakeDb, q: CollectionQuery): FakeEntry[] {
     } else if (q.rootOnly === true && e.folderId !== null) {
       return false;
     }
+    // Schema v33's term, and each of its three clauses is load-bearing.
+    //
+    // **Absent or `false` is every folder there is**, which is `rootOnly`'s argument verbatim:
+    // an unasked question keeps today's answer, so the two reads that must never narrow — the
+    // plain-text mirror and the export sweep — go on seeing a locked folder's copies by saying
+    // nothing. A term that was not asked for would make every backup silently omit the reader's
+    // set-aside cards and raise nothing, which is the worst failure this feature has available.
+    //
+    // **Ignored entirely when `folderId` names a folder**, which is `rootOnly`'s own rule
+    // applied to a second field rather than a fourth state: standing in a locked drawer — or
+    // in a sub-folder of one — names it, and a named folder is served whole.
+    //
+    // **The root is asked about first**, `scope`'s existing reason read from the fake's end:
+    // the crate's `e.folder_id IS NULL OR e.folder_id NOT IN (…)` needs its first arm because
+    // a `NOT IN` over a NULL is NULL rather than true, and the root is where most copies are.
+    //
+    // The lock asked about is the **effective** one, so a folder inside a locked folder drops
+    // out too — {@link collectionFolderLocked}.
+    if (q.excludeLocked === true && named === null) {
+      if (e.folderId !== null && collectionFolderLocked(db, e.folderId)) return false;
+    }
     // `"unallocated"` drops the copies a **deck** is holding and nothing else: the root, a
     // folder the reader made and `Recently removed` are all cards on their desk. Since schema
     // v25 every deck has a group and `collection_to_deck` files copies into it, so this is a
     // fact about **where the row sits** rather than a sum somebody has to remember to compute —
     // `collection_alloc::tests::a_copy_in_a_deck_group_is_not_available_to_another_deck` read
-    // from the collection's end.
-    if (q.allocation === "unallocated" && e.folderId !== null) {
-      if (collectionFolderById(db, e.folderId)?.kind === "deck") return false;
-    }
+    // from the collection's end. {@link inADeckFolder} is the predicate itself, shared with
+    // {@link pullCandidates} since 2026-09-03 rather than spelled twice.
+    if (q.allocation === "unallocated" && inADeckFolder(db, e.folderId)) return false;
     return true;
   });
 }
@@ -4112,6 +4761,78 @@ function wishCard(db: FakeDb, w: Pick<FakeWish, "cardId" | "oracleId">): FakeCar
     db.cards
       .filter((c) => c.oracleId === w.oracleId)
       .sort((a, b) => cmp(b.releasedAt, a.releasedAt) || cmp(a.id, b.id))[0] ?? null
+  );
+}
+
+/**
+ * `sorting::row_price_expr(market, WISH_PREFERRED_FINISH)` — what one copy of one printing costs
+ * *this wish*, at the finish the wish names.
+ *
+ * **One function for four callers** — {@link toWishRow}, {@link wishlistOrder},
+ * `wishlist_folder_summary` and `wishlist_optimize_plan` — where the expression used to be
+ * written out at each, and the last is why it was worth collapsing: the optimise preview's whole
+ * subject is a comparison between two of these figures, so a dialog quoting a wish under one
+ * rule beside a row quoted under another would be a workbench teaching a saving nobody can
+ * reproduce.
+ *
+ * **It is this fake's rule and not the crate's, and the difference is one `??`.**
+ * `row_price_expr` has two arms told apart by whether the wish has said — NULL is
+ * `printing_price_by_finish_expr`'s `nonfoil → foil → etched` chain, a named finish is that
+ * finish and no fallback of any kind — while this coalesces the unsaid case to `nonfoil`, which
+ * is what `wishlist.rs` did until 2026-08-26 (`wishlist-folders.md`, "A wish that names no
+ * finish is priced at the chain, not at nonfoil"). The two answers part company only on a
+ * printing with **no** nonfoil price and a price in some other finish — four of this corpus's 52
+ * (`mp2 8`, `acr 211`, `mul 133` and `mul 133z`, counted 2026-09-03). It is **named here rather
+ * than fixed in passing**, because moving it moves every wishlist figure in the workbench at
+ * once, which is a change to what the wishlist stories draw.
+ */
+function wishPriceAt(
+  db: FakeDb,
+  card: FakeCard | null,
+  preferredFinish: FakeWish["preferredFinish"],
+  mp: MarketplaceId,
+): number | null {
+  return finishPriceAt(db, card, preferredFinish ?? "nonfoil", mp);
+}
+
+/**
+ * The cheapest printing of a wish's oracle card that this marketplace **actually quotes**, at
+ * the wish's finish — `wishlist_optimize_plan`'s candidate query, and its only caller.
+ *
+ * Three clauses, each a decision rather than arithmetic:
+ *
+ * * **priced, or not a candidate at all.** Issue #352's own sentence — "a card without a price
+ *   should not be considered the cheapest printing" — which is why a move's `to.price` is a
+ *   number and never `null`, where its `from.price` may be either.
+ * * **not digital.** A digital printing is not a piece of cardboard anybody can be sent. It
+ *   excludes nothing here — this corpus's two digital rows are quoted by no marketplace this app
+ *   prices at (`vma 4` carries a `tix` figure and nothing else) — exactly as it excludes nothing
+ *   in the live card database, which is what makes it a fence against a feed that one day prices
+ *   them rather than part of the sum.
+ * * **no language term.** A cheaper printing in another language is a real candidate, and the
+ *   preview shows `lang` on both sides so the swap is visible. `sta 105` is this corpus's one
+ *   non-English printing and it is a Lightning Bolt, so the case is reachable in a story.
+ *
+ * The order is `list_wishes`' own cheapest-printing join verbatim — price ascending, then
+ * `released_at DESC, id ASC` — so the printing this offers a *pinned* wish and the printing an
+ * un-pinned one is drawn as are chosen by one rule and not by two.
+ */
+function cheapestPrinting(
+  db: FakeDb,
+  w: FakeWish,
+  mp: MarketplaceId,
+): { card: FakeCard; price: number } | null {
+  return (
+    db.cards
+      .filter((c) => c.oracleId === w.oracleId && !c.digital)
+      .map((c) => ({ card: c, price: wishPriceAt(db, c, w.preferredFinish, mp) }))
+      .filter((c): c is { card: FakeCard; price: number } => c.price !== null)
+      .sort(
+        (a, b) =>
+          numeric(a.price, b.price) ||
+          cmp(b.card.releasedAt, a.card.releasedAt) ||
+          cmp(a.card.id, b.card.id),
+      )[0] ?? null
   );
 }
 
@@ -4158,8 +4879,6 @@ function elsewhereWishes(db: FakeDb, w: FakeWish): number {
 
 function toWishRow(db: FakeDb, w: FakeWish, mp: MarketplaceId): WishRow {
   const card = wishCard(db, w);
-  // The cheapest way to satisfy the wish: the preferred finish's price, else nonfoil's.
-  const finish = w.preferredFinish ?? "nonfoil";
   return {
     id: w.id,
     oracleId: w.oracleId,
@@ -4182,7 +4901,10 @@ function toWishRow(db: FakeDb, w: FakeWish, mp: MarketplaceId): WishRow {
     artCardId: card?.id ?? null,
     quantity: w.quantity,
     preferredFinish: w.preferredFinish,
-    unitPrice: finishPriceAt(db, card, finish, mp),
+    // The cheapest way to satisfy the wish, per copy — {@link wishPriceAt}, which the folder
+    // subtotals and the optimise preview are quoted from too, so no two of the three can
+    // disagree about what one copy of one printing costs this wish.
+    unitPrice: wishPriceAt(db, card, w.preferredFinish, mp),
     ownedQuantity: ownedAgainstWish(db, w),
     elsewhere: elsewhereWishes(db, w),
     notes: w.notes,
@@ -4234,7 +4956,15 @@ function toWishlistFolder(f: FakeWishlistFolder): WishlistFolder {
 /** `collection_folders::folder_row`, and a **copy** for {@link toWishlistFolder}'s reason.
  *  `kind` and `deckId` are on the wire because the page has to draw a deck's folder and the
  *  removed-cards folder differently from a binder the reader named — and because a row it may
- *  not rename is a row whose menu should say so before the refusal does. */
+ *  not rename is a row whose menu should say so before the refusal does.
+ *
+ *  **`locked` is on it for that reason one step further along**, and this is the one function
+ *  that decides whether the flag crosses the fake's wire at all: a projection that dropped it
+ *  would leave every story reading `undefined` — a folder neither locked nor unlocked, which
+ *  is a state the column cannot hold. The folder's **own** flag and not the effective one: the
+ *  badge, the greyed menu rows and the drag confirmation each walk the ancestry themselves off
+ *  a tree they already have, and a DTO carrying the inherited answer would be exactly the
+ *  second copy {@link FakeCollectionFolder.locked} exists not to store. */
 function toCollectionFolder(f: FakeCollectionFolder): CollectionFolder {
   return {
     id: f.id,
@@ -4243,6 +4973,7 @@ function toCollectionFolder(f: FakeCollectionFolder): CollectionFolder {
     kind: f.kind,
     deckId: f.deckId,
     sortOrder: f.sortOrder,
+    locked: f.locked,
   };
 }
 
@@ -4260,8 +4991,11 @@ const VARIANTS: DeckVariant[] = ["live", "theory"];
 const LIVE = VARIANTS[0];
 
 /**
- * `DeckRow.cardCount`'s definition, and the engine's `SIZE_KINDS` verbatim — a third copy of
- * three words that must stay one rule (`engine.ts`, `deck.rs`'s `DECK_SELECT`, here).
+ * `DeckRow.cardCount`'s definition, and the engine's `SIZE_KINDS` verbatim — a **fourth** copy of
+ * three words that must stay one rule (`engine.ts`, `deck.rs`'s `DECK_SELECT`, `deck.rs`'s
+ * `PIP_COSTS_SQL` since 2026-09-07, here). The colour bar's read is the newest and is fenced from
+ * the other side: `the_colour_bar_reads_the_same_pile_the_gallery_count_does` in `deck.rs` asserts
+ * the two answer over one pile, so a fifth site is a red build rather than a silent divergence.
  *
  * The switch decides whether a pile counts at all; the kind decides only whether it is played
  * *beside* the deck or *in* it, and only `side` and `companion` are beside it — CR 100.4a and
@@ -4286,6 +5020,22 @@ const SIZE_KINDS: CategoryKind[] = ["main", "commander", "maybe"];
  * bracket" looks like, so a nullable column would make "put it back to Auto" unreachable.
  */
 const AUTO_BRACKET = 0;
+
+/**
+ * `decksort::DEFAULT` — how the gallery is ordered for a reader who has never said, and what
+ * {@link readHandlers.deck_sort} answers for a row that is missing or blank.
+ *
+ * **Spelled here rather than imported from `features/decks/deckSort.ts`**, which is
+ * {@link AUTO_BRACKET}'s rule above and lands harder on this one: the string the *backend*
+ * answers and the string the frontend falls back to are two constants that happen to agree, in
+ * two languages, because they cannot share one across a wire. A fake that read the app's copy
+ * would agree with it by construction and could never show them disagreeing — which is the one
+ * thing about this pair worth being able to see.
+ */
+const DEFAULT_DECK_SORT = "updated:desc";
+
+/** `decksort::NO_SORT`, verbatim — the one thing {@link writeHandlers.set_deck_sort} refuses. */
+const NO_DECK_SORT = "A deck sort cannot be blank.";
 
 /** The top of what {@link validBracket} accepts — `deck::MAX_BRACKET`. `5` is cEDH, and the
  *  estimate deliberately never *reaches* it: brackets 4 and 5 have identical deck restrictions
@@ -4345,6 +5095,13 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
     folderId: d.folderId,
     notes: d.notes,
     theoryEnabled: d.theoryEnabled,
+    // v38's pair, and the **fifth and sixth** columns on the `?? default` footing — but the
+    // first whose default is `true`. `NOT NULL DEFAULT 1` is the whole of that migration: a
+    // deck that already existed draws both marks from the first launch on the new build, so a
+    // seed written before the column is a deck with both marks on rather than one with neither.
+    // Appended, `bracket`'s note two comments down, and for the crate's own reason there.
+    theoryMarkExact: d.theoryMarkExact ?? true,
+    theoryMarkName: d.theoryMarkName ?? true,
     // The three v12 ones that remember where the reader was. They ride the *gallery's* row
     // rather than a read of their own because the editor already has this row when it mounts —
     // a second command to ask "which tab was I on" would be a round trip between opening a deck
@@ -4355,6 +5112,10 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
     // v13's, and the one column whose absence on the row is an answer rather than a gap —
     // `NOT NULL DEFAULT 0`, so a deck that has never been asked is a deck that says no.
     separateXGroup: d.separateXGroup ?? false,
+    // v35's, and the same shape one column over — `NOT NULL DEFAULT 0`, so a deck that has never
+    // been opened is a deck whose Tokens & emblems area is collapsed, which is the state every
+    // existing deck is in.
+    tokensOpen: d.tokensOpen ?? false,
     // v16's, and the same shape of answer: absent is `AUTO_CATEGORY`, which is what the column's
     // `DEFAULT 0` says about a deck nobody has asked.
     defaultCategoryId: d.defaultCategoryId ?? 0,
@@ -4450,32 +5211,37 @@ function toDeckCategory(
 }
 
 /**
- * `deck_meta::list_tags`' row, counted over the **variant that was asked for** — exactly as
+ * `deck_meta::list_labels`' row, counted over the **variant that was asked for** — exactly as
  * {@link toDeckCategory} is, and for the reason the two of them are answered by one read: they
  * describe one list of cards. Scoping one and not the other is how a Theory read came back
- * once with Theory category counts beside Live tag counts.
+ * once with Theory category counts beside Live label counts.
  */
-function toDeckTag(db: FakeDb, t: FakeDeckTag, deckId: number, variant: DeckVariant): DeckTag {
+function toDeckLabel(
+  db: FakeDb,
+  t: FakeDeckLabel,
+  deckId: number,
+  variant: DeckVariant,
+): DeckLabel {
   return {
     id: t.id,
     name: t.name,
     color: t.color,
     cardCount: db.deckCards
-      .filter((dc) => dc.tagId === t.id && dc.deckId === deckId && dc.variant === variant)
+      .filter((dc) => dc.labelId === t.id && dc.deckId === deckId && dc.variant === variant)
       .reduce((n, dc) => n + dc.quantity, 0),
   };
 }
 
 /**
- * `deck_meta::list_all_tags`' row — one tag and how far it reaches, over every deck and both
+ * `deck_meta::list_all_labels`' row — one label and how far it reaches, over every deck and both
  * variants.
  *
  * `deckCount` counts **distinct decks with a card wearing it**, not rows: `count(DISTINCT
- * dc.deck_id)` in the SQL, and the number a delete confirmation quotes. Zero for a tag nobody
- * has used yet, which is the row this list can answer and `deck_tag_list` never can.
+ * dc.deck_id)` in the SQL, and the number a delete confirmation quotes. Zero for a label nobody
+ * has used yet, which is the row this list can answer and `deck_label_list` never can.
  */
-function toGlobalTag(db: FakeDb, t: FakeDeckTag): GlobalTag {
-  const wearing = db.deckCards.filter((dc) => dc.tagId === t.id);
+function toGlobalLabel(db: FakeDb, t: FakeDeckLabel): GlobalLabel {
+  const wearing = db.deckCards.filter((dc) => dc.labelId === t.id);
   return {
     id: t.id,
     name: t.name,
@@ -4486,48 +5252,52 @@ function toGlobalTag(db: FakeDb, t: FakeDeckTag): GlobalTag {
 }
 
 /**
- * `schema::tag_name_key` — what makes two tag names the same name, in the fake.
+ * `schema::label_name_key` — what makes two label names the same name, in the fake.
  *
- * A third copy of a rule that already exists twice (Rust's is the authority, `tagNames.ts` is
+ * A third copy of a rule that already exists twice (Rust's is the authority, `labelNames.ts` is
  * the webview's courtesy), and it has to be here for the fake to refuse what the backend
  * refuses: a story that types `removal` over an existing `Removal` must see the same sentence
  * the app would show. Kept to one line so the three cannot drift far.
  */
-function tagKey(name: string): string {
+function labelKey(name: string): string {
   return name.trim().normalize("NFC").toLowerCase().normalize("NFC");
 }
 
-/** Whether some **other** tag already holds this name, by {@link tagKey}'s comparison. `except`
- *  is the row allowed to hold it — `null` for a create, the row's own id for a rename, which is
- *  what lets a reader recapitalise `removal` to `Removal`. */
-function tagNameIsTaken(db: FakeDb, name: string, except: number | null): boolean {
-  const key = tagKey(name);
-  return db.deckTags.some((t) => t.id !== except && tagKey(t.name) === key);
+/** Whether some **other** label already holds this name, by {@link labelKey}'s comparison.
+ *  `except` is the row allowed to hold it — `null` for a create, the row's own id for a rename,
+ *  which is what lets a reader recapitalise `removal` to `Removal`. */
+function labelNameIsTaken(db: FakeDb, name: string, except: number | null): boolean {
+  const key = labelKey(name);
+  return db.deckLabels.some((t) => t.id !== except && labelKey(t.name) === key);
 }
 
 /**
- * `deck_meta::list_tags` — the tags one deck's one list is wearing, most-used first.
+ * `deck_meta::list_labels` — the labels one deck's one list is wearing, most-used first.
  *
- * The join `deck_get` and `deck_tag_list` both answer through, written once because the two must
+ * The join `deck_get` and `deck_label_list` both answer through, written once because the two must
  * agree exactly: they describe one list of cards, and the day they stop agreeing is the day a
- * context menu offers a label the Tags dialog says the deck does not use. Ties break on the
+ * context menu offers a label the Labels dialog says the deck does not use. Ties break on the
  * name, which is the SQL's own second term.
  */
-function tagsWorn(db: FakeDb, deckId: number, variant: DeckVariant): DeckTag[] {
+function labelsWorn(db: FakeDb, deckId: number, variant: DeckVariant): DeckLabel[] {
   const worn = new Set(
     db.deckCards
-      .filter((dc) => dc.deckId === deckId && dc.variant === variant && dc.tagId !== null)
-      .map((dc) => dc.tagId),
+      .filter((dc) => dc.deckId === deckId && dc.variant === variant && dc.labelId !== null)
+      .map((dc) => dc.labelId),
   );
-  return db.deckTags
+  return db.deckLabels
     .filter((t) => worn.has(t.id))
-    .map((t) => toDeckTag(db, t, deckId, variant))
+    .map((t) => toDeckLabel(db, t, deckId, variant))
     .sort((a, b) => b.cardCount - a.cardCount || cmp(a.name, b.name));
 }
 
 /**
- * `deck::owned_by_oracle` — copies of each oracle card **this deck's own group holds**, keyed
- * by oracle id.
+ * `deck::owned_by_printing` — copies of each `(card_id, finish)` **this deck's own group
+ * holds**, keyed as `` `${cardId}|${finish}` `` — `deck_pull_plan`'s own separator for this
+ * exact pair (below), reused rather than reinvented. A two-field tuple has no `Map` key of its
+ * own in JS, and `|` cannot occur in either a card id (hex and hyphens) or a finish
+ * (`nonfoil`/`foil`/`etched`) — a safer choice than a literal separator escape, which is exactly
+ * how this file picked up a NUL byte once (see `.storybook/CLAUDE.md`).
  *
  * **Schema v25 deleted the allocator, and this is what replaced it.** There used to be a greedy
  * walk here: `deck_allocations` rows were spent in category-kind order over the whole
@@ -4537,26 +5307,122 @@ function tagsWorn(db: FakeDb, deckId: number, variant: DeckVariant): DeckTag[] {
  * construction because the copies are *physically* in its folder.
  *
  * So the whole derivation is one group-by: sum `quantity` over the entries filed in the deck's
- * group, joined to `cards` for the oracle id. **Matched by oracle card and not by printing** —
- * a Bolt is a Bolt, so a deck listing one printing and holding another of the same card still
- * reads owned, which is the one thing this shares with the walk it replaced.
+ * group, keyed on the exact printing and finish. **Narrowed here from the oracle grain on
+ * 2026-09-07**, to agree with what `deck_pull::CANDIDATE_SQL` has matched exactly since
+ * 2026-09-03 — a Bolt used to be a Bolt, so a deck listing one printing and holding another of
+ * the same oracle card read owned, and that let a deck report a missing count its own Pull
+ * dialog could not fill a single line of. Now the two ask the same question.
  *
- * An orphaned row names no oracle card and contributes nothing, which is the crate's
- * `c.oracle_id IS NOT NULL` and its `JOIN cards` in one test here. The group is **not** scoped
- * to a variant, exactly as the SQL is not: {@link attributeOwned} is where a plan is refused its
- * share, explicitly, rather than by a table's shape.
+ * **`JOIN cards` goes away, and that is a behaviour change worth stating rather than an
+ * optimisation.** The old grain dropped an orphaned `collection_entries` row — one whose
+ * `card_id` names no `cards` row, so it had no oracle id to sum under — reading it owned 0. At
+ * this grain there is nothing to look up: the deck row and the collection row name the same
+ * `card_id` directly, and the copy counts.
+ *
+ * The group is **not** scoped to a variant, exactly as the SQL is not: {@link attributeOwned} is
+ * where a plan is refused its share, explicitly, rather than by a table's shape.
  */
-function ownedByOracle(db: FakeDb, deckId: number): Map<string, number> {
+function ownedByPrinting(db: FakeDb, deckId: number): Map<string, number> {
   const group = deckGroup(db, deckId);
   if (group === undefined) return new Map();
   const owned = new Map<string, number>();
   for (const e of db.collectionEntries) {
     if (e.folderId !== group.id) continue;
-    const oracleId = cardById(db, e.cardId)?.oracleId;
-    if (!oracleId) continue;
-    owned.set(oracleId, (owned.get(oracleId) ?? 0) + e.quantity);
+    const key = `${e.cardId}|${e.finish}`;
+    owned.set(key, (owned.get(key) ?? 0) + e.quantity);
   }
   return owned;
+}
+
+/**
+ * `coalesce(cards.oracle_id, deck_cards.card_id)` — what names a card in a folder rule.
+ *
+ * {@link collapseKey} one table over, and the difference is which id the coalesce falls back to.
+ * That one is handed a `cards` row and takes its own id; this one is handed a **`card_id` a deck
+ * row or a collection row remembers**, and `cards` may never have heard of it — an import writes
+ * a printing this corpus has not got, and a sync can drop one. So the fallback is the id the
+ * caller already had, which is exactly what the `LEFT JOIN` and the `coalesce` do together: a
+ * printing with no `cards` row is still a card, and it is only ever the same card as itself.
+ */
+function playedKey(db: FakeDb, cardId: string): string {
+  return cardById(db, cardId)?.oracleId ?? cardId;
+}
+
+/**
+ * `deck::played_keys` — every card a deck's **live** list plays, keyed by {@link playedKey}.
+ *
+ * The live list and nothing else: a theory row is a *plan*, it holds no cards, and a group
+ * filled from a plan is the phantom {@link NOT_IN_DECK} exists to stop. It is the same sentence
+ * {@link THEORY_HOLDS_NOTHING} says from the other end of the same pair.
+ *
+ * **No category test and no quantity test.** An inactive pile is still the reader's list — the
+ * Maybeboard is switched off for the *counting*, not for the filing — and a row stepped to zero
+ * is still a row. The crate's `SELECT DISTINCT` says neither, so a fake that said either would
+ * refuse presses the app allows.
+ *
+ * `DISTINCT`, because two piles of one deck may name one card and a rule asking "does this deck
+ * play it" must not care how many rows say yes. **Sorted by the key** — the crate's `ORDER BY 1`
+ * — so the answer is a stable list rather than whatever order the rows happen to be in, which is
+ * what lets a caller compare two decks' keys without sorting them first.
+ */
+function playedKeys(db: FakeDb, deckId: number): string[] {
+  const keys = new Set<string>();
+  for (const dc of db.deckCards) {
+    if (dc.deckId !== deckId || dc.variant !== LIVE) continue;
+    keys.add(playedKey(db, dc.cardId));
+  }
+  return [...keys].sort(cmp);
+}
+
+/**
+ * Whether a deck's live list plays a card — {@link NOT_IN_DECK}'s question.
+ *
+ * **Written over {@link playedKeys} rather than beside it**, which is the whole point: the fence
+ * and the read a rule is evaluated from have to answer the same question, and two walks over
+ * `deck_cards` are two places for a variant test or an oracle fallback to drift. A folder rule
+ * that let a card through the fence and then said the deck did not play it would be the same
+ * phantom by a longer road.
+ */
+function deckPlays(db: FakeDb, deckId: number, cardId: string): boolean {
+  return playedKeys(db, deckId).includes(playedKey(db, cardId));
+}
+
+/**
+ * `deck::decks_playing` — every deck whose live list plays **every** one of the given keys.
+ *
+ * **Every, never any**, and that is the rule rather than a detail: a folder rule naming three
+ * cards asks which decks could hold all three, and an `any` would answer with decks that play
+ * one of them — the union where the caller asked for the intersection.
+ *
+ * **No keys is no decks.** The vacuous reading — every deck plays all zero of them — is the one
+ * a `HAVING count(*) = 0` would give and is the wrong answer to the only question that produces
+ * it: a caller with an empty list has nothing to file, and answering the whole gallery would
+ * offer every deck at once. The early return is **belt and braces rather than the mechanism**:
+ * the walk below already answers `[]`, because no key can be in an empty set. It is written out
+ * so a later rewrite into a counting shape cannot pick the vacuous reading up by accident, which
+ * is exactly how that bug arrives in SQL.
+ *
+ * The keys are deduped before they are counted, so a caller that sent one card twice is asking
+ * about one card — the crate walks them into a `HashSet` for the same reason, because the count
+ * its `HAVING` compares against is the number of *distinct* keys the statement bound. Sorted by
+ * deck id, the crate's `ORDER BY dc.deck_id`.
+ */
+function decksPlaying(db: FakeDb, keys: readonly string[]): number[] {
+  const wanted = new Set(keys);
+  if (wanted.size === 0) return [];
+  const have = new Map<number, Set<string>>();
+  for (const dc of db.deckCards) {
+    if (dc.variant !== LIVE) continue;
+    const key = playedKey(db, dc.cardId);
+    if (!wanted.has(key)) continue;
+    const hit = have.get(dc.deckId);
+    if (hit) hit.add(key);
+    else have.set(dc.deckId, new Set([key]));
+  }
+  return [...have]
+    .filter(([, played]) => played.size === wanted.size)
+    .map(([deckId]) => deckId)
+    .sort((a, b) => a - b);
 }
 
 /**
@@ -4595,10 +5461,16 @@ function deckReadOrder(db: FakeDb): Compare<FakeDeckCard> {
  *
  * **That `variant !== LIVE` test is now true by construction rather than because a table lacked
  * a variant column**, which is worth saying plainly because it reads like a leftover. A group is
- * not scoped to a variant either, so {@link ownedByOracle}'s map is the whole deck's; what has
+ * not scoped to a variant either, so {@link ownedByPrinting}'s map is the whole deck's; what has
  * changed is that the map is a fact about where cards *are* rather than a ledger of what was
  * reserved. The conclusion is the same one and is still drawn here, explicitly — the rule
  * `deck::tests::the_allocator_claims_nothing_for_the_theory_variant` pins.
+ *
+ * **The key build is a plain one since 2026-09-07, where it used to be a guard.** A deck row
+ * always has a `cardId`, so there is no `oracleId` that can be missing and nothing left to
+ * filter on beside `isActive` — which now stands on its own next to the `variant` test rather
+ * than folded into the same one. {@link collectionFinish} supplies the `row.finish` half of the
+ * key, `normaliseFinish`'s translation read the other way.
  *
  * The `min(remaining, row.quantity)` clamp is the crate's: a deck listing four copies of a card
  * whose group holds one owns one of them.
@@ -4606,9 +5478,9 @@ function deckReadOrder(db: FakeDb): Compare<FakeDeckCard> {
 function attributeOwned(
   db: FakeDb,
   rows: readonly FakeDeckCard[],
-  ownedByOracle: ReadonlyMap<string, number>,
+  ownedByPrinting: ReadonlyMap<string, number>,
 ): Map<number, number> {
-  const left = new Map(ownedByOracle);
+  const left = new Map(ownedByPrinting);
   const owned = new Map<number, number>();
   for (const row of rows) {
     // A plan reserves nothing, whichever list the reader is looking at.
@@ -4616,29 +5488,144 @@ function attributeOwned(
       owned.set(row.id, 0);
       continue;
     }
-    const oracleId = cardById(db, row.cardId)?.oracleId;
-    if (!oracleId || categoryById(db, row.categoryId)?.isActive !== true) {
+    // A switched-off pile counts toward nothing anywhere in the app — its own test now, where
+    // it used to ride beside the oracle-id lookup this grain no longer needs.
+    if (categoryById(db, row.categoryId)?.isActive !== true) {
       owned.set(row.id, 0);
       continue;
     }
-    const remaining = left.get(oracleId) ?? 0;
+    const key = `${row.cardId}|${collectionFinish(row.finish)}`;
+    const remaining = left.get(key) ?? 0;
     const take = Math.max(0, Math.min(remaining, row.quantity));
-    left.set(oracleId, remaining - take);
+    left.set(key, remaining - take);
     owned.set(row.id, take);
   }
   return owned;
 }
 
 /**
- * `deck::read_deck_cards`' row: the deck card, its category, its tag and every fact about the
+ * `deck_pull::candidate_order` — where one candidate sorts, as the pair of numbers the compare
+ * below reads in order.
+ *
+ * **The order is the pre-pick, and it is chosen rather than incidental**: the root first, then
+ * `Recently removed`, then the reader's own folders in their `sortOrder`. It ranks by **how
+ * little of the reader's filing a pull disturbs** — the root is a decision nobody has made and
+ * the holding area is the app's own transient bin, where a named binder is a decision somebody
+ * made on purpose and taking a card out of it is undoing that decision. A dialog that offered
+ * the binder first would make the tidy reader pay for being tidy.
+ *
+ * **The third arm is `CASE`'s `ELSE`, not "a user folder"**, which is `CANDIDATE_SQL`'s shape
+ * read off rather than reasoned about: everything that is neither the root nor `removed` sorts
+ * at 2 on `coalesce(f.sort_order, 0)`. A `deck` folder never reaches here at all —
+ * {@link inADeckFolder} has already dropped it — so the only thing the `ELSE` covers besides the
+ * reader's own drawers is a `folder_id` nothing answers to, which `ON DELETE SET NULL` means the
+ * app cannot produce.
+ */
+function pullOrder(db: FakeDb, e: FakeEntry): [number, number] {
+  if (e.folderId === null) return [0, 0];
+  const folder = collectionFolderById(db, e.folderId);
+  if (folder?.kind === COLLECTION_REMOVED_KIND) return [1, 0];
+  return [2, folder?.sortOrder ?? 0];
+}
+
+/**
+ * `deck_pull::candidates_for` — every copy on the reader's desk that could fill one hole, best
+ * first.
+ *
+ * **The printing *and* the finish match exactly, and since 2026-09-07 that is no longer a
+ * narrowing against the owned count — it is the same grain the count reads at.** Before that
+ * date a deck's owned count was attributed at the **oracle** grain (`ownedByOracle` keyed on
+ * `oracle_id`, so a LEA Bolt filed in the group made an M10 line read as owned) while this
+ * stayed exact, so a deck could read *12 missing* and this could honestly offer nothing against
+ * a single one of them. **The resolution was exactness everywhere: the count narrowed to meet
+ * the pull, and the pull did not widen to meet the count** — {@link ownedByPrinting} now keys on
+ * `(card_id, finish)` too, so every hole the deck reports is a hole a candidate here could
+ * genuinely fill.
+ *
+ * **Eligibility is {@link inADeckFolder} and nothing of its own**, which is what makes the
+ * dialog and the Collection page's own switch answer the same question: the root, a folder the
+ * reader made and `Recently removed` are all cards on their desk, and this deck's own group is
+ * excluded by the same clause because those copies are already counted as owned.
+ *
+ * `quantity > 0` is the one extra term, and it is not the fence's business: a row stepped to
+ * zero is paperwork rather than a copy, exactly as it is to
+ * {@link collection_folder_summary}'s `sum(quantity)`.
+ */
+function pullCandidates(db: FakeDb, cardId: string, finish: DeckFinish): DeckPullCandidate[] {
+  return db.collectionEntries
+    .filter(
+      (e) =>
+        e.cardId === cardId &&
+        // {@link normaliseFinish} is the one place `"nonfoil"` becomes the `null` a deck row
+        // stores, so the two spellings are compared through it rather than beside it.
+        normaliseFinish(e.finish) === finish &&
+        e.quantity > 0 &&
+        !inADeckFolder(db, e.folderId),
+    )
+    .sort((a, b) => {
+      const [aRank, aOrder] = pullOrder(db, a);
+      const [bRank, bOrder] = pullOrder(db, b);
+      // Oldest row first inside a place, which is `moveCopies`' own tiebreak read from the
+      // other end: a reader with two rows of one printing in one folder gets the one they
+      // have had longest.
+      return aRank - bRank || aOrder - bOrder || a.id - b.id;
+    })
+    .map((e) => {
+      const folder = e.folderId === null ? undefined : collectionFolderById(db, e.folderId);
+      return {
+        entryId: e.id,
+        quantity: e.quantity,
+        folderId: e.folderId,
+        // `null` at the root, which the UI words — the backend has no row to read a name off
+        // and must not invent one.
+        folderName: folder?.name ?? null,
+        folderKind: folder?.kind ?? null,
+        // The copy's own facts, which are what tell two candidates of one printing apart: a
+        // reader choosing between them is choosing between a played English one and a NM
+        // Japanese one, and the row is the only place that is said.
+        condition: e.condition,
+        lang: e.lang,
+        altered: e.altered,
+        signed: e.signed,
+        proxy: e.proxy,
+        misprint: e.misprint,
+        grading: e.grading,
+        serialNumber: e.serialNumber,
+      };
+    });
+}
+
+/**
+ * `deck_pull::why_not_offered` — which of three things to tell a caller whose pick is not in the
+ * plan.
+ *
+ * Asked only on the refusal path, so the happy path pays nothing for it, and the three arms are
+ * three different things to tell a stale dialog: the row has gone, the row is spoken for, or the
+ * row is fine and the *deck* has stopped wanting it. One sentence covering all three would tell
+ * a reader nothing they could act on.
+ *
+ * **The `deck` arm is {@link ENTRY_IN_A_DECK} for this deck's own group too**, which the crate
+ * argues at its own definition and which is the one thing a fake is tempted to improve on:
+ * {@link ALREADY_HERE} reads better for that case and is the wrong sentence, because the fake's
+ * whole contract is that a story renders the refusal the window would.
+ */
+function whyNotOffered(db: FakeDb, entryId: number): string {
+  const row = db.collectionEntries.find((e) => e.id === entryId);
+  if (!row) return ENTRY_GONE;
+  if (inADeckFolder(db, row.folderId)) return ENTRY_IN_A_DECK;
+  return NOT_SHORT_OF_THAT;
+}
+
+/**
+ * `deck::read_deck_cards`' row: the deck card, its category, its label and every fact about the
  * printing.
  *
  * The category arrives as an argument rather than being looked up here, because
  * `DECK_CARD_SELECT` reaches it through an **inner** join — `category_id` is NOT NULL with an
  * enforced foreign key, so a card with no category is a row the schema cannot hold, unlike
- * `card_id`, which is soft by design and reads as a LEFT JOIN's worth of nulls. The tag is the
- * opposite again: `LEFT JOIN deck_tags`, all three fields null together, because
- * `deck_cards.tag_id` is `ON DELETE SET NULL` and an untagged row is the ordinary case.
+ * `card_id`, which is soft by design and reads as a LEFT JOIN's worth of nulls. The label is the
+ * opposite again: `LEFT JOIN deck_labels`, all three fields null together, because
+ * `deck_cards.label_id` is `ON DELETE SET NULL` and an unlabelled row is the ordinary case.
  */
 function toDeckCard(
   db: FakeDb,
@@ -4648,7 +5635,8 @@ function toDeckCard(
   mp: MarketplaceId,
 ): DeckCard {
   const card = cardById(db, dc.cardId);
-  const tag = dc.tagId === null ? undefined : db.deckTags.find((t) => t.id === dc.tagId);
+  const label =
+    dc.labelId === null ? undefined : db.deckLabels.find((l) => l.id === dc.labelId);
   return {
     id: dc.id,
     cardId: dc.cardId,
@@ -4657,9 +5645,9 @@ function toDeckCard(
     categoryKind: category.kind,
     categoryActive: category.isActive,
     variant: dc.variant,
-    tagId: tag?.id ?? null,
-    tagName: tag?.name ?? null,
-    tagColor: tag?.color ?? null,
+    labelId: label?.id ?? null,
+    labelName: label?.name ?? null,
+    labelColor: label?.color ?? null,
     quantity: dc.quantity,
     finish: dc.finish,
     name: dc.name,
@@ -4857,7 +5845,7 @@ function wishlistOrder(
 ): Compare<FakeWish> {
   const ownedBy = new Map(rows.map((w) => [w.id, ownedAgainstWish(db, w)]));
   const priceBy = new Map(
-    rows.map((w) => [w.id, finishPriceAt(db, wishCard(db, w), w.preferredFinish ?? "nonfoil", mp)]),
+    rows.map((w) => [w.id, wishPriceAt(db, wishCard(db, w), w.preferredFinish, mp)]),
   );
   const owned = (w: FakeWish) => ownedBy.get(w.id) ?? 0;
   /** The cheapest way to satisfy the wish, per copy: the preferred finish's price if it names
@@ -5384,6 +6372,22 @@ export function readHandlers(db: FakeDb) {
        */
       const priceMin = req.priceMin;
       const priceMax = req.priceMax;
+      /**
+       * Which deck this search counts copies **for** — `SearchRequest.availableForDeck`, and the
+       * one field on this request that narrows no rows at all.
+       *
+       * It decides what *owned* means for the two things that say it: the `owned` filter below
+       * and every row's `ownedQuantity`. Both, together — a count narrowed while its filter was
+       * left alone would put a card under the Owned chip wearing `×0`. Absent everywhere but the
+       * deck builder's card search tab, which is the backend's own default.
+       *
+       * **`facet_cards` does not take it**, and `useCardFacets` states why from the other side:
+       * `CardIndex` has one global `owned` bitset and no deck-relative dimension, so the
+       * Owned/Missing counts in that panel's filter row are taken as if every copy were
+       * reachable and read **high**. Over-reading only ever leaves a control live, which is the
+       * direction the whole row fails in.
+       */
+      const forDeck = req.availableForDeck;
       const matched = db.cards.filter((c) => {
         if (text !== null && !cardMatchesText(c, text)) return false;
         if (oracleId !== null && c.oracleId !== oracleId) return false;
@@ -5399,7 +6403,9 @@ export function readHandlers(db: FakeDb) {
         // copies, because a wish is filled by copies rather than by paperwork.
         // {@link ownsPrinting} is `collection_source::owns_printing`, so the filter follows
         // whichever source the collection is — the same swap the badge beside it makes.
-        if (req.owned !== undefined && req.owned !== ownsPrinting(db, c.id)) return false;
+        if (req.owned !== undefined && req.owned !== ownsPrinting(db, c.id, forDeck)) {
+          return false;
+        }
         return true;
       });
       // `SEARCH_SORTS` over the browse order, with `c.id ASC` appended. Simplification 1 is
@@ -5415,8 +6421,8 @@ export function readHandlers(db: FakeDb) {
       // be a lie in both places. Grouping *after* the sort keeps the representative-picking
       // and the ordering independent, which is what the two-step SQL does too.
       const rows: CardSummary[] = req.collapse
-        ? collapseToCards(db, sorted, mp)
-        : sorted.map((c) => toCardSummary(db, c, mp));
+        ? collapseToCards(db, sorted, mp, forDeck)
+        : sorted.map((c) => toCardSummary(db, c, mp, forDeck));
       // The count stops at the cap rather than walking the table on every keystroke.
       const counted = Math.min(rows.length, TOTAL_CAP + 1);
       return {
@@ -5690,6 +6696,52 @@ export function readHandlers(db: FakeDb) {
     },
 
     /**
+     * `card::holdings` — the three figures the card modal's **In your grimoire** block states,
+     * in one read.
+     *
+     * **All three at the oracle grain**, which is what that heading means: a reader who owns the
+     * Alpha Bolt and opens the M10 one owns *Lightning Bolt*. Three zeros is a real answer about
+     * a card nobody holds, so this never refuses and never answers `null`.
+     *
+     * Each third is the fake's *existing* rule rather than a fourth spelling of it, exactly as
+     * the crate composes `copies_of_oracle`, `wished_copies` and `decks_playing`: a figure here
+     * that disagreed with the wall it sits beside would be the drift the fake exists to catch.
+     *
+     * * **owned** joins `cards` for the oracle id and narrows by nothing else — every printing,
+     *   every finish, every folder, which is `Availability::Everything`. A copy on a locked
+     *   shelf or filed into a deck's group is still a copy the reader owns, and an orphaned row
+     *   names no oracle card and contributes nothing (the crate's `JOIN cards`).
+     * * **wished** is `coalesce(w.oracle_id, cards[w.card_id].oracle_id)` and a `sum` rather than
+     *   a row count — `WISHLIST_GRAIN` makes a foil wish and a nonfoil wish two rows for one
+     *   card. `coalesce` and not two comparisons: a wish pinned to a printing this corpus has
+     *   lost has no key at all, and must not match by falling through to the other arm.
+     * * **decks** is {@link decksPlaying} over the oracle id as a single key, so it is **live
+     *   lists only** (a plan holds no cards) and archived decks count, exactly as the read the
+     *   modal made before this command existed.
+     *
+     * A blank `oracleId` answers three zeros rather than refusing — `cards.oracle_id` is
+     * nullable, and a card with no oracle id is a card nothing can be held *of*.
+     */
+    card_holdings: (args: { oracleId: string }): CardHoldings => {
+      const oracleId = args.oracleId.trim();
+      if (oracleId === "") return { owned: 0, wished: 0, decks: 0 };
+      const owned = db.collectionEntries
+        .filter((e) => cardById(db, e.cardId)?.oracleId === oracleId)
+        .reduce((n, e) => n + e.quantity, 0);
+      const wished = db.wishlistEntries
+        .filter((w) => {
+          // The pinned printing's own `cards` row and never {@link playedKey}, whose fallback is
+          // the printing id: a wish pinned to a printing this corpus has lost has **no key**,
+          // which is what the crate's sub-select answering NULL means, and a fallback here would
+          // give it one that could only ever match by accident.
+          const pinned = w.cardId === null ? null : (cardById(db, w.cardId)?.oracleId ?? null);
+          return (w.oracleId ?? pinned) === oracleId;
+        })
+        .reduce((n, w) => n + w.quantity, 0);
+      return { owned, wished, decks: decksPlaying(db, [oracleId]).length };
+    },
+
+    /**
      * `card::list_printings`: every **paper** printing of one oracle card, newest first,
      * capped with an uncapped count so a truncated list can say what it truncates. Every row
      * is priced per finish at the marketplace asked for, like the card above.
@@ -5697,7 +6749,8 @@ export function readHandlers(db: FakeDb) {
      * **`limit` is honoured here because the mirror sends it**, which is the whole argument for
      * this fake sitting *under* `src/lib/ipc.ts` rather than beside it: a handler that quietly
      * ignored an argument would let a story pass over a call the window answers differently. The
-     * card detail pane sends nothing and gets {@link MAX_PRINTINGS}; the printings modal names
+     * card detail modal sends nothing and gets {@link MAX_PRINTINGS} — as the docked pane it
+     * replaced did — while the printings modal names
      * the ceiling, because it filters client-side and a filter over a truncated list draws an
      * empty wall that reads as an answer.
      *
@@ -5839,6 +6892,120 @@ export function readHandlers(db: FakeDb) {
     },
 
     /**
+     * `wishlist_optimize::plan` — what re-pointing the list on screen at each card's cheapest
+     * printing would change, and **nothing is written**. Issue #352's "preview you can verify
+     * before committing", which is why this feature is two commands and not one.
+     *
+     * **Over the query, never over the page.** It is handed the same {@link WishlistQuery} the
+     * list drew and runs {@link wishlistScope} on it, so the folder, the Flatten switch and every
+     * active card filter scope the sweep — while `limit` and `offset` are read by nothing here.
+     * That is what makes `considered` the very number {@link readHandlers.wishlist_list} puts in
+     * `total`, and what stops a preview quietly ending at the foot of page one.
+     *
+     * **The three counts partition `considered`**, so the four numbers are one piece of
+     * arithmetic and a story can assert it:
+     *
+     * * an **any-printing** wish is `alreadyCheapest` and can never be a move —
+     *   {@link wishCard}'s join already draws and prices it at a printing chosen for it, so
+     *   there is no saving to find, and pinning it would take away the flexibility that makes it
+     *   cheap in the first place;
+     * * a wish with **no oracle id** (nothing to find siblings by), a wish pinned to a printing
+     *   `cards` no longer has, and an oracle card **no** printing of which this marketplace
+     *   prices at this wish's finish are `skipped` — three different ways there is nothing to
+     *   compare against, counted together because the dialog says "passed over" once;
+     * * everything else is a **move** when {@link cheapestPrinting} is *strictly* cheaper, and
+     *   `alreadyCheapest` when it is not. Strictly, because a printing tied at the same price
+     *   sorts ahead of the one the reader is already on and would offer a saving of 0.00.
+     *
+     * **A wish whose current printing this marketplace does not list is offered as a move and
+     * counts no saving.** `savedPerCopy` and `saved` are `null` exactly when `from.price` is,
+     * because an unlisted printing may be cheap rather than dear and a figure invented for it
+     * would inflate the headline — the preview draws that row `— → $1.74` and leaves it unticked.
+     *
+     * **The moves come back in `list_wishes`' *fallback* order — name, then id — and not in the
+     * reader's chosen sort**, which is the crate's call rather than a simplification: the money
+     * sorts order by output aliases (`unit_price`, `owned_quantity`) this statement does not
+     * select, so honouring `sort` would mean selecting columns a preview has no use for. A
+     * preview is a list of changes, not a second rendering of the page.
+     *
+     * **No marketplace on the answer, deliberately**, and no fault of its own: this is a read,
+     * so it answers through every second of a sync like every other read in this table, and every
+     * figure in it was quoted at the marketplace the query carried. A second copy of that fact
+     * travelling back is one more thing that can disagree with the hook the dialog renders with.
+     */
+    wishlist_optimize_plan: (args: { query: WishlistQuery }): WishlistOptimizePlan => {
+      const q = args.query;
+      const mp = marketplaceOf(q.marketplace);
+      const rows = wishlistScope(db, q);
+      const moves: WishOptimizeMove[] = [];
+      let alreadyCheapest = 0;
+      let skipped = 0;
+      for (const w of [...rows].sort((a, b) => cmp(a.name, b.name) || a.id - b.id)) {
+        // Cheapest by construction, and the one arm decided before any price is read.
+        if (w.cardId === null) {
+          alreadyCheapest += 1;
+          continue;
+        }
+        if (w.oracleId === null) {
+          skipped += 1;
+          continue;
+        }
+        // **Read off `cards`, never off the wish's own denormalised columns.** A plan is about
+        // printings that exist today, and a wish pinned to an id Scryfall has since removed still
+        // carries a set, a number and a language describing it — so trusting the row would draw
+        // a `from` side there is nothing to compare against.
+        const from = cardById(db, w.cardId);
+        if (from === null) {
+          skipped += 1;
+          continue;
+        }
+        const best = cheapestPrinting(db, w, mp);
+        if (best === null) {
+          skipped += 1;
+          continue;
+        }
+        const fromPrice = wishPriceAt(db, from, w.preferredFinish, mp);
+        // `>=` and not `>`, which is the whole of the "strictly cheaper" rule. It also answers
+        // the two cases that arrive here without being about a tie at all: the wish is already on
+        // the cheapest printing (`best` *is* `from`), and the wish is pinned to a digital
+        // printing this marketplace happens to price, which no candidate can be.
+        if (fromPrice !== null && best.price >= fromPrice) {
+          alreadyCheapest += 1;
+          continue;
+        }
+        moves.push({
+          wishId: w.id,
+          // The wish's own name, as the list draws it — a wish outlives the printing it was made
+          // from and may never have had one.
+          name: w.name,
+          quantity: w.quantity,
+          preferredFinish: w.preferredFinish,
+          folderId: w.folderId,
+          from: {
+            cardId: from.id,
+            setCode: from.setCode,
+            collectorNumber: from.collectorNumber,
+            lang: from.lang,
+            price: fromPrice,
+          },
+          to: {
+            cardId: best.card.id,
+            setCode: best.card.setCode,
+            collectorNumber: best.card.collectorNumber,
+            lang: best.card.lang,
+            // Never `null`: an unpriced printing is not a candidate. See {@link cheapestPrinting}.
+            price: best.price,
+          },
+          // `null` with `from.price` and never `0` — the paragraph above, and the reason the
+          // dialog can leave such a row unticked without lying about what it would save.
+          savedPerCopy: fromPrice === null ? null : fromPrice - best.price,
+          saved: fromPrice === null ? null : (fromPrice - best.price) * w.quantity,
+        });
+      }
+      return { moves, considered: rows.length, alreadyCheapest, skipped };
+    },
+
+    /**
      * `collection_folders::list_folders` — every folder there is, flat, `ORDER BY sort_order,
      * id`. No scoping of any kind: a folder belongs to no card, it files them.
      *
@@ -5937,7 +7104,7 @@ export function readHandlers(db: FakeDb) {
           unpriced: 0,
         };
         const missing = Math.max(0, w.quantity - ownedAgainstWish(db, w));
-        const unit = finishPriceAt(db, wishCard(db, w), w.preferredFinish ?? "nonfoil", mp);
+        const unit = wishPriceAt(db, wishCard(db, w), w.preferredFinish, mp);
         row.wishes += 1;
         row.missing += missing;
         row.cost += unit === null ? 0 : missing * unit;
@@ -5957,13 +7124,140 @@ export function readHandlers(db: FakeDb) {
         .map((d) => toDeckRow(db, d)),
 
     /**
+     * `deck::pip_costs` — every deck's printed mana costs, for the gallery's colour bars.
+     *
+     * **The same three exclusions {@link toDeckRow}'s `cardCount` applies, and that is the whole
+     * of the definition rather than a resemblance**: the bar is drawn under a caption that
+     * already says how many cards the deck has, so a bar counting a different pile than that
+     * number counts is a tile disagreeing with itself. `live`, an **active** category, and
+     * {@link SIZE_KINDS}' three kinds — the sideboard and the companion are beside the deck
+     * rather than in it, a theory row is a plan, and a switched-off pile counts toward nothing.
+     *
+     * **A cost string, never a counted pip.** Which of a cost's symbols is a pip, and what a
+     * `{W/U}` half is worth, is `src/lib/mana.ts`'s `countPips` — the facts/conclusions boundary
+     * this whole file mirrors, applied to a colour bar. So there is nothing to get wrong here
+     * except the pile, which is why the pile is the only thing this comment is about.
+     *
+     * **Null and empty costs are dropped, and an orphan with them.** A land contributes no pip
+     * and there is no reason to ship one row per basic; the crate's `JOIN cards` is inner, so a
+     * printing that has left the corpus has no cost to report either — {@link cardById} answering
+     * `null` is that join failing.
+     *
+     * **A deck with nothing to say is absent from the answer rather than present and empty**,
+     * which is what the crate's `GROUP BY` gives and what a caller has to be written for: an
+     * all-lands pile and a deck nobody has filled read alike, and both draw no bar at all. A fake
+     * that emitted an entry per deck would let a story be written against `answer[i].costs` and
+     * that story would break on the real backend.
+     *
+     * Ordered by deck and then by cost — `ORDER BY dc.deck_id, c.mana_cost` — so two runs over
+     * one store answer in one order. It is the grouping's order and not a contract about
+     * presentation: which order the *segments* are drawn in is `MANA_KEYS`', on the other side.
+     */
+    deck_pip_costs: (): DeckPipCosts[] => {
+      const byDeck = new Map<number, Map<string, number>>();
+      for (const dc of db.deckCards) {
+        if (dc.variant !== LIVE) continue;
+        const category = categoryById(db, dc.categoryId);
+        if (category === undefined || !category.isActive) continue;
+        if (!SIZE_KINDS.includes(category.kind)) continue;
+        const cost = cardById(db, dc.cardId)?.manaCost ?? null;
+        if (cost === null || cost === "") continue;
+        const costs = byDeck.get(dc.deckId) ?? new Map<string, number>();
+        // `sum(dc.quantity)`, not a row count: four Lightning Bolts are four red pips.
+        costs.set(cost, (costs.get(cost) ?? 0) + dc.quantity);
+        byDeck.set(dc.deckId, costs);
+      }
+      return [...byDeck]
+        .sort(([a], [b]) => a - b)
+        .map(([deckId, costs]) => ({
+          deckId,
+          costs: [...costs]
+            .sort(([a], [b]) => cmp(a, b))
+            .map(([cost, copies]) => ({ cost, copies })),
+        }));
+    },
+
+    /**
+     * `deck::bracket_reads` — everything the Commander bracket estimate is made of, for the
+     * decks the caller names.
+     *
+     * **A wider pile than {@link readHandlers.deck_pip_costs}' and deliberately so**: `live` and
+     * an **active** category, in **every** kind. Commander has no sideboard, so a reader who has
+     * filed cards in one has filed them somewhere the bracket rules still see, and this is what
+     * `DeckBracket.tsx` hands the estimator today — filtered on `categoryActive` and on nothing
+     * else. Two reads of one deck answering two different piles is the disagreement worth
+     * avoiding: the gallery and the editor have to reach the same bracket for the same deck.
+     *
+     * **The ids are the caller's, and that is the boundary rather than a convenience.** Which
+     * formats have a command zone is `format_specs.commanderRule`, a TypeScript question, so a
+     * filter here would be the backend drawing a conclusion — and drawing it again, differently,
+     * the day a second format grows brackets.
+     *
+     * **One entry per requested id, in request order, whether or not a deck answers to it.** A
+     * caller may zip the answer against the ids it sent, so an id with nothing behind it gets an
+     * empty read rather than being dropped — the two lists coming apart would hand every deck
+     * after the gap its neighbour's bracket. An empty `deckIds` answers `[]`, which the crate
+     * returns before it prepares a statement.
+     *
+     * `DISTINCT` over the four columns and ordered by them, the crate's `BRACKET_CARDS_SQL`: a
+     * card in two piles of one deck is one row, which changes no estimate — `estimateBracket`
+     * dedupes by name anyway — and saves a deck's worth of duplicate oracle text.
+     *
+     * The combos come from {@link matchCombos} over **the same pile's** distinct printing ids,
+     * which is the half that has to be true rather than merely tidy: `estimateBracket` does not
+     * re-check the combos it is handed, so a match made over a switched-off pile's cards would
+     * raise a floor for a combo the deck does not play and nothing downstream could tell.
+     */
+    deck_bracket_reads: (args: { deckIds: number[] }): DeckBracketRead[] =>
+      args.deckIds.map((deckId) => {
+        const rows = db.deckCards.filter(
+          (dc) =>
+            dc.deckId === deckId &&
+            dc.variant === LIVE &&
+            categoryById(db, dc.categoryId)?.isActive === true,
+        );
+        const distinct = new Map<string, BracketCardRow>();
+        for (const dc of rows) {
+          const card = cardById(db, dc.cardId);
+          const row: BracketCardRow = {
+            // `deck_cards.name`, the row's own denormalized column — the only name an orphan
+            // has, and the one the editor's panel dedupes on.
+            name: dc.name,
+            // NULL read as `false`: the column is a list membership, so "not on the list" and
+            // "no row to ask" are one answer to the only question put to this field.
+            gameChanger: card?.gameChanger ?? false,
+            oracleText: card?.oracleText ?? null,
+            faces: card?.faces ?? null,
+            // A literal, because the filter above has already pinned it. See
+            // `BracketCardRow.categoryActive` in `ipc.ts` for why it is carried at all.
+            categoryActive: true,
+          };
+          distinct.set(JSON.stringify([row.name, row.gameChanger, row.oracleText, row.faces]), row);
+        }
+        const cardIds = [...new Set(rows.map((dc) => dc.cardId))].sort(cmp);
+        return {
+          deckId,
+          cards: [...distinct.values()].sort(
+            (a, b) =>
+              cmp(a.name, b.name) ||
+              Number(a.gameChanger) - Number(b.gameChanger) ||
+              nullsFirst(a.oracleText, b.oracleText) ||
+              nullsFirst(a.faces, b.faces),
+          ),
+          // `[]` on a store that has never ingested the combo feed, which is a supported state
+          // and not an error: the estimate then reads three signals instead of four.
+          combos: matchCombos(db, cardIds),
+        };
+      }),
+
+    /**
      * `deck::get_deck` — the deck and everything in it, in one answer.
      *
      * One command rather than five, because the editor and the validation engine ask the
      * same question and a screen whose curve, legality panel, owned badges and column
      * headings come from four queries is a screen whose four answers can disagree.
      *
-     * **`variant` scopes the cards and nothing else.** Every category and every tag comes
+     * **`variant` scopes the cards and nothing else.** Every category and every label comes
      * back whole — an empty category still draws a column, because that is where the next
      * card goes, and an inactive one always draws, because that is the affordance for
      * switching it back on. Only their two numbers follow the variant that was asked for.
@@ -5979,11 +7273,11 @@ export function readHandlers(db: FakeDb) {
       const rows = db.deckCards
         .filter((dc) => dc.deckId === deck.id && dc.variant === variant)
         .sort(deckReadOrder(db));
-      // `owned_by_oracle` then `attribute_owned`, in that order and with no variant test
+      // `owned_by_printing` then `attribute_owned`, in that order and with no variant test
       // between them — exactly as `deck::get_deck` calls them. The map is what this deck's
       // group physically holds, whichever list is being read; {@link attributeOwned} is where a
       // theory row is refused its share, by hand and for a reason of its own.
-      const owned = attributeOwned(db, rows, ownedByOracle(db, deck.id));
+      const owned = attributeOwned(db, rows, ownedByPrinting(db, deck.id));
       const cards = rows
         // The join on `deck_categories` is inner, so a row whose category is gone is not a
         // row: `flatMap` is what drops one, and nothing in this fake can produce it.
@@ -5995,9 +7289,100 @@ export function readHandlers(db: FakeDb) {
         .filter((c) => c.deckId === deck.id)
         .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id)
         .map((c) => toDeckCategory(db, c, variant, mp));
-      const tags: DeckTag[] = tagsWorn(db, deck.id, variant);
-      return { deck: toDeckRow(db, deck), cards, categories, tags };
+      const labels: DeckLabel[] = labelsWorn(db, deck.id, variant);
+      return { deck: toDeckRow(db, deck), cards, categories, labels };
     },
+
+    /**
+     * `deck_tokens::deck_tokens` — every token and emblem this deck needs, with the reader's
+     * stored override joined on.
+     *
+     * **Derived on every call and stored nowhere** — {@link derivedTokens} does the walk, and
+     * `deck_tokens` holds only deviations. So a world whose {@link FakeDb.deckTokens} is empty
+     * still answers a full list, which is the state every install is in until somebody presses
+     * something.
+     *
+     * **`[]` is an answer three times over and never a failure**: a deck whose cards make
+     * nothing, a deck with no cards, and a deck that is not there. A deck must not fail to open
+     * over an area most decks use lightly, which is also why this honours no fault — not even
+     * `gone`, whose meaning here would be an empty list either way.
+     *
+     * The **`manual` rows come last**, exactly as the crate appends them: a token the reader
+     * added by hand, or one they kept after cutting the card that made it, is drawn whether the
+     * deck derives it or not and carries `derived: false` with an empty `sources`.
+     *
+     * The order within each half is by name then oracle id, which is a *stable* order and not
+     * the panel's: emblems-last and the `localeCompare` are `deckTokenViews`' conclusion, in
+     * `features/decks/deckTokens.ts`. Rust supplies facts; TypeScript draws the order.
+     */
+    deck_tokens: (args: { deckId: number; variant: DeckVariant }): DeckTokenRow[] => {
+      const variant = validVariant(args.variant);
+      const derived = derivedTokens(db, args.deckId, variant);
+      const rows = derived
+        .map((d) =>
+          toDeckTokenRow(db, args.deckId, d.token, defaultTokenPrinting(db, d), d.sources, true),
+        )
+        .sort((a, b) => cmp(a.name, b.name) || cmp(a.oracleId, b.oracleId));
+      const derivedIds = new Set(derived.map((d) => d.token.oracleId));
+      const manual = db.deckTokens
+        .filter(
+          (t) => t.deckId === args.deckId && t.state === "manual" && !derivedIds.has(t.oracleId),
+        )
+        // A stored row whose oracle id names no token in the corpus is dropped rather than drawn
+        // as a hole — `flatMap` is what drops one, and it is the same call the resolver makes
+        // about an `all_parts` id `cards` has no row for.
+        .flatMap((t) => {
+          const printings = tokenPrintings(db, t.oracleId);
+          const token = printings.find((p) => p.id === t.cardId) ?? printings[0];
+          return token === undefined
+            ? []
+            : [
+                toDeckTokenRow(
+                  db,
+                  args.deckId,
+                  token,
+                  // Nothing derives it, so there is no reference count to rank by: the reader's
+                  // own pick is the default, and the tie-break decides when they have none.
+                  t.cardId ?? printings[0].id,
+                  [],
+                  false,
+                ),
+              ];
+        })
+        .sort((a, b) => cmp(a.name, b.name) || cmp(a.oracleId, b.oracleId));
+      return [...rows, ...manual];
+    },
+
+    /**
+     * `deck::played_keys` — every card this deck's **live** list plays, as the keys a folder
+     * rule names cards by. See {@link playedKeys} for the variant, the key, the `DISTINCT` and
+     * the order.
+     *
+     * **A read where {@link writeHandlers.collection_to_deck}'s fence is a refusal**, and the
+     * pair is the point: the write is where the invariant is *kept* ({@link NOT_IN_DECK}), and
+     * this is how a screen can say so before the reader presses anything. Both go through
+     * {@link playedKeys}, so a control that offers a filing and a write that accepts one cannot
+     * disagree about which cards a deck plays.
+     *
+     * **No `deckMeta` fault and no refusal of any kind.** It is not one of `deck_meta`'s five
+     * satellites — it is `deck.rs`' own, on the same `lock_db_read` as `deck_get` — so a deck
+     * whose folders cannot be read still answers here. A deck that is not there answers `[]`,
+     * which is the honest reading of "the cards its list plays" and what the SQL gives with no
+     * fence at all.
+     */
+    deck_played_keys: (args: { deckId: number }): string[] => playedKeys(db, args.deckId),
+
+    /**
+     * `deck::decks_playing` — every deck whose live list plays **every** one of these keys.
+     *
+     * The question the other way round: {@link deck_played_keys} asks what one deck plays, this
+     * asks which decks play a given hand. See {@link decksPlaying} for the every-not-any rule
+     * and for why an empty `keys` answers an empty list rather than the whole gallery.
+     *
+     * Ids and not rows, deliberately — the caller already has `deck_list`, and a second command
+     * answering deck rows would be a second place for a name or an `updatedAt` to be stale.
+     */
+    deck_ids_playing: (args: { keys: string[] }): number[] => decksPlaying(db, args.keys),
 
     /**
      * `deck_meta::list_categories` — a deck's categories on their own, for a panel that wants
@@ -6022,35 +7407,37 @@ export function readHandlers(db: FakeDb) {
     },
 
     /**
-     * `deck_meta::list_tags` — the tags **this deck's list is wearing**, most-used first.
+     * `deck_meta::list_labels` — the labels **this deck's list is wearing**, most-used first.
      *
      * Membership is a join over `deck_cards` since schema v21, not a `WHERE t.deck_id`: there is
-     * no deck on a tag row to filter by, and what a deck has is cards. So `variant` scopes which
-     * tags are in the answer as well as their counts — the live list and the theory list are
+     * no deck on a label row to filter by, and what a deck has is cards. So `variant` scopes which
+     * labels are in the answer as well as their counts — the live list and the theory list are
      * treated as separate decks where labels are concerned.
      */
-    deck_tag_list: (args: { deckId: number; variant: DeckVariant }): DeckTag[] => {
+    deck_label_list: (args: { deckId: number; variant: DeckVariant }): DeckLabel[] => {
       const variant = validVariant(args.variant);
-      refuseIfMetaUnreadable(db, TAGS_UNREADABLE);
-      return tagsWorn(db, args.deckId, variant);
+      refuseIfMetaUnreadable(db, LABELS_UNREADABLE);
+      return labelsWorn(db, args.deckId, variant);
     },
 
     /**
-     * `deck_meta::list_all_tags` — every tag there is, most-used first.
+     * `deck_meta::list_all_labels` — every label there is, most-used first.
      *
      * The one command in the deck surface that takes no id at all, and the only list that can
-     * answer a tag no card is wearing: a `LEFT JOIN`, so an unused label is a row with two
+     * answer a label no card is wearing: a `LEFT JOIN`, so an unused label is a row with two
      * zeroes rather than a row that is missing.
      *
-     * It replaced `deck_tag_suggestions`, which grouped on `(name, color)` and answered names
-     * without ids — a shape that existed only because two decks could hold two rows spelling one
-     * word, and picking a "suggestion" copied it into the deck you were in. There is one row per
-     * name now, so this answers ids and picking one **uses** that very tag.
+     * It replaced `deck_tag_suggestions` — the label was called a tag then, and the old name is
+     * left as it was written because nothing answers to it any more — which grouped on
+     * `(name, color)` and answered names without ids, a shape that existed only because two decks
+     * could hold two rows spelling one word, and picking a "suggestion" copied it into the deck
+     * you were in. There is one row per name now, so this answers ids and picking one **uses**
+     * that very label.
      */
-    deck_tag_all: (): GlobalTag[] => {
-      refuseIfMetaUnreadable(db, TAG_PALETTE_UNREADABLE);
-      return db.deckTags
-        .map((t) => toGlobalTag(db, t))
+    deck_label_all: (): GlobalLabel[] => {
+      refuseIfMetaUnreadable(db, LABEL_PALETTE_UNREADABLE);
+      return db.deckLabels
+        .map((t) => toGlobalLabel(db, t))
         .sort((a, b) => b.cardCount - a.cardCount || cmp(a.name, b.name));
     },
 
@@ -6102,10 +7489,17 @@ export function readHandlers(db: FakeDb) {
      * entries spelling one key are a plan the frontend would read as half the size. The fake does
      * the folding rather than leaning on `theoryMatchPlan`'s own defensive sum, or a story would
      * be exercising that fallback instead of the shape the backend answers in.
+     *
+     * **`nameKey` comes off `cards` and never off the deck row** (2026-09-07), which is the
+     * `LEFT JOIN c` in the real query: an orphan whose printing has left the corpus answers
+     * `null` and is matchable exactly and not loosely, where `deck_cards.name` is denormalised
+     * and would hand every orphan a name it could be matched by. **It is answered unfolded**,
+     * because `theoryNameKey` is where the fold is written and a fake that pre-lowercased it
+     * would make every story's blue tier prove that the fold agrees with itself.
      */
     deck_theory_slots: (args: { deckId: number }): TheorySlot[] => {
       refuseIfMetaUnreadable(db, THEORY_UNREADABLE);
-      const wanted = new Map<string, number>();
+      const wanted = new Map<string, { nameKey: string | null; quantity: number }>();
       for (const dc of db.deckCards) {
         if (
           dc.deckId !== args.deckId ||
@@ -6115,9 +7509,11 @@ export function readHandlers(db: FakeDb) {
           continue;
         }
         const key = `${dc.cardId}|${dc.finish ?? ""}`;
-        wanted.set(key, (wanted.get(key) ?? 0) + dc.quantity);
+        const held = wanted.get(key);
+        if (held) held.quantity += dc.quantity;
+        else wanted.set(key, { nameKey: cardById(db, dc.cardId)?.name ?? null, quantity: dc.quantity });
       }
-      return [...wanted].map(([key, quantity]) => ({ key, quantity }));
+      return [...wanted].map(([key, { nameKey, quantity }]) => ({ key, nameKey, quantity }));
     },
 
     /** `deck_theory::theory_diff` — what the plan wants and the deck does not have. See
@@ -6125,6 +7521,153 @@ export function readHandlers(db: FakeDb) {
     deck_theory_diff: (args: { deckId: number; marketplace?: string }): TheoryDiffRow[] => {
       refuseIfMetaUnreadable(db, THEORY_UNREADABLE);
       return theoryDiff(db, args.deckId, marketplaceOf(args.marketplace)).map((g) => g.row);
+    },
+
+    /**
+     * `deck_pull::plan` — every printing the **live** list is short of that the reader can fill
+     * off their own desk, and every copy that could fill it.
+     *
+     * **The `live` list only, because a plan holds no cards** ({@link THEORY_HOLDS_NOTHING}'s
+     * reasoning without the refusal): a theory row reserves nothing, so it is short of nothing
+     * there is anywhere to put. That is not a second rule to remember — {@link attributeOwned}
+     * already answers `0` for every theory row, so a plan walking both variants would read the
+     * whole theory list as one enormous hole.
+     *
+     * **The shortfall is folded to the printing, never to the pile.** The same card short in two
+     * categories is one row here for the sum, because what a reader is short of is *cardboard*
+     * and custody is a fact about the deck rather than about a column; {@link DeckPullRow}'s
+     * `categories` names the piles for them to read and is never a term in the arithmetic. That
+     * is {@link deck_missing_to_wishlist}'s fold one grain narrower — that one folds to the
+     * **oracle** card because a shopping list is not a printing preference, and this one folds
+     * to the printing and the finish because a pull moves the exact piece of cardboard.
+     *
+     * **The owned side is `deck_get`'s and not a second attribution**, which is the whole reason
+     * this reads the DTO rather than the rows. `ownedQuantity` is printing-and-finish-grained
+     * since 2026-09-07, skips an inactive pile and skips the theory list, and every one of those
+     * is a decision with a paragraph behind it — a plan that summed `collection_entries` itself
+     * would be a fourth answer to a question that already has three, and it would be plausible
+     * every time.
+     *
+     * **A row with no candidate is left out entirely**, so `candidates` is never empty and a
+     * plan of zero rows means "nothing here can be filled". That is the ordinary answer rather
+     * than an error: the issue this came from says in as many words that not every card in a
+     * deck will have a collection option.
+     *
+     * **A deck that is not there is refused rather than answered `[]`**, which is the one place
+     * this read parts company with `deck_get` beside it: that command answers `null` for a deck
+     * the gallery may simply have deleted, and `plan` turns the same `None` into
+     * {@link DECK_GONE} because an empty plan already means something else here — "nothing in
+     * this deck can be filled" — and a dialog cannot tell those two apart from a bare `[]`.
+     *
+     * `imageUris` is omitted, as it is from every DTO this fake builds bar one: under Storybook
+     * a card picture comes from the `@/lib/images` alias rather than from a URL on the row, so a
+     * hand-minted one here would be a URL nobody ever fetches. The exception is
+     * {@link tokenImageUris}, and its own comment says what earns it one — a view that *folds*
+     * the field rather than passing it through.
+     */
+    deck_pull_plan: (args: { deckId: number }): DeckPullRow[] => {
+      const detail = readHandlers(db).deck_get({ id: args.deckId, variant: LIVE });
+      if (!detail) throw refuse(DECK_GONE);
+      // The crate's `(card_id, finish)` tuple key, spelled as `deck_theory::group_key`'s string
+      // because a JS `Map` has no tuple key — and **insertion-ordered rather than sorted**,
+      // which is why it is a `Map` and not the `BTreeMap` the fold's neighbour uses: the
+      // detail's cards are already in {@link deckReadOrder}, so the folded rows come out in the
+      // deck's own order and the categories inside one come out in it too. A key that sorted
+      // would answer in card-id order, which is neither the deck's nor any order a reader chose.
+      const folded = new Map<string, DeckPullRow>();
+      for (const row of detail.cards) {
+        // A switched-off pile counts toward nothing anywhere in the app, so it is short of
+        // nothing either — `attributeOwned` has already given it an `ownedQuantity` of 0, which
+        // is exactly what would read as a hole if this test were missing.
+        if (!row.categoryActive) continue;
+        const short = row.quantity - row.ownedQuantity;
+        if (short <= 0) continue;
+        const key = `${row.cardId}|${row.finish ?? ""}`;
+        const found = folded.get(key);
+        if (found) {
+          found.short += short;
+          // Distinct, because one pile can hold two rows of one printing — a swap or a finish
+          // change leaves them side by side — and a reader reading `Main deck, Main deck`
+          // learns nothing from the second.
+          if (!found.categories.includes(row.categoryName)) found.categories.push(row.categoryName);
+          continue;
+        }
+        folded.set(key, {
+          // The deck **row's** name, set and number rather than the card's: they are
+          // denormalised onto `deck_cards` precisely so an orphan is still listed, and this is
+          // the one name such a row still has.
+          cardId: row.cardId,
+          name: row.name,
+          setCode: row.setCode,
+          collectorNumber: row.collectorNumber,
+          finish: row.finish,
+          short,
+          categories: [row.categoryName],
+          candidates: pullCandidates(db, row.cardId, row.finish),
+        });
+      }
+      return [...folded.values()].filter((row) => row.candidates.length > 0);
+    },
+
+    /**
+     * `deck_quick_add::wishes` — every wishlist line a quick add of this printing could take
+     * copies off, best first.
+     *
+     * **The predicate is `wishlist::OWNED_SQL`'s own first arm with the any-printing arm
+     * dropped** — `w.card_id = ?1 AND (w.preferred_finish IS NULL OR w.preferred_finish = ?2)` —
+     * rather than a second opinion about what fills a wish. So the narrowing is on the
+     * **printing**, exactly as {@link pullCandidates} leaves an Alpha Bolt out of an M10 line and
+     * for the same trade: nothing is ever taken off a shopping list that is not the piece of
+     * cardboard the reader has just recorded. A wish for *any* printing is left standing, which
+     * is why the `card_id` test is a plain equality — `null` is not a card id, and the arm that
+     * would have to be written to include one is as absent here as it is in the SQL.
+     *
+     * **A NULL `preferred_finish` still matches**, because the list itself says a wish that names
+     * no finish takes any of them; excluding it would refuse the commonest wish there is. The
+     * comparison is against the **collection** word, so a deck row's `null` finish and a
+     * `nonfoil` wish are a match rather than a third state — {@link normaliseFinish} is the one
+     * place those two spellings meet, here as everywhere else in this file.
+     *
+     * **The root first, then the reader's folders in their own `sort_order`, oldest row first
+     * inside a tie** — {@link pullOrder}'s order and its argument, borrowed rather than
+     * re-decided: rank by how little of the reader's filing the write disturbs. It is the
+     * picker's pre-selection, which is why it is the backend's decision and not the component's.
+     * Note the one shape it does *not* borrow: there is no `removed` rank, because a wishlist
+     * folder has no kinds — every one of them is the reader's own.
+     *
+     * **An empty answer is the ordinary case and never a refusal.** Most cards a deck is short of
+     * are on no shopping list at all, and the editor reads `[]` as "record the copies and take
+     * nothing off" rather than as something to report.
+     */
+    deck_quick_add_wishes: (args: { cardId: string; finish?: DeckFinish }): DeckQuickAddWish[] => {
+      const wanted = normaliseFinish(args.finish) ?? "nonfoil";
+      const order = (w: FakeWish): [number, number] =>
+        w.folderId === null
+          ? [0, 0]
+          : [1, db.wishlistFolders.find((f) => f.id === w.folderId)?.sortOrder ?? 0];
+      return db.wishlistEntries
+        .filter(
+          (w) =>
+            w.cardId === args.cardId &&
+            (w.preferredFinish === null || w.preferredFinish === wanted),
+        )
+        .sort((a, b) => {
+          const [aRank, aOrder] = order(a);
+          const [bRank, bOrder] = order(b);
+          return aRank - bRank || aOrder - bOrder || a.id - b.id;
+        })
+        .map((w) => ({
+          id: w.id,
+          quantity: w.quantity,
+          folderId: w.folderId,
+          // `null` at the root, which the UI words — the wishlist page's own `Wishlist`. The
+          // backend has no row to read a name off and must not invent one, exactly as
+          // {@link pullCandidates} does not.
+          folderName:
+            w.folderId === null
+              ? null
+              : (db.wishlistFolders.find((f) => f.id === w.folderId)?.name ?? null),
+        }));
     },
 
     /**
@@ -6398,6 +7941,35 @@ export function readHandlers(db: FakeDb) {
       Object.fromEntries(Object.entries(db.flattenState).filter(([section]) => section !== "")),
 
     /**
+     * `markcolors::mark_colors` — every mark the reader has chosen a colour for.
+     *
+     * The eighth `app_meta` setting and the fourth whose value is an object, so
+     * {@link readHandlers.list_view}'s per-entry rule applies unchanged: one hand-edited entry
+     * costs that mark its colour and leaves the other standing. **Both halves of the filter are
+     * back**, which is what puts it beside the layout rather than beside
+     * {@link readHandlers.flatten_state} — the blank key is dropped as everywhere here, and a
+     * value is dropped when it is not `#rrggbb`, because the row is text and a `bool` is not.
+     *
+     * **Folded on the way out**, which is `markcolors::stored`'s own `to_ascii_lowercase`: the
+     * write folds too, so one colour has one spelling in the row — and an entry hand-written as
+     * `#56BD78` still reads back as a colour rather than being thrown away for its case.
+     *
+     * **A mark is absent rather than defaulted**, and that is the whole contract this pair
+     * carries: what an uncustomised mark is drawn in lives in `index.css`, so a fake inventing a
+     * default here would be a second opinion about a colour the stylesheet owns — and
+     * `useMarkColors` would then be unable to tell a reader who has never chosen from one who has
+     * chosen today's default, which is the distinction Reset turns on.
+     *
+     * A read, so it answers through every second of a sync — the write below does not.
+     */
+    mark_colors: (): Record<string, string> =>
+      Object.fromEntries(
+        Object.entries(db.markColors)
+          .filter(([mark, color]) => mark !== "" && isStorableHex(color))
+          .map(([mark, color]) => [mark, color.toLowerCase()]),
+      ),
+
+    /**
      * `nav::nav_collapsed` — whether the global navigation sidebar was left collapsed to icons.
      *
      * The fifth `app_meta` setting, and **the first with no fallback in it at all**, which is
@@ -6420,20 +7992,50 @@ export function readHandlers(db: FakeDb) {
     nav_collapsed: (): boolean => db.navCollapsed,
 
     /**
-     * `deck::deck_search_open` — whether the editor's search column was last left open.
+     * `searchopen::search_open` — every docked card-search column's remembered disclosure.
      *
-     * The sixth `app_meta` setting and the **second** with nothing to decide, for every one of
-     * the reasons `nav_collapsed` above gives: the Rust folds a missing row, a hand-edited one
-     * and an unreadable one into its default before the value crosses the IPC boundary, so the
-     * stored boolean is the answer.
+     * The sixth `app_meta` setting and the **fourth** whose value is an object, so this is
+     * {@link readHandlers.flatten_state} with a different key and the same one-line filter: the
+     * blank key and nothing else, because `search_open` stores a `bool` and the frontend reads a
+     * `bool`, leaving no third state to drop. The **section** name is unfiltered for that
+     * handler's reason too — which pages have a search column is TypeScript's vocabulary, and
+     * `useSearchOpen`'s narrowing on the frontend is what the split exists for.
      *
-     * Its first frame matters for the same reason and one of its own: this column is 384px of
-     * the desk, so a story seeded shut that opened wide and snapped closed would not merely
-     * flicker — it would re-pack the deck beside it on the way past.
+     * **The crate's legacy `deck_search_open` bridge has no counterpart here, deliberately.**
+     * `searchopen::stored` falls back to that old row when the map carries no `deck` entry, which
+     * is a fact about a *database written by an older build* — a state a fake with no rows and no
+     * history cannot be in, and one no story wants to stand in.
+     *
+     * Its first frame matters more than most: a column is 384px of the desk, so a story seeded
+     * shut that opened wide and snapped closed would not merely flicker — it would re-pack the
+     * page beside it on the way past.
      *
      * A read, so it answers through a sync like every other one here — the write below does not.
      */
-    deck_search_open: (): boolean => db.deckSearchOpen,
+    search_open: (): Record<string, boolean> =>
+      Object.fromEntries(Object.entries(db.searchOpen).filter(([section]) => section !== "")),
+
+    /**
+     * `decksort::deck_sort` — how the deck gallery was last ordered, or the default.
+     *
+     * **The narrowest fallback of any setting on this side of the file, and the narrowness is
+     * the point.** Its neighbours check what they read against a list and shrug at anything
+     * else — a marketplace, a grouping mode, a layout word. This one checks for a **blank** and
+     * nothing more, because there is no list here to check against: the sort keys are
+     * `features/decks/deckSort.ts`', three of the six are computed on the frontend, and a
+     * backend that invented a vocabulary would be a second opinion about a table the webview
+     * owns. So a key this build has never heard of is answered **verbatim** and the frontend
+     * falls back — which is the state {@link FakeDb.deckSort} exists to let a story seed.
+     *
+     * Both ways to the default are still here, exactly as {@link readHandlers.printing_group_by}
+     * has both of its: the row has never been written, or somebody emptied it by hand. A blank
+     * is the one value the write refuses, so a row holding one was hand-edited — and it must
+     * still read as the default rather than as an order in nobody's vocabulary.
+     *
+     * A read, so it answers through every second of a sync — the write below does not.
+     */
+    deck_sort: (): string =>
+      db.deckSort !== null && db.deckSort !== "" ? db.deckSort : DEFAULT_DECK_SORT,
 
     /**
      * `mirror::settings::mirror_status` — everything the Backup panel draws, in one round trip.
@@ -6839,15 +8441,19 @@ const CATEGORY_SELF_MOVE = "A category cannot be moved into itself.";
  */
 const predefinedRefusal = (name: string) =>
   `${name} is required by this deck's rules — it can be emptied but not removed.`;
-/** `deck_meta::TAG_GONE` and `TAG_NAME_TAKEN` — {@link CATEGORY_GONE}'s twins, one table over.
- *  There were three until schema v21; `TAG_WRONG_DECK` refused a `tagId` resolving to another
- *  deck's tag, and there is no such thing any more. */
-const TAG_GONE = "That tag is not there any more.";
-const TAG_NAME_TAKEN =
-  "A tag with that name already exists. Pick it from the list instead of making a second one.";
+/** `deck_meta::LABEL_GONE` and `LABEL_NAME_TAKEN` — {@link CATEGORY_GONE}'s twins, one table over.
+ *  There were three until schema v21; `LABEL_WRONG_DECK` refused a `labelId` resolving to another
+ *  deck's label, and there is no such thing any more. */
+const LABEL_GONE = "That label is not there any more.";
+const LABEL_NAME_TAKEN =
+  "A label with that name already exists. Pick it from the list instead of making a second one.";
 /** `deck_meta::CARD_NOT_IN_CATEGORY` — `deck::card_gone` generalised, for the stale editor
  *  pointing at a row that has since moved, folded or been stepped to zero. */
 const CARD_NOT_IN_CATEGORY = "That card is not in this deck's category any more.";
+/** `deck_tokens`' one refusal about a row: an `add` naming a printing `cards` has no token row
+ *  for. Every *other* way this feature fails is an empty list rather than an error — a deck must
+ *  not fail to open over an area most decks use lightly. */
+const TOKEN_PRINTING_GONE = "That token printing is not in the card database.";
 /** `deck_meta::FOLDER_GONE` and `FOLDER_CYCLE`. The second is not cosmetic:
  *  `deck_folders.parent_id` is `ON DELETE CASCADE` **on itself**, so a cycle is a graph
  *  SQLite's recursive cascade would walk forever the day one of them is deleted. */
@@ -6864,6 +8470,25 @@ const FOLDER_CYCLE = "A folder cannot be moved inside itself.";
  * not say it anyway — nothing in the DDL says who may *edit* a row.
  */
 const FOLDER_NOT_YOURS = "That folder is the app's own and is not yours to change.";
+/**
+ * `collection_folders::FOLDER_IS_LOCKED` (user schema v33) — what
+ * {@link writeHandlers.collection_folder_delete} says about a drawer the reader has set aside.
+ *
+ * **Delete alone, and the split is the whole feature.** Deleting re-files every card in the
+ * sub-tree to the root, which silently undoes exactly the filing the lock was protecting;
+ * renaming and moving disturb no card at all, so neither refuses. A lock stops the app
+ * *offering* what is in a folder — it is not a padlock on the drawer, and the reader can still
+ * reach every copy in it.
+ *
+ * It refuses on the **effective** lock ({@link collectionFolderLocked}), so a sub-folder of a
+ * locked parent is refused too: that press scatters its cards the same way.
+ *
+ * A sentence rather than a constraint failure, in this module's existing grammar — and one the
+ * menu says *before* the press, greyed into the row's accessible name. `PinnedFolders`' rule: a
+ * control whose only outcome is a sentence explaining that it does not work teaches the reader
+ * nothing they could not have been shown by its absence.
+ */
+const FOLDER_IS_LOCKED = "That folder is locked. Unlock it before deleting it.";
 /**
  * `collection_folders::ENTRY_IN_A_DECK` — what {@link collection_set_folder} says about the row
  * it was **given**, when that row is sitting in a deck's group.
@@ -6894,6 +8519,78 @@ const NO_REMOVED_FOLDER = "There is no Recently removed folder to file these int
  *  from deck A's folder onto deck A would otherwise write a second `deck_cards` row against
  *  copies the group already holds, and the list would say two where the folder says one. */
 const ALREADY_HERE = "Those copies are already in this deck.";
+/**
+ * `deck_pull`'s three, verbatim, and every one of them is a sentence because there is nothing
+ * else to say it with — the fake has no foreign keys and no CHECKs to raise a refusal, which is
+ * {@link collection_to_deck}'s stated reason one command over and holds here for a second one:
+ * a pull is judged against a *plan*, and no schema can express "the deck is short of this".
+ *
+ * {@link NOT_SHORT_OF_THAT} and {@link MORE_THAN_MISSING} are two sentences rather than one
+ * because they are two different things to tell a reader holding a dialog that has gone stale.
+ * The first is a printing that has stopped being short at all — somebody filed the copies from
+ * another window, or switched the pile off — and there is nothing to press. The second is a hole
+ * that is still there and smaller than it was, where lowering the number is the fix. A single
+ * "cannot pull that" would leave the reader unable to tell which.
+ *
+ * **`deck_pull` writes no fourth sentence for the deck's own group**, and that is worth naming
+ * because it looks like an omission: a pick pointing at a copy already in *this* deck's folder
+ * gets {@link ENTRY_IN_A_DECK} like any other deck folder's. `why_not_offered`'s doc argues it —
+ * it is the same fact and already says what to do about it — and it means the fake must not
+ * reach for {@link ALREADY_HERE} here, however well that sentence reads.
+ */
+const NOTHING_PICKED = "Pick at least one copy to pull into this deck.";
+const NOT_SHORT_OF_THAT = "This deck is not short of that printing any more.";
+const MORE_THAN_MISSING = "That is more copies than this deck is short of.";
+/**
+ * `collection_alloc::NOT_IN_DECK` — issue #358's fence, and the newest of this module's
+ * refusals.
+ *
+ * **A copy may only be filed into a deck's group if that deck's *live* list already plays the
+ * card.** A group is where the app keeps the cards a deck is physically holding, so a copy
+ * filed into one that no `deck_cards` row backs is a phantom: the collection says the card is
+ * spoken for, every other deck is refused it, and nothing on the deck screen accounts for it.
+ *
+ * It says what to do rather than only what went wrong, {@link ENTRY_IN_A_DECK}'s manners: the
+ * card goes on the list first — `deck_add_card`, which writes no collection row at all — and the
+ * copies follow.
+ *
+ * **It does not preempt {@link DECK_GONE}**, and that is deliberate on both sides: "that deck is
+ * gone" and "that deck does not play this" are different things to tell a stale editor, so the
+ * deck fence stays the first statement in the write.
+ *
+ * **Matched on the oracle card, not the printing** ({@link playedKeys}): a different printing of
+ * a card the deck plays is the same card for *this* fence, which is `deck::played_keys`' own
+ * reach and stays oracle-grained on purpose, so a reader may file any printing of a card their
+ * list plays. **{@link ownedByPrinting} no longer shares it** — since 2026-09-07 the owned count
+ * narrows to the exact `(card_id, finish)` a copy sits at, so a copy let through here under a
+ * different printing reads owned 0 until the list names that printing too.
+ */
+const NOT_IN_DECK =
+  "That deck does not play this card. Add it to the deck first, then file your copies.";
+/**
+ * `deck_quick_add`'s two, verbatim, and both are about the **wishlist** half of one press.
+ *
+ * **Prefixed here where the crate spells them bare**, and it is not cosmetic: `deck_quick_add`'s
+ * `WISH_GONE` and `wishlist`'s are two *different sentences* for the same news — "that wishlist
+ * line is not there any more" against {@link WISH_GONE}'s "that wishlist entry is not" — and Rust
+ * keeps them apart by module where this file has one scope. Folding them into one constant would
+ * be the fake picking which of two shipped sentences a story renders, which is exactly what
+ * simplification 9 forbids.
+ *
+ * They exist because the dialog's answer is a round trip old: `deck_quick_add_wishes` reads the
+ * matching wishes, the reader picks one, and the write re-checks that id against the *same*
+ * predicate before it decrements anything — {@link deck_pull_from_collection}'s discipline one
+ * table over, where the plan is re-read rather than trusted.
+ *
+ * **Two sentences rather than one**, for the reason {@link NOT_SHORT_OF_THAT} and
+ * {@link MORE_THAN_MISSING} are two: they are different things to tell a reader holding a stale
+ * picker. The first is a line somebody has already ticked off, where there is nothing to press;
+ * the second is a line that is still there and has been re-pinned to another printing or another
+ * finish since, where the copies are still worth recording and the wish is not this one. A single
+ * "that wish will not do" would leave them unable to tell which.
+ */
+const QUICK_ADD_WISH_GONE = "That wishlist line is not there any more.";
+const QUICK_ADD_WISH_WRONG_CARD = "That wishlist line is not for this card.";
 /** `collection_alloc::BOTH_PILES`. The id and the name are alternatives there rather than a
  *  preference — `deck_add_card` lets the id win because a drag carries both, and nothing sends
  *  both to this write, so both arriving means a caller has lost track of which it meant. In Rust
@@ -6919,8 +8616,8 @@ const MAX_FOLDER_DEPTH = 64;
 /** `deck_meta`'s read failures, which the {@link Fault} `deckMeta` produces. Four sentences
  *  because the module writes four, and a panel prints whichever one it got. */
 const CATEGORIES_UNREADABLE = "the deck's categories could not be read: database is locked";
-const TAGS_UNREADABLE = "the deck's tags could not be read: database is locked";
-const TAG_PALETTE_UNREADABLE = "the tag list could not be read: database is locked";
+const LABELS_UNREADABLE = "the deck's labels could not be read: database is locked";
+const LABEL_PALETTE_UNREADABLE = "the label list could not be read: database is locked";
 const FOLDERS_UNREADABLE = "the deck folders could not be read: database is locked";
 /** `deck_audit`'s, which the same fault produces: the history is a satellite read like the
  *  three above it, and a drawer over an editor is exactly the surface that can be open while
@@ -7080,11 +8777,11 @@ function recordCategory(db: FakeDb, deckId: number, payload: Record<string, unkn
   record(db, deckId, DECK_LEVEL, "category", null, payload, 0);
 }
 
-/** A `tag`-kind row **about the label itself** — created, renamed or deleted. The card-side
+/** A `label`-kind row **about the label itself** — created, renamed or deleted. The card-side
  *  half of the same kind carries a `cardId` and no `action`; `auditText.ts` switches on
  *  `action` first for exactly that reason. */
-function recordTag(db: FakeDb, deckId: number, payload: Record<string, unknown>): void {
-  record(db, deckId, DECK_LEVEL, "tag", null, payload, 0);
+function recordLabel(db: FakeDb, deckId: number, payload: Record<string, unknown>): void {
+  record(db, deckId, DECK_LEVEL, "label", null, payload, 0);
 }
 
 /**
@@ -7212,10 +8909,23 @@ function validFinish(finish: string): FakeEntry["finish"] {
   throw refuse(`\`${finish}\` is not a finish. Use one of: ${FINISHES.join(", ")}.`);
 }
 
-/** `collection::valid_condition` — an absent condition is `NM`, what an unmarked card is
- *  assumed to be, rather than an error. */
+/**
+ * `collection::valid_condition` — an absent condition is `collection::DEFAULT_CONDITION`
+ * rather than an error, and since schema v35 that is **`NONE`**.
+ *
+ * **It was `NM`, and what changed is that the app no longer guesses.** The old default was
+ * defensible while the scale had no way to say nothing — a write has to put *something* in a
+ * `NOT NULL` column that is also a grain term — but what it wrote was the best grade on the
+ * scale, on the reader's behalf, and indistinguishable afterwards from the grades they typed
+ * by hand. `NONE` is the same write saying *nobody said*.
+ *
+ * **This is the one place the default lives**, which is what makes the three callers agree
+ * without any of them spelling it: `collection_add`, `collection_import_commit` (through
+ * {@link addEntry} and {@link setEntry}) and `deck_quick_add_to_collection`. A junk grade is
+ * still refused in words, in {@link CONDITIONS}' order.
+ */
 function validCondition(condition: string | undefined): FakeEntry["condition"] {
-  const c = condition ?? "NM";
+  const c = condition ?? "NONE";
   const found = CONDITIONS.find((x) => x === c);
   if (found) return found;
   throw refuse(`\`${c}\` is not a condition. Use one of: ${CONDITIONS.join(", ")}.`);
@@ -7227,6 +8937,28 @@ function validVariant(variant: string): DeckVariant {
   const found = VARIANTS.find((v) => v === variant);
   if (found) return found;
   throw refuse(`\`${variant}\` is not a deck variant. Use one of: ${VARIANTS.join(", ")}.`);
+}
+
+/** `deck_tokens.state`'s three words. A **CHECK on the column**, unlike a variant's word list
+ *  and unlike {@link FakeDeck.lastGroupBy}'s — so an unknown one is refused by the database
+ *  itself and this refuses it in the same place. */
+const TOKEN_STATES = ["auto", "hidden", "manual"] as const;
+
+/**
+ * The state word, with **absent meaning `auto`**.
+ *
+ * `null` is what `ipc.ts` sends for a caller who passed no `state`, and the column's DDL default
+ * is `'auto'` — so folding the two together here is the DDL rather than a convenience. The
+ * fold matters: `deck_token_set` deletes the row when the result would carry nothing, and that
+ * test reads this word.
+ */
+function validTokenState(state: DeckTokenState | null): DeckTokenState {
+  if (state === null) return "auto";
+  const found = TOKEN_STATES.find((s) => s === state);
+  if (found) return found;
+  throw refuse(
+    `\`${state}\` is not a token state. Use one of: ${TOKEN_STATES.join(", ")}.`,
+  );
 }
 
 /**
@@ -7255,15 +8987,15 @@ function validMetaName(name: string, what: string): string {
   throw refuse(`${what} needs a name.`);
 }
 
-/** `deck_meta::valid_color` — non-empty, and **nothing more**. `deck_tags.color` carries no
+/** `deck_meta::valid_color` — non-empty, and **nothing more**. `deck_labels.color` carries no
  *  CHECK: it holds `#rrggbb` (a palette token, before 2026-08-20), and deciding what a colour
- *  *is* is the webview's job (`features/decks/tagColors.ts`), not the backend's. The seeds below
+ *  *is* is the webview's job (`features/decks/labelColors.ts`), not the backend's. The seeds below
  *  still hold the retired token words on purpose — a database older than the build is a shape
  *  the workbench should be able to draw. */
 function validColor(color: string): string {
   const trimmed = color.trim();
   if (trimmed !== "") return trimmed;
-  throw refuse("A tag needs a colour.");
+  throw refuse("A label needs a colour.");
 }
 
 /** The `deckMeta` fault, which every `deck_meta` **read** honours and no other read does. Each
@@ -7593,7 +9325,7 @@ function refuseIfPredefined(category: FakeDeckCategory): void {
 }
 
 /** `EXISTS(… WHERE deck_id = ?1 AND name = ?2 AND id <> ?3)` — the grain check both the
- *  category create and the rename run, and the tag pair's twin one table over. */
+ *  category create and the rename run, and the label pair's twin one table over. */
 function nameIsTaken(
   rows: { deckId: number; name: string; id: number }[],
   deckId: number,
@@ -7603,8 +9335,8 @@ function nameIsTaken(
   return rows.some((r) => r.deckId === deckId && r.name === name && r.id !== except);
 }
 
-function tagById(db: FakeDb, id: number): FakeDeckTag | undefined {
-  return db.deckTags.find((t) => t.id === id);
+function labelById(db: FakeDb, id: number): FakeDeckLabel | undefined {
+  return db.deckLabels.find((t) => t.id === id);
 }
 
 function folderById(db: FakeDb, id: number): FakeDeckFolder | undefined {
@@ -7662,6 +9394,31 @@ function deckGroup(db: FakeDb, deckId: number): FakeCollectionFolder | undefined
   );
 }
 
+/**
+ * `collection::Allocation::Unallocated`, asked about **one row**: is this copy in a deck's
+ * custody?
+ *
+ * **One function because it is one rule, and it grew its second reader three releases after its
+ * first.** {@link collectionScope} answers the Collection page's own switch with it, and
+ * {@link pullCandidates} decides what may fill a deck's hole with it. A pull that spelled the
+ * rule out again would be a second place for "a deck's folder is not the reader's desk" to be
+ * true, and the two would come to disagree the day a fourth folder kind is added — quietly, and
+ * each right on its own screen.
+ *
+ * **This deck's own group is not carved out, and must not be.** The copies in it are already
+ * counted in {@link attributeOwned}'s `ownedQuantity`, so offering them to a pull would be
+ * offering to fill a hole with the thing that is already in it.
+ *
+ * **The root answers `false` without a lookup**, because `null` there is a real place rather
+ * than an absence — it is where every copy starts and the only place an unfiled one can be, so
+ * a reading of it as "unknown" would hide the reader's whole unfiled collection from both
+ * callers.
+ */
+function inADeckFolder(db: FakeDb, folderId: number | null): boolean {
+  if (folderId === null) return false;
+  return collectionFolderById(db, folderId)?.kind === COLLECTION_DECK_KIND;
+}
+
 /** `collection_alloc::removed_folder` — the one holding area, or {@link NO_REMOVED_FOLDER}. A
  *  partial unique index makes a second impossible in the app; here the seed is the assertion. */
 function removedFolder(db: FakeDb): FakeCollectionFolder {
@@ -7702,6 +9459,35 @@ function userCollectionFolder(db: FakeDb, id: number): FakeCollectionFolder {
 }
 
 /**
+ * The **effective** lock — the crate's `WITH RECURSIVE locked_folders` walked from the other
+ * end, one row at a time up the `parentId` chain.
+ *
+ * **A folder inside a locked folder is locked**, and only the folder the reader pressed Lock on
+ * carries the flag: {@link FakeCollectionFolder.locked} says why the inherited answer is
+ * computed rather than stored. Everything that reads the lock and is not the toggle itself asks
+ * this — the delete refusal, and {@link collectionScope}'s `excludeLocked` term.
+ *
+ * **`null` is the root and is never locked.** The root is not a folder and has no row to carry a
+ * flag, and a `null` that answered `true` would empty the list that is mostly root.
+ *
+ * The climb is bounded by {@link MAX_FOLDER_DEPTH}, for `collection_folder_move`'s reason rather
+ * than out of caution about depth: the crate's `UNION` terminates over a cycle a hand-edited
+ * database holds, and an unbounded walk here would hang the story's tab instead — the same bug
+ * drawn smaller.
+ */
+function collectionFolderLocked(db: FakeDb, id: number | null): boolean {
+  let cursor: number | null = id;
+  for (let hops = 0; cursor !== null && hops < MAX_FOLDER_DEPTH; hops += 1) {
+    const folder: FakeCollectionFolder | undefined = collectionFolderById(db, cursor);
+    // A parent that is not there is the root reached the hard way, not a lock.
+    if (!folder) return false;
+    if (folder.locked) return true;
+    cursor = folder.parentId;
+  }
+  return false;
+}
+
+/**
  * `collection::folder_named` — the folder an **add** names, refused in words unless it is there
  * **and is the reader's own**. `null` is the root and is always a destination: there is no row to
  * look up, so the fence must not reach it.
@@ -7719,9 +9505,10 @@ function userCollectionFolder(db: FakeDb, id: number): FakeCollectionFolder {
  * and is not a folder at all, where every caller of that one is naming a row.
  *
  * **`kinds` is the crate's parameter of the same name**, and the widening it exists for is
- * `collection::IMPORT_FOLDERS`: a **deck** import files its copies into that deck's own group,
- * because the one press wrote the decklist too. Everything else keeps
- * {@link COLLECTION_READER_FOLDERS} — the reader's own drawers and nothing else.
+ * {@link COLLECTION_DECK_WRITE_FOLDERS}: a **deck** import files its copies into that deck's own
+ * group, because the one press wrote the decklist too, and the quick add does the same for the
+ * one press that recorded them. Everything else keeps {@link COLLECTION_READER_FOLDERS} — the
+ * reader's own drawers and nothing else.
  */
 function collectionFolderNamed(
   db: FakeDb,
@@ -7741,13 +9528,23 @@ function collectionFolderNamed(
 const COLLECTION_READER_FOLDERS: readonly string[] = [COLLECTION_USER_KIND];
 
 /**
- * …and what a deck import may — `collection::IMPORT_FOLDERS`, the one place in the crate that
- * fence is wider than the reader's own drawers.
+ * …and what a **deck-driven** write may — `collection::DECK_WRITE_FOLDERS`, the one place in the
+ * crate that fence is wider than the reader's own drawers.
+ *
+ * **Two callers, and each answers for the `deck_cards` row behind the copies it files.** The deck
+ * import writes the decklist in the same press; {@link writeHandlers.deck_quick_add_to_collection}
+ * checks {@link NOT_IN_DECK} before it reaches here. That is what the widening buys and the whole
+ * of what it may be spent on — a copy in a group that no `deck_cards` row backs is issue #358's
+ * phantom.
+ *
+ * **It was `COLLECTION_DECK_WRITE_FOLDERS` until the quick add arrived**, mirroring the crate's own
+ * rename: a constant called `IMPORT_` that a non-import write passes is exactly the rot this repo
+ * greps for.
  *
  * `removed` stays out of it on both sides: `Recently removed` is where copies go when they
- * *leave* a deck, and a file naming it would be an import that arrives already discarded.
+ * *leave* a deck, and neither a file nor a purchase arrives already discarded.
  */
-const COLLECTION_IMPORT_FOLDERS: readonly string[] = [
+const COLLECTION_DECK_WRITE_FOLDERS: readonly string[] = [
   COLLECTION_USER_KIND,
   COLLECTION_DECK_KIND,
 ];
@@ -7983,12 +9780,16 @@ function takeFromDeckList(
  * empty a whole pile left every copy behind them filed under a deck that no longer lists it.
  * Both now call this, through {@link releasePileCopies}.
  *
- * **Matched on the oracle card, exact printing and finish first**, which is the crate's fix for a
- * stranding rather than a nicety: `deck_swap_printing` and `deck_set_card_finish` rewrite a deck
- * row's identity and touch no collection table, so after "Use this printing" an exact-only match
- * finds nothing and the copies stay filed under a deck that no longer lists them. A card whose
- * printing has left `cards` reads `null` and falls back to the exact arm, which needs no `cards`
- * row at all.
+ * **Matched on the exact printing and finish only, since 2026-09-07 — no oracle fallback.** Until
+ * that date this also matched same-`cardId`-any-finish, then any row in the group sharing an
+ * oracle id, and the doc here called that "the crate's fix for a stranding". Under the exact
+ * grain it is a bug instead: a deck may legitimately list **both** an LEA Bolt and an M10 Bolt,
+ * with the group holding both, and cutting the LEA line would give back M10 copies the M10 line
+ * still claims — the second (finish) arm was the same bug one dimension over. What cured the
+ * stranding the fallback existed for is {@link releaseUnclaimedCopies}, called after
+ * `deck_swap_printing` and `deck_set_card_finish` rewrite a row's identity — so by the time this
+ * function is asked to cut a line, the group has nothing filed under an identity no live row
+ * still names.
  *
  * **A deck with no group holds nothing rather than refusing**, and `Recently removed` is resolved
  * only when there is something to file — so a store missing either folder still lets a pile be
@@ -8021,16 +9822,9 @@ function releaseGroupCopies(
   // The deck row's `null` is the collection row's `'nonfoil'` — {@link collectionFinish}'s
   // translation, read the other way.
   const want = collectionFinish(finish);
-  const wantOracle = cardById(db, cardId)?.oracleId ?? null;
-  const rank = (e: FakeEntry): number => (e.cardId === cardId ? (e.finish === want ? 0 : 1) : 2);
   const backing = db.collectionEntries
-    .filter((e) => {
-      if (e.folderId !== group.id) return false;
-      if (e.cardId === cardId) return true;
-      const oracle = cardById(db, e.cardId)?.oracleId ?? null;
-      return oracle !== null && oracle === wantOracle;
-    })
-    .sort((a, b) => rank(a) - rank(b) || a.id - b.id);
+    .filter((e) => e.folderId === group.id && e.cardId === cardId && e.finish === want)
+    .sort((a, b) => a.id - b.id);
   if (backing.length === 0) return nothing;
   const removed = removedFolder(db);
   let moved = 0;
@@ -8042,6 +9836,84 @@ function releaseGroupCopies(
     moved += take;
   }
   return { moved, landed };
+}
+
+/**
+ * `deck::release_unclaimed_copies` — sweep this deck's group and move every copy no **live**
+ * `deck_cards` row claims at `(card_id, finish)` into `Recently removed`.
+ *
+ * **What replaced `release_group_copies`'s oracle fallback.** That fallback existed to cure a
+ * stranding: `deck_swap_printing` and `deck_set_card_finish` rewrite a row's identity and touch
+ * no collection table, so the group would otherwise keep holding the *old* identity's copies
+ * under a deck that no longer lists them. Curing it at the source — a sweep after the rewrite —
+ * is what let the exact-grain match above stop needing a fallback at all.
+ *
+ * **Per `(card_id, finish)` present in the group, `surplus = held - claimed`.** Where it is
+ * positive, the surplus is taken oldest row first ({@link moveCopies}, which is
+ * `collection_folders::take_copies`'s split-and-fold in one call) — the same tiebreak
+ * `releaseGroupCopies` uses, because two rows of one identity should give up the older one
+ * first.
+ *
+ * **"Claimed" is every *live* `deck_cards` row, switched-off piles included, and getting that
+ * wrong is destructive rather than merely wrong.** `attributeOwned` hands an inactive pile no
+ * copies, so it is tempting to read its rows as claiming nothing — but then switching a category
+ * off would evict that pile's cards from the deck the next time this runs, turning a display
+ * switch into a press that moves cardboard. Custody follows what the list **names**; the switch
+ * only decides what is counted. This is `release_live_copies`' existing rule carried over, not a
+ * new one — that read filters by category id and never by `isActive` either.
+ *
+ * **A theory row claims nothing**, so a plan holds no cards and cannot be the reason a sweep
+ * finds a surplus. Two fences say that, and both are `deck::release_unclaimed_copies`': the
+ * `variant !== LIVE` filter over `deckCards` below, and the **`variant` guard on the way in** —
+ * the caller hands over the variant it just wrote and this returns without reading anything when
+ * it is not `live`, exactly as `release_live_copies`' guard is its own rather than each of its
+ * callers'. The guard is a no-op in any store the fake's own writes produced, because editing a
+ * plan never changes what the live list claims and the sweep would find the same nothing the
+ * slow way. It is here because a *story* can stage a group holding more than its live list
+ * claims and then make a theory swap: without the guard the fake would file those copies away
+ * on a press the app leaves alone, and the workbench would disagree with the window over a state
+ * only a fixture can build.
+ *
+ * **A deck with no group holds nothing rather than refusing, and `Recently removed` is resolved
+ * only when there is a surplus to file** — {@link releaseGroupCopies}'s asymmetries, carried over
+ * so the two behave alike.
+ */
+function releaseUnclaimedCopies(db: FakeDb, deckId: number, variant: DeckVariant): void {
+  if (variant !== LIVE) return;
+  const group = deckGroup(db, deckId);
+  if (group === undefined) return;
+  const claimed = new Map<string, number>();
+  for (const dc of db.deckCards) {
+    if (dc.deckId !== deckId || dc.variant !== LIVE) continue;
+    const key = `${dc.cardId}|${collectionFinish(dc.finish)}`;
+    claimed.set(key, (claimed.get(key) ?? 0) + dc.quantity);
+  }
+  // Grouped by identity here; sorted oldest-first per group below — a store's insertion order
+  // is not a promise, so this does not trust `db.collectionEntries` to already be in it.
+  const held = new Map<string, FakeEntry[]>();
+  for (const e of db.collectionEntries) {
+    if (e.folderId !== group.id) continue;
+    const key = `${e.cardId}|${e.finish}`;
+    const rows = held.get(key);
+    if (rows) rows.push(e);
+    else held.set(key, [e]);
+  }
+  for (const [key, rows] of held) {
+    const totalHeld = rows.reduce((n, e) => n + e.quantity, 0);
+    let surplus = totalHeld - (claimed.get(key) ?? 0);
+    if (surplus <= 0) continue;
+    // Resolved only now that there is something to move — a store missing this folder must
+    // still let every *claimed* copy sit undisturbed.
+    const removed = removedFolder(db);
+    // Oldest row first — {@link releaseGroupCopies}'s own sort, spelled the same way here
+    // rather than assumed from how the rows happened to arrive above.
+    for (const e of [...rows].sort((a, b) => a.id - b.id)) {
+      if (surplus === 0) break;
+      const take = Math.min(e.quantity, surplus);
+      moveCopies(db, e.id, take, removed.id);
+      surplus -= take;
+    }
+  }
 }
 
 /**
@@ -8082,6 +9954,9 @@ function createDeckGroup(db: FakeDb, deckId: number, name: string): FakeCollecti
     kind: COLLECTION_DECK_KIND,
     deckId,
     sortOrder: 0,
+    // Never locked, and nothing can lock it: a deck's group is already fixed, so the toggle
+    // refuses it with {@link FOLDER_NOT_YOURS} like every other write in that module.
+    locked: false,
   };
   db.collectionFolders.push(folder);
   return folder;
@@ -8096,7 +9971,7 @@ function createDeckGroup(db: FakeDb, deckId: number, name: string): FakeCollecti
  * with the live count would silently overwrite the very edit the theory list exists to hold.
  * So this is a seed that can also top up — idempotent, never destructive.
  *
- * `tagId` and `needsReview` travel with the copy. A label is the user's word about this card in
+ * `labelId` and `needsReview` travel with the copy. A label is the user's word about this card in
  * this deck and a plan inherits it; the flag says the printing left the card database, which is
  * as true of the copy as of the original.
  *
@@ -8157,13 +10032,30 @@ function theoryCopies(db: FakeDb, deckId: number): number {
 
 /**
  * `deck_theory::OWNED_SPARE_SQL` — copies of one **printing in one finish** the collection holds
- * that **no deck is holding**.
+ * that **no deck is holding and the reader has not set aside**.
  *
  * Where the row *sits* is the whole of the test since schema v25, and there is no subtraction
- * left in it: the root, a folder the reader made and `Recently removed` are all spare, and only
- * a `deck` folder is not. `Recently removed` is on the spare side deliberately — a card that
+ * left in it: the root, a folder the reader made and `Recently removed` are all spare, and a
+ * `deck` folder is not. `Recently removed` is on the spare side deliberately — a card that
  * left a deck without leaving the database is back on the reader's desk, and the folder exists
  * so they can put it somewhere else.
+ *
+ * **A locked folder is the second arm, added beside the deck one in user schema v33**, and this
+ * function's own sentence is the argument for it: a deck on a table has its cards, so a copy in
+ * its group is not one a plan can count on — and a card in a display case is not one a plan can
+ * count on either. What a lock moves is **the figures that mean *spare*, never the ones that
+ * mean *owned***: a count of what the reader **has** — the collection wall's badge, the search
+ * page's, the Owned/Missing facet, a wish's filled quantity — counts a locked copy, and must,
+ * or the app would be denying cardboard on the reader's shelf. The effective lock, so a
+ * sub-folder of a set-aside drawer goes with it.
+ *
+ * **This was the only such figure until issue #349**, and the second one is a *spare* count too
+ * wearing an owned count's clothes: the deck builder's card search asks {@link availableToDeck}
+ * with the open deck's id, so its `×N` and its Owned chip drop a locked drawer's copies for
+ * exactly this sentence's reason. The two are not one helper because they disagree about one
+ * arm — a plan cannot count on its own deck's cards, and the deck builder's search can — and a
+ * shared helper would have had to take a flag saying which, which is the same two functions with
+ * the difference hidden.
  *
  * This used to be `held − what every built deck had claimed`, floored at zero because a stored
  * claim could outlive the copies under it. Nothing can be stale any more, so nothing has to be
@@ -8181,7 +10073,8 @@ function ownedSpare(db: FakeDb, cardId: string, finish: DeckFinish): number {
     .filter((e) => {
       if (e.cardId !== cardId || e.finish !== want) return false;
       if (e.folderId === null) return true;
-      return collectionFolderById(db, e.folderId)?.kind !== COLLECTION_DECK_KIND;
+      if (collectionFolderById(db, e.folderId)?.kind === COLLECTION_DECK_KIND) return false;
+      return !collectionFolderLocked(db, e.folderId);
     })
     .reduce((n, e) => n + e.quantity, 0);
 }
@@ -8687,6 +10580,21 @@ export function writeHandlers(db: FakeDb) {
      * corrects the condition and the quantity in one press folds the quantity they typed rather
      * than the one the row had. The grain half is applied to nothing at all: the surviving row
      * already carries every value it names, which is precisely why the two collided.
+     *
+     * # Absent means "leave it", and there is no value that means "make it null"
+     *
+     * `PATCH_SQL` is `coalesce(?n, column)` in all eighteen holes, so every field this handler
+     * reads with `??` is the same statement in TypeScript — and the two together have a gap
+     * worth naming rather than discovering: **a purchase price cannot be cleared.** Sending
+     * `purchasePrice: undefined` leaves the number that is there, and `EntryPatch.purchasePrice`
+     * is `number | undefined` on the wire with no third state to send. A dialog offering to
+     * empty that field would be a control that silently does nothing, which is the shape of
+     * defect a fake exists to make visible: this handler cannot produce a row whose price went
+     * back to null, because neither can the crate.
+     *
+     * `condition` has no such gap and never did — `NONE` is a *value*, so an edit really can
+     * take a row from `NM` back to nobody-said, and that write goes through the grain: the row
+     * moves to a different one and may fold onto a `NONE` row already standing there.
      */
     collection_update: (args: { id: number; patch: EntryPatch }): EntryChange => {
       refuseIfBusy(db);
@@ -8792,6 +10700,12 @@ export function writeHandlers(db: FakeDb) {
         kind: COLLECTION_USER_KIND,
         deckId: null,
         sortOrder: nextCollectionFolderOrder(db, args.parentId),
+        // Unlocked, written rather than left to the column's `DEFAULT 0` for `kind`'s reason:
+        // a default is a decision nobody can see at the call site. **Even inside a locked
+        // parent** — the new drawer is effectively locked by its ancestry the moment it
+        // exists, and writing `true` here would be the stored second copy the walk exists to
+        // avoid, unlockable to a folder whose badge would not go away.
+        locked: false,
       };
       db.collectionFolders.push(folder);
       return toCollectionFolder(folder);
@@ -8893,11 +10807,43 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
+     * `collection_folders::set_folder_locked` (user schema v33) — set a drawer aside, or put it
+     * back. {@link collection_folder_rename}'s exact shape, which is the one other write in this
+     * cabinet whose whole body is a fence, one scalar and a re-read.
+     *
+     * **The fence first**, so the app's own folders answer {@link FOLDER_NOT_YOURS} as they do
+     * to every other folder write: a deck's group is already fixed and `Recently removed` is a
+     * holding area, and a lock on either would be a control with no meaning.
+     *
+     * **It writes the folder's *own* flag and never an ancestor's**, and a folder inside a
+     * locked parent is *not* refused here — the flag it sets is real and stored, while the
+     * effective lock stays {@link collectionFolderLocked}'s answer. Unlocking a child of a
+     * locked parent therefore changes nothing the reader can see, which is why the menu greys
+     * that row with its reason rather than letting the press report a success the badge
+     * contradicts.
+     *
+     * **No refusal on the toggle itself and no confirmation**, which is the design's decision
+     * rather than an omission: locking is reversible in one press and protects against accident
+     * rather than against a person.
+     */
+    collection_folder_set_locked: (args: { id: number; locked: boolean }): CollectionFolder => {
+      refuseIfBusy(db);
+      const folder = userCollectionFolder(db, args.id);
+      folder.locked = args.locked;
+      return toCollectionFolder(folder);
+    },
+
+    /**
      * `collection_folders::delete_folder`. **Its cards are not deleted** —
      * `collection_entries.folder_id` is `ON DELETE SET NULL`, so they surface at the root, filed
      * nowhere and otherwise exactly as they were. **Sub-folders do go with it**, `parent_id`
      * being `ON DELETE CASCADE` on itself. An id that resolves to nothing is a success; a folder
-     * the **app** owns is the one id that is not.
+     * the **app** owns and a folder the reader has **locked** are the two ids that are not.
+     *
+     * **The lock refusal is on the *effective* lock**, so a sub-folder of a locked parent is
+     * refused too — the un-filing pass below is precisely what a lock is protecting the reader
+     * from, and it scatters a sub-tree's cards whichever folder in it was named. This is the
+     * only folder write that refuses for it: rename and move disturb no card, so neither does.
      *
      * **The un-filing goes through {@link refileEntry} and that is not a nicety** — it is the
      * whole reason the crate stopped leaving this press to the `SET NULL`. `folderId` is the
@@ -8920,6 +10866,10 @@ export function writeHandlers(db: FakeDb) {
       // two halves of that helper come apart. Only a folder that exists and is the app's is
       // refused.
       if (folder && folder.kind !== COLLECTION_USER_KIND) throw refuse(FOLDER_NOT_YOURS);
+      // {@link FOLDER_IS_LOCKED} after it, and inside the same `folder &&` for that check's
+      // reason: an id nothing answers to is still a success, and a lock cannot be read off a
+      // row that is not there.
+      if (folder && collectionFolderLocked(db, folder.id)) throw refuse(FOLDER_IS_LOCKED);
       const doomed = new Set<number>([args.id]);
       // The cascade is recursive, so it is walked to a fixed point rather than one level deep.
       // Nothing filters on `kind`: the CASCADE does not, so a walk that did would leave those
@@ -9000,6 +10950,17 @@ export function writeHandlers(db: FakeDb) {
      * {@link ALREADY_HERE} is refused rather than treated as a no-op: the press that produces it
      * would otherwise write a second `deck_cards` row against copies the group already holds.
      *
+     * **The deck must already play the card** ({@link NOT_IN_DECK}, issue #358), and that fence
+     * is asked **before the pile is resolved** — the crate's position, and the one that makes
+     * the name arm safe by construction rather than by the rollback below. A copy filed into a
+     * group no `deck_cards` row backs is a phantom, so this is the same invariant
+     * {@link ENTRY_IN_A_DECK} keeps from the collection's end: a copy in a deck's group is
+     * backed by a deck card in that deck.
+     *
+     * **It changes what this command is for.** Filing copies is no longer how a card *joins* a
+     * deck — `deck_add_card` is, and it writes no collection row — this is how the card the deck
+     * already plays gets the reader's physical copies behind it.
+     *
      * **`categoryId` and `categoryName` are alternatives and exactly one must arrive**
      * (`collection_alloc::Pile`), which is where this parts company with {@link deck_add_card}
      * one cabinet over: that one lets the id win when both are sent, because a drag genuinely
@@ -9024,6 +10985,22 @@ export function writeHandlers(db: FakeDb) {
       // The deck fence first, so a stale editor's id answers `DECK_GONE` before there is an
       // orphan to worry about.
       const deck = requireDeck(db, args.deckId);
+      // **The row the copies are coming out of, hoisted above the pile with the fence that needs
+      // it** — `collection_alloc`'s own order since issue #358. The deck fence stays *first*, so
+      // a stale editor's dead deck id is still told the deck is gone rather than that it does
+      // not play this: two different things to be told.
+      //
+      // What the hoist costs is that a caller sending a dead entry id **and** a dead category id
+      // now hears about the entry first, which the crate argues is the right order anyway — the
+      // entry is what the reader pointed at, the category is only where it was going.
+      const source = db.collectionEntries.find((e) => e.id === args.entryId);
+      if (!source) throw refuse(ENTRY_GONE);
+      // **Issue #358's fence** (`deck::plays_card`), and it sits ahead of the pile for the reason
+      // the rollback below exists: the name arm *writes* — a pile nobody has made yet is made
+      // here — and a refusal that lands after that create leaves an empty column standing after
+      // a press that failed. The crate gets that from the transaction the create sits in; this
+      // one gets it by being asked first, which is where `collection_alloc` puts it too.
+      if (!deckPlays(db, args.deckId, source.cardId)) throw refuse(NOT_IN_DECK);
       // Its **name** as well as its id, because the history row below quotes the word rather
       // than a number no reader can resolve — `deck::add_card`'s two arms record the same way.
       // The name arm finds before it creates, so a pile the reader made stays theirs.
@@ -9052,8 +11029,6 @@ export function writeHandlers(db: FakeDb) {
         const group = deckGroup(db, args.deckId);
         if (!group) throw refuse(NO_DECK_GROUP);
 
-        const source = db.collectionEntries.find((e) => e.id === args.entryId);
-        if (!source) throw refuse(ENTRY_GONE);
         if (args.quantity > source.quantity) throw refuse(NOT_THAT_MANY);
         if (source.folderId === group.id) throw refuse(ALREADY_HERE);
         // Read before anything moves: the card is what a deck row remembers, and the name is the
@@ -9076,7 +11051,7 @@ export function writeHandlers(db: FakeDb) {
         // *first* row's id, which is the crate's `RETURNING id` seen from here.
         let landedCard = deckCardAt(db, args.deckId, cardId, category.id, LIVE, finish);
         if (landedCard) {
-          // `tagId` and `needsReview` are left alone: the row already there is the one the user
+          // `labelId` and `needsReview` are left alone: the row already there is the one the user
           // labelled.
           landedCard.quantity += args.quantity;
         } else {
@@ -9086,7 +11061,7 @@ export function writeHandlers(db: FakeDb) {
             categoryId: category.id,
             variant: LIVE,
             cardId,
-            tagId: null,
+            labelId: null,
             quantity: args.quantity,
             name: card.name,
             setCode: card.setCode,
@@ -9209,6 +11184,263 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
+     * `deck_pull::pull_from_collection` — move copies the reader already owns into this deck's
+     * group, filling holes the list has been carrying.
+     *
+     * **It writes no `deck_cards` row, and that is the entire difference from
+     * {@link collection_to_deck}.** That command is an *add*: a card the deck did not list is
+     * now listed and held, so the quantity goes up. This one is a *filling*: the line already
+     * says four and the reader has one, so what changes is which folder three pieces of
+     * cardboard sit in — the deck's `ownedQuantity` rises to meet a `quantity` nobody touched.
+     * Getting it wrong turns a 4-copy line into a 7-copy line, silently, and the reader's
+     * decklist is then wrong everywhere it is exported.
+     *
+     * **All-or-nothing, which is the crate's transaction reached from here.** Every pick is
+     * judged before the first copy moves, so a batch with one bad row moves nothing at all
+     * rather than half of what was asked — the deck editor sends a dialog's worth of picks in
+     * one press, and a partial pull would leave the reader unable to say what happened without
+     * counting rows. This handler needs no {@link collection_to_deck}-style rollback, because
+     * by construction it writes nothing before the last refusal it can hit.
+     *
+     * **The plan is the fence.** What may be pulled is exactly what {@link deck_pull_plan}
+     * offered, re-read here rather than trusted from the caller: a dialog can be minutes old,
+     * and every refusal below is a way that has stopped being true. Re-deriving the shortfall
+     * inline instead would be a second implementation of the fold to disagree with, on the one
+     * arithmetic this feature turns on.
+     *
+     * **The copies move through {@link moveCopies}**, so a pulled row that matches one already
+     * in the group folds into it rather than making a second — the same merge a filing and a cut
+     * get, and for the same reason: `folderId` is the eleventh term of {@link collectionGrain},
+     * so two rows of one grain in one folder is a state no other write here can produce.
+     *
+     * **One history row, `delta: 0`.** A `move` kind because copies moved, no card id or name
+     * because a batch can span several printings and a row naming one of them would read as a
+     * claim about that card alone, and a zero delta because the deck's **list** did not change —
+     * `delta` is what `auditText.ts`'s day header adds up, and a pull that contributed to it
+     * would make a day of filing look like a day of deckbuilding.
+     */
+    deck_pull_from_collection: (args: {
+      deckId: number;
+      picks: DeckPullPick[];
+    }): DeckPullOutcome => {
+      refuseIfBusy(db);
+      // A write that writes nothing is not a write — {@link ZERO_ADD}'s rule one command over,
+      // and the press that produces it is a dialog confirmed with nothing ticked.
+      const picks = args.picks ?? [];
+      if (picks.length === 0) throw refuse(NOTHING_PICKED);
+      // The deck fence first — `touch_deck` doubles as it in the crate, one statement before
+      // there is an orphan to worry about. The **stamp** it also performs there waits until the
+      // end here, which is this fake's rule for every write: a rolled-back transaction takes the
+      // bump with it, and a refused pull must not resort the gallery.
+      const deck = requireDeck(db, args.deckId);
+      const group = deckGroup(db, args.deckId);
+      if (!group) throw refuse(NO_DECK_GROUP);
+
+      const rows = readHandlers(db).deck_pull_plan({ deckId: args.deckId });
+      // **Every entry the plan is willing to be pointed at**, and the two numbers a pick is
+      // measured against: which folded row it fills, and how many copies its own row holds. An
+      // id that is not in here is refused by {@link whyNotOffered}, which asks the store *which*
+      // of the three mistakes it is — so eligibility is never spelled a second time on this
+      // path.
+      const offered = new Map<number, { row: number; held: number }>();
+      rows.forEach((row, index) => {
+        for (const candidate of row.candidates) {
+          offered.set(candidate.entryId, { row: index, held: candidate.quantity });
+        }
+      });
+
+      // **Picks naming one row twice are merged rather than refused**, in first-appearance order.
+      // They have to be: {@link moveCopies} splits the source, so a second take would be pointed
+      // at a row that has moved or folded away and the caller would be told its own row was
+      // gone. Merging makes the batch mean what it plainly says and keeps every check below
+      // about the **total**.
+      const merged = new Map<number, number>();
+      // …and one running total per folded row, one grain up, for the same reason: two collection
+      // rows of one printing are two picks against one hole, and each is small enough on its own.
+      const wanted = new Map<number, number>();
+      for (const pick of picks) {
+        if (pick.quantity <= 0) throw refuse(ZERO_MOVE);
+        const found = offered.get(pick.entryId);
+        if (!found) throw refuse(whyNotOffered(db, pick.entryId));
+        const taken = (merged.get(pick.entryId) ?? 0) + pick.quantity;
+        if (taken > found.held) throw refuse(NOT_THAT_MANY);
+        merged.set(pick.entryId, taken);
+        const asked = (wanted.get(found.row) ?? 0) + pick.quantity;
+        if (asked > rows[found.row].short) throw refuse(MORE_THAN_MISSING);
+        wanted.set(found.row, asked);
+      }
+
+      let copies = 0;
+      for (const [entryId, quantity] of merged) {
+        moveCopies(db, entryId, quantity, group.id);
+        copies += quantity;
+      }
+
+      // **Distinct folded rows touched**, which is printings-and-**finishes** and is what a
+      // sentence means by "cards": two picks against one hole are one card, and `wanted` is
+      // already exactly that set. A foil and a nonfoil of one printing are two rows in the
+      // dialog and therefore two here — the narrowing this feature took, counted consistently.
+      const outcome: DeckPullOutcome = { copies, cards: wanted.size };
+      // `live` rather than {@link DECK_LEVEL}'s filler: the plan walks the live list and this is
+      // a statement about it, even though the row it changed nothing about is the reason `delta`
+      // is 0.
+      record(db, args.deckId, LIVE, "move", null, { pull: outcome }, 0);
+      deck.updatedAt = stamp(db);
+      return outcome;
+    },
+
+    /**
+     * `deck_quick_add::quick_add` — record copies the reader has just acquired straight into this
+     * deck's group, and take them off a matching wish in the same press.
+     *
+     * **The fourth write that crosses the deck boundary and the first that *creates* copies
+     * rather than moving them.** {@link collection_to_deck}, {@link deck_to_collection} and
+     * {@link deck_pull_from_collection} all re-file cardboard that already exists somewhere; this
+     * one answers "I have just bought these", so there is no source row and nothing is refused on
+     * behalf of one. What it borrows from all three is the boundary's discipline: `collection_add`
+     * refuses a `deck` folder outright and must go on refusing, because filing into a group
+     * asserts *this deck holds these copies* — a claim only a write that answers for the
+     * `deck_cards` row behind it may make. {@link addEntry}'s widened `kinds` parameter is that
+     * private door, and {@link COLLECTION_DECK_WRITE_FOLDERS} is what this write hands it.
+     *
+     * **The order is the rule rather than a tidy arrangement**, and every step is a different
+     * thing to tell a stale editor:
+     *
+     * 1. `quantity <= 0` — {@link ZERO_ADD}, before the deck is even looked up. A press that
+     *    records nothing is not a press.
+     * 2. The finish, through {@link normaliseFinish} — a junk one is refused here and not after
+     *    the deck fence, so a caller that sent nonsense hears about the nonsense.
+     * 3. The deck — {@link DECK_GONE} rather than {@link NOT_IN_DECK}, because "that deck is
+     *    gone" and "that deck does not play this" are not the same news.
+     * 4. {@link deckPlays} — {@link NOT_IN_DECK}, issue #358's fence, and it reads the **live**
+     *    list only. A card the deck merely *plans* is refused here with no theory fence of its
+     *    own, and that is a statement rather than an omission: a plan holds no cards, so there is
+     *    nothing for a group to hold on its behalf — {@link THEORY_HOLDS_NOTHING}'s reasoning
+     *    reached from the other end.
+     * 5. The group — {@link NO_DECK_GROUP}, because there is nowhere to put them.
+     *
+     * **The fold is {@link addEntry}'s and not a second one**, so a second quick add on the same
+     * line raises the row already sitting in the group rather than standing a twin beside it:
+     * `folderId` is the eleventh term of {@link collectionGrain}, and two rows of one grain in one
+     * folder is a state no other write in this file can produce.
+     *
+     * **The wish is re-read *inside* the write and re-checked against the same predicate the read
+     * used** — {@link readHandlers.deck_pull_plan}'s "the plan is the fence" one table over,
+     * because the picker's answer is a round trip old. Gone is {@link QUICK_ADD_WISH_GONE}; still there and
+     * no longer a match is {@link QUICK_ADD_WISH_WRONG_CARD}. `take` is `min(quantity, wish.quantity)`, so a
+     * reader recording four copies against a wish for one clears the wish and records all four —
+     * the shortfall and the shopping list are two different numbers and neither clamps the other.
+     *
+     * **A refused wish rolls the copies back with it**, which is the crate's one transaction
+     * reached from a store that has none: the entries are snapshotted before the add and restored
+     * if anything below throws. {@link collection_to_deck} does the same by hand and for the same
+     * reason — a fake that left the copies standing after a refusal would show a state the
+     * backend cannot produce, which is the class of defect this feature has already shipped once.
+     *
+     * **One history row, `delta: 0`, no card id.** A `move` kind because the audit's nine words
+     * are a closed CHECK and a tenth would rebuild every reader's history for a spelling;
+     * `deck_import_commit`, `deck_undo` and `deck_pull` each reached that conclusion first and
+     * this is the fourth reuse. The delta is 0 and honest — the deck's **list** gained nothing,
+     * and `auditText.ts`'s day header adds that column up, so a quick add contributing to it would
+     * make a day of filing look like a day of deckbuilding. No `cardId` either, `pull`'s rule: the
+     * payload is what the sentence is drawn from.
+     */
+    deck_quick_add_to_collection: (args: {
+      deckId: number;
+      cardId: string;
+      finish?: DeckFinish;
+      // A bare `string` because that is what `ipc.ts` sends — `lib/conditions.ts`'s
+      // `MENU_CONDITION`, spelled by the caller — and {@link validCondition} is where it becomes
+      // one of the six. **Both ends of that now say `NONE`**, which is the whole of what a menu
+      // quick-add changed at schema v35: the constant is still sent from the app rather than
+      // left to the backend's default, so the one decision a menu *declines* to make is visible
+      // where it is declined.
+      condition?: string;
+      quantity: number;
+      wishId?: number | null;
+    }): DeckQuickAddOutcome => {
+      refuseIfBusy(db);
+      // Before the deck lookup, exactly as the crate refuses it before `touch_deck`: a press that
+      // records nothing has nothing to say about a deck.
+      if (args.quantity <= 0) throw refuse(ZERO_ADD);
+      // The deck's spelling into the collection's, **before the transaction opens** and read by
+      // both halves below: the `collection_entries.finish` this writes and the
+      // `wishlist_entries.preferred_finish` the wish is re-checked against are the same
+      // vocabulary, and a second translation would be a second thing to drift. Its position is
+      // load-bearing rather than tidy — an unknown finish is refused ahead of the deck fence, so
+      // a caller sending junk hears about the junk and not about the deck.
+      const finish = normaliseFinish(args.finish) ?? "nonfoil";
+      const deck = requireDeck(db, args.deckId);
+      if (!deckPlays(db, args.deckId, args.cardId)) throw refuse(NOT_IN_DECK);
+      const group = deckGroup(db, args.deckId);
+      if (!group) throw refuse(NO_DECK_GROUP);
+
+      // This fake's stand-in for the transaction the crate's whole press sits in. Copied row by
+      // row rather than by reference, because {@link addEntry}'s fold mutates the row it lands on.
+      const snapshot = db.collectionEntries.map((e) => ({ ...e }));
+      let wishCopies = 0;
+      try {
+        const landed = addEntry(
+          db,
+          {
+            cardId: args.cardId,
+            finish,
+            condition: validCondition(args.condition),
+            quantity: args.quantity,
+            folderId: group.id,
+            // Every other `EntryInput` field is left at its empty value on purpose: a quick add is
+            // the reader saying "I have these now", and a price, an acquisition source or a
+            // grading invented here would be provenance nobody typed.
+          },
+          COLLECTION_DECK_WRITE_FOLDERS,
+        );
+        if (typeof args.wishId === "number") {
+          const wish = db.wishlistEntries.find((w) => w.id === args.wishId);
+          // The fault is read beside the lookup rather than instead of it, so a story standing in
+          // that world still refuses a wish id that was never there for the ordinary reason.
+          if (!wish || db.fault === "wishGone") throw refuse(QUICK_ADD_WISH_GONE);
+          if (
+            wish.cardId !== args.cardId ||
+            !(wish.preferredFinish === null || wish.preferredFinish === finish)
+          ) {
+            throw refuse(QUICK_ADD_WISH_WRONG_CARD);
+          }
+          wishCopies = Math.min(args.quantity, wish.quantity);
+          if (wishCopies === wish.quantity) {
+            // A want that is met is over, and `wishlist_entries` has a CHECK against a zero row —
+            // so this is a delete rather than a decrement to nothing.
+            db.wishlistEntries = db.wishlistEntries.filter((w) => w !== wish);
+          } else {
+            wish.quantity -= wishCopies;
+            wish.updatedAt = stamp(db);
+          }
+        }
+        const outcome: DeckQuickAddOutcome = {
+          copies: args.quantity,
+          entryId: landed.id,
+          wishCopies,
+        };
+        // `live` rather than {@link DECK_LEVEL}'s filler, `pull`'s reason: the fence walked the
+        // live list and this row is a statement about it, even though the list itself is the thing
+        // that did not change.
+        record(
+          db,
+          args.deckId,
+          LIVE,
+          "move",
+          null,
+          { quickAdd: { copies: outcome.copies, wishes: wishCopies } },
+          0,
+        );
+        deck.updatedAt = stamp(db);
+        return outcome;
+      } catch (e) {
+        db.collectionEntries = snapshot;
+        throw e;
+      }
+    },
+
+    /**
      * `collection::commit_import` — one transaction for a whole imported file, mirrored here as
      * one loop over the same `addEntry`/`setEntry` operations `collection_add` performs one
      * line at a time. A refused item must roll the whole file back, and there is no real
@@ -9235,7 +11467,7 @@ export function writeHandlers(db: FakeDb) {
       const folderId = collectionFolderNamed(
         db,
         args.folderId ?? null,
-        COLLECTION_IMPORT_FOLDERS,
+        COLLECTION_DECK_WRITE_FOLDERS,
       );
       const before = db.collectionEntries.length;
       const snapshot = db.collectionEntries.map((e) => ({ ...e }));
@@ -9278,7 +11510,7 @@ export function writeHandlers(db: FakeDb) {
             folderId,
           };
           if (args.mode === "add") {
-            addEntry(db, entry, COLLECTION_IMPORT_FOLDERS);
+            addEntry(db, entry, COLLECTION_DECK_WRITE_FOLDERS);
             continue;
           }
           // **A `set` of 0 deletes the row**, `collection_set_quantity`'s reversal reached from
@@ -9287,7 +11519,7 @@ export function writeHandlers(db: FakeDb) {
           // the crate's upsert does, so a `set 0` for a printing the reader does not own counts
           // oddly and honestly: one added and one removed rather than nothing, because both
           // statements really ran.
-          const change = setEntry(db, entry, COLLECTION_IMPORT_FOLDERS);
+          const change = setEntry(db, entry, COLLECTION_DECK_WRITE_FOLDERS);
           if (change.quantity === 0) {
             db.collectionEntries = db.collectionEntries.filter((e) => e.id !== change.id);
             removed += 1;
@@ -9444,6 +11676,81 @@ export function writeHandlers(db: FakeDb) {
       if (merged) return merged;
       Object.assign(wish, pinned, { needsReview: null, updatedAt: stamp(db) });
       return { id: wish.id, quantity: wish.quantity, removed: false };
+    },
+
+    /**
+     * `wishlist_optimize::apply` — the rows the reader left ticked in a plan, committed.
+     *
+     * **One transaction**, `wishlist_import_commit`'s rule and the same snapshot-and-restore
+     * stand-in for it, because a sweep seen half done is a shopping list nobody can reason about.
+     * What the transaction is for here is the one *refusal* rather than the four statuses: every
+     * status below is a row this command declined to touch and said so about, and only a
+     * `toCardId` no card carries throws — which is a caller bug, since a plan offers ids off
+     * `cards` and nothing else.
+     *
+     * **`fromCardId` is a guard, not a description.** Between the preview and the press a sync
+     * can land, or another pane can repoint the same wish; applying regardless would move a
+     * printing the reader never saw. So a wish whose `cardId` no longer matches is left exactly
+     * as it is and reported `stale`, and a wish that has left the list entirely is `missing` —
+     * the same thought one step further along.
+     *
+     * **A repoint landing on a taken grain merges**, {@link mergeWishOnto} and therefore
+     * `wishlist_set_printing`'s own rule: the two quantities sum into the row that was already
+     * there, this row is deleted, and it is reported `merged` rather than as a failure, with the
+     * saving still standing. The result names **the item's** `wishId` and not the survivor's,
+     * because the caller matches results to the rows it sent.
+     *
+     * One result per item, **in the order they were sent**, so the dialog can sum the saving over
+     * exactly the rows that moved rather than over the rows it hoped would.
+     */
+    wishlist_optimize_apply: (args: {
+      items: WishOptimizeApplyItem[];
+    }): WishlistOptimizeOutcome => {
+      refuseIfBusy(db);
+      const items = args.items ?? [];
+      const snapshot = db.wishlistEntries.map((w) => ({ ...w }));
+      const results: WishOptimizeResult[] = [];
+      try {
+        for (const item of items) {
+          const wish = db.wishlistEntries.find((w) => w.id === item.wishId);
+          if (!wish) {
+            results.push({ wishId: item.wishId, status: "missing" });
+            continue;
+          }
+          if (wish.cardId !== item.fromCardId) {
+            results.push({ wishId: item.wishId, status: "stale" });
+            continue;
+          }
+          const printing = cardById(db, item.toCardId);
+          // `wishlist_set_printing`'s sentence verbatim — one rule, two commands.
+          if (printing === null) throw refuse("no card with that id is in the card database");
+          const pinned: FakeWish = {
+            ...wish,
+            cardId: printing.id,
+            // The wish's own oracle id is not up for revision, {@link addWish}'s fallback: this
+            // command moves the wish between printings *of one card*, so the only row that can
+            // want one is an orphan that never had one.
+            oracleId: wish.oracleId ?? nonblank(printing.oracleId),
+            setCode: printing.setCode,
+            collectorNumber: printing.collectorNumber,
+            lang: printing.lang,
+          };
+          const merged = mergeWishOnto(db, wish, pinned);
+          if (merged) {
+            results.push({ wishId: item.wishId, status: "merged" });
+            continue;
+          }
+          // `needsReview` clears for `wishlist_set_printing`'s reason: the only sentences that
+          // column ever carries are the reconciler's, and both are about an id this write has
+          // just replaced.
+          Object.assign(wish, pinned, { needsReview: null, updatedAt: stamp(db) });
+          results.push({ wishId: item.wishId, status: "changed" });
+        }
+      } catch (e) {
+        db.wishlistEntries = snapshot;
+        throw e;
+      }
+      return { results };
     },
 
     /**
@@ -9712,6 +12019,10 @@ export function writeHandlers(db: FakeDb) {
         // Spelled out rather than left absent, because `create_deck` names every column it
         // writes: a new deck's curve is the plain one until the reader says otherwise.
         separateXGroup: false,
+        // Spelled out beside it for the same reason: a deck being born has its token area
+        // collapsed, which is what `tokens_open INTEGER NOT NULL DEFAULT 0` says and what makes
+        // a deck made *here* open the way a deck made in the app does.
+        tokensOpen: false,
         updatedAt: stamp(db),
       };
       db.decks.push(row);
@@ -9815,6 +12126,21 @@ export function writeHandlers(db: FakeDb) {
       if (patch.separateXGroup !== undefined && patch.separateXGroup !== separateXWas) {
         field("xGroup", separateXWas, patch.separateXGroup);
       }
+      // v35's, on `separateXGroup`'s footing exactly: an absent column is the DDL's `0`, so a
+      // deck that has never been opened and a deck whose area was collapsed are one state.
+      //
+      // **The word is a guess and is flagged rather than asserted.** `deck.rs` does not carry
+      // `tokens_open` in `record_deck_edit` yet, so there is no spelling to mirror; `tokensOpen`
+      // follows the two multi-word names already in that switch (`xGroup`, `defaultCategory`).
+      // Nothing goes red if it is wrong — `auditText.ts`' `default` arm answers an unrecognised
+      // field with "Changed the deck", which is true of every deck edit — and that is exactly the
+      // silent drift the `xGroup` arm documents. Recording *something* is the important half:
+      // {@link journalled} keys an undo step on the last history row a write produced, so a
+      // handler that recorded nothing would leave this press outside Ctrl+Z.
+      const tokensOpenWas = before.tokensOpen ?? false;
+      if (patch.tokensOpen !== undefined && patch.tokensOpen !== tokensOpenWas) {
+        field("tokensOpen", tokensOpenWas, patch.tokensOpen);
+      }
       // v16's, and the second multi-word field name in that switch — `deck.rs` writes
       // `"defaultCategory"`, and the paragraph above applies word for word.
       //
@@ -9887,6 +12213,10 @@ export function writeHandlers(db: FakeDb) {
       // this one only changes how the same cards are read — the curve is regrouped in TS, by
       // `buildGroups`, on the rows the next read hands back.
       deck.separateXGroup = patch.separateXGroup ?? deck.separateXGroup;
+      // `coalesce(?n, tokens_open)`, and **nothing else happens** for the reason above it: the
+      // list the area draws is derived on every read, so opening or closing it writes one column
+      // and changes no answer about the deck.
+      deck.tokensOpen = patch.tokensOpen ?? deck.tokensOpen;
       // `coalesce(?n, default_category_id)` again — and **`0` is a value here rather than an
       // absence**, which is the whole reason `??` is right and a truthiness test would be wrong:
       // `patch.defaultCategoryId === 0` is a reader asking to go back to Auto, and `||` would
@@ -9994,7 +12324,11 @@ export function writeHandlers(db: FakeDb) {
       db.decks = db.decks.filter((d) => d.id !== args.id);
       db.deckCards = db.deckCards.filter((dc) => dc.deckId !== args.id);
       db.deckCategories = db.deckCategories.filter((c) => c.deckId !== args.id);
-      // **The tags stay**, since schema v21: a label belongs to no deck, so deleting the deck
+      // `deck_tokens.deck_id` is `ON DELETE CASCADE`, so the overrides go with the deck — and
+      // nothing else has to happen, because the *list* was never stored: it was derived from
+      // cards that have just gone.
+      db.deckTokens = db.deckTokens.filter((t) => t.deckId !== args.id);
+      // **The labels stay**, since schema v21: a label belongs to no deck, so deleting the deck
       // it was first typed in must not take it off the others wearing it. Only `reset_decks`,
       // which is every deck at once, sweeps the table.
       db.deckAudit = db.deckAudit.filter((a) => a.deckId !== args.id);
@@ -10012,7 +12346,7 @@ export function writeHandlers(db: FakeDb) {
      * curve, and a copy opened onto a differently grouped curve than the deck it was made from
      * would be a copy that lost something nobody chose to change.
      *
-     * **Categories and tags are new rows with new ids, and the cards are remapped onto them.**
+     * **Categories and labels are new rows with new ids, and the cards are remapped onto them.**
      * This is the part a "copy the cards" implementation gets wrong invisibly: a card row
      * stores a `category_id`, so copying it verbatim would file the copy's cards under the
      * *original's* categories — and then deleting the original would take the copy's cards
@@ -10060,10 +12394,10 @@ export function writeHandlers(db: FakeDb) {
       // `?? 0` covers a source on Auto (in no map) and a source pointing at a pile that has
       // gone, which the delete handler's clean-up means cannot happen.
       copy.defaultCategoryId = categoryMap.get(source.defaultCategoryId ?? 0) ?? 0;
-      // **No tags are copied, and since schema v21 there is nothing to copy.** A duplicate used
-      // to get its own `deck_tags` rows and a map from the original's ids to them, because a tag
+      // **No labels are copied, and since schema v21 there is nothing to copy.** A duplicate used
+      // to get its own `deck_labels` rows and a map from the original's ids to them, because a label
       // belonged to a deck. It is one app-wide row now, so the copied cards keep the very
-      // `tagId` they had — the duplicate wears the same labels as its original, which is what a
+      // `labelId` they had — the duplicate wears the same labels as its original, which is what a
       // reader duplicating a deck means by "the same deck".
       // `needsReview` travels with the row: the sentence says this printing left the card
       // database, which is just as true of the copy.
@@ -10076,7 +12410,7 @@ export function writeHandlers(db: FakeDb) {
           // deck — and is the honest answer if it ever does, as the Rust's `NULL` fallback is.
           categoryId: categoryMap.get(dc.categoryId) ?? dc.categoryId,
           // Verbatim: the label is the app's, so the copy wears the very same row.
-          tagId: dc.tagId,
+          labelId: dc.labelId,
         });
       }
       return toDeckRow(db, copy);
@@ -10125,7 +12459,7 @@ export function writeHandlers(db: FakeDb) {
       const existing = deckCardAt(db, args.deckId, args.cardId, category.id, variant, finish);
       deck.updatedAt = stamp(db);
       if (existing) {
-        // The quantities add; `tagId` and `needsReview` are left alone, because the row that
+        // The quantities add; `labelId` and `needsReview` are left alone, because the row that
         // is already there is the one the user labelled.
         existing.quantity += args.quantity;
         return { id: existing.id, quantity: existing.quantity, removed: false };
@@ -10136,7 +12470,7 @@ export function writeHandlers(db: FakeDb) {
         categoryId: category.id,
         variant,
         cardId: args.cardId,
-        tagId: null,
+        labelId: null,
         quantity: args.quantity,
         name: card.name,
         setCode: card.setCode,
@@ -10299,7 +12633,7 @@ export function writeHandlers(db: FakeDb) {
      * The identity travels **from the moved row**, never from a fresh `cards` lookup: a deck
      * whose printing left the card database is exactly the deck whose scratchpad someone is
      * tidying, and a move that needed the id to resolve would refuse the one row that most
-     * needs moving. `tagId` travels with it for the same reason — a label is the user's word
+     * needs moving. `labelId` travels with it for the same reason — a label is the user's word
      * about this card in this deck, and re-filing it is not a reason to lose it.
      *
      * **Either `toCategoryId` or `toCategoryName`, and at least one** — `deck_add_card`'s two-arm
@@ -10375,6 +12709,10 @@ export function writeHandlers(db: FakeDb) {
      *
      * `needsReview` is deliberately not carried across — the flag says the row's printing
      * left the card database, and a swap onto one that is in it is exactly the cure.
+     *
+     * **Touches no collection table**, which is exactly why {@link releaseUnclaimedCopies} runs
+     * after this write: the group still holds the *old* printing's copies once the list stops
+     * naming it, and nothing else in this command would ever notice.
      */
     deck_swap_printing: (args: {
       deckId: number;
@@ -10423,8 +12761,8 @@ export function writeHandlers(db: FakeDb) {
           categoryId: category.id,
           variant,
           cardId: args.toCardId,
-          // `add_card`'s insert names no `tag_id`, so the copies land unlabelled.
-          tagId: null,
+          // `add_card`'s insert names no `label_id`, so the copies land unlabelled.
+          labelId: null,
           quantity,
           name: to.name,
           setCode: to.setCode,
@@ -10437,6 +12775,10 @@ export function writeHandlers(db: FakeDb) {
       }
       db.deckCards = db.deckCards.filter((dc) => dc !== row);
       deck.updatedAt = stamp(db);
+      // §2.2's sweep, after the rewrite rather than a targeted release before it: a swap can
+      // *fold* into a line the deck already has, and reading the finished list against the
+      // group answers both the plain case and the folded one with one query.
+      releaseUnclaimedCopies(db, args.deckId, variant);
       // `CHECK (quantity > 0)` means a row that was already there contributed at least one
       // copy, so the landed total is strictly greater than what moved exactly when it folded.
       return { folded: landed > quantity, quantity: landed };
@@ -10447,12 +12789,16 @@ export function writeHandlers(db: FakeDb) {
      *
      * `deck_swap_printing` one axis over, so it answers the same `SwapResult` and **folds** the
      * same way: setting a row to a finish the pile already holds adds the quantities and takes
-     * the row that moved away, and the surviving row keeps its own id, its tag and its sentence
+     * the row that moved away, and the surviving row keeps its own id, its label and its sentence
      * (`add_card`'s rule — the row that was already there is the one the reader labelled).
      *
      * Three refusals, and the second is the one worth having in the fake: the target finish is
      * checked against `cards.finishes`, so a story that points this at a printing sold only in
      * nonfoil sees what the app does with a refusal rather than a silently shiny card.
+     *
+     * **Touches no collection table**, `deck_swap_printing`'s reason exactly:
+     * {@link releaseUnclaimedCopies} runs after either branch below, because the group still
+     * holds the *old* finish's copies once the list stops naming it.
      */
     deck_set_card_finish: (args: {
       deckId: number;
@@ -10478,16 +12824,21 @@ export function writeHandlers(db: FakeDb) {
       if (!row) throw refuse(cardGone(category.name));
       const target = deckCardAt(db, args.deckId, args.cardId, category.id, variant, to);
       deck.updatedAt = stamp(db);
+      let result: SwapResult;
       if (target) {
         target.quantity += row.quantity;
         db.deckCards = db.deckCards.filter((dc) => dc !== row);
-        return { folded: true, quantity: target.quantity };
+        result = { folded: true, quantity: target.quantity };
+      } else {
+        // Nothing to fold into: the row changes finish in place and keeps everything else. No
+        // new rowid here, unlike the move and the swap above — the crate's statement is a bare
+        // `UPDATE … SET finish`, so the row keeps its place in {@link takeFromDeckList}'s order.
+        row.finish = to;
+        result = { folded: false, quantity: row.quantity };
       }
-      // Nothing to fold into: the row changes finish in place and keeps everything else. No new
-      // rowid here, unlike the move and the swap above — the crate's statement is a bare
-      // `UPDATE … SET finish`, so the row keeps its place in {@link takeFromDeckList}'s order.
-      row.finish = to;
-      return { folded: false, quantity: row.quantity };
+      // §2.2's sweep, after the rewrite either branch took — see the doc above.
+      releaseUnclaimedCopies(db, args.deckId, variant);
+      return result;
     },
 
     /**
@@ -10618,11 +12969,11 @@ export function writeHandlers(db: FakeDb) {
       // and a map keyed on the raw string would count them as two in the history row.
       const categories = new Map<string, FakeDeckCategory>();
       let categoriesCreated = 0;
-      // `import::tag_for_name`'s memo, keyed on {@link tagKey}'s answer for that function's
-      // reason: `deck_tags.name_key` is the grain, so a list writing `Keeper` and `keeper` names
+      // `import::label_for_name`'s memo, keyed on {@link labelKey}'s answer for that function's
+      // reason: `deck_labels.name_key` is the grain, so a list writing `Keeper` and `keeper` names
       // one label and must count as one creation.
-      const tags = new Map<string, FakeDeckTag>();
-      let tagsCreated = 0;
+      const labels = new Map<string, FakeDeckLabel>();
+      let labelsCreated = 0;
       let added = 0;
       for (const item of args.items) {
         const name = item.categoryName.trim();
@@ -10647,34 +12998,34 @@ export function writeHandlers(db: FakeDb) {
         // part of the grain, so a list naming the same printing foil on one line and plain on
         // another lands as two rows rather than one summed.
         const finish = normaliseFinish(item.finish);
-        // Archidekt's `^Keeper,#4aab08^`: find the label by {@link tagKey}, or make it in the
+        // Archidekt's `^Keeper,#4aab08^`: find the label by {@link labelKey}, or make it in the
         // colour the file asked for. **A label that already exists is used unchanged** — not
-        // renamed to the file's capitals and not recoloured — which is `import::tag_for_name`'s
-        // rule and matters because a tag is app-wide.
-        let tagId: number | null = null;
-        if (item.tagName !== undefined) {
-          const name = validMetaName(item.tagName, "A tag");
-          const key = tagKey(name);
-          let tag = tags.get(key);
-          if (!tag) {
-            tag = db.deckTags.find((t) => tagKey(t.name) === key);
-            if (!tag) {
-              tag = { id: nextId(db.deckTags), name, color: validColor(item.tagColor ?? "") };
-              db.deckTags.push(tag);
-              tagsCreated += 1;
+        // renamed to the file's capitals and not recoloured — which is `import::label_for_name`'s
+        // rule and matters because a label is app-wide.
+        let labelId: number | null = null;
+        if (item.labelName !== undefined) {
+          const name = validMetaName(item.labelName, "A label");
+          const key = labelKey(name);
+          let label = labels.get(key);
+          if (!label) {
+            label = db.deckLabels.find((l) => labelKey(l.name) === key);
+            if (!label) {
+              label = { id: nextId(db.deckLabels), name, color: validColor(item.labelColor ?? "") };
+              db.deckLabels.push(label);
+              labelsCreated += 1;
             }
-            tags.set(key, tag);
+            labels.set(key, label);
           }
-          tagId = tag.id;
+          labelId = label.id;
         }
         const existing = deckCardAt(db, deck.id, item.cardId, category.id, variant, finish);
         if (existing) {
           // `DECK_CARD_GRAIN`'s `ON CONFLICT … DO UPDATE`: a list naming a card on two lines
           // lands as one row with the sum, and a merge folds onto what the deck already held.
           existing.quantity += item.quantity;
-          // `tag_id = coalesce(deck_cards.tag_id, excluded.tag_id)` — the label a reader put on
-          // a row by hand survives a merge that quantity does not.
-          existing.tagId ??= tagId;
+          // `label_id = coalesce(deck_cards.label_id, excluded.label_id)` — the label a reader
+          // put on a row by hand survives a merge that quantity does not.
+          existing.labelId ??= labelId;
         } else {
           db.deckCards.push({
             id: nextId(db.deckCards),
@@ -10682,7 +13033,7 @@ export function writeHandlers(db: FakeDb) {
             categoryId: category.id,
             variant,
             cardId: item.cardId,
-            tagId,
+            labelId,
             quantity: item.quantity,
             name: card.name,
             setCode: card.setCode,
@@ -10722,16 +13073,16 @@ export function writeHandlers(db: FakeDb) {
             lines: args.items.length,
             cards: added,
             categories: categories.size,
-            tagsCreated,
+            labelsCreated,
           },
         },
         added,
       );
       deck.updatedAt = stamp(db);
-      return { added, removed, categoriesCreated, tagsCreated };
+      return { added, removed, categoriesCreated, labelsCreated };
     },
 
-    /* ------------------------------------------------- categories, tags and folders ---- */
+    /* ----------------------------------------------- categories, labels and folders ---- */
 
     /**
      * `deck_meta::create_category` — a new pile, always `kind: "main"`, always active, always
@@ -10863,7 +13214,7 @@ export function writeHandlers(db: FakeDb) {
      *
      * The move covers **both variants**, folding on the grain, so a `live` row and a `theory`
      * row of one printing land in their own matching rows in the target and never in each
-     * other. A row the target already holds keeps its own `tagId` and `needsReview` — the
+     * other. A row the target already holds keeps its own `labelId` and `needsReview` — the
      * existing row wins a fold.
      *
      * The card count in the history is taken **before** anything moves, in copies rather than
@@ -10924,90 +13275,90 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
-     * `deck_meta::create_tag` — a new label, **app-wide**. `deckId` is where the reader was
-     * standing: it goes in the history row and is not stored on the tag.
+     * `deck_meta::create_label` — a new label, **app-wide**. `deckId` is where the reader was
+     * standing: it goes in the history row and is not stored on the label.
      *
-     * Refuses a name **any** tag already holds, compared on {@link tagKey} rather than on the
+     * Refuses a name **any** label already holds, compared on {@link labelKey} rather than on the
      * word — `removal` collides with `Removal`, and a `Café` typed with a combining accent with
      * one typed without. That is the issue's second half and it is a table property, so the fake
      * enforces it the way the UNIQUE index does.
      */
-    deck_tag_create: (args: { deckId: number; name: string; color: string }): GlobalTag => {
+    deck_label_create: (args: { deckId: number; name: string; color: string }): GlobalLabel => {
       refuseIfBusy(db);
-      const name = validMetaName(args.name, "A tag");
+      const name = validMetaName(args.name, "A label");
       const color = validColor(args.color);
-      if (tagNameIsTaken(db, name, null)) throw refuse(TAG_NAME_TAKEN);
+      if (labelNameIsTaken(db, name, null)) throw refuse(LABEL_NAME_TAKEN);
       const deck = requireDeck(db, args.deckId);
-      const tag: FakeDeckTag = { id: nextId(db.deckTags), name, color };
-      db.deckTags.push(tag);
-      recordTag(db, deck.id, { action: "create", tag: name, previous: null });
+      const label: FakeDeckLabel = { id: nextId(db.deckLabels), name, color };
+      db.deckLabels.push(label);
+      recordLabel(db, deck.id, { action: "create", label: name, previous: null });
       deck.updatedAt = stamp(db);
-      return toGlobalTag(db, tag);
+      return toGlobalLabel(db, label);
     },
 
     /**
-     * `deck_meta::update_tag` — rename **and** recolour, **in every deck at once**: one command,
+     * `deck_meta::update_label` — rename **and** recolour, **in every deck at once**: one command,
      * both arguments required. There is no patch shape here, so a caller changing one sends the
      * other back unchanged.
      *
      * **Two verbs, where `rename` used to cover both.** It covered both because a colour was one
      * of six palette tokens and never reached a sentence; the colour is the reader's own now and
-     * is the same colour in every deck, so "Recoloured tag Ramp" is a line a reader may come
+     * is the same colour in every deck, so "Recoloured label Ramp" is a line a reader may come
      * back looking for.
      */
-    deck_tag_update: (args: {
+    deck_label_update: (args: {
       deckId: number;
       id: number;
       name: string;
       color: string;
-    }): GlobalTag => {
+    }): GlobalLabel => {
       refuseIfBusy(db);
-      const name = validMetaName(args.name, "A tag");
+      const name = validMetaName(args.name, "A label");
       const color = validColor(args.color);
-      const tag = tagById(db, args.id);
-      if (!tag) throw refuse(TAG_GONE);
-      if (tagNameIsTaken(db, name, tag.id)) throw refuse(TAG_NAME_TAKEN);
+      const label = labelById(db, args.id);
+      if (!label) throw refuse(LABEL_GONE);
+      if (labelNameIsTaken(db, name, label.id)) throw refuse(LABEL_NAME_TAKEN);
       const deck = requireDeck(db, args.deckId);
-      const previous = tag.name;
-      tag.name = name;
-      tag.color = color;
-      recordTag(
+      const previous = label.name;
+      label.name = name;
+      label.color = color;
+      recordLabel(
         db,
         deck.id,
         previous === name
-          ? { action: "recolour", tag: name, previous: null, color }
-          : { action: "rename", tag: name, previous, color },
+          ? { action: "recolour", label: name, previous: null, color }
+          : { action: "rename", label: name, previous, color },
       );
       deck.updatedAt = stamp(db);
-      return toGlobalTag(db, tag);
+      return toGlobalLabel(db, label);
     },
 
     /**
-     * `deck_meta::remove_tag_from_deck` — take a label off **this deck's cards in one list**,
-     * leaving the tag itself alone. Answers how many rows lost it.
+     * `deck_meta::remove_label_from_deck` — take a label off **this deck's cards in one list**,
+     * leaving the label itself alone. Answers how many rows lost it.
      *
      * The act the app-wide list needed and the per-deck one never did: "I am done with this
-     * label here" and "this label should stop existing" were one press while a tag belonged to a
-     * deck. Zero is a success, not a refusal, and writes nothing.
+     * label here" and "this label should stop existing" were one press while a label belonged to
+     * a deck. Zero is a success, not a refusal, and writes nothing.
      */
-    deck_tag_remove_from_deck: (args: {
+    deck_label_remove_from_deck: (args: {
       deckId: number;
-      tagId: number;
+      labelId: number;
       variant: DeckVariant;
     }): number => {
       const variant = validVariant(args.variant);
       refuseIfBusy(db);
-      const tag = tagById(db, args.tagId);
-      if (!tag) throw refuse(TAG_GONE);
+      const label = labelById(db, args.labelId);
+      if (!label) throw refuse(LABEL_GONE);
       const wearing = db.deckCards.filter(
-        (dc) => dc.tagId === tag.id && dc.deckId === args.deckId && dc.variant === variant,
+        (dc) => dc.labelId === label.id && dc.deckId === args.deckId && dc.variant === variant,
       );
       if (wearing.length === 0) return 0;
       const deck = requireDeck(db, args.deckId);
-      for (const dc of wearing) dc.tagId = null;
-      recordTag(db, deck.id, {
+      for (const dc of wearing) dc.labelId = null;
+      recordLabel(db, deck.id, {
         action: "remove",
-        tag: tag.name,
+        label: label.name,
         previous: null,
         cards: wearing.length,
       });
@@ -11016,84 +13367,201 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
-     * `deck_meta::delete_tag` — **from the whole app**, and it **untags its cards rather than
-     * deleting them** (`deck_cards.tag_id` is `ON DELETE SET NULL`) in every deck wearing it,
+     * `deck_meta::delete_label` — **from the whole app**, and it **unlabels its cards rather than
+     * deleting them** (`deck_cards.label_id` is `ON DELETE SET NULL`) in every deck wearing it,
      * which is the half of the sentence a confirm dialog owes a reader.
      *
-     * An id that resolves to nothing is a success: the caller wanted that tag gone, and it is
+     * An id that resolves to nothing is a success: the caller wanted that label gone, and it is
      * gone.
      */
-    deck_tag_delete: (args: { deckId: number; id: number }): void => {
+    deck_label_delete: (args: { deckId: number; id: number }): void => {
       refuseIfBusy(db);
-      const tag = tagById(db, args.id);
-      if (!tag) return;
+      const label = labelById(db, args.id);
+      if (!label) return;
       const deck = requireDeck(db, args.deckId);
-      const cards = db.deckCards.filter((dc) => dc.tagId === tag.id).length;
-      db.deckTags = db.deckTags.filter((t) => t.id !== tag.id);
-      for (const dc of db.deckCards) if (dc.tagId === tag.id) dc.tagId = null;
-      // `previous` is null: this row is about the label, and the label it is about is `tag`.
+      const cards = db.deckCards.filter((dc) => dc.labelId === label.id).length;
+      db.deckLabels = db.deckLabels.filter((l) => l.id !== label.id);
+      for (const dc of db.deckCards) if (dc.labelId === label.id) dc.labelId = null;
+      // `previous` is null: this row is about the label, and the label it is about is `label`.
       // Filling it here would make a delete read as a rename that went nowhere.
-      recordTag(db, deck.id, { action: "delete", tag: tag.name, previous: null, cards });
+      recordLabel(db, deck.id, { action: "delete", label: label.name, previous: null, cards });
       deck.updatedAt = stamp(db);
     },
 
     /**
-     * `deck_meta::set_card_tag` — put the one tag a deck card carries on it, or take it off with
-     * `tagId: null`.
+     * `deck_meta::set_card_label` — put the one label a deck card carries on it, or take it off
+     * with `labelId: null`.
      *
-     * A **card** write wearing a tag command's name: it addresses the slot by the full grain
+     * A **card** write wearing a label command's name: it addresses the slot by the full grain
      * like every other card write, and answers {@link CARD_NOT_IN_CATEGORY} for a row that has
-     * since moved, folded or been stepped to zero. A `tagId` belonging to another deck is
+     * since moved, folded or been stepped to zero. A `labelId` belonging to another deck is
      * refused before anything is written.
      *
      * The history row carries the card id — which is what marks it the *card's* half of the
-     * `tag` kind — and `tag: null` is how a row says the card wears nothing now: clearing a
+     * `label` kind — and `label: null` is how a row says the card wears nothing now: clearing a
      * label is as much a change as applying one, and `previous` is the only place the label it
      * lost is written down.
      */
-    deck_card_set_tag: (args: {
+    deck_card_set_label: (args: {
       deckId: number;
       cardId: string;
       categoryId: number;
       variant: DeckVariant;
-      tagId: number | null;
+      finish?: DeckFinish;
+      labelId: number | null;
     }): void => {
       const variant = validVariant(args.variant);
       refuseIfBusy(db);
       let applied: string | null = null;
-      if (args.tagId !== null) {
-        const tag = tagById(db, args.tagId);
-        if (!tag) throw refuse(TAG_GONE);
-        // No wrong-deck fence since schema v21: there is no other deck's tag to refuse.
-        applied = tag.name;
+      if (args.labelId !== null) {
+        const label = labelById(db, args.labelId);
+        if (!label) throw refuse(LABEL_GONE);
+        // No wrong-deck fence since schema v21: there is no other deck's label to refuse.
+        applied = label.name;
       }
       const deck = requireDeck(db, args.deckId);
-      const row = db.deckCards.find(
-        (dc) =>
-          dc.deckId === args.deckId &&
-          dc.cardId === args.cardId &&
-          dc.categoryId === args.categoryId &&
-          dc.variant === variant,
-      );
+      // **`deckCardAt`, the same five-term address every other card writer here uses**, rather
+      // than the four-field `find` this had until 2026-09-03. That `find` matched the first row
+      // for the card in the category *whatever its finish*, so it drew a label onto the regular
+      // copy when a foil one was asked for — and it was the reason nothing in this suite noticed
+      // that the real command dropped `finish` and could label no foil row at all.
+      const finish = normaliseFinish(args.finish);
+      const row = deckCardAt(db, args.deckId, args.cardId, args.categoryId, variant, finish);
       if (!row) throw refuse(CARD_NOT_IN_CATEGORY);
-      const previous = row.tagId === null ? null : (tagById(db, row.tagId)?.name ?? null);
-      row.tagId = args.tagId;
+      const previous = row.labelId === null ? null : (labelById(db, row.labelId)?.name ?? null);
+      row.labelId = args.labelId;
       record(
         db,
         deck.id,
         variant,
-        "tag",
+        "label",
         { id: row.cardId, name: row.name },
-        { tag: applied, previous },
+        { label: applied, previous },
         0,
       );
       deck.updatedAt = stamp(db);
     },
 
     /**
+     * `deck_tokens::deck_token_set` — one token's override: the art, the count, or the
+     * dismissal.
+     *
+     * **All five keys travel on every call, `null` included**, because Tauri fills parameters by
+     * name and an absent one is a refusal rather than a default. The state word arrives as
+     * **`tokenState`** and not `state`: the crate cannot call a parameter `state`, since that is
+     * already the managed `tauri::State` every command takes, so it declares `token_state` and
+     * `ipc.ts` folds `{ state }` onto that key at the call site. This handler matches `invoke`'s
+     * object exactly, the way every handler here does — a typo is a runtime rejection in the
+     * workbench for the same reason it is one in the window.
+     *
+     * **A write whose result would carry nothing deletes the row.** `state` back at `auto` with
+     * no printing and no quantity is *no deviation*, and the empty override is deliberately not
+     * representable: two spellings of "the reader has not touched this" would be two states to
+     * keep in agreement, and a panel reading the wrong one would draw a reset control over
+     * nothing.
+     *
+     * **`quantity` is not validated and `0` is a value.** The column is nullable with no CHECK
+     * — unlike `deck_cards.quantity`, which is NOT NULL and `> 0` — because a reader who zeroed
+     * a token while keeping the art they picked has said something. `validQuantity` is
+     * deliberately not called: a fake that refused what the DDL accepts would be a fake with a
+     * rule the app does not have.
+     */
+    deck_token_set: (args: {
+      deckId: number;
+      oracleId: string;
+      cardId: string | null;
+      quantity: number | null;
+      tokenState: DeckTokenState | null;
+    }): void => {
+      refuseIfBusy(db);
+      requireDeck(db, args.deckId);
+      const state = validTokenState(args.tokenState);
+      const existing = storedToken(db, args.deckId, args.oracleId);
+      if (state === "auto" && args.cardId === null && args.quantity === null) {
+        if (existing) db.deckTokens = db.deckTokens.filter((t) => t !== existing);
+        return;
+      }
+      if (existing) {
+        existing.cardId = args.cardId;
+        existing.quantity = args.quantity;
+        existing.state = state;
+        existing.updatedAt = stamp(db);
+        return;
+      }
+      // The upsert's other arm — `ON CONFLICT(deck_id, oracle_id)`, which is why the lookup
+      // above is on the grain and never on the row id: the reader names a token, not a row.
+      const now = stamp(db);
+      db.deckTokens.push({
+        id: nextId(db.deckTokens),
+        deckId: args.deckId,
+        oracleId: args.oracleId,
+        cardId: args.cardId,
+        quantity: args.quantity,
+        state,
+        createdAt: now,
+        updatedAt: now,
+      });
+    },
+
+    /**
+     * `deck_tokens::deck_token_clear` — back to the derived defaults, by **deleting** the
+     * override row.
+     *
+     * Not a `deck_token_set` of three nulls even though that spelling is the same write: this
+     * one says what the reader pressed, and a grain resolving to no row is a **success** — the
+     * caller wanted no override and there is none.
+     */
+    deck_token_clear: (args: { deckId: number; oracleId: string }): void => {
+      refuseIfBusy(db);
+      requireDeck(db, args.deckId);
+      db.deckTokens = db.deckTokens.filter(
+        (t) => !(t.deckId === args.deckId && t.oracleId === args.oracleId),
+      );
+    },
+
+    /**
+     * `deck_tokens::deck_token_add` — a token added by hand, and the one of the four that names
+     * a **printing** rather than the grain.
+     *
+     * The reader picks out of a printings grid, so a printing is what there is to send; the
+     * oracle id is resolved from it and the row is written `manual` with that printing as its
+     * `cardId`. A `manual` row is drawn whether or not the deck derives it, which is also what a
+     * derived token becomes when the reader keeps it after cutting the card that made it.
+     *
+     * **Adding one the deck already derives is a `set`, not a second row**: the grain is
+     * `(deckId, oracleId)` and there is only ever one row per token per deck.
+     */
+    deck_token_add: (args: { deckId: number; cardId: string }): void => {
+      refuseIfBusy(db);
+      requireDeck(db, args.deckId);
+      const token = tokenById(db, args.cardId);
+      if (token === undefined) throw refuse(TOKEN_PRINTING_GONE);
+      const existing = storedToken(db, args.deckId, token.oracleId);
+      if (existing) {
+        existing.cardId = token.id;
+        existing.state = "manual";
+        existing.updatedAt = stamp(db);
+        return;
+      }
+      const now = stamp(db);
+      db.deckTokens.push({
+        id: nextId(db.deckTokens),
+        deckId: args.deckId,
+        oracleId: token.oracleId,
+        cardId: token.id,
+        // Left alone rather than set to 1: the default is `deckTokens.ts`' conclusion, and
+        // storing it here would freeze a token added today at whatever the default was today.
+        quantity: null,
+        state: "manual",
+        createdAt: now,
+        updatedAt: now,
+      });
+    },
+
+    /**
      * `deck_meta::create_folder` — at the root with `parentId: null`, or inside another one.
      *
-     * **No uniqueness rule on the name**, mirroring the DDL: unlike a category or a tag,
+     * **No uniqueness rule on the name**, mirroring the DDL: unlike a category or a label,
      * `deck_folders` carries no grain constant and no unique index, so two sibling folders may
      * share a name. Writes no history: a folder belongs to no deck, and `deck_audit.deck_id` is
      * NOT NULL — the `folder` kind records a *deck being filed*, which is `deck_set_folder`.
@@ -11358,6 +13826,9 @@ export function writeHandlers(db: FakeDb) {
         kind: COLLECTION_REMOVED_KIND,
         deckId: null,
         sortOrder: 0,
+        // {@link createDeckGroup}'s reason: the holding area is the app's, so nothing can set
+        // it aside — and a sweep that rebuilt it locked would be a folder nobody could unlock.
+        locked: false,
       });
       for (const deck of db.decks) createDeckGroup(db, deck.id, deck.name);
       return { entries };
@@ -11424,7 +13895,8 @@ export function writeHandlers(db: FakeDb) {
       db.deckFolders = [];
       db.deckCards = [];
       db.deckCategories = [];
-      db.deckTags = [];
+      db.deckLabels = [];
+      db.deckTokens = [];
       db.deckAudit = [];
       db.deckUndo = [];
       return { decks, folders };
@@ -11592,6 +14064,44 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
+     * `markcolors::set_mark_color` — remember one mark's colour, or, with `null`, **forget** it.
+     *
+     * {@link writeHandlers.set_list_view}'s three rules with a fourth of its own. The refusals are
+     * the exact complement of the read's silence above: that one discards an unusable entry
+     * without a word, so a fake that accepted anything would let a story pick a colour, read back
+     * nothing, and look like it worked. The **mark** is unchecked past being non-empty for the
+     * asymmetry every setting here is on — which marks exist is TypeScript's vocabulary and
+     * `markcolors.rs` deliberately does not know it — and only the named mark is touched, so a
+     * key a newer build wrote survives an older build writing beside it.
+     *
+     * **The fourth rule is the `null`, and it is the one thing this handler has that its three
+     * neighbours do not.** Reset **deletes** the entry rather than storing the default, because a
+     * reader who has never chosen and one who has just reset have to end in the same state — and
+     * a default written into the row would pin today's palette forever. A fake that wrote the hex
+     * back would draw an identical panel and make Reset untestable.
+     *
+     * **The refusal is worth surfacing here where its neighbours' are not**, which is the crate's
+     * own split rather than this file's: the reader is standing in front of a swatch watching it
+     * move, so `TheoryMarksPanel` prints what this throws instead of leaving them to find out at
+     * the next launch. It honours `busy` like every other ordinary write — `markcolors.rs` takes
+     * the write connection through `sync::with_write`, and the lock comes first.
+     */
+    set_mark_color: (args: { mark: string; color: string | null }): void => {
+      refuseIfBusy(db);
+      if (args.mark === "") throw refuse("A mark cannot be blank.");
+      const next = { ...db.markColors };
+      if (args.color === null) {
+        delete next[args.mark];
+      } else {
+        if (!isStorableHex(args.color)) {
+          throw refuse(`"${args.color}" is not a colour this app can store. Expected #rrggbb.`);
+        }
+        next[args.mark] = args.color.toLowerCase();
+      }
+      db.markColors = next;
+    },
+
+    /**
      * `nav::set_nav_collapsed` — remember that the reader collapsed the sidebar, or opened it.
      *
      * **The only thing it can refuse is a running sync, and that absence is the point rather
@@ -11622,23 +14132,62 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
-     * `deck::set_deck_search_open` — remember whether the search column is open.
+     * `searchopen::set_search_open` — remember whether one docked search column is open.
      *
-     * The **second** write here with nothing but `busy` to refuse, and the paragraph above is
-     * the whole argument: a `boolean` off the IPC boundary has no junk state for a validation
-     * to catch, so adding one would invent a refusal the backend does not make.
+     * {@link writeHandlers.set_flatten_state}'s handler with a different key, down to which half
+     * of the validation survives: the **blank section is refused** and the value is not, a `bool`
+     * off the IPC boundary having no junk state for Tauri's deserializer to have let through. That
+     * asymmetry is argued in full at {@link writeHandlers.set_nav_collapsed}; this is the second
+     * place it lands inside a map.
      *
-     * The row it writes holds `"1"`/`"0"` rather than a JSON boolean — `deck::store_deck_search_open`
-     * — and that is invisible from here on purpose: the fake stores the answered `boolean`,
-     * because the string is a storage detail with no state a story could stand in. Which
-     * spellings the Rust reads back is `deck.rs`'s own test, where the row really is text.
+     * The **section** is unchecked past being non-empty, deliberately — which pages have a search
+     * column is TypeScript's vocabulary and `searchopen.rs` knows only the one word `deck`, and
+     * only for a legacy row it reads and never writes. Only the named section is touched, so the
+     * column on the page beside it keeps its own answer.
      *
-     * It honours `busy` like every other ordinary write here — `deck.rs` takes the write
-     * connection through `sync::with_write`.
+     * **`false` writes an entry rather than removing one**: a reader who rails a column and then
+     * opens it again has made a second choice, not withdrawn the first, and every default here is
+     * `true`, so that second choice is the only thing that can beat it.
+     *
+     * It honours `busy` like every other ordinary write — `searchopen.rs` takes the write
+     * connection through `sync::with_write`, and the lock comes first.
      */
-    set_deck_search_open: (args: { open: boolean }): void => {
+    set_search_open: (args: { section: string; open: boolean }): void => {
       refuseIfBusy(db);
-      db.deckSearchOpen = args.open;
+      if (args.section === "") throw refuse("A search section cannot be blank.");
+      db.searchOpen = { ...db.searchOpen, [args.section]: args.open };
+    },
+
+    /**
+     * `decksort::set_deck_sort` — remember how the gallery is ordered.
+     *
+     * **One refusal, and it is a blank.** Every preference write above this one either refuses a
+     * value against a list (`set_marketplace`, `set_printing_group_by`, `set_list_view`,
+     * `set_card_zoom`) or refuses nothing because a `bool` has no junk state
+     * ({@link writeHandlers.set_nav_collapsed}). This is neither, and it is the argument those
+     * two make meeting in one handler: the value **has** a vocabulary and the backend does not
+     * have it, so any wider refusal could only be `decksort.rs` guessing about a table the
+     * frontend owns — while a blank is refusable without a vocabulary, because it is an order in
+     * nobody's. It is also the one value {@link readHandlers.deck_sort} discards, so storing it
+     * would be a write that reported success and read back as the default for ever, which is
+     * exactly the bug `set_printing_group_by`'s note calls the half a fake is easiest to leave
+     * out.
+     *
+     * The sentence is `decksort::NO_SORT` verbatim, like every refusal here — a story renders
+     * these.
+     *
+     * **The argument is `sort`, not `value`.** `invoke` fills parameters by name, so a handler
+     * spelling it differently from the crate would be a story that passed against a call the
+     * real backend rejects. `src/lib/ipc.test.ts` pins the same word against `decksort.rs`.
+     *
+     * It honours `busy` like every other ordinary write — `decksort.rs` takes the write
+     * connection through `sync::with_write`, and the lock comes first: a blank sent while a sync
+     * holds the connection answers BUSY, because nothing has looked at the word yet.
+     */
+    set_deck_sort: (args: { sort: string }): void => {
+      refuseIfBusy(db);
+      if (args.sort === "") throw refuse(NO_DECK_SORT);
+      db.deckSort = args.sort;
     },
 
     /**
@@ -12575,9 +15124,12 @@ export function writeHandlers(db: FakeDb) {
      * than stubbed.** A baseline goes to a peer this device has never heard from; there is no
      * peer here and no `sync_peers` to be empty, so the honest stand-in is the one fact the
      * world does hold - a device that has never completed a round trip, which is exactly where
-     * the `paired` seed starts. The counts are the world's own **eleven synced tables** counted
-     * back (`schema::SYNCED_TABLES`), not figures invented for the sentence, and `deck_audit` is
+     * the `paired` seed starts. The counts are the world's own synced tables counted back
+     * (`schema::SYNCED_TABLES`), not figures invented for the sentence, and `deck_audit` is
      * counted a second time on its own because that is the half the panel names separately.
+     * **The sum below is the list and there is no number in this sentence**, deliberately: it
+     * said "eleven synced tables" until `deck_tokens` joined the census at user schema v37, and
+     * a count in prose routes to neither CI job.
      */
     sync_now: (): RelayOutcome | null => {
       refuseIfBusy(db);
@@ -12607,8 +15159,9 @@ export function writeHandlers(db: FakeDb) {
             db.decks.length +
             db.deckFolders.length +
             db.deckCategories.length +
-            db.deckTags.length +
+            db.deckLabels.length +
             db.deckCards.length +
+            db.deckTokens.length +
             db.deckAudit.length +
             db.mutedTags.length
           : 0,
@@ -13020,15 +15573,16 @@ export function allHandlers(db: FakeDb) {
  * `deck_set_view_state` is not here because it writes no history row either: looking at a deck
  * is not editing it, so the wrapper below files nothing for it without being told.
  *
- * **The two `collection_alloc` writes are the newest pair, and they are on this list by
- * argument rather than by accident.** Each moves copies across the deck boundary, so a step
- * could put the `deck_cards` half back and would leave the copies where they went — a deck
- * claiming cards its own group no longer holds, told to a reader who pressed Ctrl+Z and watched
- * the row reappear. `deck_undo`'s four primitives touch no collection table, so the half-step is
- * the only step available and it is worse than none. `deck_to_collection` would also slip
- * through the wrapper on its own — it carries a `deckCardId` rather than a `deckId`, so
- * {@link deckOf} answers `undefined` for it — and naming it here is what stops that being the
- * reason.
+ * **The four writes that reach across the deck boundary are here by argument rather than
+ * by accident.** A step could put the `deck_cards` half back and would leave the copies where
+ * they went — a deck claiming cards its own group no longer holds, told to a reader who pressed
+ * Ctrl+Z and watched the row reappear. `deck_undo`'s four primitives touch no collection table,
+ * so the half-step is the only step available and it is worse than none. `deck_to_collection`
+ * would also slip through the wrapper on its own — it carries a `deckCardId` rather than a
+ * `deckId`, so {@link deckOf} answers `undefined` for it — and naming it here is what stops that
+ * being the reason. **It said "the two" until `deck_pull_from_collection` joined them and "the
+ * three" until `deck_quick_add_to_collection` did, both on 2026-09-03**, which is the drift this
+ * file keeps naming: the count is in the list below and nowhere else.
  */
 const NO_UNDO_STEP: ReadonlySet<string> = new Set([
   "deck_create",
@@ -13043,6 +15597,27 @@ const NO_UNDO_STEP: ReadonlySet<string> = new Set([
   "deck_folder_delete",
   "collection_to_deck",
   "deck_to_collection",
+  // The third write that moves copies across the deck boundary, and the one with the strongest
+  // claim to the list: it changes **no** `deck_cards` cell at all, so `deck_undo`'s four
+  // primitives have nothing to put back — a step here would snapshot a deck, restore it
+  // unchanged, and spend the reader's one Ctrl+Z on a press that appeared to do nothing while
+  // the copies stayed exactly where the pull put them.
+  "deck_pull_from_collection",
+  // The fourth, and it inherits that argument whole: the quick add changes no `deck_cards` cell
+  // either, and the half a step *could* put back is the half nobody wants back — the copies are
+  // the reader's, bought and recorded, and a Ctrl+Z that quietly unfiled them would be worse than
+  // one that does nothing. The crate calls no `record_step` here for the same reason.
+  "deck_quick_add_to_collection",
+  // The three token writes, and they are here for the **snapshot's** shape rather than the
+  // copies': {@link deckState} records a deck's row, its cards, its categories and the label
+  // table, and `deck_tokens` is in none of those. So a step could only ever put half the deck
+  // back — and the half it would restore is the half these writes do not touch. They record no
+  // history row either, which means the wrapper below would file nothing for them anyway;
+  // naming them is what stops that being the *reason*, the way `deck_to_collection` is named
+  // rather than left to {@link deckOf} answering `undefined`.
+  "deck_token_set",
+  "deck_token_clear",
+  "deck_token_add",
 ]);
 
 /**
@@ -13115,8 +15690,8 @@ function journalled<T extends Record<string, (args: never) => unknown>>(db: Fake
  * Which deck a write is about, **before it runs**.
  *
  * Most deck commands carry a `deckId` and this is one property read. The rest are keyed by the
- * *row* they change — a category rename knows an id in `deck_categories`, a tag delete one in
- * `deck_tags` — and the crate resolves the owner from that row, which is the same lookup the
+ * *row* they change — a category rename knows an id in `deck_categories`, a label delete one in
+ * `deck_labels` — and the crate resolves the owner from that row, which is the same lookup the
  * ownership fence in each of those handlers makes anyway. It has to happen **first**: after a
  * delete there is no row left to ask.
  *
@@ -13134,9 +15709,9 @@ function deckOf(db: FakeDb, name: string, args: Record<string, unknown>): number
     case "deck_category_set_active":
     case "deck_category_delete":
       return db.deckCategories.find((c) => c.id === id)?.deckId;
-    case "deck_tag_update":
-    case "deck_tag_delete":
-      // **The argument's own `deckId`, not the tag's** — a tag has none since schema v21, and
+    case "deck_label_update":
+    case "deck_label_delete":
+      // **The argument's own `deckId`, not the label's** — a label has none since schema v21, and
       // both commands take one for exactly this: the deck the reader was standing in, which is
       // where the history row goes and which deck's undo stack the step joins.
       return typeof args?.deckId === "number" ? args.deckId : undefined;
@@ -13153,10 +15728,10 @@ function deckState(db: FakeDb, deckId: number): FakeDeckState | null {
     deck: { ...deck },
     cards: db.deckCards.filter((c) => c.deckId === deckId).map((c) => ({ ...c })),
     categories: db.deckCategories.filter((c) => c.deckId === deckId).map((c) => ({ ...c })),
-    // **Every tag, not this deck's** — since schema v21 there is no such thing, and a tag write
-    // is app-wide. A snapshot narrowed to one deck would let an undo leave another deck's label
-    // renamed and call the deck restored.
-    tags: db.deckTags.map((t) => ({ ...t })),
+    // **Every label, not this deck's** — since schema v21 there is no such thing, and a label
+    // write is app-wide. A snapshot narrowed to one deck would let an undo leave another deck's
+    // label renamed and call the deck restored.
+    labels: db.deckLabels.map((l) => ({ ...l })),
   };
 }
 
@@ -13173,7 +15748,7 @@ function restoreDeck(db: FakeDb, deckId: number, state: FakeDeckState): void {
     ...state.categories.map((c) => ({ ...c })),
   ];
   // The whole table, for the reason `deckState` records the whole table.
-  db.deckTags = state.tags.map((t) => ({ ...t }));
+  db.deckLabels = state.labels.map((l) => ({ ...l }));
 }
 
 /**

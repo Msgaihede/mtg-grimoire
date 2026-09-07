@@ -15,6 +15,7 @@
 //! — see [`Card`] — so every field a surface does not answer stays `None` rather than being
 //! filled in from somewhere plausible.
 
+use crate::collection::CONDITION_NOT_SET;
 use crate::mirror::layout::Source;
 use crate::sorting::Marketplace;
 use crate::transfer::Card;
@@ -166,6 +167,32 @@ fn finish_of(raw: Option<&str>) -> Option<String> {
     }
 }
 
+/// [`CONDITION_NOT_SET`] is the collection's word for "the reader never said", and a file says
+/// that by saying nothing.
+///
+/// **The sentinel is a storage decision and must not reach a reader's disk.** `condition` is
+/// `NOT NULL` and is the third term of `schema::COLLECTION_GRAIN`, so "not set" had to be a
+/// string rather than a NULL — two NULLs are distinct in a UNIQUE index, so a nullable column
+/// would have made every ungraded add a brand-new row instead of folding onto the one already
+/// there. None of that is a fact about the card in the reader's hand, and a Condition column
+/// reading `NONE` is this app's private vocabulary in a file that has to open in a spreadsheet.
+/// `None` here is the same `None` a deck row and a wish carry — see [`Card`], where it means
+/// "this surface does not have this fact" — and [`crate::transfer::fields::read`] turns it into
+/// the empty cell an importer already reads as "the file did not say". That is what makes the
+/// round trip close: out as blank, back in as not set.
+///
+/// **`TransferCard.ts`'s `fromCollectionRow` is the other half of this, and the golden fence
+/// will not tell you if the two come apart.** `src/features/transfer/__golden__/` compares the
+/// two *writers* by feeding both a corpus of `TransferCard`s — which is downstream of this
+/// function, and of `fromCollectionRow` with it. A corpus row already carries the finished
+/// `condition`, so neither conversion is ever exercised by it, and the corpus deliberately holds
+/// no not-set row. The whole guard is therefore a test on each side:
+/// `a_not_set_condition_leaves_the_app_as_an_empty_cell` here, and its twin in
+/// `TransferCard.test.ts`. Change one and the other has to be changed by hand.
+fn condition_of(raw: &str) -> Option<String> {
+    (raw != CONDITION_NOT_SET).then(|| raw.to_owned())
+}
+
 /// `fromDeckCard`. A deck has piles and labels, and no purchase history at all.
 fn from_deck_card(row: &crate::deck::DeckCardRow) -> Card {
     Card {
@@ -198,8 +225,8 @@ fn from_deck_card(row: &crate::deck::DeckCardRow) -> Card {
         unit_price: row.unit_price,
         // The one surface that has a label, and `deck_get` carries both halves on the row, so
         // this costs no second read.
-        tag_name: row.tag_name.clone(),
-        tag_color: row.tag_color.clone(),
+        label_name: row.label_name.clone(),
+        label_color: row.label_color.clone(),
         legalities: row.legalities.clone(),
     }
 }
@@ -220,7 +247,7 @@ fn from_collection_row(row: &crate::collection::CollectionRow) -> Card {
         category_name: None,
         category_kind: None,
         category_active: None,
-        condition: Some(row.condition.clone()),
+        condition: condition_of(&row.condition),
         tradelist_quantity: Some(row.tradelist_quantity),
         purchase_price: row.purchase_price,
         purchase_currency: row.purchase_currency.clone(),
@@ -240,8 +267,8 @@ fn from_collection_row(row: &crate::collection::CollectionRow) -> Card {
         rarity: row.rarity.clone(),
         type_line: row.type_line.clone(),
         unit_price: row.unit_price,
-        tag_name: None,
-        tag_color: None,
+        label_name: None,
+        label_color: None,
         legalities: row.legalities.clone(),
     }
 }
@@ -282,8 +309,8 @@ fn from_wish_row(row: &crate::wishlist::WishRow) -> Card {
         rarity: row.rarity.clone(),
         type_line: row.type_line.clone(),
         unit_price: row.unit_price,
-        tag_name: None,
-        tag_color: None,
+        label_name: None,
+        label_color: None,
         legalities: row.legalities.clone(),
     }
 }
@@ -323,10 +350,19 @@ mod tests {
         Marketplace::default()
     }
 
+    /// One copy, filed where it is told, **stating its grade out loud**.
+    ///
+    /// The grade is spelled here rather than left to `collection::DEFAULT_CONDITION` because
+    /// nothing in this module is a test about that default: a fixture that leaves the field
+    /// unsaid would be asserting whatever the add command last decided on the reader's behalf,
+    /// and since the default became "not set" it would be asserting the *absence* of a
+    /// condition in the one test whose point is that a collection row has one. The not-set case
+    /// has a test of its own — `a_not_set_condition_leaves_the_app_as_an_empty_cell`.
     fn entry(card_id: &str, finish: &str, folder_id: Option<i64>) -> crate::collection::EntryInput {
         crate::collection::EntryInput {
             card_id: card_id.to_owned(),
             finish: finish.to_owned(),
+            condition: Some("NM".to_owned()),
             quantity: 1,
             folder_id,
             ..Default::default()
@@ -590,7 +626,10 @@ mod tests {
         // is a *label* and the two are one field apart.
         assert_eq!(collection[0].tags.as_deref(), Some("[]"));
         assert_eq!(collection[0].category_name, None, "a binder has no piles");
-        assert_eq!(collection[0].tag_name, None, "a binder has no deck labels");
+        assert_eq!(
+            collection[0].label_name, None,
+            "a binder has no deck labels"
+        );
 
         let (wish_conn, _) = db_with_two_wishes_one_filed();
         let wishes = cards_for(&wish_conn, &Source::WholeWishlist, shop()).unwrap();
@@ -598,6 +637,64 @@ mod tests {
         assert_eq!(wishes[0].condition, None, "a wish has no condition");
         assert_eq!(wishes[0].category_name, None, "a wish has no piles");
         assert_eq!(wishes[0].set_name, None, "a wish carries no set name");
+    }
+
+    /// **A copy whose grade the reader never stated leaves the app as an empty cell, and only
+    /// that cell changes.**
+    ///
+    /// [`CONDITION_NOT_SET`] exists because the grain needed a string where a NULL would have
+    /// stopped folding, and for no other reason — so a file must not repeat it. The two rows
+    /// here are one printing told apart by nothing but the grade, which is what makes the
+    /// assertion mean something: the pair stays a pair, one of them writes `NM` and the other
+    /// writes nothing, and every other fact the not-set row carries is still on it. The last
+    /// two assertions go on through [`crate::transfer::fields::read`] to the cell a writer
+    /// actually puts in a file, because the cell is what a reader sees and `condition == None`
+    /// is only the mechanism that produces it — and because no golden file covers this hop, for
+    /// the reason [`condition_of`] gives.
+    #[test]
+    fn a_not_set_condition_leaves_the_app_as_an_empty_cell() {
+        use crate::transfer::fields::{read, FieldId};
+
+        let conn = seeded();
+        crate::collection::add_entry(
+            &conn,
+            &crate::collection::EntryInput {
+                condition: Some(CONDITION_NOT_SET.to_owned()),
+                quantity: 3,
+                ..entry("bolt-lea", "nonfoil", None)
+            },
+        )
+        .unwrap();
+        crate::collection::add_entry(&conn, &entry("bolt-lea", "nonfoil", None)).unwrap();
+
+        let cards = cards_for(&conn, &Source::WholeCollection, shop()).unwrap();
+        assert_eq!(
+            cards.len(),
+            2,
+            "the grade is a grain term, so a not-set copy is its own row"
+        );
+        let not_set = cards.iter().find(|c| c.quantity == 3).unwrap();
+        let graded = cards.iter().find(|c| c.quantity == 1).unwrap();
+
+        assert_eq!(
+            not_set.condition, None,
+            "the sentinel is storage's word and must not reach a file"
+        );
+        assert_eq!(graded.condition.as_deref(), Some("NM"));
+
+        // Nothing else about the row moved. A conversion that blanked the provenance block
+        // rather than the one field would pass both assertions above and still take a reader's
+        // whole acquisition story out of every mirrored file.
+        assert_eq!(not_set.name, "Lightning Bolt");
+        assert_eq!(not_set.set_code.as_deref(), Some("lea"));
+        assert_eq!(not_set.collector_number.as_deref(), Some("161"));
+        assert_eq!(not_set.lang.as_deref(), Some("en"));
+        assert_eq!(not_set.tradelist_quantity, Some(0));
+        assert_eq!(not_set.tags.as_deref(), Some("[]"));
+        assert_eq!(not_set.altered, Some(false));
+
+        assert_eq!(read(FieldId::Condition, not_set), "");
+        assert_eq!(read(FieldId::Condition, graded), "NM");
     }
 
     /// A foil wish reaches the file as `"foil"` and a wish that names no finish as nothing —

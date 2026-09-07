@@ -7,25 +7,44 @@ import {
   type CSSProperties,
   type RefObject,
 } from "react";
-import { ChevronRight, Plus } from "lucide-react";
+import { ArrowUp, ChevronRight, Plus } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
+import { Dropdown } from "@/components/Dropdown/Dropdown";
+import type { DropdownOption } from "@/components/Dropdown/types";
+import {
+  FILTER_CONTROL,
+  FILTER_FIELD,
+  FILTER_FOCUS,
+  filterChipState,
+  ToggleChip,
+} from "@/components/FilterChips";
 import { useContextMenu } from "@/components/menu/useContextMenu";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { atLeast, scaled } from "@/lib/cardZoom";
 import { plural } from "@/lib/counts";
 import type { FolderDrag, FolderEdge } from "@/lib/folderDrag";
 import { reorderedLevel } from "@/lib/folderOrder";
 import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type DeckFolder, type DeckRow } from "@/lib/ipc";
+import { sortOptions } from "@/lib/options";
 import { writeFailure } from "@/lib/writes";
 import { LAYER } from "@/lib/layers";
-import { PRESS, statusLine } from "@/lib/motion";
+import { PRESS, statusLine, TRANSITION } from "@/lib/motion";
 import { useAppStore } from "@/lib/store";
 import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
-import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
+import { clearFieldOnEscape, useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { CreateDeckDialog } from "./CreateDeckDialog";
+import { deckFormats, filterDecks, NO_DECK_FILTER, type DeckFilter } from "./deckFilter";
 import { DeckTile } from "./DeckTile";
 import { type DeckMenuDeps } from "./deckMenu";
+import {
+  DECK_SORT_OPTIONS,
+  NATURAL_DESC,
+  sortDecks,
+  type DeckSort,
+  type DeckSortKey,
+} from "./deckSort";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
 import { decksUnder, FolderCard, ParentDeckFolderCard } from "./FolderCard";
 import { buildFolderMenu, type FolderMenuDeps } from "./folderMenu";
@@ -48,8 +67,12 @@ import { NewDeckPreview } from "@/features/transfer/import/destinations/NewDeckP
 import { newDeckDestination } from "@/features/transfer/import/destinations/newDeck";
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import type { Panel } from "./panels";
+import { bracketLabel, useDeckBrackets } from "./useDeckBrackets";
 import { useDeckFolders } from "./useDeckFolders";
+import { useDeckPips } from "./useDeckPips";
 import { useDecks, type Decks } from "./useDecks";
+import { useDeckSort } from "./useDeckSort";
+import { useFormatSpecs } from "./useFormatSpecs";
 import { useNewDeckFormat } from "./useNewDeckFormat";
 
 /**
@@ -141,6 +164,48 @@ const HEADING_BUTTON = cn(
 const CREDIT = "Card images © Wizards of the Coast · Data © Scryfall";
 
 /**
+ * The two ids the filter row's controls are addressed by, spelled once.
+ *
+ * **A fixed stem rather than `FilterBar`'s `idStem` prop, and the difference is how many of each
+ * row can be mounted.** That component is drawn on five surfaces and twice at once in the deck
+ * editor, so its ids have to be parameterised or two boxes end up sharing one `id` and a
+ * `getByLabelText` cannot tell them apart. This row is `DecksPage`'s alone, and `DecksPage` is
+ * one view of the app — there is no second gallery to collide with.
+ */
+const FILTER_FIELD_ID = "deck-gallery-filter";
+const SORT_ID = "deck-gallery-sort";
+
+/**
+ * The sort picker's rows, in the order it offers them.
+ *
+ * **Through {@link sortOptions}, which is `src/lib/options.ts`' app-wide rule**: alphabetical by
+ * the words on screen, so a reader looking for `Name` looks under N rather than wherever the
+ * array happens to read. {@link DECK_SORT_OPTIONS} says so at its own site and is deliberately
+ * written in an order that explains the sorts instead — so this is where the display decision is
+ * made, and a seventh key appended there needs no thought about where it appears.
+ *
+ * Module level because the input is a constant: a `useMemo` would be a dependency array around
+ * an array that cannot change.
+ */
+const SORT_ROWS: readonly DropdownOption[] = sortOptions(DECK_SORT_OPTIONS, (o) => o.label).map(
+  (o) => ({ value: o.value, label: o.label }),
+);
+
+/**
+ * What the direction toggle is called, and it names the press rather than the state alone.
+ *
+ * `FilterBar.tsx`'s `sortDirectionName` verbatim but for its first arm: that row's sort can be
+ * `Best match`, which has no direction at all and greys the button. A gallery is always in one of
+ * six orders and every one of them has two ways round, so there is no third case here and no
+ * `unavailable` treatment to draw.
+ */
+function sortDirectionName(desc: boolean): string {
+  return desc
+    ? "Sort direction: descending — press for ascending"
+    : "Sort direction: ascending — press for descending";
+}
+
+/**
  * The decks, filed.
  *
  * Two columns: the folders on the left, and on the right the one folder the reader is standing
@@ -168,6 +233,46 @@ export function DecksPage() {
    * every `useDecks` mutation invalidates.
    */
   const newDeckFormatKey = useNewDeckFormat();
+  /**
+   * How the wall is ordered — **and this half is remembered**, in one `app_meta` row, the way
+   * the list layouts are. See {@link filter} for why its neighbour is not.
+   */
+  const { sort, setSort } = useDeckSort();
+  /**
+   * Every deck's printed pips, in one read for the whole gallery.
+   *
+   * One query rather than one per tile, for the reason the zoom is one store read handed down: a
+   * folder of forty decks would otherwise be forty subscriptions and forty round trips for a
+   * fact the backend can fold in a single statement (90 rows for the whole dev database).
+   */
+  const { byDeck: pipsByDeck } = useDeckPips();
+  /**
+   * Which decks even *have* a bracket, and it is a question about the **format** rather than
+   * about the deck — `format_specs.commander_rule`, which is the same cell the editor's own
+   * bracket button is fenced on.
+   *
+   * **The array is the whole of the read's cost, so a gallery with no Commander deck must build
+   * an empty one rather than every id.** {@link useDeckBrackets} is `enabled`-gated on its
+   * length, so an empty list is *no IPC call at all* — a reader whose decks are all Modern pays
+   * nothing for a control they will never see.
+   *
+   * It is every deck in the gallery and not only the ones on the wall, which costs one read and
+   * buys two things: walking into a folder or opening the filed wall asks nothing new, and the
+   * `bracket` sort can order *any* wall the moment it is picked rather than after a round trip.
+   *
+   * `formatSpecFor` rather than a map read out of the hook: {@link useFormatSpecs} exposes the
+   * lookup and keeps the map private, and the lookup is a `useCallback` over it, so this memo is
+   * as stable as the table is (`staleTime: Infinity` — it changes once per app version).
+   */
+  const { formatSpecFor } = useFormatSpecs();
+  const commanderDeckIds = useMemo(
+    () =>
+      decks.decks
+        .filter((d) => formatSpecFor(d.formatKey)?.commanderRule != null)
+        .map((d) => d.id),
+    [decks.decks, formatSpecFor],
+  );
+  const { floorByDeck } = useDeckBrackets(commanderDeckIds);
   const setOpenDeckId = useAppStore((s) => s.setOpenDeckId);
   const returnToDeckId = useAppStore((s) => s.returnToDeckId);
   const clearReturnToDeck = useAppStore((s) => s.clearReturnToDeck);
@@ -183,6 +288,20 @@ export function DecksPage() {
    */
   const [settingsDeckId, setSettingsDeckId] = useState<number | null>(null);
   const [showArchived, setShowArchived] = useState(false);
+  /**
+   * How the wall is narrowed — **and it is deliberately not remembered.**
+   *
+   * The sort is an `app_meta` row and survives a restart ({@link useDeckSort}); this is
+   * `useState` and does not, which is the plan's ruling and worth the sentence it costs. A filter
+   * is a thing a reader is doing *right now*: a gallery that opened already narrowed, with no
+   * memory of having asked for it, is a gallery that looks like it has lost decks — and the one
+   * screen least able to explain that is the one whose whole content is the missing tiles.
+   *
+   * It **does** survive walking into a folder, which is the other half of the same argument: the
+   * text is still in the box the reader typed it into, one glance above the wall it is narrowing,
+   * so nothing about the state is hidden from them.
+   */
+  const [filter, setFilter] = useState<DeckFilter>(NO_DECK_FILTER);
   /** Which drawer is open. `null` is the top level, which is also where every deck is drawn
    *  when the folder list could not be read. */
   const [selectedFolderId, setSelectedFolderId] = useState<number | null>(null);
@@ -317,6 +436,79 @@ export function DecksPage() {
     () => archived.filter((d) => folderOf(d) === folderView),
     [archived, folderOf, folderView],
   );
+
+  /**
+   * The two walls as they are actually drawn: **the drawer, then the filter, then the sort.**
+   *
+   * The plan states the order as filter-then-sort and it is the half that matters — sorting a
+   * list and then throwing rows out of it is the same list in the same order and strictly more
+   * work. The folder split leads because {@link here} and {@link archivedHere} have three other
+   * readers that must never see a narrowed list: the heading's count, the format chips, and the
+   * empty-state sentences that say a *drawer* is empty rather than a filter is.
+   *
+   * **The folder cards are not in here at all.** A filter narrows the wall you are looking at; a
+   * tree that lost its branches would take away the way out of it, so the sub-folder cards, the
+   * `ParentDeckFolderCard` and the sidebar are drawn from the unfiltered tree exactly as before.
+   */
+  const sortContext = useMemo(
+    () => ({ pips: pipsByDeck, brackets: floorByDeck }),
+    [pipsByDeck, floorByDeck],
+  );
+  const shown = useMemo(
+    () => sortDecks(filterDecks(here, filter), sort, sortContext),
+    [here, filter, sort, sortContext],
+  );
+  const shownArchived = useMemo(
+    () => sortDecks(filterDecks(archivedHere, filter), sort, sortContext),
+    [archivedHere, filter, sort, sortContext],
+  );
+
+  /**
+   * The format chips, one per format actually present among the decks **on the wall**.
+   *
+   * Built from the drawer's *live* decks and not from the whole gallery, because a chip is only
+   * ever useful about the wall it sits above — a `Pauper` chip in a drawer holding no Pauper deck
+   * is a control whose only outcome is an empty wall. The filed decks are left out for the same
+   * reason and it is the weaker half of the argument: they are behind a shut disclosure, so a
+   * chip that existed only for them would empty the wall the reader can see in exchange for
+   * narrowing one they cannot.
+   *
+   * Unfiltered on purpose — the chips are what the reader picks *between*, so a set that
+   * reflowed as they typed would move the control out from under the pointer reaching for it.
+   * That is `features/search/facets.ts`' rule (an option that vanishes reads as a control that
+   * broke) applied to a row that has nothing to grey.
+   *
+   * The order is {@link deckFormats}' own and is not re-applied here: that function ends in
+   * `sortOptions`, so the chips already read alphabetically by the words on them. A second sort
+   * at this call site would be one more place for the app's option-list rule to be spelled, and
+   * `src/lib/options.ts` is emphatic that there is exactly one.
+   */
+  const formats = useMemo(() => deckFormats(here), [here]);
+
+  /**
+   * Whether anything is narrowing the wall — the one thing the empty sentence below is allowed
+   * to claim.
+   *
+   * Read off the filter rather than off the two lengths, because the lengths agree in one case
+   * this must not swallow: a format chip pressed on a drawer where every deck is that format
+   * narrows nothing and is still a filter that is on.
+   */
+  const filtering = filter.query.trim() !== "" || filter.formats.length > 0;
+
+  const setFilterQuery = useCallback(
+    (query: string) => setFilter((f) => ({ ...f, query })),
+    [],
+  );
+  /** Multi-select: an empty selection is *no format filter*, never an empty gallery — which is
+   *  the whole of why this toggles a list rather than setting a single key. */
+  const toggleFormat = useCallback((key: string) => {
+    setFilter((f) => ({
+      ...f,
+      formats: f.formats.includes(key)
+        ? f.formats.filter((k) => k !== key)
+        : [...f.formats, key],
+    }));
+  }, []);
 
   /** The deck an editor just closed on, once the wall has read enough to know where it is
    *  filed. `null` while the query is out, and for a deck deleted from inside its own editor. */
@@ -917,10 +1109,42 @@ export function DecksPage() {
   // off the wall without anything on this screen asking it to. The rule lives on the mutation
   // definitions, which is the one place it can be kept.
 
+  /**
+   * The bracket a tile prints, or `null` — **and `null` is the answer for every deck whose
+   * format has no command zone**, which is most of them.
+   *
+   * The fence is the format's `commanderRule`, the same cell {@link commanderDeckIds} asks
+   * `deck_bracket_reads` about, so a deck that was never read for cannot print a reading: the
+   * two are one condition asked twice rather than two conditions that have to agree.
+   * {@link bracketLabel} decides the rest — the reader's own answer where they gave one, the
+   * estimate otherwise, and `null` while the read is in flight or has failed.
+   */
+  const bracketFor = useCallback(
+    (deck: DeckRow) =>
+      formatSpecFor(deck.formatKey)?.commanderRule != null
+        ? bracketLabel(deck.bracket, floorByDeck.get(deck.id))
+        : null,
+    [formatSpecFor, floorByDeck],
+  );
+
   const heading = openNode === null ? ROOT_LABEL : openNode.folder.name;
+  /**
+   * What the line under the heading counts — **the drawer, and the filter's share of it.**
+   *
+   * The folder figure is the drawer's own and is never narrowed: sub-folders are navigation, and
+   * a name typed into a box about decks says nothing about which drawers exist. The deck figure
+   * is the drawer's own too, and while a filter is on it is prefixed with what survived —
+   * `2 of 9 decks`. Both numbers, never one: the whole is what says the decks are still there,
+   * which is exactly the reassurance a wall that just lost seven tiles owes the reader, and the
+   * share is what says the wall is short *because they asked*.
+   *
+   * The alternative — narrowing the figure outright — was rejected for the reason the folder tree
+   * is not filtered either: this line is part of the heading that names the drawer, and a heading
+   * whose count shrank as you typed is the second thing on screen agreeing that decks have gone.
+   */
   const counts = [
     childFolders.length > 0 ? plural(childFolders.length, "folder") : null,
-    plural(here.length, "deck"),
+    filtering ? `${shown.length} of ${plural(here.length, "deck")}` : plural(here.length, "deck"),
   ]
     .filter((part): part is string => part !== null)
     .join(" · ");
@@ -1144,6 +1368,33 @@ export function DecksPage() {
             </div>
           </div>
 
+          {/* **A row of its own, beneath the heading rather than inside it.**
+
+              The row above already carries a heading, a count, up to three folder verbs, New
+              folder, Import deck and New deck — seven things at the widest. Five more in it wrap
+              badly at the app's 1024px floor, where this column is ~548px wide, and a heading
+              that shares a line with a text box has stopped being a heading. Its own row is also
+              what the app does everywhere else: `FilterBar` is a row, on all five surfaces that
+              draw it.
+
+              Drawn only where there is a wall to narrow — a filter row over "No decks" is chrome
+              about nothing — and the gate is the **unfiltered** drawer, so the row cannot vanish
+              along with the last tile it matched and strand a reader with no way to undo. */}
+          {!status && (here.length > 0 || archivedHere.length > 0) && (
+            <DeckFilterRow
+              filter={filter}
+              onQuery={setFilterQuery}
+              formats={formats}
+              onToggleFormat={toggleFormat}
+              archivedCount={shownArchived.length}
+              archivedGate={archivedHere.length}
+              showArchived={showArchived}
+              onToggleArchived={() => setShowArchived((v) => !v)}
+              sort={sort}
+              onSort={setSort}
+            />
+          )}
+
           {/* Mounted for the life of the view and swapped into: a live region that appears
               together with its own text announces nothing, because there was no change for a
               screen reader to notice. */}
@@ -1174,7 +1425,24 @@ export function DecksPage() {
             </p>
           )}
 
-          {(childFolders.length > 0 || here.length > 0) && (
+          {/* **The fourth empty state, and it exists because the other three would be read as
+              lies here.** "Every deck you have is filed in a folder" and "Nothing is filed in X
+              yet" are both sentences about a *drawer*, and a wall emptied by a filter is a full
+              drawer the reader has narrowed to nothing — told either of those, they would go
+              looking for decks that are exactly where they left them.
+
+              The condition needs no `filtering` beside it and deliberately does not carry one:
+              `shown` is `here` narrowed, so the two lengths can only differ while something is
+              narrowing them. A second guard would be a second thing to keep in step.
+
+              The voice is the other three's — short, no pitch (see the placeholder note above,
+              which used to be a paragraph). No way out is offered because the way out is the box
+              the reader typed into, one row up and still holding their words. */}
+          {!status && here.length > 0 && shown.length === 0 && (
+            <p className="py-12 text-center text-sm text-dim">No decks match this filter</p>
+          )}
+
+          {(childFolders.length > 0 || shown.length > 0) && (
             // Named, the way the search's wall of art is (`CardGrid`'s `role="group"` +
             // `aria-label`) — but left a list rather than made a group, because these tiles are
             // countable and a list says how many there are on the way in.
@@ -1214,11 +1482,17 @@ export function DecksPage() {
                   rowMenu={folderRowMenu}
                 />
               ))}
-              {here.map((deck) => (
+              {shown.map((deck) => (
                 <DeckTile
                   key={deck.id}
                   deck={deck}
                   zoom={zoom}
+                  // The two facts a tile cannot read for itself, both answered once for the whole
+                  // wall. `null` is a real answer for each: a deck the pip read has not reached
+                  // draws no colour bar, and a deck whose format has no command zone prints no
+                  // bracket — see {@link bracketFor}.
+                  pips={pipsByDeck.get(deck.id) ?? null}
+                  bracketLabel={bracketFor(deck)}
                   decks={decks}
                   nodes={nodes}
                   folderId={folderOf(deck)}
@@ -1248,41 +1522,39 @@ export function DecksPage() {
             </p>
           )}
 
-          {archivedHere.length > 0 && (
-            <div className={cn(here.length > 0 && "mt-4 border-t border-border pt-4")}>
-              {/* A disclosure rather than a second wall: filed decks are kept, not shown. */}
-              <button
-                type="button"
-                aria-expanded={showArchived}
-                onClick={() => setShowArchived((v) => !v)}
-                className={cn(
-                  "inline-flex items-center gap-1.5 rounded-md text-xs text-dim",
-                  "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-                  FOCUS,
-                )}
-              >
-                {/* The one chevron in this file that is a disclosure's, and the only one that
-                    turns. On the app's `fast` tier, off the shared token, so it agrees with
-                    the press feedback its own button carries. */}
-                <ChevronRight
-                  className={cn(
-                    "size-3.5 transition-transform duration-[var(--duration-fast)] ease-standard",
-                    "motion-reduce:transition-none",
-                    showArchived && "rotate-90",
-                  )}
-                  aria-hidden="true"
-                />
-                Archived <span className="font-mono tabular-nums">{archivedHere.length}</span>
-              </button>
+          {/* **The wall of filed decks stays exactly where it was; its button did not.**
+
+              The disclosure's trigger is the `Archived` chip in the filter row above — one
+              control, moved, not two — and this is still the same `showArchived` it always
+              toggled. The point the old comment made is the one the chip now has to carry, so it
+              is written there rather than deleted: *filed decks are kept, not shown*. They are
+              never mixed into the live wall, whatever the sort or the filter says; a deck the
+              reader put away is a deck they asked not to look at.
+
+              Drawn on the **unfiltered** count, like the chip, so the section and its own trigger
+              appear and disappear together. */}
+          {archivedHere.length > 0 && showArchived && (
+            <div className={cn(shown.length > 0 && "mt-4 border-t border-border pt-4")}>
+              {/* The filed wall is narrowed by the same filter as the live one, so it can be
+                  emptied by it — and an opened disclosure revealing literally nothing reads as a
+                  control that broke. Its own sentence, in the live wall's voice. */}
+              {shownArchived.length === 0 && (
+                <p className="py-6 text-center text-sm text-dim">
+                  No filed decks match this filter
+                </p>
+              )}
               {/* The same tracks and the same gutter as the wall above it: filed decks are the
                   same wall behind a disclosure, so one size answers for both. */}
-              {showArchived && (
-                <ul aria-label="Archived decks" className={cn(GRID, "mt-3")} style={wallStyle(zoom)}>
-                  {archivedHere.map((deck) => (
+              {shownArchived.length > 0 && (
+                <ul aria-label="Archived decks" className={GRID} style={wallStyle(zoom)}>
+                  {shownArchived.map((deck) => (
                     <DeckTile
                       key={deck.id}
                       deck={deck}
                       zoom={zoom}
+                      // As above: one read for the whole gallery, handed down per tile.
+                      pips={pipsByDeck.get(deck.id) ?? null}
+                      bracketLabel={bracketFor(deck)}
                       decks={decks}
                       nodes={nodes}
                       folderId={folderOf(deck)}
@@ -1333,6 +1605,264 @@ export function DecksPage() {
 }
 
 /**
+ * The row that narrows and orders the wall.
+ *
+ * **Five controls, and the row reads left to right as one sentence about the wall below it**:
+ * everything that decides *which* decks are on it, then — past the auto margin — the one pair
+ * that decides what order they are in. That is the division `FilterBar` draws with a hairline on
+ * its own row, borrowed without the hairline: this row wraps at the app's 1024px floor, and a
+ * divider is the one item in a wrapping row that can end up alone on a line saying nothing.
+ *
+ * **The controls are `FilterChips`' recipes rather than a second family.** A chip that invents
+ * its own height sits 2px off the line and one that invents its own focus style is the only
+ * control on the screen a keyboard reader loses — so the geometry, the press, the focus ring and
+ * the on/off treatment all come from that module, and the gallery contributes nothing but the
+ * arrangement.
+ *
+ * **`flex-wrap` is not optional.** This column is `flex-1` beside a 208px folder rail, so at the
+ * app's own 1024px floor it is ~548px wide — narrower than the row's contents. A flex item cannot
+ * shrink below its own min-content, so an unwrapped row would hang out of the column and, since
+ * the column is `overflow-y-auto` (which computes `overflow-x` to `auto`), the overhang would
+ * become a horizontal scrollbar across the whole gallery. Wrapping makes the row's min-content
+ * one control. `src/CLAUDE.md` carries the measured version of that failure from the deck
+ * editor's docked panel.
+ */
+function DeckFilterRow({
+  filter,
+  onQuery,
+  formats,
+  onToggleFormat,
+  archivedCount,
+  archivedGate,
+  showArchived,
+  onToggleArchived,
+  sort,
+  onSort,
+}: {
+  filter: DeckFilter;
+  onQuery: (query: string) => void;
+  /** Every format present among the decks on the wall, already in display order. */
+  formats: readonly { key: string; label: string; count: number }[];
+  onToggleFormat: (key: string) => void;
+  /** What the chip opens onto — the filed decks **this filter leaves**, so the number on the
+   *  disclosure is the number of tiles behind it rather than a count that stops agreeing with the
+   *  wall the moment anything is typed. */
+  archivedCount: number;
+  /** Whether the drawer holds filed decks at all, filter or no filter. The chip is drawn on
+   *  this rather than on {@link archivedCount} so it cannot vanish out from under a reader
+   *  narrowing the wall — `features/search/facets.ts`' rule, that an option which disappears
+   *  reads as a control that broke. */
+  archivedGate: number;
+  showArchived: boolean;
+  onToggleArchived: () => void;
+  sort: DeckSort;
+  onSort: (next: DeckSort) => void;
+}) {
+  const tip = useTooltip();
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {/* **`Filter decks by name`, and never a bare `Filter`.** The deck editor already owns a
+          box called "Filter this deck", and the two are one Escape apart in a reader's day: that
+          one narrows the cards inside one deck, this one narrows the gallery of decks. A name
+          that did not say which would be unaddressable by a screen reader walking the app, by
+          voice, and by a `getByLabelText` — the argument `FilterBar.tsx:928-944` makes at length
+          about `Sort results`, applied to the control beside it. The placeholder is the label
+          with an ellipsis so the two cannot say different things. */}
+      <label htmlFor={FILTER_FIELD_ID} className="sr-only">
+        Filter decks by name
+      </label>
+      <input
+        id={FILTER_FIELD_ID}
+        type="search"
+        value={filter.query}
+        onChange={(e) => onQuery(e.target.value)}
+        // Escape empties the box while there is something in it, and falls through when there is
+        // not — which is load-bearing on *this* view rather than a courtesy. Chromium clears an
+        // `<input type="search">` itself and leaves `defaultPrevented` false, and the gallery
+        // binds Escape at the `"navigation"` rung to walk one folder up: without this, one press
+        // in a box with text would clear the filter *and* take the reader out of the drawer they
+        // were narrowing. jsdom implements no native clear, so the handler is also the only half
+        // of the behaviour a test can see. The rule is `clearFieldOnEscape`'s.
+        onKeyDown={(e) => clearFieldOnEscape(e, filter.query, () => onQuery(""))}
+        placeholder="Filter decks by name…"
+        // `FILTER_FIELD` and **never** `FILTER_CONTROL`: the row's chips dip 3% under a press and
+        // a box the reader types into must not, or the native ✕ slides out from under the pointer
+        // clearing it and the box bounces without emptying (issue #179 — the whole measurement is
+        // on the constant). It is also where the finger's 44px floor comes from, through
+        // `FILTER_SHAPE`, with no number written a second time here.
+        //
+        // `min-w-40 max-w-[22rem] flex-1` is the deck editor's own filter-box shape: it takes what
+        // the row leaves, but a search box as wide as a maximised window is a box whose text sits
+        // alone in the middle of the desk.
+        className={cn(
+          FILTER_FIELD,
+          FILTER_FOCUS,
+          "min-w-40 max-w-[22rem] flex-1 border-border bg-surface px-3",
+          "placeholder:text-dim focus:border-accent",
+        )}
+      />
+
+      {/* **One chip per format on the wall, and only where there is more than one.** A lone chip
+          can do exactly two things — leave the wall as it is, or empty it — so it is a control
+          whose only effect is the bad one. The group wraps for the row's own reason, and it is
+          named so a reader sweeping the row hears what the chips are about before hearing the
+          first of them.
+
+          The count rides `title`, which `ToggleChip` makes both the tooltip *and* the accessible
+          name, so the chip reads "Modern format, 3 decks" while still *beginning* with the word
+          printed on it (WCAG 2.5.3). That is the search's Owned chip's arrangement, for its
+          reason: the number is what tells a reader whether pressing it is worth doing.
+
+          **The word `format` in that name is load-bearing and was found by a story going red.**
+          Without it the chip is named `Commander, 1 deck` — and so is the sidebar's tree row for a
+          *folder* somebody called Commander holding one deck, which is a folder name a Commander
+          player is very likely to use. Two controls with one name is not a WCAG failure; it is a
+          control that cannot be addressed unambiguously, by a screen reader walking the page, by
+          anyone driving the app by voice, or by a `getByRole` that starts throwing "found
+          multiple" — `FilterBar`'s `Sort results` rule, met here by a collision nobody designed
+          rather than by two rows of one toolbar. The chip's name has to say what *kind* of thing
+          it narrows by, because a folder's name is the reader's and can be anything at all. */}
+      {formats.length > 1 && (
+        <div role="group" aria-label="Format" className="flex flex-wrap items-center gap-1">
+          {formats.map((format) => (
+            <ToggleChip
+              key={format.key}
+              label={format.label}
+              title={`${format.label} format, ${plural(format.count, "deck")}`}
+              pressed={filter.formats.includes(format.key)}
+              onClick={() => onToggleFormat(format.key)}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* **The archived disclosure, moved into the row and still a disclosure.**
+          It carries `aria-expanded` rather than `aria-pressed`, which is the whole reason it is
+          built out of the chip family's recipes instead of being a `ToggleChip`: that component
+          states `aria-pressed`, and "this filter is on" and "the thing below is open" are two
+          different sentences. A reader who is told the wrong one goes looking for a wall that is
+          not there.
+
+          It keeps the chevron for the same reason. Every other chip in this row narrows; this one
+          *reveals*, and the turning glyph is the one mark that says so at a glance — filed decks
+          are kept, not shown, and this is the control that shows them.
+
+          The visible text is unchanged (`Archived 1`), so the accessible name the disclosure has
+          always had survives the move. */}
+      {archivedGate > 0 && (
+        <button
+          type="button"
+          aria-expanded={showArchived}
+          onClick={onToggleArchived}
+          className={cn(
+            FILTER_CONTROL,
+            FILTER_FOCUS,
+            "inline-flex items-center gap-1.5 px-3",
+            filterChipState(showArchived),
+          )}
+        >
+          {/* The one chevron in this file that is a disclosure's, and the only one that turns. On
+              the app's `fast` tier, off the shared token, so it agrees with the press feedback its
+              own button carries. */}
+          <ChevronRight
+            className={cn(
+              "size-3.5 transition-transform duration-[var(--duration-fast)] ease-standard",
+              "motion-reduce:transition-none",
+              showArchived && "rotate-90",
+            )}
+            aria-hidden="true"
+          />
+          Archived <span className="font-mono tabular-nums">{archivedCount}</span>
+        </button>
+      )}
+
+      {/* The order, at the far end. `ml-auto` rather than a divider, and the pair is boxed rather
+          than left to the row's own gap so `flex-wrap` can never break the arrow onto the line
+          below the order it belongs to — a direction with its order on another line is a button
+          about nothing. 4px apart, `FilterBar`'s number for the same pair. */}
+      <div className="ml-auto flex items-center gap-1">
+        {/* **`Sort decks`, and never shortened to `Sort`.** The deck editor's toolbar already has
+            a `Sort`, and it sorts the cards *in* a deck; this sorts the decks. Two controls with
+            one name is not a WCAG failure — it is a control that cannot be addressed
+            unambiguously, by a screen reader, by voice, or by a `getByRole("button", { name:
+            "Sort" })` that starts throwing "found multiple". `FilterBar.tsx:928-944` writes the
+            argument out in full and this is the same call. Both `id` and `labelledBy`: the first
+            keeps the label's pointer behaviour, the second pins the name against a later edit
+            that moves one of the two. */}
+        <label id={`${SORT_ID}-label`} htmlFor={SORT_ID} className="sr-only">
+          Sort decks
+        </label>
+        <Dropdown
+          id={SORT_ID}
+          labelledBy={`${SORT_ID}-label`}
+          value={sort.key}
+          // **Picking a key sets the direction as well, and does not keep the old one.** Each key
+          // has a way round it reads naturally — the deck touched most recently and the biggest
+          // pile from the top, names and formats and colours and brackets forwards — and
+          // `NATURAL_DESC` is where those six answers live. Carrying the previous key's direction
+          // over would open `Name` at Z.
+          onChange={(key) => onSort({ key: key as DeckSortKey, desc: NATURAL_DESC[key as DeckSortKey] })}
+          options={SORT_ROWS}
+          // **Never gold.** Accent on a picker means "this is not where the control opens", which
+          // is a state a *filter* can be in. A wall is always in some order, so a sort cannot be
+          // inactive, and a gold sort picker would be saying a filter is on about the one control
+          // in this row that is not one.
+        />
+
+        {/* One arrow, turned over — never `ArrowDown` swapped in for `ArrowUp`. That is
+            `SortableHeader.tsx:51-55`'s rule and `FilterBar.tsx:975` states the reason: a
+            different element in the same slot is unmounted and remounted, so the indicator
+            *teleports*, and the whole of what the press means is that the order reversed. Half a
+            turn is that fact, drawn. `initial={false}` so a wall that opens descending — which is
+            the default, `updated` — draws its arrow already turned rather than spinning on first
+            paint.
+
+            `rotate` is a transform prop, so `MotionConfig reducedMotion="user"` reaches it and no
+            `useReducedMotion` opt-out is owed (`docs/reference/motion.md` — the trap there is the
+            *non*-positional properties, and this animates none).
+
+            The wrapper carries the tooltip rather than the button, `AllPrintingsDialog`'s
+            arrangement: `aria-label` already carries the whole sentence, so the binding is
+            `describes: false`, and a wrapper adds no box beyond the button's own. This button is
+            never `disabled` — `FilterBar`'s is, because `Best match` has no direction — so the
+            wrapper buys nothing that the button could not, and it is written this way so the two
+            rows stay one arrangement. */}
+        <span {...tip(sortDirectionName(sort.desc), { describes: false })}>
+          <button
+            type="button"
+            onClick={() => onSort({ ...sort, desc: !sort.desc })}
+            aria-label={sortDirectionName(sort.desc)}
+            className={cn(
+              FILTER_CONTROL,
+              FILTER_FOCUS,
+              "flex size-9 items-center justify-center",
+              // Not `aria-pressed`, and never gold: descending is not a filter switched on, it is
+              // the other half of a control that is always doing something.
+              filterChipState(false),
+            )}
+          >
+            {/* `flex` on the span is load-bearing and not decoration: a bare `<span>` is a
+                non-replaced inline box, a transform does not apply to one at all, and the rotation
+                would silently do nothing. `SortableHeader` carries the same class for the same
+                reason. */}
+            <motion.span
+              aria-hidden="true"
+              initial={false}
+              animate={{ rotate: sort.desc ? 180 : 0 }}
+              transition={TRANSITION.fast}
+              className="flex"
+            >
+              <ArrowUp className="size-4" />
+            </motion.span>
+          </button>
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/**
  * The other question, and the one whose answer a reader will guess wrong.
  *
  * **Deleting a folder does not delete the decks in it.** `decks.folder_id` is
@@ -1371,7 +1901,9 @@ function DeleteFolderConfirm({
         "absolute right-0 top-9 w-72 rounded-lg border border-border bg-bg/95 p-2",
         "text-xs shadow-lg",
         LAYER.popup,
-        FOCUS,
+        // No focus outline: a landing pad, not a control — `tabIndex={-1}` only so the caret has
+        // somewhere to go while the confirmation is open, and neither Tab nor an arrow reaches
+        // it. Its two buttons keep theirs. `src/lib/focus.ts` has the rule.
       )}
       onBlur={(e) => {
         if (pending) return;

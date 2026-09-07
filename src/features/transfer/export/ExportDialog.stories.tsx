@@ -112,8 +112,19 @@ const CARDS: TransferCard[] = [
  * The same pile plus a **switched-off** one, which is the deck-level scope: a whole deck holds
  * piles the reader has turned off, and `is_active = 0` is the whole of what a maybeboard is.
  *
- * Six copies on one row rather than six rows, deliberately — {@link SwitchedOffPile} is what says
- * the omission line counts *cards* and not rows.
+ * Six copies on one row rather than six rows, deliberately — both omission lines count **copies**,
+ * so a one-copy row would let "1 card" pass as a true statement about the array while being a
+ * false one about the deck. {@link SwitchedOffPile} is the format's own line and
+ * {@link InactiveCategoriesLeftOut} the reader's, and the six is what tells the pair apart from a
+ * row count.
+ *
+ * **Every story that passes this fixture is a story about that third row**, which is why they are
+ * worth naming together: {@link SwitchedOffPile} and {@link Tcgplayer} for what each format does
+ * with it, {@link InactiveCategoriesLeftOut} and {@link IncludeInactiveCategories} for the
+ * reader's own answer since issue #390, {@link OnlyCardsArenaHas} because it is the only fixture
+ * that can put both omission lines on screen at once, and {@link ShutByDefault} because the
+ * toggle's line count is measured on the file rather than on the pile and this is where the two
+ * differ.
  */
 const DECK_CARDS: TransferCard[] = [
   ...CARDS,
@@ -184,7 +195,8 @@ function collectionEntry(
 }
 
 /** Two entries the collection surface can carry every field of — a foil, graded and altered
- *  Lightning Bolt and a played, tagged Sol Ring — via `fromCollectionRow`, the same adapter
+ *  Lightning Bolt and a played Sol Ring with the collection's own free-text tags on it — via
+ *  `fromCollectionRow`, the same adapter
  *  `CollectionPage` reads its export scope through. */
 const COLLECTION_CARDS: TransferCard[] = [
   fromCollectionRow(
@@ -263,11 +275,14 @@ const WISHLIST_CARDS: TransferCard[] = [
  * A pile of cards as text: a format, a live preview, Copy, and Save as….
  *
  * **Two controls open it and only the `cards` prop tells them apart.** A deck category's
- * right-click opens it over one pile, which is every story on this page bar one; the editor
- * header's `Export deck` opens it over the whole variant on screen, which is
- * {@link SwitchedOffPile} — a deck holds piles the reader has switched off and one pile does not.
- * Taking the cards as a **prop** is what made the second control a caller rather than a rewrite.
- * Nothing on this page reaches the deck at all.
+ * right-click opens it over one pile — `CARDS` below, which is what a story passes when the
+ * subject is a format's own spelling; the editor header's `Export deck` opens it over the whole
+ * variant on screen — `DECK_CARDS`, which is that pile plus one the reader has switched off, and
+ * is what every story about a maybeboard or about the `Include inactive categories` box passes.
+ * (Which stories those are is `DECK_CARDS`' own reference list rather than a count here: the
+ * sentence this replaced named **one** story, and four already passed the fixture before issue
+ * #390 added two more.) Taking the cards as a **prop** is what made the second control a caller
+ * rather than a rewrite. Nothing on this page reaches the deck at all.
  *
  * **Built on `Dialog`**, the deck surface's shared modal shell, rather than carrying its own
  * copy of the chrome; the body lives one floor down, so `open={false}` mounts nothing at all —
@@ -442,14 +457,14 @@ export const Archidekt: Story = {
 };
 
 /**
- * The same pile with the reader's own **labels** on it — `deck_tags` rows, one per card.
+ * The same pile with the reader's own **labels** on it — `deck_labels` rows, one per card.
  *
  * Two of them, because one box is not a choice: the Bolt is a keeper and the Sol Ring is a cut
  * candidate, in the two colours the reader gave them.
  */
 const LABELLED_CARDS: TransferCard[] = [
-  transferCard({ ...CARDS[0], tagName: "Keeper", tagColor: "#4aab08" }),
-  transferCard({ ...CARDS[1], tagName: "Cut candidate", tagColor: "#d3202a" }),
+  transferCard({ ...CARDS[0], labelName: "Keeper", labelColor: "#4aab08" }),
+  transferCard({ ...CARDS[1], labelName: "Cut candidate", labelColor: "#d3202a" }),
 ];
 
 /**
@@ -459,7 +474,7 @@ const LABELLED_CARDS: TransferCard[] = [
  *
  * **It is on by default here and nowhere else.** Archidekt's other four optional fields are on
  * too: this format's defaults are everything Archidekt can say, and the caret group is something
- * Archidekt itself emits. The reader unticking Tag is what the box is for — a deck exported to
+ * Archidekt itself emits. The reader unticking Label is what the box is for — a deck exported to
  * share is often a deck whose private "cut candidate" notes should stay at home.
  *
  * **There is no colour checkbox on this format, and that is not an omission.** The colour rides
@@ -479,7 +494,7 @@ export const DeckLabels: Story = {
     );
 
     await userEvent.click(canvas.getByRole("radio", { name: "Archidekt" }));
-    await expect(canvas.getByRole("checkbox", { name: "Tag" })).toBeChecked();
+    await expect(canvas.getByRole("checkbox", { name: "Label" })).toBeChecked();
     await expand(canvasElement);
     await expect(preview(canvasElement)).toHaveTextContent(
       "Ramp 2x Lightning Bolt (2x2) 117 [Ramp] ^Keeper,#4aab08^ " +
@@ -488,7 +503,7 @@ export const DeckLabels: Story = {
 
     // Unticked, the lines are what they were before labels existed — the box is a real control
     // over the file rather than a decoration on the panel.
-    await userEvent.click(canvas.getByRole("checkbox", { name: "Tag" }));
+    await userEvent.click(canvas.getByRole("checkbox", { name: "Label" }));
     await expect(preview(canvasElement)).toHaveTextContent(
       "Ramp 2x Lightning Bolt (2x2) 117 [Ramp] 1x Sol Ring (c21) 263 [Ramp]",
     );
@@ -503,9 +518,18 @@ export const DeckLabels: Story = {
  * Mass Entry reads every line as one item and has no section vocabulary at all, so this format
  * writes a **flat** list: a heading here would be read as a card nobody sells. It has nowhere to
  * put a maybeboard either — and unlike Arena and MTGO it does not *lose* one, because a pile the
- * reader switched off is usually exactly the half they still have to buy. So every row is
- * written and the omission line never fires for this format; {@link SwitchedOffPile} is where
- * the two other flat formats answer differently.
+ * reader switched off is usually exactly the half they still have to buy. So the *format* never
+ * omits a row and `omittedCount`'s "not written in this format" never fires for it;
+ * {@link SwitchedOffPile} is where the two other flat formats answer differently.
+ *
+ * **That argument survives issue #390 intact, and what changed is who is asked.** The cart still
+ * keeps a switched-off pile where Arena and MTGO cut theirs — the format's answer is the same
+ * one it always gave — but the pile only reaches it if the reader has ticked `Include inactive
+ * categories`, which opens **off**. So the tick in this play is not scaffolding around an
+ * assertion: it is the reader saying the thing this format was built to hear, and without it the
+ * six Forests are held back before `formatExport` is called at all. See
+ * {@link InactiveCategoriesLeftOut} for what the untouched dialog writes and why that is the
+ * reported bug rather than a side effect of fixing it.
  *
  * The set code goes in **square brackets** with the collector number bare after it, which is the
  * most specific of the three shapes TCGplayer documents — the cart then lands on the printing the
@@ -532,12 +556,25 @@ export const Tcgplayer: Story = {
       "2 Lightning Bolt [2X2] 117 1 Sol Ring [C21] 263",
     );
 
+    // The reader's own answer, which this format is the best possible listener for. Off, the six
+    // Forests never reach the writer — see the count line {@link InactiveCategoriesLeftOut}
+    // asserts, and the description above for why that is the fix rather than a regression.
+    const inactive = canvas.getByRole("checkbox", { name: "Include inactive categories" });
+    await expect(inactive).not.toBeChecked();
+    await userEvent.click(inactive);
+
     // The switched-off pile is in the cart with everything else, and nothing is said about
-    // omissions because nothing was omitted.
+    // omissions because nothing was omitted — by the format or by the reader.
     await expect(preview(canvasElement)).toHaveTextContent("6 Forest [UNF] 239");
     await expect(canvas.queryByText(/not written in this format/)).toBeNull();
+    await expect(canvas.queryByText(/inactive categories are not written/)).toBeNull();
     // Flat: not one of the section words the grouped formats write.
     await expect(preview(canvasElement).textContent).not.toMatch(/Deck|Maybeboard|Cuts/);
+
+    // Put it back, for {@link OnlyCardsArenaHas}'s reason: `exportPrefs` is `useAppStore`'s and
+    // outlives a story on a shared page, so a play that left it ticked would decide what the
+    // next deck story on this page exports.
+    await userEvent.click(inactive);
   },
 };
 
@@ -546,9 +583,11 @@ export const Tcgplayer: Story = {
  *
  * A field is quoted only when it carries a comma, a quote or a newline — never otherwise, so
  * `Lightning Bolt` stays `Lightning Bolt` rather than becoming `"Lightning Bolt"` on every row.
- * The extension changes with it (`.csv`), which is what the save dialog is seeded with. The last
- * column is the pile's own name, which is how a spreadsheet keeps the filing the five text
- * formats say with a heading.
+ * The extension changes with it (`.csv`), which is what the save dialog is seeded with. A
+ * `Category` column carries the pile's own name, which is how a spreadsheet keeps the filing the
+ * five text formats say with a heading — and it is the *columns* that make that true rather than
+ * the position, which is why the play asserts a header prefix: `Finish` is on a deck's default
+ * set too and sits after it, and this sentence said `Category` was last until 2026-09-07.
  *
  * **It reads as well as writes, since Task 10** — `parse.ts` detects a header by content (two
  * known columns, one of which is Name) and then checks the next row's own field count agrees
@@ -591,6 +630,19 @@ export const Csv: Story = {
  * a false one about the deck. **Moxfield has a `Maybeboard` section and Archidekt has `{noDeck}`**,
  * so both write the pile and leave nothing out — and the line goes with the format that needed it.
  *
+ * **This is also the page's home for the box that is _not_ drawn** (issue #390). `Include
+ * inactive categories` is the reader's own answer to the question these two formats answer for
+ * themselves, so on a deck they are the only two of the seven that draw no box: a maybeboard in
+ * an Arena file is an illegal import at the other end, no preference may turn that back on, and
+ * a checkbox that could never move a byte is the furniture `src/CLAUDE.md` forbids. The sentence
+ * under Arena and MTGO says `not written in this format` for exactly that reason — under those
+ * two the honest author of the omission is the format, and putting a box beside it would hand
+ * the blame to a reader who has no say in it. The other five ask, which is why the two writers
+ * below need a tick before they can show what they can say: see
+ * {@link IncludeInactiveCategories}. **That fence is the _format's_**; the box is missing on the
+ * collection and the wishlist for an unrelated reason of the surface's, which is
+ * {@link Collection}'s.
+ *
  * **Not a `role="alert"`, deliberately**: nothing failed. It is a fact about the text underneath
  * it, which is why it sits between the radios and the preview rather than down beside the two
  * failure lines — and why it has to be on screen *before* Copy is pressed rather than after.
@@ -608,6 +660,12 @@ export const SwitchedOffPile: Story = {
     await expect(
       canvas.getByText("6 cards in switched-off piles are not written in this format."),
     ).toBeVisible();
+    // **And no box beside it.** The whole of `dropsInactive` is that these two have already
+    // answered the question, so the reader is not offered it — the fence is the format's, not
+    // the surface's, and this is a deck.
+    await expect(
+      canvas.queryByRole("checkbox", { name: "Include inactive categories" }),
+    ).toBeNull();
     // **The sentence is on screen with the preview still shut**, which is the whole of why it is
     // said beside the format rather than over the text: a reader who never opens the decklist can
     // still press Copy, and this is the only thing that tells them what the file will be missing.
@@ -617,18 +675,198 @@ export const SwitchedOffPile: Story = {
     // Said before Copy could be pressed, and true of the text on screen: no Forest in it.
     await expect(preview(canvasElement).textContent).not.toMatch(/Forest/);
 
-    // Moxfield puts the cut pile in its maybeboard, so nothing is left out and the line goes.
+    // The other half of `dropsInactive`, asserted rather than assumed from its twin: MTGO gives
+    // the same sentence and draws no box either. A two-member set checked at one member is a set
+    // nobody has checked — and these two are a hand-written `Set`, not something derived.
+    await userEvent.click(canvas.getByRole("radio", { name: "MTGO" }));
+    await expect(
+      canvas.getByText("6 cards in switched-off piles are not written in this format."),
+    ).toBeVisible();
+    await expect(
+      canvas.queryByRole("checkbox", { name: "Include inactive categories" }),
+    ).toBeNull();
+    await expect(preview(canvasElement).textContent).not.toMatch(/Forest/);
+
+    // Moxfield has somewhere to put the pile — and since #390 that is not enough on its own.
+    // The box appears the moment the format stops answering for itself, opens **off**, and the
+    // reader's own line is what stands in the format's place until it is ticked.
     await userEvent.click(canvas.getByRole("radio", { name: "Moxfield" }));
+    const inactive = canvas.getByRole("checkbox", { name: "Include inactive categories" });
+    await expect(inactive).not.toBeChecked();
+    await expect(
+      canvas.getByText("6 cards in inactive categories are not written."),
+    ).toBeVisible();
+    await expect(preview(canvasElement).textContent).not.toMatch(/Forest/);
+
+    // Ticked, the format writes what it has always been able to write: the cut pile in its
+    // maybeboard, nothing left out, and both count lines gone.
+    await userEvent.click(inactive);
     await expect(preview(canvasElement)).toHaveTextContent("Maybeboard 6 Forest (UNF) 239");
     await expect(canvas.queryByText(/not written in this format/)).toBeNull();
+    await expect(canvas.queryByText(/inactive categories are not written/)).toBeNull();
 
     // Archidekt keeps the reader's own word for the pile and flags it, which is what makes an
-    // export and a re-import agree about a maybeboard.
+    // export and a re-import agree about a maybeboard. The tick came across the format switch
+    // with it — `includeInactive` rides in `exportPrefs` where `fields` is re-derived, because
+    // "write my switched-off piles" is the same answer whatever format asked for it.
     await userEvent.click(canvas.getByRole("radio", { name: "Archidekt" }));
+    await expect(
+      canvas.getByRole("checkbox", { name: "Include inactive categories" }),
+    ).toBeChecked();
     await expect(preview(canvasElement)).toHaveTextContent(
       "Cuts 6x Forest (unf) 239 [Cuts{noDeck}]",
     );
     await expect(canvas.queryByText(/not written in this format/)).toBeNull();
+
+    // Put the store back, for {@link OnlyCardsArenaHas}'s reason.
+    await userEvent.click(canvas.getByRole("checkbox", { name: "Include inactive categories" }));
+  },
+};
+
+/**
+ * **The dialog as it opens on a deck with a cut pile in it — and the pile is not in the file.**
+ * Issue #390, and the honest half of it.
+ *
+ * A reader exported a deck and found their maybeboard in it. `Include inactive categories` is the
+ * answer, and it opens **off**, which is a real change to what an existing reader's next export
+ * contains: **plain text, Moxfield, Archidekt, TCGplayer and CSV all wrote a switched-off pile
+ * before this shipped and none of them does now** unless the box is ticked. That is the bug being
+ * fixed rather than a side effect of fixing it — the opposite default would ship the fix with the
+ * complaint still in it — and it is the reverse of the argument `arenaOnly` makes for its own
+ * `false` one row up, where starting *on* would have been the silent change. Both end up off;
+ * they get there from opposite directions, which is why the two are worth reading together.
+ *
+ * **Plain text is the sharpest surface for it**, and is what the dialog opens on. It has no
+ * section vocabulary, no bracket and no `{noDeck}` — nothing whatever to say a pile with — so a
+ * reader comparing the file against the deck has no structural tell that six cards are missing.
+ * The count line *is* the tell: `6 cards in inactive categories are not written.`, in **copies**,
+ * because six Forests on one row are six cards missing from the file and "1 card" would be a true
+ * statement about the array and a false one about the deck.
+ *
+ * **`text-dim` and not a `role="alert"`, for {@link SwitchedOffPile}'s reason**: nothing has
+ * failed. It is a fact about the text underneath it, and it has to be on screen before Copy is
+ * pressed — this play reads it with the preview still shut, which is the state a reader who never
+ * opens the decklist is in. **The wording differs from the line under Arena and MTGO on purpose**:
+ * this one names `inactive categories`, the box the reader can press, where that one names
+ * `switched-off piles` and adds `in this format`, because under those two there is no box and the
+ * format is the author of the omission. Naming a control that is not on screen would send a
+ * reader looking for it.
+ *
+ * Nothing here presses anything, so nothing has to be put back: this is the store's own default,
+ * which is exactly the claim being made.
+ */
+export const InactiveCategoriesLeftOut: Story = {
+  args: { subject: "Atraxa", cards: DECK_CARDS, suggestedFileName: "Atraxa" },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const dialog = await canvas.findByRole("dialog", { name: 'Export "Atraxa"' });
+    await waitFor(async () => await expect(dialog).toBeVisible(), { timeout: FRAME_WAIT });
+
+    // The format the dialog opens on, untouched — the whole point is that no press was needed
+    // to reach this state.
+    await expect(canvas.getByRole("radio", { name: "Plain text" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    const box = canvas.getByRole("checkbox", { name: "Include inactive categories" });
+    await expect(box).toBeVisible();
+    await expect(box).not.toBeChecked();
+
+    // Read with the preview still shut, and in copies.
+    await expect(canvas.getByRole("button", { name: /Show decklist/ })).toBeVisible();
+    await expect(canvas.getByText("6 cards in inactive categories are not written.")).toBeVisible();
+    // The format's own sentence is not the one on screen: plain text omits nothing by itself, so
+    // claiming "in this format" here would blame the writer for the reader's answer.
+    await expect(canvas.queryByText(/not written in this format/)).toBeNull();
+    // Nothing failed, so nothing shouts.
+    await expect(canvas.queryByRole("alert")).toBeNull();
+
+    // And the file really is short of them — said before Copy could be pressed, true of the text.
+    await expand(canvasElement);
+    await expect(preview(canvasElement)).toHaveTextContent("2 Lightning Bolt 1 Sol Ring");
+    await expect(preview(canvasElement).textContent).not.toMatch(/Forest/);
+  },
+};
+
+/**
+ * **The box ticked, on the one format that can say what it is being asked to write.**
+ *
+ * Archidekt is the only writer here that keeps a switched-off pile *and* marks it: the reader's
+ * own word for the pile as the heading and in the bracket, and `{noDeck}` on the first bracket
+ * entry, which is the flag `parse.ts` reads straight back as `is_active = 0`. So this story is
+ * the round trip the flag exists for — a deck exported and re-imported comes back with the cut
+ * pile still switched off, rather than with six Forests promoted into the ninety-nine. Moxfield
+ * writes the pile too, under its fixed `Maybeboard` heading. The three flat formats keep the rows
+ * and lose the fact that they were set aside — CSV keeps the pile's *name* in its `Category`
+ * column and still cannot say the pile is off, because there is no `categoryActive` in the field
+ * registry for it to spend a column on — which is a fair trade for a shopping cart and a
+ * spreadsheet and not one for a deck builder.
+ *
+ * **The count in the toggle's own label is what shows the box moving the _file_ rather than the
+ * preview**, and it is readable before the decklist is opened at all: three lines with the box
+ * off — a heading and two cards — and six with it on, since Archidekt's second group brings a
+ * blank line and a heading of its own with it. A reader who never expands the preview still sees
+ * the number change under their press.
+ *
+ * **The tick survives a format switch, where the field set does not.** `includeInactive` rides in
+ * `exportPrefs` beside `format` and `arenaOnly` rather than being re-derived per format, for the
+ * Arena filter's reason ({@link OnlyCardsArenaHas}): a field set chosen for CSV means nothing to
+ * Archidekt, but "write my switched-off piles" is the same answer whatever format the reader
+ * passed through on the way. So the CSV arm at the foot of this play needs no second press — and
+ * the row it finds is the pile's name in the `Category` column, which is how a spreadsheet keeps
+ * the filing the text formats say with a heading.
+ *
+ * The last press puts the store back: `exportPrefs` is `useAppStore`'s and outlives a story on a
+ * shared page, so a play that left it ticked would decide what the next deck story exports.
+ */
+export const IncludeInactiveCategories: Story = {
+  args: { subject: "Atraxa", cards: DECK_CARDS, suggestedFileName: "Atraxa" },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(
+      async () => await expect(canvas.getByRole("radio", { name: "Archidekt" })).toBeVisible(),
+      { timeout: FRAME_WAIT },
+    );
+
+    await userEvent.click(canvas.getByRole("radio", { name: "Archidekt" }));
+    // Off: one group, so a heading and the two switched-on rows.
+    await expect(canvas.getByRole("button", { name: /Show decklist/ })).toHaveTextContent(
+      "Show decklist (3 lines)",
+    );
+
+    const box = canvas.getByRole("checkbox", { name: "Include inactive categories" });
+    await expect(box).not.toBeChecked();
+    await userEvent.click(box);
+
+    // On: a blank line, the reader's own heading and the cut row — measured on the text rather
+    // than on the pile, which is what makes this a claim about the file.
+    await expect(canvas.getByRole("button", { name: /Show decklist/ })).toHaveTextContent(
+      "Show decklist (6 lines)",
+    );
+    // Both count lines are gone: nothing is being held back by the reader or by the format.
+    await expect(canvas.queryByText(/inactive categories are not written/)).toBeNull();
+    await expect(canvas.queryByText(/not written in this format/)).toBeNull();
+
+    await expand(canvasElement);
+    await expect(preview(canvasElement)).toHaveTextContent(
+      "Ramp 2x Lightning Bolt (2x2) 117 [Ramp] 1x Sol Ring (c21) 263 [Ramp]",
+    );
+    // The heading, the bracket and the flag — the whole of what makes the re-import agree.
+    await expect(preview(canvasElement)).toHaveTextContent(
+      "Cuts 6x Forest (unf) 239 [Cuts{noDeck}]",
+    );
+
+    // The answer comes across the switch with the reader, where the field set is re-derived.
+    await userEvent.click(canvas.getByRole("radio", { name: "CSV" }));
+    const again = canvas.getByRole("checkbox", { name: "Include inactive categories" });
+    await expect(again).toBeChecked();
+    await expect(preview(canvasElement)).toHaveTextContent("6,Forest,unf,239,Cuts");
+
+    // Untick, and the row goes with the answer — which is what makes the assertion above able to
+    // fail, and puts the store back for the next story on the page.
+    await userEvent.click(again);
+    await expect(preview(canvasElement).textContent).not.toMatch(/Forest/);
+    await expect(canvas.getByText("6 cards in inactive categories are not written.")).toBeVisible();
   },
 };
 
@@ -651,8 +889,18 @@ export const SwitchedOffPile: Story = {
  * alert because nothing has failed, and in **copies** because two copies of a card Arena lacks
  * are two lines that will not be in the file.
  *
- * The fixture is the deck scope, so both omission lines are reachable: Sol Ring is playable in no
- * Arena format, and the six Forests are in a pile the reader switched off.
+ * **`Include inactive categories` reaches the opposite default from the opposite direction, and
+ * the pair is worth reading together** ({@link InactiveCategoriesLeftOut}). Here starting *on*
+ * would have been the silent change; there starting on would have shipped issue #390's fix with
+ * the complaint still in it. Both boxes open off and neither default was inherited from the
+ * other. This play never presses `Include inactive categories`, and that is not an oversight:
+ * the box is fenced off Arena, so wherever this one is drawn that one is not and the two can
+ * never be on screen together.
+ *
+ * The fixture is the deck scope, so both of the omission lines this format can draw are
+ * reachable: Sol Ring is playable in no Arena format, and the six Forests are in a pile the
+ * reader switched off — which Arena leaves out by itself, in its own words rather than the
+ * reader's.
  */
 export const OnlyCardsArenaHas: Story = {
   args: { subject: "Atraxa", cards: DECK_CARDS, suggestedFileName: "Atraxa" },
@@ -859,6 +1107,15 @@ export const EmptyPile: Story = {
  * intersection `availableFields` draws: `Condition` is offered here and nowhere a deck
  * export reaches, `Category` is offered nowhere on this surface at all — a collection row is not
  * filed anywhere, so there is no pile to name.
+ *
+ * **`Include inactive categories` is absent for that same emptiness, and the fence it fails is
+ * the _surface's_ rather than the format's** (issue #390). A `CollectionRow` and a `WishRow` both
+ * carry `categoryActive: null` — `SURFACE_HAS_PILES` is `false` for the pair — so the box here
+ * would be a control over nothing, which is the furniture `src/CLAUDE.md` forbids for the same
+ * reason a disabled `Quantity` checkbox is not drawn. It is worth asserting rather than assuming
+ * because the two fences fail independently and this is the half {@link SwitchedOffPile} cannot
+ * see: **CSV on a deck draws the box**, so a fence written on `dropsInactive` alone would put it
+ * here, over a list where every row is already written.
  */
 export const Collection: Story = {
   args: {
@@ -880,6 +1137,12 @@ export const Collection: Story = {
     await expect(within(fields).getByRole("checkbox", { name: "Condition" })).toBeChecked();
     // No pile to name on this surface — `availableFields` never offers it here.
     await expect(within(fields).queryByRole("checkbox", { name: "Category" })).toBeNull();
+    // And no pile to *be in*, which is a second fence over the same emptiness — queried on the
+    // canvas rather than in the fieldset, since this one is not a field. On a deck this same
+    // format draws it; see the description.
+    await expect(
+      canvas.queryByRole("checkbox", { name: "Include inactive categories" }),
+    ).toBeNull();
 
     await expand(canvasElement);
     await expect(preview(canvasElement)).toHaveTextContent(
@@ -923,6 +1186,12 @@ export const Wishlist: Story = {
     await expect(within(fields).queryByRole("checkbox", { name: "Category" })).toBeNull();
     await expect(within(fields).queryByRole("checkbox", { name: "Tradelist quantity" })).toBeNull();
     await expect(within(fields).getByRole("checkbox", { name: "Notes" })).toBeInTheDocument();
+    // The second pile-less surface, asserted rather than inferred from the collection's: the
+    // fence is one hand-written `SURFACE_HAS_PILES` entry each, so checking one says nothing
+    // about the other. {@link Collection} carries the argument.
+    await expect(
+      canvas.queryByRole("checkbox", { name: "Include inactive categories" }),
+    ).toBeNull();
   },
 };
 
@@ -991,6 +1260,16 @@ export const EveryFieldOn: Story = {
  * It really is shut and not hidden: the `<pre>` is **unmounted**, which is why every play on this
  * page presses this button before reading a line. A hidden block still holding the text is
  * exactly the shape that lets a play assert a line no reader can see.
+ *
+ * **The count is a fact about the _file_ and not about the pile, and this fixture is where the
+ * two visibly differ.** `DECK_CARDS` is three rows and the toggle says **two lines**: the third
+ * is the switched-off `Cuts` pile, which plain text does not write while `Include inactive
+ * categories` is off — the default since issue #390. It said three until that shipped, and the
+ * number moving is the change working rather than the label drifting. A count derived from
+ * `cards.length` would still say three here and would be wrong about every export this dialog
+ * has ever filtered, the Arena one included; measuring it on the rendered text is what keeps the
+ * toggle honest about the thing under it. {@link InactiveCategoriesLeftOut} is the same default
+ * seen from the count line's side.
  */
 export const ShutByDefault: Story = {
   args: { subject: "Atraxa", cards: DECK_CARDS, suggestedFileName: "Atraxa" },
@@ -1000,7 +1279,8 @@ export const ShutByDefault: Story = {
     await waitFor(async () => await expect(toggle).toBeVisible(), { timeout: FRAME_WAIT });
 
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
-    await expect(toggle).toHaveTextContent("Show decklist (3 lines)");
+    // Two of the fixture's three rows — see the description: the cut pile is not in the file.
+    await expect(toggle).toHaveTextContent("Show decklist (2 lines)");
     await expect(canvasElement.querySelector("pre")).toBeNull();
     // The presses that do the work are on screen with it — which is the point of the whole
     // change, since they were the two a tall export pushed out of reach.

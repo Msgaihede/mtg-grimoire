@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { dragData, readDragData } from "@/features/decks/dnd";
+import { searchCardDragData, type SearchCardDrag } from "@/features/search/searchCardDrag";
 import { boxed, recordDrags, startPointerDrag } from "@/test-drag";
 import {
   collectionDragData,
@@ -28,6 +29,26 @@ const TILE: CollectionTileDrag = {
 /** The card half a collection row always carries beside the entry half — `kind: "card"`, the arm
  *  the collection table has handed the deck's targets since long before folders existed. */
 const CARD = { kind: "card", cardId: "c1", name: "Lightning Bolt", typeLine: "Instant" } as const;
+
+/** What the sidebar's search tile hands a folder: a printing the reader does **not** own, and the
+ *  two facts a drop has to write with it. `finish` is part of the address rather than extra
+ *  information — a copy is stored per finish — and `oracleId` is nullable because an orphaned
+ *  printing has no oracle row. */
+const NEW_CARD: SearchCardDrag = {
+  cardId: "c2",
+  name: "Black Lotus",
+  finish: "nonfoil",
+  oracleId: "o2",
+};
+
+/** The card half that rides beside it, `kind: "search-card"` — the arm a search tile has handed
+ *  the deck's targets since the docked panel existed. */
+const SEARCH_CARD = {
+  kind: "search-card",
+  cardId: "c2",
+  name: "Black Lotus",
+  typeLine: "Artifact",
+} as const;
 
 describe("collectionDragData / readCollectionDrag", () => {
   it("round-trips an entry", () => {
@@ -199,25 +220,61 @@ describe("readCollectionDrop", () => {
     expect(readCollectionDrop(collectionTileDragData(TILE))).toEqual({ kind: "tile", tile: TILE });
   });
 
-  /** A card payload carrying neither collection mark is not this feature's drag at all — which is
-   *  what keeps a search tile from raising every folder's ring. */
-  it("refuses a payload carrying neither mark", () => {
+  /** The third arm, and the whole of what the sidebar bought: a folder card takes a card the
+   *  reader does not own, and the page turns that into an **add** rather than a refile. */
+  it("reads a search tile as a card nobody owns yet", () => {
+    expect(readCollectionDrop(searchCardDragData(NEW_CARD))).toEqual({
+      kind: "new",
+      card: NEW_CARD,
+    });
+  });
+
+  /** A card payload carrying none of the three marks is not this feature's drag at all — a deck
+   *  tile, a wish, anything else in the window that has learnt to be dragged. */
+  it("refuses a payload carrying no mark of this feature's", () => {
     expect(readCollectionDrop(dragData(CARD))).toBeNull();
     expect(readCollectionDrop({})).toBeNull();
   });
 
-  /** A malformed payload of either shape is refused outright rather than falling through to the
-   *  other reader and being reported as the thing it is not. */
-  it("refuses a malformed payload of either shape", () => {
+  /** A malformed payload of any shape is refused outright rather than falling through to the next
+   *  reader and being reported as the thing it is not. The search arm's own case is the finish,
+   *  which `readSearchCardDrag` **refuses rather than normalising**: it is what a new row will be
+   *  filed under, so guessing it would write a fact the reader never said. */
+  it("refuses a malformed payload of any shape", () => {
     expect(readCollectionDrop({ ...collectionDragData(ENTRY), entryId: 0 })).toBeNull();
     expect(readCollectionDrop({ ...collectionTileDragData(TILE), copies: [] })).toBeNull();
+    expect(readCollectionDrop({ ...searchCardDragData(NEW_CARD), finish: "shiny" })).toBeNull();
   });
 
-  /** The two keys are disjoint by construction, so a payload with both can only be a bug upstream
-   *  — and the entry is the narrower fact to act on: it moves one row where a tile moves a whole
-   *  printing's shelf. */
+  /**
+   * The three keys are disjoint by construction, so a payload with two of them can only be a bug
+   * upstream — and the order says which fact to act on: **narrowest first**. An existing copy
+   * being moved outranks a new one being added, because only one of them can be true of a real
+   * drag and moving a row the reader already has is the smaller claim.
+   */
   it("takes the entry when a payload somehow carries both", () => {
     const both = { ...collectionTileDragData(TILE), ...collectionDragData(ENTRY) };
     expect(readCollectionDrop(both)).toEqual({ kind: "entry", entry: ENTRY });
+  });
+
+  it("takes the entry over a search mark, and the tile over one too", () => {
+    expect(
+      readCollectionDrop({ ...searchCardDragData(NEW_CARD), ...collectionDragData(ENTRY) }),
+    ).toEqual({ kind: "entry", entry: ENTRY });
+    expect(
+      readCollectionDrop({ ...searchCardDragData(NEW_CARD), ...collectionTileDragData(TILE) }),
+    ).toEqual({ kind: "tile", tile: TILE });
+  });
+
+  /**
+   * The composition a search tile actually registers, read back through both readers — which is
+   * the reason `searchCardDrag.ts` has a key of its own rather than an arm on `dnd.ts`'s payload.
+   * The card half is what keeps the tile droppable on a deck category and the sidebar's Decks
+   * entry; this half is what a folder card reads.
+   */
+  it("lets one search tile be read as a card and as a new copy at once", () => {
+    const both = { ...dragData(SEARCH_CARD), ...searchCardDragData(NEW_CARD) };
+    expect(readDragData(both)).toEqual(SEARCH_CARD);
+    expect(readCollectionDrop(both)).toEqual({ kind: "new", card: NEW_CARD });
   });
 });

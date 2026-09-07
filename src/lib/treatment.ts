@@ -8,6 +8,12 @@
  * word behind it. Scryfall answers in a different column — `promo_types`, already ingested
  * (`card_row.rs`) and stored (`schema.rs`), and until this module never read on this side.
  *
+ * **What this table supplies is the word and not the picture** — issue #353. A treatment renames
+ * `FinishMark` and never redraws it, because the glyph is the finish and a Surge Foil is foil;
+ * drawing it as something else made one card two different pictures across the views that pass
+ * `treatments` and the views that only know a finish. The exception is a **nonfoil** copy with a
+ * trait, which has no finish glyph to keep.
+ *
  * **A treatment is therefore an annotation on a finish and never a fourth finish.** Nothing here
  * touches `Finish`, `collection_entries.finish`, its `CHECK`, or any import format: a Surge Foil
  * copy is a `foil` copy that is also a Surge Foil, which is what the reader's data already says.

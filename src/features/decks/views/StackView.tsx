@@ -33,6 +33,7 @@ import { useCategoryDragSource, useCategoryReorderDrop } from "../categoryDrag";
 import { deckCardSlot, DECK_CARD_ATTR } from "../dnd";
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
+import type { TheoryPlan } from "../theoryMatch";
 import type { ValidationIssue } from "../validation/types";
 import { RAIL_ATTR, splitRail } from "./columns";
 import { GroupHeader } from "./GroupHeader";
@@ -345,7 +346,7 @@ export function StackView({
   groups,
   marketplace,
   violations,
-  theoryMatches,
+  theoryPlan,
   onSelect,
   actions,
   selectedSlot,
@@ -357,10 +358,9 @@ export function StackView({
    *  card's own unit price. One value for the whole view, so the two cannot disagree. */
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
-  /** What the deck's plan says about each row — `theoryMatch.ts`'s map of slot → how far the
-   *  live list is from the planned count, handed down whole like `violations` beside it.
-   *  `undefined` for a deck with no plan. */
-  theoryMatches?: ReadonlyMap<string, number>;
+  /** The deck's plan — `theoryMatch.ts`'s two lookups and the deck's own two mark switches,
+   *  handed down whole like `violations` beside it. `undefined` for a deck with no plan. */
+  theoryPlan?: TheoryPlan;
   onSelect?: (card: DeckCard) => void;
   /** What may be done to a card here, and where a dropped one lands. See
    *  {@link DeckCardActions}; omitted, this view is exactly what it always was. */
@@ -610,10 +610,15 @@ export function StackView({
     // block to fill — and is kept because it is the sentence a host in a *row* reads: it is how
     // the view takes its share of the width, which is the axis this box has ever shared.
     //
-    // **{@link DROP_MARK_ROOM} is the padding, and it is what keeps a drag's own affordance on
-    // screen.** This box clips at its padding box, so with none the leftmost pile's `DROP_RING`
-    // and the rail's were each sliced down the edge for the whole length of a drag, and a pile's
-    // focus outline with them. The bottom edge is {@link ROOT_GUTTER} instead — the `pb-2` this
+    // **{@link DROP_MARK_ROOM} is the padding, and what it keeps on screen is a pile's focus
+    // outline.** This box clips at its padding box, so with none the leftmost pile's mark and the
+    // rail's were each sliced down the edge, and a pile's focus outline with them.
+    //
+    // **The drag half of that is history since 2026-09-03 and the padding is not**: `DROP_RING`
+    // became `ring-1 ring-inset ring-accent/45`, and an inset ring is painted *within* the border
+    // box, so nothing here can clip it any more. `FOCUS` still stands 4px proud and is still the
+    // reason for the number — which it always was, since 6px is that 4 plus two to spare and was
+    // never the ring's 2. The bottom edge is {@link ROOT_GUTTER} instead — the `pb-2` this
     // was written as until the reserve above needed adding to it, and an inline `padding-bottom`
     // replaces a Tailwind one rather than adding to it — because the foot of a column is the one
     // edge that was never clipped and 8px is what the layout was drawn with.
@@ -717,6 +722,7 @@ export function StackView({
             groups={command}
             marketplace={marketplace}
             violations={violations}
+            theoryPlan={theoryPlan}
             onSelect={selectCard}
             actions={actions}
             selectedSlot={selectedSlot}
@@ -731,7 +737,7 @@ export function StackView({
             group={group}
             marketplace={marketplace}
             violations={violations}
-            theoryMatches={theoryMatches}
+            theoryPlan={theoryPlan}
             onSelect={selectCard}
             actions={actions}
             selectedSlot={selectedSlot}
@@ -795,7 +801,7 @@ export function StackView({
               group={group}
               marketplace={marketplace}
               violations={violations}
-              theoryMatches={theoryMatches}
+              theoryPlan={theoryPlan}
               onSelect={selectCard}
               actions={actions}
               selectedSlot={selectedSlot}
@@ -858,6 +864,7 @@ function CommandZone({
   groups,
   marketplace,
   violations,
+  theoryPlan,
   onSelect,
   actions,
   selectedSlot,
@@ -871,6 +878,21 @@ function CommandZone({
   groups: readonly CardGroup[];
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
+  /**
+   * The deck's plan, handed through exactly as {@link CommandZone.violations} above it is.
+   *
+   * **This box is the one place a per-card fact can go missing without a type saying so**, and it
+   * did: every prop here is optional, so a plan left out of the call site compiled, rendered, and
+   * drew a commander with no theory mark on it — the one card a Commander deck is *built around*
+   * being the only one that could not say whether it matched the plan. Found by driving the
+   * shipped window against real data (deck "Bruna", 73 live cards, 69 marks) and by nothing in
+   * the suite, because no fixture had put an **active** command zone against a plan.
+   *
+   * It is emphatically not {@link StackGroup.flowWidth}'s kind of absence. That prop is withheld
+   * here on purpose and says five things at once; this is a fact *about a card*, and a card in
+   * this box is a card in the deck like any other.
+   */
+  theoryPlan?: TheoryPlan;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
   /** Handed through to the piles — see {@link StackView}'s own props. */
@@ -918,6 +940,7 @@ function CommandZone({
           group={group}
           marketplace={marketplace}
           violations={violations}
+          theoryPlan={theoryPlan}
           onSelect={onSelect}
           actions={actions}
           selectedSlot={selectedSlot}
@@ -940,7 +963,7 @@ function StackGroup({
   group,
   marketplace,
   violations,
-  theoryMatches,
+  theoryPlan,
   onSelect,
   actions,
   selectedSlot,
@@ -952,10 +975,9 @@ function StackGroup({
   group: CardGroup;
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
-  /** What the deck's plan says about each row — `theoryMatch.ts`'s map of slot → how far the
-   *  live list is from the planned count, handed down whole like `violations` beside it.
-   *  `undefined` for a deck with no plan. */
-  theoryMatches?: ReadonlyMap<string, number>;
+  /** The deck's plan — `theoryMatch.ts`'s two lookups and the deck's own two mark switches,
+   *  handed down whole like `violations` beside it. `undefined` for a deck with no plan. */
+  theoryPlan?: TheoryPlan;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
   /** Handed through to the stack — see {@link StackView}'s own props. */
@@ -1143,7 +1165,7 @@ function StackGroup({
             label={group.name}
             currency={marketplace.currency}
             violations={violations}
-            theoryMatches={theoryMatches}
+            theoryPlan={theoryPlan}
             onSelect={onSelect}
             actions={actions}
             selectedSlot={selectedSlot}
