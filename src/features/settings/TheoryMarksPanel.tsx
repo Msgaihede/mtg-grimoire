@@ -109,11 +109,14 @@ export function TheoryMarksPanel(): JSX.Element {
 
                   <div className="ml-auto flex items-center gap-2">
                     {/* The swatch is both the trigger and the answer to "what is it set to now",
-                        which is `LabelColorButton`'s argument at its own site — but its name is
-                        the fixed "Choose label colour", and two buttons with one accessible name
-                        in a panel about two marks is a panel a screen reader cannot navigate. So
-                        this is `LabelsDialog`'s row trigger instead: the same swatch, named for
-                        the mark it belongs to. */}
+                        which is `LabelColorButton`'s argument at its own site. This is
+                        `LabelsDialog`'s row trigger rather than that button, and the reason is
+                        the row beside it: `Change the matching-printing mark's colour` and
+                        `Reset the matching-printing mark…` are one pair naming one thing, where
+                        `Choose matching printing colour` would put a third wording for the same
+                        mark on the same line. (`LabelColorButton` takes a `subject` of its own
+                        now, so it is a choice between two correct controls rather than a way
+                        round a broken one.) */}
                     <button
                       type="button"
                       onClick={() =>
@@ -169,6 +172,13 @@ export function TheoryMarksPanel(): JSX.Element {
 
                 {drafting && (
                   <LabelColorRow
+                    // **What is being coloured, said in the reader's words rather than the
+                    // component's.** The picker's own default is `"Label colour"`, and a label is
+                    // not a mark — the two are different objects in this app and the vocabulary
+                    // rule is that they never trade places. Left at the default, a screen-reader
+                    // user recolouring the green tick would hear "Label colour" twice, once per
+                    // mark, with nothing telling the two apart.
+                    subject={mark.subject}
                     value={picking.color}
                     onChange={(color) => setPicking({ key: mark.key, color })}
                     onDone={() => {
@@ -237,6 +247,16 @@ interface MarkRow {
    * visible word still leads the accessible name (WCAG 2.5.3).
    */
   noun: string;
+  /**
+   * What the open picker calls the thing it is colouring — `LabelColorPicker`'s `ColourSubject`,
+   * which every control inside that frame names itself from.
+   *
+   * **It is {@link title} plus the word "colour"**, so the group a reader lands in is named for
+   * the row they opened it from, and the row is named for the switch they have already met in
+   * Deck settings (`DeckSettingsForm`'s `MarkSwitch` headings are these two words exactly). One
+   * thing, one name, in all three places.
+   */
+  subject: string;
   /** The custom property the mark's fill is read from, and — with `-fg` — what a tick or a
    *  number is printed on it in. */
   fill: string;
@@ -263,6 +283,7 @@ const MARKS: readonly MarkRow[] = [
       "The card in front of you is the printing the theory list names — the real thing rather " +
       "than a stand-in.",
     noun: "matching-printing mark",
+    subject: "Matching printing colour",
     fill: "--color-theory-exact",
   },
   {
@@ -274,6 +295,7 @@ const MARKS: readonly MarkRow[] = [
       "The same card, in a printing the theory list does not name — the proxy or the spare copy " +
       "standing in until the one you meant arrives.",
     noun: "different-printing mark",
+    subject: "Different printing colour",
     fill: "--color-theory-name",
   },
 ];

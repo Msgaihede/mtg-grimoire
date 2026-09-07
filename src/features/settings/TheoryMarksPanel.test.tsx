@@ -105,7 +105,7 @@ describe("TheoryMarksPanel", () => {
       screen.getByRole("button", { name: /change the matching-printing mark/i }),
     );
 
-    const hex = screen.getByRole("textbox", { name: "Label colour hex" });
+    const hex = screen.getByRole("textbox", { name: "Matching printing colour hex" });
     expect(hex).toHaveValue(MARK_COLOR_DEFAULTS.theoryExact.slice(1).toUpperCase());
 
     await userEvent.clear(hex);
@@ -133,8 +133,9 @@ describe("TheoryMarksPanel", () => {
     await userEvent.click(
       screen.getByRole("button", { name: /change the matching-printing mark/i }),
     );
-    await userEvent.clear(screen.getByRole("textbox", { name: "Label colour hex" }));
-    await userEvent.type(screen.getByRole("textbox", { name: "Label colour hex" }), "ff0000");
+    const hex = () => screen.getByRole("textbox", { name: "Matching printing colour hex" });
+    await userEvent.clear(hex());
+    await userEvent.type(hex(), "ff0000");
 
     expect(row("Matching printing").style.getPropertyValue("--color-theory-exact")).toBe("#ff0000");
     // The other mark is untouched — one picker is open, and it is about one mark.
@@ -217,6 +218,46 @@ describe("TheoryMarksPanel", () => {
     await waitFor(() => expect(markColors).toHaveBeenCalled());
 
     expect(screen.getByText(/only on this device/i)).toBeInTheDocument();
+  });
+
+  /**
+   * **The open picker is named for the mark it colours, and the two names are different.**
+   *
+   * `LabelColorRow` defaults its subject to `"Label colour"` — right for the deck dialog it was
+   * written for, and wrong twice over here: a *label* is not a *mark* (this repo's vocabulary
+   * rule, which the root `CLAUDE.md` states as never letting the words trade places), and left at
+   * the default both pickers would announce themselves identically, so a screen-reader user
+   * recolouring the green tick could not tell which one they had opened.
+   *
+   * The names are collected by opening each picker in turn — only one is ever open, which is the
+   * panel's own single-tenant state — and asserted as a **set of two** rather than one at a time,
+   * because the failure this guards is *sameness* and a pair of separate assertions can both pass
+   * against two identical strings.
+   */
+  it("names each mark's picker for that mark, and never for a label", async () => {
+    stored({});
+    draw();
+    await waitFor(() => expect(markColors).toHaveBeenCalled());
+
+    const names: string[] = [];
+    for (const noun of ["matching-printing", "different-printing"]) {
+      const open = screen.getByRole("button", {
+        name: new RegExp(`change the ${noun} mark`, "i"),
+      });
+      await userEvent.click(open);
+      const group = screen.getByRole("group", { name: /colour$/ });
+      const name = group.getAttribute("aria-label") ?? "";
+      names.push(name);
+      // The hex field belongs to the same thing the group around it does, which is what
+      // `subjectNames` composing all three from one string is for.
+      expect(within(group).getByRole("textbox", { name: `${name} hex` })).toBeInTheDocument();
+      // Close it again, so the next iteration is not reading a group that outlived its row.
+      await userEvent.click(open);
+    }
+
+    expect(names).toEqual(["Matching printing colour", "Different printing colour"]);
+    expect(new Set(names).size).toBe(2);
+    for (const name of names) expect(name.toLowerCase()).not.toContain("label");
   });
 
   /** Each mark's controls are addressed by that mark's own words, so neither the swatch nor the
