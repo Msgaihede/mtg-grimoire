@@ -23,7 +23,6 @@ import { everythingLabel, scopeLabel, useExportScope } from "@/features/transfer
 import { wishlistDestination } from "@/features/transfer/import/destinations/WishlistPreview";
 import { ImportExportPair } from "@/features/transfer/ImportExportPair";
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
-import { MIN_PANEL_WIDTH_PX } from "@/features/search/CardSearchPanel";
 import type { SearchCardDrag } from "@/features/search/searchCardDrag";
 import { FilterBar, type FilterLabels, type TrayCell } from "@/features/search/FilterBar";
 import { NewFolderCard } from "@/components/NewFolderCard";
@@ -50,6 +49,7 @@ import { LAYER } from "@/lib/layers";
 import { statusLine } from "@/lib/motion";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
+import { useDeskWidth } from "@/lib/useDeskWidth";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useDockHeight } from "@/lib/useDockHeight";
 import { cn } from "@/lib/utils";
@@ -108,10 +108,6 @@ const ROOT_TARGET = 0;
  * a list, and that is a thing a browser answers.
  */
 const LIST_FLOOR = 192;
-
-/** The `gap-4` between the list and the dock, in px — spelled here because the arithmetic below has
- *  to subtract it and Tailwind's number is not readable from JavaScript. */
-const DESK_GAP = 16;
 
 /**
  * The one dismissible layer this page can have open — the union, and never four flags.
@@ -365,34 +361,22 @@ export function WishlistPage() {
    */
   const deskRef = useRef<HTMLDivElement>(null);
   const dockRef = useRef<HTMLDivElement>(null);
-  /** How wide that row is. `0` is *unmeasured* — jsdom, and the first paint before the observer has
-   *  answered — and is read below as "roomy", never as a row of no width. */
-  const [deskWidth, setDeskWidth] = useState(0);
   /**
-   * How wide the window is, for the half-of-it cap on the panel's drag.
+   * What that row can spare for the column: the widest the panel may be drawn or dragged, whether
+   * the list and the column fit **beside each other**, and — when they do not — how wide to draw
+   * the panel **over** the list, which is the door out of the rail rather than a refusal to open.
    *
-   * `document.documentElement.clientWidth` rather than `window.innerWidth`, which is this app's
-   * rule wherever a viewport width is used for anything: `innerWidth` counts the classic vertical
-   * scrollbar and the layout does not — 1280 against 1265, measured on the deck editor — and this
-   * page scrolls inside `AppShell`'s `main`, so there is always one.
+   * `useDeskWidth` carries the whole of it, including the observer, why the viewport is
+   * `documentElement.clientWidth` rather than `window.innerWidth`, and why an unmeasured row reads
+   * as roomy. **It was this file's own block and `CollectionPage`'s at once**, byte for byte,
+   * which is two decisions that happen to agree rather than one.
+   *
+   * **{@link LIST_FLOOR} is handed in rather than assumed by the hook**, because it is a fact about
+   * this page's list and not about docked columns — the two pages agree on 192 today and are free
+   * to stop. What comes back **decides what is drawn and never what is mounted**, which is
+   * `CardSearchPanel`'s own prop doc: a width change must not be able to throw a typed query away.
    */
-  const [viewport, setViewport] = useState(0);
-  // One observer answering both, `DeckEditor`'s arrangement and its reason: this row is `flex-1`
-  // inside the page, so nothing can change the window's width without changing the desk's, and a
-  // second listener would let the two numbers be a frame apart. `entry` is deliberately not read,
-  // so the callback is the same whether the observer or the line below it calls it.
-  useEffect(() => {
-    const el = deskRef.current;
-    if (!el) return;
-    const measure = () => {
-      setViewport(document.documentElement.clientWidth);
-      setDeskWidth(el.clientWidth);
-    };
-    const observer = new ResizeObserver(measure);
-    observer.observe(el);
-    measure();
-    return () => observer.disconnect();
-  }, []);
+  const { maxPanelWidth, roomy, overWidth } = useDeskWidth(deskRef, LIST_FLOOR);
 
   /**
    * The dock's height — **arithmetic rather than a length**, because CSS cannot say "the scroller's
@@ -404,38 +388,6 @@ export function WishlistPage() {
    * which.
    */
   useDockHeight(dockRef, deskRef);
-
-  /**
-   * The widest the docked panel may be drawn or dragged — the smaller of two caps that bind at
-   * different window sizes, and `Infinity` while neither has been measured.
-   *
-   * **Half the window**, because a search column that can take three quarters of the app has
-   * stopped being a column; and **whatever the row can spare over {@link LIST_FLOOR}**, because the
-   * list is what the width is being taken from. Neither is redundant: at 1280 the row is ~1032 less
-   * this page's own gutters, so half the window is the binding cap; at 1920 the floor would allow
-   * far more than half and only the half-window cap holds the column to a column.
-   */
-  const maxPanelWidth = Math.min(
-    viewport > 0 ? Math.floor(viewport / 2) : Number.POSITIVE_INFINITY,
-    deskWidth > 0 ? deskWidth - DESK_GAP - LIST_FLOOR : Number.POSITIVE_INFINITY,
-  );
-  /**
-   * Whether the row can hold the list and this column **beside each other**.
-   *
-   * `deskWidth === 0` reads as roomy, which is what keeps jsdom and the first paint out of the way:
-   * an unmeasured row is not a row of no width, and a panel railed on the first frame would flick
-   * open once the observer answered.
-   *
-   * **This decides what is drawn and never what is mounted** — see `CardSearchPanel`'s own prop
-   * doc. A width change must not be able to throw the reader's typed query away.
-   */
-  const roomForPanel = deskWidth === 0 || maxPanelWidth >= MIN_PANEL_WIDTH_PX;
-  /**
-   * And the door out of the rail: below that width the panel is drawn **over** the list at the
-   * row's full width rather than refusing to open at all. On a phone that is the difference between
-   * a sidebar that exists and one that is only ever a greyed chevron.
-   */
-  const panelOverWidth = deskWidth > 0 && !roomForPanel ? deskWidth : undefined;
 
   /**
    * Rewrite one wish wherever the wishlist is cached.
@@ -1834,7 +1786,7 @@ export function WishlistPage() {
           ref={dockRef}
           className={cn(
             "sticky top-0 flex shrink-0 self-start",
-            panelOverWidth !== undefined && LAYER.popup,
+            overWidth !== undefined && LAYER.popup,
           )}
         >
           <WishlistSearchPanel
@@ -1846,8 +1798,8 @@ export function WishlistPage() {
             folderId={flatten ? null : folderId}
             folderNodes={nodes}
             folderName={folderNameOf}
-            roomy={roomForPanel}
-            overWidth={panelOverWidth}
+            roomy={roomy}
+            overWidth={overWidth}
             maxWidth={maxPanelWidth}
           />
         </div>

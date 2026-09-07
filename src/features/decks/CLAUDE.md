@@ -841,13 +841,25 @@ reader to configure the deck they had just made; it now asks all of them.
     into this fence for free: they are drawn in a box of their own that carries the width, exactly
     as the rail is, so `flowWidth` is absent on both and neither draws a grip. **Their drop target
     is untouched** — a pile whose *place* is fixed is still a pile a card can be dragged into.
-  - **The drop target is a wrapper `<div>` inside the section, not the section**, and that is
-    pdnd's constraint rather than a layout choice: one drop target per element, and the section is
-    already the card one. Because the wrapper is an **ancestor** of the heading and of every card,
-    a card drag hits it, is refused by `canDrop`, and pdnd walks to `element.parentElement` — the
-    section — exactly as before; a category drag is accepted anywhere in the pile. So the whole
-    column is the target with no monitor, no overlay and no z-index. The section's own 6px rim is
-    outside it and is the one dead spot.
+  - **The drop target is a wrapper `<div>` inside the section, not the section**, and that
+    **was** pdnd's constraint rather than a layout choice. ⚠️ **The constraint is gone and the
+    arrangement stayed — corrected 2026-09-07, and this page was the last place in the repo still
+    asserting the old rule.** `@atlaskit/pragmatic-drag-and-drop` kept one drop target per element:
+    `makeDropTarget`'s registry is a `WeakMap` keyed by the node, so a second
+    `dropTargetForElements` silently *replaced* the first. **`@dnd-kit/dom` keys its registry by
+    entity id**, so two `Droppable`s on one element both register and both compete, and what
+    separates them is `accepts()` — `computeCollisions` asks it before it measures anything. Two
+    boxes here would now be legal, and so would one. Do not "fix" this by merging them: what the
+    two boxes buy is unchanged by the migration — the wrapper is an **ancestor** of the heading and
+    of every card, so a card drag hits it, is refused by `canDrop`, and the library walks to
+    `element.parentElement` — the section — exactly as before; a category drag is accepted anywhere
+    in the pile. So the whole column is the target with no monitor, no overlay and no z-index. The
+    section's own 6px rim is outside it and is the one dead spot. Where two *accepting* targets
+    overlap, `collisionPriority` decides them, and without one they are separated by distance —
+    which is why an element with no measured rectangle in jsdom can win a drop the pointer never
+    went near. `frontend-design.md`'s dnd-kit section is the measured version, and
+    `CollectionFolderCard.tsx`, `ParentFolderCard.tsx`, `dnd.ts` and `StackView.tsx` each carry it
+    at their own site.
   - **The heading is the draggable and the grip only says where the press may start** — the
     dialog's `mousedown`-in-capture plus `canDrag` arrangement, kept verbatim. **It is a choice
     about the drag preview, not a constraint**: a pdnd `draggable` on the grip `<button>` starts a
@@ -1872,6 +1884,18 @@ price | type`). An **inactive category stays its own group in all three grouping
   `sticky bottom-0` for the length of a drag, so the remove tray drawn on it stays at the foot of
   the window instead of at the foot of a 7 000px deck. Every figure, at 1280×800 and 1024×600:
   [frontend-design.md](../../../docs/reference/frontend-design.md).
+  **That measured height is `src/lib/useDockHeight.ts` since 2026-09-07 and the editor is one of
+  three callers.** The `useLayoutEffect` here was written against the editor's *own* page section,
+  which is `overflow-y-auto`; the collection and the wishlist scroll in `AppShell`'s `main`
+  instead, so the hook finds the **nearest scrolling ancestor** rather than assuming one —
+  `CardGrid`'s `nearestScroller` already answered that question. Nothing about the arithmetic
+  moved; it is the same `scroller.clientHeight − (anchor.top − scroller.top)`, floored at 0,
+  `requestAnimationFrame`-coalesced, with a passive listener and a `ResizeObserver` on both boxes.
+  **`useDeskWidth` is the sibling extraction and `DeckEditor` deliberately does not call it** — its
+  `panelOverWidth` carries an extra `selectedCardId === null` clause, its desk mounts only once
+  `deck_get` has answered (so its effect names `[hasRow]` where the hook's can name nothing), and
+  it measures a desk holding a deck rather than a list. Three differences, none cosmetic; do not
+  fold it in.
 - **`Stacks` and `Text` wrap downward — neither view grows sideways any more**
   (changed 2026-08-14). Both lay a deck out in fixed-width boxes —
   `stackColumnWidth(zoom)`, 224px at 1×, and the text view's 300px — and both used to open the
@@ -2617,9 +2641,23 @@ price | type`). An **inactive category stays its own group in all three grouping
   the deck 202px. That row is gone: the card pane is an overlay over one of these two columns now
   and takes no width from either, so the desk the panel is measured against is the full one and
   `roomy` is the only thing that still rails it. The memory is the other half and the two ship
-  together — `app_meta.deck_search_open` behind `useDeckSearchOpen`, written on the **press** and
+  together — written on the **press** and
   never on the drawn state, because a railing is a measurement about a narrow window and not
-  something the reader asked for. **Its body is mounted on the reader's press and merely _hidden_ when the
+  something the reader asked for. **Since 2026-09-07 that memory is `app_meta.search_open` behind
+  `useSearchOpen("deck")`**, one JSON map of section → bool that the deck editor now shares with
+  the collection's and the wishlist's own docked columns; it was `deck_search_open` behind
+  `useDeckSearchOpen` while this panel was the only one. Nothing about the *rule* moved — three
+  columns asking the same question a row each would have been three rows, six commands, three query
+  keys and three prefetches for one fact. **No schema rung was spent on the change**: `app_meta` is
+  schema v6's key/value table, and `searchopen::stored` reads the old `deck_search_open` row when
+  the map has no `deck` entry — a bridge that decays, because nothing writes the legacy row again
+  and the first press stores the map. **`usePrefetchSearchOpen` is still mounted in `AppShell` and
+  nowhere else, and that is a measurement rather than tidiness**: asked by the panel instead, the
+  read queues behind the page's own query and lands ~700ms after the column has been drawn the
+  other way round, which is how a reader who had shut it watched it thrown open and yanked closed
+  on every deck they opened. The write is optimistic and deliberately **not** rolled back — a
+  refused write costs the memory, not the column snapping shut under the reader's hand.
+  **Its body is mounted on the reader's press and merely _hidden_ when the
   editor rails it for want of width**, and those two must not be folded into one gate: `open` is a
   choice and `roomy` is a measurement, so mounting on both threw the reader's typed query,
   filters and format away on a _resize_ — opening the card pane at 1024 was enough. Never opened
@@ -2704,6 +2742,29 @@ price | type`). An **inactive category stays its own group in all three grouping
   for each. **The picker holds a draft and Done is the write**: `input[type=color]` fires all the
   way down a drag through the OS dialog, so a row writing on every change would be a
   `deck_label_update` per pixel of travel.
+- ⚠️ **The panel's chrome is not this folder's any more, and every rule below is now
+  `features/search/CardSearchPanel.tsx`'s** (2026-09-07,
+  [issue #356](https://github.com/Msgaihede/mtg-grimoire/issues/356)). The collection and the
+  wishlist each grew a docked card search of their own, so the two thirds of `DeckSearchPanel` that
+  were never about a deck were **extracted**: `CardSearchPanel.tsx` is the shell (the three-state
+  `<section>` and its rail, the disclosure and its `NO_ROOM` tooltip, the title row and the
+  vertical rail heading, `ResizeHandle`, the width `useState` and the clamp split, the
+  `open`/`shown`/`over`/`overlaid` derivations, the caret hand-back) and `CardSearchBody.tsx` is
+  the wall and its furniture. `MIN_PANEL_WIDTH_PX` and `SEARCH_OVER_ATTR` are re-exported from
+  `DeckSearchPanel.tsx`, so nothing that imported them from here had to change.
+  **What stays deck-shaped stays here** and is what the rest of this section is about: the tab
+  strip, `CollectionSearchTab`, `categories`/`targetCategoryId`/`AUTO_CATEGORY`/`autoCategoryFor`,
+  `deck_add_card`, the landed glow, `availableForDeck` and the format seed. **The proof the
+  extraction was faithful is that this panel's whole test file and whole story file stayed green
+  with no edit to either** — an edit one of them seemed to need was defined as the signal that
+  behaviour had moved, and none was needed.
+  **Reading this section, read every rule below as a rule about the shared shell**, and change one
+  of them in `features/search/` rather than here — a fix applied to the deck's copy alone is now a
+  fix two other pages do not get. Where the two new surfaces *differ* is written up in
+  [`src/CLAUDE.md`](../../CLAUDE.md) and
+  [frontend-design.md](../../../docs/reference/frontend-design.md); the short version is that they
+  draw no tab strip, lock the add's destination list, and pass their own `ZoomSection`,
+  `selectionScope`, `FilterLabels.idStem` and `data-search-over` value.
 - **The docked panel's width is the reader's, dragged from its left edge** (2026-08-14).
   `ResizeHandle` is an ARIA window splitter — `role="separator"`, `aria-orientation="vertical"`, a
   `tabIndex`, `aria-valuenow`/`min`/`max` in **px**, arrows and Home/End for the keyboard — bounded

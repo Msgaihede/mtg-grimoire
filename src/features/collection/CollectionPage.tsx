@@ -24,7 +24,6 @@ import { dragData } from "@/features/decks/dnd";
 import { CONFIRM_CANCEL, CONFIRM_DESTRUCTIVE, useConfirmFocus } from "@/features/decks/metaRows";
 import { MoveToFolder } from "@/features/decks/MoveToFolder";
 import { CardGrid, PHONE_TILE_WIDTH, type GridCard } from "@/features/search/CardGrid";
-import { MIN_PANEL_WIDTH_PX } from "@/features/search/CardSearchPanel";
 import { FilterBar, type FilterLabels, type TrayCell } from "@/features/search/FilterBar";
 import { ExportDialog } from "@/features/transfer/export/ExportDialog";
 import { everythingLabel, scopeLabel, useExportScope } from "@/features/transfer/export/scope";
@@ -57,6 +56,7 @@ import { statusLine } from "@/lib/motion";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { tileKeyOf } from "@/lib/tileKey";
+import { useDeskWidth } from "@/lib/useDeskWidth";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useDockHeight } from "@/lib/useDockHeight";
 import { useNarrowWindow } from "@/lib/useNarrowWindow";
@@ -590,10 +590,6 @@ const COLLECTION_LABELS: FilterLabels = {
  */
 const LIST_FLOOR = 192;
 
-/** The `gap-4` between the list and the dock, in px — spelled here because the arithmetic below
- *  has to subtract it and Tailwind's number is not readable from JavaScript. */
-const DESK_GAP = 16;
-
 /**
  * Which of `FilterBar`'s tray cells this page offers, in the order it draws them.
  *
@@ -661,34 +657,22 @@ export function CollectionPage() {
    */
   const deskRef = useRef<HTMLDivElement>(null);
   const dockRef = useRef<HTMLDivElement>(null);
-  /** How wide that row is. `0` is *unmeasured* — jsdom, and the first paint before the observer
-   *  has answered — and is read below as "roomy", never as a row of no width. */
-  const [deskWidth, setDeskWidth] = useState(0);
   /**
-   * How wide the window is, for the half-of-it cap on the panel's drag.
+   * What that row can spare for the column: the widest the panel may be drawn or dragged, whether
+   * the list and the column fit **beside** each other, and — when they do not — how wide to draw
+   * the panel **over** the list.
    *
-   * `document.documentElement.clientWidth` rather than `window.innerWidth`, which is this app's
-   * rule wherever a viewport width is used for anything: `innerWidth` counts the classic vertical
-   * scrollbar and the layout does not — 1280 against 1265, measured on the deck editor — and this
-   * page scrolls inside `AppShell`'s `main`, so there is always one.
+   * `useDeskWidth` carries the whole of it, including the observer, why the viewport is
+   * `documentElement.clientWidth` rather than `window.innerWidth`, and why an unmeasured row reads
+   * as roomy. **It was this file's own block until it was the wishlist's too**, byte for byte,
+   * which is N decisions that happen to agree rather than one.
+   *
+   * **{@link LIST_FLOOR} is handed in rather than assumed by the hook**, because it is a fact
+   * about this page's list and not about docked columns. What comes back carries no "unless a card
+   * is open" term either, unlike the deck editor's: the card surface is a centred modal on every
+   * page since 2026-09-03 and takes width from nothing.
    */
-  const [viewport, setViewport] = useState(0);
-  // One observer answering both, `DeckEditor`'s arrangement and its reason: this row is `flex-1`
-  // inside the page, so nothing can change the window's width without changing the desk's, and a
-  // second listener would let the two numbers be a frame apart. `entry` is deliberately not read,
-  // so the callback is the same whether the observer or the line below it calls it.
-  useEffect(() => {
-    const el = deskRef.current;
-    if (!el) return;
-    const measure = () => {
-      setViewport(document.documentElement.clientWidth);
-      setDeskWidth(el.clientWidth);
-    };
-    const observer = new ResizeObserver(measure);
-    observer.observe(el);
-    measure();
-    return () => observer.disconnect();
-  }, []);
+  const { maxPanelWidth, roomy, overWidth } = useDeskWidth(deskRef, LIST_FLOOR);
 
   /**
    * The dock's height — **arithmetic rather than a length**, because CSS cannot say "the
@@ -701,42 +685,6 @@ export function CollectionPage() {
    * after every commit.
    */
   useDockHeight(dockRef, deskRef);
-
-  /**
-   * The widest the docked panel may be drawn or dragged — the smaller of two caps that bind at
-   * different window sizes, and `Infinity` while neither has been measured.
-   *
-   * **Half the window**, because a search column that can take three quarters of the app has
-   * stopped being a column; and **whatever the row can spare over {@link LIST_FLOOR}**, because
-   * the list is what the width is being taken from. Neither is redundant: at 1032 — the app's own
-   * narrow rung — the floor allows 824 where half the window is 640, and at 1920 the floor would
-   * allow ~1700 and only the half-window cap holds the column to a column.
-   */
-  const maxPanelWidth = Math.min(
-    viewport > 0 ? Math.floor(viewport / 2) : Number.POSITIVE_INFINITY,
-    deskWidth > 0 ? deskWidth - DESK_GAP - LIST_FLOOR : Number.POSITIVE_INFINITY,
-  );
-  /**
-   * Whether this row can hold the list and the column side by side.
-   *
-   * **`deskWidth === 0` reads as roomy**, which is what keeps jsdom and the first paint out of the
-   * way: an unmeasured row is not a narrow one, and railing on the first frame would draw the
-   * panel shut for one commit on every load.
-   *
-   * **The press is what is stored, never this.** A railing is a measurement about a narrow window
-   * and not a thing the reader asked for, so it decides what is *drawn* and `useSearchOpen` goes
-   * on holding what they chose.
-   */
-  const roomForPanel = deskWidth === 0 || maxPanelWidth >= MIN_PANEL_WIDTH_PX;
-  /**
-   * How wide to draw the panel **over** the list, for a row that cannot hold both — the door out
-   * of the rail, and the whole row's width because that is what the panel gets when it takes it.
-   *
-   * `undefined` is a row that can. Unlike the deck editor's, this carries no "unless a card is
-   * open" term: the card surface is a centred modal on every page since 2026-09-03 and takes width
-   * from nothing.
-   */
-  const panelOverWidth = deskWidth > 0 && !roomForPanel ? deskWidth : undefined;
 
   /**
    * The export dialog, and the sweep that fills it — see `scope.ts`'s doc for why the sweep
@@ -3275,7 +3223,7 @@ export function CollectionPage() {
           ref={dockRef}
           className={cn(
             "sticky top-0 flex shrink-0 self-start",
-            panelOverWidth !== undefined && LAYER.popup,
+            overWidth !== undefined && LAYER.popup,
           )}
         >
           <CollectionSearchPanel
@@ -3295,8 +3243,8 @@ export function CollectionPage() {
             // holds a copy no `deck_cards` row knows about is the thing both fences prevent.
             folderNodes={nodes}
             folderName={folderNameOf}
-            roomy={roomForPanel}
-            overWidth={panelOverWidth}
+            roomy={roomy}
+            overWidth={overWidth}
             maxWidth={maxPanelWidth}
           />
         </div>

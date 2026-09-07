@@ -32,10 +32,13 @@ export type SearchSurface = "deck" | "collection" | "wishlist";
  * Stamped on this panel while it is drawn **over** the list rather than docked beside it — the
  * phone case, where the desk cannot hold {@link MIN_PANEL_WIDTH_PX} and the list's floor at once.
  *
- * **A sibling of `DeckEditor`'s `PANE_OVER_ATTR` and deliberately not that attribute.** That one
- * says which of the desk's two columns the *card pane* covers, and a second element answering
- * `[data-pane-over]` would make the editor's own probes ambiguous. What is reused is the
- * argument, word for word: the difference between the two placements is a `position` and a
+ * **It was a sibling of `DeckEditor`'s `PANE_OVER_ATTR`, and that attribute is gone** — deleted
+ * with the docked card pane on 2026-09-03, when the card became a centred modal that covers no
+ * column. While both existed the rule was that a second element answering `[data-pane-over]`
+ * would make the editor's own probes ambiguous, and that is still why this attribute is not
+ * tripled per surface: one name, three values, because the three panels live on three routes and
+ * can never be on screen together. What is reused is the argument, word for word: the difference
+ * between the two placements is a `position` and a
  * width, both of which jsdom reads as nothing, so the *choice* is stamped where a suite and a
  * CDP pass can both ask about it and the geometry stays a live-window question.
  *

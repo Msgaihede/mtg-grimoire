@@ -333,11 +333,20 @@ impl Updater {
 
 /// **The store itself lives in [`crate::app_meta`], which compiles for every target.**
 ///
-/// It was moved there on 2026-08-29 because eleven modules read and write `app_meta` and
-/// only this one updates the app: `deck` keeps the search column's state in it, `zoom`,
-/// `nav`, `listview` and `flatten` keep their view state, and all of them are wanted on the
-/// web target where an `.exe` swap is meaningless. Re-exported rather than renamed so the
-/// sixty existing `crate::app_meta::get_app_meta` call sites keep reading the way they read.
+/// It was moved there on 2026-08-29 because a long list of modules read and write `app_meta`
+/// and only this one updates the app: the five view-state modules — `searchopen`, `zoom`,
+/// `nav`, `listview` and `flatten` — plus `deck` (`last_deck_format`), `marketplace`, `card`,
+/// `decksort`, `sync`, `mirror` and `desktop`, and all of them are wanted on the web target
+/// where an `.exe` swap is meaningless. Re-exported rather than renamed so every existing
+/// `crate::app_meta::get_app_meta` call site keeps reading the way it reads.
+///
+/// **The census is `grep -rn 'get_app_meta\|set_app_meta' src-tauri/src`, not the list above**
+/// — `data-and-sync.md`'s rule, and this doc has already been wrong once by carrying a count.
+/// It said *eleven modules* and *`deck` keeps the search column's state in it* until
+/// **2026-09-07**, when [`crate::searchopen`] took the search column's row: `deck_search_open`
+/// became one `search_open` map three docked columns share, and `deck.rs` stopped being an
+/// answer to "who keeps the search column's state in `app_meta`" without stopping being a
+/// caller of this store.
 pub use crate::app_meta::{get_app_meta, set_app_meta};
 
 /// The one delete this module makes. Not in [`crate::app_meta`] because nothing else in the

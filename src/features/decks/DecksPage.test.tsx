@@ -2132,10 +2132,16 @@ async function hold(source: HTMLElement) {
 /**
  * A folder's row in the sidebar, as **the folder gesture** sees it.
  *
- * Both surfaces draw two nested boxes, because the drag library keeps one drop target per element
- * — the outer one is the deck's and the inner one is the folder's, and the inner one is also where
- * the folder is picked up. So this is the row's button's own parent, and it is the single element
- * every case below both starts a drag from and drops onto.
+ * Both surfaces draw two nested boxes — the outer one is the deck's and the inner one is the
+ * folder's, and the inner one is also where the folder is picked up. So this is the row's button's
+ * own parent, and it is the single element every case below both starts a drag from and drops onto.
+ *
+ * **The nesting was pragmatic-dnd's rule and is now only geometry.** That library kept one
+ * `draggable()`/drop target per element in a `WeakMap`, so a second registration silently replaced
+ * the first and two payloads on one row needed two boxes. `@dnd-kit/dom` keys its registry by
+ * entity id, so two `Droppable`s on one element both register and `accepts()` separates them —
+ * one box would work today. The two survive because the boxes are genuinely different shapes, not
+ * because the library still demands it. `CollectionFolderCard.tsx` carries the full reading.
  */
 async function folderRow(name: string): Promise<HTMLElement> {
   const button = await screen.findByRole("button", { name: new RegExp(`^${name}, `) });

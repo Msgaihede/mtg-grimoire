@@ -51,7 +51,7 @@
  * landings and the geometry has to be exactly the card's. This tile has **one** landing —
  * everything on it means "up there" — so there is no geometry to keep and no second box to keep
  * it on. `@dnd-kit/dom` keys its droppable registry by entity id rather than by element, so two
- * droppables on one `<li>` both register, and `accepts()` keeps them apart: `readWishDrag` and
+ * droppables on one `<li>` both register, and `accepts()` keeps them apart: `readWishDrop` and
  * `readFolderDrag` are disjoint by construction, and only one thing is ever in the air.
  *
  * **Presentational, and deliberately so.** The three walls that draw it — the wishlist's, the

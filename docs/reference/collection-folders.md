@@ -231,6 +231,53 @@ never interpolated into any of them — a probe compares a list of expressions o
 that many **bound values**, which is a different statement — so widening the constant cannot widen
 the probes, and nothing in either half goes red when they drift.
 
+### The add path has a folder default now, and the eleventh term is what makes that safe
+
+**Since 2026-09-07 the `+` on a card can file into the folder the reader is standing in**, and it
+is the grain above that turns that from a risk into an ordinary add. `EntryInput.folderId` has been
+on the wire since v24 and `useCardMenuDeps` has always passed it; `AddToCollectionButton` never did,
+which is why every `+` in the app filed at the root. It now takes optional `folderId`,
+`folderNodes`, `folderName` and `lockMode`, and the collection page's docked search column passes
+all four — so a reader filing a binder adds from the sidebar without leaving the folder, where
+before they left the page, filed at the root, came back and moved what they had just filed.
+
+**Read the eleventh term as the licence for this rather than as a constraint on it.** A default
+destination is only sane where a second destination is a second row: with `coalesce(folder_id, 0)`
+in the grain, adding a printing the reader already owns *elsewhere* writes a new row in the folder
+on screen and touches the old one not at all. Without the term the same press would land on the
+existing row and raise its quantity, so the copies filed last week would silently **move** into
+whatever folder happened to be open — a default that quietly undoes filing decisions, which is
+exactly the failure v24 was built to make impossible. The grain came first and the folder default
+is what it was for.
+
+**Three fences around it, each of which could have been the other way:**
+
+- **A flattened page defaults to the root.** Flatten means *show me everything*; the breadcrumb
+  reads `Collection · all folders`, there is no folder on screen to be standing in, and the page
+  passes `folderId: null` rather than whatever `useCollection` still holds underneath. The
+  collection ships flattened, so out of the box the sidebar behaves exactly as the `+` always has,
+  and the default starts working the moment a reader opens a folder.
+- **Absent and `null` are different on the wire**, and the page sends `null` explicitly. Absent
+  sends no `folderId` field at all — which is what `SearchPage` and the Tags page still do, and why
+  they were untouched by this — where `null` sends `folderId: null` and *names* the root as the
+  destination.
+- **Only `user` folders are offered.** The override picker is handed the page's own
+  `buildFolderTree(userFolders, [])`, the filtered tree that already existed: deck groups and
+  `Recently removed` are kinds the cabinet draws and nothing may be filed into by hand, and
+  `collection::add_entry` refuses a `deck` folder outright in any case.
+
+**A tile dropped on a folder card takes the same path**, and it answers `useSidebarDrops.ts`'s
+standing objection rather than dodging it. That file refuses to make the sidebar's Collection entry
+a drop target because *"`collection_add` carries a finish, a condition and a language that a drop
+cannot answer, and a drop that invented 'NM nonfoil' would write facts the reader never said"* —
+sound, and already answered elsewhere: the card menu's own add writes `MENU_CONDITION`, which is
+`CONDITION_NOT_SET`. **An add that names no grade records that nobody named one, which is a fact,
+where `NM` would be a guess dressed as one** — and since schema v35 `NONE` is the column's own
+default, so the drop is writing what the database would have written anyway. A drop here writes
+`MENU_CONDITION`, `quantity: 1` and the finish the printing actually exists in, onto a **named
+folder the reader pointed at**; the sidebar entry stays as it is, because that one would have to
+guess a destination as well as a grade.
+
 ## The merge rule: a write that lands on a taken grain merges
 
 `collection_set_folder` moves one row onto a grain another row may already hold — it changes the
@@ -1804,6 +1851,18 @@ would make every target, every test and every `canDrop` reason about a list to s
 single row. `readCollectionDrop` is what a target that takes either asks, and `CollectionDrop` is
 its discriminated answer — the union rather than the tile alone, because a folder's answer about
 one row is a different sentence from its answer about nine copies filed in five places.
+
+**That union is what made the search sidebar's drop nearly free on 2026-09-07.** A third arm —
+`{ kind: "new"; card: SearchCardDrag }`, for a printing nobody owns yet, carrying
+`searchCardSource` — is one line on the type and one branch in `readCollectionDrop`, and it
+reached `useCollectionDropTarget`, `CollectionFolderCard`, `CollectionParentFolderCard` and
+`CollectionBreadcrumb`'s `Segment` with **no component edits at all**. The wishlist had no
+discriminator and had to grow one; the cost of that comparison is written up in
+[wishlist-folders.md](wishlist-folders.md). The precedence is stated rather than left to the marks:
+a record carrying both an entry mark and a search mark reads as **the entry**, because an existing
+copy being moved outranks a new one being added — only one of them can be true of a real drag, and
+the narrower fact is the one to act on. The three marks are disjoint by construction, so that order
+is a convention that no live drag can exercise.
 
 **A folder takes a tile when _any_ copy behind it could move, never only when all of them could.**
 A printing filed in two drawers with one of them this one is the ordinary case, and a folder that

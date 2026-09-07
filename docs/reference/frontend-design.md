@@ -478,12 +478,17 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   the card pane never move. What changed is what those listeners write. `useAppStore`'s `cardZoom`
   is a `Record<ZoomSection, number>` keyed by `ZOOM_SECTIONS` (`src/lib/cardZoom.ts`, which is the
   list — no count is written here, because a count is a fact about a tree and the constant already
-  answers it): `search`, `collection` and `wishlist`, the three list walls; `deckSearch`, the deck
-  editor's docked search column, which is a fourth `CardGrid`; `deck`, the editor's desk — **one key
-  for both deck views**, because Stacks and Grid are two drawings of the same pile and switching
-  between them must not resize the cards the reader just settled on; `deckGallery`, the decks page's
-  wall of deck tiles and folder cards; and `printings`, the modal's wall, which opens *over* a wall
-  the reader has already sized. `useCardZoomGesture(ref, section)` names the section it is stepping.
+  answers it): `search`, `tags`, `collection` and `wishlist`, the page-sized list walls;
+  `deckSearch`, `collectionSearch` and `wishlistSearch`, the three **docked search columns**, each
+  of which is a second `CardGrid` on a page that already has one; `deck`, the editor's desk — **one
+  key for both deck views**, because Stacks and Grid are two drawings of the same pile and
+  switching between them must not resize the cards the reader just settled on; `deckGallery`, the
+  decks page's wall of deck tiles and folder cards; and `printings`, the modal's wall, which opens
+  *over* a wall the reader has already sized. `useCardZoomGesture(ref, section)` names the section
+  it is stepping. **`collectionSearch` and `wishlistSearch` are 2026-09-07's**, and they are their
+  own keys for `deckSearch`'s reason exactly: a sidebar's tiles and the page wall's tiles are on
+  screen at once and are two different questions — *how big are the cards I am shopping through*
+  against *how big is the binder I am filing*.
   **The wishlist joined the list on 2026-08-20**, when it gained a card view of its own; until then
   it was `VirtualTable` only and had no card section to zoom.
 - **The decks gallery joined on 2026-08-26, and it is the one section whose tiles are not cards.**
@@ -767,6 +772,103 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
     against **`none`** under `prefers-reduced-motion: reduce` (with `transition-duration` still
     reading `0.15s`, which is the false failure this file's harness rule warns about, reproduced
     again).
+- **That column is three columns since 2026-09-07, and every number above is now
+  `features/search/CardSearchPanel.tsx`'s rather than the deck editor's.** The collection page and
+  the wishlist page each grew a docked, collapsible card search of their own
+  ([issue #356](https://github.com/Msgaihede/mtg-grimoire/issues/356)), because both pages' empty
+  states said in as many words that the way to add a card was to leave the page. The chrome is
+  **extracted, not copied**: `CardSearchPanel.tsx` is the shell — the three-state `<section>`, the
+  36px rail, the disclosure and its `NO_ROOM` tooltip, the vertical rail heading, `ResizeHandle`,
+  the width `useState` and the clamp split, the `open`/`shown`/`over`/`overlaid` derivations and
+  the caret hand-back — and `CardSearchBody.tsx` is the wall and its furniture in the order the
+  deck panel always drew them. Copying it twice would have been the mistake this repo has made and
+  undone twice already (`CollectionSearchTab`'s own filter row, the deck Grid view's inline card
+  frame): **a resemblance is N independent decisions that happen to agree today.**
+  `DeckSearchPanel` went **1595 → 778 lines on the day** and kept every deck-shaped thing — the tab
+  strip, `CollectionSearchTab`, `categories`/`targetCategoryId`/`AUTO_CATEGORY`, the landed glow,
+  `availableForDeck`, the format seed. **The proof of a faithful extraction is that nothing
+  changed**: its whole test file and its whole story file stayed green with **no edit to either**,
+  which is why they were the acceptance criterion rather than a new suite — and an edit either of
+  them seemed to need was the signal that behaviour had moved. (No count of them is written here on
+  purpose. A test total is a fact about a *tree*, every open branch has a different one, and this
+  repo deleted its Storybook totals after they conflicted on five consecutive merges of `main`.)
+  - **Three gates, not two, and they must stay three.** `open` *mounts* the body, so a page nobody
+    searched from issues no `search_cards`; `shown` merely *hides* it, so a window narrowing keeps
+    the reader's typed query, filters and fetched pages; `overlaid` decides position and width
+    source. Folding `open` and `roomy` into one gate throws a reader's search away on a **resize**,
+    and that is the single most load-bearing assertion in `DeckSearchPanel.test.tsx`. The `hidden`
+    **attribute** rides beside the `hidden` class, because jsdom loads no stylesheet.
+  - **`data-search-over` is reused rather than tripled.** Its own doc warns that a second element
+    answering `[data-search-over]` would make the deck's probes ambiguous — but the three panels
+    live on three routes and can never be on screen together, and the attribute's *value*
+    (`"deck"` | `"collection"` | `"wishlist"`) already discriminates. `"deck"` keeps every meaning
+    it had. The *argument* is reused word for word from `DeckEditor`'s old `PANE_OVER_ATTR`: the
+    difference between the two placements is a `position` and a width, both of which jsdom reads as
+    nothing, so the **choice** is stamped where a suite and a CDP pass can both ask about it and
+    the geometry stays a live-window question. ⚠️ **`PANE_OVER_ATTR` itself no longer exists** — it
+    went with the docked card pane on 2026-09-03, when the pane became `CardDetailModal` — so it is
+    a precedent to reason from and not an attribute to grep for. `CardSearchPanel.tsx`'s own doc
+    comment still describes it in the present tense.
+  - **No tab strip on the two new panels.** The deck's `Collection` / `All cards` pair exists
+    because a deck is built out of cards you already have; on the collection page the first tab
+    would search the very list on screen, and on the wishlist it would search a list the reader is
+    not filling. These panels **are** the `All cards` tab, which also gives back the **141px** the
+    strip costs at the panel's 206px floor.
+  - **The destination is locked and the switch is not drawn.** `AddToCollectionButton`'s
+    `Collection` / `Wishlist` chip pair is right on the search page, where a reader genuinely is
+    choosing; here the page has already answered. `lockMode` pins it, and that is what keeps the
+    folder default unambiguous — the two folder trees are different tables, so a popup that could
+    flip lists mid-form would need two defaults and a picker that swapped trees under the reader's
+    hand. The override is a `Folder` row in the popup that swaps the panel body **in place** for
+    `MoveToFolder` in its `inline` mode — the shape `EditWish`'s folder row and `PickCopies`
+    already use, and deliberately not a nested popup, so there is **one Escape rung** rather than
+    two.
+  - ⚠️ **The `+`'s accessible name changed on every card surface in the app, not just here.** It
+    is `Add {name} ({SET} {num}) to {destination}` — the deck panel's own rule
+    (`Add Ancient Tomb to Land`) applied — where the destination is the folder's name when there is
+    one and **`Collection` / `Wishlist` at the root**. That last word was lowercase (`to
+    collection`) until 2026-09-07, and because the new props are all optional the *name* change
+    still reaches the Search page, the Tags page and the printings modal, which pass none of them
+    and go on filing at the root. **A probe matching the old lowercase form finds nothing**, which
+    is the kind of break a prose-only doc cannot go red for — it is written here so a stale
+    `getByRole("button", { name: /to collection/ })` has somewhere to be looked up.
+  - **Each surface invents its own bookkeeping and none of it is shared.** `ZoomSection`
+    (`collectionSearch` / `wishlistSearch`, added to the `DEFAULT_SECTION_ZOOMS` literal so a new
+    section is a compile error until somebody says what it starts at), `selectionScope`
+    (`collection-panel` / `wishlist-panel` — two walls on one screen must pass different scopes or
+    picking in the sidebar puts the binder's selection down), `FilterLabels.idStem`
+    (`collection-add` / `wishlist-add`, because two mounted filter rows would otherwise share
+    `id`s) and the section `aria-label` (`Add cards to your collection` / `…your wishlist`, so two
+    panels' probes do not answer to one name). The filter box keeps the app-wide name
+    `Search cards`, which is unique on each page because the page's own box is
+    `Search your collection` / `Search your wishlist`.
+  - **The dock's height is imperative and now shared.** CSS cannot say *"the scroller's visible
+    height, less however much of the page sits above this row"*, so `DeckEditor` had sized its dock
+    in a `useLayoutEffect`. That is `src/lib/useDockHeight.ts` now, and it finds the *nearest
+    scrolling ancestor* rather than assuming one — the deck editor's own page section is
+    `overflow-y-auto` while these two pages scroll in `AppShell`'s `main`. All three sites call it.
+  - **The row's arithmetic is `src/lib/useDeskWidth.ts`**, and it was two byte-identical copies for
+    about a day before it was one. `maxPanelWidth = min(⌊viewport / 2⌋, deskWidth − DESK_GAP −
+    floor)`, `roomy = deskWidth === 0 || maxPanelWidth >= MIN_PANEL_WIDTH_PX`, and an `overWidth`
+    of the whole row for a desk that cannot hold both. `viewport` is
+    `document.documentElement.clientWidth` and **never `innerWidth`**, which counts the page
+    scrollbar and caps the panel 8px too wide (632 against 640, measured on the deck editor);
+    `deskWidth === 0` reads as **roomy**, which is what keeps jsdom and the first paint out of the
+    way. **`DeckEditor` is deliberately not a caller**: its `panelOverWidth` carries an extra
+    `selectedCardId === null` clause, its desk mounts only once `deck_get` has answered, and it
+    measures a desk holding a deck rather than a list — three differences, none cosmetic.
+  - ⚠️ **`LIST_FLOOR` is 192 and is still provisional.** It is the deck's `DECK_FLOOR` borrowed as
+    an opening figure — one card column plus the folder wall's `minmax(180px,1fr)` cell — and it
+    has **not** been driven in the shipped window yet. What is already known is that 192 describes
+    the **grid** and not the whole page: `CollectionTable`'s min-content is near **520px**, so a
+    reader in table view at a narrow window has a floor the panel's cap knows nothing about. Do not
+    quote 192 as measured, and do not fold the two pages' floors into the hook — `useDeskWidth`
+    takes `floor` as a parameter precisely so one page can answer differently from the other once
+    somebody measures it.
+  - **The overlay ships too**, and it is the half a phone needs. Below the floor the shell already
+    knows how to draw itself *over* the list at the full row width, so the plumbing is one more
+    number from the page. Without it a narrow window would offer a sidebar that is only ever a
+    greyed chevron.
 - **A scaled budget floors rather than scales only while the chrome inside it is unscaled — and
   since 2026-08-17 almost none of it is.** The rule was `max(base, scaled(base, zoom))` and three
   surfaces landed on it independently: `CardGrid`'s 28px caption was set by the 24px quick-add
@@ -1642,12 +1744,17 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
   a second line inside the panel and is unchanged in the two full-width filter bars, where it
   already fitted. After it, `scrollWidth === clientWidth` at both widths and the document had no
   sideways scroller at all. **The general rule this is an instance of**: a row of fixed-width
-  controls is sized by the _narrowest_ surface that draws it, and in this app that is the 384px
-  docked panel — never the filter bar it was designed in. Nothing goes red when a tenth chip is
+  controls is sized by the _narrowest_ surface that draws it, and in this app that is a **docked
+  search panel** — never the filter bar it was designed in. That surface is a *range* rather than
+  384: the panel is draggable from its left edge and its floor is `MIN_PANEL_WIDTH_PX`, **206**, so
+  the narrowest content box a filter control has to survive is ~193 rather than ~371. **And since
+  2026-09-07 there are three of them** — the deck editor's, the collection's and the wishlist's,
+  all one `CardSearchPanel` — so a control that overflows now overflows on three pages rather than
+  one. Nothing goes red when a tenth chip is
   added, so `FilterChips.test.tsx` now holds the arithmetic beside the wrap.
 - **The search filter row lays out by its own width and not the window's, in four bands — and
   the mechanism is `@container`, not a media query.** The same component is the search page's bar
-  across a maximised window and the deck editor's docked panel, which is draggable from 206px, so
+  across a maximised window and a docked search panel, which is draggable from 206px, so
   a viewport query would be answering a question about the wrong box. The container is named
   (`@container/fb`) rather than anonymous, because container variants bind to the nearest
   ancestor container and an unnamed one here would be claimed by any future `@container` inside a
@@ -4513,8 +4620,9 @@ The shape `src/CLAUDE.md` describes is the shape the tree is in.
 **One correction worth recording before it is repeated: `touch-action` is not absent from this
 tree.** Two sites carry it — `src/index.css:434`, inside the block mirroring the rules
 `@dnd-kit/dom` injects at runtime, applying `touch-action: none` to whatever is mid-drag; and
-`features/decks/DeckSearchPanel.tsx:1072`, where the panel's resize strip carries Tailwind's
-`touch-none` with a comment saying why. Neither is a designed touch affordance and neither
+`features/search/CardSearchPanel.tsx:747`, where the panel's resize strip carries Tailwind's
+`touch-none` with a comment saying why. (That was `features/decks/DeckSearchPanel.tsx:1072` until
+2026-09-07, when the shell was extracted and three panels started drawing it.) Neither is a designed touch affordance and neither
 changes what follows, but a later sweep for "does anything here think about touch" will find them
 and should know what they are. `(pointer: coarse)` really is nowhere: every `coarse` in the tree
 is prose about something else.
@@ -4526,10 +4634,10 @@ is prose about something else.
 | `components/AppShell.tsx:614` — `{...tip(narrow && label, { side: "right", describes: false })}` | The nav entry's word while the rail is collapsed to `w-17`/68px. The label is `sr-only` there, so the button's accessible name is unchanged and a screen reader still has it; the eye has the icon and nothing else. | The expanded rail — `useNavCollapsed` persists the state in `app_meta`. At 390px the expanded rail is 208px of the window. |
 | `components/AppShell.tsx:822` — the same spread over a pinned deck or folder's name | Which deck or folder each pinned art crop is. | The same, and nothing else. |
 | `components/Ribbon.tsx:96` (`dataDir`) and `:97–98` (`imageStoreFailures`), bound at `:176` on the `role="status"` line | Which data folder is live, and how many card images could not be written to the cache. | **Nothing.** Each field reaches the UI at exactly one place, and it is this tooltip: `imageStoreFailures` is drawn in no other string and `dataDir` in no other expression. Settings names neither — `features/settings/SettingsPage.tsx:154` reads "Data folder and import. Coming in a later plan.", and `features/settings/DangerZonePanel.tsx:117` records that the folder is named nowhere on Settings. |
-| `features/collection/AddToCollection.tsx:36–38` — `REVEAL_ON_HOVER`, spread at 11 sites: `features/card/CardDetailPane.tsx:2034` (**that file was deleted 2026-09-03; the modal that replaced it draws no quick-add**), `features/collection/CollectionTable.tsx:349`, `features/decks/DeckTile.tsx:387`, `features/decks/FolderTree.tsx:581`, `features/search/CardGrid.tsx:1485`, `features/search/SearchPage.tsx:180` and `:637`, `features/tags/TagResults.tsx:301`, `features/wishlist/WishlistGrid.tsx:440`, `features/wishlist/WishlistTable.tsx:180` and `:290` | Where the quick-add `+` is, on every card surface in the app. | **The control is not gone; it is unaimable.** `opacity-0`, never `hidden` — deliberately, so it keeps its tab stop — and `CardGrid.tsx:1474` states in as many words that an `opacity-0` element is still a hit target. A finger that lands on it presses it. Nothing on screen says it is there. |
+| `features/collection/AddToCollection.tsx:41` — `REVEAL_ON_HOVER`. **No count is written here; `grep -rn REVEAL_ON_HOVER src` is the census** — this row said *11 sites* with line numbers and every one of them had moved by 2026-09-07. The files, which drift far more slowly: `collection/CollectionTable.tsx`, `collection/CollectionSearchPanel.tsx` **(new 2026-09-07)**, `decks/DeckTile.tsx`, `decks/FolderTree.tsx`, `search/CardGrid.tsx` (×2), `search/SearchPage.tsx` (×2), `tags/TagResults.tsx`, `wishlist/WishlistGrid.tsx`, `wishlist/WishlistSearchPanel.tsx` **(new 2026-09-07)**, `wishlist/WishlistTable.tsx` (×2). `card/CardDetailPane.tsx` was on this list until **that file was deleted 2026-09-03; the modal that replaced it draws no quick-add** | Where the quick-add `+` is, on every card surface in the app — **including the two docked search sidebars since 2026-09-07**, whose tiles are the newest place this `+` appears. | **The control is not gone; it is unaimable.** `opacity-0`, never `hidden` — deliberately, so it keeps its tab stop — and `CardGrid.tsx` states in as many words that an `opacity-0` element is still a hit target. A finger that lands on it presses it. Nothing on screen says it is there. |
 | `features/decks/cardControl.tsx:933–936` — `REVEALED_ON_CARD` | The deck card's control bar on the three views that draw a card as a picture. | The same `opacity-0` answer. The stack has a second door: `revealedWhenOpen` (`cardControl.tsx:955–963`) drives the same bar off **which card is open** rather than off the pointer — see the flip-through row. |
 | `components/CardArt.tsx:210–213` — `group-hover:scale-[1.02]`, given `hoverZoom` by `features/search/CardGrid.tsx:1374` and `features/decks/views/GridView.tsx:404`; `features/decks/DeckTile.tsx:531–534` for a deck tile | Which tile the pointer is over. | Nothing equivalent, and nothing is missing: the lift answers a question a finger does not ask. The caret's answer is `FOCUS`, which is a different thing. |
-| `features/decks/DeckSearchPanel.tsx:1072` (`cursor-col-resize`) and `:1082–1086` (an `opacity-0 … group-hover:opacity-100` grip) | That the docked search panel's left edge can be dragged at all. Both signals belong to a pointer: a cursor a touchscreen does not have, and a grip revealed by `group-hover`. | The drag itself is pointer-based and the strip already carries `touch-none` (`:1072`); the keyboard reaches the same resize through arrows, Home and End (`:1055–1061`). Nothing **visible** reaches it without a pointer. |
+| `features/search/CardSearchPanel.tsx:747` (`cursor-col-resize`) and `:755–762` (an `opacity-0 … group-hover:opacity-100` grip) — `DeckSearchPanel.tsx:1072`/`:1082–1086` until the shell was extracted on 2026-09-07, and **three** docked panels draw it now rather than one | That a docked search panel's left edge can be dragged at all. Both signals belong to a pointer: a cursor a touchscreen does not have, and a grip revealed by `group-hover`. | The drag itself is pointer-based and the strip already carries `touch-none` (`:747`); the keyboard reaches the same resize through arrows, Home and End (`:724–736`). Nothing **visible** reaches it without a pointer. |
 | `features/decks/CardStack.tsx:851` — `onPointerEnter={() => onArm(index)}`, `STACK_OPEN_DWELL_MS` 80 (`:271`); released at `:703` after `STACK_CLOSE_DELAY_MS` 180 (`:287`) | The deck builder's signature interaction: running a pointer down a pile to fan it. | **Yes, and by design.** The open card resolves to `openIndex ?? selectedIndex` (`CardStack.tsx:653–655`), so a card that was *pressed* stays lifted after the pointer has gone. A tap therefore fans one card. What a tap cannot do is fan the pile. |
 | ~~`features/card/PrintingPreview.tsx:182–183`~~ — `onMouseEnter`/`onMouseLeave`, `PREVIEW_DWELL_MS` 250 (`:25`). **Deleted 2026-09-03 with the docked card pane.** | One printing's art without swapping to that printing. | `onFocus` armed the same dwell when focus arrived in the row (`:185–187`), which was the keyboard's door. On touch, `onPointerDown: cancel` (`:201`) took down whatever the tap's compatibility `mouseenter` armed. **Nothing replaces it**, and nothing needs to: the printings list is `AllPrintingsDialog`'s wall of art tiles now, so the art is the tile and looking at one costs no hover. |
 | `components/menu/ContextMenu.tsx:730` — `onPointerOver`, `SUBMENU_HOVER_MS` 120 (`:48`) | Opening a submenu by resting on its row. | **Yes, at the site**: the submenu row's own `onClick` toggles it (`components/menu/Submenu.tsx:163`). Opening the parent menu is the gestures table's problem, not this one's. |
@@ -4566,8 +4674,10 @@ gesture library, nowhere in `src/`.
 
 **So on a phone `cardZoom` is frozen at whatever the last session left.** `ZOOM_STEPS` is
 **sixteen** stops from 0.5 to 2, ten points apart, written out as literals
-(`lib/cardZoom.ts:79–81`), walked independently for **eight** sections (`ZOOM_SECTIONS`, `:125–134`
-— `search`, `tags`, `collection`, `wishlist`, `deckSearch`, `deck`, `deckGallery`, `printings`).
+(`lib/cardZoom.ts:79–81`), walked independently per section (`ZOOM_SECTIONS`, `:129–140` — the
+constant is the census and no total is written here; it was **eight** when this paragraph was
+written and `collectionSearch` and `wishlistSearch` joined on 2026-09-07, which is the drift a
+written-down count buys).
 The value a phone opens on comes from `hydrateCardZoom` (`lib/store.ts:1029–1037`), called once
 from `lib/useCardZoomPersistence.ts:80` with whatever `ipc.cardZoom()` answered: it snaps each
 value to the ladder through `snapZoom`, **drops any key this build does not draw** (`isZoomSection`),
