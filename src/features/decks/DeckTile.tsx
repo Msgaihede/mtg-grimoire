@@ -23,10 +23,13 @@ import { FOCUS } from "@/lib/focus";
 import { ART_ASPECT, cardArtSrc, cardImageUrl } from "@/lib/images";
 import type { DeckRow } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
+import type { PipCounts } from "@/lib/mana";
 import { PRESS } from "@/lib/motion";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
+import { DeckColorBar } from "./DeckColorBar";
 import { buildDeckMenu, type DeckMenuDeps } from "./deckMenu";
+import { deckColorsLabel } from "./deckPips";
 import { deckDraggable, MoveToFolder, type FolderNode } from "./FolderTree";
 import { RenameField } from "./metaRows";
 import type { Panel } from "./panels";
@@ -99,6 +102,13 @@ export function deckBadge(deck: DeckRow): DeckBadge | null {
  * reader which of the two happened. "No cover" means *you have not chosen one*; a deck that has
  * chosen one and cannot be handed its bytes says "No image", which is the same sentence a
  * failed fetch gets and the true one.
+ *
+ * **The illustrator half of this test survived the credit line's deletion, and it still means
+ * what it said** (2026-09-07). The `Art by` row under the tile is gone, but the name did not go
+ * with it — it moved onto the picture as {@link Cover}'s tooltip — so the condition this guard
+ * enforces is unchanged: a crop is drawn only where the app can name who painted it. Reading
+ * this the other way round is the mistake to avoid, and it is an easy one for a reader arriving
+ * after that change: the guard was never *about* the line, it was about the crop.
  */
 function hasCover(deck: DeckRow): boolean {
   return deck.coverCardId !== null && deck.coverArtist !== null;
@@ -107,9 +117,14 @@ function hasCover(deck: DeckRow): boolean {
 /**
  * A deck's cover as a URL — or `null` when it has none, or none this app may draw.
  *
- * **A cover this app cannot credit is not drawn at all.** Scryfall's image policy is that an
- * `art` crop, having no printed frame, may be shown only where the illustrator is named — so if
- * the credit cannot be shown, neither can the crop. `DeckRow.coverArtist` is `null` exactly when
+ * **A cover this app cannot credit is not drawn at all, and that is as true after 2026-09-07 as
+ * before it.** Scryfall's rule — `https://scryfall.com/docs/api`, under the image guidelines, and
+ * *not* `docs/api/images`, which carries no artist rule at all any more — is that an `art` crop,
+ * having no printed frame, may be shown only in an interface that names the illustrator. So if
+ * the credit cannot be shown, neither can the crop. What changed is only *where* the credit is
+ * shown: it is {@link Cover}'s tooltip rather than a line of text under the tile, so the artist
+ * is still named and this condition still means exactly what it said.
+ * `DeckRow.coverArtist` is `null` exactly when
  * the printing has left `cards`, and it comes back on the next sync that brings the printing
  * back, so this is a state that heals itself and never a picture permanently withheld. The frame
  * then says "No cover" rather than claiming a failure, because from the reader's side that is
@@ -145,15 +160,26 @@ function coverUrl(deck: DeckRow): string | null {
 }
 
 /**
- * One deck: its cover art, its name, what it is and how big it is.
+ * One deck: its cover art, what colours it is, its name, what it is and how big it is.
  *
  * The art is the tile — an `art` crop rather than a card image, because a wall of full cards
  * is what the *search* looks like and a deck is not a card. The price of the crop is the
- * credit line under it: an art crop carries no printed frame, so the illustrator is named
- * wherever one is shown.
+ * illustrator's name, which an art crop carries no printed frame to give: see {@link Cover},
+ * which is where that credit now lives.
+ *
+ * **The colours and the bracket arrived 2026-09-07 and the credit line left in the same pass**
+ * (issue #387). The tile said four things about a deck and one about its illustrator, and the
+ * two facts a reader actually browses a wall by — what colours it is, and how strong it is —
+ * were reachable only by opening it. {@link DeckColorBar} is the first and the caption's
+ * bracket segment is the second; the credit became a tooltip on the picture it belongs to,
+ * which is a row of chrome off every tile and a name that has moved *closer* to the thing it
+ * names. `docs/superpowers/plans/2026-09-07-deck-gallery-overview.md` carries the whole
+ * argument, including the policy reading behind the move.
  */
 export function DeckTile({
   deck,
+  pips,
+  bracketLabel,
   decks,
   nodes,
   folderId,
@@ -173,6 +199,36 @@ export function DeckTile({
   onClosePanel,
 }: {
   deck: DeckRow;
+  /**
+   * The deck's pip distribution, or `null` while the read is out — see `useDeckPips`.
+   *
+   * A prop rather than a read of this deck's own, for the reason {@link zoom} is one: the
+   * gallery asks `deck_pip_costs` once for every deck on the wall and hands each tile its
+   * record, where forty tiles each fetching their own would be forty queries for one screen.
+   * `null` is the honest shape of "not yet" and {@link DeckColorBar} draws nothing for it —
+   * a bar that appeared a moment after the wall did would be forty tiles changing height
+   * under the reader's pointer.
+   */
+  pips: PipCounts | null;
+  /**
+   * `Bracket 3` when the reader answered, `Bracket ~3` for a reading, `null` where the format
+   * has no command zone or nothing has answered yet.
+   *
+   * **The tile draws the string and decides nothing.** Whether a format has a command zone is
+   * `format_specs.commanderRule`, and whether the number is an answer or a reading is
+   * `useDeckBrackets`' own — both are questions with a source of truth elsewhere, and a tile
+   * that re-derived either would be a second opinion about a deck the editor has already
+   * stated one about.
+   *
+   * **The `~` means here exactly what it means on the editor's `DeckBracket` button, and the
+   * two spellings may not diverge.** There it is the whole of the visible difference between
+   * what the cards read as and what the reader told the deck it is; a gallery that spelled a
+   * reading differently would teach the mark twice, and a reader who has had the bracket
+   * conversation at their table would see their own answer hedged on the wall. It is drawn and
+   * not spoken — a screen reader says "tilde three" or nothing at all — which is why the
+   * caption around it stays plain text a reader can also see.
+   */
+  bracketLabel: string | null;
   decks: Decks;
   nodes: readonly FolderNode[];
   /** The folder it is in now, normalised through the folder list this screen actually has. */
@@ -233,6 +289,7 @@ export function DeckTile({
 
   /** One derivation of the plural, for the caption and the question that quotes it. */
   const unit = deck.cardCount === 1 ? "card" : "cards";
+  const colorsLabel = deckColorsLabel(pips);
   const badge = deckBadge(deck);
   const confirming = panel?.kind === "deleteDeck" && panel.deckId === deck.id;
   const choosingFolder = panel?.kind === "moveDeck" && panel.deckId === deck.id;
@@ -301,6 +358,18 @@ export function DeckTile({
         className={cn("block w-full rounded-lg text-left", FOCUS)}
       >
         <Cover deck={deck} />
+        {/* What colours the deck is, between the picture and the name — **inside the button**,
+            because it is part of the tile's flow rather than a mark laid on the art, and the
+            reader who is about to press this tile is reading it in that order: the picture, the
+            colours, the name.
+            Absent on a deck with no pips, and the component argues why: an all-lands pile has
+            nothing to say and an empty rule saying so is worse than silence.
+            **It is `aria-hidden`, and the words are the `sr-only` span under the name.** The
+            picture may sit above the name; the *sentence* may not, and that is the badge's rule
+            below applied one element up — a tile is named for its deck, and a bar that named
+            itself here made the button read `White, Red Zoo …`, which is a tile that no longer
+            answers to "click Zoo". */}
+        <DeckColorBar pips={pips} />
         {/* The deck's name, and the first of the four sizes on this tile that move with the
             zoom. Written as a `calc` off `--mark-scale` rather than as a scaled pixel prop for
             `cardZoom.ts`'s reason: the variable is inherited, so the marks drawn inside a tile
@@ -313,13 +382,43 @@ export function DeckTile({
         >
           {deck.name}
         </span>
+        {/* The bar, in words, for a reader who cannot see it — and **after the name**, which is
+            the whole point of its being here rather than on the bar itself. `deckColorsLabel` is
+            the one definition the two share, so the picture and the sentence cannot come to name
+            different colours. `null` exactly where the bar draws nothing.
+
+            **What this button's name looks like under test is not what it sounds like.** An
+            accessible name is its parts concatenated, and the separator between them comes from
+            each part being block-level — a fact about the *stylesheet*. jsdom applies none, so it
+            computes `ZooWhiteModern · 60 cards` where a browser says `Zoo White Modern · 60
+            cards`; padding this string with spaces does not fix it either, because the algorithm
+            trims each part before joining. (`ManaText`'s trailing space works because its spans
+            are inline siblings, which is a different join.) So the test over this asserts the
+            **anchor** and the DOM order rather than the whole sentence — `^Zoo` is exactly the
+            thing that broke, and it breaks in jsdom too. This repo has the same class of failure
+            recorded once already, where a `gap` between a label and its count computed to
+            `Missing2`. */}
+        {colorsLabel !== null && <span className="sr-only">{colorsLabel}</span>}
         {/* `Modern · Arena · 60 cards`, and `Modern · 60 cards` on a deck that has been given
             no platform. **The `Any` row is deliberately not drawn**: it is what every deck is
             born as, so printing it would put a word that says nothing on nearly every tile in
             the gallery — and this caption already truncates in a narrow column. A deck that
             *has* been pinned is the one worth marking, which is the same argument the theory
             badge above makes about the lists a deck keeps — a deck with only the one list wears
-            none. */}
+            none.
+
+            **`Commander · Bracket ~3 · 100 cards` since 2026-09-07**, and the bracket obeys
+            that same rule from the other end: it is drawn only where there is one, which is a
+            format with a command zone whose number has arrived. A `null` is both "this deck
+            cannot have a bracket" and "nothing has answered yet", and the caption treats them
+            alike on purpose — neither is a fact about the deck worth a word, and a placeholder
+            for the second would be a segment that appears a beat after the wall does.
+
+            **The truncation in a narrow column is the existing behaviour and is correct.** A
+            fourth segment makes it likelier, and the answer is not a shorter format name or a
+            wider tile: the caption is the tile's least important line, it truncates from the
+            end, and the deck's name above it is what a reader is scanning. The full string is a
+            hover away on any surface that needs it. */}
         <span
           className={cn(
             "mt-[calc(0.125rem*var(--mark-scale,1))] block truncate text-dim",
@@ -327,7 +426,8 @@ export function DeckTile({
           )}
         >
           {deck.formatName ?? deck.formatKey}
-          {deck.gameKey !== ANY_GAME && ` · ${gameLabel(deck.gameKey)}`} ·{" "}
+          {deck.gameKey !== ANY_GAME && ` · ${gameLabel(deck.gameKey)}`}
+          {bracketLabel !== null && ` · ${bracketLabel}`} ·{" "}
           <span className="font-mono tabular-nums">{deck.cardCount}</span> {unit}
         </span>
       </button>
@@ -356,29 +456,6 @@ export function DeckTile({
         >
           {badge}
         </span>
-      )}
-
-      {/* Scryfall's image policy, per tile — and the plan's ruling: a cover whose artist is
-          unknown draws no line at all, never the word "null" and never a placeholder. An
-          orphaned cover heals itself on the next sync.
-
-          One test, and `coverArtist` is it: it is a lookup on `coverCardId` and nothing else
-          (the backend's `LEFT JOIN cards c ON c.id = d.cover_card_id`), which is exactly the
-          picture {@link coverUrl} draws, so the credit and the crop cannot come apart. There
-          was a `coverKind === "card_art"` beside it while a deck could wear a file instead: the
-          join answered an artist for the card id such a deck still carried, and crediting an
-          illustrator whose work is *not on screen* is the one thing this line must never do.
-          `DeckCoverPicker`'s `CoverPreview` guards the same way. */}
-      {deck.coverArtist && (
-        <p
-          className={cn(
-            "mt-[calc(0.125rem*var(--mark-scale,1))] truncate text-dim",
-            "text-[calc(0.7rem*var(--mark-scale,1))] leading-[calc(1rem*var(--mark-scale,1))]",
-          )}
-          {...tip(deck.coverArtist, { whenClipped: true })}
-        >
-          Art by {deck.coverArtist}
-        </p>
       )}
 
       {/* Renaming a deck, in the tile it belongs to.
@@ -529,8 +606,46 @@ export function DeckTile({
  * the one that deliberately does not, because reading a deck is not editing it — so keying it
  * would throw away a crop the browser has already decoded and leave the tile blank while it came
  * back, for a rename.
+ *
+ * ## The illustrator's name, which is this frame's since 2026-09-07
+ *
+ * **It is a tooltip on the picture now, where it was a line of text under the tile — and this is
+ * a policy question rather than a tidy-up.** The rule is Scryfall's, it is a *must*, and where it
+ * lives is worth stating because **nothing in this repo named a URL for it before 2026-09-07** —
+ * this file said "Scryfall's image policy" and left a reader to find it. The obvious page to look
+ * on is `docs/api/images`, and it is **not** on it. The Card Imagery page carries no artist rule at
+ * all any more — it is a table of image variants and their statuses, and the word "artist" does
+ * not appear on it. The rule is on `https://scryfall.com/docs/api`, under *"When using images
+ * from Scryfall, you must adhere to the following guidelines"*, and reads verbatim (fetched live
+ * 2026-09-07):
+ *
+ * > When using the art_crop, list the artist name and copyright elsewhere in the same interface
+ * > presenting the art crop, or use the full card image elsewhere in the same interface.
+ * >
+ * > Users should be able to identify the artist and source of the image somehow.
+ *
+ * So it is satisfied two ways, and neither of them is "a permanent line under every tile". The
+ * gallery draws `art` crops and shows no full card image anywhere, so it has to take the first
+ * arm: **the artist has to stay reachable here.** The tooltip is that, and it satisfies
+ * *somehow* more directly than the line did — the name is on the picture it belongs to, which is
+ * where a reader who wants to know who painted it points, rather than under a different element
+ * of the tile.
+ *
+ * **Always shown, never `whenClipped`.** That option opens a tooltip only when the anchor's own
+ * text is genuinely cut off, which is exactly right for a truncating cell repeating itself and
+ * exactly wrong here: there is no text in this frame to clip, so a `whenClipped` binding would
+ * open for nobody and the name would be unreachable on every tile in the gallery. The credit is
+ * the one hint on this tile that is not a convenience.
+ *
+ * **`describes` is left at its default, where the four controls in the tray pass
+ * `describes: false`.** Those already say their words in an `aria-label`, so a description would
+ * be the same sentence twice; this frame says the artist nowhere else, and the guideline asks
+ * that a reader be able to identify them *somehow*. The `alt` stays empty — the crop is
+ * decorative, the deck's name is two lines down, and putting the illustrator into the tile's
+ * accessible name would announce a painter before the deck on every tile on the wall.
  */
 function Cover({ deck }: { deck: DeckRow }) {
+  const tip = useTooltip();
   const url = coverUrl(deck);
   // Not `url === null`: on web those are two different states — see {@link hasCover}.
   const chosen = hasCover(deck);
@@ -538,6 +653,10 @@ function Cover({ deck }: { deck: DeckRow }) {
 
   return (
     <span
+      // `null` binds nothing — `useTooltip` refuses falsy content — so a deck with no artist to
+      // credit is a frame with no hint, which is the same silence {@link coverUrl} answers with
+      // for the picture itself. The two cannot come apart: they are one test on one field.
+      {...tip(deck.coverArtist && `Art by ${deck.coverArtist}`)}
       className="grid w-full place-items-center overflow-hidden rounded-lg bg-surface"
       style={{ aspectRatio: ART_ASPECT }}
     >

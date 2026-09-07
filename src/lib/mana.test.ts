@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  addPips,
+  countPips,
+  emptyPips,
   hasVariableCost,
   MANA_COST_GLYPHS,
   MANA_KEYS,
   MANA_LINE_GRADIENT,
   manaParts,
   manaSymbolClass,
+  type PipCounts,
 } from "@/lib/mana";
 /**
  * The bundled font as it ships. `manaParts` names classes rather than glyphs, so the only
@@ -159,5 +163,131 @@ describe("MANA_LINE_GRADIENT", () => {
     expect(positions.every((p) => p >= 0)).toBe(true);
     expect([...positions].sort((a, b) => a - b)).toEqual(positions);
     expect(MANA_LINE_GRADIENT).not.toContain("--color-mana-c");
+  });
+});
+
+/**
+ * The colour bar's arithmetic — every rule the deck gallery's bar rests on, and the two that
+ * are decisions rather than readings (a hybrid counts twice; generic counts not at all).
+ */
+describe("countPips", () => {
+  /**
+   * Six zeroes, **written out here rather than taken from `emptyPips()`**.
+   *
+   * An expectation built from the constant under test agrees with a broken constant by
+   * construction: an `emptyPips` that had lost a key would produce an expected record missing
+   * the same key, and every assertion below would go on passing over the hole. The literal is
+   * the second opinion.
+   */
+  const NO_PIPS: PipCounts = { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
+  /** That literal with the colours a case is about written over it, so each expectation reads
+   *  as "these, and every other colour at zero". */
+  const pips = (over: Partial<PipCounts>): PipCounts => ({ ...NO_PIPS, ...over });
+
+  it("starts every colour at zero, colourless included", () => {
+    expect(emptyPips()).toEqual(NO_PIPS);
+    expect(Object.keys(emptyPips()).sort()).toEqual([...MANA_KEYS].sort());
+  });
+
+  it("counts one pip per coloured symbol, however many times it is printed", () => {
+    expect(countPips("{2}{U}{U}")).toEqual(pips({ U: 2 }));
+    expect(countPips("{W}{U}{B}{R}{G}")).toEqual(pips({ W: 1, U: 1, B: 1, R: 1, G: 1 }));
+  });
+
+  /**
+   * **The rule that is a decision.** A hybrid is a cost the reader may pay either way, so
+   * neither half is truer than the other and both are counted — the bar answers *what does this
+   * deck want*, not *what will be spent*. Lurrus's real printed cost, because a made-up
+   * `{W/U}` on its own would not show the pips accumulating per copy of the symbol.
+   */
+  it("counts a hybrid as one pip of each half", () => {
+    expect(countPips("{1}{W/B}{W/B}")).toEqual(pips({ W: 2, B: 2 }));
+    expect(countPips("{W/U}")).toEqual(pips({ W: 1, U: 1 }));
+  });
+
+  /**
+   * Not three more rules — the hybrid one, arriving at halves that are not colours. `2` and `P`
+   * name no colour, so they are skipped and what is left is the colour the card really asks
+   * for.
+   */
+  it("counts a twobrid and a Phyrexian as their colours and nothing else", () => {
+    expect(countPips("{2/W}")).toEqual(pips({ W: 1 }));
+    expect(countPips("{G/P}")).toEqual(pips({ G: 1 }));
+    expect(countPips("{B/G/P}")).toEqual(pips({ B: 1, G: 1 }));
+  });
+
+  /** `{C}` is a demand for a real kind of mana, which is the whole of what separates it from
+   *  the generic beside it — so it is a pip and `{1}` is not. */
+  it("counts {C} as a colourless pip while the generic beside it counts for nothing", () => {
+    expect(countPips("{1}{C}{C}")).toEqual(pips({ C: 2 }));
+  });
+
+  /**
+   * "Ignore general mana cost" — the issue's own instruction, and the right one: generic mana
+   * says how *much* a card costs and this is asking *what* it costs. The variables and the
+   * oddities go the same way, `{S}` and `{E}` included: snow and energy are resources rather
+   * than colours, and the bar has no segment to put either in.
+   */
+  it("counts nothing for generic, the variables, and every symbol that is not a colour", () => {
+    expect(countPips("{2}{X}{Y}{Z}{S}{E}{T}{Q}")).toEqual(NO_PIPS);
+    expect(countPips("{X}{X}")).toEqual(NO_PIPS);
+    // 100 and 1000000 are printed costs, not typos: the generic rule has to hold for the joke
+    // ones too, and a counter that read the leading digit would find a `1` in each.
+    expect(countPips("{100}{1000000}")).toEqual(NO_PIPS);
+  });
+
+  /**
+   * A split or MDFC cost is one string, so every symbol in it counts — {@link hasVariableCost}'s
+   * reading of the same shape. A card castable either way wants both halves, and the `//`
+   * between them is not a symbol at all.
+   */
+  it("counts both halves of a split cost", () => {
+    expect(countPips("{1}{R} // {1}{U}")).toEqual(pips({ R: 1, U: 1 }));
+  });
+
+  /** An empty cost is the **land** case — Scryfall sends `""` for a transform's back face and
+   *  the workbench seeds `""` for lands — so it is a cost with no symbols rather than a cost
+   *  nobody knows, and a pile of basics counts to six zeroes rather than refusing. */
+  it("counts an absent or empty cost as no pips at all", () => {
+    expect(countPips(null)).toEqual(NO_PIPS);
+    expect(countPips("")).toEqual(NO_PIPS);
+  });
+
+  /** The tokeniser lowercases elsewhere in this file and nothing guarantees the case a cost
+   *  arrives in, so a colour typed in lowercase is the same colour. */
+  it("reads a lowercase symbol as the same colour", () => {
+    expect(countPips("{x}{r}{w/u}")).toEqual(pips({ R: 1, W: 1, U: 1 }));
+  });
+
+  describe("addPips", () => {
+    /** The deck's own arithmetic: four copies of a one-red spell is four red pips, not one. */
+    it("weights a cost by the copies in the deck", () => {
+      const counts = emptyPips();
+      addPips(counts, "{R}{R}", 4);
+      expect(counts).toEqual(pips({ R: 8 }));
+    });
+
+    /**
+     * The shape the gallery folds a deck in — one accumulator, one call per `(cost, copies)`
+     * pair, no record allocated per row. The hybrid still counts on both sides of the sum.
+     */
+    it("accumulates every cost it is given into one count", () => {
+      const counts = emptyPips();
+      addPips(counts, "{1}{R}", 4);
+      addPips(counts, "{W/U}", 2);
+      addPips(counts, "{C}", 1);
+      // A land, contributing nothing and not disturbing what is already there.
+      addPips(counts, "", 20);
+      addPips(counts, null, 20);
+      expect(counts).toEqual(pips({ R: 4, W: 2, U: 2, C: 1 }));
+    });
+
+    /** Zero copies is a row nothing is played from — the arithmetic holds rather than being
+     *  special-cased, which is what keeps a stepped-to-zero deck row harmless. */
+    it("adds nothing for a row with no copies", () => {
+      const counts = emptyPips();
+      addPips(counts, "{G}{G}", 0);
+      expect(counts).toEqual(NO_PIPS);
+    });
   });
 });

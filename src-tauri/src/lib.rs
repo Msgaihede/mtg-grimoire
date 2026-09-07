@@ -65,6 +65,13 @@ pub mod deck_pull;
 pub mod deck_quick_add;
 pub mod deck_theory;
 pub mod deck_undo;
+/// **A view-state module wearing the deck domain's name.** It is [`listview`]'s shape exactly —
+/// one `app_meta` row, an infallible read and a write whose only refusal is a blank — and it is
+/// filed here rather than beside its four siblings below because a `decksort` between
+/// `deck_undo` and `errors` is where the next person looking for the deck gallery's settings
+/// will look. Nothing in it touches the filesystem, `tokio` or the network, so it is on the
+/// every-target half of this map like the rest of them.
+pub mod decksort;
 pub mod errors;
 pub mod feed;
 pub mod filters;

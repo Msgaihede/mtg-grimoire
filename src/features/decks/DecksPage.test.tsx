@@ -6,7 +6,7 @@ import type { ReactElement } from "react";
 import type { DeckFolder, DeckRow, FormatSpec, ImportMatch, SyncStatus } from "@/lib/ipc";
 import { cardImageUrl } from "@/lib/images";
 import { isWebTarget } from "@/pwa/target";
-import { openDropdown } from "@/test-dropdown";
+import { openDropdown, pickOption } from "@/test-dropdown";
 import { spec } from "./validation/fixtures";
 
 /**
@@ -37,6 +37,18 @@ const deckFolderMove = vi.hoisted(() => vi.fn());
 const deckFolderReorder = vi.hoisted(() => vi.fn());
 const deckFolderDelete = vi.hoisted(() => vi.fn());
 const formatSpecs = vi.hoisted(() => vi.fn());
+/**
+ * The three reads the overview added, and the one write.
+ *
+ * `deckPipCosts` is asked unconditionally — one row set for the whole gallery — while
+ * `deckBracketReads` is `enabled`-gated on the caller's id list, which is why one of the cases
+ * below can assert it is never called at all. `deckSort`/`setDeckSort` are the one `app_meta`
+ * row behind "what order is the wall in", the `listView` pair's arrangement.
+ */
+const deckPipCosts = vi.hoisted(() => vi.fn());
+const deckBracketReads = vi.hoisted(() => vi.fn());
+const deckSort = vi.hoisted(() => vi.fn());
+const setDeckSort = vi.hoisted(() => vi.fn());
 /** The one `app_meta` row behind "what does a new deck start on" — read by this screen and
  *  handed to both surfaces that make a deck. `null` here means no deck has been created on this
  *  install, which is the ordinary gallery's state as far as this preference is concerned. */
@@ -71,6 +83,10 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckFolderDelete,
     formatSpecs,
     deckLastFormat,
+    deckPipCosts,
+    deckBracketReads,
+    deckSort,
+    setDeckSort,
     importResolve,
     deckImportCommit,
     importReadFile,
@@ -80,6 +96,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 
 import { DecksPage } from "./DecksPage";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
+import { TOOLTIP_OPEN_MS, TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { FOLDER_DROP_LINE_ATTR } from "@/components/FolderDropLine";
 import { DEFAULT_SECTION_ZOOMS, DEFAULT_ZOOM, ZOOM_SECTIONS } from "@/lib/cardZoom";
 import { useAppStore } from "@/lib/store";
@@ -236,6 +253,41 @@ function wrap(ui: ReactElement) {
   return { ...view, client };
 }
 
+/**
+ * The same render with the app's one tooltip mounted over it — `App.tsx`'s order, the provider
+ * **above** `ContextMenuProvider`.
+ *
+ * **Deliberately not folded into {@link wrap}, and the reason is a clock.** A tooltip opens
+ * `TOOLTIP_OPEN_MS` (400ms) after the pointer arrives, and `userEvent.click` fires
+ * `pointerover`/`pointerenter` on its way in — so a provider mounted for the whole file would
+ * arm a timer on every click every case in it makes. Most never run long enough to fire one;
+ * a `waitFor` under `npm run verify`'s load can, and a panel that opened mid-assertion puts a
+ * second copy of a deck's name into the document and turns a `getAllByText` count into a flake.
+ * The two cases that are *about* the tooltip mount it and pay for it; nothing else does.
+ */
+function wrapWithTips(ui: ReactElement) {
+  return wrap(<TooltipProvider>{ui}</TooltipProvider>);
+}
+
+/**
+ * Rest the pointer on an element and read the panel that opens.
+ *
+ * Real timers and a polling `findByRole`, not `vi.advanceTimersByTime`: this file drives almost
+ * everything through `userEvent`, whose own `advanceTimers` contract does not survive a fake
+ * clock installed mid-file (a `userEvent` session started under one hangs). So the 400ms is
+ * genuinely waited out, once per case, and the query polls rather than sleeping a fixed span —
+ * which is what keeps it honest on a loaded machine rather than merely slow on an idle one.
+ *
+ * `fireEvent.pointerEnter` rather than `userEvent.hover`: `useTooltip` binds React's
+ * `onPointerEnter`, which React synthesises from `pointerover` as a **non-bubbling** event, and
+ * the element that has to receive it is the frame around the picture rather than whatever
+ * `userEvent` decides is on top of it in a layout engine jsdom does not have.
+ */
+async function hintOn(anchor: Element): Promise<HTMLElement> {
+  fireEvent.pointerEnter(anchor);
+  return screen.findByRole("tooltip", undefined, { timeout: 2_000 });
+}
+
 /** The tile, addressed the way a reader sees it: the deck's name first. */
 const tileFor = (name: string) => screen.findByRole("button", { name: new RegExp(`^${name}`) });
 
@@ -273,6 +325,17 @@ beforeEach(() => {
   deckFolderReorder.mockReset().mockResolvedValue([]);
   deckFolderDelete.mockReset().mockResolvedValue(undefined);
   formatSpecs.mockReset().mockResolvedValue(PICKER);
+  // No pips and no bracket reads by default: a colour bar and a bracket are the tile's own
+  // suite's to prove, and every case here that is about one says so by overriding these. The
+  // empty arrays still have to *resolve* — a wall whose pip read rejects draws no bar, which is
+  // fine, but an unhandled rejection is noise across every case in the file.
+  deckPipCosts.mockReset().mockResolvedValue([]);
+  deckBracketReads.mockReset().mockResolvedValue([]);
+  // Nobody has pressed the sort control on this install, so the row is missing and the gallery
+  // opens on `DEFAULT_DECK_SORT` — `updated:desc`, which is the order `deck_list` already
+  // answers in and therefore the wall a reader knows.
+  deckSort.mockReset().mockResolvedValue("");
+  setDeckSort.mockReset().mockResolvedValue(undefined);
   // Nobody has made a deck yet, so there is no remembered format: the two create surfaces get
   // Commander, which is what `newDeckFormat` answers for a reader with no history.
   deckLastFormat.mockReset().mockResolvedValue(null);
@@ -383,17 +446,64 @@ describe("DecksPage", () => {
   });
 
   /**
-   * An art crop has no printed frame, so the illustrator is credited beside it — and the
-   * plan's ruling is that a cover with no artist draws *no line at all*, never the word
-   * "null" and never a placeholder.
+   * **The illustrator is on the picture, not under the tile** (2026-09-07).
+   *
+   * An `art` crop has no printed frame, so Scryfall's image guidelines require the artist to be
+   * identifiable *somewhere in the same interface* — and the rule is satisfied two ways, neither
+   * of which is "a permanent line under every tile". This gallery takes the first arm: the name
+   * moved onto the crop it belongs to, as the frame's tooltip, where a reader who wants to know
+   * who painted it already looks. The tile lost a row of chrome, which is what issue #387 asked
+   * for.
+   *
+   * **Both halves are the claim, and asserting either alone would pass on a broken build.** No
+   * visible `Art by` line anywhere on the wall — a build that merely kept the old line would fail
+   * that — *and* the name reachable on the picture, which a build that simply deleted the credit
+   * would fail. The second half is why this case pays for {@link wrapWithTips}.
+   *
+   * The coverless deck beside it is the other half of the old ruling, unchanged in substance: a
+   * frame with nothing to credit binds nothing at all. `useTooltip` refuses falsy content, so
+   * `null` can never reach the panel as the word "null" — which is exactly what the old line's
+   * guard was for.
    */
-  it("credits the cover's artist, and says nothing at all when there is none", async () => {
-    wrap(<DecksPage />);
+  it("credits the cover's artist on the picture and draws no line under the tile", async () => {
+    wrapWithTips(<DecksPage />);
 
-    expect(await screen.findByText("Art by Rebecca Guay")).toBeInTheDocument();
-    // The coverless deck is on screen beside it, and has no credit of its own.
-    await tileFor("Sunday draft");
-    expect(screen.getAllByText(/art by/i)).toHaveLength(1);
+    const tile = (await tileFor("Burn")).closest("li")!;
+    // Nowhere in the document, not merely absent from this tile: the line is gone from the
+    // folder cards too, and a build that moved it rather than deleting it would be caught here.
+    expect(screen.queryByText(/^Art by/)).not.toBeInTheDocument();
+
+    // The frame around the picture is the anchor — the element `Cover` binds, which is the
+    // `<img>`'s parent whether or not the bytes arrived.
+    const frame = tile.querySelector("img")!.parentElement!;
+    expect(await hintOn(frame)).toHaveTextContent("Art by Rebecca Guay");
+  });
+
+  /**
+   * The other half of the same field: a cover with nobody to credit is not drawn, so there is no
+   * picture to hover — **and the empty frame binds no hint either.** `useTooltip` refuses falsy
+   * content outright, which is what the deleted line's `deck.coverArtist && …` guard used to do,
+   * so the word "null" can no more reach a panel than it could reach a paragraph.
+   *
+   * **A real wait longer than the open delay, and a fixed one on purpose.** This is an *absence*
+   * claim about something that arrives on a timer: a `waitFor` returns the instant the assertion
+   * holds, which here is immediately and before the timer could ever have fired — so it would
+   * pass on a build that binds "Art by null" and merely has not drawn it yet. Sized off
+   * {@link TOOLTIP_OPEN_MS} rather than a literal, so the two cannot drift apart, and erring long
+   * only makes the claim stricter.
+   */
+  it("binds no hint at all to a frame it cannot credit", async () => {
+    wrapWithTips(<DecksPage />);
+
+    const tile = (await tileFor("Sunday draft")).closest("li")!;
+    expect(tile.querySelector("img")).toBeNull();
+
+    fireEvent.pointerEnter(within(tile).getByText("No cover").parentElement!);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, TOOLTIP_OPEN_MS + 100));
+    });
+
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
     expect(screen.queryByText(/null/i)).not.toBeInTheDocument();
   });
 
@@ -425,18 +535,26 @@ describe("DecksPage", () => {
       cardImageUrl(BURN.coverCardId!, 0, "art"),
     );
     expect(tile).not.toHaveTextContent("No cover");
-    // And the credit with it: the picture on screen is the crop, so the illustrator is named.
-    expect(within(tile).getByText("Art by Rebecca Guay")).toBeInTheDocument();
+    // And no credit *line* with it — the illustrator moved onto the crop as a tooltip on
+    // 2026-09-07, which is asserted where the mechanism is. What this case is about is that a row
+    // still carrying the retired word draws its card art at all.
+    expect(within(tile).queryByText(/^Art by/)).not.toBeInTheDocument();
   });
 
   /**
-   * The credit rides the picture it is about, and `coverArtist` is now the whole test.
+   * The credit rides the picture it is about, and `coverArtist` is still the whole test —
+   * **what changed is where the answer is visible.**
    *
-   * Two decks, identical but for whether the printing they name is one `cards` still has — so
-   * the only thing that can explain one credit and not two is the artist. It used to be
-   * `coverKind` that separated them, one deck wearing a file and one wearing a crop.
+   * Two decks, identical but for whether the printing they name is one `cards` still has. Until
+   * 2026-09-07 the visible difference was a line of text; it is the *crop* now, because the
+   * policy runs the other way round — a cover this app cannot name an illustrator for cannot be
+   * shown at all, so one deck has a picture and the other has three words. The one field decides
+   * both, which is why they cannot come apart.
+   *
+   * Deliberately still two decks on one render rather than one deck twice: the rule is a fact
+   * about a cover, and a build that hid every picture would pass a single-deck version of this.
    */
-  it("credits the illustrator, and only where there is one", async () => {
+  it("draws the crop only where there is an illustrator to name", async () => {
     deckList.mockResolvedValue([
       BURN,
       { ...BURN, id: 5, name: "Sunday burn", coverArtist: null },
@@ -446,9 +564,15 @@ describe("DecksPage", () => {
 
     const credited = (await tileFor("Burn")).closest("li")!;
     const orphaned = (await tileFor("Sunday burn")).closest("li")!;
-    expect(within(credited).getByText("Art by Rebecca Guay")).toBeInTheDocument();
-    expect(within(orphaned).queryByText(/art by/i)).not.toBeInTheDocument();
-    expect(screen.getAllByText("Art by Rebecca Guay")).toHaveLength(1);
+    expect(credited.querySelector("img")).toHaveAttribute(
+      "src",
+      cardImageUrl(BURN.coverCardId!, 0, "art"),
+    );
+    expect(orphaned.querySelector("img")).toBeNull();
+    expect(within(orphaned).getByText("No cover")).toBeInTheDocument();
+    // And neither of them draws a line of text: the credit is the frame's tooltip on both
+    // builds now, and this wall has none of the old row of chrome left anywhere on it.
+    expect(screen.queryByText(/^Art by/)).not.toBeInTheDocument();
   });
 
   /**
@@ -514,8 +638,10 @@ describe("DecksPage", () => {
 
       const tile = (await tileFor("Burn")).closest("li")!;
       expect(tile.querySelector("img")).toHaveAttribute("src", SUPPLIED);
-      // The credit rides the picture, and the picture is on screen.
-      expect(within(tile).getByText("Art by Rebecca Guay")).toBeInTheDocument();
+      // The credit rides the picture and is the frame's tooltip on both builds — the binding is
+      // `Cover`'s and knows nothing about the platform, so it is asserted once above rather than
+      // twice. What is platform-specific, and what this case is about, is the `src`.
+      expect(within(tile).queryByText(/^Art by/)).not.toBeInTheDocument();
     });
 
     /**
@@ -562,20 +688,33 @@ describe("DecksPage", () => {
       expect(card.querySelector("img")).toHaveAttribute("src", SUPPLIED);
     });
 
-    /** And a member whose row carries none leaves an empty cell rather than a broken one — the
-     *  strip's existing "the bytes have not arrived" state, which keeps its geometry. */
-    it("leaves a member cell empty when that row carries no URL", async () => {
+    /**
+     * And a member whose row carries none leaves an empty cell rather than a broken one — the
+     * strip's existing "the bytes have not arrived" state, which keeps its geometry.
+     *
+     * **The credit survives that, and the claim is unchanged from the day it was written**: it is
+     * about the cover the folder *holds*, not about whether the picture drew. What changed on
+     * 2026-09-07 is only which element carries it — `MemberArt` renders its frame, and binds the
+     * hint to it, whether or not there is an `<img>` inside. So a cell with no bytes is still a
+     * cell a reader can ask about.
+     */
+    it("leaves a member cell empty when that row carries no URL, and still names its painter", async () => {
       withFolders();
 
-      wrap(<DecksPage />);
+      wrapWithTips(<DecksPage />);
 
       const card = (
         await screen.findByRole("button", { name: "Commander folder, 2 decks" })
       ).closest("li")!;
       expect(card.querySelectorAll("img")).toHaveLength(0);
-      // The credit is about the cover the folder *holds*, not about whether it drew — so it is
-      // still named, exactly as on the desktop build.
-      expect(within(card).getByText("Art by Kieran Yanner")).toBeInTheDocument();
+      expect(within(card).queryByText(/^Art by/)).not.toBeInTheDocument();
+      // Addressed by class, which is the honest handle here and not a shortcut: a cell whose
+      // bytes never arrived holds no text and no `<img>`, so it has no accessible name and no
+      // role for a query to find it by. `MemberArt`'s frame is the only `min-w-0 flex-1
+      // overflow-hidden` box in the card — the folder's own name span is `min-w-0 flex-1
+      // truncate` — and it is the element the hint is bound to.
+      const cell = card.querySelector("span.min-w-0.flex-1.overflow-hidden")!;
+      expect(await hintOn(cell)).toHaveTextContent("Art by Kieran Yanner");
     });
   });
 
@@ -608,6 +747,381 @@ describe("DecksPage", () => {
     await userEvent.click(screen.getByRole("button", { name: /archived/i }));
 
     expect(await tileFor("Old Standard")).toBeInTheDocument();
+  });
+
+  /**
+   * The row under the heading: a name box, a chip per format, the archived disclosure, and the
+   * order.
+   *
+   * **Three decks, and every one of the six sorts puts them in a different order.** That is the
+   * point of the fixture rather than an accident of it: with three decks there are exactly six
+   * orders, so a key that quietly did nothing — or that fell back to the default — lands on
+   * another key's answer and the case that asserts it goes red. Two decks would have made three
+   * of the six sorts indistinguishable from each other.
+   */
+  describe("the filter row", () => {
+    /**
+     * `bracket` is set on all three, including the two whose format has no command zone.
+     *
+     * **That is a state the app can really be in**, not a fixture taking a shortcut: the column
+     * is written by the editor and kept when a deck's format changes, so a Commander deck moved
+     * to Modern still carries the number it was given. It also keeps this case honest about what
+     * it is testing — `effectiveBracket` prefers a *set* bracket over any estimate, so the order
+     * here is decided by the column alone and no `deck_bracket_reads` answer is involved.
+     */
+    const ZOO: DeckRow = {
+      ...BURN,
+      id: 11,
+      name: "Zoo",
+      formatKey: "modern",
+      formatName: "Modern",
+      cardCount: 60,
+      updatedAt: 1_800_000_300,
+      bracket: 4,
+    };
+    const ALTAR: DeckRow = {
+      ...BURN,
+      id: 12,
+      name: "Altar",
+      formatKey: "commander",
+      formatName: "Commander",
+      cardCount: 40,
+      updatedAt: 1_800_000_100,
+      bracket: 3,
+    };
+    const BOLT: DeckRow = {
+      ...BURN,
+      id: 13,
+      name: "Bolt",
+      formatKey: "standard",
+      formatName: "Standard",
+      cardCount: 100,
+      updatedAt: 1_800_000_200,
+      bracket: 2,
+    };
+
+    /** One pip each, in printed order — W, U, B — so the colour sort has three distinct answers
+     *  and `sortDecks`' mono-colour arm is what decides them. */
+    const PIPS = [
+      { deckId: 11, costs: [{ cost: "{W}", copies: 4 }] },
+      { deckId: 12, costs: [{ cost: "{U}", copies: 4 }] },
+      { deckId: 13, costs: [{ cost: "{B}", copies: 4 }] },
+    ];
+
+    /**
+     * The wall in the order it is drawn, by deck id.
+     *
+     * Ids rather than names, off `data-deck-id` — the handle the caret hand-back already uses —
+     * because a tile's text content is its name, its format, its bracket and its count, and a
+     * sort case has no business going red when the caption gains a segment.
+     *
+     * **It is also the only handle that works once a deck has pips**, which is worth knowing
+     * before reaching for `tileFor` in here: `DeckColorBar` is drawn *inside* the tile's button
+     * and carries a `role="img"` whose name is the deck's colours, so a tile with a bar is named
+     * `White Zoo Modern · …` and a `^Zoo` anchor matches nothing at all. That is the tile's own
+     * decision and the right one — a reader hears the colours on the way in — and it makes every
+     * case in this block that seeds {@link PIPS} unable to address a tile by its name.
+     */
+    const wallIds = () =>
+      [...screen.getByRole("list", { name: "Your decks" }).querySelectorAll("[data-deck-id]")].map(
+        (el) => Number(el.getAttribute("data-deck-id")),
+      );
+
+    /** Handed to `deck_list` scrambled on purpose: the wall's opening order has to be the sort's
+     *  work rather than the read's. */
+    function threeDecks() {
+      deckList.mockResolvedValue([ALTAR, ZOO, BOLT]);
+      deckPipCosts.mockResolvedValue(PIPS);
+    }
+
+    it.each([
+      ["Last updated", [11, 13, 12]],
+      ["Name", [12, 13, 11]],
+      ["Colors", [11, 12, 13]],
+      ["Bracket", [13, 12, 11]],
+      ["Cards", [13, 11, 12]],
+      ["Format", [12, 11, 13]],
+    ])("orders the wall by %s", async (label, expected) => {
+      threeDecks();
+
+      wrap(<DecksPage />);
+      // The default is `updated:desc`, which is the order `deck_list` already answers in — so a
+      // gallery nobody has pressed anything on is the gallery a reader already knows.
+      await waitFor(() => expect(wallIds()).toEqual([11, 13, 12]));
+
+      await pickOption(userEvent.setup(), "Sort decks", label);
+
+      await waitFor(() => expect(wallIds()).toEqual(expected));
+    });
+
+    /**
+     * The arrow reverses whatever order is on screen, and the claim is stated as a reversal
+     * rather than as a literal list — which is what makes it fail on a build that pressed the
+     * key back to its default instead of flipping it.
+     *
+     * `Name` because it is the one key with no ties in this fixture, so the reverse is a single
+     * well-defined list.
+     */
+    it("reverses the wall with the direction arrow", async () => {
+      threeDecks();
+      const user = userEvent.setup();
+
+      wrap(<DecksPage />);
+      await waitFor(() => expect(wallIds()).toEqual([11, 13, 12]));
+      await pickOption(user, "Sort decks", "Name");
+      await waitFor(() => expect(wallIds()).toEqual([12, 13, 11]));
+
+      // The button is named for the press rather than for the state alone, so its name is the
+      // other half of what the arrow says.
+      const arrow = screen.getByRole("button", {
+        name: "Sort direction: ascending — press for descending",
+      });
+      await user.click(arrow);
+
+      await waitFor(() => expect(wallIds()).toEqual([11, 13, 12]));
+      expect(
+        screen.getByRole("button", {
+          name: "Sort direction: descending — press for ascending",
+        }),
+      ).toBeInTheDocument();
+    });
+
+    /**
+     * **The sort outlives the window and the filter does not** — the plan's ruling, and the two
+     * halves are asserted together because either alone is only half the decision.
+     *
+     * The `app_meta` cell is faked here rather than mocked flat: `set_deck_sort` writes it and
+     * `deck_sort` reads it back, which is the only arrangement that can tell "remembered" from
+     * "the press is still in a `useState` nobody remounted".
+     */
+    it("remembers the order across a remount and forgets the filter", async () => {
+      threeDecks();
+      let stored = "";
+      deckSort.mockImplementation(() => Promise.resolve(stored));
+      setDeckSort.mockImplementation((value: string) => {
+        stored = value;
+        return Promise.resolve(undefined);
+      });
+
+      const first = wrap(<DecksPage />);
+      await waitFor(() => expect(wallIds()).toEqual([11, 13, 12]));
+      await pickOption(userEvent.setup(), "Sort decks", "Name");
+      await waitFor(() => expect(wallIds()).toEqual([12, 13, 11]));
+      await userEvent.type(screen.getByLabelText("Filter decks by name"), "alt");
+      await waitFor(() => expect(wallIds()).toEqual([12]));
+      expect(setDeckSort).toHaveBeenCalledWith("name:asc");
+
+      first.unmount();
+      wrap(<DecksPage />);
+
+      // The order came back — from the row, since the component that held the press is gone.
+      await waitFor(() => expect(wallIds()).toEqual([12, 13, 11]));
+      expect(screen.getByRole("button", { name: "Sort decks" })).toHaveTextContent("Name");
+      // And the box is empty: a gallery that opened already narrowed, with no memory of having
+      // asked for it, is a gallery that looks like it has lost decks.
+      expect(screen.getByLabelText("Filter decks by name")).toHaveValue("");
+    });
+
+    /** The name box, and the heading count that goes on saying how many decks the drawer has. */
+    it("narrows the wall to the decks whose names match", async () => {
+      threeDecks();
+
+      wrap(<DecksPage />);
+      await waitFor(() => expect(wallIds()).toEqual([11, 13, 12]));
+
+      await userEvent.type(screen.getByLabelText("Filter decks by name"), "al");
+
+      await waitFor(() => expect(wallIds()).toEqual([12]));
+      // Both numbers: the whole is what says the other two decks are still there, and the share
+      // is what says the wall is short because the reader asked.
+      expect(screen.getByText("1 of 3 decks")).toBeInTheDocument();
+    });
+
+    /**
+     * The chips, and the one thing about a chip row that has to be got right: **an empty
+     * selection is every deck, not none.** The bug shape is an `includes` with no empty check in
+     * front of it, which empties the wall the moment the row appears.
+     */
+    it("narrows to the formats that are ticked, and to everything when none are", async () => {
+      threeDecks();
+      const user = userEvent.setup();
+
+      wrap(<DecksPage />);
+      await waitFor(() => expect(wallIds()).toEqual([11, 13, 12]));
+
+      // Named by the format and by how many decks it would leave — the count is what tells a
+      // reader whether pressing it is worth doing, and the name still *begins* with the word
+      // printed on the chip (WCAG 2.5.3).
+      await user.click(screen.getByRole("button", { name: "Modern format, 1 deck" }));
+      await waitFor(() => expect(wallIds()).toEqual([11]));
+
+      // Multi-select: a second format is added rather than replacing the first.
+      await user.click(screen.getByRole("button", { name: "Standard format, 1 deck" }));
+      await waitFor(() => expect(wallIds()).toEqual([11, 13]));
+
+      await user.click(screen.getByRole("button", { name: "Modern format, 1 deck" }));
+      await user.click(screen.getByRole("button", { name: "Standard format, 1 deck" }));
+      await waitFor(() => expect(wallIds()).toEqual([11, 13, 12]));
+    });
+
+    /**
+     * The disclosure, moved into the row and still a disclosure — `aria-expanded`, not
+     * `aria-pressed`, because "the thing below is open" and "this filter is on" are two different
+     * sentences and a reader told the wrong one goes looking for a wall that is not there.
+     *
+     * And the half the move must not have cost: filed decks are never mixed into the live wall.
+     */
+    it("reveals the filed wall from the chip and says whether it is open", async () => {
+      wrap(<DecksPage />);
+      await tileFor("Burn");
+
+      const chip = screen.getByRole("button", { name: "Archived 1" });
+      expect(chip).toHaveAttribute("aria-expanded", "false");
+      expect(screen.queryByRole("list", { name: "Archived decks" })).not.toBeInTheDocument();
+
+      await userEvent.click(chip);
+
+      const filed = await screen.findByRole("list", { name: "Archived decks" });
+      expect(within(filed).getByRole("button", { name: /^Old Standard/ })).toBeInTheDocument();
+      expect(chip).toHaveAttribute("aria-expanded", "true");
+      expect(
+        within(screen.getByRole("list", { name: "Your decks" })).queryByRole("button", {
+          name: /^Old Standard/,
+        }),
+      ).toBeNull();
+    });
+
+    /**
+     * **The fourth empty state.** A wall emptied by a filter is a full drawer narrowed to
+     * nothing, and told either of the drawer sentences the reader would go looking for decks
+     * that are exactly where they left them. Both halves are the claim: the new sentence, and
+     * the three older ones staying quiet.
+     */
+    it("says the filter emptied the wall rather than letting it read as an empty folder", async () => {
+      wrap(<DecksPage />);
+      await tileFor("Burn");
+
+      await userEvent.type(screen.getByLabelText("Filter decks by name"), "nothing");
+
+      expect(await screen.findByText("No decks match this filter")).toBeInTheDocument();
+      expect(screen.queryByText("No decks")).not.toBeInTheDocument();
+      expect(screen.queryByText(/^Every deck you have is filed/)).not.toBeInTheDocument();
+      // The count still says the drawer holds two, which is the reassurance an emptied wall owes.
+      expect(screen.getByText("0 of 2 decks")).toBeInTheDocument();
+    });
+
+    /** Nothing to narrow, no row: a filter box over "No decks" is chrome about nothing. */
+    it("draws no filter row at all over an empty gallery", async () => {
+      deckList.mockResolvedValue([]);
+
+      wrap(<DecksPage />);
+
+      expect(await screen.findByText("No decks")).toBeInTheDocument();
+      expect(screen.queryByLabelText("Filter decks by name")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Sort decks" })).not.toBeInTheDocument();
+    });
+
+    /**
+     * **A gallery with no Commander deck makes no bracket call at all**, which is the whole
+     * reason the deck ids are the caller's decision rather than a `WHERE` clause: which decks
+     * have a command zone is a fact about `format_specs.commander_rule`, and that vocabulary
+     * lives on this side. `useDeckBrackets` is `enabled`-gated on the list, so an empty one is
+     * no round trip rather than a round trip that answers `[]`.
+     */
+    it("asks for no bracket reads when no deck's format has a command zone", async () => {
+      deckList.mockResolvedValue([BURN, DRAFT]);
+
+      wrap(<DecksPage />);
+      await tileFor("Burn");
+      // The gate needs the format table, so wait until the answer that could have opened it has
+      // landed — otherwise this passes on a read that simply had not been decided yet.
+      await waitFor(() => expect(formatSpecs).toHaveBeenCalled());
+      await waitFor(() => expect(deckPipCosts).toHaveBeenCalled());
+
+      expect(deckBracketReads).not.toHaveBeenCalled();
+    });
+
+    /**
+     * **The two facts a tile cannot read for itself, handed down per tile.**
+     *
+     * This is the wiring rather than the drawing: `DeckColorBar` and the caption's bracket segment
+     * are the tile's own suite's, and what can only be checked from here is that *this* deck's
+     * pips and *this* deck's bracket reach *this* tile. A page that read one deck's answer and
+     * handed it to every tile passes every test written one level down.
+     *
+     * The Modern deck is the fence and it carries a `bracket` of its own on purpose: the column
+     * is set, so a page that printed `bracketLabel(deck.bracket, …)` without asking the format
+     * first would draw `Bracket 4` on it. The fence is `commanderRule`, not the column.
+     */
+    it("hands each tile its own pips and its own bracket", async () => {
+      deckList.mockResolvedValue([ALTAR, ZOO]);
+      deckPipCosts.mockResolvedValue(PIPS);
+
+      wrap(<DecksPage />);
+      await waitFor(() => expect(wallIds()).toEqual([11, 12]));
+
+      const commander = (await tileFor("Altar")).closest("li")!;
+      const modern = (await tileFor("Zoo")).closest("li")!;
+
+      // One bar each, saying that deck's own colours — `{U}` for Altar, `{W}` for Zoo. The bar
+      // itself is `aria-hidden`, so what is asserted is the `sr-only` sentence beside it; which
+      // segments it draws is `DeckColorBar`'s own suite's.
+      expect(within(commander).getByText("Blue")).toBeInTheDocument();
+      expect(within(modern).getByText("White")).toBeInTheDocument();
+
+      expect(within(commander).getByText(/^Commander ·/)).toHaveTextContent(
+        "Commander · Bracket 3 · 40 cards",
+      );
+      // …and nothing for the deck whose format has no command zone, `decks.bracket` or not.
+      expect(within(modern).getByText(/^Modern ·/)).not.toHaveTextContent("Bracket");
+    });
+
+    /**
+     * **A tile is named for its deck, and a bar under the art may not take that away.**
+     *
+     * The colour bar is drawn between the cover and the name, *inside* the tile's button — so a
+     * `role="img"` with a name on it, which is how this shipped first, lands in that button's
+     * accessible name ahead of the deck: `"White, Red Zoo"`. What that costs is not cosmetic.
+     * `getByRole("button", { name: /^Zoo/ })` stops matching, and so does anyone driving the app
+     * by voice saying "click Zoo" — while every test written one level down, over the bar alone,
+     * stays green. `DeckTile` had already reasoned this out once for the theory badge and drawn
+     * it outside the button for exactly this reason.
+     *
+     * So the bar is `aria-hidden` and the colours are an `sr-only` span placed **after** the
+     * name. Both halves are asserted here, on a deck that really has pips: the name still starts
+     * with the deck, and the colours are still said.
+     */
+    it("keeps a tile addressable by its deck's name, colour bar and all", async () => {
+      deckList.mockResolvedValue([ALTAR, ZOO]);
+      deckPipCosts.mockResolvedValue(PIPS);
+
+      wrap(<DecksPage />);
+      await waitFor(() => expect(wallIds()).toEqual([11, 12]));
+
+      // **The anchor is the assertion.** An unanchored `/Zoo/` passes against the very defect
+      // this test exists for, since `"White, Red Zoo"` contains it.
+      const zoo = await screen.findByRole("button", { name: /^Zoo/ });
+
+      // And the colours are still said, after the name. Asserted as DOM order rather than by
+      // matching the whole accessible name: jsdom applies no stylesheet, so it joins these parts
+      // with no separator at all (`ZooWhiteModern · 60 cards`) where a browser puts a space
+      // between block-level parts. The order is the same in both, and the order is the fact.
+      const said = within(zoo).getByText("White");
+      expect(zoo.textContent?.indexOf("Zoo")).toBeLessThan(zoo.textContent?.indexOf("White") ?? -1);
+      expect(said.className).toContain("sr-only");
+    });
+
+    /** …and it asks about exactly the ones that do, whichever wall they are on. The ids are
+     *  sorted and de-duplicated before they enter the query key, so the argument is `[12]` rather
+     *  than whatever order `deck_list` answered in. */
+    it("asks about exactly the decks whose format has a command zone", async () => {
+      threeDecks();
+
+      wrap(<DecksPage />);
+      await waitFor(() => expect(wallIds()).toEqual([11, 13, 12]));
+
+      await waitFor(() => expect(deckBracketReads).toHaveBeenCalledWith([12]));
+    });
   });
 
   /** The gallery's whole job: pick one to work on. */
@@ -1290,25 +1804,30 @@ describe("DecksPage folders", () => {
   });
 
   /**
-   * Scryfall's image policy reaches the folder cards too: an `art` crop has no printed frame,
-   * so every illustrator whose work is in the strip is named — and a cover the card database
-   * has no artist for is not drawn at all, exactly as on a deck tile.
+   * Scryfall's image policy reaches the folder cards too: an `art` crop has no printed frame, so
+   * every illustrator whose work is in the strip is named — and a cover the card database has no
+   * artist for is not drawn at all, exactly as on a deck tile.
+   *
+   * **The naming is now per crop rather than one comma-joined line**, which is the half of the
+   * 2026-09-07 change that improved this card rather than merely tidying it: the old line read
+   * `Art by A, B, C` under three pictures with no way to tell which painter belonged to which,
+   * and each frame carries its own name now.
    */
   it("draws a folder's member art only where it can credit the illustrator", async () => {
     withFolders();
 
-    wrap(<DecksPage />);
+    wrapWithTips(<DecksPage />);
 
     const card = (await screen.findByRole("button", { name: "Commander folder, 2 decks" })).closest(
       "li",
     )!;
     // `Sunday draft` has no cover and contributes nothing; Kenrith, one level down, does.
-    expect(within(card).getByText("Art by Kieran Yanner")).toBeInTheDocument();
     expect(card.querySelectorAll("img")).toHaveLength(1);
-    expect(card.querySelector("img")).toHaveAttribute(
-      "src",
-      cardImageUrl(KENRITH.coverCardId!, 0, "art"),
-    );
+    const art = card.querySelector("img")!;
+    expect(art).toHaveAttribute("src", cardImageUrl(KENRITH.coverCardId!, 0, "art"));
+    // No line of text under the card, and the painter on the crop instead.
+    expect(within(card).queryByText(/^Art by/)).not.toBeInTheDocument();
+    expect(await hintOn(art.parentElement!)).toHaveTextContent("Art by Kieran Yanner");
   });
 
   /** A folder is made where it will live, at the indent it will have — and at **any** level,
