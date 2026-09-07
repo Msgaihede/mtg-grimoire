@@ -432,9 +432,9 @@ preferred_finish`'s nullability one table over.
   exact `(card_id, finish)` match and the `ORDER BY` reduces to `e.id`, and `swap_printing` and
   `set_card_finish` are the ones that now keep the promise the fallback used to.
 
-  **Schema v35 runs the same sweep once, over every file that predates it.** The v25 conversion
+  **Schema v36 runs the same sweep once, over every file that predates it.** The v25 conversion
   "replaced matched candidates by oracle id, so the conversion routinely files a printing the
-  deck does not list" (`release_group_copies`'s own doc) — the `if v < 35` rung inlines
+  deck does not list" (`release_group_copies`'s own doc) — the `if v < 36` rung inlines
   `release_unclaimed_copies`'s logic in its own SQL and arithmetic rather than calling the app
   function (a migration step is history the day it ships, and app code it called would silently
   change what an old file is converted into), and applies it to every `collection_folders` row

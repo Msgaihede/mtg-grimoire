@@ -1157,7 +1157,7 @@ mod tests {
         // while its own rows come up short would give back copies the other line still claims.
         // The stranding the fallback was written for is cured at the source instead:
         // `deck::release_unclaimed_copies` runs inside `swap_printing` and `set_card_finish`, so
-        // a copy the list does not name is never left in the group to begin with, and schema v35
+        // a copy the list does not name is never left in the group to begin with, and schema v36
         // sweeps what the v25 conversion left. What is left here is a deck holding a printing
         // nothing in it names — a state only a hand-edited or an out-of-date-device file reaches
         // — and the honest answer is that this cut is not the press that moves it.

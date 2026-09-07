@@ -1342,7 +1342,7 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
   up. `attribute_owned` hands the map out along `read_deck_cards`' own `ORDER BY`, never a
   caller's, so the number a row shows cannot depend on how a view displayed the list. **The group
   is kept honest at the new grain by `deck::release_unclaimed_copies`**, called from
-  `swap_printing` and `set_card_finish` after each rewrites a row's identity, and by the v35
+  `swap_printing` and `set_card_finish` after each rewrites a row's identity, and by the v36
   rung's one-time sweep of every existing file into the rule. **There is no run list to keep**:
   nothing is derived, so no write "reallocates" and none can forget to — the previous rule named
   seven writes and had already gone stale once. What a deck owns changes only when a row moves in

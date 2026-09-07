@@ -9251,16 +9251,23 @@ function releaseGroupCopies(
  * new one — that read filters by category id and never by `isActive` either.
  *
  * **A theory row claims nothing**, so a plan holds no cards and cannot be the reason a sweep
- * finds a surplus — the `variant !== LIVE` filter below is this function's own, the way
- * `release_live_copies`' guard is its own rather than each of its callers'. Calling this after a
- * *theory*-variant swap or finish change is therefore a loop that finds nothing new, because
- * editing a plan never changes what the live list claims.
+ * finds a surplus. Two fences say that, and both are `deck::release_unclaimed_copies`': the
+ * `variant !== LIVE` filter over `deckCards` below, and the **`variant` guard on the way in** —
+ * the caller hands over the variant it just wrote and this returns without reading anything when
+ * it is not `live`, exactly as `release_live_copies`' guard is its own rather than each of its
+ * callers'. The guard is a no-op in any store the fake's own writes produced, because editing a
+ * plan never changes what the live list claims and the sweep would find the same nothing the
+ * slow way. It is here because a *story* can stage a group holding more than its live list
+ * claims and then make a theory swap: without the guard the fake would file those copies away
+ * on a press the app leaves alone, and the workbench would disagree with the window over a state
+ * only a fixture can build.
  *
  * **A deck with no group holds nothing rather than refusing, and `Recently removed` is resolved
  * only when there is a surplus to file** — {@link releaseGroupCopies}'s asymmetries, carried over
  * so the two behave alike.
  */
-function releaseUnclaimedCopies(db: FakeDb, deckId: number): void {
+function releaseUnclaimedCopies(db: FakeDb, deckId: number, variant: DeckVariant): void {
+  if (variant !== LIVE) return;
   const group = deckGroup(db, deckId);
   if (group === undefined) return;
   const claimed = new Map<string, number>();
@@ -12132,7 +12139,7 @@ export function writeHandlers(db: FakeDb) {
       // §2.2's sweep, after the rewrite rather than a targeted release before it: a swap can
       // *fold* into a line the deck already has, and reading the finished list against the
       // group answers both the plain case and the folded one with one query.
-      releaseUnclaimedCopies(db, args.deckId);
+      releaseUnclaimedCopies(db, args.deckId, variant);
       // `CHECK (quantity > 0)` means a row that was already there contributed at least one
       // copy, so the landed total is strictly greater than what moved exactly when it folded.
       return { folded: landed > quantity, quantity: landed };
@@ -12191,7 +12198,7 @@ export function writeHandlers(db: FakeDb) {
         result = { folded: false, quantity: row.quantity };
       }
       // §2.2's sweep, after the rewrite either branch took — see the doc above.
-      releaseUnclaimedCopies(db, args.deckId);
+      releaseUnclaimedCopies(db, args.deckId, variant);
       return result;
     },
 

@@ -6676,6 +6676,16 @@ describe("the deck grain (deck, variant, category, card)", () => {
       .reduce((n, e) => n + e.quantity, 0);
 
   /**
+   * Copies of **one printing** in one folder, which the folded case needs and {@link copiesIn}
+   * cannot answer: where the group holds two printings, a folder total reads the same whether
+   * the sweep took the one the list stopped naming or took both.
+   */
+  const copiesOf = (db: FakeDb, folderId: number | null, cardId: string) =>
+    db.collectionEntries
+      .filter((e) => e.folderId === folderId && e.cardId === cardId)
+      .reduce((n, e) => n + e.quantity, 0);
+
+  /**
    * **Spec §2.2, the plain case.** A swap touches no collection table, so the group would
    * otherwise keep the old printing's copies filed under a deck that no longer lists them —
    * exactly the stranding `release_group_copies`' oracle fallback used to paper over (§2.3) and
@@ -6707,11 +6717,22 @@ describe("the deck grain (deck, variant, category, card)", () => {
    * plays BOLT_B, so a release keyed on "the row that used to be here" would have nothing left to
    * reason about; reading the finished list against the group answers the plain case and this one
    * with one query.
+   *
+   * **The group holds _both_ printings, and staging only the one that leaves is what made this
+   * test unable to fail** (corrected 2026-09-07). With BOLT_B's own copies absent, "evicts the
+   * printing that left" and "evicts everything in the group" produce the same two numbers, so a
+   * sweep that had thrown the surplus arithmetic away entirely would still have passed. The
+   * crate's `a_folded_swap_evicts_only_the_printing_that_left` files both from the start for
+   * exactly this reason, and this fixture is now its shape: BOLT_B's copy is claimed by the
+   * folded row and stays, BOLT_A's three are claimed by nothing and go.
    */
   it("sweeps correctly when the swap folds into a line the deck already has", () => {
     const db = makeDeckDb({
       decks: [deck({ id: 1 })],
-      collectionEntries: [entry({ id: 1, cardId: BOLT_A.id, quantity: 3, folderId: groupId(1) })],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT_A.id, quantity: 3, folderId: groupId(1) }),
+        entry({ id: 2, cardId: BOLT_B.id, quantity: 1, folderId: groupId(1) }),
+      ],
       deckCards: [
         deckCard({ id: 1, deckId: 1, cardId: BOLT_A.id, categoryKind: "main", quantity: 2 }),
         deckCard({ id: 2, deckId: 1, cardId: BOLT_B.id, categoryKind: "main", quantity: 1 }),
@@ -6726,8 +6747,12 @@ describe("the deck grain (deck, variant, category, card)", () => {
     });
 
     expect(result).toEqual({ folded: true, quantity: 3 });
-    expect(copiesIn(db, groupId(1))).toBe(0);
-    expect(copiesIn(db, REMOVED_FOLDER)).toBe(3);
+    // Per printing, not per folder: a folder total cannot tell "only BOLT_A left" from
+    // "everything left", which is the whole of what this fixture was changed to say.
+    expect(copiesOf(db, groupId(1), BOLT_A.id)).toBe(0);
+    expect(copiesOf(db, groupId(1), BOLT_B.id)).toBe(1);
+    expect(copiesOf(db, REMOVED_FOLDER, BOLT_A.id)).toBe(3);
+    expect(copiesOf(db, REMOVED_FOLDER, BOLT_B.id)).toBe(0);
   });
 
   /**

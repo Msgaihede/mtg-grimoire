@@ -1083,9 +1083,14 @@ rewriting a row's identity — sweeping the group for whatever the new identity 
 have to reason about the fold to get the quantity right. `release_group_copies` narrows back to
 the exact `(card_id, finish)` match and nothing looser, so the crate's one walk stops needing to
 reach for the oracle card at all — the ordering that used to keep every cut of a card nobody ever
-swapped exactly what it was now has nothing left to order. The join to `cards` is still a
-`LEFT JOIN` so a row whose printing has left the corpus is still releasable, and a deck card that
-is itself an orphan is matched by its own id — that much is unchanged.
+swapped exactly what it was now has nothing left to order. **The `LEFT JOIN cards` went with the
+fallbacks**: the backing query reads `collection_entries` alone, on `folder_id`, `card_id` and
+`finish`. The join was only ever there to hand the oracle arm an `oracle_id` to compare, and the
+`LEFT` so that a row whose printing has left the corpus still matched the exact arm while the
+oracle one degraded to `NULL`. With no arm asking for an oracle id there is nothing to join to,
+and an orphan is *more* releasable than before rather than less — the deck row and the collection
+row name the same `card_id`, so the match holds whether or not the corpus still knows the
+printing.
 
 Three scopes are decisions rather than details:
 
@@ -1122,7 +1127,7 @@ a grain needs the source stepped down, refiled, and the remainder re-inserted be
 crate's one copy of that rule — `collection_alloc` carried a private twin until fan-in, and the
 note under "The two writes" says what happened to it.
 
-### The honesty rule, and what v35 did to bring every file under it
+### The honesty rule, and what v36 did to bring every file under it
 
 > **A deck's group holds only copies its live list claims at `(card_id, finish)`.**
 
@@ -1136,7 +1141,7 @@ deck*, turning a display switch into a press that moves cardboard. Custody follo
 way — its query filters by `category_id` and never by `category_active` — so this is the file's
 existing rule rather than a new one.
 
-**Schema v35 is the one-time pass that brings every file made before 2026-09-07 under it.** The
+**Schema v36 is the one-time pass that brings every file made before 2026-09-07 under it.** The
 v25 conversion "replaced matched candidates by oracle id, so the conversion routinely files a
 printing the deck does not list" (above) — tolerable while the read counting a deck's copies was
 the same oracle-grain match the conversion made, and no longer tolerable once the read narrowed:
@@ -1150,7 +1155,7 @@ old file is converted into the next time either function's logic moves — the v
 model, and it inlines `take_copies`' split with both clamps for the same reason. The folder kinds
 are spelled as the literals `'deck'` and `'removed'` rather than read through
 `COLLECTION_FOLDER_KINDS`, for the reason `COLLECTION_GRAIN` is never interpolated into a probe:
-a rung that read the constant would convert a v34 file differently the day the constant is
+a rung that read the constant would convert a v35 file differently the day the constant is
 reordered.
 
 **The copies land in `Recently removed` and not at the root, and where they land is
@@ -2122,7 +2127,7 @@ build, not a description of this one.
 
 | Path | What is in it |
 | --- | --- |
-| `src-tauri/src/schema.rs` | The v24 and v25 steps, the v34 rung that adds `locked`, the v35 rung that sweeps every `kind = 'deck'` folder to the exact-grain rule, `COLLECTION_GRAIN`, `COLLECTION_FOLDER_KINDS`, `UNDO_V24`, `UNDO_V25`, `UNDO_V34`, `schema_at_23`, `v24_database`, and the whole-schema `ON DELETE` inventory |
+| `src-tauri/src/schema.rs` | The v24 and v25 steps, the v34 rung that adds `locked`, the v36 rung that sweeps every `kind = 'deck'` folder to the exact-grain rule, `COLLECTION_GRAIN`, `COLLECTION_FOLDER_KINDS`, `UNDO_V24`, `UNDO_V25`, `UNDO_V34`, `schema_at_23`, `v24_database`, and the whole-schema `ON DELETE` inventory |
 | `src-tauri/src/collection_folders.rs` | The folder commands, `set_entry_folder` and its two fences, `refile_entry`, `take_copies` (the split), `merge_entry`, `folder_summary`, `set_folder_locked`, `LOCKED_FOLDER_IDS` and `effectively_locked` (the lock's inheritance, spelled once), `FOLDER_NOT_YOURS`, `ENTRY_IN_A_DECK`, `FOLDER_IS_LOCKED` |
 | `src-tauri/src/collection_alloc.rs` | `collection_to_deck` and `deck_to_collection` — the pair that moves a row across the deck boundary and back — `take_from_deck_list`, `MoveOutcome`, the cut's history row and the argument for its missing undo step, and the seven refusal sentences |
 | `src-tauri/src/deck_pull.rs` | The third crossing (2026-09-03, issue #351): `deck_pull_plan` and `deck_pull_from_collection` — filling a hole the list already declares, writing no `deck_cards` row. Candidate eligibility, the pre-pick order, the all-or-nothing batch, and the `move` history row. Recorded in [decks-storage.md](decks-storage.md#the-pull-filling-a-hole-the-list-already-has) |
