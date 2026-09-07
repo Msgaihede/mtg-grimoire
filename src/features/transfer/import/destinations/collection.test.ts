@@ -166,8 +166,14 @@ describe("planCollectionImport", () => {
     // The fold key was `(cardId, finish, condition)` while the real grain is eleven columns,
     // and `commit_import` hard-coded altered/signed/proxy/misprint/serial/grading to defaults
     // — so a re-import could never land on the reader's altered row and wrote a second
-    // all-defaults entry beside it. `import-export.md:225-262` called this latent; PR 4's
-    // import toggle makes it live.
+    // all-defaults entry beside it. `import-export.md`'s **"The narrow fold"** called this
+    // latent; PR 4's import toggle makes it live.
+    //
+    // **Named rather than numbered, because the number had already rotted.** This read
+    // `import-export.md:225-262`, and by 2026-09-07 that range had become the middle of the
+    // inactive-category filter — a section about something else entirely, inserted above it by
+    // an unrelated PR. A line range into a prose file is a fact about a *document revision*,
+    // and a prose-only edit routes to neither CI job, so nothing can ever go red for it.
     const plan = planCollectionImport(
       listOf(line({ extra: { altered: "yes" } })),
       [hit(0, "bolt")],

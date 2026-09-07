@@ -705,6 +705,21 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   against that device's narrower CHECK. That is true of every shape rung this repo has shipped —
   v34's `collection_folders.locked` has exactly the same property — and it is not v35's to fix;
   it is written down here so the next person meets it in a document rather than in a failure.
+  **Driven on a real v34 database, 2026-09-07, debug `tauri dev`** — a copy of the main
+  checkout's own `user.db`, because a worktree is a fresh install and can never show an upgrade
+  bug. Before: `user_version` **34**, **275** rows over **330** copies, every one of them `NM`,
+  no `purchase_price` anywhere, ids **1–275**, the five-value CHECK. After the app opened it
+  once: `user_version` **35**, the CHECK reading `('NONE','NM','LP','MP','HP','DMG')`, and
+  **all 275 rows still `NM`** at the same ids with all five indexes back. That is the whole of
+  what the rung promises — a widened constraint and nothing rewritten — measured rather than
+  argued. The rebuild is fast enough not to be worth a figure: the window was up and drawing the
+  collection within the ordinary start-up.
+  **The one trap in taking that measurement is reading too early.** Probed 8 s after
+  `mtg-grimoire.exe` appeared in the process list, the file still said **34** — the process
+  exists well before `prepare_database` has opened the user half, and `user.db-wal` was still
+  0 bytes. A single probe at that moment reads exactly like a rung that never ran. Wait for the
+  window to draw, then probe; and note that a read-only `node:sqlite` open **creates the `-shm`
+  file itself**, so a fresh `-shm` timestamp is not evidence the app has touched anything.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every
