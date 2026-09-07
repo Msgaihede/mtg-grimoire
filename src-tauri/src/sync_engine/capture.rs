@@ -105,7 +105,7 @@ impl Spec {
 }
 
 /// One spec per synced table. `schema::SYNCED_TABLES` is the census this is held to.
-pub const TABLES: [Spec; 12] = [
+pub const TABLES: [Spec; 13] = [
     Spec {
         table: "collection_entries",
         keys: &["id"],
@@ -266,6 +266,30 @@ pub const TABLES: [Spec; 12] = [
         append_only: false,
     },
     Spec {
+        table: "deck_tokens",
+        keys: &["id"],
+        // **`quantity` is a field and not a counter, on two grounds.** Mechanically a counter
+        // carries `NEW - OLD` and this column is nullable, so there is no arithmetic to carry;
+        // `deck_cards.quantity` can be a counter precisely because it is NOT NULL.
+        // Semantically last-write-wins is what is wanted: `deck_cards.quantity` sums because
+        // two devices each sleeving a copy means two copies, but "how many Treasures I want to
+        // bring" is a setting, and two devices each setting it to 4 must mean 4, not 8.
+        //
+        // **`oracle_id` is on the field list although it is half the grain**, `muted_tags`' and
+        // `device_names`' reason: the far device has to be able to *build* the row, and the
+        // grain `apply::META` restates is a way of recognising one that is already there.
+        fields: &["oracle_id", "card_id", "quantity", "state"],
+        counters: &[],
+        parents: &[Parent {
+            key: "deck",
+            col: "deck_id",
+            table: "decks",
+            absent: Absent::Null,
+            soft: false,
+        }],
+        append_only: false,
+    },
+    Spec {
         table: "decks",
         keys: &["id"],
         fields: &[
@@ -299,6 +323,11 @@ pub const TABLES: [Spec; 12] = [
             "last_group_by",
             "last_sort_by",
             "separate_x_group",
+            // Whether the Tokens & emblems area under this deck is expanded (user schema v35).
+            // It joins the three above it rather than staying local for their reason: it is
+            // per-deck view state, and a reader who opened that area on one device meant it
+            // about the deck rather than about the machine.
+            "tokens_open",
             "bracket",
         ],
         counters: &[],
@@ -668,7 +697,7 @@ fn delete_trigger(spec: &Spec) -> String {
 
 /// The clock follows the op it just stamped.
 ///
-/// A separate trigger rather than a second statement inside each of the thirty-four, so the rule
+/// A separate trigger rather than a second statement inside each of the thirty-seven, so the rule
 /// lives once. It is not recursive — a different table — so `PRAGMA recursive_triggers` has no
 /// bearing on it either way, and nothing here depends on that pragma's value.
 const CLOCK_TRIGGER: &str = "DROP TRIGGER IF EXISTS sync_ops_clock;
@@ -683,11 +712,11 @@ const CLOCK_TRIGGER: &str = "DROP TRIGGER IF EXISTS sync_ops_clock;
 /// **`DROP` then `CREATE`, never `CREATE … IF NOT EXISTS`.** A trigger is stored SQL: a build
 /// that changed the generator and shipped `IF NOT EXISTS` would leave every existing database
 /// running last year's rules forever, silently, and a bug fixed here would reach nobody who
-/// already had the app. Thirty-four drops and creates at open is a fraction of a millisecond.
+/// already had the app. Thirty-seven drops and creates at open is a fraction of a millisecond.
 ///
 /// Called from [`crate::schema::prepare_database`], so it reaches the desktop, Android and the
 /// browser through the one door. **Not** on a read-only connection: it never writes, and a
-/// trigger there is thirty-four objects nobody fires.
+/// trigger there is thirty-seven objects nobody fires.
 pub fn install(conn: &Connection) -> rusqlite::Result<()> {
     for spec in &TABLES {
         conn.execute_batch(&insert_trigger(spec))?;

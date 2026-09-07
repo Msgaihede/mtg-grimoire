@@ -93,7 +93,17 @@ const WISHLIST_ONLY: Dirty = Dirty {
 /// update hook per connection.
 pub fn surface_of(table: &str) -> Option<Dirty> {
     match table {
-        "deck_cards" | "deck_categories" | "deck_labels" | "deck_folders" => Some(DECKS_ONLY),
+        // **`deck_tokens` is an over-approximation and joins them anyway** (user schema v35).
+        // No mirrored file names a token today — the seven formats have no section for one,
+        // which `docs/superpowers/specs/2026-09-07-deck-token-management-design.md` §8 puts out
+        // of scope deliberately — so a write here costs one pass that renders identical bytes.
+        // The other direction is a table that is silently invisible to the backup for as long
+        // as that stays true, and `None` is the arm a *reader* would have to remember to move
+        // the day a format grows a token line. Being wrong this way costs a render; being wrong
+        // the other way costs a file that never catches up.
+        "deck_cards" | "deck_categories" | "deck_labels" | "deck_folders" | "deck_tokens" => {
+            Some(DECKS_ONLY)
+        }
         // Both, and the over-approximation is deliberate: a deck's name titles its group
         // folder in the cabinet, so a rename that only marked decks would leave the folder
         // named after the old one until something else touched the collection. Being wrong
@@ -251,8 +261,9 @@ pub fn install_hook(
         // commit hook per connection, so a second installer would take this one off.
         //
         // A commit, not a row: `update_hook` does not fire for `WITHOUT ROWID` tables, and two
-        // of the twelve synced tables are exactly that (`muted_tags`, and `device_names` since
-        // user schema v31). A row-level wake would silently never sync a mute or a rename.
+        // of the thirteen synced tables are exactly that (`muted_tags`, and `device_names`
+        // since user schema v31). A row-level wake would silently never sync a mute or a
+        // rename.
         //
         // **This says only "a transaction committed", and deciding is somebody else's job** —
         // spec §6.3's "`commit_hook` wakes, the outbox decides". The decider is
@@ -835,7 +846,7 @@ mod tests {
             .map(String::as_str)
             .partition(|t| surface_of(t).is_some());
 
-        // The nine that reach the mirror.
+        // The ten that reach the mirror.
         assert_eq!(
             mapped,
             [
@@ -845,6 +856,7 @@ mod tests {
                 "deck_categories",
                 "deck_folders",
                 "deck_labels",
+                "deck_tokens",
                 "decks",
                 "wishlist_entries",
                 "wishlist_folders",
@@ -937,6 +949,8 @@ mod tests {
         assert!(!surface_of("deck_cards").unwrap().collection);
         assert!(surface_of("deck_categories").unwrap().decks);
         assert!(surface_of("deck_labels").unwrap().decks);
+        assert!(surface_of("deck_tokens").unwrap().decks);
+        assert!(!surface_of("deck_tokens").unwrap().collection);
         assert!(surface_of("deck_folders").unwrap().decks);
         assert!(surface_of("wishlist_entries").unwrap().wishlist);
         assert!(surface_of("wishlist_folders").unwrap().wishlist);

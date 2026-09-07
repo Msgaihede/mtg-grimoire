@@ -16,6 +16,7 @@ import deckMetaRs from "../../src-tauri/src/deck_meta.rs?raw";
 import deckPullRs from "../../src-tauri/src/deck_pull.rs?raw";
 import deckQuickAddRs from "../../src-tauri/src/deck_quick_add.rs?raw";
 import deckTheoryRs from "../../src-tauri/src/deck_theory.rs?raw";
+import deckTokensRs from "../../src-tauri/src/deck_tokens.rs?raw";
 import resetRs from "../../src-tauri/src/reset.rs?raw";
 import searchRs from "../../src-tauri/src/search.rs?raw";
 import syncCommandsRs from "../../src-tauri/src/sync_engine/commands.rs?raw";
@@ -29,6 +30,7 @@ import {
   ipcError,
   type ArtTagProgressEvent,
   type ComboProgress,
+  type DeckTokenRow,
   type FeedProgressEvent,
   type OracleTagProgressEvent,
   type RelayOutcome,
@@ -1141,6 +1143,97 @@ describe("ipc argument names match the Rust command signatures", () => {
     // one reads `live` and only `live`, and the two shopping lists are different questions.
     expect(invoke).toHaveBeenCalledWith("deck_theory_missing_to_wishlist", { deckId: 4 });
     expect(wishes).toBe(3);
+  });
+
+  /**
+   * The four token commands, and the one argument in this whole file that is **renamed on the
+   * wire**.
+   *
+   * `deck_token_set`'s state word cannot be spelled `state` in Rust: `state` is already the
+   * managed `tauri::State` every command takes, so the parameter is `token_state` and the key
+   * the payload carries is `tokenState`. That rename lives in exactly one place — this
+   * wrapper — and nothing type-checks it: callers on this side pass `{ state }` because that
+   * is what the column is called, and a mirror that forwarded the word unchanged would hand
+   * `deck_token_set` a field it declares no parameter for. Tauri drops it, the command reads
+   * `None`, and a dismissal silently becomes "no change" with no error anywhere.
+   *
+   * The other three are pinned for the ordinary reason. `deck_tokens` is a read scoped by
+   * `variant`, like every deck read beside it. `deck_token_clear` addresses the override by
+   * the grain (`deckId`, `oracleId`); `deck_token_add` addresses a **printing** (`deckId`,
+   * `cardId`) because a hand-added token is picked out of a printings grid and Rust resolves
+   * the oracle id from it. Those two ids are one word apart and interchangeable to a
+   * type checker, so the swap is a runtime no-op the suite would otherwise never see.
+   */
+  it("names the deck token command arguments the way Rust spells them", async () => {
+    const row: DeckTokenRow = {
+      oracleId: "o-1",
+      name: "Treasure",
+      typeLine: "Token Artifact — Treasure",
+      layout: "token",
+      // The four disambiguation fields, and a `null` in each is a real answer: an artifact
+      // token has no power or toughness and Treasure is colourless. They are typed here rather
+      // than left off, because 104 token names in the corpus name more than one `oracle_id`
+      // and a mirror that dropped these would draw them as one tile.
+      power: null,
+      toughness: null,
+      colors: "",
+      oracleText: "{T}, Sacrifice this artifact: Add one mana of any color.",
+      defaultCardId: "c-default",
+      sources: [{ cardId: "d-1", name: "Smothering Tithe" }],
+      derived: true,
+      cardId: null,
+      quantity: null,
+      state: null,
+    };
+    invoke.mockResolvedValue([row]);
+
+    // Read back rather than assumed: the DTO reaches this side already camelCased by serde and
+    // the wrapper transforms nothing, so a mirror that renamed or dropped a field here would
+    // be the only thing standing between the crate and every caller. The annotation above is
+    // half the assertion — a field this side spells differently is a compile error here and
+    // `undefined` everywhere else.
+    expect(await ipc.deckTokens(7, "live")).toEqual([row]);
+    expect(invoke).toHaveBeenCalledWith("deck_tokens", { deckId: 7, variant: "live" });
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.deckTokenSet(7, "o-1", { cardId: "c-9", quantity: 4, state: "auto" });
+    expect(invoke).toHaveBeenLastCalledWith("deck_token_set", {
+      deckId: 7,
+      oracleId: "o-1",
+      cardId: "c-9",
+      quantity: 4,
+      tokenState: "auto",
+    });
+
+    // All five keys travel on every call, the `null`s included — Tauri fills parameters by
+    // name and an absent one is a refusal rather than a default, which is the same rule
+    // `deck_add_card`'s two category keys are written to.
+    await ipc.deckTokenSet(7, "o-1", { quantity: 2 });
+    expect(invoke).toHaveBeenLastCalledWith("deck_token_set", {
+      deckId: 7,
+      oracleId: "o-1",
+      cardId: null,
+      quantity: 2,
+      tokenState: null,
+    });
+
+    // A quantity of **zero** is a number the reader chose, not an absent one: `?? null` and
+    // never `|| null`, or stepping a token down to nothing would travel as "leave it alone"
+    // and the tile would spring back to what it was.
+    await ipc.deckTokenSet(7, "o-1", { quantity: 0, state: "hidden" });
+    expect(invoke).toHaveBeenLastCalledWith("deck_token_set", {
+      deckId: 7,
+      oracleId: "o-1",
+      cardId: null,
+      quantity: 0,
+      tokenState: "hidden",
+    });
+
+    await ipc.deckTokenClear(7, "o-1");
+    expect(invoke).toHaveBeenLastCalledWith("deck_token_clear", { deckId: 7, oracleId: "o-1" });
+
+    await ipc.deckTokenAdd(7, "c-9");
+    expect(invoke).toHaveBeenLastCalledWith("deck_token_add", { deckId: 7, cardId: "c-9" });
   });
 
   /**
@@ -2472,6 +2565,17 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // not the deck's own; `TheoryDiffRow.image_uris` is the row's printing.
     ["DeckRow", deckRs, "DeckRow"],
     ["TheoryDiffRow", deckTheoryRs, "TheoryDiffRow"],
+    // **The first row here that is not about a picture**, and it earns its place on the same
+    // mechanism rather than the same symptom. Four of `DeckTokenRow`'s fields exist solely to
+    // tell two tokens apart — `power`, `toughness`, `colors`, `oracleText` — because a token's
+    // name does not identify it: 104 token/emblem names are shared by more than one `oracle_id`
+    // (debug corpus, 2026-09-07), and `Wurmcoil Engine` alone puts two tokens both called
+    // `Wurm 3/3` in one deck. A field dropped on either side of this mirror would not blank a
+    // tile the way a missing `image_uris` does; it would draw two tiles that look and announce
+    // the same, which is the collection wall's shipped bug again and which neither suite can
+    // see. `colors` typed as an array rather than the concatenated letters `cards.colors`
+    // actually stores would be caught here too, by name parity alone.
+    ["DeckTokenRow", deckTokensRs, "DeckTokenRow"],
   ];
 
   it.each(mirrors)(

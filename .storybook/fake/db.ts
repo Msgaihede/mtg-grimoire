@@ -100,7 +100,7 @@ import { SPECS } from "@/features/decks/validation/fixtures";
 // and a second hand-typed list here would let the workbench and the window disagree about which
 // four exist. Under Storybook this specifier is aliased to `.storybook/fake/images.ts`, which
 // re-exports it from the real module unchanged — so both programs read the same tuple.
-import { IMAGE_VARIANTS } from "@/lib/images";
+import { IMAGE_VARIANTS, type ImageVariant } from "@/lib/images";
 import type {
   BackupZip,
   CardDetail,
@@ -141,6 +141,8 @@ import type {
   DeckQuickAddOutcome,
   DeckQuickAddWish,
   DeckRow,
+  DeckTokenRow,
+  DeckTokenState,
   DecksCleared,
   DeckLabel,
   DeckVariant,
@@ -192,6 +194,7 @@ import type {
   TagStatus,
   GlobalLabel,
   TheoryDiffRow,
+  TokenSource,
   TheorySlot,
   TransferImportMode,
   UpdateAsset,
@@ -477,6 +480,21 @@ export interface FakeDeck {
    */
   separateXGroup?: boolean;
   /**
+   * `decks.tokens_open` (schema v35): whether the editor's **Tokens & emblems** area is
+   * expanded.
+   *
+   * **Optional for {@link separateXGroup}'s reason, and this is the fifth column on that
+   * footing** — `NOT NULL DEFAULT 0`, so a seed that says nothing is a deck whose area is
+   * collapsed rather than a deck missing an answer, and {@link toDeckRow} resolves the absence.
+   *
+   * A **reading** preference like `separateXGroup` beside it, and it rides the ordinary
+   * `deck_update` for the same reason rather than `deck_set_view_state`: the three `last*`
+   * columns are written on every press and deliberately move neither `updated_at` nor the
+   * history, while a disclosure a reader opens once and leaves open is a handful of audited
+   * writes over a deck's whole life.
+   */
+  tokensOpen?: boolean;
+  /**
    * `decks.default_category_id` (schema v16): which of this deck's categories an add that names
    * no pile lands in, and `AUTO_CATEGORY` (`0`) for "by what the card does".
    *
@@ -698,6 +716,45 @@ export interface FakeDeckCard {
    */
   finish: DeckFinish;
   needsReview: string | null;
+}
+
+/**
+ * One row of `deck_tokens` (user schema v35). Grain `(deckId, oracleId)`
+ * (`schema::DECK_TOKEN_GRAIN`), and the reader's **deviation** — never the list itself.
+ *
+ * **The list of tokens a deck needs is derived and stored nowhere**: Rust reads `all_parts` off
+ * each distinct card in the deck's *active* categories on every open. So this table holds only
+ * what the reader changed about one of them — which art, how many, or that they do not want to
+ * see it — and a token nobody has touched has no row at all. That is why all three of
+ * {@link cardId}, {@link quantity} and {@link state} can be absent together, and why
+ * {@link writeHandlers.deck_token_set} *deletes* a row rather than writing one whose three
+ * fields say nothing.
+ *
+ * **`oracleId` and not a card id**, because the row has to survive the reader changing their
+ * mind about the art — the art choice is one of the things it stores.
+ *
+ * **Not grained on `variant`**, unlike {@link FakeDeckCard}. The derived list is per-variant
+ * because deck cards are; the override is not, so a Treasure art chosen for the live list is
+ * the art the theory list draws too.
+ */
+export interface FakeDeckToken {
+  id: number;
+  deckId: number;
+  oracleId: string;
+  /** The printing the reader picked. `null` is "whichever one the resolver names". */
+  cardId: string | null;
+  /**
+   * How many copies the reader wants. `null` is "the default", which is 1 — stored **absent**
+   * rather than as a 1, so that changing the default later moves every untouched token.
+   *
+   * **`0` is a value and not an absence**: a reader who zeroed a token while keeping the art
+   * they picked has said something, which is why every reader of this column uses `??`.
+   */
+  quantity: number | null;
+  /** `auto` | `hidden` | `manual`, closed by a CHECK on the column rather than by convention. */
+  state: DeckTokenState;
+  createdAt: number;
+  updatedAt: number;
 }
 
 /**
@@ -1096,6 +1153,14 @@ export interface FakeDb {
   deckCategories: FakeDeckCategory[];
   deckLabels: FakeDeckLabel[];
   deckCards: FakeDeckCard[];
+  /**
+   * `deck_tokens` — the **deviations only**, never the list of tokens a deck needs.
+   *
+   * That list is derived from {@link FakeDb.cards} and {@link TOKEN_PARTS} on every read, which
+   * is what the app does with `all_parts`, so a world with an empty table here still draws a
+   * full panel. See {@link FakeDeckToken} for why an empty override is not representable.
+   */
+  deckTokens: FakeDeckToken[];
   deckAudit: FakeDeckAudit[];
   /** `deck_undo` — one step per deck write, keyed to the history row it reverses. */
   deckUndo: FakeDeckUndo[];
@@ -1847,6 +1912,11 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     deckCategories: [],
     deckLabels: [],
     deckCards: [],
+    // Empty in every world but the one that seeds a press, and that is the honest default
+    // rather than a shortcut: `deck_tokens` stores **deviations**, so a reader who has never
+    // touched the panel has no rows at all and still sees every token their deck makes. The
+    // derived side comes off {@link TOKEN_PARTS} and needs nothing here.
+    deckTokens: [],
     deckAudit: [],
     // Never seeded, always earned: a step exists only where a *write* made one, so a story's
     // Undo button is about the edit that story made rather than about a fixture.
@@ -3198,6 +3268,331 @@ function matchCombos(db: FakeDb, cardIds: readonly string[] | undefined): DeckCo
     );
 }
 
+/* ------------------------------------------------------------- tokens and emblems ----- */
+
+/**
+ * The token oracle ids and printing ids, so a seed, a story or a test can name one without
+ * retyping a UUID — and so that each id is typed **once**, in the one place a typo in it would
+ * be a silently unreachable fixture rather than an error.
+ *
+ * **Real Scryfall ids out of `cards.ts` since 2026-09-07**, where they were minted in a `7…`
+ * block before that. The block cost exactly what an invented id costs: `card_printings` reads
+ * {@link FakeDb.cards} and `@/lib/images` builds its corpus from `CARDS`, so an id in neither
+ * resolved to no printing and no picture — every token tile drew the unknown-card placeholder
+ * and the art picker's grid was empty. Nothing about a token is hand-written here any more;
+ * `db.test.ts` fails if one of these stops resolving against the generated corpus.
+ */
+export const TOKEN_ORACLE = {
+  treasure: "3c549374-6c37-42e0-8d88-a8555d46732d",
+  construct: "f3dd381f-eafa-488e-bdb1-6de85923300d",
+  wurmDeathtouch: "5e3f41f7-9b42-437a-a9f9-f09250b083db",
+  wurmLifelink: "1b9ccdd7-4935-45e2-bb16-b09870dd965d",
+  okoEmblem: "a0864e2f-7cb7-4a57-a0de-90c7acaf4822",
+} as const;
+
+/**
+ * The printings of those five — **six over five oracle cards**, chosen so every shape the panel
+ * has to draw is reachable from one seeded deck. They are ordinary rows of {@link FakeDb.cards};
+ * this is the reading of them.
+ *
+ * * **Two Treasures**, which is what makes an art *choice* a thing at all rather than a control
+ *   with one option — and the common case rather than a corner: across 40 Treasure makers, 12
+ *   distinct Treasure printings were referenced (debug corpus, 2026-09-07). `tafr` 15
+ *   (2021-07-23, Dan Murayama Scott) against `thob` 13 (2026-08-14, Kamila Szutenberg): distinct
+ *   art and distinct release dates, so with both named once below the **tie-break** —
+ *   `released_at DESC, set_code ASC, collector_number ASC, id ASC` — picks `thob` unambiguously
+ *   and a story can assert which art the panel opens on. A *second* card naming `tafr` moves it
+ *   by majority instead, which is what the Maybeboard edge below is for.
+ * * **A 4/4 Construct with rules text.** The ordinary creature token beside the Treasure's empty
+ *   P/T box, so a tile that assumes a token has no body has something to get wrong. The `0` that
+ *   matters to this feature is a *quantity* and lives in `seeds.ts` — a token the reader has
+ *   decided they need none of — not in a power box.
+ * * **Two Wurms sharing a name and a stat line**, separated only by their rules text. This is
+ *   the case a subtitle exists for and the reason grouping is by `oracle_id` and never by name:
+ *   104 token/emblem names are shared by more than one oracle id (debug corpus, 2026-09-07) —
+ *   `Elemental` by 31, `Spirit` by 22, `Soldier` by 13 — and `Wurmcoil Engine` alone puts two
+ *   3/3 colourless Wurms in one deck, one deathtouch and one lifelink. Two tiles announcing one
+ *   accessible name is a bug that has already shipped once on the collection wall, and neither
+ *   suite can see it.
+ * * **An emblem** — Oko's, `layout: "emblem"` with a null power and toughness. The row the
+ *   filter rule's second half exists to keep: an emblem arrives in `all_parts` as a
+ *   `combo_piece`, so a `component == "token"` filter drops it.
+ *
+ * The corpus's **seventh** token row, the `plst` double-faced token, is deliberately absent from
+ * this table: nothing here makes it, and it is in `cards.ts` to pin the generator's face-first
+ * image resolution rather than to reach the panel.
+ */
+export const TOKEN_PRINTING = {
+  treasureTafr: "a3a684b7-27e0-4d9e-a064-9e03c6e50c89",
+  treasureThob: "d1892b78-7663-4cbd-a732-9a4b0b18d4c8",
+  construct: "530c7ad1-1127-40ad-86b4-cb959eb297cb",
+  wurmDeathtouch: "b68e816f-f9ac-435b-ad0b-ceedbe72447a",
+  wurmLifelink: "a6ee0db9-ac89-4ab6-ac2e-8a7527d9ecbd",
+  okoEmblem: "0d9d6611-bc46-4fc1-8e39-460f56236ceb",
+} as const;
+
+/**
+ * The three `cards.layout` words that make a row a token — `deck_tokens`' own filter, and
+ * **the layout is what says an emblem is an emblem** rather than the type line, which is prose.
+ *
+ * A filter over {@link FakeDb.cards} and not a second table, which is the whole of what changed
+ * on 2026-09-07: in the app a token *is* a `cards` row — `set_type = 'token'` joins 2 950 of
+ * them (measured 2026-09-07, debug corpus) — so the resolver, `card_printings` and the image
+ * cache all reach one table. A fake keeping its own token rows beside `cards` was storing a DTO,
+ * and could answer the same question two ways.
+ */
+const TOKEN_LAYOUTS = new Set(["token", "double_faced_token", "emblem"]);
+
+/**
+ * One `all_parts` edge: a card in the corpus, and a token printing it names.
+ *
+ * **The maker is named by card *name*, not by id**, which is {@link COMBO_FIXTURES}' rule and
+ * for its reason twice over: a table of UUIDs is a table nobody can check, and it is the *name*
+ * the self-exclusion tests against — `Krenko, Mob Boss` names a different printing of Krenko as
+ * a relative, so an id-based test leaves the open card in its own list of tokens.
+ * `card::meld_parts` makes the same call one relation over, for the same measured reason.
+ */
+interface TokenPart {
+  maker: string;
+  token: string;
+}
+
+/**
+ * Which cards in this corpus make which tokens — **one real relationship and six constructed**,
+ * and the split is the fixture corpus's fault rather than a shortcut.
+ *
+ * `cards.ts` holds 52 playable printings chosen for the *collection* stories, and among them
+ * exactly **four** name a token in Scryfall's `all_parts` — Ragavan, Urza's Saga, and two more
+ * naming tokens no fixture holds (measured 2026-09-07 over the whole corpus's `all_parts`). Of
+ * those, **one** lands on a token oracle card this fixture carries: Ragavan's Treasure. Urza's
+ * Saga makes a Construct, but a *different* Construct — `tmh2` 16, the 0/0 that grows with your
+ * artifacts, a different `oracle_id` from the `tmsc` 4/4 here — so that edge is real in kind and
+ * constructed in target. There is no `Wurmcoil Engine` and no planeswalker whose emblem is here,
+ * so the pair the disambiguation case needs and the emblem are hung on cards that plausibly
+ * could and demonstrably do not. Each line says which it is, exactly as {@link COMBO_FIXTURES}
+ * does — and adding the real makers is a change to `scripts/gen-storybook-cards.mjs`'
+ * selections, not to this file.
+ *
+ * **An edge names a printing and the app's does too**, which is the second place a real
+ * relationship goes half-constructed: Ragavan's `all_parts` names Treasure `tmh2` 21, a printing
+ * this corpus does not hold, so the edge below points at `tafr` 15 instead. Same oracle card,
+ * different cardboard — and the grain the panel groups by is the oracle card.
+ *
+ * Every edge lands in **deck 1**, which is why that is the deck a token story opens on: four of
+ * them in its main deck, two in its sideboard (active — a Sideboard and a Companion make tokens
+ * like anything else) and one on its **Maybeboard**, which is inactive and must therefore
+ * contribute nothing at all. That last one is the only way a story can watch the `is_active = 0`
+ * rule work: switch the Maybeboard on and a second maker appears under Treasure, taking the
+ * older printing's reference count to 2 and moving the default art with it.
+ */
+const TOKEN_PARTS: readonly TokenPart[] = [
+  // **Real, at the grain that matters.** Ragavan's dash trigger makes a Treasure and Scryfall's
+  // `all_parts` names one — `tmh2` 21, whose `oracle_id` is this fixture's Treasure. The
+  // printing is the corpus's `tafr` 15 rather than that one, because that one is not in it.
+  { maker: "Ragavan, Nimble Pilferer", token: TOKEN_PRINTING.treasureTafr },
+  // **Real in kind, constructed in target.** Urza's Saga's third chapter really does make a
+  // Construct, but it is `tmh2` 16 — a 0/0 that grows with your artifacts, a different oracle
+  // card from the `tmsc` 4/4 flier this corpus holds.
+  { maker: "Urza's Saga", token: TOKEN_PRINTING.construct },
+  // **Constructed.** A second Treasure maker, naming the *other* printing — which is what gives
+  // the Treasure row two `sources` ("why is this here") and leaves both printings tied at one
+  // reference, so the tie-break picks the default rather than a majority.
+  { maker: "Smuggler's Copter", token: TOKEN_PRINTING.treasureThob },
+  // **Constructed**, and the pair is the point: **one** card naming **two** tokens that share a
+  // name, which is `Wurmcoil Engine`'s shape and the case a panel grouping by name gets wrong.
+  // Elesh Norn sits in deck 1's *sideboard*, so this is also the edge that shows an active
+  // non-main category contributing.
+  { maker: "Elesh Norn, Grand Cenobite", token: TOKEN_PRINTING.wurmDeathtouch },
+  { maker: "Elesh Norn, Grand Cenobite", token: TOKEN_PRINTING.wurmLifelink },
+  // **Constructed.** The corpus's one planeswalker stands in for Oko, so that the emblem — whose
+  // whole reason to be here is `layout: "emblem"` — has a maker at all.
+  { maker: "Jace, the Mind Sculptor", token: TOKEN_PRINTING.okoEmblem },
+  // **Constructed, and deliberately on a pile that counts toward nothing.** Ancient Tomb is deck
+  // 1's Maybeboard, which is `isActive: false` — so this edge must contribute **no** source and
+  // **no** reference. An implementation that read every category would show it, and the only
+  // visible symptom would be the Treasure tile quietly drawing the older art.
+  { maker: "Ancient Tomb", token: TOKEN_PRINTING.treasureTafr },
+];
+
+/**
+ * A token printing by id — **a row of {@link FakeDb.cards} whose layout is one of
+ * {@link TOKEN_LAYOUTS}**, and the layout test is load-bearing rather than tidy: it is what
+ * makes `deck_token_add` refuse an ordinary card, which is the feature's one refusal about a row.
+ */
+function tokenById(db: FakeDb, id: string): FakeCard | undefined {
+  return db.cards.find((c) => c.id === id && TOKEN_LAYOUTS.has(c.layout));
+}
+
+/**
+ * `card::list_printings`' tail, which is what makes a default printing **deterministic**:
+ * `released_at DESC, set_code ASC, collector_number ASC, id ASC`.
+ *
+ * Without it one deck draws different art on two opens, and nothing in the app would say why.
+ */
+function byTokenPrintingRank(a: FakeCard, b: FakeCard): number {
+  return (
+    cmp(b.releasedAt, a.releasedAt) ||
+    cmp(a.setCode, b.setCode) ||
+    cmp(a.collectorNumber, b.collectorNumber) ||
+    cmp(a.id, b.id)
+  );
+}
+
+/**
+ * Every **token** printing of one oracle card, in that order.
+ *
+ * `card::PRINTINGS_WHERE` is `oracle_id = ?1 AND is_paper = 1` and this is that read over the
+ * same table the art picker's own `card_printings` uses, so the grid a reader scrolls and the
+ * printing the resolver names cannot disagree about the order or about which rows exist. The
+ * layout test is what the picker's command does **not** have and this one needs: a stored
+ * `manual` row naming an oracle id that is not a token's must come back empty and be dropped,
+ * rather than drawing an ordinary card on a wall of tokens.
+ */
+function tokenPrintings(db: FakeDb, oracleId: string): FakeCard[] {
+  return db.cards
+    .filter((c) => c.oracleId === oracleId && c.isPaper && TOKEN_LAYOUTS.has(c.layout))
+    .sort(byTokenPrintingRank);
+}
+
+/** One token the deck derives, accumulated while walking its cards. */
+interface DerivedToken {
+  token: FakeCard;
+  sources: TokenSource[];
+  /** Printing id -> how many of the deck's cards named it. The most-named one is the default. */
+  refs: Map<string, number>;
+}
+
+/**
+ * `deck_tokens::deck_token_rows` — the list a deck needs, derived and stored nowhere.
+ *
+ * The walk, in the crate's own order:
+ *
+ * 1. The deck's **distinct** cards in this variant whose category is **active**. `is_active = 0`
+ *    is the whole of "counts toward nothing", so the Maybeboard makes no tokens while the
+ *    Sideboard and the Companion do.
+ * 2. Each card's `all_parts` edges ({@link TOKEN_PARTS} here, the gzipped `raw` blob there),
+ *    with the **self-reference dropped by name**.
+ * 3. Grouped by the target's **`oracle_id`, never by its name** — see {@link TOKEN_PRINTING} for
+ *    the two Wurms that is about.
+ *
+ * **The filter rule is a union in the crate and is {@link TOKEN_LAYOUTS} here**: every edge in
+ * {@link TOKEN_PARTS} names a row that passes it, so the workbench cannot show the rule
+ * *failing*. That is `deck_tokens.rs`' tests' job rather than a story's.
+ */
+function derivedTokens(db: FakeDb, deckId: number, variant: DeckVariant): DerivedToken[] {
+  const seen = new Set<string>();
+  const out = new Map<string, DerivedToken>();
+  for (const dc of db.deckCards) {
+    if (dc.deckId !== deckId || dc.variant !== variant) continue;
+    // The join on `deck_categories` is inner and the predicate is `is_active = 1`: a row whose
+    // pile counts toward nothing is not a row here either.
+    if (categoryById(db, dc.categoryId)?.isActive !== true) continue;
+    // `DISTINCT (card_id, name)` — one printing sleeved twice (two finishes, two piles) is one
+    // maker, and the blob is inflated once.
+    if (seen.has(dc.cardId)) continue;
+    seen.add(dc.cardId);
+    const maker = cardById(db, dc.cardId);
+    if (maker === null) continue;
+    for (const part of TOKEN_PARTS) {
+      if (part.maker !== maker.name) continue;
+      const token = tokenById(db, part.token);
+      // An `all_parts` id absent from `cards` is **dropped**, never drawn as a hole.
+      if (token === undefined) continue;
+      // Self, by name. A relationship a card has with a different printing of itself is not a
+      // token, and an id test would not catch it.
+      if (token.name === maker.name) continue;
+      const row: DerivedToken = out.get(token.oracleId) ?? {
+        token,
+        sources: [],
+        refs: new Map(),
+      };
+      row.sources.push({ cardId: dc.cardId, name: maker.name });
+      row.refs.set(token.id, (row.refs.get(token.id) ?? 0) + 1);
+      out.set(token.oracleId, row);
+    }
+  }
+  return [...out.values()];
+}
+
+/** The printing the resolver names for one derived token: the most-referenced, ties broken by
+ *  {@link byTokenPrintingRank}. */
+function defaultTokenPrinting(db: FakeDb, derived: DerivedToken): string {
+  const ranked = tokenPrintings(db, derived.token.oracleId).sort(
+    (a, b) =>
+      (derived.refs.get(b.id) ?? 0) - (derived.refs.get(a.id) ?? 0) || byTokenPrintingRank(a, b),
+  );
+  return (ranked[0] ?? derived.token).id;
+}
+
+/** The override this deck stores for one token, or `undefined` for the reader never having
+ *  deviated — which is what most rows are. */
+function storedToken(db: FakeDb, deckId: number, oracleId: string): FakeDeckToken | undefined {
+  return db.deckTokens.find((t) => t.deckId === deckId && t.oracleId === oracleId);
+}
+
+/**
+ * `image_uri::front_face_map` over a fixture row — the picture the **web target and the phone**
+ * draw, and the one DTO this fake carries it on.
+ *
+ * **Every other DTO here omits `imageUris` and that is still the rule**: a picture under
+ * Storybook comes from the `@/lib/images` alias, so a URL on a row would be one nobody ever
+ * fetches. What earns this one an exception is that `deckTokenViews` *folds* the field — a token
+ * tile's `imageUrl` is `imageUris?.[WALL_CARD_VARIANT] ?? null`, so a row that omitted it would
+ * make the fake the one place that view is always `null` and the panel's own resolution
+ * unexercised. Nothing minted: the two URLs are the fixture's own real Scryfall ones, the same
+ * pair {@link readHandlers.card_image_uri} answers with, and the same two variants
+ * `image_uri::LIST_VARIANTS` names — `display` from `normalUrl` and `art` from `artCropUrl`. The
+ * corpus can answer no others, which is why `thumb` and `grid` are absent here as they are there.
+ *
+ * `null` rather than `{}` for a row with neither, which is `front_face_map`'s own answer, and
+ * the {@link FakeDb.fault} `imageUrisMissing` is every row in that state.
+ */
+function tokenImageUris(db: FakeDb, cardId: string): DeckTokenRow["imageUris"] {
+  if (db.fault === "imageUrisMissing") return null;
+  const card = cardById(db, cardId);
+  if (card === null) return null;
+  const uris: Partial<Record<ImageVariant, string>> = {};
+  if (card.normalUrl !== null) uris.display = card.normalUrl;
+  if (card.artCropUrl !== null) uris.art = card.artCropUrl;
+  return Object.keys(uris).length === 0 ? null : uris;
+}
+
+/** One wire row: the derived facts, with the stored override joined on. */
+function toDeckTokenRow(
+  db: FakeDb,
+  deckId: number,
+  token: FakeCard,
+  defaultCardId: string,
+  sources: TokenSource[],
+  derived: boolean,
+): DeckTokenRow {
+  const over = storedToken(db, deckId, token.oracleId);
+  return {
+    oracleId: token.oracleId,
+    name: token.name,
+    typeLine: token.typeLine,
+    layout: token.layout,
+    power: token.power,
+    toughness: token.toughness,
+    colors: token.colors,
+    oracleText: token.oracleText,
+    defaultCardId,
+    sources,
+    derived,
+    // The three the table actually holds. All `null` together for a token nobody has touched,
+    // which is why they are read with `??` and never with `||`.
+    cardId: over?.cardId ?? null,
+    quantity: over?.quantity ?? null,
+    state: over?.state ?? null,
+    // **The printing the tile addresses**, which is `cardId ?? defaultCardId` and deliberately
+    // not the row the resolver named: those two differ for exactly the tokens somebody has
+    // picked art for, and taking the resolver's would draw the deck's default Treasure on the
+    // tile the reader chose the other Treasure for. `picture_for` in `deck_tokens.rs` is the
+    // same precedence, and `over` is already in hand here so it costs no second lookup.
+    imageUris: tokenImageUris(db, over?.cardId ?? defaultCardId),
+  };
+}
+
 /* ------------------------------------------------------------------ tag reads --------- */
 
 /**
@@ -4545,6 +4940,10 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
     // v13's, and the one column whose absence on the row is an answer rather than a gap —
     // `NOT NULL DEFAULT 0`, so a deck that has never been asked is a deck that says no.
     separateXGroup: d.separateXGroup ?? false,
+    // v35's, and the same shape one column over — `NOT NULL DEFAULT 0`, so a deck that has never
+    // been opened is a deck whose Tokens & emblems area is collapsed, which is the state every
+    // existing deck is in.
+    tokensOpen: d.tokensOpen ?? false,
     // v16's, and the same shape of answer: absent is `AUTO_CATEGORY`, which is what the column's
     // `DEFAULT 0` says about a deck nobody has asked.
     defaultCategoryId: d.defaultCategoryId ?? 0,
@@ -6577,6 +6976,66 @@ export function readHandlers(db: FakeDb) {
     },
 
     /**
+     * `deck_tokens::deck_tokens` — every token and emblem this deck needs, with the reader's
+     * stored override joined on.
+     *
+     * **Derived on every call and stored nowhere** — {@link derivedTokens} does the walk, and
+     * `deck_tokens` holds only deviations. So a world whose {@link FakeDb.deckTokens} is empty
+     * still answers a full list, which is the state every install is in until somebody presses
+     * something.
+     *
+     * **`[]` is an answer three times over and never a failure**: a deck whose cards make
+     * nothing, a deck with no cards, and a deck that is not there. A deck must not fail to open
+     * over an area most decks use lightly, which is also why this honours no fault — not even
+     * `gone`, whose meaning here would be an empty list either way.
+     *
+     * The **`manual` rows come last**, exactly as the crate appends them: a token the reader
+     * added by hand, or one they kept after cutting the card that made it, is drawn whether the
+     * deck derives it or not and carries `derived: false` with an empty `sources`.
+     *
+     * The order within each half is by name then oracle id, which is a *stable* order and not
+     * the panel's: emblems-last and the `localeCompare` are `deckTokenViews`' conclusion, in
+     * `features/decks/deckTokens.ts`. Rust supplies facts; TypeScript draws the order.
+     */
+    deck_tokens: (args: { deckId: number; variant: DeckVariant }): DeckTokenRow[] => {
+      const variant = validVariant(args.variant);
+      const derived = derivedTokens(db, args.deckId, variant);
+      const rows = derived
+        .map((d) =>
+          toDeckTokenRow(db, args.deckId, d.token, defaultTokenPrinting(db, d), d.sources, true),
+        )
+        .sort((a, b) => cmp(a.name, b.name) || cmp(a.oracleId, b.oracleId));
+      const derivedIds = new Set(derived.map((d) => d.token.oracleId));
+      const manual = db.deckTokens
+        .filter(
+          (t) => t.deckId === args.deckId && t.state === "manual" && !derivedIds.has(t.oracleId),
+        )
+        // A stored row whose oracle id names no token in the corpus is dropped rather than drawn
+        // as a hole — `flatMap` is what drops one, and it is the same call the resolver makes
+        // about an `all_parts` id `cards` has no row for.
+        .flatMap((t) => {
+          const printings = tokenPrintings(db, t.oracleId);
+          const token = printings.find((p) => p.id === t.cardId) ?? printings[0];
+          return token === undefined
+            ? []
+            : [
+                toDeckTokenRow(
+                  db,
+                  args.deckId,
+                  token,
+                  // Nothing derives it, so there is no reference count to rank by: the reader's
+                  // own pick is the default, and the tie-break decides when they have none.
+                  t.cardId ?? printings[0].id,
+                  [],
+                  false,
+                ),
+              ];
+        })
+        .sort((a, b) => cmp(a.name, b.name) || cmp(a.oracleId, b.oracleId));
+      return [...rows, ...manual];
+    },
+
+    /**
      * `deck::played_keys` — every card this deck's **live** list plays, as the keys a folder
      * rule names cards by. See {@link playedKeys} for the variant, the key, the `DISTINCT` and
      * the order.
@@ -6772,9 +7231,11 @@ export function readHandlers(db: FakeDb) {
      * {@link DECK_GONE} because an empty plan already means something else here — "nothing in
      * this deck can be filled" — and a dialog cannot tell those two apart from a bare `[]`.
      *
-     * `imageUris` is omitted, as it is from every DTO this fake builds: under Storybook a card
-     * picture comes from the `@/lib/images` alias rather than from a URL on the row, so a
-     * hand-minted one here would be a URL nobody ever fetches.
+     * `imageUris` is omitted, as it is from every DTO this fake builds bar one: under Storybook
+     * a card picture comes from the `@/lib/images` alias rather than from a URL on the row, so a
+     * hand-minted one here would be a URL nobody ever fetches. The exception is
+     * {@link tokenImageUris}, and its own comment says what earns it one — a view that *folds*
+     * the field rather than passing it through.
      */
     deck_pull_plan: (args: { deckId: number }): DeckPullRow[] => {
       const detail = readHandlers(db).deck_get({ id: args.deckId, variant: LIVE });
@@ -7602,6 +8063,10 @@ const LABEL_NAME_TAKEN =
 /** `deck_meta::CARD_NOT_IN_CATEGORY` — `deck::card_gone` generalised, for the stale editor
  *  pointing at a row that has since moved, folded or been stepped to zero. */
 const CARD_NOT_IN_CATEGORY = "That card is not in this deck's category any more.";
+/** `deck_tokens`' one refusal about a row: an `add` naming a printing `cards` has no token row
+ *  for. Every *other* way this feature fails is an empty list rather than an error — a deck must
+ *  not fail to open over an area most decks use lightly. */
+const TOKEN_PRINTING_GONE = "That token printing is not in the card database.";
 /** `deck_meta::FOLDER_GONE` and `FOLDER_CYCLE`. The second is not cosmetic:
  *  `deck_folders.parent_id` is `ON DELETE CASCADE` **on itself**, so a cycle is a graph
  *  SQLite's recursive cascade would walk forever the day one of them is deleted. */
@@ -8069,6 +8534,28 @@ function validVariant(variant: string): DeckVariant {
   const found = VARIANTS.find((v) => v === variant);
   if (found) return found;
   throw refuse(`\`${variant}\` is not a deck variant. Use one of: ${VARIANTS.join(", ")}.`);
+}
+
+/** `deck_tokens.state`'s three words. A **CHECK on the column**, unlike a variant's word list
+ *  and unlike {@link FakeDeck.lastGroupBy}'s — so an unknown one is refused by the database
+ *  itself and this refuses it in the same place. */
+const TOKEN_STATES = ["auto", "hidden", "manual"] as const;
+
+/**
+ * The state word, with **absent meaning `auto`**.
+ *
+ * `null` is what `ipc.ts` sends for a caller who passed no `state`, and the column's DDL default
+ * is `'auto'` — so folding the two together here is the DDL rather than a convenience. The
+ * fold matters: `deck_token_set` deletes the row when the result would carry nothing, and that
+ * test reads this word.
+ */
+function validTokenState(state: DeckTokenState | null): DeckTokenState {
+  if (state === null) return "auto";
+  const found = TOKEN_STATES.find((s) => s === state);
+  if (found) return found;
+  throw refuse(
+    `\`${state}\` is not a token state. Use one of: ${TOKEN_STATES.join(", ")}.`,
+  );
 }
 
 /**
@@ -11036,6 +11523,10 @@ export function writeHandlers(db: FakeDb) {
         // Spelled out rather than left absent, because `create_deck` names every column it
         // writes: a new deck's curve is the plain one until the reader says otherwise.
         separateXGroup: false,
+        // Spelled out beside it for the same reason: a deck being born has its token area
+        // collapsed, which is what `tokens_open INTEGER NOT NULL DEFAULT 0` says and what makes
+        // a deck made *here* open the way a deck made in the app does.
+        tokensOpen: false,
         updatedAt: stamp(db),
       };
       db.decks.push(row);
@@ -11139,6 +11630,21 @@ export function writeHandlers(db: FakeDb) {
       if (patch.separateXGroup !== undefined && patch.separateXGroup !== separateXWas) {
         field("xGroup", separateXWas, patch.separateXGroup);
       }
+      // v35's, on `separateXGroup`'s footing exactly: an absent column is the DDL's `0`, so a
+      // deck that has never been opened and a deck whose area was collapsed are one state.
+      //
+      // **The word is a guess and is flagged rather than asserted.** `deck.rs` does not carry
+      // `tokens_open` in `record_deck_edit` yet, so there is no spelling to mirror; `tokensOpen`
+      // follows the two multi-word names already in that switch (`xGroup`, `defaultCategory`).
+      // Nothing goes red if it is wrong — `auditText.ts`' `default` arm answers an unrecognised
+      // field with "Changed the deck", which is true of every deck edit — and that is exactly the
+      // silent drift the `xGroup` arm documents. Recording *something* is the important half:
+      // {@link journalled} keys an undo step on the last history row a write produced, so a
+      // handler that recorded nothing would leave this press outside Ctrl+Z.
+      const tokensOpenWas = before.tokensOpen ?? false;
+      if (patch.tokensOpen !== undefined && patch.tokensOpen !== tokensOpenWas) {
+        field("tokensOpen", tokensOpenWas, patch.tokensOpen);
+      }
       // v16's, and the second multi-word field name in that switch — `deck.rs` writes
       // `"defaultCategory"`, and the paragraph above applies word for word.
       //
@@ -11211,6 +11717,10 @@ export function writeHandlers(db: FakeDb) {
       // this one only changes how the same cards are read — the curve is regrouped in TS, by
       // `buildGroups`, on the rows the next read hands back.
       deck.separateXGroup = patch.separateXGroup ?? deck.separateXGroup;
+      // `coalesce(?n, tokens_open)`, and **nothing else happens** for the reason above it: the
+      // list the area draws is derived on every read, so opening or closing it writes one column
+      // and changes no answer about the deck.
+      deck.tokensOpen = patch.tokensOpen ?? deck.tokensOpen;
       // `coalesce(?n, default_category_id)` again — and **`0` is a value here rather than an
       // absence**, which is the whole reason `??` is right and a truthiness test would be wrong:
       // `patch.defaultCategoryId === 0` is a reader asking to go back to Auto, and `||` would
@@ -11318,6 +11828,10 @@ export function writeHandlers(db: FakeDb) {
       db.decks = db.decks.filter((d) => d.id !== args.id);
       db.deckCards = db.deckCards.filter((dc) => dc.deckId !== args.id);
       db.deckCategories = db.deckCategories.filter((c) => c.deckId !== args.id);
+      // `deck_tokens.deck_id` is `ON DELETE CASCADE`, so the overrides go with the deck — and
+      // nothing else has to happen, because the *list* was never stored: it was derived from
+      // cards that have just gone.
+      db.deckTokens = db.deckTokens.filter((t) => t.deckId !== args.id);
       // **The labels stay**, since schema v21: a label belongs to no deck, so deleting the deck
       // it was first typed in must not take it off the others wearing it. Only `reset_decks`,
       // which is every deck at once, sweeps the table.
@@ -12416,6 +12930,122 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
+     * `deck_tokens::deck_token_set` — one token's override: the art, the count, or the
+     * dismissal.
+     *
+     * **All five keys travel on every call, `null` included**, because Tauri fills parameters by
+     * name and an absent one is a refusal rather than a default. The state word arrives as
+     * **`tokenState`** and not `state`: the crate cannot call a parameter `state`, since that is
+     * already the managed `tauri::State` every command takes, so it declares `token_state` and
+     * `ipc.ts` folds `{ state }` onto that key at the call site. This handler matches `invoke`'s
+     * object exactly, the way every handler here does — a typo is a runtime rejection in the
+     * workbench for the same reason it is one in the window.
+     *
+     * **A write whose result would carry nothing deletes the row.** `state` back at `auto` with
+     * no printing and no quantity is *no deviation*, and the empty override is deliberately not
+     * representable: two spellings of "the reader has not touched this" would be two states to
+     * keep in agreement, and a panel reading the wrong one would draw a reset control over
+     * nothing.
+     *
+     * **`quantity` is not validated and `0` is a value.** The column is nullable with no CHECK
+     * — unlike `deck_cards.quantity`, which is NOT NULL and `> 0` — because a reader who zeroed
+     * a token while keeping the art they picked has said something. `validQuantity` is
+     * deliberately not called: a fake that refused what the DDL accepts would be a fake with a
+     * rule the app does not have.
+     */
+    deck_token_set: (args: {
+      deckId: number;
+      oracleId: string;
+      cardId: string | null;
+      quantity: number | null;
+      tokenState: DeckTokenState | null;
+    }): void => {
+      refuseIfBusy(db);
+      requireDeck(db, args.deckId);
+      const state = validTokenState(args.tokenState);
+      const existing = storedToken(db, args.deckId, args.oracleId);
+      if (state === "auto" && args.cardId === null && args.quantity === null) {
+        if (existing) db.deckTokens = db.deckTokens.filter((t) => t !== existing);
+        return;
+      }
+      if (existing) {
+        existing.cardId = args.cardId;
+        existing.quantity = args.quantity;
+        existing.state = state;
+        existing.updatedAt = stamp(db);
+        return;
+      }
+      // The upsert's other arm — `ON CONFLICT(deck_id, oracle_id)`, which is why the lookup
+      // above is on the grain and never on the row id: the reader names a token, not a row.
+      const now = stamp(db);
+      db.deckTokens.push({
+        id: nextId(db.deckTokens),
+        deckId: args.deckId,
+        oracleId: args.oracleId,
+        cardId: args.cardId,
+        quantity: args.quantity,
+        state,
+        createdAt: now,
+        updatedAt: now,
+      });
+    },
+
+    /**
+     * `deck_tokens::deck_token_clear` — back to the derived defaults, by **deleting** the
+     * override row.
+     *
+     * Not a `deck_token_set` of three nulls even though that spelling is the same write: this
+     * one says what the reader pressed, and a grain resolving to no row is a **success** — the
+     * caller wanted no override and there is none.
+     */
+    deck_token_clear: (args: { deckId: number; oracleId: string }): void => {
+      refuseIfBusy(db);
+      requireDeck(db, args.deckId);
+      db.deckTokens = db.deckTokens.filter(
+        (t) => !(t.deckId === args.deckId && t.oracleId === args.oracleId),
+      );
+    },
+
+    /**
+     * `deck_tokens::deck_token_add` — a token added by hand, and the one of the four that names
+     * a **printing** rather than the grain.
+     *
+     * The reader picks out of a printings grid, so a printing is what there is to send; the
+     * oracle id is resolved from it and the row is written `manual` with that printing as its
+     * `cardId`. A `manual` row is drawn whether or not the deck derives it, which is also what a
+     * derived token becomes when the reader keeps it after cutting the card that made it.
+     *
+     * **Adding one the deck already derives is a `set`, not a second row**: the grain is
+     * `(deckId, oracleId)` and there is only ever one row per token per deck.
+     */
+    deck_token_add: (args: { deckId: number; cardId: string }): void => {
+      refuseIfBusy(db);
+      requireDeck(db, args.deckId);
+      const token = tokenById(db, args.cardId);
+      if (token === undefined) throw refuse(TOKEN_PRINTING_GONE);
+      const existing = storedToken(db, args.deckId, token.oracleId);
+      if (existing) {
+        existing.cardId = token.id;
+        existing.state = "manual";
+        existing.updatedAt = stamp(db);
+        return;
+      }
+      const now = stamp(db);
+      db.deckTokens.push({
+        id: nextId(db.deckTokens),
+        deckId: args.deckId,
+        oracleId: token.oracleId,
+        cardId: token.id,
+        // Left alone rather than set to 1: the default is `deckTokens.ts`' conclusion, and
+        // storing it here would freeze a token added today at whatever the default was today.
+        quantity: null,
+        state: "manual",
+        createdAt: now,
+        updatedAt: now,
+      });
+    },
+
+    /**
      * `deck_meta::create_folder` — at the root with `parentId: null`, or inside another one.
      *
      * **No uniqueness rule on the name**, mirroring the DDL: unlike a category or a label,
@@ -12753,6 +13383,7 @@ export function writeHandlers(db: FakeDb) {
       db.deckCards = [];
       db.deckCategories = [];
       db.deckLabels = [];
+      db.deckTokens = [];
       db.deckAudit = [];
       db.deckUndo = [];
       return { decks, folders };
@@ -13903,9 +14534,12 @@ export function writeHandlers(db: FakeDb) {
      * than stubbed.** A baseline goes to a peer this device has never heard from; there is no
      * peer here and no `sync_peers` to be empty, so the honest stand-in is the one fact the
      * world does hold - a device that has never completed a round trip, which is exactly where
-     * the `paired` seed starts. The counts are the world's own **eleven synced tables** counted
-     * back (`schema::SYNCED_TABLES`), not figures invented for the sentence, and `deck_audit` is
+     * the `paired` seed starts. The counts are the world's own synced tables counted back
+     * (`schema::SYNCED_TABLES`), not figures invented for the sentence, and `deck_audit` is
      * counted a second time on its own because that is the half the panel names separately.
+     * **The sum below is the list and there is no number in this sentence**, deliberately: it
+     * said "eleven synced tables" until `deck_tokens` joined the census at user schema v35, and
+     * a count in prose routes to neither CI job.
      */
     sync_now: (): RelayOutcome | null => {
       refuseIfBusy(db);
@@ -13937,6 +14571,7 @@ export function writeHandlers(db: FakeDb) {
             db.deckCategories.length +
             db.deckLabels.length +
             db.deckCards.length +
+            db.deckTokens.length +
             db.deckAudit.length +
             db.mutedTags.length
           : 0,
@@ -14383,6 +15018,16 @@ const NO_UNDO_STEP: ReadonlySet<string> = new Set([
   // the reader's, bought and recorded, and a Ctrl+Z that quietly unfiled them would be worse than
   // one that does nothing. The crate calls no `record_step` here for the same reason.
   "deck_quick_add_to_collection",
+  // The three token writes, and they are here for the **snapshot's** shape rather than the
+  // copies': {@link deckState} records a deck's row, its cards, its categories and the label
+  // table, and `deck_tokens` is in none of those. So a step could only ever put half the deck
+  // back — and the half it would restore is the half these writes do not touch. They record no
+  // history row either, which means the wrapper below would file nothing for them anyway;
+  // naming them is what stops that being the *reason*, the way `deck_to_collection` is named
+  // rather than left to {@link deckOf} answering `undefined`.
+  "deck_token_set",
+  "deck_token_clear",
+  "deck_token_add",
 ]);
 
 /**

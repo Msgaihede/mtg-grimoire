@@ -1123,7 +1123,7 @@ than a `SELECT unixepoch()`, because the only caller is `check_inner`, which is 
 ### The reason it is worth routing two commands that can answer so little
 
 On web `available` is always `None` and `update_history` always `[]`, because only
-`update_check` writes those rows and **`app_meta` is not one of the twelve synced tables** —
+`update_check` writes those rows and **`app_meta` is not one of the thirteen synced tables** —
 so no desktop check fills them in either. What a browser gets is the current version, the
 install kind, and "not checked yet".
 

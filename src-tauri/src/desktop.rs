@@ -17,10 +17,10 @@
 use crate::sync::AppState;
 use crate::{
     camera, card, collection, collection_alloc, collection_folders, combos, db, deck, deck_audit,
-    deck_meta, deck_pull, deck_quick_add, deck_theory, deck_undo, errors, export, flatten, images,
-    import, index, listview, marketplace, marketplace_feed, mirror, nav, paths, reset, schema,
-    scryfall, search, sync, sync_engine, sync_pair, tags, update, wishlist, wishlist_folders,
-    wishlist_optimize, zoom,
+    deck_meta, deck_pull, deck_quick_add, deck_theory, deck_tokens, deck_undo, errors, export,
+    flatten, images, import, index, listview, marketplace, marketplace_feed, mirror, nav, paths,
+    reset, schema, scryfall, search, sync, sync_engine, sync_pair, tags, update, wishlist,
+    wishlist_folders, wishlist_optimize, zoom,
 };
 // **Not in the list above, because this file compiles for Android too.** Its name says
 // `desktop`, but its gate is `cfg(not(target_family = "wasm"))` — desktop *and* mobile — while
@@ -471,6 +471,15 @@ pub fn run() {
             deck_theory::deck_theory_slots,
             deck_theory::deck_theory_copy_from_live,
             deck_theory::deck_theory_missing_to_wishlist,
+            // The tokens and emblems a deck needs, and the three writes that record a deviation
+            // from them. `generate_handler!` names a command after the **last path segment**, so
+            // `deck_tokens::deck_tokens` registers as `deck_tokens` — the module and the read
+            // wear the same name on purpose, because the wire name is the one `src/lib/ipc.ts`
+            // invokes and `deck_tokens_list` would be a second thing to remember.
+            deck_tokens::deck_tokens,
+            deck_tokens::deck_token_set,
+            deck_tokens::deck_token_clear,
+            deck_tokens::deck_token_add,
             marketplace::get_marketplace,
             marketplace::set_marketplace,
             zoom::card_zoom,

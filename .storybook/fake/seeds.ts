@@ -47,6 +47,8 @@
 import { CARDS, type FakeCard } from "./cards";
 import {
   CLOCK_BASE,
+  TOKEN_ORACLE,
+  TOKEN_PRINTING,
   artTagEdges,
   artTagIllustrations,
   artTagMeta,
@@ -72,6 +74,7 @@ import type {
   FakeDeckCategory,
   FakeDeckFolder,
   FakeDeckLabel,
+  FakeDeckToken,
   FakeEntry,
   FakeWish,
   FakeWishlistFolder,
@@ -1090,6 +1093,90 @@ function starterLabels(): FakeDeckLabel[] {
 }
 
 /**
+ * The `deck_tokens` overrides — **four rows against a list nothing seeds**, and that asymmetry
+ * is the feature rather than a gap in this seed.
+ *
+ * The tokens a deck needs are derived from its cards on every read (`db.ts`'s `TOKEN_PARTS`), so
+ * the populated panel comes for free: **deck 1 makes five** — a Treasure from Ragavan and from
+ * Smuggler's Copter, a Construct from Urza's Saga, the two same-named Wurms from Elesh Norn in
+ * its *sideboard*, and the emblem from Jace — while deck 2 makes two, deck 4 makes one, and
+ * **deck 3 makes none at all**, which is the empty state a story needs and gets from a real
+ * deck rather than from an empty world. Deck 1's Maybeboard names a Treasure too and must
+ * contribute nothing, because an inactive category counts toward nothing.
+ *
+ * What this table can therefore be is only what the reader *changed*, and the four rows are one
+ * of each thing they can change:
+ *
+ * * **An art and a count on one row** (deck 1's Treasure). The reader kept the older `tafr`
+ *   printing over the one the resolver names and asked for four of them — so the tile draws a
+ *   deviation in both of its controls at once, and the reset affordance has something to undo.
+ * * **A dismissal** (deck 1's lifelink Wurm). `hidden` is still derived and still a row; it is
+ *   simply not drawn until a reader asks to see what they put away, which is the whole of the
+ *   "show dismissed" control. Its twin is left untouched **on purpose**: two tiles that differ
+ *   only in their rules text, one of them dismissed, is the disambiguation case and the
+ *   dismissal case in one screen.
+ * * **A count of zero** (deck 1's Construct). `0` is a value and not an absence — a token the
+ *   reader has decided they need none of while keeping it on the list — and it is the exact
+ *   state `stored || 1` reads as untouched and silently draws as 1.
+ * * **A hand-added token nothing derives** (deck 2's emblem). Deck 2 runs no Jace, so this row
+ *   comes back `derived: false` with an empty `sources` — which is also what a derived token
+ *   becomes when the reader keeps it after cutting the card that made it, and the only state
+ *   `deck_token_add` can produce.
+ *
+ * Two things are deliberately *not* here. **Deck 1's other three rows carry no override at all**,
+ * because a panel where every tile had been touched would never draw the untouched one. And
+ * **nothing is seeded on deck 3**, whose empty panel is the point.
+ */
+function starterDeckTokens(): FakeDeckToken[] {
+  const at = CLOCK_BASE - HOUR;
+  return [
+    {
+      id: 1,
+      deckId: 1,
+      oracleId: TOKEN_ORACLE.treasure,
+      cardId: TOKEN_PRINTING.treasureTafr,
+      quantity: 4,
+      state: "auto",
+      createdAt: at,
+      updatedAt: at,
+    },
+    {
+      id: 2,
+      deckId: 1,
+      oracleId: TOKEN_ORACLE.construct,
+      // No art picked — only the count moved, which is what keeps the two halves of an override
+      // separable on a tile.
+      cardId: null,
+      quantity: 0,
+      state: "auto",
+      createdAt: at,
+      updatedAt: at,
+    },
+    {
+      id: 3,
+      deckId: 1,
+      oracleId: TOKEN_ORACLE.wurmLifelink,
+      cardId: null,
+      quantity: null,
+      state: "hidden",
+      createdAt: at,
+      updatedAt: at,
+    },
+    {
+      id: 4,
+      deckId: 2,
+      oracleId: TOKEN_ORACLE.okoEmblem,
+      // `deck_token_add` names a printing, so a hand-added row always carries one.
+      cardId: TOKEN_PRINTING.okoEmblem,
+      quantity: null,
+      state: "manual",
+      createdAt: at,
+      updatedAt: at,
+    },
+  ];
+}
+
+/**
  * A timestamp `daysAgo` days back at a fixed local hour — **the one clock in this file that is
  * not {@link CLOCK_BASE}**, and the exception is forced.
  *
@@ -1337,6 +1424,7 @@ function starterSeed(): FakeDb {
       ...migrated,
       ...testbedDeckCards(deckCategories, deckLabels, migrated.length + 1),
     ],
+    deckTokens: starterDeckTokens(),
     deckAudit: starterAudit(),
   });
 }

@@ -990,6 +990,19 @@ Run: `npx tsc --noEmit -p tsconfig.json`
 
 ## Fan-in (the dispatching session, not a subagent)
 
+- [ ] **`DeckTokenRow` needs `image_uris`, or every token tile is blank on web and Android.** Found by adding the struct-mirror row, on its first run — which is the whole argument for that fence.
+
+  `CardArt` takes an optional `imageUrl`, and its own doc says that on web *"it is the only picture there is, and a row that carries none draws the no-art frame"*: the browser build has no `mtgimg://` custom protocol to ask. `DeckTokensPanel` passes only `cardId={view.printingId}`, so its tiles have nothing to draw from off-desktop. This is exactly the bug that took four surfaces blank in a browser and on the phone on 2026-08-31, which is why the mirror block asserts every DTO in it carries the field.
+
+  `TokenArtPicker` is **not** affected — `card_printings` already carries `image_uris` and the picker already passes `imageUrl={printing.imageUris?.[WALL_CARD_VARIANT]}`. Only the panel's own tiles are.
+
+  The fix is one vertical slice, following `DeckCardRow` exactly:
+  - `deck_tokens.rs` — `pub image_uris: Option<BTreeMap<String, String>>` on `DeckTokenRow`, filled with `crate::image_uri::front_face_map(|i| r.get(IMAGE_COL + i))` over columns from `crate::image_uri::front_face_selects(<alias>)`. Both the derived query and the manual-row lookup need it.
+  - `ipc.ts` — `imageUris?: Partial<Record<ImageVariant, string>> | null`, the shape every other DTO uses.
+  - `deckTokens.ts` — carry it onto `DeckTokenView`.
+  - `DeckTokensPanel.tsx` — pass `imageUrl={...?.[WALL_CARD_VARIANT]}` to `CardArt`.
+  - `.storybook/fake/db.ts` — derive it in the handler.
+
 - [ ] Sweep for unowned files: grep every new symbol against the ownership table above. `git grep` skips untracked files, so use plain `grep` or `git status` — a wiring sweep mid-fan-out otherwise misses every new file.
 - [ ] Check for CRLF flips: `git diff --stat` should show no whole-file rewrites.
 - [ ] Reconcile the state-word argument name across Task 2 and Task 3. Task 3 shipped the wire key **`tokenState`**, so Task 2's Rust parameter must be `token_state`.

@@ -914,7 +914,9 @@ pub fn commit_rotation(
 /// `manifest` is the `devices` beside it.
 ///
 /// **The manifest is the roster, so every row it omits is deleted** — spec §2.3. It is
-/// deliberately not a thirteenth synced table: a manifest that *is* the key distribution cannot
+/// deliberately not a synced table at all, and would be the fourteenth if it were (it read
+/// "thirteenth" until `deck_tokens` took that number at user schema v35): a manifest that *is*
+/// the key distribution cannot
 /// disagree with it, where a synced `device_removals` table could arrive late, arrive out of
 /// order, or arrive at a device that cannot decrypt it — which is precisely the state a rotation
 /// puts every peer in.

@@ -100,6 +100,7 @@ const DECK: DeckRow = {
   // rides through `update` untouched — so it is here to satisfy the row's shape, not to be
   // asserted on.
   separateXGroup: false,
+  tokensOpen: false,
   defaultCategoryId: 0,
   bracket: 0,
 };

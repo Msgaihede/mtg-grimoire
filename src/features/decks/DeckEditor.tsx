@@ -79,6 +79,7 @@ import { DeckNameField } from "./DeckNameField";
 import { DeckSearchPanel, MIN_PANEL_WIDTH_PX } from "./DeckSearchPanel";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
 import { DeckStats } from "./DeckStats";
+import { DeckTokensPanel } from "./DeckTokensPanel";
 import { useDeckUndo } from "./useDeckUndo";
 import { deckCardSlot, dropWrite, type DeckWrite, type DragPayload } from "./dnd";
 import { ExportDialog } from "@/features/transfer/export/ExportDialog";
@@ -4451,6 +4452,35 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             separateXGroup={separateX}
           />
         </section>
+      )}
+
+      {row && (
+        // What this deck puts on the table beside itself — the tokens and emblems its cards
+        // make, resolved out of each card's `all_parts` on every open and never stored.
+        //
+        // **After the stats band, which is the far side of a pair that may not be split.** The
+        // price strip is where the remove tray is drawn for the length of a drag, at `-top-3`
+        // over this column's own `gap-3`, so the strip and the deck above it stay adjacent; the
+        // stats band is already below that pair, and this is below the stats. Between the strip
+        // and the band it would put a wall of tokens between a card in the air and the one drop
+        // that takes it out.
+        //
+        // **A `section` and `shrink-0`** for the two reasons the band above spells out in full —
+        // a second complementary landmark answered `getByRole("complementary")` and broke five of
+        // `App.test.tsx`'s pane assertions, and `shrink-0` on the bands below the desk is the
+        // whole of why this editor scrolls. Both live on the panel's own root, so this mount
+        // cannot get either wrong.
+        //
+        // `tokensOpen` is the deck's own column (`decks.tokens_open`, schema v35) rather than
+        // editor state, for `separateXGroup`'s reason one control over: whether a reader wants
+        // the token wall in front of them is an answer about a *particular* deck, and a
+        // `useState` here would ask it again every time they opened one.
+        <DeckTokensPanel
+          deckId={deckId}
+          variant={variant}
+          open={row.tokensOpen}
+          onToggle={(next) => deck.update.mutate({ tokensOpen: next })}
+        />
       )}
 
       {/* The overlays, mounted **at the editor's top level and as siblings of the layout

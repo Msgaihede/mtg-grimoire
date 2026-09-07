@@ -316,6 +316,7 @@ const DECK: DeckRow = {
   lastGroupBy: "category",
   lastSortBy: "alphabetical",
   separateXGroup: false,
+  tokensOpen: false,
   defaultCategoryId: 0,
   bracket: 0,
 };

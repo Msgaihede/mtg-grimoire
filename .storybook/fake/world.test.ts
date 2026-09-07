@@ -438,9 +438,12 @@ describe("the seeds", () => {
 
   it("large's synthetic printings agree about the card and differ about the printing", () => {
     const db = seed("large");
-    // 52 real rows, then 650 oracle cards × 8 printings.
-    expect(db.cards).toHaveLength(52 + 5200);
-    const eight = db.cards.slice(52, 60);
+    // The real rows, then 650 oracle cards × 8 printings. **`CARDS.length` rather than the
+    // number**: the corpus grew by seven when the token and emblem printings landed, and a
+    // literal here made every `slice` below start one row short of the synthetic half —
+    // silently, since a slice out of range is an empty array rather than an error.
+    expect(db.cards).toHaveLength(CARDS.length + 5200);
+    const eight = db.cards.slice(CARDS.length, CARDS.length + 8);
     expect(new Set(eight.map((c) => c.oracleId)).size).toBe(1);
     expect(new Set(eight.map((c) => c.name)).size).toBe(1);
     expect(new Set(eight.map((c) => c.typeLine)).size).toBe(1);
@@ -448,13 +451,13 @@ describe("the seeds", () => {
     expect(new Set(eight.map((c) => c.collectorNumber)).size).toBe(8);
     // No synthetic card carries a `card_faces` array, so no face names disagree with the name
     // above them.
-    expect(db.cards.slice(52).every((c) => c.faces === "[]")).toBe(true);
+    expect(db.cards.slice(CARDS.length).every((c) => c.faces === "[]")).toBe(true);
     // Ids are unique across the whole corpus, real rows included.
     expect(new Set(db.cards.map((c) => c.id)).size).toBe(db.cards.length);
     // Every synthetic row is paper, so the count a *default* search makes — `paperOnly` is
     // omitted-means-true — is the one that clears the cap. Only the two digital rows of the
     // real corpus are outside it.
-    expect(db.cards.filter((c) => c.isPaper)).toHaveLength(5250);
+    expect(db.cards.filter((c) => c.isPaper)).toHaveLength(5257);
   });
 
   it("large's collection rows hold a finish their own printing is printed in", () => {

@@ -36,8 +36,10 @@ const BURN: DeckRow = {
   archived: false,
   cardCount: 60,
   updatedAt: 1_800_000_000,
-  // The four v8 deck columns, the three v12 view-state ones and `separateXGroup` from v13.
-  // Every real row carries all eight, so the fixture does too — and `folderId` is the one this
+  // The v8 deck columns, the v12 view-state ones, `separateXGroup` from v13 and `tokensOpen`
+  // from v35 — the census is `DeckRow` itself rather than a count written here, which said
+  // "eight" through two later columns.
+  // Every real row carries all of them, so the fixture does too — and `folderId` is the one this
   // hook can never write: filing is `deckSetFolder`, because a patch reads a bound null as
   // "leave it" and so cannot reach the root of the tree.
   coverKind: "card_art",
@@ -50,6 +52,7 @@ const BURN: DeckRow = {
   lastGroupBy: "category",
   lastSortBy: "alphabetical",
   separateXGroup: false,
+  tokensOpen: false,
   defaultCategoryId: 0,
   bracket: 0,
 };

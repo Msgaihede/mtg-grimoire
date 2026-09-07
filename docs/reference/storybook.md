@@ -124,15 +124,15 @@ it says `tags: ["autodocs"]`.
   **stays**, and the reason goes to `error_log` — a refusal a story has to be able to show
   without the screen behind it changing at all, because nothing about categorising a card may
   fail a deck add.
-- **`starter` seeds the taxonomy as well as both price feeds** — **32 oracle cards, covering 38
-  of the 43 printings**, closed over their ancestors exactly as `oracle_tag_cards` stores them,
+- **`starter` seeds the taxonomy as well as both price feeds** — **32 oracle cards, covering 42
+  of the 59 printings**, closed over their ancestors exactly as `oracle_tag_cards` stores them,
   so a deck story shows real piles rather than everything falling back to card type. Both counts
   are measured by `db.test.ts` rather than asserted here, because every count on this page has
   drifted at least once. Five printings are deliberately left untagged (both basic lands, Delver
   of Secrets, Tarmogoyf, Little Girl) so a `starter` deck holds cards on both sides of the
   fallback at once; `empty` and `large` go without a taxonomy entirely, `large` for the reason it
   goes without price feeds. The one anchor slug the corpus cannot reach is `sacrifice-outlet`:
-  no card in these 43 printings is one, and tagging one that is not would be worse than the hole.
+  no card in these 59 printings is one, and tagging one that is not would be worse than the hole.
   Both reads answer **one entry per requested id, in request order, deduped, `slugs: []` for
   anything unknown** — a fake that answered only the matches, or that reordered, would look fine
   in Storybook and break every caller that matches by id.
@@ -144,8 +144,9 @@ it says `tags: ["autodocs"]`.
   Ancestral Recall is the mirror case and is deliberately left untagged — `lea` and `2ed` share
   one illustration, so `db.test.ts` proves that join against a store built for it rather than by
   inventing a motif for a picture nobody has looked at. **Every tag in the fixture is true of the
-  picture it is on**, which is why there is no `dog` and no `hound`: nobody in these 43
-  illustrations is a dog, and the `dog`/`hound`/`bulldog` branch lives in the crate's own fixture
+  picture it is on**, which is why there is no `dog` and no `hound`: nobody in these 59
+  printings' illustrations is a dog, and the `dog`/`hound`/`bulldog` branch lives in the crate's
+  own fixture
   in `tags/query.rs`. What the seed carries instead is the shape every story needs — `animal`
   with no direct taggings of its own (reached only through `cat` and `monkey`, the same shape as
   the real `removal`, which has zero of its own and answers 6 686 cards), `forest` under **two**
