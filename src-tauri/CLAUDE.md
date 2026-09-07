@@ -116,8 +116,10 @@ both plus the frontend.
   every upgraded one, and a fresh worktree is a fresh install, so nothing else here can see it.
   The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
-  numbers from there (`USER_SCHEMA_VERSION` **36** since a deck's group started holding only
-  copies its live list claims at `(card_id, finish)`, `CORPUS_SCHEMA_VERSION` 1, deliberately
+  numbers from there (`USER_SCHEMA_VERSION` **37** since decks learned which tokens they make —
+  one rung above a deck's group holding only copies its live list claims at
+  `(card_id, finish)`, which is itself one above a condition learning to say nothing —
+  `CORPUS_SCHEMA_VERSION` 1, deliberately
   incomparable). This line read **v25** while that was head, and
   [the ladder's history](../docs/reference/data-and-sync.md) is the story. (This line read
   **v18** for two whole rungs, then **v20** for two more, then **v23** for one and **v24** for
@@ -146,7 +148,16 @@ both plus the frontend.
   either ladder that changes no shape at all, so it owes neither a `USER_SCHEMA_SQL` line nor an
   `UNDO_V36`, where v34 and v35 each owed both. **It was written as v35 and renumbered on the way
   in**, this list's own rule again, and it runs *after* v35 for a reason renumbering does not
-  settle by itself: v35 rebuilds `collection_entries`, and v36 reads and writes that table.)
+  settle by itself: v35 rebuilds `collection_entries`, and v36 reads and writes that table.
+  **v37 then landed the same day, and had to be renumbered twice getting in** — written as 35,
+  merged to 36, merged again to 37. It creates `deck_tokens`, the **thirteenth** synced table,
+  one row per token the reader has deviated on and grained on `DECK_TOKEN_GRAIN`, and adds
+  `decks.tokens_open`; it is a shape rung, so it owes both its `USER_SCHEMA_SQL` lines and its
+  `UNDO_V37`, for [issue #388](https://github.com/Msgaihede/mtg-grimoire/issues/388).
+  **What made both collisions invisible is worth more than the numbers**: each time, both
+  branches wrote the *same* `USER_SCHEMA_VERSION`, so git reported no conflict on that line at
+  all and only the rungs underneath it collided. `grep USER_SCHEMA_VERSION
+  src-tauri/src/schema.rs` settles it in one command and nothing else does.)
 - **v35 is the user ladder's third table rebuild, and a CHECK is why.** SQLite cannot alter one,
   so widening the grade list means building `collection_entries_v35`, copying every column
   **including `id`**, dropping, renaming and replaying all five indexes as frozen literals — the
@@ -923,7 +934,9 @@ with the arithmetic behind the 105-character code and the crate pins, is
   nobody removed it from, with no press anywhere that said the roster was changing. **The real fix
   is a wire change carrying public keys in the manifest** and is not built; until it is, a
   partial-view device declines rather than breaking the group.
-- **The manifest is deliberately not a thirteenth synced table.** A manifest that *is* the key
+- **The manifest is deliberately not a synced table** — it would be the fourteenth now, and this
+  line said *thirteenth* until `deck_tokens` took that number at user schema v37, which is the
+  argument for not counting in prose at all. A manifest that *is* the key
   distribution cannot disagree with it, where a synced `device_removals` table could arrive late,
   arrive out of order, or arrive at a device that cannot decrypt it — which is precisely the state
   a rotation puts every peer in.
@@ -1014,10 +1027,14 @@ record, with every measurement, is
   landed, and there is no such setting any more**: `sync_relay_set_url` and `valid_relay_url` are
   deleted, `RelayStatus` no longer carries a `relayUrl`, and what the panel draws in its place is
   `sync_supporter_status`'s answer.
-- **Twelve tables sync and `schema::SYNCED_TABLES` is the census.** ⚠️ **This line said *eleven*
+- **Thirteen tables sync and `schema::SYNCED_TABLES` is the census.** ⚠️ **This line said *eleven*
   from schema v25 until 2026-08-31**, on the argument that the spec's twelfth was
   `deck_allocations`, which v25 dropped — true when written, and made wrong by v31 adding
-  `device_names` back to twelve without this page moving. `capture::TABLES` is held to that constant by a
+  `device_names` back to twelve without this page moving. **v37 makes it thirteen**: `deck_tokens`,
+  one row per token a reader has deviated on, and the first table on the census whose
+  `quantity` is a **field** rather than a counter — nullable, so there is no `NEW - OLD` to
+  carry, and last-write-wins is what a *setting* wants where two devices each sleeving a copy
+  means two copies. `capture::TABLES` is held to that constant by a
   test, and a second test asserts every column a capture spec names exists on its table — a
   misspelt column is not a compile error and not a runtime error either until the trigger fires,
   at which point it is a *write* that starts failing for the reader in a command that has nothing
@@ -1464,6 +1481,51 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
   order is load-bearing on the **redo** side: `Op::Labels` restores before `Op::Variant` inserts,
   because `deck_cards.label_id` is a real foreign key and `insert_cards` writes the restored rows'
   labels through `remap.label`.
+- **`deck_tokens.rs` is `card::meld_parts`' sibling and the one place a *missing* rule is the
+  rule** (schema v35, [issue #388](https://github.com/Msgaihede/mtg-grimoire/issues/388)). Same
+  inflate of `cards.raw`, same walk over `all_parts`, same *every failure is an empty vec* —
+  pointed at a different `component`, over the deck's own cards rather than over one opened card.
+  Three things bind it, and the third is the one to read twice:
+  - **The keep rule is a union and both halves are measured.** Keep an entry when
+    `component == "token"` **or** when the row it *resolves to* has `layout = 'emblem'`
+    (`TOKEN_COMPONENTS` and `EXTRA_LAYOUTS`). The component half alone misses **every** emblem —
+    `Elspeth, Sun's Champion` names hers as a `combo_piece` — and a layout allow-list alone drops
+    **78** real token relationships, whose targets are `flip` (75) or `reversible_card` (3). The
+    emblem half is asked of the resolved row and never of the entry, which is why this resolves
+    first and filters second.
+  - **Nothing is gated on `layout` before the blob is touched**, which is where it parts from
+    `meld_parts`: that one gates on `layout = 'meld'` and pays 72 rows of 117 621, and there is no
+    column here that predicts a token reference (they sit on 15 161 printings). The cost is
+    already bounded because only the open deck's cards are ever inflated — ~5 ms for a 100-card
+    pool — and **the corpus-wide index is the thing that must not be built**: a cold full scan is
+    6.5 s and would need a new ingest-filled column.
+  - ⚠️ **There is no self-exclusion by `name` here, and `meld_parts` must have one — the two are
+    opposites.** At `card.rs:635` a same-named `all_parts` entry **is the same card**, which is
+    why an id test does not do and a name test does. Here it is a token **of** that card: a
+    different oracle card wearing the card's name, because Embalm and Eternalize name the token
+    after the creature. The keep rule already excludes self on its own — a card's own printing
+    arrives as `combo_piece` resolving to a `normal` row, so it never passes the union — and the
+    name test would subtract nothing else. Measured over the 108 372 rows a deck can hold
+    (`legal_mask != 0`, non-token layouts) on the debug corpus, 2026-09-07: **154 same-name
+    entries pass the keep rule, across 55 distinct cards, all 154 targeting `layout = 'token'`
+    from a `normal` producer, and 0 of them share the producer's `id` *or* its `oracle_id`.**
+    The oracle-id zero is what carries it: a different printing id could still be the same card,
+    a different oracle id cannot. Corpus-wide and unrestricted there **are** 2 929 same-name kept
+    entries that do share the producer's oracle id, and every one has a producer layout of
+    `token`, `emblem`, `double_faced_token`, `flip` or `reversible_card` — all `legal_mask = 0`,
+    so never a `deck_cards` row. No fence is owed, and a page that did not say so would invite one.
+    Both halves are pinned: `an_embalm_token_sharing_its_makers_name_is_kept` and
+    `a_cards_own_printing_never_reaches_the_wall`.
+
+  The table stores **only deviations** — `DECK_TOKEN_GRAIN` is `deck_id, oracle_id`, deliberately
+  not `variant` and deliberately not `card_id`, and `state = 'auto'` with no printing and no
+  quantity is deleted rather than written because it carries nothing. **A stored zero is not that
+  case.** `decks.tokens_open` is the panel's disclosure, on the `decks` capture `Spec` beside
+  `separate_x_group`, the last **named** column of `DECK_SELECT` for `deck_row`'s positional
+  reason — which moved its `IMAGE_COL` from 21 to 22 — and on no history row and no
+  `deck_undo::DECK_FIELDS`. The four commands, the tie-break, the sync
+  registrations and every measurement:
+  [decks-storage.md](../docs/reference/decks-storage.md).
 
 ## Scryfall and the network
 
@@ -1768,10 +1830,10 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
 | [image-cache.md](../docs/reference/image-cache.md) | Cache layout, concurrency, placeholders, and the `/cover/` route as it was before 2026-08-31 — the encoder, the traversal fence and why the CSP never moved for it |
 | [search-faceting.md](../docs/reference/search-faceting.md) | `src/index/` — why the index is in memory, and the fail-open rule |
 | [in-app-updates.md](../docs/reference/in-app-updates.md) | `update.rs` — why the portable swap is hand-written |
-| [decks-storage.md](../docs/reference/decks-storage.md) | The deck tables, the card commands, how owned/missing is answered, the audit log, the decklist import |
+| [decks-storage.md](../docs/reference/decks-storage.md) | The deck tables, the card commands, how owned/missing is answered, the audit log, the decklist import, and the token resolver — the union keep rule, why there is no name test, and the v36 table |
 | [commander-brackets.md](../docs/reference/commander-brackets.md) | `combos.rs` and the v26 rung — the feed measured end to end, what is kept and what is skipped, the match query, and `decks.bracket` |
 | [wishlist-folders.md](../docs/reference/wishlist-folders.md) | The wishlist's cabinet (v23) — the four-term grain, the merge rule, the root-add duplicate |
 | [collection-folders.md](../docs/reference/collection-folders.md) | The collection's cabinet (v24–v25) — the eleventh grain term, the deck groups and `Recently removed`, the conversion that made them, what a zero quantity now costs |
-| [sync.md](../docs/reference/sync.md) | `sync_pair/`, `sync_engine/` and the user-schema rungs sync owns, v29 to v31 — the pairing protocol step by step and the six digits; then the twelve synced tables, how a row is named across devices, the three SQLite facts the capture triggers' shape follows from, §7.3's five rules against the test that proves each, the envelope measured, the relay's endpoints, and what is not built |
+| [sync.md](../docs/reference/sync.md) | `sync_pair/`, `sync_engine/` and the user-schema rungs sync owns, v29 to v31 — the pairing protocol step by step and the six digits; then the thirteen synced tables, how a row is named across devices, the three SQLite facts the capture triggers' shape follows from, §7.3's five rules against the test that proves each, the envelope measured, the relay's endpoints, and what is not built |
 | [web-target.md](../docs/reference/web-target.md) | The browser build — the module map, the OPFS pair, the measured browse and facet, and the first run's open memory failure |
 | [text-mirror.md](../docs/reference/text-mirror.md) | `mirror/` — the layout, the dirty map, why the pruner reads a manifest instead of guessing, what a pass costs measured, and the bugs still open |

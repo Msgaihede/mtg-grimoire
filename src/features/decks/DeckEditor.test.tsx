@@ -159,6 +159,18 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckSwapPrinting,
     deckSetCardFinish,
     deckSetViewState,
+    // **The Tokens & emblems band asks on every open, so every test in this file pays for it
+    // whether or not it looks at the band.** Answered with an empty list: the panel then draws
+    // its "nothing in this deck makes a token" sentence and, crucially, *no* `role="alert"`.
+    // Left off the mock entirely, the read rejects with `ipc.deckTokens is not a function`, the
+    // band draws its read-failure alert, and every `getByRole("alert")` in this file fails with
+    // "Found multiple elements" — eight of them did. The three writes are here for the same
+    // reason: a press that reached an undefined function would fail as a write refusal rather
+    // than as the missing double it is.
+    deckTokens: vi.fn().mockResolvedValue([]),
+    deckTokenSet: vi.fn().mockResolvedValue(undefined),
+    deckTokenClear: vi.fn().mockResolvedValue(undefined),
+    deckTokenAdd: vi.fn().mockResolvedValue(undefined),
     formatSpecs,
     searchCards,
     deckSearchOpen,
@@ -249,6 +261,7 @@ const DECK: DeckRow = {
   // Schema v13, and `0` is the column's own default: a deck counts an `{X}` spell at the mana
   // value Scryfall gives it until the reader says otherwise.
   separateXGroup: false,
+  tokensOpen: false,
   // Schema v16, and `0` is `AUTO_CATEGORY` — the column's own default and the state every deck
   // is born in: an add that names no pile is filed by what the card does. A test about the
   // setting overrides it through `detail()`, which is the *only* way to move it now — it was a

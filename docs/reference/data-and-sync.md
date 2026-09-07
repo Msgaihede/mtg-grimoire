@@ -513,7 +513,9 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   **It then read 33 for three more after that**, through v34, v35 and v36 — this time in this file
   alone, since `src-tauri/CLAUDE.md`'s own copy stayed only one rung behind, at 34, until this
   pass corrected both. Three drifts now on the one number a `grep` settles, which is why this
-  page stops writing one down here at all rather than opening a fourth. Read it off the
+  page stops writing one down here at all rather than opening a fourth. **v37 then landed the
+  same day as v36 and had to be renumbered twice on its way in**, which is the same lesson from
+  the other end: the number is not stable enough to write down even while you are writing it. Read it off the
   constant; v30 and v31 have no paragraph of their own below, and
   `USER_SCHEMA_VERSION`'s own doc comment is where every rung from 27 to head is described in
   one place, one sentence each.
@@ -530,8 +532,12 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   ladder and the head shape were the same fifteen tables — and left alone it would have
   failed every upgrade from a pre-27 folder with `cannot split: 'sync_identity' has no
   columns in common`. The whole record is [sync.md](sync.md).
-  **v29 is sync's own rung and it is the widest one on either ladder.** It adds `sync_uid` to
-  all twelve synced tables with a unique index each, `needs_review` to the three folder tables,
+  **v29 is sync's own rung and it is the widest one on either ladder.** It adds `sync_uid` with a
+  unique index to **the eleven tables that were on the census then** — this line said "all twelve"
+  until 2026-09-07 and was wrong in both directions, since the rung's own `ALTER TABLE`s are
+  eleven (spelled out below) and the census is **thirteen** now: `device_names` joined
+  at v31 and `deck_tokens` at v37, and each carries the column in its own `CREATE TABLE` rather
+  than through this rung. It also adds `needs_review` to the three folder tables,
   the op log (`sync_ops`, `sync_clock`, `sync_state`, `sync_peers`), and it **rebuilds
   `error_log`** so `source` can be `'relay'` — that vocabulary is inside a `CHECK` and SQLite
   has no `ALTER — CHECK`. The user side is **twenty-two tables and thirty-six indexes**
@@ -756,6 +762,45 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   before that day under it once.
   [collection-folders.md](collection-folders.md) and
   [decks-storage.md](decks-storage.md) carry the whole change.
+  **v37 gives a deck the tokens it makes, and it is the first rung since v31 to add a table to the
+  sync census.** Landed 2026-09-07 for
+  [issue #388](https://github.com/Msgaihede/mtg-grimoire/issues/388). One `CREATE TABLE`, two
+  indexes and one `ALTER TABLE`: `deck_tokens` (`id`, `deck_id` CASCADEing off `decks`, `oracle_id`, a nullable
+  `card_id` and `quantity`, a `state` CHECKed to `auto | hidden | manual`, the two timestamps and
+  `sync_uid`), `idx_deck_tokens_grain` on `schema::DECK_TOKEN_GRAIN`, `idx_deck_tokens_uid`, and
+  `ALTER TABLE decks ADD COLUMN tokens_open INTEGER NOT NULL DEFAULT 0`. A shape rung, so it owes
+  its `USER_SCHEMA_SQL` lines and its `UNDO_V37` — and the undo has to take **all four** things
+  back, because `CREATE TABLE` without `IF NOT EXISTS` and `ADD COLUMN` are both non-idempotent
+  and every fixture below replays over it.
+  Four things about it are worth carrying.
+  First, **the list this table exists for is never stored.** The tokens a deck needs are derived
+  on every open out of each deck card's `all_parts`, ~5 ms for a 100-card pool; the table holds
+  only the reader's *deviations*, so a token nobody has touched has no row, and `state = 'auto'`
+  with no printing and no quantity is deleted rather than written because it carries nothing. A
+  stored list would need a reconciliation pass on every deck edit and would go stale the next time
+  a Scryfall sync changed a card's `all_parts`, with nothing to notice.
+  Second, **the grain is `(deck_id, oracle_id)`, the schema's third *plain* grain constant beside
+  `DECK_CATEGORY_GRAIN` and `DECK_LABEL_GRAIN`.** Carrying no `coalesce`, it can be read back
+  through `PRAGMA index_info`, which is why
+  `every_plain_grain_constant_names_the_index_the_head_schema_carries` fences it — the only
+  thing that did until the first `ON CONFLICT ({DECK_TOKEN_GRAIN})` interpolated it. Not
+  `card_id`, because the row survives the reader changing which printing they want; not grained on
+  `variant`, because an art choice reverting between the Actual list and the plan would be a
+  surprise with nothing to recommend it.
+  Third, **`deck_tokens` is the thirteenth synced table and the first whose `quantity` is a
+  field rather than a counter.** The column is nullable, so there is no `NEW - OLD` to carry —
+  `deck_cards.quantity` can be a counter precisely because it is `NOT NULL` — and last-write-wins
+  is what a *setting* wants: two devices each sleeving a copy means two copies, but two devices
+  each asking for four Treasures must mean four. No counter, so no `Floor` in `apply::META`. The
+  rung is also what established that **a new synced table owes ten registrations and not nine**;
+  the tenth is `sync_engine/apply/tests.rs`'
+  `every_unique_index_on_a_synced_table_has_been_decided_about`, easy to miss because it sits in a
+  `tests.rs` rather than beside the other nine.
+  Fourth, **the DDL's SQL comments carry no double quote, and they cannot.** The rung is a plain
+  `"…"` Rust string, and since it and `USER_SCHEMA_SQL` are compared byte for byte, both copies
+  lose them — the design document's own two comments had to be rewritten to land. The whole
+  feature, with every measurement:
+  [decks-storage.md](decks-storage.md).
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every

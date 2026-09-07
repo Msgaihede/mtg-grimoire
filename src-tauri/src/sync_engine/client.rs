@@ -33,7 +33,7 @@
 //! [`super::schedule::WRITE_DEBOUNCE_MS`] (3 s) waits out a local write and slides on every
 //! commit, so a transaction that keeps writing for a minute pushes once, at the end — armed off
 //! the mirror's own `commit_hook`, for the reason `db.rs`'s `CrossFileFence` doc gives: the
-//! update hook the mirror uses does not fire for `WITHOUT ROWID` tables, and two of the twelve
+//! update hook the mirror uses does not fire for `WITHOUT ROWID` tables, and two of the thirteen
 //! synced ones are exactly that.
 //!
 //! **That hook fires for every transaction, so the debounce is armed only after the outbox has

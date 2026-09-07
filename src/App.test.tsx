@@ -250,8 +250,10 @@ const BURN: DeckRow = {
   archived: false,
   cardCount: 0,
   updatedAt: 1_800_000_000,
-  // The four v8 deck columns, the three v12 view-state ones and `separateXGroup` from v13.
-  // Every real row carries all eight, so the fixture does too.
+  // The v8 deck columns, the v12 view-state ones, `separateXGroup` from v13 and `tokensOpen`
+  // from v35 — the census is `DeckRow` itself rather than a count written here, which said
+  // "eight" through two later columns.
+  // Every real row carries all of them, so the fixture does too.
   coverKind: "card_art",
   folderId: null,
   notes: null,
@@ -262,6 +264,7 @@ const BURN: DeckRow = {
   lastGroupBy: "category",
   lastSortBy: "alphabetical",
   separateXGroup: false,
+  tokensOpen: false,
   defaultCategoryId: 0,
   bracket: 0,
 };

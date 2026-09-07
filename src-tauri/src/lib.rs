@@ -64,6 +64,11 @@ pub mod deck_meta;
 pub mod deck_pull;
 pub mod deck_quick_add;
 pub mod deck_theory;
+/// **The tokens and emblems a deck needs, derived rather than stored** — schema v37. It reads
+/// `all_parts` out of each deck card's gzip `raw` blob, which is [`card::meld_parts`]' one
+/// trick applied to a different `component`, so it is a sibling of that function and not of
+/// the eleven modules around it. Nothing here reaches a filesystem or a network.
+pub mod deck_tokens;
 pub mod deck_undo;
 /// **A view-state module wearing the deck domain's name.** It is [`listview`]'s shape exactly —
 /// one `app_meta` row, an infallible read and a write whose only refusal is a blank — and it is

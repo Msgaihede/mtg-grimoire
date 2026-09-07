@@ -719,8 +719,15 @@ export const OneRoundTrip: Story = {
  *
  * There is no relay here and no peer to have never been heard from, so the fake stands the state
  * up out of the one fact the world does hold: a device that has never completed a round trip.
- * The counts are the world's own eleven synced tables read back rather than figures written for
+ * The counts are the world's own synced tables read back rather than figures written for
  * the sentence, which is why nothing here asserts a particular one.
+ *
+ * **The number of those tables used to be in this sentence and has been taken out.** It said
+ * *eleven* and was already wrong before it was noticed — `device_names` had made the answer twelve
+ * at user schema v31 — and `deck_tokens` made it thirteen at v37. A count is a fact about a tree,
+ * every open branch has a different one, and `schema::SYNCED_TABLES` answers this one in a grep.
+ * A story comment is exactly the wrong place to keep a copy: a prose-only edit routes to neither
+ * CI job, so nothing here would ever have gone red for it.
  */
 export const AFirstExchange: Story = {
   parameters: { fake: { seed: "paired" } },

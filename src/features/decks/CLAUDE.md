@@ -2851,6 +2851,144 @@ longer-form record of the two hand-rolled comboboxes and their shared panel is
   freshness guard is **unit-tested only**: reproducing a stale list live means winning a 300ms
   race by hand, which is what a test with a controlled clock is for.
 
+## Tokens & emblems
+
+`DeckTokensPanel.tsx` (the band), `TokenArtPicker.tsx` (the printings dialog),
+`useDeckTokens.ts` (the query and the four writes) and `deckTokens.ts` (every conclusion), landed
+2026-09-07 for [issue #388](https://github.com/Msgaihede/mtg-grimoire/issues/388). The Rust half —
+the union keep rule, the `deck_tokens` table, the four commands and every measurement — is
+[docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md).
+
+**Rust supplies the facts and `deckTokens.ts` draws every conclusion**, which is this feature's
+copy of the boundary the rest of the builder keeps. Rust resolves each deck card's `all_parts`
+against the corpus and joins on whatever the reader stored; which printing to draw, how many
+copies the stepper starts at, whether a dismissed token is on screen and the order the wall reads
+in are all decisions, and they live in one function with one test file so that changing a rule is
+one edit and not four components disagreeing.
+
+- **The naming rule, and it is the reason this section is not called "Tokens".** The area is
+  **"Tokens & emblems"** — `TOKENS_HEADING` in `DeckTokensPanel.tsx`, one constant because three
+  things say it: the region's `aria-label`, the disclosure's visible text, and every test and
+  story that addresses either.
+  `autoCategory.ts:130` already uses the bare word *Tokens* for an auto-category
+  of cards that **make** tokens, driven by the `repeatable-token-generator` oracle tag. Those are
+  opposite meanings of one word, and **the auto-category is deliberately not renamed** — renaming
+  it would silently regroup every existing deck — so the two strings are kept apart instead. Same
+  discipline as *tag* versus *label*: this repo does not let words trade places.
+- **Four placement constraints, each already documented at its site and one of which has cost a
+  session.** A **`<section>`, never an `<aside>`** — a second complementary landmark broke five of
+  `App.test.tsx`'s pane assertions. **`shrink-0` is mandatory** — the editor's root is the only
+  box with a height, and `shrink-0` on the bands below the desk "is the whole of why this editor
+  scrolls now", so without it the band is squeezed to nothing on exactly the decks the feature is
+  for. **Below the Deck stats band, never between `PriceStrip` and it** — the strip's drag-remove
+  tray sits at `-top-3`, reaching up into the column's `gap-3`, so splitting that pair would leave
+  a reader dragging a card the height of four charts to reach the drop that removes it.
+  **Collapsed by default**, driven by `decks.tokens_open`, so a reader who never sleeves tokens
+  pays one header row.
+- **The read runs whether or not the wall is drawn**, and that is deliberate. The header has to
+  say how many tokens the deck makes — that number *is* the reason to open the area — and the
+  resolve is ~5 ms for a 100-card deck against the corpus the app already has. Gating the query on
+  `open` would trade that for a header that could only say "press to find out".
+- **`??` and never `||`, in both fallbacks.** Effective printing is `cardId ?? defaultCardId` and
+  effective quantity is `quantity ?? DEFAULT_TOKEN_QUANTITY`. The two operators agree on every
+  value the reader can produce except one — **a quantity of 0**, which is a token they zeroed on
+  purpose while keeping the art they picked — and `stored || 1` is the natural way to write this
+  and is wrong. `overridden` compares `quantity !== null` for the same reason, so the reset
+  affordance does not vanish on the most easily lost deviation.
+- **`DEFAULT_TOKEN_QUANTITY` is a floor and never a guess.** Reading *"create two 1/1 white
+  Soldier tokens"* out of oracle text is defeated by `create X`, by *for each*, by copy-tokens and
+  by repeatable makers like Krenko, and a number the reader has to correct is worse than one they
+  raise. It is typed `number` rather than left as the literal `1`, or a consumer seeding a
+  `useState` from it would get a state of type `1`.
+- **Emblems last, then by name with `localeCompare(name, "en")`.** An emblem is a one-off a deck
+  may make once in a game; a pile of Treasures is what a reader reaches for, so the things they
+  touch sit where they can be touched. The locale is pinned for the reason every `Intl` call in
+  this app pins it — a wall that reorders itself on a different machine is one two readers cannot
+  compare. `isEmblem` tests **`layout === "emblem"`**, the column and not the type line: a type
+  line is prose, and `"Emblem — Elspeth"` is one shape of it.
+- **A token's name does not identify it, so every control folds the subtitle into its own name.**
+  104 token and emblem names are carried by more than one `oracle_id` (debug corpus, 2026-09-07) —
+  `Elemental` by 31, `Spirit` by 22, `Soldier` by 13 — and `Wurmcoil Engine` alone puts two tokens
+  both called `Wurm`, both 3/3, both colourless artifacts, on one deck's wall, separated only by
+  Deathtouch against Lifelink. **Deduping by `oracleId` is not enough to make a name unique.** Two
+  tiles announcing one accessible name is a bug that has already shipped here, on the collection
+  wall, where a 2X2 and an LEA Lightning Bolt both announced *"Copies of Lightning Bolt"* —
+  neither suite caught it, because both names were **correct** and merely not unique.
+  - `tokenSubtitle` is `<colours> <power>/<toughness> · <oracle text>`, and **all three terms are
+    needed**: text alone cannot separate the corpus's colourless 1/1 Soldier from its white one,
+    and colours and size alone cannot separate the two Wurms. Dropping a term to shorten the line
+    re-opens exactly one of those two cases.
+  - **`power` and `toughness` are strings and must never be parsed to numbers** — Scryfall writes
+    `*`, `1+*` and `∞`, and there is a real `*`-over-`*` Elemental. `colors` is Scryfall's letters,
+    where `""` is genuinely colourless and `null` is *not known*, which is why the type is nullable
+    rather than defaulted.
+  - **The subtitle is clamped in CSS and never in the string.** Oracle text is the term that
+    separates the two Wurms, so a truncation short enough to fit a 150px tile would fold them back
+    together in the one case this exists for.
+  - **The name and the subtitle are two elements, and every accessible name is spelled rather than
+    assembled.** Two flex children with a `gap` between them compute to a name with the words run
+    together (`"Missing2"`), so every control on a tile goes through one `tileName(verb, view)` —
+    `Quantity of <name>, <subtitle>`, `Change the art for …`, `Dismiss …`, `Restore …`,
+    `Reset …` — rather than being left to the DOM to concatenate. One helper, so a control added
+    later cannot be the one that forgets the subtitle.
+  - It returns `null` for an emblem: the type line already names the planeswalker, so a second
+    line would repeat what the tile is drawing.
+- **`TOKEN_TILE_WIDTH` is 150 and is a third constant rather than an import, on purpose.**
+  `GridView`'s `TILE_WIDTH` and `DeckSearchPanel`'s `TILE_BASE` are both a *base* that a zoom then
+  multiplies for their own card section; neither the token wall nor the picker is a zoom section,
+  so importing one would be importing a number that means "the size before the reader's zoom" and
+  using it as the size. What the two walls here must agree about is **each other** — a reader who
+  presses a tile has to meet the same picture at the same size, or the swap does not read as a
+  swap — which is why the number is declared once for the pair, in `TokenArtPicker.tsx`, so the
+  import runs the way a panel opening a picker does.
+- **The picker passes no `playableOnly`, because `cardPrintings` does not take one.** That flag is
+  `searchCards`', which is what `DeckCoverPicker.tsx:148` passes it to; `card_printings`' predicate
+  is `oracle_id = ?1 AND is_paper = 1` with no legality term at all. Reading the two as one command
+  is how this picker would come back empty for every token in the game — and the symptom of
+  "fixing" it later is a compile error rather than a wrong result, which is why it is written down.
+  Treasure answers 97 paper printings across 70 distinct arts, so it is a grid with a scroller and
+  never a dropdown, and `token !== null` is what opens it rather than a flag beside it.
+- **The query key is `["decks", "tokens", deckId, variant]`, under the `["decks"]` root on
+  purpose.** `useDeck`'s own `invalidate` fires that root for every write to what is *in* a deck,
+  so adding a card, moving one between piles or switching a category off already refreshes this
+  list — and it should, because all three change what the deck makes. **No `staleTime`**:
+  `query.ts` caches 30 s app-wide, and a second one here could only make a missing invalidation
+  invisible. **No `marketplace` in the key** either — nothing this answers is priced.
+  Invalidation drops one segment (`["decks", "tokens", deckId]`) because the override is not
+  grained on variant while the derived list is, so a dismissal made on the Actual list has to reach
+  the plan's tab too.
+- **Every write sends the whole triple, and `storedOverride` reads the *stored* columns rather
+  than the effective ones.** `deck_token_set` has no `coalesce` — the row it upserts is defined by
+  what it carries and is deleted outright when it would carry nothing — so a caller sending only
+  the field it changed would silently clear the other two: picking a different art for a token set
+  to 4 copies would put the count back to 1. And reading `view.printingId` back would pin a reader
+  who only changed the count to whatever art the resolver named today, so the next deck edit that
+  moved the default would find that token no longer following it. An untouched field stays
+  untouched.
+- **`restore` chooses `auto` or `manual` by whether the deck still derives the token**, because
+  `state` is one column and `hidden` therefore costs a `manual` row its manual-ness. A token the
+  deck makes goes back to `auto` and follows the deck again — and if that leaves the row carrying
+  nothing the backend deletes it, which is exactly right. A token nothing derives can only be on
+  the wall as `manual`, so restoring it to `auto` would take it off the wall a second time, in the
+  one press whose whole meaning is the opposite.
+- **`showDismissed` is plain `useState` with the views a `useMemo` over it** — never state synced
+  in an effect, which fails lint only at `npm run verify`. There are two facts and one derivation
+  rather than three facts that have to be kept in agreement, and it is deliberately not persisted:
+  a reader who revealed a dismissed token in order to put it back has finished with the switch by
+  the time they close the deck. `NO_ROWS` is a module-level constant for the same reason —
+  `query.data ?? []` is a fresh array every render, so the views would be re-sorted on every
+  keystroke anywhere in the editor.
+- **A deck that derives nothing is a supported state and never an error**, and it depends on
+  nothing optional: this feature reads the corpus the app already has, so unlike the Tagger
+  datasets, the price feeds or the relay there is no never-fetched floor to fall back to. The
+  header says so and the area stays collapsed. The hook's `loading` is gated on `deckId !== null`
+  as well as on the query, because an `enabled: false` query is `pending` for ever and a gallery
+  with no deck open must not report a spinner.
+- **`tokensOpen` reached `useDeck`'s `update` with no edit at all**, exactly as `separateXGroup`
+  and `bracket` did: that mutation takes a whole `DeckPatch` and names no field, which is what
+  makes a new column free. A per-field arm would be a second definition of what the command already
+  accepts.
+
 ## Known open bugs
 
 Two, both found by driving the shipped window and **neither of them fixed** — both from the

@@ -2028,3 +2028,312 @@ read-only, and the row is `app_meta` like every other preference the web target 
 `COMMANDS.len()`'s assertion moved by four, and the new figure was **read off the assertion's own
 failure rather than reached by arithmetic** — which is the only way that number has ever been got
 right, and the reason no count of commands is written on this page.
+
+## Tokens and emblems: derived on every open, deviations stored
+
+`deck_tokens.rs` and user schema **v37**,
+[issue #388](https://github.com/Msgaihede/mtg-grimoire/issues/388), landed 2026-09-07. Every
+figure below was measured that day against the debug corpus at
+`src-tauri/target/debug/data/corpus.db` (117 621 rows), in Node unless it says otherwise; the
+design's own record is
+[the spec](../superpowers/specs/2026-09-07-deck-token-management-design.md).
+
+A deck that plays `Smothering Tithe` needs a Treasure; one that plays `Elspeth, Sun's Champion`
+needs Soldiers **and** an emblem. Neither fact is in a column — Scryfall publishes it inside each
+printing's `all_parts` array, which this crate stores gzipped in `cards.raw` — so this module is
+`card::meld_parts`' sibling: the same inflate, the same parse, the same walk over `all_parts`, the
+same *every failure is an empty vec*, pointed at a different `component`. **Nothing is
+downloaded**: 2 988 `token`, 137 `emblem` and 120 `double_faced_token` rows are already local, and
+**2 520 of the 2 523 distinct token printings some card's `all_parts` names resolve to a local
+`cards` row — 99.9 %**.
+
+### The filter rule is a union, and getting it wrong is the way to ship something that looks right
+
+> Keep an `all_parts` entry when its **`component` is `"token"`**, **or** when the `cards` row it
+> **resolves to** has **`layout = 'emblem'`**.
+
+`deck_tokens::TOKEN_COMPONENTS` and `EXTRA_LAYOUTS` are the two halves, and **each one alone is
+measurably wrong**:
+
+- **`component == "token"` alone misses every emblem.** A full-corpus scan found exactly four
+  component values — `combo_piece` 148 216, `token` 16 377, `meld_part` 164, `meld_result` 81 —
+  and an emblem is not in the `token` half: `Elspeth, Sun's Champion` names hers as a
+  `combo_piece` carrying `type_line: "Emblem — Elspeth"`.
+- **A layout allow-list alone drops 78 real token relationships.** The layouts a
+  `component: "token"` entry resolves to are `token` 16 216, `double_faced_token` 79, **`flip`
+  75** and `reversible_card` 3, so gating the component half on layout is a silent subtraction of
+  those 78.
+
+The emblem half is tested against the row the entry **resolves to** and never against the entry
+itself, which is why the walk resolves first and decides second rather than filtering in one pass.
+An entry resolving to no local row is dropped rather than drawn as a hole — 3 printings in the
+whole corpus, and a token nobody can draw or pick art for is not a row worth having.
+
+### ⚠️ There is no self-exclusion rule, and that is where this parts company with `meld_parts`
+
+`card::meld_parts` **must** drop an entry whose `name` equals the producing card's own
+(`card.rs:635`), and this module deliberately does not. It is the single most likely thing in the
+feature for a future reader to "simplify" back into a bug.
+
+**The keep rule already excludes a card's own printing without being asked.** A card's self-entry
+arrives as `component: "combo_piece"` resolving to a row with the card's own layout — `normal`,
+never `token` or `emblem` — so it fails the union before any name is compared.
+
+What a name test would subtract instead is measured. Restricted to the **108 372** rows a deck can
+hold (`legal_mask != 0`, non-token layouts), counting the `all_parts` entries that pass the keep
+rule **and** carry the producing card's own name:
+
+| what was counted | answer |
+| --- | --- |
+| same-name entries passing the keep rule | **154** |
+| distinct producer names | **55** |
+| their target layouts | `token` 154, and nothing else |
+| their producer layouts | `normal` 154, and nothing else |
+| target `id` == producer `id` | **0** |
+| target `oracle_id` == producer `oracle_id` | **0** |
+
+**The last zero is the one that carries the argument.** A different *printing id* could still have
+been the same card under another printing — that is exactly the trap `meld_parts` documents at
+`card.rs:635`, and it is why the rule there is a name test and not an id test. A different *oracle
+id* cannot be. So not one of the 154 is the card itself; every one is a genuinely different oracle
+card wearing the producer's name, which is what an Embalm or Eternalize token is. They are
+`Timeless Dragon`, `Sacred Cat`, `Adorned Pouncer`, `Champion of Wits`, `Earthshaker Khenra`,
+`Temmet, Vizier of Naktamun`, `Manifold Mouse` and forty-eight more names, where the token *is* a
+copy of the card and wears its name by rule.
+
+**The two cases are opposites and one word hides it.** In `meld_parts` a same-named entry **is the
+same card**; here it is a token **of** that card, which is a different oracle card that happens to
+wear the card's name. So the rule that is correct one file over subtracts exactly those 55 cards'
+tokens here and subtracts nothing else. `an_embalm_token_sharing_its_makers_name_is_kept` and
+`a_cards_own_printing_never_reaches_the_wall` are the pair that hold both halves.
+
+**And the obvious objection, answered so nobody adds a fence for it.** Corpus-wide and
+*unrestricted*, there **are** 2 929 same-name kept entries that do share the producer's oracle id
+— but every one of them has a producer layout of `token` (2 780), `emblem` (136),
+`double_faced_token` (7), `flip` (5) or `reversible_card` (1), and the six non-obvious `flip` and
+`reversible_card` ones were checked by hand: all are double-sided *token* cards on a flip frame,
+all `legal_mask = 0`. So the only rows that can name themselves through the keep rule are tokens
+naming their own printing, and **those are never `deck_cards` rows**, because the search wall
+fences tokens behind `legal_mask != 0`. A deck that somehow listed a Spirit token and drew a
+Spirit on its token wall would be right rather than wrong. No extra fence is needed.
+
+### The grain is `(deck_id, oracle_id)`, and only deviations are written down
+
+```sql
+CREATE TABLE deck_tokens (
+    id INTEGER PRIMARY KEY,
+    deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+    oracle_id TEXT NOT NULL,
+    card_id TEXT,          -- the printing the reader picked; NULL is the resolver's
+    quantity INTEGER,      -- NULL is the default, which is 1
+    state TEXT NOT NULL DEFAULT 'auto'
+        CHECK (state IN ('auto','hidden','manual')),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  , sync_uid TEXT);
+CREATE UNIQUE INDEX idx_deck_tokens_grain ON deck_tokens (deck_id, oracle_id);
+CREATE UNIQUE INDEX idx_deck_tokens_uid ON deck_tokens (sync_uid);
+```
+
+- **`schema::DECK_TOKEN_GRAIN` is `"deck_id, oracle_id"`** and every `ON CONFLICT` interpolates
+  it: a conflict target that does not match the index verbatim is a runtime error at the first
+  write and not a compile error. It carries no `coalesce`, so unlike `COLLECTION_GRAIN`,
+  `WISHLIST_GRAIN` and `DECK_CARD_GRAIN` it can be read back through `PRAGMA index_info` —
+  `every_plain_grain_constant_names_the_index_the_head_schema_carries` is the second fence, and
+  the only one there was until the first `ON CONFLICT` interpolated the constant.
+- **`oracle_id` and not `card_id`**, because the row has to survive the reader changing which
+  printing they want: the art choice *is* one of the things it stores. Every token, emblem and
+  double-faced-token row in the corpus carries an `oracle_id` (**0 missing of 3 245**), which is
+  what makes the column safe as a grain in a way `card_id` would not be.
+- **Deliberately not grained on `variant`.** The derived list is per-variant because deck cards
+  are; the override is not. Choosing the Treasure art for a deck and finding it reverted in the
+  theory build would be a surprise with nothing to recommend it.
+- **The three states.** `auto` — the row exists only to carry a printing and/or a quantity for a
+  token the deck derives anyway. `hidden` — the reader dismissed it; still derived, deliberately
+  not drawn. `manual` — drawn whether or not anything derives it, which is both a token the reader
+  added by hand and what a derived token becomes when they want it kept after cutting the card
+  that made it. The vocabulary is spelled twice on purpose: the `CHECK` is the shape, and
+  `deck_tokens::TOKEN_STATES` is what lets an unknown word be a **sentence** (`BAD_STATE`) rather
+  than a constraint failure — `deck::set_folder`'s rule, and it applies because a command
+  parameter reaches this column.
+- **The empty row is not representable.** `state = 'auto'` with no `card_id` and no `quantity`
+  carries no information, so `set_token_override` **deletes** instead of writing it. That keeps
+  *the reader has not deviated* one state rather than two that have to be kept in agreement.
+  **A quantity of zero is not that case**: it is a token the reader deliberately zeroed, and the
+  row goes on carrying the art they picked.
+
+### `quantity` is a synced **field** and not a counter, on two grounds
+
+`deck_tokens` is the **thirteenth** synced table (`schema::SYNCED_TABLES`, user schema v37), and
+it is where this distinction is written out. Mechanically a counter carries `NEW - OLD` and this
+column is nullable, so there is no arithmetic to carry — `deck_cards.quantity` can be a counter
+precisely because it is `NOT NULL`. Semantically last-write-wins is what is wanted:
+`deck_cards.quantity` sums because two devices each sleeving a copy means two copies, but *how
+many Treasures I want to bring* is a **setting**, and two devices each setting it to 4 must mean 4
+rather than 8. No counter also means no `Floor` in `apply::META`.
+
+**A new synced table owes TEN registrations, not nine.** That list said nine until this rung was
+actually built. The tenth is `sync_engine/apply/tests.rs`'
+`every_unique_index_on_a_synced_table_has_been_decided_about`, which reads every UNIQUE index off
+a live `SYNCED_TABLES` and compares it against a written-down list, so it goes red on any new
+synced table that has a grain. It is easy to miss because it sits in a `tests.rs` rather than
+beside the other nine, and because nothing at a registration site points at it. The other nine:
+the `if v < N` rung at the **bottom** of `migrate_user` ending in its own **literal** number; the
+matching lines in `USER_SCHEMA_SQL`; an `UNDO_V<N>` for the rewind fixtures; `schema::TABLES` with
+`Side::User`; an arm in `mirror::watch::surface_of`; the `sync_uid` column and its unique index in
+**both** the rung and `USER_SCHEMA_SQL`; `schema::SYNCED_TABLES`; a `capture::Spec`; and an
+`apply::Meta`. The three array lengths (`SYNCED_TABLES`, `capture::TABLES`, `apply::META`) move
+together, and they are the one part of the list a compile error catches.
+
+Three notes on the sync half that are this table's own:
+
+- **`oracle_id` is on the `capture::Spec`'s field list even though it is half the grain**, which
+  is `muted_tags`' and `device_names`' reason: the far device has to be able to *build* the row,
+  and the grain `apply::META` restates is a way of recognising one that is already there.
+
+- **`apply::META`'s `order` is 12, appended rather than slotted in behind `decks`.** The rank is
+  only ever *sorted* by, through `baseline::build`'s `order_of`, so what it has to say is "after
+  the deck this row hangs off" — which any number above `decks`' 1 says. Renumbering the tail to
+  put it at 2 would move ten ranks to change nothing an emission can observe, and `baseline`'s
+  hard failure is on a *missing* rank rather than on a gap.
+- **The `Grain` takes `deck_id` from `Source::Parent` and `oracle_id` from `Source::Field`.** A
+  local deck id means nothing on the far device; an oracle id is Scryfall's and means the same
+  thing everywhere. Without the grain, two devices that each picked an art for the same token in
+  the same deck hold one row under two uids, and the far op is not a row to update but a row to
+  insert — which hits the unique index, rolls the group's savepoint back, and defers that op for
+  ever. `deck_labels`' reason, one table over.
+
+### The list is derived on every deck open, and that is cheaper than storing it
+
+`deck_tokens::deck_token_rows(conn, deck_id, variant)` inflates the `raw` blob of each **distinct**
+card in the deck's **active** categories and walks `all_parts`. Measured over a 100-card pool (the
+top 100 by `edhrec_rank`, denser than a real deck): 71 `all_parts` entries scanned, 10 kept, 9
+distinct tokens needed, **4.9 / 4.9 / 5.3 ms in Node** — and Rust beats that, because only the
+cards in the open deck are ever inflated.
+
+A *stored* list would need a reconciliation pass on every deck edit and would go stale the next
+time a Scryfall sync changed a card's `all_parts`, with nothing to notice. What is written down is
+only the reader's deviation.
+
+- **Active categories only** — `deck_categories.is_active = 1`. `is_active = 0` means *counts
+  toward nothing*, which is the whole of what the old `maybe` zone meant, so the **Maybeboard
+  makes no tokens**. The Sideboard and the Companion are active and do contribute, which is right:
+  you sleeve those.
+- **`CAST(raw AS BLOB)` is required, and this can never be done in SQL at all.** rusqlite will not
+  hand a TEXT-declared value out as `Vec<u8>`, and `json_extract` over a gzip member is a hard
+  `malformed JSON` error rather than a NULL.
+- **Nothing is gated on `layout` before the blob is touched**, which is the one place this parts
+  from `meld_parts`. That function gates on `layout = 'meld'` and turns a decompression on every
+  card the reader opens into one on 72 rows of 117 621. There is no such column here — token
+  references sit on 15 161 printings and nothing predicts them — and **the corpus-wide token index
+  is the thing that must not be built**: a cold full scan costs 6.5 s and it would have to be a new
+  ingest-filled column. The question is never asked corpus-wide, only of the deck in front of the
+  reader.
+- **Every failure is `Ok(vec![])` and never an `Err`**: an unknown deck, an unknown printing, a
+  `raw` that will not inflate or parse, a missing `all_parts`, an `all_parts` that is not an
+  array. A deck must not fail to open over an area most decks use lightly.
+
+### The default printing, and why the tie-break is the common path
+
+`defaultCardId` is the referenced printing the **most** of the deck's cards point at, ties broken
+by `released_at DESC, set_code ASC, collector_number ASC, id ASC` — the tail
+`card::list_printings` already orders by, so the art the resolver names is the art at the top of
+the picker the reader opens next. **Deterministic, or the same deck draws different art on two
+opens.**
+
+**The tie-break is not the rare fallback it looks like.** Different maker cards name different
+printings of the same token: across **40 Treasure makers, 12 distinct Treasure printings** were
+referenced, so a deck with two Treasure makers usually gives both a reference count of 1 and the
+tail is what actually chooses. `the_default_printing_is_stable_across_calls` and
+`the_most_referenced_printing_wins_before_the_tie_break` are the pair — the second asserts with
+the *older* printing referenced twice, so a rule that read only the tail would answer the newer
+one.
+
+`newest_printing` is that same tail written as SQL, for the hand-added tail of the answer, so a
+`manual` row and a derived one cannot disagree about which art is the default.
+
+### A token's name does not identify it
+
+**104 token and emblem names are carried by more than one `oracle_id`** — `Elemental` by 31,
+`Spirit` by 22, `Bird` and `Soldier` by 13 each, `Insect` 12, `Golem` 11 — and one card can make
+two of them: **`Wurmcoil Engine` makes two tokens both called `Wurm`**, both 3/3, both colourless
+artifacts, separated only by Deathtouch against Lifelink. So **grouping is by `oracle_id` and
+never by name**, and `DeckTokenRow` carries four fields no resolver needs — `power`, `toughness`,
+`colors`, `oracleText` — for the page to build a subtitle out of.
+
+All three of colours, size and text are needed, because each alone is insufficient: the corpus
+holds a colourless 1/1 Soldier with no text beside a white 1/1 Soldier with no text, which p/t and
+text together cannot separate. **`power` and `toughness` are strings and must never be parsed to
+numbers** — Scryfall writes `*`, `1+*` and `∞`, and there is a real `*`-over-`*` Elemental.
+`colors` is the concatenated-letter string `cards.colors` stores (`""`, `"W"`, `"BGRUW"`) and
+never a JSON array, which is what `DeckCard.colors` already is.
+
+Two tiles announcing one accessible name is a bug that has already shipped here once, on the
+collection wall, where a 2X2 and an LEA Lightning Bolt both announced *"Copies of Lightning
+Bolt"* — neither suite caught it, because both names were **correct** and merely not unique.
+
+### The four commands
+
+| command | what it does |
+| --- | --- |
+| `deck_tokens(deckId, variant)` | the derived list with the stored override joined on. Read-only connection on the blocking pool, `card_meld_parts`' shape. **No `marketplace`** — nothing in the answer is priced |
+| `deck_token_set(deckId, oracleId, cardId, quantity, tokenState)` | upsert on the grain, or **delete** when the result would carry nothing. A full replace and not a patch: the page composes the whole override and sends all three fields, `null` included |
+| `deck_token_clear(deckId, oracleId)` | back to the derived defaults; the row goes. A grain that resolves to no row is a **success** |
+| `deck_token_add(deckId, cardId)` | resolves `oracle_id` from the printing and writes `state = 'manual'` with that printing as the art. **An existing quantity survives** — adding is *put this on the wall with this art*, and a reader who had set four Treasures, dismissed them and added them back must not find the four silently gone |
+
+- **The wire key for the state word is `tokenState` and the Rust parameter is `token_state`**,
+  because `state` is already the managed `AppState` every command takes. `src/lib/ipc.ts` is the
+  one place on the other side that knows the rename; callers there pass `{ state }`, which is what
+  the column is called. `ipc.test.ts` pins all four argument sets — it is the only fence that
+  boundary has.
+- **Plain `sync::with_write` and never `with_write_owned`.** That one is for the four commands
+  that move copies across the collection/deck boundary; nothing here changes what the reader owns,
+  and the facet index's `owned` bitset has nothing to rebuild.
+- **Every refusal is a sentence.** `BAD_STATE` for a word outside `TOKEN_STATES`; `deck::GONE` for
+  a deck that is not there — `deck_tokens.deck_id` has an enforced foreign key and
+  `PRAGMA foreign_keys` is per-connection, so a deck deleted in another window is
+  `FOREIGN KEY constraint failed` on the app's connections and a silent orphan on one without the
+  pragma, and a sentence in Rust answers both; `NO_SUCH_PRINTING` for an `add` whose printing has
+  left the corpus, because that id arrives from a printings grid the reader was just looking at
+  and a press that reported success and stored nothing would be worse than a refusal.
+- **The art picker adds no Rust.** `card_printings`' predicate is `oracle_id = ?1 AND is_paper = 1`
+  (`card.rs:96`) with no `legal_mask` term at all, and every token row satisfies both. It needs no
+  `playableOnly: false` either — **that flag belongs to `search_cards`**, which is what
+  `DeckCoverPicker.tsx:148` passes it to, and reading the two as one command is how this picker
+  would come back empty for every token in the game.
+
+### `decks.tokens_open`, and the one thing it does not do
+
+v37's second half is `decks.tokens_open INTEGER NOT NULL DEFAULT 0` — whether the editor's
+**Tokens & emblems** area is expanded, per deck, beside `last_variant`, `last_group_by`,
+`last_sort_by` and `separate_x_group`. It is on the `decks` capture `Spec` with those three, so it
+travels the same way and for the same reason.
+
+It rides `DeckPatch` / `DeckRow` / `DECK_SELECT` and reaches `useDeck`'s `update` with no per-field
+arm anywhere, exactly as `separateXGroup` and `bracket` did. **`d.tokens_open` is the last
+*named* column of `DECK_SELECT` and `r.get(21)` the last positional read in `deck_row`**, which is
+not a style preference: that read is positional, and a column added anywhere but the end shifts
+every later index into a field of the same SQLite type, silently — which is how `finish` (TEXT)
+once landed in `needs_review` (TEXT).
+
+**And the named list has a tail after it, so a column added here owes a second edit.**
+`DECK_SELECT` interpolates `image_uri::front_face_selects` past the named columns, and `deck_row`'s
+`IMAGE_COL` is where they start — it read **21** until v36 and reads **22** now. Forgetting to move
+it is one of the few positional mistakes in this file that is *not* silent: the image reads are
+`Option<String>` and the column they would land on is an `INTEGER`, so rusqlite refuses the
+conversion rather than answering a plausible URL.
+
+**It writes no `deck_audit` row and no undo step, and it is not on `deck_undo::DECK_FIELDS`.**
+`record_deck_edit` names the fields a history row is worth writing for and this is not one of
+them — a disclosure triangle is not an edit to the deck — and with no history row `update_deck`
+files no step either. What it *does* do, unlike `deck_set_view_state`'s three columns, is **move
+`updated_at`**, because `update_deck` stamps that unconditionally: opening the token area lifts a
+deck to the top of a gallery sorted by most-recently-touched. Worth writing down rather than
+rediscovering, and cheap to change if it ever reads wrong.
+
+### A stale comment found on the way, and deliberately not fixed here
+
+`search.rs:1252` claims token-only and memorabilia sets have no rows in `cards` at all, "because
+`default_cards` holds nothing for them". **Measured false on 2026-09-07**: `set_type = 'token'`
+joins **2 950** card rows and `memorabilia` **5 847**. It is not this feature's to fix and nothing
+here depends on it being right; it is recorded so the next reader does not trust it.
