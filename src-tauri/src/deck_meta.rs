@@ -7,10 +7,16 @@
 //!
 //! Three tables, three different relationships to "the deck":
 //!
-//! * **Categories** and **labels** are *of* one deck (`deck_id NOT NULL`) — a category names a
-//!   pile within a deck, a label is a per-deck mark a deck card can carry. Every write to
-//!   either goes through [`crate::deck::touch_deck`], so the gallery's "recently edited"
-//!   order moves the same way a card add or a rename does.
+//! * **Categories** are *of* one deck (`deck_id NOT NULL`) — a category names a pile within a
+//!   deck. Every write to one goes through [`crate::deck::touch_deck`], so the gallery's
+//!   "recently edited" order moves the same way a card add or a rename does.
+//! * **Labels** were that too until schema v21 made them one app-wide row each, and the
+//!   `deck_id` the three writes take is now the deck the reader was *standing in* rather than
+//!   the one the label belongs to. **It is optional**: [`create_label`], [`update_label`] and
+//!   [`delete_label`] each take `Option<i64>`, because the Appearance panel in Settings edits
+//!   the app-wide list with no deck open. A deckless call does the label write and nothing
+//!   else — no `touch_deck`, no `deck_audit` row, no undo step — and the trade that makes is
+//!   pinned by `a_deckless_label_write_records_no_audit_and_no_undo`.
 //! * **Folders** are not of any deck at all — they file decks the way a filesystem directory
 //!   files files, and `decks.folder_id` is `ON DELETE SET NULL` rather than the CASCADE every
 //!   category and label write takes. No folder write touches a deck's `updated_at`, and three
@@ -21,8 +27,10 @@
 //!   *kind* is not about folder CRUD even there: it records a **deck being filed**, and the
 //!   other two writers of it are `deck::update_deck` and `deck::set_folder`.
 //!
-//! Every category and label write records one [`crate::deck_audit`] row inside its own
-//! transaction, so a refused write leaves no history. The `label` kind covers two events and
+//! Every category write, and every label write **that names a deck**, records one
+//! [`crate::deck_audit`] row inside its own transaction, so a refused write leaves no history.
+//! (`deck_audit.deck_id` is `NOT NULL`, which is the other half of why a deckless label write
+//! records nothing: there is no row it could write.) The `label` kind covers two events and
 //! `card_id` is what tells them apart: a card wearing a label (`set_card_label`, `card_id` set)
 //! and the label itself being made, renamed or deleted (`card_id` NULL, and an `action` verb —
 //! without one a delete would read as a labelling).
@@ -1224,13 +1232,22 @@ fn label_name_is_taken(conn: &Connection, key: &str, except: Option<i64>) -> Res
 /// Make a label. **App-wide** — `deck_id` says where the reader was standing, for the history
 /// row and the undo step, and is not stored on the label.
 ///
+/// **`deck_id` is optional, and its absence is the Appearance panel.** A label is one app-wide row
+/// and always was (schema v21); the deck is what the *side effects* need — its `updated_at`, and
+/// the history entry the editor's dialog draws. A call from Settings has no deck to name, so it
+/// makes the label and writes no history: no [`crate::deck::touch_deck`], no `deck_audit` row and
+/// no undo step. **The trade is that such an edit is in no deck's undo stack.** Naming one deck
+/// for a change that reaches every deck wearing the label would be a false entry, and naming all
+/// of them is a feature nobody asked for — so the entry is simply not written. See
+/// `a_deckless_label_write_records_no_audit_and_no_undo` in this module's tests.
+///
 /// Refuses a name any label already holds ([`LABEL_NAME_TAKEN`]). That refusal is the issue's
 /// second half and it is enforced here rather than in the webview, because uniqueness is a
 /// property of the table: the dialog steering a reader away from a duplicate is a courtesy, and
 /// two windows racing the same new name is what a UNIQUE index is for.
 pub fn create_label(
     conn: &Connection,
-    deck_id: i64,
+    deck_id: Option<i64>,
     name: &str,
     color: &str,
 ) -> Result<GlobalLabel, String> {
@@ -1241,7 +1258,10 @@ pub fn create_label(
     if label_name_is_taken(&tx, &key, None)? {
         return Err(LABEL_NAME_TAKEN.to_owned());
     }
-    crate::deck::touch_deck(&tx, deck_id)?;
+    // **The deck's side effects, and only when there is a deck** — see this function's doc.
+    if let Some(deck_id) = deck_id {
+        crate::deck::touch_deck(&tx, deck_id)?;
+    }
     let id: i64 = tx
         .query_row(
             "INSERT INTO deck_labels (name, name_key, color, created_at, updated_at)
@@ -1251,29 +1271,31 @@ pub fn create_label(
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
-    let audit_id = record_label(
-        &tx,
-        deck_id,
-        &json!({ "action": "create", "label": name, "previous": null }),
-    )?;
-    // Nothing wears it yet, so the label itself is the whole of the change.
-    record_category_step(
-        &tx,
-        audit_id,
-        deck_id,
-        vec![crate::deck_undo::Op::Labels {
-            restore: vec![],
-            patch: vec![],
-            delete: vec![id],
-            carriers: vec![],
-        }],
-        vec![crate::deck_undo::Op::Labels {
-            restore: label_step_row(&tx, id)?,
-            patch: vec![],
-            delete: vec![],
-            carriers: vec![],
-        }],
-    )?;
+    if let Some(deck_id) = deck_id {
+        let audit_id = record_label(
+            &tx,
+            deck_id,
+            &json!({ "action": "create", "label": name, "previous": null }),
+        )?;
+        // Nothing wears it yet, so the label itself is the whole of the change.
+        record_category_step(
+            &tx,
+            audit_id,
+            deck_id,
+            vec![crate::deck_undo::Op::Labels {
+                restore: vec![],
+                patch: vec![],
+                delete: vec![id],
+                carriers: vec![],
+            }],
+            vec![crate::deck_undo::Op::Labels {
+                restore: label_step_row(&tx, id)?,
+                patch: vec![],
+                delete: vec![],
+                carriers: vec![],
+            }],
+        )?;
+    }
     tx.commit().map_err(|e| e.to_string())?;
     read_global_label(conn, id)?.ok_or_else(|| LABEL_GONE.to_owned())
 }
@@ -1288,9 +1310,12 @@ pub fn create_label(
 /// and the undo step. It is honest rather than arbitrary: the change is global, but the *act*
 /// happened somewhere, and a history that could not say where would be a worse record than one
 /// that names the deck the reader pressed it in.
+///
+/// **And it is optional for [`create_label`]'s reason** — a rename from the Appearance panel was
+/// pressed in no deck at all, so it renames the label and records nothing.
 pub fn update_label(
     conn: &Connection,
-    deck_id: i64,
+    deck_id: Option<i64>,
     id: i64,
     name: &str,
     color: &str,
@@ -1313,8 +1338,15 @@ pub fn update_label(
     if label_name_is_taken(&tx, &key, Some(id))? {
         return Err(LABEL_NAME_TAKEN.to_owned());
     }
-    crate::deck::touch_deck(&tx, deck_id)?;
-    let before = label_step_row(&tx, id)?;
+    if let Some(deck_id) = deck_id {
+        crate::deck::touch_deck(&tx, deck_id)?;
+    }
+    // Read before the UPDATE below rewrites it, and only worth reading when there is a step to
+    // put it in.
+    let before = match deck_id {
+        Some(_) => label_step_row(&tx, id)?,
+        None => vec![],
+    };
     tx.execute(
         "UPDATE deck_labels SET name = ?2, name_key = ?3, color = ?4, updated_at = unixepoch()
           WHERE id = ?1",
@@ -1327,29 +1359,31 @@ pub fn update_label(
     // is the reader's own hex, and it is the same colour in every deck — so "Recoloured label
     // Ramp" is a line a reader may well come back looking for. `auditText` has rendered
     // `recolour` since before anything wrote it.
-    let payload = if previous == name {
-        json!({ "action": "recolour", "label": name, "previous": null, "color": color })
-    } else {
-        json!({ "action": "rename", "label": name, "previous": previous, "color": color })
-    };
-    let audit_id = record_label(&tx, deck_id, &payload)?;
-    record_category_step(
-        &tx,
-        audit_id,
-        deck_id,
-        vec![crate::deck_undo::Op::Labels {
-            restore: vec![],
-            patch: before,
-            delete: vec![],
-            carriers: vec![],
-        }],
-        vec![crate::deck_undo::Op::Labels {
-            restore: vec![],
-            patch: label_step_row(&tx, id)?,
-            delete: vec![],
-            carriers: vec![],
-        }],
-    )?;
+    if let Some(deck_id) = deck_id {
+        let payload = if previous == name {
+            json!({ "action": "recolour", "label": name, "previous": null, "color": color })
+        } else {
+            json!({ "action": "rename", "label": name, "previous": previous, "color": color })
+        };
+        let audit_id = record_label(&tx, deck_id, &payload)?;
+        record_category_step(
+            &tx,
+            audit_id,
+            deck_id,
+            vec![crate::deck_undo::Op::Labels {
+                restore: vec![],
+                patch: before,
+                delete: vec![],
+                carriers: vec![],
+            }],
+            vec![crate::deck_undo::Op::Labels {
+                restore: vec![],
+                patch: label_step_row(&tx, id)?,
+                delete: vec![],
+                carriers: vec![],
+            }],
+        )?;
+    }
     tx.commit().map_err(|e| e.to_string())?;
     read_global_label(conn, id)?.ok_or_else(|| LABEL_GONE.to_owned())
 }
@@ -1444,8 +1478,12 @@ pub fn remove_label_from_deck(
 /// worn in six decks comes off the cards in six decks; [`GlobalLabel::deck_count`] exists so the
 /// dialog can say the number before the press rather than after it.
 ///
-/// `deck_id` is where the reader was standing — [`update_label`]'s argument, for its reason.
-pub fn delete_label(conn: &Connection, deck_id: i64, id: i64) -> Result<(), String> {
+/// `deck_id` is where the reader was standing — [`update_label`]'s argument, for its reason, and
+/// **optional for [`create_label`]'s**. A deckless delete still deletes the label everywhere and
+/// still un-labels every card that wore it, through the same `SET NULL`; what it does not do is
+/// touch a deck, write the `delete` history row or file an undo step — so those cards cannot be
+/// re-labelled by Ctrl+Z, and the `cards` count that row carries is never computed.
+pub fn delete_label(conn: &Connection, deck_id: Option<i64>, id: i64) -> Result<(), String> {
     // Read rather than `owning_deck`, which no longer means anything for a label: the history
     // needs the name, and this is the last statement in which it is knowable.
     let name: Option<String> = conn
@@ -1460,47 +1498,60 @@ pub fn delete_label(conn: &Connection, deck_id: i64, id: i64) -> Result<(), Stri
         return Ok(());
     };
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    crate::deck::touch_deck(&tx, deck_id)?;
     // **The label, and every card wearing it in every deck.** The DELETE below silently
     // un-labels them through the FK's `SET NULL`, and the history row says only that a label
     // went — so undo has to put the label back *and* put it back on those cards, which is the
     // only place either fact still exists. `Carrier` carries its own `deck_id` for exactly this
     // reason: the carriers of a global delete are not all in the deck the press happened in.
-    let before = label_step_row(&tx, id)?;
-    let carriers = crate::deck_undo::read_carriers(&tx, id)?;
-    let cards: i64 = carriers.len() as i64;
+    //
+    // **Both reads are the history's and the DELETE needs neither** — it names the label by id
+    // and nothing else — but they have to happen *before* it, so the guard is here rather than
+    // around the block below. A deckless delete reads nothing extra at all.
+    let history = match deck_id {
+        Some(deck_id) => {
+            crate::deck::touch_deck(&tx, deck_id)?;
+            Some((
+                label_step_row(&tx, id)?,
+                crate::deck_undo::read_carriers(&tx, id)?,
+            ))
+        }
+        None => None,
+    };
     tx.execute("DELETE FROM deck_labels WHERE id = ?1", params![id])
         .map_err(|e| e.to_string())?;
-    // `previous` is null: this row is about the label, and the one it is about is named by the
-    // `label` key. `previous` carries the *former* name of a renamed one and nothing else, so
-    // filling it here would make a delete read as a rename that went nowhere. `cards` is what
-    // `auditText`'s "N cards unlabelled" is rendered from — it has always been read and was
-    // never written until the reach became worth stating.
-    let audit_id = record_label(
-        &tx,
-        deck_id,
-        &json!({ "action": "delete", "label": name, "previous": null, "cards": cards }),
-    )?;
-    // The carriers ride on the same op as the restore, so they are written after it and can be
-    // rewritten through the remap when the label comes back under a fresh id. On the redo side
-    // there are none: the delete's own `SET NULL` is what clears them again.
-    record_category_step(
-        &tx,
-        audit_id,
-        deck_id,
-        vec![crate::deck_undo::Op::Labels {
-            restore: before,
-            patch: vec![],
-            delete: vec![],
-            carriers,
-        }],
-        vec![crate::deck_undo::Op::Labels {
-            restore: vec![],
-            patch: vec![],
-            delete: vec![id],
-            carriers: vec![],
-        }],
-    )?;
+    if let (Some(deck_id), Some((before, carriers))) = (deck_id, history) {
+        let cards: i64 = carriers.len() as i64;
+        // `previous` is null: this row is about the label, and the one it is about is named by
+        // the `label` key. `previous` carries the *former* name of a renamed one and nothing
+        // else, so filling it here would make a delete read as a rename that went nowhere.
+        // `cards` is what `auditText`'s "N cards unlabelled" is rendered from — it has always
+        // been read and was never written until the reach became worth stating.
+        let audit_id = record_label(
+            &tx,
+            deck_id,
+            &json!({ "action": "delete", "label": name, "previous": null, "cards": cards }),
+        )?;
+        // The carriers ride on the same op as the restore, so they are written after it and can
+        // be rewritten through the remap when the label comes back under a fresh id. On the redo
+        // side there are none: the delete's own `SET NULL` is what clears them again.
+        record_category_step(
+            &tx,
+            audit_id,
+            deck_id,
+            vec![crate::deck_undo::Op::Labels {
+                restore: before,
+                patch: vec![],
+                delete: vec![],
+                carriers,
+            }],
+            vec![crate::deck_undo::Op::Labels {
+                restore: vec![],
+                patch: vec![],
+                delete: vec![id],
+                carriers: vec![],
+            }],
+        )?;
+    }
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -2002,11 +2053,18 @@ pub async fn deck_label_list(
     .map_err(|e| format!("the deck's labels could not be read: {e}"))?
 }
 
+/// **`deck_id` is optional, and its absence is the Appearance panel.** A label is one app-wide row
+/// and always was; the deck is what the *side effects* need — its `updated_at`, and the history
+/// entry the editor's dialog draws. A call from Settings has no deck to name, so it makes the
+/// label and writes no history. See the module tests for the trade.
+///
+/// **Tauri fills a missing `Option` argument with `None`**, so the deck editor's existing calls,
+/// which send `deckId`, are unchanged.
 #[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_label_create(
     state: tauri::State<'_, Arc<AppState>>,
-    deck_id: i64,
+    deck_id: Option<i64>,
     name: String,
     color: String,
 ) -> Result<GlobalLabel, String> {
@@ -2019,12 +2077,13 @@ pub async fn deck_label_create(
 }
 
 /// `deck_id` is where the reader was standing, not what is being changed — see
-/// [`update_label`], which is app-wide.
+/// [`update_label`], which is app-wide. Optional, for [`deck_label_create`]'s reason: a rename
+/// made from Settings names no deck and records nothing.
 #[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_label_update(
     state: tauri::State<'_, Arc<AppState>>,
-    deck_id: i64,
+    deck_id: Option<i64>,
     id: i64,
     name: String,
     color: String,
@@ -2037,12 +2096,14 @@ pub async fn deck_label_update(
     .map_err(unfinished)?
 }
 
-/// Deletes the label **everywhere**, and answers nothing. `deck_id` is where the reader was.
+/// Deletes the label **everywhere**, and answers nothing. `deck_id` is where the reader was, and
+/// is optional for [`deck_label_create`]'s reason — a deckless delete still un-labels every card,
+/// and writes no history and no undo step.
 #[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_label_delete(
     state: tauri::State<'_, Arc<AppState>>,
-    deck_id: i64,
+    deck_id: Option<i64>,
     id: i64,
 ) -> Result<(), String> {
     let state = state.inner().clone();
@@ -3407,9 +3468,9 @@ mod tests {
         let deck_b = deck(&conn, "Control");
         // One row per name, made once — a second deck does not get its own copy any more, which
         // is the whole of the change. `Draw` is worn by nothing at all.
-        let removal = create_label(&conn, deck_a, "Removal", "red").unwrap();
-        let ramp = create_label(&conn, deck_a, "Ramp", "green").unwrap();
-        create_label(&conn, deck_a, "Draw", "blue").unwrap();
+        let removal = create_label(&conn, Some(deck_a), "Removal", "red").unwrap();
+        let ramp = create_label(&conn, Some(deck_a), "Ramp", "green").unwrap();
+        create_label(&conn, Some(deck_a), "Draw", "blue").unwrap();
 
         labelled(&conn, deck_a, "bolt-lea", removal.id, 4);
         labelled(&conn, deck_b, "swords-lea", removal.id, 3);
@@ -3432,16 +3493,16 @@ mod tests {
         let conn = conn();
         let deck_a = deck(&conn, "Burn");
         let deck_b = deck(&conn, "Control");
-        create_label(&conn, deck_a, "Removal", "red").unwrap();
+        create_label(&conn, Some(deck_a), "Removal", "red").unwrap();
 
         // The same deck, and then a *different* one: while a label was per-deck the second of
         // these was allowed and made the second row this feature exists to prevent.
         assert_eq!(
-            create_label(&conn, deck_a, "Removal", "blue").unwrap_err(),
+            create_label(&conn, Some(deck_a), "Removal", "blue").unwrap_err(),
             LABEL_NAME_TAKEN
         );
         assert_eq!(
-            create_label(&conn, deck_b, "Removal", "blue").unwrap_err(),
+            create_label(&conn, Some(deck_b), "Removal", "blue").unwrap_err(),
             LABEL_NAME_TAKEN
         );
     }
@@ -3450,11 +3511,11 @@ mod tests {
     fn deck_label_create_compares_names_case_insensitively_and_normalised() {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
-        create_label(&conn, deck_id, "Removal", "red").unwrap();
+        create_label(&conn, Some(deck_id), "Removal", "red").unwrap();
 
         for spelling in ["removal", "REMOVAL", "  Removal  "] {
             assert_eq!(
-                create_label(&conn, deck_id, spelling, "blue").unwrap_err(),
+                create_label(&conn, Some(deck_id), spelling, "blue").unwrap_err(),
                 LABEL_NAME_TAKEN,
                 "`{spelling}` is the same label"
             );
@@ -3462,13 +3523,13 @@ mod tests {
 
         // The Unicode half, which `COLLATE NOCASE` could not answer: a combining acute against
         // a precomposed one. Both are typeable and which one arrives is the keyboard's choice.
-        create_label(&conn, deck_id, "Caf\u{e9}", "red").unwrap();
+        create_label(&conn, Some(deck_id), "Caf\u{e9}", "red").unwrap();
         assert_eq!(
-            create_label(&conn, deck_id, "Cafe\u{301}", "blue").unwrap_err(),
+            create_label(&conn, Some(deck_id), "Cafe\u{301}", "blue").unwrap_err(),
             LABEL_NAME_TAKEN
         );
         assert_eq!(
-            create_label(&conn, deck_id, "CAF\u{c9}", "blue").unwrap_err(),
+            create_label(&conn, Some(deck_id), "CAF\u{c9}", "blue").unwrap_err(),
             LABEL_NAME_TAKEN
         );
     }
@@ -3477,7 +3538,7 @@ mod tests {
     fn deck_label_create_keeps_the_capitals_the_reader_typed() {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
-        let label = create_label(&conn, deck_id, "Cut Candidate", "red").unwrap();
+        let label = create_label(&conn, Some(deck_id), "Cut Candidate", "red").unwrap();
         assert_eq!(
             label.name, "Cut Candidate",
             "the key is never the display name"
@@ -3497,10 +3558,10 @@ mod tests {
         let conn = conn();
         let deck_a = deck(&conn, "Burn");
         let deck_b = deck(&conn, "Control");
-        let label = create_label(&conn, deck_a, "Removal", "red").unwrap();
+        let label = create_label(&conn, Some(deck_a), "Removal", "red").unwrap();
         labelled(&conn, deck_b, "swords-lea", label.id, 1);
 
-        let returned = update_label(&conn, deck_a, label.id, "Interaction", "blue").unwrap();
+        let returned = update_label(&conn, Some(deck_a), label.id, "Interaction", "blue").unwrap();
         assert_eq!(returned.name, "Interaction");
         assert_eq!(returned.color, "blue");
 
@@ -3527,15 +3588,15 @@ mod tests {
     fn deck_label_update_refuses_a_name_another_label_holds_but_allows_recapitalising_its_own() {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
-        let removal = create_label(&conn, deck_id, "Removal", "red").unwrap();
-        create_label(&conn, deck_id, "Ramp", "green").unwrap();
+        let removal = create_label(&conn, Some(deck_id), "Removal", "red").unwrap();
+        create_label(&conn, Some(deck_id), "Ramp", "green").unwrap();
 
         assert_eq!(
-            update_label(&conn, deck_id, removal.id, "ramp", "red").unwrap_err(),
+            update_label(&conn, Some(deck_id), removal.id, "ramp", "red").unwrap_err(),
             LABEL_NAME_TAKEN
         );
         // Its own name in different capitals is not taken — by itself.
-        let fixed = update_label(&conn, deck_id, removal.id, "REMOVAL", "red").unwrap();
+        let fixed = update_label(&conn, Some(deck_id), removal.id, "REMOVAL", "red").unwrap();
         assert_eq!(fixed.name, "REMOVAL");
     }
 
@@ -3544,10 +3605,10 @@ mod tests {
         let conn = conn();
         let deck_a = deck(&conn, "Burn");
         let deck_b = deck(&conn, "Control");
-        let removal = create_label(&conn, deck_a, "Removal", "red").unwrap();
-        let ramp = create_label(&conn, deck_a, "Ramp", "green").unwrap();
-        let elsewhere = create_label(&conn, deck_a, "Elsewhere", "blue").unwrap();
-        create_label(&conn, deck_a, "Unworn", "amber").unwrap();
+        let removal = create_label(&conn, Some(deck_a), "Removal", "red").unwrap();
+        let ramp = create_label(&conn, Some(deck_a), "Ramp", "green").unwrap();
+        let elsewhere = create_label(&conn, Some(deck_a), "Elsewhere", "blue").unwrap();
+        create_label(&conn, Some(deck_a), "Unworn", "amber").unwrap();
 
         let cat = labelled(&conn, deck_a, "bolt-lea", ramp.id, 2);
         crate::schema::tests::seed_card(&conn, "swords-lea", "lea", "161");
@@ -3580,8 +3641,8 @@ mod tests {
     fn deck_label_list_treats_the_two_variants_as_different_decks() {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
-        let live_only = create_label(&conn, deck_id, "Live only", "red").unwrap();
-        let theory_only = create_label(&conn, deck_id, "Theory only", "blue").unwrap();
+        let live_only = create_label(&conn, Some(deck_id), "Live only", "red").unwrap();
+        let theory_only = create_label(&conn, Some(deck_id), "Theory only", "blue").unwrap();
         let cat = labelled(&conn, deck_id, "bolt-lea", live_only.id, 1);
 
         crate::schema::tests::seed_card(&conn, "swords-lea", "lea", "161");
@@ -3613,7 +3674,7 @@ mod tests {
         let conn = conn();
         let deck_a = deck(&conn, "Burn");
         let deck_b = deck(&conn, "Control");
-        let label = create_label(&conn, deck_a, "Removal", "red").unwrap();
+        let label = create_label(&conn, Some(deck_a), "Removal", "red").unwrap();
         labelled(&conn, deck_a, "bolt-lea", label.id, 4);
         labelled(&conn, deck_b, "swords-lea", label.id, 3);
 
@@ -3635,7 +3696,7 @@ mod tests {
     fn removing_a_label_no_card_here_wears_is_a_success_that_writes_nothing() {
         let conn = conn();
         let deck_id = deck(&conn, "Burn");
-        let label = create_label(&conn, deck_id, "Removal", "red").unwrap();
+        let label = create_label(&conn, Some(deck_id), "Removal", "red").unwrap();
         let before: i64 = conn
             .query_row("SELECT count(*) FROM deck_audit", [], |r| r.get(0))
             .unwrap();
@@ -3656,11 +3717,11 @@ mod tests {
         let conn = conn();
         let deck_a = deck(&conn, "Burn");
         let deck_b = deck(&conn, "Control");
-        let label = create_label(&conn, deck_a, "Removal", "red").unwrap();
+        let label = create_label(&conn, Some(deck_a), "Removal", "red").unwrap();
         labelled(&conn, deck_a, "bolt-lea", label.id, 4);
         labelled(&conn, deck_b, "swords-lea", label.id, 3);
 
-        delete_label(&conn, deck_a, label.id).unwrap();
+        delete_label(&conn, Some(deck_a), label.id).unwrap();
 
         assert!(list_all_labels(&conn).unwrap().is_empty());
         let cards: i64 = conn
@@ -3677,6 +3738,84 @@ mod tests {
         assert_eq!(labelled_rows, 0, "and neither is wearing anything");
     }
 
+    // -- A label write with no deck in the room ------------------------------------------------
+
+    /// Every `deck_audit` row in the database, for the three tests below — the module writes one
+    /// per label act, and the whole question here is whether a deckless call writes one at all.
+    fn audit_count(conn: &Connection) -> i64 {
+        conn.query_row("SELECT count(*) FROM deck_audit", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    /// The same for the undo stack, which hangs off those rows.
+    fn undo_count(conn: &Connection) -> i64 {
+        conn.query_row("SELECT count(*) FROM deck_undo", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    /// **A label can be made with no deck in the room** — the Appearance panel in Settings owns
+    /// the app-wide list, and there is no deck there to touch or to write a history entry for.
+    ///
+    /// A label has been one app-wide row since v21, so this needs no new storage: what `deck_id`
+    /// was ever for here is the *deck's* side effects, and a global edit has none.
+    #[test]
+    fn a_label_can_be_created_without_a_deck() {
+        let conn = conn();
+        let label = create_label(&conn, None, "Cut candidate", "#d9b95c").unwrap();
+        assert_eq!(label.name, "Cut candidate");
+        assert!(list_all_labels(&conn)
+            .unwrap()
+            .iter()
+            .any(|l| l.id == label.id));
+    }
+
+    /// **And it writes no deck history**, which is the trade this option is, stated as a test
+    /// rather than discovered. A rename made from Settings is not an event in any one deck's life
+    /// — it reaches every deck wearing the label — so attributing it to one would be a false
+    /// entry, and attributing it to all of them is a feature nobody asked for. The cost is that
+    /// such an edit is not in a deck's undo stack; the deck editor's own dialog is unchanged and
+    /// still records everything it always did.
+    #[test]
+    fn a_deckless_label_write_records_no_audit_and_no_undo() {
+        let conn = conn();
+        // A deck exists and wears the label, so the absence below is the argument's doing rather
+        // than an empty database's.
+        let deck_id = deck(&conn, "Burn");
+        let seed = create_label(&conn, Some(deck_id), "Seed", "#3a7d44").unwrap();
+        labelled(&conn, deck_id, "bolt-lea", seed.id, 4);
+        let before = audit_count(&conn);
+        let before_undo = undo_count(&conn);
+
+        let label = create_label(&conn, None, "Cut candidate", "#d9b95c").unwrap();
+        update_label(&conn, None, label.id, "Cut", "#0e68ab").unwrap();
+        delete_label(&conn, None, label.id).unwrap();
+
+        assert_eq!(
+            audit_count(&conn),
+            before,
+            "no deck was named, so none is told"
+        );
+        assert_eq!(undo_count(&conn), before_undo, "and nothing is undoable");
+        assert!(
+            list_all_labels(&conn)
+                .unwrap()
+                .iter()
+                .all(|l| l.id != label.id),
+            "the delete itself still happened"
+        );
+    }
+
+    /// The deck path is untouched: given a deck, all three still touch it and still write the
+    /// history entry the editor's dialog depends on.
+    #[test]
+    fn a_label_write_with_a_deck_still_records_history() {
+        let conn = conn();
+        let deck_id = deck(&conn, "Burn");
+        let before = audit_count(&conn);
+        create_label(&conn, Some(deck_id), "Cut candidate", "#d9b95c").unwrap();
+        assert!(audit_count(&conn) > before);
+    }
+
     // -- Rule 5: a card carries 0 or 1 labels --------------------------------------------------
 
     #[test]
@@ -3686,8 +3825,8 @@ mod tests {
         let cat = category(&conn, deck_id, "main", "Main deck");
         crate::schema::tests::seed_card(&conn, "bolt-lea", "lea", "161");
         deck_card(&conn, deck_id, "bolt-lea", cat, 4);
-        let removal = create_label(&conn, deck_id, "Removal", "red").unwrap();
-        let ramp = create_label(&conn, deck_id, "Ramp", "green").unwrap();
+        let removal = create_label(&conn, Some(deck_id), "Removal", "red").unwrap();
+        let ramp = create_label(&conn, Some(deck_id), "Ramp", "green").unwrap();
 
         let label_of = |conn: &Connection| -> Option<i64> {
             conn.query_row(
@@ -3729,7 +3868,7 @@ mod tests {
         let cat = category(&conn, deck_a, "main", "Main deck");
         crate::schema::tests::seed_card(&conn, "bolt-lea", "lea", "161");
         deck_card(&conn, deck_a, "bolt-lea", cat, 4);
-        let made_elsewhere = create_label(&conn, deck_b, "Removal", "red").unwrap();
+        let made_elsewhere = create_label(&conn, Some(deck_b), "Removal", "red").unwrap();
 
         set_card_label(
             &conn,
@@ -3799,7 +3938,7 @@ mod tests {
         let cat = category(&conn, deck_id, "main", "Main deck");
         crate::schema::tests::seed_card(&conn, "bolt-lea", "lea", "161");
         let row = foil_deck_card(&conn, deck_id, "bolt-lea", cat);
-        let label = create_label(&conn, deck_id, "Cut candidate", "ember").unwrap();
+        let label = create_label(&conn, Some(deck_id), "Cut candidate", "ember").unwrap();
 
         set_card_label(
             &conn,
@@ -3832,7 +3971,7 @@ mod tests {
         let cat = category(&conn, deck_id, "main", "Main deck");
         crate::schema::tests::seed_card(&conn, "bolt-lea", "lea", "161");
         foil_deck_card(&conn, deck_id, "bolt-lea", cat);
-        let label = create_label(&conn, deck_id, "Cut candidate", "ember").unwrap();
+        let label = create_label(&conn, Some(deck_id), "Cut candidate", "ember").unwrap();
 
         let err = set_card_label(
             &conn,
@@ -3884,14 +4023,14 @@ mod tests {
         deck_card(&conn, deck_id, "bolt-lea", cat, 4);
 
         backdate(&conn, deck_id);
-        let label = create_label(&conn, deck_id, "Removal", "red").unwrap();
+        let label = create_label(&conn, Some(deck_id), "Removal", "red").unwrap();
         assert!(
             updated_at(&conn, deck_id) > 0,
             "label create moved the deck"
         );
 
         backdate(&conn, deck_id);
-        update_label(&conn, deck_id, label.id, "Interaction", "red").unwrap();
+        update_label(&conn, Some(deck_id), label.id, "Interaction", "red").unwrap();
         assert!(updated_at(&conn, deck_id) > 0, "so does label update");
 
         backdate(&conn, deck_id);
@@ -3915,7 +4054,7 @@ mod tests {
         );
 
         backdate(&conn, deck_id);
-        delete_label(&conn, deck_id, label.id).unwrap();
+        delete_label(&conn, Some(deck_id), label.id).unwrap();
         assert!(updated_at(&conn, deck_id) > 0, "and label delete");
     }
 

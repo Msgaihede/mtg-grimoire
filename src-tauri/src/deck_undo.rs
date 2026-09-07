@@ -1577,7 +1577,7 @@ mod tests {
         crate::deck::add_card(&conn, id, "bolt-lea", Some(ramp), None, "live", None, 2).unwrap();
         crate::deck::add_card(&conn, id, "serra-lea", Some(draw), None, "live", None, 1).unwrap();
         crate::deck::add_card(&conn, id, "bolt-m10", Some(ramp), None, "theory", None, 3).unwrap();
-        let label = crate::deck_meta::create_label(&conn, id, "Cut candidate", "amber")
+        let label = crate::deck_meta::create_label(&conn, Some(id), "Cut candidate", "amber")
             .unwrap()
             .id;
         crate::deck_meta::set_card_label(&conn, id, "serra-lea", draw, "live", None, Some(label))
@@ -2098,14 +2098,14 @@ mod tests {
                 },
             ),
             ("deck_label_create", nothing, |c, id| {
-                crate::deck_meta::create_label(c, id, "Keep", "jade").unwrap();
+                crate::deck_meta::create_label(c, Some(id), "Keep", "jade").unwrap();
             }),
             (
                 "deck_label_update (renaming and recolouring)",
                 nothing,
                 |c, id| {
                     let label = label_id(c, id);
-                    crate::deck_meta::update_label(c, id, label, "Cut", "jade").unwrap();
+                    crate::deck_meta::update_label(c, Some(id), label, "Cut", "jade").unwrap();
                 },
             ),
             (
@@ -2113,7 +2113,7 @@ mod tests {
                 "deck_label_delete (un-labelling its cards)",
                 nothing,
                 |c, id| {
-                    crate::deck_meta::delete_label(c, id, label_id(c, id)).unwrap();
+                    crate::deck_meta::delete_label(c, Some(id), label_id(c, id)).unwrap();
                 },
             ),
             ("deck_card_set_label", nothing, |c, id| {
@@ -2330,7 +2330,7 @@ mod tests {
         crate::deck::set_card_quantity(&conn, id, "serra-lea", draw(&conn, id), "live", None, 4)
             .unwrap();
         let quantity_step = next_undo(&conn, id).unwrap().unwrap();
-        crate::deck_meta::delete_label(&conn, id, label_id(&conn, id)).unwrap();
+        crate::deck_meta::delete_label(&conn, Some(id), label_id(&conn, id)).unwrap();
         let label_step = next_undo(&conn, id).unwrap().unwrap();
 
         let mut wound_back = String::new();

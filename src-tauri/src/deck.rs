@@ -6837,7 +6837,7 @@ mod tests {
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
         let main = main_of(&conn, deck.id);
         let scratch = kind_of(&conn, deck.id, "maybe");
-        let label = crate::deck_meta::create_label(&conn, deck.id, "Flex", "amber").unwrap();
+        let label = crate::deck_meta::create_label(&conn, Some(deck.id), "Flex", "amber").unwrap();
         add(&conn, deck.id, "bolt-lea", main, 4);
         add(&conn, deck.id, "bolt-jp", scratch, 1);
         add_card(
@@ -8201,7 +8201,7 @@ mod tests {
         conn.pragma_update(None, "foreign_keys", "ON").unwrap();
         let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
         add(&conn, deck.id, "bolt-lea", main_of(&conn, deck.id), 4);
-        crate::deck_meta::create_label(&conn, deck.id, "Flex", "amber").unwrap();
+        crate::deck_meta::create_label(&conn, Some(deck.id), "Flex", "amber").unwrap();
         file_into_group(&conn, deck.id, "bolt-lea", 4);
 
         delete_deck(&conn, deck.id).unwrap();
@@ -10485,8 +10485,8 @@ mod tests {
         let main = main_of(&conn, deck.id);
         let side = kind_of(&conn, deck.id, "side");
         let scratch = kind_of(&conn, deck.id, "maybe");
-        let label = crate::deck_meta::create_label(&conn, deck.id, "Flex", "amber").unwrap();
-        crate::deck_meta::create_label(&conn, deck.id, "Unworn", "slate").unwrap();
+        let label = crate::deck_meta::create_label(&conn, Some(deck.id), "Flex", "amber").unwrap();
+        crate::deck_meta::create_label(&conn, Some(deck.id), "Unworn", "slate").unwrap();
         // Written so the reading order is neither the insert order nor the category order a
         // reader would guess: the Sideboard and the Maybeboard both sort *before* the main
         // pile, because they were seeded with the deck and the main pile was made by the

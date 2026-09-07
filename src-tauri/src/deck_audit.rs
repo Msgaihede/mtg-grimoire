@@ -656,9 +656,10 @@ mod tests {
                 Box::new(|| {
                     crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", None, 2)
                         .unwrap();
-                    let label = crate::deck_meta::create_label(&conn, id, "Cut candidate", "amber")
-                        .unwrap()
-                        .id;
+                    let label =
+                        crate::deck_meta::create_label(&conn, Some(id), "Cut candidate", "amber")
+                            .unwrap()
+                            .id;
                     clear(&conn);
                     crate::deck_meta::set_card_label(
                         &conn,
@@ -723,29 +724,29 @@ mod tests {
                 "deck_label_create",
                 1,
                 Box::new(|| {
-                    crate::deck_meta::create_label(&conn, id, "Fresh", "amber").unwrap();
+                    crate::deck_meta::create_label(&conn, Some(id), "Fresh", "amber").unwrap();
                 }),
             ),
             (
                 "deck_label_update",
                 1,
                 Box::new(|| {
-                    let label = crate::deck_meta::create_label(&conn, id, "Old", "amber")
+                    let label = crate::deck_meta::create_label(&conn, Some(id), "Old", "amber")
                         .unwrap()
                         .id;
                     clear(&conn);
-                    crate::deck_meta::update_label(&conn, id, label, "New", "jade").unwrap();
+                    crate::deck_meta::update_label(&conn, Some(id), label, "New", "jade").unwrap();
                 }),
             ),
             (
                 "deck_label_delete",
                 1,
                 Box::new(|| {
-                    let label = crate::deck_meta::create_label(&conn, id, "Doomed", "amber")
+                    let label = crate::deck_meta::create_label(&conn, Some(id), "Doomed", "amber")
                         .unwrap()
                         .id;
                     clear(&conn);
-                    crate::deck_meta::delete_label(&conn, id, label).unwrap();
+                    crate::deck_meta::delete_label(&conn, Some(id), label).unwrap();
                 }),
             ),
             (
@@ -1103,10 +1104,10 @@ mod tests {
         let id = deck(&conn, "Burn");
         let main = category(&conn, id, "Ramp");
         crate::deck::add_card(&conn, id, "bolt-lea", Some(main), None, "live", None, 1).unwrap();
-        let cut = crate::deck_meta::create_label(&conn, id, "Cut candidate", "amber")
+        let cut = crate::deck_meta::create_label(&conn, Some(id), "Cut candidate", "amber")
             .unwrap()
             .id;
-        let keep = crate::deck_meta::create_label(&conn, id, "Keep", "jade")
+        let keep = crate::deck_meta::create_label(&conn, Some(id), "Keep", "jade")
             .unwrap()
             .id;
 
@@ -1145,7 +1146,7 @@ mod tests {
         let conn = seeded();
         let id = deck(&conn, "Burn");
 
-        let label = crate::deck_meta::create_label(&conn, id, "Cut candidate", "amber")
+        let label = crate::deck_meta::create_label(&conn, Some(id), "Cut candidate", "amber")
             .unwrap()
             .id;
         let (row, payload) = newest(&conn, id);
@@ -1156,7 +1157,7 @@ mod tests {
             json!({ "action": "create", "label": "Cut candidate", "previous": null })
         );
 
-        crate::deck_meta::update_label(&conn, id, label, "Cut", "jade").unwrap();
+        crate::deck_meta::update_label(&conn, Some(id), label, "Cut", "jade").unwrap();
         let (_, payload) = newest(&conn, id);
         // `color` rides along since v21: one row means one colour, so a recolour is a change a
         // reader may come back looking for — and a rename that also recoloured says both.
@@ -1168,14 +1169,14 @@ mod tests {
 
         // Same name, different colour: the other verb, and `previous` is null because nothing
         // was renamed.
-        crate::deck_meta::update_label(&conn, id, label, "Cut", "amber").unwrap();
+        crate::deck_meta::update_label(&conn, Some(id), label, "Cut", "amber").unwrap();
         let (_, payload) = newest(&conn, id);
         assert_eq!(
             payload,
             json!({ "action": "recolour", "label": "Cut", "previous": null, "color": "amber" })
         );
 
-        crate::deck_meta::delete_label(&conn, id, label).unwrap();
+        crate::deck_meta::delete_label(&conn, Some(id), label).unwrap();
         let (_, payload) = newest(&conn, id);
         // `cards` is what `auditText` renders "N cards unlabelled" from. It reads the key for a
         // delete and always has; nothing wrote it until the reach became app-wide.

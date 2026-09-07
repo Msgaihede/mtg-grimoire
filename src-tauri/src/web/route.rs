@@ -810,7 +810,11 @@ pub fn call(
         }
 
         "deck_label_create" => {
-            let deck_id: i64 = field(command, args, "deckId")?;
+            // `optional`, not `field`: the Appearance panel in Settings sends no
+            // `deckId` at all, which is what the label write takes as "no deck to
+            // touch and no history to write" — the web mirror of Tauri filling a
+            // missing `Option` argument with `None`.
+            let deck_id: Option<i64> = optional(command, args, "deckId")?;
             let name: String = field(command, args, "name")?;
             let color: String = field(command, args, "color")?;
             encode(
@@ -823,7 +827,8 @@ pub fn call(
         }
 
         "deck_label_update" => {
-            let deck_id: i64 = field(command, args, "deckId")?;
+            // `optional` for `deck_label_create`'s reason, above.
+            let deck_id: Option<i64> = optional(command, args, "deckId")?;
             let id: i64 = field(command, args, "id")?;
             let name: String = field(command, args, "name")?;
             let color: String = field(command, args, "color")?;
@@ -837,7 +842,8 @@ pub fn call(
         }
 
         "deck_label_delete" => {
-            let deck_id: i64 = field(command, args, "deckId")?;
+            // `optional` for `deck_label_create`'s reason, above.
+            let deck_id: Option<i64> = optional(command, args, "deckId")?;
             let id: i64 = field(command, args, "id")?;
             encode(
                 command,
